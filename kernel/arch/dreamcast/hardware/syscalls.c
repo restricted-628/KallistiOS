@@ -98,22 +98,28 @@
 /* Sets a value of a specified 'type' */
 #define MAKE_SYSCALL_SET(vec, func, r4, r5, r6, result, type) do { \
     uintptr_t *syscall_ptr = (uintptr_t *)(vec); \
-    type (*syscall)() = (type (*)())(*syscall_ptr); \
-    result = syscall((r4), (r5), (r6), (func)); \
+    type (*bios_call)(uintptr_t, uintptr_t, uintptr_t, uintptr_t) = \
+        (type (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(*syscall_ptr); \
+    result = bios_call((uintptr_t)(r4), (uintptr_t)(r5), \
+                       (uintptr_t)(r6), (uintptr_t)(func)); \
 } while(0)
 
 /* Returns an int */
 #define MAKE_SYSCALL_INT(vec, func, r4, r5, r6) do { \
     uintptr_t *syscall_ptr = (uintptr_t *)(vec); \
-    int (*syscall)() = (int (*)())(*syscall_ptr); \
-    return syscall((r4), (r5), (r6), (func)); \
+    int (*bios_call)(uintptr_t, uintptr_t, uintptr_t, uintptr_t) = \
+        (int (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(*syscall_ptr); \
+    return bios_call((uintptr_t)(r4), (uintptr_t)(r5), \
+                     (uintptr_t)(r6), (uintptr_t)(func)); \
 } while(0)
 
 /* Returns nothing */
 #define MAKE_SYSCALL_VOID(vec, func, r4, r5, r6) do { \
     uintptr_t *syscall_ptr = (uintptr_t *)(vec); \
-    void (*syscall)() = (void (*)())(*syscall_ptr); \
-    syscall((r4), (r5), (r6), (func)); \
+    void (*bios_call)(uintptr_t, uintptr_t, uintptr_t, uintptr_t) = \
+        (void (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(*syscall_ptr); \
+    bios_call((uintptr_t)(r4), (uintptr_t)(r5), \
+              (uintptr_t)(r6), (uintptr_t)(func)); \
 } while(0)
 
 void syscall_sysinfo_init(void) {
@@ -256,4 +262,3 @@ void syscall_system_cd_menu(void) {
     system_func system = (system_func)(*((uintptr_t *) VEC_SYSTEM));
     system(FUNC_SYSTEM_CD_MENU);
 }
-
