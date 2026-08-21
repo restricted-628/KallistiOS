@@ -29,6 +29,8 @@ g1_ata_shutdown
 bfont_set_foreground_color
 bfont_set_background_color
 bfont_set_encoding
+bfont_sjis_to_jis
+bfont_lookup_glyph
 bfont_find_char
 bfont_find_char_jp
 bfont_find_char_jp_half

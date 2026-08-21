@@ -142,6 +142,7 @@ This page serves as an index for all KallistiOS examples.
   - genmenu
 - video
   - bfont
+  - bfont-glyph-query
   - minifont
   - multibuffer
   - palmenu

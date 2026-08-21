@@ -7,6 +7,7 @@
    Copyright (C) 2017, 2024 Donald Haase
    Copyright (C) 2024 Andy Barajas
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <assert.h>
@@ -101,25 +102,34 @@ int unlock_bfont(void) {
     return 0;
 }
 
-/* Shift-JIS -> JIS conversion */
-static uint32_t sjis2jis(uint32_t sjis) {
-    unsigned int hib, lob;
+bool bfont_sjis_to_jis(uint16_t sjis, uint16_t *jis) {
+    uint8_t lead = sjis >> 8;
+    uint8_t trail = sjis;
+    uint16_t row;
+    uint16_t cell;
 
-    hib = (sjis >> 8) & 0xff;
-    lob = sjis & 0xff;
-    hib -= (hib <= 0x9f) ? 0x71 : 0xb1;
-    hib = (hib << 1) + 1;
+    if(!jis || !((lead >= 0x81 && lead <= 0x9f) ||
+                 (lead >= 0xe0 && lead <= 0xef)) ||
+       !((trail >= 0x40 && trail <= 0x7e) ||
+         (trail >= 0x80 && trail <= 0xfc)))
+        return false;
 
-    if(lob > 0x7f) lob--;
+    row = (uint16_t)(lead - (lead <= 0x9f ? 0x71 : 0xb1));
+    row = (uint16_t)((row << 1) + 1);
 
-    if(lob >= 0x9e) {
-        lob -= 0x7d;
-        hib++;
+    if(trail >= 0x9f) {
+        ++row;
+        cell = (uint16_t)(trail - 0x7e);
     }
-    else
-        lob -= 0x1f;
+    else {
+        if(trail > 0x7f)
+            --trail;
 
-    return (hib << 8) | lob;
+        cell = (uint16_t)(trail - 0x1f);
+    }
+
+    *jis = (uint16_t)((row << 8) | cell);
+    return true;
 }
 
 
@@ -128,60 +138,233 @@ static uint32_t euc2jis(uint32_t euc) {
     return euc & ~0x8080;
 }
 
+static bool bfont_jisx0208_offset(uint16_t jis, uint32_t *offset) {
+    uint32_t row = jis >> 8;
+    uint32_t cell = jis & 0xff;
+    uint32_t packed_row;
+
+    if(cell < 0x21 || cell > 0x7e)
+        return false;
+
+    /* The ROM contains rows 1-7 and 16-83 in full, followed by the
+       first six characters of row 84. Rows 8-15 are not present. */
+    if(!((row >= 0x21 && row <= 0x27) ||
+         (row >= 0x30 && row <= 0x73) ||
+         (row == 0x74 && cell <= 0x26)))
+        return false;
+
+    packed_row = row - 0x21;
+    if(row >= 0x30)
+        packed_row -= 8;
+
+    *offset = BFONT_WIDE_START +
+              (packed_row * JISX_0208_ROW_SIZE + cell - 0x21) *
+              BFONT_BYTES_PER_WIDE_CHAR;
+    return true;
+}
+
+static bool bfont_jisx0201_offset(uint32_t code, uint32_t *offset) {
+    if(code >= 0x20 && code <= 0x7e) {
+        if(code == 0x20)
+            *offset = BFONT_BLANK;
+        else if(code == 0x5c)
+            *offset = BFONT_YEN;
+        else if(code == 0x7e)
+            *offset = BFONT_OVERBAR;
+        else
+            *offset = (code - 0x20) * BFONT_BYTES_PER_CHAR;
+
+        return true;
+    }
+
+    if(code >= 0xa1 && code <= 0xdf) {
+        *offset = BFONT_JISX_0201_160_255 +
+                  (code - 0xa0) * BFONT_BYTES_PER_CHAR;
+        return true;
+    }
+
+    return false;
+}
+
+static bool bfont_shift_jis_font_code(uint16_t code) {
+    /* These are the assigned Shift-JIS spans backed by the three wide-font
+       regions in the Boot ROM. Syntactically convertible codes also exist in
+       the gaps, but their converted JIS slots do not contain assigned glyphs. */
+    return (code >= 0x8140 && code <= 0x8396) ||
+           (code >= 0x889f && code <= 0x9872) ||
+           (code >= 0x989f && code <= 0xeaa4);
+}
+
+static void bfont_set_glyph(bfont_glyph_t *glyph, uint32_t offset,
+                            uint16_t width, uint16_t height,
+                            uint16_t data_size) {
+    glyph->data = get_font_address() + offset;
+    glyph->offset = offset;
+    glyph->width = width;
+    glyph->height = height;
+    glyph->data_size = data_size;
+}
+
+bool bfont_lookup_glyph(bfont_glyph_set_t set, uint32_t code,
+                        bfont_glyph_t *glyph) {
+    uint32_t offset;
+    uint16_t jis;
+
+    if(!glyph)
+        return false;
+
+    memset(glyph, 0, sizeof(*glyph));
+
+    switch(set) {
+        case BFONT_GLYPH_ISO8859_1:
+            if(code == 0x20)
+                offset = BFONT_BLANK;
+            else if(code >= 0x21 && code <= 0x7e)
+                offset = (code - 0x20) * BFONT_BYTES_PER_CHAR;
+            else if(code >= 0xa0 && code <= 0xff)
+                offset = BFONT_ISO_8859_1_160_255 +
+                         (code - 0xa0) * BFONT_BYTES_PER_CHAR;
+            else
+                return false;
+
+            bfont_set_glyph(glyph, offset, BFONT_THIN_WIDTH, BFONT_HEIGHT,
+                            BFONT_BYTES_PER_CHAR);
+            return true;
+
+        case BFONT_GLYPH_JISX0201:
+            if(!bfont_jisx0201_offset(code, &offset))
+                return false;
+
+            bfont_set_glyph(glyph, offset, BFONT_THIN_WIDTH, BFONT_HEIGHT,
+                            BFONT_BYTES_PER_CHAR);
+            return true;
+
+        case BFONT_GLYPH_JISX0208:
+            if(code > UINT16_MAX ||
+               !bfont_jisx0208_offset((uint16_t)code, &offset))
+                return false;
+
+            bfont_set_glyph(glyph, offset, BFONT_WIDE_WIDTH, BFONT_HEIGHT,
+                            BFONT_BYTES_PER_WIDE_CHAR);
+            return true;
+
+        case BFONT_GLYPH_SHIFT_JIS:
+            if(code <= 0xff) {
+                if(!bfont_jisx0201_offset(code, &offset))
+                    return false;
+
+                bfont_set_glyph(glyph, offset, BFONT_THIN_WIDTH, BFONT_HEIGHT,
+                                BFONT_BYTES_PER_CHAR);
+                return true;
+            }
+
+            if(code > UINT16_MAX ||
+               !bfont_shift_jis_font_code((uint16_t)code) ||
+               !bfont_sjis_to_jis((uint16_t)code, &jis) ||
+               !bfont_jisx0208_offset(jis, &offset))
+                return false;
+
+            bfont_set_glyph(glyph, offset, BFONT_WIDE_WIDTH, BFONT_HEIGHT,
+                            BFONT_BYTES_PER_WIDE_CHAR);
+            return true;
+
+        case BFONT_GLYPH_EUC_JP:
+            if(code <= 0x7f) {
+                if(!bfont_jisx0201_offset(code, &offset))
+                    return false;
+
+                bfont_set_glyph(glyph, offset, BFONT_THIN_WIDTH, BFONT_HEIGHT,
+                                BFONT_BYTES_PER_CHAR);
+                return true;
+            }
+
+            if((code & 0xff00) == 0x8e00) {
+                if(!bfont_jisx0201_offset(code & 0xff, &offset))
+                    return false;
+
+                bfont_set_glyph(glyph, offset, BFONT_THIN_WIDTH, BFONT_HEIGHT,
+                                BFONT_BYTES_PER_CHAR);
+                return true;
+            }
+
+            if(code > UINT16_MAX || (code & 0x8080) != 0x8080 ||
+               !bfont_jisx0208_offset((uint16_t)euc2jis(code), &offset))
+                return false;
+
+            bfont_set_glyph(glyph, offset, BFONT_WIDE_WIDTH, BFONT_HEIGHT,
+                            BFONT_BYTES_PER_WIDE_CHAR);
+            return true;
+
+        case BFONT_GLYPH_DREAMCAST_ICON:
+            if(code >= BFONT_DREAMCAST_ICON_COUNT)
+                return false;
+
+            offset = BFONT_DC_ICON(code);
+            bfont_set_glyph(glyph, offset, BFONT_WIDE_WIDTH, BFONT_HEIGHT,
+                            BFONT_BYTES_PER_WIDE_CHAR);
+            return true;
+
+        case BFONT_GLYPH_VMU_ICON:
+            if(code >= BFONT_VMU_ICON_COUNT)
+                return false;
+
+            offset = BFONT_VMU_DREAMCAST_SPECIFIC +
+                     code * BFONT_ICON_DIMEN * BFONT_ICON_DIMEN / 8;
+            bfont_set_glyph(glyph, offset, BFONT_ICON_DIMEN, BFONT_ICON_DIMEN,
+                            BFONT_ICON_DIMEN * BFONT_ICON_DIMEN / 8);
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 /* Given an ASCII character, find it in the BIOS font if possible */
 uint8_t *bfont_find_char(uint32_t ch) {
-    uint8_t *fa = get_font_address();
-    /* By default, map to a space */
-    uint32_t index = 72 << 2;
+    bfont_glyph_t glyph;
 
-    /* 33-126 in ASCII are 1-94 in the font */
-    if(ch >= 33 && ch <= 126)
-        index = ch - 32;
+    if(bfont_lookup_glyph(BFONT_GLYPH_ISO8859_1, ch, &glyph))
+        return glyph.data;
 
-    /* 160-255 in ASCII are 96-161 in the font */
-    else if(ch >= 160 && ch <= 255)
-        index = ch - (160 - 96);
-
-    return fa + index * (BFONT_THIN_WIDTH*BFONT_HEIGHT/8);
+    /* Stock KOS used the blank JIS 0x2121 slot for space and replacement. */
+    return get_font_address() + BFONT_BLANK;
 }
 
 /* JIS -> (kuten) -> address conversion */
 uint8_t *bfont_find_char_jp(uint32_t ch) {
-    uint8_t *fa = get_font_address();
-    uint32_t ku, ten, kuten = 0;
+    bfont_glyph_t glyph;
+    bfont_glyph_set_t set;
 
-    /* Do the requested code conversion */
     switch(bfont_code_mode) {
         case BFONT_CODE_ISO8859_1:
             return NULL;
         case BFONT_CODE_EUC:
-            ch = euc2jis(ch);
+            set = BFONT_GLYPH_EUC_JP;
             break;
         case BFONT_CODE_SJIS:
-            ch = sjis2jis(ch);
+            set = BFONT_GLYPH_SHIFT_JIS;
             break;
         default:
             assert_msg(0, "Unknown bfont encoding mode");
+            return get_font_address() + BFONT_WIDE_START;
     }
 
-    if(ch > 0) {
-        ku = ((ch >> 8) & 0x7F);
-        ten = (ch & 0x7F);
+    if(bfont_lookup_glyph(set, ch, &glyph) &&
+       glyph.width == BFONT_WIDE_WIDTH)
+        return glyph.data;
 
-        if(ku >= 0x30)
-            ku -= 0x30 - 0x28;
-
-        kuten = (ku - 0x21) * 94 + ten - 0x21;
-    }
-
-    return fa + (kuten + 144) * (BFONT_WIDE_WIDTH*BFONT_HEIGHT/8);
+    return get_font_address() + BFONT_WIDE_START;
 }
 
 
 /* Half-width kana -> address conversion */
 uint8_t *bfont_find_char_jp_half(uint32_t ch) {
-    uint8_t *fa = get_font_address();
-    return fa + (32 + ch) * (BFONT_THIN_WIDTH*BFONT_HEIGHT/8);
+    bfont_glyph_t glyph;
+
+    if(bfont_lookup_glyph(BFONT_GLYPH_JISX0201, ch, &glyph))
+        return glyph.data;
+
+    return get_font_address() + BFONT_BLANK;
 }
 
 /* Draws one half-width row of a character to an output buffer of bit depth in bits per pixel */
@@ -456,12 +639,10 @@ void bfont_draw_str_vram_fmt(uint32_t x, uint32_t y, bool opaque,
 }
 
 uint8_t *bfont_find_icon(bfont_vmu_icon_t icon) {
-    if(icon > BFONT_ICON_EMBROIDERY)
+    bfont_glyph_t glyph;
+
+    if(!bfont_lookup_glyph(BFONT_GLYPH_VMU_ICON, icon, &glyph))
         return NULL;
 
-    int icon_offset = BFONT_VMU_DREAMCAST_SPECIFIC +
-        (icon * BFONT_ICON_DIMEN * BFONT_ICON_DIMEN / 8);
-    uint8_t *fa = get_font_address();
-
-    return fa + icon_offset;
+    return glyph.data;
 }
