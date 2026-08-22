@@ -49,6 +49,9 @@ struct vmufs_request {
     size_t filename_count;
     vmufs_delete_result_t *delete_result;
     vmufs_repair_result_t *repair_result;
+    vmu_memcard_bank_info_t *bank_info;
+    uint8_t bank;
+    bool bank_locked;
     vmufs_format_options_t options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -78,6 +81,9 @@ typedef struct vmufs_request_submission {
     size_t filename_count;
     vmufs_delete_result_t *delete_result;
     vmufs_repair_result_t *repair_result;
+    vmu_memcard_bank_info_t *bank_info;
+    uint8_t bank;
+    bool bank_locked;
     const vmufs_format_options_t *options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -292,6 +298,17 @@ static void process_request(vmufs_request_t *request) {
         result = vmufs_repair_observed(
             request->dev, request->repair_result, &observer);
         break;
+    case VMUFS_REQUEST_BANK_INFO:
+        result = vmu_memcard_get_bank_info(request->dev,
+                                           request->bank_info);
+        break;
+    case VMUFS_REQUEST_BANK_SELECT:
+        result = vmu_memcard_select_bank(request->dev, request->bank);
+        break;
+    case VMUFS_REQUEST_BANK_LOCK:
+        result = vmu_memcard_set_bank_locked(request->dev,
+                                             request->bank_locked);
+        break;
     default:
         errno = EINVAL;
         result = -1;
@@ -398,7 +415,7 @@ static vmufs_request_t *submit_request(
 
     if(!submission || !submission->dev ||
        !(submission->dev->info.functions & MAPLE_FUNC_MEMCARD) ||
-       submission->operation > VMUFS_REQUEST_REPAIR ||
+       submission->operation > VMUFS_REQUEST_BANK_LOCK ||
        ((submission->operation == VMUFS_REQUEST_WRITE ||
          submission->operation == VMUFS_REQUEST_DELETE ||
          submission->operation == VMUFS_REQUEST_RENAME ||
@@ -422,6 +439,8 @@ static vmufs_request_t *submit_request(
          submission->filename_count > VMUFS_REQUEST_MAX_FILENAMES)) ||
        (submission->operation == VMUFS_REQUEST_REPAIR &&
         !submission->repair_result) ||
+       (submission->operation == VMUFS_REQUEST_BANK_INFO &&
+        !submission->bank_info) ||
        (submission->operation == VMUFS_REQUEST_WRITE &&
         ((submission->input_size && !submission->input) ||
          submission->input_size > INT_MAX ||
@@ -497,6 +516,9 @@ static vmufs_request_t *submit_request(
     request->filename_count = submission->filename_count;
     request->delete_result = submission->delete_result;
     request->repair_result = submission->repair_result;
+    request->bank_info = submission->bank_info;
+    request->bank = submission->bank;
+    request->bank_locked = submission->bank_locked;
     if(submission->filename_count) {
         request->filenames = calloc(submission->filename_count,
                                     sizeof(*request->filenames));
@@ -535,6 +557,9 @@ static vmufs_request_t *submit_request(
     }
     else if(submission->operation == VMUFS_REQUEST_REPAIR) {
         *submission->repair_result = (vmufs_repair_result_t) {0};
+    }
+    else if(submission->operation == VMUFS_REQUEST_BANK_INFO) {
+        *submission->bank_info = (vmu_memcard_bank_info_t) {0};
     }
 
     mutex_lock(&request_mutex);
@@ -657,6 +682,48 @@ vmufs_request_t *vmufs_repair_async(
         .operation = VMUFS_REQUEST_REPAIR,
         .dev = dev,
         .repair_result = result,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
+}
+
+vmufs_request_t *vmufs_get_bank_info_async(
+    maple_device_t *dev, vmu_memcard_bank_info_t *info,
+    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_BANK_INFO,
+        .dev = dev,
+        .bank_info = info,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
+}
+
+vmufs_request_t *vmufs_select_bank_async(
+    maple_device_t *dev, uint8_t bank,
+    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_BANK_SELECT,
+        .dev = dev,
+        .bank = bank,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
+}
+
+vmufs_request_t *vmufs_set_bank_locked_async(
+    maple_device_t *dev, bool locked,
+    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_BANK_LOCK,
+        .dev = dev,
+        .bank_locked = locked,
         .callback = callback,
         .callback_data = callback_data
     };

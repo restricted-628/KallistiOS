@@ -298,6 +298,9 @@ vmu_beep_waveform
 vmu_draw_lcd
 vmu_block_read
 vmu_block_write
+vmu_memcard_get_bank_info
+vmu_memcard_select_bank
+vmu_memcard_set_bank_locked
 vmu_set_icon
 vmufb_present_ex
 vmufs_root_validate
@@ -380,6 +383,9 @@ vmufs_write_async
 vmufs_delete_async
 vmufs_delete_files_async
 vmufs_repair_async
+vmufs_get_bank_info_async
+vmufs_select_bank_async
+vmufs_set_bank_locked_async
 vmufs_rename_async
 vmufs_set_file_attributes_async
 vmufs_format_async

@@ -520,6 +520,60 @@ int vmu_block_read(maple_device_t *dev, uint16_t blocknum, uint8_t *buffer);
 */
 int vmu_block_write(maple_device_t *dev, uint16_t blocknum, const uint8_t *buffer);
 
+/** \brief Bank state reported by a bank-switching memory card.
+    \ingroup maple_memcard
+*/
+typedef struct vmu_memcard_bank_info {
+    uint8_t bank_count;   /**< \brief Number of selectable banks. */
+    uint8_t current_bank; /**< \brief Currently visible bank. */
+    bool locked;          /**< \brief Bank selection is locked. */
+    bool multibank;       /**< \brief Device implements bank commands. */
+} vmu_memcard_bank_info_t;
+
+/** \brief Query memory-card bank geometry and current state.
+    \ingroup maple_memcard
+
+    Ordinary cards are reported as one unlocked bank without sending an
+    extension command. Recognized bank-switching cards are queried with their
+    bounded vendor command and the complete response is validated.
+
+    \param dev   Attached memory-card device.
+    \param info  Receives a coherent bank snapshot.
+    \retval MAPLE_EOK       State returned.
+    \retval MAPLE_ETIMEOUT  The card did not complete the command.
+    \retval MAPLE_EINVALID  Invalid or unavailable memory-card device.
+    \retval MAPLE_EFAIL     Transport or response validation failed.
+*/
+int vmu_memcard_get_bank_info(maple_device_t *dev,
+                              vmu_memcard_bank_info_t *info);
+
+/** \brief Select the visible bank of a bank-switching memory card.
+    \ingroup maple_memcard
+
+    Selection is serialized against VMUFS operations. Callers must discard
+    metadata obtained from the previously selected bank after success.
+
+    \param dev   Attached bank-switching memory card.
+    \param bank  Zero-based bank number returned by the information query.
+    \retval MAPLE_EOK       The requested bank was selected and acknowledged.
+    \retval MAPLE_ETIMEOUT  The card did not complete the command.
+    \retval MAPLE_EINVALID  Invalid device or out-of-range bank.
+    \retval MAPLE_EFAIL     Locked card, transport, or response failure.
+*/
+int vmu_memcard_select_bank(maple_device_t *dev, uint8_t bank);
+
+/** \brief Enable or disable memory-card bank-selection locking.
+    \ingroup maple_memcard
+
+    \param dev     Attached bank-switching memory card.
+    \param locked  Nonzero locks selection; zero unlocks it.
+    \retval MAPLE_EOK       The requested state was acknowledged.
+    \retval MAPLE_ETIMEOUT  The card did not complete the command.
+    \retval MAPLE_EINVALID  Invalid or non-bank-switching device.
+    \retval MAPLE_EFAIL     Transport or response validation failed.
+*/
+int vmu_memcard_set_bank_locked(maple_device_t *dev, bool locked);
+
 /** \defgroup maple_clock Clock Function
     \brief    API for features of the Clock Maple Function
     \ingroup  vmu

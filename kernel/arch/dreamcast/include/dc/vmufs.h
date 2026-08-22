@@ -33,6 +33,7 @@
 __BEGIN_DECLS
 
 #include <dc/maple.h>
+#include <dc/maple/vmu.h>
 #include <dc/vmufs_meta.h>
 
 /** \addtogroup vfs_vmu
@@ -605,7 +606,10 @@ typedef enum vmufs_request_operation {
     VMUFS_REQUEST_VOLUME_INFO, /**< \brief Volume inspection. */
     VMUFS_REQUEST_DELETE_FILES, /**< \brief Transactional multi-file deletion. */
     VMUFS_REQUEST_REWRITE,     /**< \brief Bounded file-block replacement. */
-    VMUFS_REQUEST_REPAIR       /**< \brief Orphan allocation reclamation. */
+    VMUFS_REQUEST_REPAIR,      /**< \brief Orphan allocation reclamation. */
+    VMUFS_REQUEST_BANK_INFO,   /**< \brief Memory-card bank query. */
+    VMUFS_REQUEST_BANK_SELECT, /**< \brief Memory-card bank selection. */
+    VMUFS_REQUEST_BANK_LOCK    /**< \brief Memory-card bank lock update. */
 } vmufs_request_operation_t;
 
 typedef enum vmufs_request_state {
@@ -755,6 +759,21 @@ vmufs_request_t *vmufs_delete_files_async(
 */
 vmufs_request_t *vmufs_repair_async(
     maple_device_t *dev, vmufs_repair_result_t *result,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a memory-card bank information query. */
+vmufs_request_t *vmufs_get_bank_info_async(
+    maple_device_t *dev, vmu_memcard_bank_info_t *info,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a bank selection command serialized with VMUFS work. */
+vmufs_request_t *vmufs_select_bank_async(
+    maple_device_t *dev, uint8_t bank,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a bank-selection lock update serialized with VMUFS work. */
+vmufs_request_t *vmufs_set_bank_locked_async(
+    maple_device_t *dev, bool locked,
     vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a transactional rename on one VMU.

@@ -31,6 +31,8 @@
 #include <dc/vmufs.h>
 #include <kos/timer.h>
 
+#include "vmu_bank_protocol.h"
+
 #define VMU_BLOCK_WRITE_RETRY_TIME  100     /* time to sleep until retrying a failed write */
 
 /* vmu_state_t remains first so existing maple_dev_status() callers retain the
@@ -44,6 +46,7 @@ typedef struct vmu_driver_status {
     vmu_clock_completion_handler_t clock_handler;
     void *clock_handler_data;
     bool clock_sync_waiting;
+    bool bank_sync_waiting;
 } vmu_driver_status_t;
 
 static bool vmu_has_clock(const maple_device_t *dev) {
@@ -998,6 +1001,190 @@ int vmu_block_write(maple_device_t *dev, uint16_t blocknum, const uint8_t *buffe
     /* Well, looks like it's really toasty... return the most recent
        error. */
     return rv;
+}
+
+static bool vmu_has_memcard(const maple_device_t *dev) {
+    return dev && dev->valid && dev->status &&
+           (dev->info.functions & MAPLE_FUNC_MEMCARD);
+}
+
+static bool vmu_has_bank_commands(const maple_device_t *dev) {
+    static const char prefix[] = "BANK";
+
+    return vmu_has_memcard(dev) &&
+           memcmp(dev->info.product_name, prefix, sizeof(prefix) - 1u) == 0;
+}
+
+static void vmu_bank_sync_reply(maple_state_t *state, maple_frame_t *frame) {
+    maple_device_t *dev = frame->dev;
+    vmu_driver_status_t *status = dev ? dev->status : NULL;
+
+    (void)state;
+    if(status && status->bank_sync_waiting)
+        genwait_wake_all(frame);
+    else
+        maple_frame_unlock(frame);
+}
+
+static int vmu_bank_wait_for_response(maple_device_t *dev) {
+    vmu_driver_status_t *status = dev->status;
+    irq_mask_t irq;
+    int frame_state;
+    int wait_result = genwait_wait(&dev->frame, "vmu bank command", 500);
+
+    irq = irq_disable();
+    frame_state = dev->frame.state;
+    if(frame_state == MAPLE_FRAME_RESPONDED) {
+        status->bank_sync_waiting = false;
+        irq_restore(irq);
+        return MAPLE_EOK;
+    }
+
+    status->bank_sync_waiting = false;
+    if(frame_state == MAPLE_FRAME_UNSENT && dev->frame.queued) {
+        maple_queue_remove(&dev->frame);
+        dev->frame.state = MAPLE_FRAME_RESPONDED;
+        maple_frame_unlock(&dev->frame);
+    }
+    irq_restore(irq);
+    if(wait_result < 0) {
+        errno = ETIMEDOUT;
+        return MAPLE_ETIMEOUT;
+    }
+    errno = EIO;
+    return MAPLE_EFAIL;
+}
+
+static int vmu_bank_command_locked(maple_device_t *dev,
+                                   vmu_bank_command_t command,
+                                   uint8_t value,
+                                   vmu_memcard_bank_info_t *info) {
+    vmu_driver_status_t *status = dev->status;
+    maple_response_t *response;
+    size_t payload_size;
+    int result;
+
+    maple_frame_lock(&dev->frame);
+    maple_frame_init(&dev->frame);
+    dev->frame.send_buf[0] = vmu_bank_command_encode(command, value);
+    dev->frame.cmd = 0x1f;
+    dev->frame.dst_port = dev->port;
+    dev->frame.dst_unit = dev->unit;
+    dev->frame.length = 1;
+    dev->frame.callback = vmu_bank_sync_reply;
+    status->bank_sync_waiting = true;
+
+    if(maple_queue_frame(&dev->frame) < 0) {
+        status->bank_sync_waiting = false;
+        dev->frame.state = MAPLE_FRAME_RESPONDED;
+        maple_frame_unlock(&dev->frame);
+        return MAPLE_EFAIL;
+    }
+    result = vmu_bank_wait_for_response(dev);
+    if(result != MAPLE_EOK)
+        return result;
+
+    response = (maple_response_t *)dev->frame.recv_buf;
+    payload_size = response->data_len * sizeof(uint32_t);
+    if(response->response != MAPLE_RESPONSE_DATATRF) {
+        errno = EPROTO;
+        result = MAPLE_EFAIL;
+    }
+    else if(command == VMU_BANK_COMMAND_INFO) {
+        result = vmu_bank_info_decode(
+                     response->data, payload_size, &info->bank_count,
+                     &info->current_bank, &info->locked) == 0 ?
+                 MAPLE_EOK : MAPLE_EFAIL;
+    }
+    else {
+        result = vmu_bank_command_response_validate(
+                     command, value, response->data, payload_size) == 0 ?
+                 MAPLE_EOK : MAPLE_EFAIL;
+    }
+    maple_frame_unlock(&dev->frame);
+    return result;
+}
+
+static int vmu_memcard_get_bank_info_locked(
+    maple_device_t *dev, vmu_memcard_bank_info_t *info) {
+    if(!vmu_has_memcard(dev) || !info) {
+        errno = !dev || !info ? EINVAL : ENODEV;
+        return MAPLE_EINVALID;
+    }
+
+    *info = (vmu_memcard_bank_info_t) {
+        .bank_count = 1,
+        .current_bank = 0
+    };
+    if(!vmu_has_bank_commands(dev))
+        return MAPLE_EOK;
+
+    info->multibank = true;
+    return vmu_bank_command_locked(dev, VMU_BANK_COMMAND_INFO, 0, info);
+}
+
+int vmu_memcard_get_bank_info(maple_device_t *dev,
+                              vmu_memcard_bank_info_t *info) {
+    int result;
+
+    if(vmufs_mutex_lock() < 0)
+        return MAPLE_EFAIL;
+    result = vmu_memcard_get_bank_info_locked(dev, info);
+    vmufs_mutex_unlock();
+    return result;
+}
+
+int vmu_memcard_select_bank(maple_device_t *dev, uint8_t bank) {
+    vmu_memcard_bank_info_t info;
+    int result;
+
+    if(vmufs_mutex_lock() < 0)
+        return MAPLE_EFAIL;
+    result = vmu_memcard_get_bank_info_locked(dev, &info);
+    if(result != MAPLE_EOK)
+        goto out;
+    if(!info.multibank || bank >= info.bank_count) {
+        errno = !info.multibank ? ENOTSUP : EINVAL;
+        result = MAPLE_EINVALID;
+        goto out;
+    }
+    if(info.locked && bank != info.current_bank) {
+        errno = EACCES;
+        result = MAPLE_EFAIL;
+        goto out;
+    }
+    if(bank == info.current_bank)
+        goto out;
+    result = vmu_bank_command_locked(dev, VMU_BANK_COMMAND_SELECT,
+                                     bank, NULL);
+
+out:
+    vmufs_mutex_unlock();
+    return result;
+}
+
+int vmu_memcard_set_bank_locked(maple_device_t *dev, bool locked) {
+    vmu_memcard_bank_info_t info;
+    int result;
+
+    if(vmufs_mutex_lock() < 0)
+        return MAPLE_EFAIL;
+    result = vmu_memcard_get_bank_info_locked(dev, &info);
+    if(result != MAPLE_EOK)
+        goto out;
+    if(!info.multibank) {
+        errno = ENOTSUP;
+        result = MAPLE_EINVALID;
+        goto out;
+    }
+    if(info.locked == locked)
+        goto out;
+    result = vmu_bank_command_locked(dev, VMU_BANK_COMMAND_LOCK,
+                                     locked ? 1u : 0u, NULL);
+
+out:
+    vmufs_mutex_unlock();
+    return result;
 }
 
 static int vmu_clock_decode_response(const maple_response_t *response,

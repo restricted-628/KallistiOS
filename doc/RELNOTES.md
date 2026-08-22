@@ -86,6 +86,10 @@ lifecycle and naming conventions.
   executable files use pre-read rollback because their required block-zero
   placement prevents dual-chain publication. Added validated orphan-only FAT
   repair that never reclaims a block reachable from a live directory entry.
+* Added validated bank discovery, selection, and lock control for compatible
+  multi-bank memory cards, together with lazy asynchronous VMUFS requests and
+  host-tested command/response vectors. Physical multi-bank hardware remains
+  a required validation gate.
 * The `/vmu` VFS now distinguishes logical package payload length from
   block-rounded backing storage. Reads, seeks, totals, `stat()`, `fstat()`,
   append writes, sparse gaps, and package rebuilds use the logical EOF, while
