@@ -104,8 +104,8 @@ than place another renderer above them.
 4. ~~Add texture surfaces plus checked synchronous and asynchronous updates.~~
 5. ~~Close global material and packed-header state needed by higher-level scene
    generation.~~
-6. Design complete multi-pass TA registration banks rather than a shallow
-   scene wrapper.
+6. Implement the opt-in multi-pass registration-bank design in
+   `pvr-multipass-design.md`, preserving the existing one-pass fast path.
 7. Add per-render completion identity and finish render-target/no-flip hazard
    contracts.
 8. Add only hardware-validated advanced texture layouts, readback, contiguous
