@@ -5,6 +5,7 @@
    Copyright (C) 2008 Donald Haase
    Copyright (C) 2023 Andy Barajas
    Copyright (C) 2023, 2025 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -22,6 +23,7 @@
     \author Megan Potter
     \author Donald Haase
     \author Falco Girgis
+    \author Joseph Black
 */
 
 #ifndef __DC_MAPLE_VMU_H
@@ -40,10 +42,9 @@ __BEGIN_DECLS
     \brief    VMU/VMS Maple Peripheral API
     \ingroup  peripherals
 
-    The Sega Dreamcast's Visual Memory Unit (VMU) 
-    is an 8-Bit gaming device which, when plugged into 
-    the controller, communicates with the Dreamcast 
-    as a Maple peripheral. 
+    The Dreamcast Visual Memory Unit (VMU) is an 8-bit gaming device which,
+    when plugged into a controller, communicates with the console as a Maple
+    peripheral.
 
                 Visual Memory Unit
                  _________________
@@ -242,11 +243,157 @@ int vmu_get_icon_shape(maple_device_t *dev, uint8_t *icon_shape);
 */
 #define VMU_SCREEN_HEIGHT   32
 
+/** \brief Size of a standard VMU LCD bitmap in bytes.
+    \ingroup maple_lcd
+*/
+#define VMU_SCREEN_BITMAP_BYTES \
+    (VMU_SCREEN_WIDTH * VMU_SCREEN_HEIGHT / 8)
+
+/** \brief Physical orientation of an LCD relative to its parent peripheral.
+    \ingroup maple_lcd
+*/
+typedef enum vmu_lcd_direction {
+    VMU_LCD_DIRECTION_NORMAL = 0,
+    VMU_LCD_DIRECTION_FLIPPED,
+    VMU_LCD_DIRECTION_LEFT,
+    VMU_LCD_DIRECTION_RIGHT
+} vmu_lcd_direction_t;
+
+/** \brief Optional transforms applied while packing grayscale LCD pixels.
+    \ingroup maple_lcd
+*/
+typedef enum vmu_lcd_flip {
+    VMU_LCD_FLIP_NONE       = 0,
+    VMU_LCD_FLIP_HORIZONTAL = BIT(0),
+    VMU_LCD_FLIP_VERTICAL   = BIT(1)
+} vmu_lcd_flip_t;
+
+/** \brief Coherent completion state for LCD write commands.
+    \ingroup maple_lcd
+*/
+typedef struct vmu_lcd_status {
+    bool busy;                    /**< A write is queued or on the bus. */
+    int result;                   /**< MAPLE_EOK, MAPLE_EFAIL, or MAPLE_EAGAIN. */
+    int response;                 /**< Raw MAPLE_RESPONSE_* value. */
+    uint32_t submitted_sequence;  /**< Most recent write submission. */
+    uint32_t completed_sequence;  /**< Most recent completed write. */
+} vmu_lcd_status_t;
+
+/** \brief IRQ-context LCD write completion callback.
+    \ingroup maple_lcd
+*/
+typedef void (*vmu_lcd_completion_handler_t)(maple_device_t *dev,
+                                             int result,
+                                             int response,
+                                             uint32_t sequence,
+                                             void *user_data);
+
+/** \brief Check for the standard 48x32 monochrome LCD geometry.
+    \ingroup maple_lcd
+
+    This checks the LCD function descriptor rather than requiring the device
+    to also implement the memory-card and clock functions of an official VMU.
+
+    \param  dev             LCD device to inspect.
+    \retval 1               The standard LCD geometry is supported.
+    \retval 0               An LCD is present but its geometry is incompatible.
+    \retval -1              Invalid or unavailable device; errno is set.
+*/
+int vmu_lcd_is_compatible(const maple_device_t *dev);
+
+/** \brief Determine an LCD's orientation relative to its parent peripheral.
+    \ingroup maple_lcd
+
+    \param  dev             Attached LCD device.
+    \param  direction       Receives the relative orientation.
+    \retval 0               Direction returned.
+    \retval -1              Invalid topology or unavailable device; errno is
+                            EINVAL, ENODEV, or EPROTO.
+*/
+int vmu_lcd_get_direction(const maple_device_t *dev,
+                          vmu_lcd_direction_t *direction);
+
+/** \brief Check whether an LCD can accept another command.
+    \ingroup maple_lcd
+
+    Because each Maple device owns one command frame, other VMU operations can
+    temporarily make the LCD busy.
+
+    \param  dev             LCD device to inspect.
+    \retval 1               The LCD is ready.
+    \retval 0               The LCD's command frame is busy.
+    \retval -1              Invalid, unavailable, or incompatible device.
+*/
+int vmu_lcd_is_ready(const maple_device_t *dev);
+
+/** \brief Copy the coherent state of the most recent LCD write.
+    \ingroup maple_lcd
+
+    \param  dev             LCD device to inspect.
+    \param  status          Receives a coherent completion snapshot.
+    \retval 0               Status copied.
+    \retval -1              Invalid or unavailable device; errno is set.
+*/
+int vmu_lcd_get_status(const maple_device_t *dev, vmu_lcd_status_t *status);
+
+/** \brief Install an optional LCD write completion callback.
+    \ingroup maple_lcd
+
+    The callback runs in Maple interrupt context after status publication and
+    frame release. It must remain bounded and must not block, allocate, perform
+    filesystem I/O, or wait for an interrupt.
+
+    \param  dev             LCD device to configure.
+    \param  handler         Callback, or NULL to remove it.
+    \param  user_data       Opaque value passed to the callback.
+    \retval 0               Handler installed.
+    \retval -1              Invalid or unavailable device; errno is set.
+*/
+int vmu_lcd_set_completion_handler(maple_device_t *dev,
+                                   vmu_lcd_completion_handler_t handler,
+                                   void *user_data);
+
+/** \brief Convert byte-per-pixel grayscale data to a packed LCD bitmap.
+    \ingroup maple_lcd
+
+    The input contains 48x32 row-major pixels in top-left-first order. Pixel
+    values use the low four bits; values with bit 3 set become dark pixels.
+    Horizontal and vertical transforms are applied in logical image space.
+    The resulting 192-byte bitmap uses the raw ordering accepted by
+    vmu_draw_lcd().
+
+    \param  bitmap          Receives VMU_SCREEN_BITMAP_BYTES bytes.
+    \param  pixels          VMU_SCREEN_WIDTH * VMU_SCREEN_HEIGHT pixels.
+    \param  flip            VMU_LCD_FLIP_* bit mask.
+    \retval 0               Bitmap converted.
+    \retval -1              Invalid pointer or flags; errno is EINVAL.
+*/
+int vmu_lcd_pack_grayscale(void *bitmap, const uint8_t *pixels,
+                           vmu_lcd_flip_t flip);
+
+/** \brief Convert and asynchronously display byte-per-pixel grayscale data.
+    \ingroup maple_lcd
+
+    The source and transform rules match vmu_lcd_pack_grayscale(). The source
+    is copied into the device's Maple frame before this function returns.
+
+    \param  dev             LCD device to receive the image.
+    \param  pixels          VMU_SCREEN_WIDTH * VMU_SCREEN_HEIGHT pixels.
+    \param  flip            VMU_LCD_FLIP_* bit mask.
+    \retval MAPLE_EOK       The write was queued.
+    \retval MAPLE_EAGAIN    The device frame is busy; retry later.
+    \retval MAPLE_EINVALID  Invalid data, flags, or incompatible device.
+    \retval MAPLE_EFAIL     The frame could not be queued.
+*/
+int vmu_draw_lcd_grayscale(maple_device_t *dev, const uint8_t *pixels,
+                           vmu_lcd_flip_t flip);
+
 /** \brief   Display a 1bpp bitmap on a VMU screen.
     \ingroup maple_lcd
 
     This function sends a raw bitmap to a VMU to display on its screen. This
-    bitmap is 1bpp, and is 48x32 in size.
+    bitmap is 1bpp and 48x32. Its first bit corresponds to the bottom-right
+    pixel, matching the peripheral's raw transfer order.
 
     \param  dev             The device to draw to.
     \param  bitmap          The bitmap to show.
@@ -267,9 +414,8 @@ int vmu_draw_lcd(maple_device_t *dev, const void *bitmap);
     vmu_draw_lcd(), but the image is rotated 180° so that the first byte of the
     bitmap corresponds to the top-left corner, instead of the bottom-right one.
 
-    \warning    This function is optimized by an assembly routine which operates
-                on 32 bits at a time. As such, the given bitmap must be 4-byte
-                aligned.
+    The input may have arbitrary byte alignment; the implementation copies each
+    word before applying its optimized bit reversal.
 
     \param  dev             The device to draw to.
     \param  bitmap          The bitmap to show.
@@ -334,8 +480,8 @@ void vmu_set_icon(const char *vmu_icon);
     <i>really</i> know what you're doing, as you can easily corrupt
     the filesystem by writing incorrect data. Instead, you should
     favor the high-level filesystem API found in vmufs.h, or just
-    use the native C standard filesystem API within the virtual 
-    `/vmu/` root directory to operate on VMU data. 
+    use the standard C filesystem API within the virtual `/vmu/` root
+    directory to operate on VMU data.
 */
 
 /** \brief   Read a block from a memory card.
@@ -382,6 +528,162 @@ int vmu_block_write(maple_device_t *dev, uint16_t blocknum, const uint8_t *buffe
         - date/time management
         - input/button status
 */
+
+/** \brief Civil date and time used by Maple clock peripherals.
+    \ingroup maple_clock
+
+    The weekday uses the standard C convention: Sunday is zero and Saturday
+    is six. Clock reads recompute it from the returned date because some
+    peripherals do not maintain a reliable weekday field.
+*/
+typedef struct vmu_clock_time {
+    uint16_t year;      /**< Full Gregorian year from 1 through 9999. */
+    uint8_t month;      /**< Month from 1 through 12. */
+    uint8_t day;        /**< Day of month from 1 through 31. */
+    uint8_t hour;       /**< Hour from 0 through 23. */
+    uint8_t minute;     /**< Minute from 0 through 59. */
+    uint8_t second;     /**< Second from 0 through 59. */
+    uint8_t weekday;    /**< Sunday 0 through Saturday 6. */
+} vmu_clock_time_t;
+
+/** \brief Clock command represented by a completion snapshot.
+    \ingroup maple_clock
+*/
+typedef enum vmu_clock_operation {
+    VMU_CLOCK_OPERATION_NONE = 0, /**< No clock command submitted yet. */
+    VMU_CLOCK_OPERATION_GET,      /**< Read the peripheral clock. */
+    VMU_CLOCK_OPERATION_SET       /**< Set the peripheral clock. */
+} vmu_clock_operation_t;
+
+/** \brief Coherent state of the most recent asynchronous clock command.
+    \ingroup maple_clock
+*/
+typedef struct vmu_clock_status {
+    bool busy;                       /**< A clock command is in flight. */
+    bool time_valid;                 /**< time contains a successful result. */
+    vmu_clock_operation_t operation; /**< Most recently submitted operation. */
+    int result;                      /**< MAPLE_EOK, MAPLE_EFAIL, or MAPLE_EAGAIN. */
+    int response;                    /**< Raw MAPLE_RESPONSE_* value. */
+    uint32_t submitted_sequence;     /**< Most recently submitted sequence. */
+    uint32_t completed_sequence;     /**< Most recently completed sequence. */
+    vmu_clock_time_t time;           /**< Read or successfully written time. */
+} vmu_clock_status_t;
+
+/** \brief IRQ-context clock completion callback.
+    \ingroup maple_clock
+
+    The snapshot pointer remains valid only for the duration of the callback.
+*/
+typedef void (*vmu_clock_completion_handler_t)(
+    maple_device_t *dev, const vmu_clock_status_t *status, void *user_data);
+
+/** \brief Validate a civil date and time.
+    \ingroup maple_clock
+
+    This validates month lengths, leap years, clock fields, and that the
+    weekday matches the supplied date.
+
+    \param  time            Time to validate.
+    \retval 1               The value is valid.
+    \retval 0               The value is not valid.
+    \retval -1              time is NULL; errno is EINVAL.
+*/
+int vmu_clock_time_is_valid(const vmu_clock_time_t *time);
+
+/** \brief Check whether a clock device can accept another command.
+    \ingroup maple_clock
+
+    Because each Maple device owns one command frame, LCD, storage, or buzzer
+    activity on a multi-function device can temporarily make its clock busy.
+
+    \param  dev             Clock-capable Maple device.
+    \retval 1               The shared device frame is ready.
+    \retval 0               The shared device frame is busy.
+    \retval -1              Invalid or unavailable clock device; errno is set.
+*/
+int vmu_clock_is_ready(const maple_device_t *dev);
+
+/** \brief Copy coherent asynchronous clock-command state.
+    \ingroup maple_clock
+
+    \param  dev             Clock-capable Maple device.
+    \param  status          Receives the state snapshot.
+    \retval 0               Status copied.
+    \retval -1              Invalid or unavailable clock device; errno is set.
+*/
+int vmu_clock_get_status(const maple_device_t *dev,
+                         vmu_clock_status_t *status);
+
+/** \brief Install an optional clock-command completion callback.
+    \ingroup maple_clock
+
+    The callback runs in Maple interrupt context after status publication and
+    frame release. It must remain bounded and must not block, allocate, perform
+    filesystem I/O, or wait for an interrupt.
+
+    \param  dev             Clock-capable Maple device.
+    \param  handler         Callback, or NULL to remove it.
+    \param  user_data       Opaque value passed to the callback.
+    \retval 0               Handler installed.
+    \retval -1              Invalid or unavailable clock device; errno is set.
+*/
+int vmu_clock_set_completion_handler(
+    maple_device_t *dev, vmu_clock_completion_handler_t handler,
+    void *user_data);
+
+/** \brief Asynchronously read a Maple peripheral clock.
+    \ingroup maple_clock
+
+    The result is published through vmu_clock_get_status() before the optional
+    completion callback runs.
+
+    \param  dev             Clock-capable Maple device.
+    \retval MAPLE_EOK       The command was queued.
+    \retval MAPLE_EAGAIN    The shared device frame is busy.
+    \retval MAPLE_EINVALID  The device lacks the clock function.
+    \retval MAPLE_EFAIL     The frame could not be queued.
+*/
+int vmu_clock_get_time_async(maple_device_t *dev);
+
+/** \brief Asynchronously set a Maple peripheral clock.
+    \ingroup maple_clock
+
+    The time is copied into the Maple frame before this function returns.
+
+    \param  dev             Clock-capable Maple device.
+    \param  time            Valid civil time to write.
+    \retval MAPLE_EOK       The command was queued.
+    \retval MAPLE_EAGAIN    The shared device frame is busy.
+    \retval MAPLE_EINVALID  Invalid time or unsupported device.
+    \retval MAPLE_EFAIL     The frame could not be queued.
+*/
+int vmu_clock_set_time_async(maple_device_t *dev,
+                             const vmu_clock_time_t *time);
+
+/** \brief Synchronously read a Maple peripheral clock.
+    \ingroup maple_clock
+
+    \param  dev             Clock-capable Maple device.
+    \param  time            Receives a validated civil time.
+    \retval MAPLE_EOK       On success.
+    \retval MAPLE_ETIMEOUT  If the command timed out.
+    \retval MAPLE_EFAIL     On transport or response error.
+    \retval MAPLE_EINVALID  The device lacks the clock function.
+*/
+int vmu_clock_get_time(maple_device_t *dev, vmu_clock_time_t *time);
+
+/** \brief Synchronously set a Maple peripheral clock.
+    \ingroup maple_clock
+
+    \param  dev             Clock-capable Maple device.
+    \param  time            Valid civil time to write.
+    \retval MAPLE_EOK       On success.
+    \retval MAPLE_ETIMEOUT  If the command timed out.
+    \retval MAPLE_EFAIL     On transport or response error.
+    \retval MAPLE_EINVALID  Invalid time or unsupported device.
+*/
+int vmu_clock_set_time(maple_device_t *dev,
+                       const vmu_clock_time_t *time);
 
 /** \name Buzzer
     \brief Methods for tone generation.
@@ -639,4 +941,3 @@ void vmu_shutdown(void);
 __END_DECLS
 
 #endif  /* __DC_MAPLE_VMU_H */
-

@@ -276,10 +276,30 @@ lightgun_set_capture_handler
 lightgun_set_trigger_filter
 lightgun_set_flash_color
 lightgun_get_flash_color
+vmu_lcd_is_compatible
+vmu_lcd_get_direction
+vmu_lcd_is_ready
+vmu_lcd_get_status
+vmu_lcd_set_completion_handler
+vmu_lcd_pack_grayscale
+vmu_draw_lcd_grayscale
+vmu_clock_time_is_valid
+vmu_clock_is_ready
+vmu_clock_get_status
+vmu_clock_set_completion_handler
+vmu_clock_get_time_async
+vmu_clock_set_time_async
+vmu_clock_get_time
+vmu_clock_set_time
+vmu_get_datetime
+vmu_set_datetime
+vmu_beep_raw
+vmu_beep_waveform
 vmu_draw_lcd
 vmu_block_read
 vmu_block_write
 vmu_set_icon
+vmufb_present_ex
 
 # MIE
 mie_port0_mode
