@@ -157,7 +157,7 @@ This page serves as an index for all KallistiOS examples.
   - yuv_converter
 - raylib
   - raytris
-- [**rumble**](rumble/): Demonstrates sending raw commands to the purupuru/jump pack
+- [**rumble**](rumble/): Validates typed vibration effects, device metadata, auto-stop, and asynchronous completion
 - sd
   - ext2fs
   - mke2fs
