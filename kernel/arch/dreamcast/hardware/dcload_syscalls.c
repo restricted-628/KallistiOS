@@ -23,7 +23,8 @@
 
 int dcload_syscall_native(dcload_cmd_t cmd, void *param1, void *param2, void *param3) {
     uintptr_t *syscall_ptr = (uintptr_t *)VEC_DCLOAD;
-    int (*syscall)() = (int (*)())(*syscall_ptr);
+    int (*syscall)(uintptr_t, uintptr_t, uintptr_t, uintptr_t) =
+        (int (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(*syscall_ptr);
 
     /* Disable IRQs until the syscall returns */
     irq_disable_scoped();
@@ -33,5 +34,6 @@ int dcload_syscall_native(dcload_cmd_t cmd, void *param1, void *param2, void *pa
     while(FIFO_STATUS & FIFO_SH4)            ;
 
     /* Make the call */
-    return syscall(cmd, param1, param2, param3);
+    return syscall((uintptr_t)cmd, (uintptr_t)param1,
+                   (uintptr_t)param2, (uintptr_t)param3);
 }
