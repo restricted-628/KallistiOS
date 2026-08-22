@@ -1146,6 +1146,145 @@ int vmufs_delete(maple_device_t *dev, const char *fn) {
     return vmufs_delete_observed(dev, fn, NULL);
 }
 
+int vmufs_rename_observed(
+    maple_device_t *dev, const char *old_name, const char *new_name,
+    const vmufs_transaction_observer_t *observer) {
+    uint16_t replaced_blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    vmu_root_t root;
+    vmu_dir_t *dir = NULL;
+    uint16_t *fat = NULL;
+    size_t old_length, new_length, dir_entries;
+    size_t completed = 0, total;
+    uint16_t replaced_size = 0;
+    int fatsize, dirsize, old_index, new_index, rv = -1;
+    bool same_directory_block = false;
+
+    if(!dev || !old_name || !new_name) {
+        errno = EINVAL;
+        return -1;
+    }
+    old_length = filename_length(old_name, 13u);
+    new_length = filename_length(new_name, 13u);
+    if(old_length == 0 || old_length > 12u ||
+       new_length == 0 || new_length > 12u) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(vmufs_setup(dev, &root, &dir, &dirsize, &fat, &fatsize) < 0) {
+        if(errno == 0)
+            errno = EIO;
+        return -1;
+    }
+
+    dir_entries = (size_t)dirsize / sizeof(*dir);
+    for(size_t i = 0; i < dir_entries; ++i)
+        dir[i].dirty = 0;
+
+    if(mutation_preflight(&root, fat, fatsize, dir, dirsize) < 0)
+        goto ex;
+
+    old_index = vmufs_dir_find(&root, dir, old_name);
+    if(old_index < 0) {
+        errno = ENOENT;
+        goto ex;
+    }
+    if(strcmp(old_name, new_name) == 0) {
+        transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                           0, 0, 0, 0, true);
+        rv = 0;
+        goto ex;
+    }
+
+    new_index = vmufs_dir_find(&root, dir, new_name);
+    if(new_index >= 0) {
+        replaced_size = dir[new_index].filesize;
+        if(vmufs_chain_collect(&root, fat,
+                               VMUFS_BLOCK_SIZE / sizeof(*fat),
+                               &dir[new_index], replaced_blocks,
+                               sizeof(replaced_blocks) /
+                                   sizeof(replaced_blocks[0])) < 0) {
+            errno = EILSEQ;
+            goto ex;
+        }
+        same_directory_block =
+            (size_t)old_index /
+                (VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t)) ==
+            (size_t)new_index /
+                (VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t));
+        total = same_directory_block ? 2u : 3u;
+    }
+    else {
+        total = 1u;
+    }
+
+    transaction_update(observer, VMUFS_TRANSACTION_DIRECTORY,
+                       0, total, 0, 0, false);
+    if(transaction_cancelled(observer)) {
+        errno = ECANCELED;
+        rv = VMUFS_TRANSACTION_CANCELLED;
+        goto ex;
+    }
+
+    if(new_index >= 0) {
+        /* Remove the replaced name before releasing its blocks. When the two
+           entries occupy different directory blocks this intermediate state
+           preserves the source and can only orphan the replaced chain. */
+        memset(&dir[new_index], 0, sizeof(dir[new_index]));
+        dir[new_index].dirty = 1;
+        if(!same_directory_block) {
+            if(vmufs_dir_write(dev, &root, dir) < 0) {
+                errno = EIO;
+                goto ex;
+            }
+            ++completed;
+            transaction_update(observer, VMUFS_TRANSACTION_DIRECTORY,
+                               completed, total, 0, 0, false);
+        }
+    }
+
+    memset(dir[old_index].filename, 0, sizeof(dir[old_index].filename));
+    memcpy(dir[old_index].filename, new_name, new_length);
+    dir[old_index].dirty = 1;
+    if(vmufs_dir_write(dev, &root, dir) < 0) {
+        errno = EIO;
+        goto ex;
+    }
+
+    ++completed;
+    if(new_index < 0) {
+        transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                           completed, total, 0, 0, true);
+        rv = 0;
+        goto ex;
+    }
+
+    transaction_update(observer, VMUFS_TRANSACTION_CLEANUP,
+                       completed, total, 0, 0, true);
+    vmufs_chain_release(fat, replaced_blocks, replaced_size);
+    if(vmufs_fat_write(dev, &root, fat) < 0) {
+        /* The rename is already visible. The replaced chain is merely
+           orphaned if allocation cleanup cannot be written. */
+        errno = EIO;
+        rv = -2;
+        goto ex;
+    }
+
+    ++completed;
+    transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                       completed, total, 0, 0, true);
+    rv = 0;
+
+ex:
+    vmufs_teardown(dir, fat);
+    return rv;
+}
+
+int vmufs_rename(maple_device_t *dev, const char *old_name,
+                 const char *new_name) {
+    return vmufs_rename_observed(dev, old_name, new_name, NULL);
+}
+
 int vmufs_free_blocks(maple_device_t *dev) {
     vmu_root_t  root;
     uint16_t      *fat = NULL;
@@ -1159,6 +1298,21 @@ int vmufs_free_blocks(maple_device_t *dev) {
 
     vmufs_teardown(NULL, fat);
     return rv;
+}
+
+int vmufs_free_executable_blocks(maple_device_t *dev) {
+    vmu_root_t root;
+    uint16_t *fat = NULL;
+    size_t free_blocks;
+    int fatsize;
+
+    if(vmufs_setup(dev, &root, NULL, NULL, &fat, &fatsize) < 0)
+        return -1;
+
+    free_blocks = vmufs_fat_free_executable(
+        &root, fat, (size_t)fatsize / sizeof(*fat));
+    vmufs_teardown(NULL, fat);
+    return (int)free_blocks;
 }
 
 int vmufs_init(void) {

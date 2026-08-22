@@ -384,6 +384,26 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf, int insize, in
 */
 int vmufs_delete(maple_device_t *dev, const char *fn);
 
+/** \brief Rename a file, replacing an existing destination safely.
+
+    File contents, timestamp, type, copy protection, and header offset are
+    preserved. The complete filesystem is validated before mutation. When a
+    destination exists, its directory entry is removed before its FAT chain is
+    released, so interruption can leak blocks but cannot cross-link live files.
+    If the entries occupy different directory blocks, interruption after the
+    first commit can leave the source under its old name with the destination
+    removed.
+
+    \param dev       VMU containing both names.
+    \param old_name  Existing file name.
+    \param new_name  New file name of at most 12 bytes.
+    \retval 0        Rename completed or both names were identical.
+    \retval -1       Failure before or during the directory commit.
+    \retval -2       Rename committed, but replaced blocks may be orphaned.
+*/
+int vmufs_rename(maple_device_t *dev, const char *old_name,
+                 const char *new_name);
+
 /** \brief Format a standard 128 KiB memory card.
 
     Quick format invalidates the current root, clears the directory, writes a
@@ -440,7 +460,8 @@ typedef enum vmufs_request_operation {
     VMUFS_REQUEST_WRITE,       /**< \brief Transactional file save. */
     VMUFS_REQUEST_DELETE,      /**< \brief Transactional file deletion. */
     VMUFS_REQUEST_FORMAT,      /**< \brief Whole-card format. */
-    VMUFS_REQUEST_DEFRAGMENT   /**< \brief Safe file repacking. */
+    VMUFS_REQUEST_DEFRAGMENT,  /**< \brief Safe file repacking. */
+    VMUFS_REQUEST_RENAME       /**< \brief Transactional file rename. */
 } vmufs_request_operation_t;
 
 typedef enum vmufs_request_state {
@@ -513,6 +534,16 @@ vmufs_request_t *vmufs_delete_async(
     maple_device_t *dev, const char *fn,
     vmufs_request_callback_t callback, void *callback_data);
 
+/** \brief Queue a transactional rename on one VMU.
+
+    Both names are copied during submission. If the destination exists, its
+    blocks are reclaimed only after the source is visible under the new name.
+    Cancellation is accepted before the first directory commit.
+*/
+vmufs_request_t *vmufs_rename_async(
+    maple_device_t *dev, const char *old_name, const char *new_name,
+    vmufs_request_callback_t callback, void *callback_data);
+
 /** \brief Queue a destructive standard-card format.
 
     Options are copied during submission. Cancellation is accepted while the
@@ -559,6 +590,18 @@ int vmufs_request_destroy(vmufs_request_t *request);
     \return                 The number of blocks free for writing.
 */
 int vmufs_free_blocks(maple_device_t *dev);
+
+/** \brief Return contiguous space eligible for an executable image.
+
+    A VMU executable must begin at physical block zero. This count therefore
+    stops at the first allocated block and can be much smaller than the total
+    reported by vmufs_free_blocks() on a fragmented card.
+
+    \param dev  VMU to inspect.
+    \return     Contiguous free blocks beginning at block zero, or -1 on I/O
+                or geometry failure.
+*/
+int vmufs_free_executable_blocks(maple_device_t *dev);
 
 
 /** \brief  Initialize vmufs.

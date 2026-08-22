@@ -170,6 +170,7 @@ static int validate_orphans_only(const vmu_root_t *root,
 static int test_commit_prefixes(void) {
     uint16_t fat[TEST_FAT_ENTRIES];
     uint16_t old_blocks[2], new_blocks[2];
+    uint16_t source_blocks[2], target_blocks[2];
     vmu_dir_t dir[TEST_DIR_ENTRIES];
     vmufs_validation_t validation;
     vmu_root_t root;
@@ -218,6 +219,51 @@ static int test_commit_prefixes(void) {
     if(validate_orphans_only(&root, fat, dir) < 0)
         return -1;
     vmufs_chain_release(fat, old_blocks, 2);
+    if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                      TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                      &validation) < 0)
+        return -1;
+
+    /* Replacement rename across directory blocks: removing the destination
+       first preserves the source and only orphans the destination chain.
+       Publishing the new name preserves that property until FAT cleanup. */
+    make_card(&root, fat, dir);
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, source_blocks, 2) < 0 ||
+       vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, target_blocks, 2) < 0)
+        return -1;
+    make_entry(&dir[0], "SOURCE", source_blocks[0], 2);
+    make_entry(&dir[16], "TARGET", target_blocks[0], 2);
+    memset(&dir[16], 0, sizeof(dir[16]));
+    if(validate_orphans_only(&root, fat, dir) < 0)
+        return -1;
+    memset(dir[0].filename, 0, sizeof(dir[0].filename));
+    memcpy(dir[0].filename, "TARGET", 6);
+    if(validate_orphans_only(&root, fat, dir) < 0)
+        return -1;
+    vmufs_chain_release(fat, target_blocks, 2);
+    if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                      TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                      &validation) < 0)
+        return -1;
+
+    /* Entries in one directory block can be replaced by a single block
+       commit, after which only the replaced chain needs reclamation. */
+    make_card(&root, fat, dir);
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, source_blocks, 2) < 0 ||
+       vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, target_blocks, 2) < 0)
+        return -1;
+    make_entry(&dir[0], "SOURCE", source_blocks[0], 2);
+    make_entry(&dir[1], "TARGET", target_blocks[0], 2);
+    memset(&dir[1], 0, sizeof(dir[1]));
+    memset(dir[0].filename, 0, sizeof(dir[0].filename));
+    memcpy(dir[0].filename, "TARGET", 6);
+    if(validate_orphans_only(&root, fat, dir) < 0)
+        return -1;
+    vmufs_chain_release(fat, target_blocks, 2);
     if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
                       TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
                       &validation) < 0)

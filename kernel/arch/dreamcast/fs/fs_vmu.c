@@ -174,6 +174,34 @@ static maple_device_t * vmu_path_to_addr(const char *p) {
     return maple_enum_dev(port - 'a', p[2] - '0');
 }
 
+static int vmu_file_path(const char *path, maple_device_t **dev,
+                         const char **name) {
+    size_t path_len;
+    size_t name_len;
+
+    if(!path || !dev || !name) {
+        errno = EINVAL;
+        return -1;
+    }
+    path_len = strlen(path);
+    if(path_len < 5u || path[0] != '/') {
+        errno = ENOENT;
+        return -1;
+    }
+    *dev = vmu_path_to_addr(path);
+    if(!*dev || path[3] != '/' || !path[4] || strchr(path + 4, '/')) {
+        errno = ENOENT;
+        return -1;
+    }
+    name_len = strlen(path + 4);
+    if(name_len > sizeof(((vmu_fh_t *)0)->name) - 1u) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    *name = path + 4;
+    return 0;
+}
+
 /* Open the fake vmu root dir /vmu */
 static vmu_fh_t *vmu_open_vmu_dir(void) {
     unsigned int p, u;
@@ -783,33 +811,36 @@ static int vmu_ioctl(void *fd, int cmd, va_list ap) {
 
 /* Delete a file */
 static int vmu_unlink(vfs_handler_t * vfs, const char *path) {
-    maple_device_t  * dev = NULL;   /* address of VMU */
-    size_t name_len;
+    maple_device_t *dev;
+    const char *name;
 
     (void)vfs;
 
-    if(!path) {
-        errno = EINVAL;
+    if(vmu_file_path(path, &dev, &name) < 0) {
+        dbglog(DBG_ERROR, "VMUFS: vmu_unlink on invalid path '%s'\n",
+               path ? path : "(null)");
         return -1;
     }
 
-    /* convert path to valid VMU address */
-    dev = vmu_path_to_addr(path);
+    return vmufs_delete(dev, name);
+}
 
-    if(dev == NULL || path[3] != '/' || !path[4] ||
-       strchr(path + 4, '/')) {
-        dbglog(DBG_ERROR, "VMUFS: vmu_unlink on invalid path '%s'\n", path);
-        errno = ENOENT;
+static int vmu_rename(vfs_handler_t *vfs, const char *old_path,
+                      const char *new_path) {
+    maple_device_t *old_dev, *new_dev;
+    const char *old_name, *new_name;
+
+    (void)vfs;
+
+    if(vmu_file_path(old_path, &old_dev, &old_name) < 0 ||
+       vmu_file_path(new_path, &new_dev, &new_name) < 0)
+        return -1;
+    if(old_dev != new_dev) {
+        errno = EXDEV;
         return -1;
     }
 
-    name_len = strlen(path + 4);
-    if(name_len > 12) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-
-    return vmufs_delete(dev, path + 4);
+    return vmufs_rename(old_dev, old_name, new_name);
 }
 
 static int vmu_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
@@ -1007,7 +1038,7 @@ static vfs_handler_t vh = {
     vmu_total,
     vmu_readdir,
     vmu_ioctl,
-    NULL,               /* rename/move */
+    vmu_rename,
     vmu_unlink,
     vmu_mmap,
     NULL,               /* complete */
