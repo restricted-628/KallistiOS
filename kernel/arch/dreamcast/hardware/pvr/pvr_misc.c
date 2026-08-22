@@ -262,6 +262,17 @@ int pvr_get_pipeline_status(pvr_pipeline_status_t *status) {
     status->ram_target = pvr_state.ram_target;
     status->ta_target = pvr_state.ta_target;
     status->view_target = pvr_state.view_target;
+    status->scene_render_id = pvr_state.scene_render_id;
+    status->queued_render_id = pvr_state.queued_render_id;
+    status->registration_render_id =
+        pvr_state.registration_render_id;
+    status->registered_render_id = pvr_state.registered_render_id;
+    status->render_started_id = pvr_state.render_started_id;
+    status->active_render_id = pvr_state.active_render_id;
+    status->completed_render_id = pvr_state.completed_render_id;
+    status->pending_display_render_id =
+        pvr_state.pending_display_render_id;
+    status->displayed_render_id = pvr_state.displayed_render_id;
     memcpy(&status->faults, (const void *)&pvr_state.fault_status,
            sizeof(status->faults));
 

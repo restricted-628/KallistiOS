@@ -51,6 +51,11 @@ lifecycle and naming conventions.
   tile accumulation until one final renderer submission. The established
   one-pass path retains its ABI, allocation model, and DMA behavior. Pass-aware
   hybrid flushing switches only the opted-in scene to lockstep continuation.
+* Added allocation-free PVR render tickets with monotonic scene identities and
+  identity-specific queued, registered, rendering, complete, and displayed
+  stages. Texture tickets describe their exact target geometry, reject display
+  waits, and make the render-to-texture reuse boundary explicit; framebuffer
+  tickets separately identify the VBlank at which their result becomes visible.
 * Completed the established extended texture loader with checked dimensions,
   honest preformatted-copy behavior, bounded transfer selection, and an
   error-reporting entry point while preserving the original void wrapper.

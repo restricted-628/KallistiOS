@@ -122,9 +122,14 @@ static void pvr_render_lists(void) {
         // Begin rendering from the dirty TA buffer into the clean
         // frame buffer.
         pvr_state.ta_target ^= pvr_state.vbuf_doublebuf;
-        pvr_begin_queued_render();
+        pvr_state.active_render_id = pvr_state.registration_render_id;
+        pvr_state.render_started_id = pvr_state.active_render_id;
+        pvr_state.registration_render_id = PVR_RENDER_ID_INVALID;
+        pvr_state.was_to_texture = pvr_state.curr_to_texture;
         pvr_state.render_busy = 1;
+        pvr_begin_queued_render();
         pvr_sync_stats(PVR_SYNC_RNDSTART);
+        genwait_wake_all((void *)&pvr_state.render_started_id);
 
         // Switch to the clean TA buffer.
         pvr_state.lists_transferred = 0;
@@ -133,7 +138,6 @@ static void pvr_render_lists(void) {
         // The TA is no longer busy.
         pvr_state.ta_busy = 0;
 
-        pvr_state.was_to_texture = pvr_state.curr_to_texture;
         pvr_status_advance();
 
         // Signal the client code to continue onwards.
@@ -188,6 +192,8 @@ static void registration_complete(void) {
         }
     }
 
+    pvr_state.registered_render_id = pvr_state.registration_render_id;
+    genwait_wake_all((void *)&pvr_state.registered_render_id);
     pvr_sync_stats(PVR_SYNC_REGDONE);
     pvr_event_dispatch(PVR_EVENT_REGISTRATION_COMPLETE,
                        pvr_state.lists_transferred);
@@ -210,6 +216,14 @@ void pvr_vblank_handler(uint32_t code, void *data) {
         pvr_state.view_target ^= 1;
 
         pvr_sync_view();
+
+        if(pvr_state.pending_display_render_id != PVR_RENDER_ID_INVALID) {
+            pvr_state.displayed_render_id =
+                pvr_state.pending_display_render_id;
+        }
+
+        pvr_state.pending_display_render_id = PVR_RENDER_ID_INVALID;
+        genwait_wake_all((void *)&pvr_state.displayed_render_id);
 
         // Clear the render completed flag.
         pvr_state.render_completed = 0;
@@ -251,6 +265,16 @@ void pvr_int_handler(uint32_t code, void *data) {
             status_changed = true;
             break;
         case ASIC_EVT_PVR_RENDERDONE_TSP:
+            if(pvr_state.active_render_id != PVR_RENDER_ID_INVALID) {
+                pvr_state.completed_render_id = pvr_state.active_render_id;
+
+                if(!pvr_state.was_to_texture) {
+                    pvr_state.pending_display_render_id =
+                        pvr_state.active_render_id;
+                }
+            }
+
+            pvr_state.active_render_id = PVR_RENDER_ID_INVALID;
             pvr_state.render_busy = 0;
             if(!pvr_state.was_to_texture)
                 pvr_state.render_completed = 1;
@@ -258,6 +282,7 @@ void pvr_int_handler(uint32_t code, void *data) {
             status_changed = true;
 
             genwait_wake_all((void *)&pvr_state.render_busy);
+            genwait_wake_all((void *)&pvr_state.completed_render_id);
             break;
         case ASIC_EVT_PVR_YUV_DONE:
             /* Converter completion is distinct from the channel-2 DMA that

@@ -160,6 +160,7 @@ This page serves as an index for all KallistiOS examples.
   - pvrmark
   - pvrmark_strips
   - pvrmark_strips_direct
+  - render_ticket
   - strided_texture
   - texture_surface
   - texture_render

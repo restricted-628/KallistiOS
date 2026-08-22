@@ -53,8 +53,8 @@ than place another renderer above them.
 | Background plane | Covered for untextured color planes | Textured backgrounds remain optional because ordinary geometry expresses them without special scene state. |
 | Global material state | Fog and cheap-shadow controls are broad; clamp endpoints and punch-through threshold were missing | Provide checked packed-color clamp, threshold, bulk palette, and header supersampling controls. Audit culling threshold and vertical-filter coefficients separately. |
 | Context and header construction | Most polygon, sprite, modifier, two-volume, blend, depth, fog, UV, palette, and texture fields are covered | Preserve public context layout. Add extended compilation flags for missing packed-header controls; treat individual header mutation helpers as optional optimizations. |
-| Render submission identity | Global pipeline state and events are covered | Add per-render completion identity only if it can represent queued registration, render, display, and render-to-texture completion without ambiguous frame counters. |
-| Render targets | Sized 16-bit render-to-texture is covered | Audit additional output formats, no-flip rendering, completion ordering, and sampling hazards. |
+| Render submission identity | Stable allocation-free tickets cover queued registration, completed registration, rendering, target completion, and display | Preserve identity-specific waits and expose counters in coherent pipeline diagnostics. |
+| Render targets | Sized 16-bit render-to-texture and explicit completion/no-flip contracts are covered | Audit additional output formats and checked framebuffer bindings. |
 | Texture allocation | General allocator and checked caller-owned surfaces are covered | Add contiguous multi-surface reservations for demonstrated streaming and batch-conversion needs. Do not move raw pointer allocations behind an unsafe collector. |
 | Texture formats | Linear, twiddled, mipmapped, paletted, full-codebook VQ, stride, rectangle, and YUV are represented | Validate reduced-codebook VQ and any VQ/palette combinations against hardware before extending the surface layout vocabulary. |
 | Texture upload | Checked synchronous and immediate-admission asynchronous paths are covered | Add checked readback and framebuffer-binding helpers with explicit render/sampling hazard rules. |
@@ -83,8 +83,9 @@ than place another renderer above them.
    record or notify an application.~~ Closed: faults are latched with counters
    and TA register snapshots, and optional event handlers receive the fault.
 5. The scene pipeline still has fixed waits. Sparse terminal-state reporting
-   is closed by the coherent pipeline snapshot; per-render identity remains a
-   separate design problem.
+   and per-render identity are closed by coherent pipeline snapshots and
+   allocation-free completion tickets; bounded recovery for established waits
+   remains separate work.
 6. ~~User clipping is representable in a polygon header, but KOS provides no
    checked command-construction or submission helper.~~ Closed for direct and
    buffered lists, including active-target tile validation.
@@ -110,8 +111,10 @@ than place another renderer above them.
    continuation, final-only render release, a host layout suite, and an
    emulator-tested three-pass example. Per-pass DMA staging, IRQ-chained
    continuation, and pass-aware hybrid early flushing are also closed.
-7. Add per-render completion identity and finish render-target/no-flip hazard
-   contracts.
+7. ~~Add per-render completion identity and finish render-target/no-flip hazard
+   contracts.~~ Closed with monotonic allocation-free tickets, five observable
+   stages, identity-specific waits, exact texture-target geometry, and explicit
+   separation between render completion and framebuffer display.
 8. Add only hardware-validated advanced texture layouts, readback, contiguous
    reservations, and batch YUV conversion.
 9. Close remaining display timing and filter controls in `video`.
@@ -173,6 +176,27 @@ items. Emulator validation covers the normal interrupt and snapshot paths only.
   masks, stale handles, and normal completion counts;
 - the hybrid-list example verifies one DMA event per explicit list transfer and
   rejects any DMA fault.
+
+### Identity-specific render completion
+
+- a successful tracked scene finish returns a caller-owned ticket with a
+  monotonic nonzero render identity and no allocation or worker;
+- queued, registered, rendering, complete, and displayed counters advance at
+  their corresponding TA, ISP/TSP, and VBlank transitions;
+- waits use the requested identity, so an unrelated interrupt or earlier frame
+  cannot satisfy a later ticket;
+- render-to-texture tickets preserve the exact target pointer, width, height,
+  and stride, define `COMPLETE` as the reuse boundary, and reject the
+  framebuffer-only display stage;
+- framebuffer tickets distinguish rendering completion from the later VBlank
+  page flip;
+- shutdown wakes every stage wait and invalid active pipeline slots never move
+  historical completion counters backward;
+- the focused example completes 60 texture/framebuffer pairs in interpreter
+  and dynamic-recompiler emulation, including invalid-output, unsupported-stage,
+  forged-future-ID, target-metadata, and pipeline-reconciliation checks.
+
+Physical completion visibility and page-flip timing remain hardware-day items.
 
 ### Pixel and user clipping
 

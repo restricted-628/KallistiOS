@@ -193,6 +193,18 @@ typedef struct {
     uint32_t status_sequence;           // Software-visible pipeline transitions
     pvr_fault_status_t fault_status;    // Persistent interrupt fault record
 
+    // Stable render identities; zero is reserved for inactive pipeline slots.
+    pvr_render_id_t next_render_id;
+    pvr_render_id_t scene_render_id;
+    pvr_render_id_t queued_render_id;
+    pvr_render_id_t registration_render_id;
+    pvr_render_id_t registered_render_id;
+    pvr_render_id_t render_started_id;
+    pvr_render_id_t active_render_id;
+    pvr_render_id_t completed_render_id;
+    pvr_render_id_t pending_display_render_id;
+    pvr_render_id_t displayed_render_id;
+
     // Memory pointers / buffers
     pvr_dma_buffers_t   dma_buffers[2];     // DMA buffers (if any)
     pvr_ta_buffers_t    ta_buffers[2];      // TA buffers

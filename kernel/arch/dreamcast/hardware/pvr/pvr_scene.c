@@ -20,6 +20,7 @@
 #include <kos/genwait.h>
 #include <kos/regfield.h>
 #include <kos/thread.h>
+#include <kos/timer.h>
 #include <dc/pvr.h>
 #include <dc/video.h>
 #include <dc/sq.h>
@@ -251,6 +252,9 @@ static void pvr_start_ta_rendering(void) {
         pvr_state.curr_pclip_y = pvr_state.next_pclip_y;
         pvr_state.curr_background = pvr_state.next_background;
 
+        pvr_state.queued_render_id = pvr_state.scene_render_id;
+        pvr_state.registration_render_id = pvr_state.scene_render_id;
+
         // Starting from that point, we consider that the Tile Accelerator
         // might be busy.
         pvr_state.ta_busy = 1;
@@ -262,6 +266,13 @@ static void pvr_start_ta_rendering(void) {
    frame buffer */
 void pvr_scene_begin(void) {
     int i;
+
+    ++pvr_state.next_render_id;
+
+    if(pvr_state.next_render_id == PVR_RENDER_ID_INVALID)
+        ++pvr_state.next_render_id;
+
+    pvr_state.scene_render_id = pvr_state.next_render_id;
 
     if(pvr_state.multipass) {
         pvr_state.multipass->build_pass = 0;
@@ -1028,9 +1039,11 @@ static int flush_buffered_pass_to_ta(void) {
    this has been called, you can not submit any more data until one of the
    pvr_scene_begin() functions is called again. An error (-1) is returned if
    you have not started a scene already. */
-int pvr_scene_finish(void) {
+static int pvr_scene_finish_internal(pvr_render_ticket_t *ticket) {
     int i, o;
     volatile pvr_dma_buffers_t *b;
+    pvr_render_ticket_t completed_ticket;
+    pvr_render_id_t render_id;
 
     if(!pvr_state.scene_active) {
         errno = EPERM;
@@ -1128,11 +1141,40 @@ int pvr_scene_finish(void) {
             return -1;
     }
 
+    render_id = pvr_state.scene_render_id;
     pvr_state.scene_active = false;
+    pvr_state.scene_render_id = PVR_RENDER_ID_INVALID;
     pvr_status_advance();
+
+    if(ticket) {
+        completed_ticket.id = render_id;
+        completed_ticket.to_texture = pvr_state.next_to_texture;
+        completed_ticket.target = pvr_state.next_to_texture ?
+            (pvr_ptr_t)(PVR_RAM_INT_BASE + pvr_state.next_to_txr_addr) : NULL;
+        completed_ticket.width = pvr_state.next_to_texture ?
+            pvr_state.next_to_txr_w : (uint32_t)vid_mode->width;
+        completed_ticket.height = pvr_state.next_to_texture ?
+            pvr_state.next_to_txr_h : (uint32_t)vid_mode->height;
+        completed_ticket.stride = pvr_state.next_to_texture ?
+            pvr_state.next_to_txr_stride_px : (uint32_t)vid_mode->width;
+        *ticket = completed_ticket;
+    }
 
     /* Ok, now it's just a matter of waiting for the interrupt... */
     return 0;
+}
+
+int pvr_scene_finish(void) {
+    return pvr_scene_finish_internal(NULL);
+}
+
+int pvr_scene_finish_tracked(pvr_render_ticket_t *ticket) {
+    if(!ticket) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return pvr_scene_finish_internal(ticket);
 }
 
 int pvr_wait_ready(void) {
@@ -1184,4 +1226,146 @@ int pvr_wait_render_done(void) {
         t = genwait_wait((void *)&pvr_state.render_busy, "PVR wait render done", 100);
 
     return t;
+}
+
+static volatile pvr_render_id_t *render_stage_counter(
+        pvr_render_stage_t stage) {
+    switch(stage) {
+        case PVR_RENDER_STAGE_QUEUED:
+            return &pvr_state.queued_render_id;
+        case PVR_RENDER_STAGE_REGISTERED:
+            return &pvr_state.registered_render_id;
+        case PVR_RENDER_STAGE_RENDERING:
+            return &pvr_state.render_started_id;
+        case PVR_RENDER_STAGE_COMPLETE:
+            return &pvr_state.completed_render_id;
+        case PVR_RENDER_STAGE_DISPLAYED:
+            return &pvr_state.displayed_render_id;
+        default:
+            return NULL;
+    }
+}
+
+static int render_ticket_validate(const pvr_render_ticket_t *ticket,
+                                  pvr_render_stage_t stage) {
+    if(!ticket || ticket->id == PVR_RENDER_ID_INVALID ||
+            stage < PVR_RENDER_STAGE_QUEUED ||
+            stage > PVR_RENDER_STAGE_DISPLAYED) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(stage == PVR_RENDER_STAGE_DISPLAYED && ticket->to_texture) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    return 0;
+}
+
+int pvr_render_ticket_get_stage(const pvr_render_ticket_t *ticket,
+                                pvr_render_stage_t *stage) {
+    int old_irq;
+
+    if(!stage || render_ticket_validate(ticket, PVR_RENDER_STAGE_QUEUED) < 0) {
+        if(!stage)
+            errno = EINVAL;
+
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(ticket->id > pvr_state.queued_render_id) {
+        irq_restore(old_irq);
+        errno = ENOENT;
+        return -1;
+    }
+
+    *stage = PVR_RENDER_STAGE_QUEUED;
+
+    if(pvr_state.registered_render_id >= ticket->id)
+        *stage = PVR_RENDER_STAGE_REGISTERED;
+
+    if(pvr_state.render_started_id >= ticket->id)
+        *stage = PVR_RENDER_STAGE_RENDERING;
+
+    if(pvr_state.completed_render_id >= ticket->id)
+        *stage = PVR_RENDER_STAGE_COMPLETE;
+
+    if(!ticket->to_texture && pvr_state.displayed_render_id >= ticket->id)
+        *stage = PVR_RENDER_STAGE_DISPLAYED;
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_render_ticket_wait(const pvr_render_ticket_t *ticket,
+                           pvr_render_stage_t stage,
+                           unsigned int timeout_ms) {
+    volatile pvr_render_id_t *counter;
+    uint64_t deadline = 0;
+    int old_irq;
+
+    if(render_ticket_validate(ticket, stage) < 0)
+        return -1;
+
+    counter = render_stage_counter(stage);
+    assert(counter);
+
+    if(timeout_ms)
+        deadline = timer_ms_gettime64() + timeout_ms;
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(ticket->id > pvr_state.queued_render_id) {
+        irq_restore(old_irq);
+        errno = ENOENT;
+        return -1;
+    }
+
+    while(*counter < ticket->id) {
+        unsigned int remaining = 0;
+
+        if(timeout_ms) {
+            uint64_t now = timer_ms_gettime64();
+
+            if(now >= deadline) {
+                irq_restore(old_irq);
+                errno = ETIMEDOUT;
+                return -1;
+            }
+
+            remaining = (unsigned int)(deadline - now);
+        }
+
+        if(genwait_wait((void *)counter, "PVR render ticket", remaining) < 0) {
+            if(errno == EAGAIN)
+                errno = ETIMEDOUT;
+
+            irq_restore(old_irq);
+            return -1;
+        }
+
+        if(!pvr_state.valid) {
+            irq_restore(old_irq);
+            errno = ENODEV;
+            return -1;
+        }
+    }
+
+    irq_restore(old_irq);
+    return 0;
 }

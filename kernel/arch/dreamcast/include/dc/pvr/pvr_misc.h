@@ -364,6 +364,15 @@ typedef struct pvr_pipeline_status {
     uint32_t ram_target;           /**< \brief Current RAM vertex-buffer index. */
     uint32_t ta_target;            /**< \brief Current TA buffer index. */
     uint32_t view_target;          /**< \brief Current displayed framebuffer index. */
+    uint64_t scene_render_id;      /**< \brief Active scene, or zero. */
+    uint64_t queued_render_id;     /**< \brief Most recently queued scene. */
+    uint64_t registration_render_id; /**< \brief Scene in TA registration, or zero. */
+    uint64_t registered_render_id; /**< \brief Latest completed registration. */
+    uint64_t render_started_id;    /**< \brief Latest render started by ISP/TSP. */
+    uint64_t active_render_id;     /**< \brief Render currently using ISP/TSP. */
+    uint64_t completed_render_id;  /**< \brief Latest completed ISP/TSP render. */
+    uint64_t pending_display_render_id; /**< \brief Frame awaiting page flip. */
+    uint64_t displayed_render_id;  /**< \brief Latest displayed framebuffer render. */
     pvr_fault_status_t faults;     /**< \brief Persistent fault information. */
 } pvr_pipeline_status_t;
 

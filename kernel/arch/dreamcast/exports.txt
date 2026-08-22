@@ -534,6 +534,9 @@ pvr_list_flush
 pvr_user_clip_compile
 pvr_user_clip_submit
 pvr_scene_finish
+pvr_scene_finish_tracked
+pvr_render_ticket_get_stage
+pvr_render_ticket_wait
 pvr_wait_ready
 pvr_check_ready
 pvr_txr_load

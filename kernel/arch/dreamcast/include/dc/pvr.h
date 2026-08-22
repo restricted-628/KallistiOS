@@ -980,6 +980,43 @@ void *pvr_vertbuf_tail(pvr_list_t list);
 */
 void pvr_vertbuf_written(pvr_list_t list, size_t amt);
 
+/** \brief Stable identity assigned to one PVR scene.
+    \ingroup pvr_scene_mgmt
+
+    Zero is reserved as an invalid identity. Values increase monotonically for
+    the lifetime of one PVR initialization.
+*/
+typedef uint64_t pvr_render_id_t;
+
+#define PVR_RENDER_ID_INVALID UINT64_C(0)
+
+/** \brief Observable stages of one submitted render.
+    \ingroup pvr_scene_mgmt
+*/
+typedef enum pvr_render_stage {
+    PVR_RENDER_STAGE_QUEUED = 0,
+    PVR_RENDER_STAGE_REGISTERED,
+    PVR_RENDER_STAGE_RENDERING,
+    PVR_RENDER_STAGE_COMPLETE,
+    PVR_RENDER_STAGE_DISPLAYED
+} pvr_render_stage_t;
+
+/** \brief Immutable completion ticket for one submitted scene.
+    \ingroup pvr_scene_mgmt
+
+    A framebuffer ticket has target set to NULL and can reach DISPLAYED. A
+    render-to-texture ticket identifies its exact destination and stops at
+    COMPLETE because texture renders never enter the display page-flip queue.
+*/
+typedef struct pvr_render_ticket {
+    pvr_render_id_t id;       /**< \brief Stable scene identity. */
+    pvr_ptr_t target;         /**< \brief Texture target, or NULL for display. */
+    uint32_t width;           /**< \brief Rendered width in pixels. */
+    uint32_t height;          /**< \brief Rendered height in pixels. */
+    uint32_t stride;          /**< \brief Target pitch in pixels. */
+    uint32_t to_texture;      /**< \brief Non-zero for a texture target. */
+} pvr_render_ticket_t;
+
 /** \brief   Begin collecting data for a frame of 3D output to the off-screen
              frame buffer.
     \ingroup pvr_scene_mgmt
@@ -1311,6 +1348,59 @@ int pvr_list_flush(pvr_list_t list);
                             has not reached its final pass).
 */
 int pvr_scene_finish(void);
+
+/** \brief Finish a scene and return its stable completion ticket.
+    \ingroup pvr_scene_mgmt
+
+    This has the same submission behavior as pvr_scene_finish(). The ticket is
+    written only after successful scene completion and remains valid until PVR
+    shutdown. No object is allocated and the caller does not release it.
+
+    \param  ticket          Destination ticket.
+
+    \retval 0              On success.
+    \retval -1             On invalid output or scene state, with errno set.
+*/
+int pvr_scene_finish_tracked(pvr_render_ticket_t *ticket);
+
+/** \brief Query the latest stage reached by one render ticket.
+    \ingroup pvr_scene_mgmt
+
+    COMPLETE guarantees that the ISP/TSP no longer writes the ticket's render
+    target. CPU access, DMA upload, reuse, or release of a texture target must
+    not occur before that stage. COMPLETE is the highest stage returned for a
+    render-to-texture ticket because that target never enters page flipping.
+
+    \param  ticket          Ticket returned by pvr_scene_finish_tracked().
+    \param  stage           Destination for the observed stage.
+
+    \retval 0              On success.
+    \retval -1             On error, with `errno` set to `EINVAL`, `ENODEV`,
+                           or `ENOENT`.
+*/
+int pvr_render_ticket_get_stage(const pvr_render_ticket_t *ticket,
+                                pvr_render_stage_t *stage);
+
+/** \brief Wait until one render ticket reaches a requested stage.
+    \ingroup pvr_scene_mgmt
+
+    Waiting is identity-specific: completion of a different queued render does
+    not satisfy the request. A zero timeout waits indefinitely; otherwise the
+    timeout is in milliseconds and applies to the complete wait operation.
+    DISPLAYED is rejected for render-to-texture tickets because those renders
+    intentionally bypass page flipping.
+
+    \param  ticket          Ticket returned by pvr_scene_finish_tracked().
+    \param  stage           Minimum stage to reach.
+    \param  timeout_ms      Zero for no deadline, otherwise milliseconds.
+
+    \retval 0              Requested stage reached.
+    \retval -1             On error, with `errno` set to `EINVAL`, `ENOTSUP`,
+                           `ENODEV`, `ENOENT`, or `ETIMEDOUT`.
+*/
+int pvr_render_ticket_wait(const pvr_render_ticket_t *ticket,
+                           pvr_render_stage_t stage,
+                           unsigned int timeout_ms);
 
 /** \brief   Block the caller until the PVR system is ready for another frame to
              be submitted.

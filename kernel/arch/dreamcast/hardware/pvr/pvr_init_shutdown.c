@@ -16,6 +16,7 @@
 #include <dc/asic.h>
 #include <dc/vblank.h>
 #include <kos/dbglog.h>
+#include <kos/genwait.h>
 #include "pvr_internal.h"
 
 /*
@@ -283,6 +284,13 @@ int pvr_shutdown(void) {
 
     /* Set us invalid */
     pvr_state.valid = 0;
+
+    /* Identity-specific waits must not survive subsystem shutdown. */
+    genwait_wake_all((void *)&pvr_state.queued_render_id);
+    genwait_wake_all((void *)&pvr_state.registered_render_id);
+    genwait_wake_all((void *)&pvr_state.render_started_id);
+    genwait_wake_all((void *)&pvr_state.completed_render_id);
+    genwait_wake_all((void *)&pvr_state.displayed_render_id);
 
     /* Stop anything that might be going on */
     PVR_SET(PVR_RESET, PVR_RESET_ALL);
