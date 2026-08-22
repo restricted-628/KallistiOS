@@ -52,7 +52,7 @@ than place another renderer above them.
 | Multi-pass scene control | No first-class pass object | Add a KOS pass description only after hybrid submission and status tracking are sound. Per-pass sort mode and user clipping are the essential behaviors. |
 | User clipping | Covered | Preserve six-bit X/four-bit Y command bounds and active-target validation. |
 | Global/pixel clipping | Covered per scene | Keep clip state attached to its scene across framebuffer and texture targets. |
-| Background plane | Fixed color is public; plane representation is internal | Expose a checked background-plane description without leaking mutable driver state. |
+| Background plane | Covered for untextured color planes | Audit textured background state separately if a concrete use case requires it. |
 | Texture allocation | General allocator covered | Add optional surface descriptors for dimensions, format, byte span, and ownership. Fixed-address and contiguous reservations should build on the existing allocator rather than introduce a second heap. |
 | Texture upload | Full raw upload and DMA covered | Add checked partial rectangle uploads, mip-level uploads, codebook-only updates, and explicit completion objects. |
 | Texture conversion | 4/8/16-bpp twiddling covered | Add 32-bpp handling where the hardware format permits it; keep offline VQ encoding outside the kernel unless a bounded, independently licensed encoder is justified. |
@@ -167,3 +167,16 @@ items. Emulator validation covers the normal interrupt and snapshot paths only.
 - the focused example validates command words, ordering failures, target
   bounds, disabled lists, persistent zero-fault state, and 120 rendered frames
   in interpreter-mode emulation.
+
+### Background-plane geometry
+
+- an active scene can replace the default solid plane with three checked
+  screen-space vertices, independent RGB888 colors, and explicit positive
+  depth;
+- background state is copied into the scene pipeline before TA registration,
+  preventing a later scene from mutating an in-flight render;
+- the established solid-color and depth setters remain source compatible and
+  update an active scene only while it is still configurable;
+- the focused example validates copy-out, finite/depth/color bounds, late-update
+  rejection, zero persistent faults, and 120 frames in interpreter-mode
+  emulation.

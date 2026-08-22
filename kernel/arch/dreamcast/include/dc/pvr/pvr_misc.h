@@ -116,6 +116,54 @@ void pvr_set_shadow_scale(bool enable, float scale_value);
 */
 void pvr_set_zclip(float zc);
 
+/** \brief One vertex of an untextured background plane.
+    \ingroup pvr_scene_mgmt
+
+    The color is stored as RGB888 in the low 24 bits. Background rendering uses
+    the PVR driver's established opaque, untextured render state.
+*/
+typedef struct pvr_background_vertex {
+    float x;                 /**< \brief Screen-space X coordinate. */
+    float y;                 /**< \brief Screen-space Y coordinate. */
+    float z;                 /**< \brief Positive inverse-depth value. */
+    uint32_t color;          /**< \brief RGB888 color in the low 24 bits. */
+} pvr_background_vertex_t;
+
+/** \brief Per-scene background-plane description.
+    \ingroup pvr_scene_mgmt
+*/
+typedef struct pvr_background_plane {
+    float depth;             /**< \brief Positive background depth clip. */
+    pvr_background_vertex_t vertices[3]; /**< \brief Background triangle. */
+} pvr_background_plane_t;
+
+/** \brief Set a checked background plane for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    Call after beginning a framebuffer or texture scene and before TA
+    registration starts. All coordinates and depths must be finite; depth and
+    vertex Z values must be positive. The triangle should cover every pixel
+    that may remain untouched by scene geometry.
+
+    \param  plane           Background-plane description.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV, EPERM,
+                            or EBUSY.
+*/
+int pvr_scene_set_background_plane(const pvr_background_plane_t *plane);
+
+/** \brief Get the background plane configured for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    \param  plane           Destination description.
+
+    \retval 0               On success.
+    \retval -1              If plane is NULL, PVR is unavailable, or no scene
+                            is active, with errno set appropriately.
+*/
+int pvr_scene_get_background_plane(pvr_background_plane_t *plane);
+
 /** \brief   Set the vertical scale factor.
     \ingroup pvr_global
 

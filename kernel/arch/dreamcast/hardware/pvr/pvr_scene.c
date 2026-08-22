@@ -10,6 +10,8 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <float.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -44,6 +46,18 @@ static void set_next_full_pixel_clip(uint32_t width, uint32_t height) {
     pvr_state.next_pclip_bottom = height - 1u;
     pvr_state.next_pclip_x = (pvr_state.next_pclip_right << 16);
     pvr_state.next_pclip_y = (pvr_state.next_pclip_bottom << 16);
+}
+
+static void set_next_default_background(uint32_t width, uint32_t height) {
+    pvr_state.next_background = (pvr_background_plane_t) {
+        .depth = pvr_state.zclip,
+        .vertices = {
+            { 0.0f, (float)height, FLT_EPSILON, pvr_state.bg_color },
+            { 0.0f, 0.0f, FLT_EPSILON, pvr_state.bg_color },
+            { (float)width, (float)height, FLT_EPSILON,
+              pvr_state.bg_color }
+        }
+    };
 }
 
 void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
@@ -125,6 +139,7 @@ static void pvr_start_ta_rendering(void) {
         pvr_state.to_txr_addr = pvr_state.next_to_txr_addr;
         pvr_state.curr_pclip_x = pvr_state.next_pclip_x;
         pvr_state.curr_pclip_y = pvr_state.next_pclip_y;
+        pvr_state.curr_background = pvr_state.next_background;
 
         // Starting from that point, we consider that the Tile Accelerator
         // might be busy.
@@ -141,6 +156,8 @@ void pvr_scene_begin(void) {
     pvr_state.next_to_texture = 0;
     set_next_full_pixel_clip((uint32_t)vid_mode->width,
                              (uint32_t)vid_mode->height);
+    set_next_default_background((uint32_t)vid_mode->width,
+                                (uint32_t)vid_mode->height);
     pvr_state.scene_active = true;
     pvr_state.ta_checked_ready = 0;
     pvr_state.lists_closed = 0;
@@ -190,6 +207,7 @@ int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
 
     pvr_state.next_to_texture = 1;
     set_next_full_pixel_clip(render_w, render_h);
+    set_next_default_background(render_w, render_h);
     pvr_status_advance();
 
     return 0;
@@ -267,6 +285,70 @@ int pvr_scene_get_pixel_clip(pvr_pixel_clip_t *clip) {
     clip->right = pvr_state.next_pclip_right;
     clip->bottom = pvr_state.next_pclip_bottom;
 
+    return 0;
+}
+
+int pvr_scene_set_background_plane(const pvr_background_plane_t *plane) {
+    unsigned int i;
+
+    if(!plane) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    if(pvr_state.ta_checked_ready) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    if(!isfinite(plane->depth) || plane->depth <= 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for(i = 0; i < 3; ++i) {
+        const pvr_background_vertex_t *vertex = &plane->vertices[i];
+
+        if(!isfinite(vertex->x) || !isfinite(vertex->y) ||
+                !isfinite(vertex->z) || vertex->z <= 0.0f ||
+                (vertex->color & 0xff000000u)) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+
+    memcpy((void *)&pvr_state.next_background, plane, sizeof(*plane));
+    pvr_status_advance();
+    return 0;
+}
+
+int pvr_scene_get_background_plane(pvr_background_plane_t *plane) {
+    if(!plane) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    memcpy(plane, (const void *)&pvr_state.next_background, sizeof(*plane));
     return 0;
 }
 

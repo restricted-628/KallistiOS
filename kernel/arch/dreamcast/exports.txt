@@ -498,6 +498,8 @@ pvr_mem_stats
 pvr_set_bg_color
 pvr_get_vbl_count
 pvr_get_stats
+pvr_scene_set_background_plane
+pvr_scene_get_background_plane
 pvr_get_pipeline_status
 pvr_clear_faults
 pvr_event_handler_add

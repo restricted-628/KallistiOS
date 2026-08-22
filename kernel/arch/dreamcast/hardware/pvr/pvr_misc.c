@@ -29,12 +29,18 @@
    any other polygons) */
 void pvr_set_bg_color(float r, float g, float b) {
     int ir, ig, ib;
+    unsigned int i;
 
     ir = (int)(255 * r);
     ig = (int)(255 * g);
     ib = (int)(255 * b);
 
     pvr_state.bg_color = (ir << 16) | (ig << 8) | (ib << 0);
+
+    if(pvr_state.scene_active && !pvr_state.ta_checked_ready) {
+        for(i = 0; i < 3; ++i)
+            pvr_state.next_background.vertices[i].color = pvr_state.bg_color;
+    }
 }
 
 /* Enable/disable cheap shadow mode and set the cheap shadow scale register. */
@@ -47,6 +53,9 @@ void pvr_set_shadow_scale(bool enable, float scale_value) {
 /* Set the Z-Clip value (that is to say the depth of the background layer). */
 void pvr_set_zclip(float zc) {
     pvr_state.zclip = zc;
+
+    if(pvr_state.scene_active && !pvr_state.ta_checked_ready)
+        pvr_state.next_background.depth = zc;
 }
 
 /* Return the current VBlank count */
@@ -279,7 +288,6 @@ void pvr_begin_queued_render(void) {
     volatile pvr_frame_buffers_t    *rbuf;
     pvr_bkg_poly_t  *bkg;
     uint32_t      vert_end;
-    uint32_t      target_w, target_h;
     int bufn = pvr_state.view_target;
     union {
         float    f;
@@ -289,8 +297,6 @@ void pvr_begin_queued_render(void) {
     /* Get the appropriate buffer */
     tbuf = pvr_state.ta_buffers + (pvr_state.ta_target ^ pvr_state.vbuf_doublebuf);
     rbuf = pvr_state.frame_buffers + (bufn ^ 1);
-    target_w = pvr_state.curr_to_texture ? pvr_state.to_txr_w : (uint32_t)pvr_state.w;
-    target_h = pvr_state.curr_to_texture ? pvr_state.to_txr_h : (uint32_t)pvr_state.h;
 
     /* Calculate background value for below */
     /* Small side note: during setup, the value is originally
@@ -306,18 +312,18 @@ void pvr_begin_queued_render(void) {
         .flags1 = 0x90800000,    /* These are from libdream.. ought to figure out */
         .flags2 = 0x20800440,    /*   what they mean for sure... heh =) */
         .dummy  = 0,
-        .x1     = 0.0f,
-        .y1     = target_h,
-        .z1     = FLT_EPSILON,
-        .argb1  = pvr_state.bg_color,
-        .x2     = 0.0f,
-        .y2     = 0.0f,
-        .z2     = FLT_EPSILON,
-        .argb2  = pvr_state.bg_color,
-        .x3     = target_w,
-        .y3     = target_h,
-        .z3     = FLT_EPSILON,
-        .argb3  = pvr_state.bg_color,
+        .x1     = pvr_state.curr_background.vertices[0].x,
+        .y1     = pvr_state.curr_background.vertices[0].y,
+        .z1     = pvr_state.curr_background.vertices[0].z,
+        .argb1  = pvr_state.curr_background.vertices[0].color,
+        .x2     = pvr_state.curr_background.vertices[1].x,
+        .y2     = pvr_state.curr_background.vertices[1].y,
+        .z2     = pvr_state.curr_background.vertices[1].z,
+        .argb2  = pvr_state.curr_background.vertices[1].color,
+        .x3     = pvr_state.curr_background.vertices[2].x,
+        .y3     = pvr_state.curr_background.vertices[2].y,
+        .z3     = pvr_state.curr_background.vertices[2].z,
+        .argb3  = pvr_state.curr_background.vertices[2].color,
     };
 
     /* Reset the ISP/TSP, just in case */
@@ -336,7 +342,7 @@ void pvr_begin_queued_render(void) {
     }
 
     PVR_SET(PVR_BGPLANE_CFG, vert_end); /* Bkg plane location */
-    zclip.f = pvr_state.zclip;
+    zclip.f = pvr_state.curr_background.depth;
     PVR_SET(PVR_BGPLANE_Z, zclip.i);
     PVR_SET(PVR_PCLIP_X, pvr_state.curr_pclip_x);
     PVR_SET(PVR_PCLIP_Y, pvr_state.curr_pclip_y);

@@ -192,6 +192,8 @@ typedef struct {
     uint32_t  next_pclip_x, next_pclip_y;
     uint32_t  curr_pclip_x, curr_pclip_y;
     uint32_t  bg_color;                   // Background color in ARGB format
+    pvr_background_plane_t next_background;
+    pvr_background_plane_t curr_background;
 
     /* Running statistics on the PVR system. All vars are in terms
        of nanoseconds. */

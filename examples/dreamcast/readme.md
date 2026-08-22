@@ -140,6 +140,7 @@ This page serves as an index for all KallistiOS examples.
 - pthread
   - general
 - pvr
+  - background_plane
   - bumpmap
   - cheap_shadow
   - clipping
