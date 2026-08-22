@@ -186,6 +186,9 @@ This page serves as an index for all KallistiOS examples.
   - screenshot
 - vmu
   - vmu_beep
+  - [**vmu_clock**](vmu/vmu_clock/): Validates civil-time rules and coherent
+    synchronous and asynchronous clock reads
   - vmu_game
-  - vmu_lcd
+  - [**vmu_lcd**](vmu/vmu_lcd/): Validates LCD descriptors, raw bitmap
+    ordering, orientation, and asynchronous completion
   - vmu_pkg

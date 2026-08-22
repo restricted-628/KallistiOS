@@ -46,6 +46,12 @@ lifecycle and naming conventions.
 * Extended vibration support with typed effect encoding, multi-unit output,
   device and unit metadata, relative orientation, hardware auto-stop, readiness,
   coherent asynchronous completion status, and optional IRQ-context callbacks.
+* Extended VMU display support with descriptor-based capability checks,
+  top-left grayscale packing into the peripheral's raw bitmap order, relative
+  orientation, coherent completion state, and optional IRQ-context callbacks.
+* Added validated civil-time VMU clock APIs with synchronous and asynchronous
+  reads and writes, coherent completion state, and correct Sunday-zero weekday
+  conversion while retaining the established time-based entry points.
 
 RELEASE NOTES for 2.2.2
 -----------------------

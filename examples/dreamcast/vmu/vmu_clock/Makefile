@@ -1,12 +1,12 @@
 # KallistiOS ##version##
 #
-# VMU LCD Example
-# Copyright (C) 2023 Paul Cercueil
+# vmu/vmu_clock/Makefile
 # Copyright (C) 2026 Joseph Black
 #
 
-TARGET = lcd.elf
-OBJS = lcd.o
+TARGET = vmu-clock.elf
+OBJS = vmu-clock.o
+KOS_CFLAGS += -std=c11
 
 all: rm-elf $(TARGET)
 
