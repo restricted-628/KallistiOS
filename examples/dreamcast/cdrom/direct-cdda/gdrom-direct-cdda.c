@@ -17,6 +17,59 @@
 #define COMMAND_TIMEOUT_MS 3000u
 #define STATUS_DEADLINE_MS 3000u
 
+static volatile unsigned callback_count;
+
+static void request_complete(cdrom_request_t *request,
+                             const cdrom_request_status_t *status,
+                             void *data) {
+    (void)request;
+    ++callback_count;
+    printf("%s callback: state=%d backend=%d result=%d errno=%d\n",
+           (const char *)data, status->state, status->backend,
+           status->result, status->error);
+}
+
+static int finish_request(cdrom_request_t *request, const char *label) {
+    cdrom_request_status_t status = { 0 };
+    int failed = 0;
+
+    if(!request) {
+        perror(label);
+        return -1;
+    }
+    if(cdrom_request_wait(request, COMMAND_TIMEOUT_MS + 1000u, &status) < 0) {
+        perror("cdrom_request_wait");
+        (void)cdrom_request_cancel(request);
+        if(cdrom_request_wait(request, COMMAND_TIMEOUT_MS + 1000u,
+                              &status) < 0) {
+            perror("cdrom_request cleanup wait");
+            return -1;
+        }
+        failed = 1;
+    }
+    if(cdrom_request_wait_callback(request, COMMAND_TIMEOUT_MS) < 0) {
+        perror("cdrom_request_wait_callback");
+        if(cdrom_request_wait_callback(request, COMMAND_TIMEOUT_MS) < 0) {
+            perror("cdrom_request cleanup callback wait");
+            return -1;
+        }
+        failed = 1;
+    }
+    if(status.state != CDROM_REQUEST_COMPLETE
+            || status.result != ERR_OK
+            || status.backend != CDROM_REQUEST_BACKEND_DIRECT) {
+        printf("%s failed: state=%d backend=%d result=%d errno=%d\n",
+               label, status.state, status.backend,
+               status.result, status.error);
+        failed = 1;
+    }
+    if(cdrom_request_destroy(request) < 0) {
+        perror("cdrom_request_destroy");
+        failed = 1;
+    }
+    return failed ? -1 : 0;
+}
+
 static int read_status_until(cd_sub_audio_t expected,
                              cdrom_cdda_status_t *status) {
     uint64_t deadline = timer_ms_gettime64() + STATUS_DEADLINE_MS;
@@ -54,6 +107,7 @@ static void print_status(const char *label,
 int main(int argc, char **argv) {
     gdrom_direct_result_t transport;
     cdrom_cdda_status_t status;
+    cdrom_cdda_status_t async_status;
     cd_toc_t direct_toc;
     cd_toc_t bios_toc;
     uint8_t raw_q[14];
@@ -63,6 +117,7 @@ int main(int argc, char **argv) {
     uint32_t track_fad;
     uint32_t track_end;
     uint32_t i;
+    unsigned callbacks_before;
     int failed = 0;
 
     (void)argc;
@@ -98,11 +153,12 @@ int main(int argc, char **argv) {
     printf("direct CDDA: track=%" PRIu32 " FAD=%" PRIu32
            "..%" PRIu32 "\n", track, track_fad, track_end);
 
-    if(gdrom_direct_cdda_play(
-            track, track, 0, CDDA_TRACKS,
-            COMMAND_TIMEOUT_MS, &transport) < 0
+    callbacks_before = callback_count;
+    if(finish_request(gdrom_direct_cdda_play_async(
+            track, track, 0, CDDA_TRACKS, COMMAND_TIMEOUT_MS, &transport,
+            request_complete, "play-track"), "play-track") < 0
+            || callback_count != callbacks_before + 1u
             || read_status_until(CD_SUB_AUDIO_STATUS_PLAYING, &status) < 0) {
-        perror("gdrom_direct_cdda_play track");
         failed = 1;
         goto done;
     }
@@ -125,32 +181,34 @@ int main(int argc, char **argv) {
                    | ((unsigned)raw_q[12] << 8) | raw_q[13]);
     }
 
-    if(gdrom_direct_cdda_get_status(
-            &status, COMMAND_TIMEOUT_MS, &transport) < 0) {
-        perror("gdrom_direct_cdda_get_status");
+    if(finish_request(gdrom_direct_cdda_get_status_async(
+            &async_status, COMMAND_TIMEOUT_MS, &transport,
+            request_complete, "typed-status"), "typed-status") < 0) {
         failed = 1;
         goto done;
     }
-    print_status("direct typed status", &status);
+    print_status("direct async status", &async_status);
 
-    if(gdrom_direct_cdda_pause(COMMAND_TIMEOUT_MS, &transport) < 0
+    if(finish_request(gdrom_direct_cdda_pause_async(
+            COMMAND_TIMEOUT_MS, &transport,
+            request_complete, "pause"), "pause") < 0
             || read_status_until(CD_SUB_AUDIO_STATUS_PAUSED, &status) < 0) {
-        perror("gdrom_direct_cdda_pause");
         failed = 1;
         goto done;
     }
     print_status("direct pause", &status);
 
-    if(gdrom_direct_cdda_resume(COMMAND_TIMEOUT_MS, &transport) < 0
+    if(finish_request(gdrom_direct_cdda_resume_async(
+            COMMAND_TIMEOUT_MS, &transport,
+            request_complete, "resume"), "resume") < 0
             || read_status_until(CD_SUB_AUDIO_STATUS_PLAYING, &status) < 0) {
-        perror("gdrom_direct_cdda_resume");
         failed = 1;
         goto done;
     }
 
-    if(gdrom_direct_cdda_scan(
-            false, 0, COMMAND_TIMEOUT_MS, &transport) < 0) {
-        perror("gdrom_direct_cdda_scan");
+    if(finish_request(gdrom_direct_cdda_scan_async(
+            false, 0, COMMAND_TIMEOUT_MS, &transport,
+            request_complete, "scan"), "scan") < 0) {
         failed = 1;
         goto done;
     }
@@ -166,10 +224,10 @@ int main(int argc, char **argv) {
     }
 
 done:
-    if(gdrom_direct_cdda_stop(COMMAND_TIMEOUT_MS, &transport) < 0) {
-        perror("gdrom_direct_cdda_stop");
+    if(finish_request(gdrom_direct_cdda_stop_async(
+            COMMAND_TIMEOUT_MS, &transport,
+            request_complete, "stop"), "stop") < 0)
         failed = 1;
-    }
 
     if(cdrom_read_toc(&bios_toc, false) != ERR_OK) {
         printf("BIOS TOC failed after direct CDDA controls\n");
@@ -180,8 +238,8 @@ done:
         failed = 1;
     }
 
-    printf("%s: close or reset the console to exit.\n",
-           failed ? "FAIL" : "PASS");
+    printf("%s: callbacks=%u; close or reset the console to exit.\n",
+           failed ? "FAIL" : "PASS", callback_count);
     for(;;)
         thd_sleep(1000);
 }

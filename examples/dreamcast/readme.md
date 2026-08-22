@@ -36,6 +36,17 @@ This page serves as an index for all KallistiOS examples.
     - workqueue-safety
   - watchdog
 - cdrom
+  - cdda-status
+  - direct-async
+  - direct-cdda
+  - direct-geometry
+  - direct-lifecycle
+  - direct-read
+  - direct-recovery
+  - direct-status
+  - media-recognition
+  - request
+  - sector-range
   - stream
 - conio
   - adventure
