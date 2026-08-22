@@ -22,6 +22,9 @@ handlers are documented in the
 G2 PIO state preservation, DMA lifecycle rules, cache ownership, and MMU-safe
 address handling are documented in the
 [G2 DMA safety guide](g2-dma-safety.md).
+Shared optical-drive and ATA ownership, DMA-event routing, and fail-closed
+controller behavior are documented in the
+[G1 bus ownership guide](g1-bus-ownership.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.
