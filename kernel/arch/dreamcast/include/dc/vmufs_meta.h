@@ -45,7 +45,6 @@ extern "C" {
 #define VMUFS_STANDARD_FAT_BLOCK   254u
 #define VMUFS_STANDARD_DIR_BLOCK   253u
 #define VMUFS_STANDARD_DIR_BLOCKS  13u
-
 /** \brief BCD timestamp used by the VMU filesystem. */
 typedef struct {
     uint8_t cent;   /**< \brief Century */
@@ -164,6 +163,16 @@ typedef struct vmufs_volume_info {
     size_t directory_entries;         /**< \brief Total directory capacity. */
     vmufs_validation_t validation;    /**< \brief Ownership and free-space data. */
 } vmufs_volume_info_t;
+
+/** \brief Detailed outcome of a multi-file deletion. */
+typedef struct vmufs_delete_result {
+    size_t requested_files; /**< \brief Number of requested names. */
+    size_t deleted_files;   /**< \brief Positively acknowledged removals. */
+    size_t reclaimed_blocks; /**< \brief Positively acknowledged FAT cleanup. */
+    uint8_t directory_complete; /**< \brief Every requested entry was removed. */
+    uint8_t directory_state_uncertain; /**< \brief A directory write was unacknowledged. */
+    uint8_t allocation_cleanup_complete; /**< \brief Confirmed removals have no leaked blocks. */
+} vmufs_delete_result_t;
 
 /** \brief Validate root geometry for a card using KOS's root-block location.
 

@@ -171,6 +171,7 @@ static int test_commit_prefixes(void) {
     uint16_t fat[TEST_FAT_ENTRIES];
     uint16_t old_blocks[2], new_blocks[2];
     uint16_t source_blocks[2], target_blocks[2];
+    uint16_t multi_blocks[3];
     vmu_dir_t dir[TEST_DIR_ENTRIES];
     vmufs_validation_t validation;
     vmu_root_t root;
@@ -267,6 +268,66 @@ static int test_commit_prefixes(void) {
     if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
                       TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
                       &validation) < 0)
+        return -1;
+
+    /* Multi-delete commits whole directory blocks before releasing the
+       chains confirmed by those blocks. Every acknowledged prefix is either
+       orphan-only before cleanup or fully consistent after cleanup. */
+    for(size_t prefix = 0; prefix <= 3; ++prefix) {
+        static const size_t entries[] = {0, 16, 32};
+
+        make_card(&root, fat, dir);
+        for(size_t i = 0; i < 3; ++i) {
+            uint16_t block;
+
+            if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                                    VMUFS_FILETYPE_DATA, 1, &block, 1) < 0)
+                return -1;
+            multi_blocks[i] = block;
+            make_entry(&dir[entries[i]], "MULTI", block, 1);
+            dir[entries[i]].filename[5] = (char)('0' + i);
+        }
+        for(size_t i = 0; i < prefix; ++i)
+            memset(&dir[entries[i]], 0, sizeof(dir[entries[i]]));
+
+        if(prefix == 0) {
+            if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                              TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                              &validation) < 0)
+                return -1;
+        }
+        else if(validate_orphans_only(&root, fat, dir) < 0) {
+            return -1;
+        }
+
+        for(size_t i = 0; i < prefix; ++i)
+            vmufs_chain_release(fat, &multi_blocks[i], 1);
+        if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                          TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                          &validation) < 0)
+            return -1;
+    }
+
+    /* An unacknowledged directory write has two possible on-card outcomes.
+       If it did not land, its file remains live; if it did, its chain remains
+       allocated as an orphan. Neither outcome permits that chain to be reused. */
+    make_card(&root, fat, dir);
+    for(size_t i = 0; i < 2; ++i) {
+        if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                                VMUFS_FILETYPE_DATA, 1,
+                                &multi_blocks[i], 1) < 0)
+            return -1;
+        make_entry(&dir[i * 16], i ? "MAYBE" : "CONFIRMED",
+                   multi_blocks[i], 1);
+    }
+    memset(&dir[0], 0, sizeof(dir[0]));
+    vmufs_chain_release(fat, &multi_blocks[0], 1);
+    if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                      TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                      &validation) < 0)
+        return -1;
+    memset(&dir[16], 0, sizeof(dir[16]));
+    if(validate_orphans_only(&root, fat, dir) < 0)
         return -1;
 
     return 0;

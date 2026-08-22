@@ -77,6 +77,10 @@ lifecycle and naming conventions.
   directory-only updates for copy protection and file-header offset. Existing
   rename destinations are removed before their blocks are reclaimed, so an
   interrupted replacement can leak space but cannot cross-link live files.
+* Added synchronous and lazy asynchronous multi-file deletion with complete
+  preflight, directory-before-FAT ordering, confirmed-removal accounting, and
+  explicit reporting when an unacknowledged directory write makes the exact
+  on-card result uncertain.
 * The `/vmu` VFS now distinguishes logical package payload length from
   block-rounded backing storage. Reads, seeks, totals, `stat()`, `fstat()`,
   append writes, sparse gaps, and package rebuilds use the logical EOF, while

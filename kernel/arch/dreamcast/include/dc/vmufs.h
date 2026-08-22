@@ -437,6 +437,33 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf, int insize, in
 */
 int vmufs_delete(maple_device_t *dev, const char *fn);
 
+/** \brief Delete several files with directory-before-FAT commit ordering.
+
+    Every name must be unique, valid, and present, and the complete filesystem
+    must pass the mutation safety gate before the first write. All affected
+    directory blocks are removed before their FAT chains are released. If a
+    directory write is not acknowledged, only entries from earlier,
+    positively acknowledged blocks are eligible for FAT cleanup; therefore a
+    failure can leak blocks but cannot free storage still owned by a confirmed
+    live entry.
+
+    Cancellation is accepted before the first directory commit. Once that
+    barrier is crossed, the operation finishes the planned directory writes
+    and cleanup. On any post-barrier failure, inspect \p result and re-query
+    names when `directory_state_uncertain` is true.
+
+    \param dev         VMU containing the files.
+    \param filenames   Array of \p file_count null-terminated names.
+    \param file_count  Number of names; zero is permitted.
+    \param result      Detailed outcome, initialized on every accepted call.
+    \retval 0          Every file removed and allocation cleanup acknowledged.
+    \retval -1         Failure before the commit barrier; no confirmed removal.
+    \retval -2         Commit began but completion or cleanup was incomplete.
+*/
+int vmufs_delete_files(
+    maple_device_t *dev, const char *const *filenames, size_t file_count,
+    vmufs_delete_result_t *result);
+
 /** \brief Rename a file, replacing an existing destination safely.
 
     File contents, timestamp, type, copy protection, and header offset are
@@ -534,7 +561,8 @@ typedef enum vmufs_request_operation {
     VMUFS_REQUEST_RENAME,      /**< \brief Transactional file rename. */
     VMUFS_REQUEST_READ,        /**< \brief Bounded file-block read. */
     VMUFS_REQUEST_SET_ATTRIBUTES, /**< \brief Directory attribute update. */
-    VMUFS_REQUEST_VOLUME_INFO  /**< \brief Volume inspection. */
+    VMUFS_REQUEST_VOLUME_INFO, /**< \brief Volume inspection. */
+    VMUFS_REQUEST_DELETE_FILES /**< \brief Transactional multi-file deletion. */
 } vmufs_request_operation_t;
 
 typedef enum vmufs_request_state {
@@ -643,6 +671,27 @@ vmufs_request_t *vmufs_write_async(
 */
 vmufs_request_t *vmufs_delete_async(
     maple_device_t *dev, const char *fn,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a transactional multi-file deletion.
+
+    Every filename is validated and copied during submission. Once arguments
+    have been accepted, the result is initialized even if a queued request is
+    cancelled before running. The buffer remains caller-owned and must stay
+    writable until terminal storage completion. Cancellation follows
+    vmufs_delete_files()'s commit barrier.
+
+    \param dev            VMU containing the files.
+    \param filenames      Array of \p file_count names.
+    \param file_count     Number of names; zero is permitted.
+    \param result         Destination for the detailed outcome.
+    \param callback       Optional progress and terminal callback.
+    \param callback_data  Caller data passed to \p callback.
+    \return               New request, or NULL with errno set.
+*/
+vmufs_request_t *vmufs_delete_files_async(
+    maple_device_t *dev, const char *const *filenames, size_t file_count,
+    vmufs_delete_result_t *result,
     vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a transactional rename on one VMU.

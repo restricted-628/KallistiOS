@@ -27,6 +27,9 @@
 
 #include "vmufs_internal.h"
 
+#define VMUFS_REQUEST_MAX_FILENAMES \
+    (VMUFS_STANDARD_CARD_BLOCKS * VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t))
+
 struct vmufs_request {
     STAILQ_ENTRY(vmufs_request) entry;
     STAILQ_ENTRY(vmufs_request) callback_entry;
@@ -42,6 +45,9 @@ struct vmufs_request {
     size_t block_count;
     vmufs_file_attributes_t attributes;
     vmufs_volume_info_t *volume_info;
+    char **filenames;
+    size_t filename_count;
+    vmufs_delete_result_t *delete_result;
     vmufs_format_options_t options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -67,6 +73,9 @@ typedef struct vmufs_request_submission {
     size_t block_count;
     const vmufs_file_attributes_t *attributes;
     vmufs_volume_info_t *volume_info;
+    const char *const *filenames;
+    size_t filename_count;
+    vmufs_delete_result_t *delete_result;
     const vmufs_format_options_t *options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -100,6 +109,18 @@ static size_t filename_length(const char *filename, size_t maximum) {
     while(length < maximum && filename[length])
         ++length;
     return length;
+}
+
+static void free_request(vmufs_request_t *request) {
+    if(!request)
+        return;
+
+    if(request->filenames) {
+        for(size_t i = 0; i < request->filename_count; ++i)
+            free(request->filenames[i]);
+    }
+    free(request->filenames);
+    free(request);
 }
 
 static bool observer_cancelled(void *data) {
@@ -255,6 +276,11 @@ static void process_request(vmufs_request_t *request) {
         result = vmufs_get_volume_info_observed(
             request->dev, request->volume_info, &observer);
         break;
+    case VMUFS_REQUEST_DELETE_FILES:
+        result = vmufs_delete_files_observed(
+            request->dev, (const char *const *)request->filenames,
+            request->filename_count, request->delete_result, &observer);
+        break;
     default:
         errno = EINVAL;
         result = -1;
@@ -361,7 +387,7 @@ static vmufs_request_t *submit_request(
 
     if(!submission || !submission->dev ||
        !(submission->dev->info.functions & MAPLE_FUNC_MEMCARD) ||
-       submission->operation > VMUFS_REQUEST_VOLUME_INFO ||
+       submission->operation > VMUFS_REQUEST_DELETE_FILES ||
        ((submission->operation == VMUFS_REQUEST_WRITE ||
          submission->operation == VMUFS_REQUEST_DELETE ||
          submission->operation == VMUFS_REQUEST_RENAME ||
@@ -376,6 +402,10 @@ static vmufs_request_t *submit_request(
         !submission->attributes) ||
        (submission->operation == VMUFS_REQUEST_VOLUME_INFO &&
         !submission->volume_info) ||
+       (submission->operation == VMUFS_REQUEST_DELETE_FILES &&
+        (!submission->delete_result ||
+         (submission->filename_count && !submission->filenames) ||
+         submission->filename_count > VMUFS_REQUEST_MAX_FILENAMES)) ||
        (submission->operation == VMUFS_REQUEST_WRITE &&
         ((submission->input_size && !submission->input) ||
          submission->input_size > INT_MAX ||
@@ -402,6 +432,28 @@ static vmufs_request_t *submit_request(
             return NULL;
         }
     }
+    if(submission->operation == VMUFS_REQUEST_DELETE_FILES) {
+        for(size_t i = 0; i < submission->filename_count; ++i) {
+            size_t length;
+
+            if(!submission->filenames[i]) {
+                errno = EINVAL;
+                return NULL;
+            }
+            length = filename_length(submission->filenames[i], 13u);
+            if(length == 0 || length > 12u) {
+                errno = EINVAL;
+                return NULL;
+            }
+            for(size_t j = 0; j < i; ++j) {
+                if(strcmp(submission->filenames[i],
+                          submission->filenames[j]) == 0) {
+                    errno = EINVAL;
+                    return NULL;
+                }
+            }
+        }
+    }
 
     request = calloc(1, sizeof(*request));
     if(!request) {
@@ -426,6 +478,29 @@ static vmufs_request_t *submit_request(
     if(submission->attributes)
         request->attributes = *submission->attributes;
     request->volume_info = submission->volume_info;
+    request->filename_count = submission->filename_count;
+    request->delete_result = submission->delete_result;
+    if(submission->filename_count) {
+        request->filenames = calloc(submission->filename_count,
+                                    sizeof(*request->filenames));
+        if(!request->filenames) {
+            free_request(request);
+            errno = ENOMEM;
+            return NULL;
+        }
+        for(size_t i = 0; i < submission->filename_count; ++i) {
+            size_t length = strlen(submission->filenames[i]);
+
+            request->filenames[i] = malloc(length + 1u);
+            if(!request->filenames[i]) {
+                free_request(request);
+                errno = ENOMEM;
+                return NULL;
+            }
+            memcpy(request->filenames[i], submission->filenames[i],
+                   length + 1u);
+        }
+    }
     if(submission->options)
         request->options = *submission->options;
     request->mode = submission->mode;
@@ -435,13 +510,19 @@ static vmufs_request_t *submit_request(
     request->status.operation = submission->operation;
     request->status.state = VMUFS_REQUEST_QUEUED;
     request->status.phase = VMUFS_REQUEST_PHASE_QUEUED;
+    if(submission->operation == VMUFS_REQUEST_DELETE_FILES) {
+        *submission->delete_result = (vmufs_delete_result_t) {
+            .requested_files = submission->filename_count,
+            .allocation_cleanup_complete = true
+        };
+    }
 
     mutex_lock(&request_mutex);
     if(shutting_down || workers_start_locked() < 0) {
         int saved_errno = shutting_down ? ENODEV : errno;
 
         mutex_unlock(&request_mutex);
-        free(request);
+        free_request(request);
         errno = saved_errno;
         return NULL;
     }
@@ -507,6 +588,23 @@ vmufs_request_t *vmufs_delete_async(
         .operation = VMUFS_REQUEST_DELETE,
         .dev = dev,
         .filename = fn,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
+}
+
+vmufs_request_t *vmufs_delete_files_async(
+    maple_device_t *dev, const char *const *filenames, size_t file_count,
+    vmufs_delete_result_t *result,
+    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_DELETE_FILES,
+        .dev = dev,
+        .filenames = filenames,
+        .filename_count = file_count,
+        .delete_result = result,
         .callback = callback,
         .callback_data = callback_data
     };
@@ -699,7 +797,7 @@ int vmufs_request_destroy(vmufs_request_t *request) {
         errno = EBUSY;
         return -1;
     }
-    free(request);
+    free_request(request);
     return 0;
 }
 

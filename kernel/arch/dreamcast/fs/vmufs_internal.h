@@ -133,6 +133,11 @@ int vmufs_delete_observed(
     maple_device_t *dev, const char *fn,
     const vmufs_transaction_observer_t *observer);
 
+int vmufs_delete_files_observed(
+    maple_device_t *dev, const char *const *filenames, size_t file_count,
+    vmufs_delete_result_t *result,
+    const vmufs_transaction_observer_t *observer);
+
 int vmufs_rename_observed(
     maple_device_t *dev, const char *old_name, const char *new_name,
     const vmufs_transaction_observer_t *observer);
