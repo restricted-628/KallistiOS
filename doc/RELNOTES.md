@@ -3,6 +3,49 @@ Copyright (C) 2002, 2003 Megan Potter
 Copyright (C) 2012-2019 Lawrence Sebald  
 Copyright (C) 2024-2026 Donald Haase  
 Copyright (C) 2025 Eric Fradella  
+Copyright (C) 2026 Joseph Black
+
+UNRELEASED DREAMCAST I/O WORK
+-----------------------------
+
+This development series extends existing KOS drivers and retains their normal
+lifecycle and naming conventions.
+
+* Added shared, fail-closed G1 controller arbitration for GD-ROM and ATA.
+  Drivers now use the public G1 ownership API instead of the former private
+  `_g1_ata_sem` symbol.
+* Added an opt-in post-boot direct GD-ROM transport with bounded packet PIO and
+  DMA, status, geometry, mode, recovery, CDDA, streaming, diagnostics, and
+  asynchronous request integration. Boot-time disc authorization remains the
+  responsibility of the firmware.
+* Added queued asynchronous CD requests with cancellation, deadlines, progress,
+  terminal sense data, finalizers, and callbacks dispatched outside IRQ and
+  transport-worker context. Request and callback workers are created on first
+  use.
+* Extended ISO9660 with selectable BIOS/direct transport, aligned-sector and
+  arbitrary-byte asynchronous reads, preseek, staged streaming, media
+  invalidation, directory prefetch, and cache statistics. The 32 KiB bounce
+  workspace is allocated only when an unaligned byte read needs it.
+* Added bounded sector-range handles and typed CDDA, media recognition,
+  drive-state, disc-identity, and media-event facilities.
+* Added encoding-aware BIOS-font glyph lookup and corrected ASCII space to use
+  the historical blank replacement glyph instead of the overbar slot.
+* Added stored-order Maple function-descriptor and connection-direction helpers,
+  coherent controller snapshots and transitions, analog-trigger hysteresis,
+  capability-aware soft-reset detection, and strict response-size validation.
+* Completed keyboard metadata and coherent state snapshots, bounded both legacy
+  key queues, synchronized callback configuration, and corrected attach-time
+  status clearing that could overwrite memory beyond the keyboard state.
+* Completed mouse condition decoding with eight buttons, eight axes, overflow
+  and option data, descriptor metadata, coherent transitions, and safe handling
+  of malformed responses while preserving the established leading status
+  layout.
+* Added scheduled light-gun capture with exclusive Maple field ownership,
+  automatic flash restoration, coherent aim snapshots, port selection, and
+  optional IRQ-context trigger and completion callbacks.
+* Extended vibration support with typed effect encoding, multi-unit output,
+  device and unit metadata, relative orientation, hardware auto-stop, readiness,
+  coherent asynchronous completion status, and optional IRQ-context callbacks.
 
 RELEASE NOTES for 2.2.2
 -----------------------
