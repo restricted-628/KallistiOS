@@ -791,9 +791,8 @@ void vmu_set_icon(const char *vmu_icon) {
     }
 }
 
-/* Read the data in block blocknum into buffer, return a -1
-   if an error occurs, for now we ignore MAPLE_RESPONSE_FILEERR,
-   which will be changed shortly */
+/* Read one complete block. The caller's buffer is published only after the
+   response envelope identifies the requested block and exact payload size. */
 static void vmu_block_read_callback(maple_state_t *st, maple_frame_t *frm) {
     (void)st;
 
@@ -804,9 +803,12 @@ static void vmu_block_read_callback(maple_state_t *st, maple_frame_t *frm) {
 int vmu_block_read(maple_device_t *dev, uint16_t blocknum, uint8_t *buffer) {
     maple_response_t *resp;
     int              rv;
-    uint32_t         blkid, *send_buf;
+    uint32_t         blkid, response_function, *send_buf;
 
-    assert(dev != NULL);
+    if(!dev || !buffer) {
+        errno = EINVAL;
+        return MAPLE_EFAIL;
+    }
 
     /* Lock the frame */
     maple_frame_lock(&dev->frame);
@@ -846,17 +848,20 @@ int vmu_block_read(maple_device_t *dev, uint16_t blocknum, uint8_t *buffer) {
     /* Copy out the response */
     resp = (maple_response_t *)dev->frame.recv_buf;
     send_buf = (uint32_t *)resp->data;
+    response_function = resp->data_len ? send_buf[0] : 0;
 
-    if(resp->response != MAPLE_RESPONSE_DATATRF
-            || send_buf[0] != MAPLE_FUNC_MEMCARD
-            || send_buf[1] != blkid) {
+    if(resp->response != MAPLE_RESPONSE_DATATRF ||
+       resp->data_len != 2u + VMUFS_BLOCK_SIZE / sizeof(uint32_t) ||
+       send_buf[0] != MAPLE_FUNC_MEMCARD || send_buf[1] != blkid) {
         rv = MAPLE_EFAIL;
+        errno = EPROTO;
         dbglog(DBG_ERROR, "vmu_block_read failed: %s(%d)/%08lx\r\n",
-               maple_perror(resp->response), resp->response, send_buf[0]);
+               maple_perror(resp->response), resp->response,
+               response_function);
     }
     else {
         rv = MAPLE_EOK;
-        memcpy(buffer, send_buf + 2, (resp->data_len - 2) * 4);
+        memcpy(buffer, send_buf + 2, VMUFS_BLOCK_SIZE);
     }
 
     maple_frame_unlock(&dev->frame);

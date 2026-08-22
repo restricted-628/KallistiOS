@@ -487,7 +487,9 @@ void vmu_set_icon(const char *vmu_icon);
 /** \brief   Read a block from a memory card.
     \ingroup maple_memcard
 
-    This function performs a low-level raw block read from a memory card.
+    This function performs a low-level raw block read from a memory card. The
+    response function, block identifier, and exact 512-byte payload length are
+    validated before the caller's buffer is modified.
 
     \param  dev             The device to read from.
     \param  blocknum        The block number to read.
