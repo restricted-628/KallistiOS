@@ -640,6 +640,10 @@ static int w5500_if_start(netif_t *self) {
     if(w5500_use_thread) {
         w5500_rx_exit = false;
         w5500_rx_thread = thd_create(0, w5500_rx_func, (void *)self);
+        if(!w5500_rx_thread) {
+            dbglog(DBG_ERROR, "w5500: unable to create RX thread\n");
+            return -1;
+        }
         thd_set_label(w5500_rx_thread, "w5500-rx");
     }
 

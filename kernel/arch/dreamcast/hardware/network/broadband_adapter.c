@@ -925,6 +925,10 @@ static int bba_if_start(netif_t *self) {
     // Start the BBA RX thread.
     assert(rx_worker == NULL);
     rx_worker = thd_worker_create_ex(&bba_rx_worker_attr, bba_rx_worker, NULL);
+    if(!rx_worker) {
+        dbglog(DBG_ERROR, "bba: unable to create RX worker\n");
+        return -1;
+    }
 
     /* We need something like this to get DHCP to work (since it doesn't
        know anything about an activated and yet not-yet-receiving network
