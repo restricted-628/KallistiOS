@@ -6,6 +6,7 @@
    Copyright (C) 2020 Lawrence Sebald
    Copyright (C) 2023, 2024, 2025, 2026 Ruslan Rostovtsev
    Copyright (C) 2024 Stefanos Kornilios Mitsis Poiitidis
+   Copyright (C) 2026 Joseph Black
 
    SH-4 support routines for SPU streaming sound driver
 */
@@ -324,25 +325,31 @@ int snd_stream_init(void) {
 }
 
 int snd_stream_init_ex(int channels, size_t buffer_size) {
+    uint32_t *new_buffer = NULL;
+
+    if((channels != 1 && channels != 2) ||
+       (buffer_size && (buffer_size & 63))) {
+        errno = EINVAL;
+        return -1;
+    }
 
     if(max_channels) {
         if(channels > max_channels) {
             dbglog(DBG_ERROR, "snd_stream_init_ex(): already initialized"
                 " with %d channels, but %d requested\n",
                 max_channels, channels);
+            errno = EBUSY;
             return -1;
         }
-        else if(max_buffer_size && buffer_size > max_buffer_size) {
+        else if(buffer_size > max_buffer_size) {
             dbglog(DBG_ERROR, "snd_stream_init_ex(): already initialized"
-                " with %d buffer size, but %d requested\n",
+                " with %zu buffer size, but %zu requested\n",
                 max_buffer_size, buffer_size);
+            errno = EBUSY;
             return -1;
         }
         return 0;
     }
-
-    max_channels = channels;
-    max_buffer_size = buffer_size;
 
     if(buffer_size > 0) {
         /* Create stereo separation buffers. This buffer size for each channel.
@@ -350,73 +357,116 @@ int snd_stream_init_ex(int channels, size_t buffer_size) {
            polling doesn't read more than half buffer at time.
            This can also be used for mono streams on unaligned data.
         */
-        sep_buffer[0] = aligned_alloc(32, buffer_size);
+        new_buffer = aligned_alloc(32, buffer_size);
 
-        if(sep_buffer[0] == NULL) {
+        if(new_buffer == NULL) {
             dbglog(DBG_ERROR, "snd_stream_init_ex(): memory allocation failed\n");
             return -1;
         }
-        sep_buffer[1] = sep_buffer[0] + (buffer_size / 8);
-    }
-    else {
-        sep_buffer[0] = NULL;
-        sep_buffer[1] = NULL;
     }
 
     /* Finish loading the stream driver */
     if(snd_init() < 0) {
         dbglog(DBG_ERROR, "snd_stream_init_ex(): snd_init() failed, giving up\n");
+        free(new_buffer);
         return -1;
     }
+
+    /* Publish the global limits only after every fallible initialization step
+       has succeeded. Each separation buffer occupies half the allocation. */
+    sep_buffer[0] = new_buffer;
+    sep_buffer[1] = new_buffer ? new_buffer + (buffer_size / 8) : NULL;
+    max_channels = channels;
+    max_buffer_size = buffer_size;
 
     return 0;
 }
 
 snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
-    int i;
-    snd_stream_hnd_t hnd;
+    int i, saved_errno;
+    snd_stream_hnd_t hnd = SND_STREAM_INVALID;
+    uint32_t ram = 0;
+    int ch0 = -1;
+    int ch1 = -1;
+
+    if(!max_channels) {
+        errno = ENODEV;
+        return SND_STREAM_INVALID;
+    }
+
+    if(bufsize <= 0 || (bufsize & 31) ||
+       (max_buffer_size && (size_t)bufsize > max_buffer_size)) {
+        errno = EINVAL;
+        return SND_STREAM_INVALID;
+    }
+
+    if(sem_wait(&stream_sem) < 0)
+        return SND_STREAM_INVALID;
 
     /* Get an unused handle */
-    hnd = -1;
-
     for(i = 0; i < SND_STREAM_MAX; i++) {
         if(!streams[i].initted) {
             hnd = i;
             break;
         }
     }
-    if(hnd == -1) {
+    if(hnd == SND_STREAM_INVALID) {
+        errno = ENOSPC;
+        sem_signal(&stream_sem);
         return SND_STREAM_INVALID;
     }
 
-    streams[hnd].initted = 1;
+    ram = snd_mem_malloc((size_t)bufsize * (size_t)max_channels);
 
-    /* Default this for now */
-    streams[hnd].buffer_size = bufsize;
+    if(!ram)
+        goto fail;
 
-    /* Start off with queueing disabled */
-    streams[hnd].queueing = 0;
+    ch0 = snd_sfx_chn_alloc();
 
-    /* Setup the callback */
-    snd_stream_set_callback(hnd, cb);
-    snd_stream_set_callback_direct(hnd, NULL);
-
-    /* Initialize our filter chain list */
-    TAILQ_INIT(&streams[hnd].filters);
-
-    /* Allocate stream buffers */
-    streams[hnd].spu_ram_sch[0] = snd_mem_malloc(streams[hnd].buffer_size * max_channels);
-
-    /* And channels */
-    streams[hnd].ch[0] = snd_sfx_chn_alloc();
-
-    if(max_channels == 2) {
-        streams[hnd].spu_ram_sch[1] = streams[hnd].spu_ram_sch[0] + streams[hnd].buffer_size;
-        streams[hnd].ch[1] = snd_sfx_chn_alloc();
+    if(ch0 < 0) {
+        errno = ENOSPC;
+        goto fail;
     }
 
+    if(max_channels == 2) {
+        ch1 = snd_sfx_chn_alloc();
+
+        if(ch1 < 0) {
+            errno = ENOSPC;
+            goto fail;
+        }
+    }
+
+    /* A handle becomes visible only after all resources are owned. */
+    memset(&streams[hnd], 0, sizeof(streams[hnd]));
+    streams[hnd].ch[0] = ch0;
+    streams[hnd].ch[1] = ch1;
+    streams[hnd].buffer_size = (size_t)bufsize;
+    streams[hnd].spu_ram_sch[0] = ram;
+    streams[hnd].spu_ram_sch[1] = max_channels == 2 ? ram + (uint32_t)bufsize : 0;
+    streams[hnd].get_data = cb;
+    TAILQ_INIT(&streams[hnd].filters);
+    streams[hnd].initted = 1;
+
+    sem_signal(&stream_sem);
     // dbglog(DBG_INFO, "snd_stream: alloc'd channels %d/%d\n", streams[hnd].ch[0], streams[hnd].ch[1]);
     return hnd;
+
+fail:
+    saved_errno = errno;
+
+    if(ch1 >= 0)
+        snd_sfx_chn_free(ch1);
+
+    if(ch0 >= 0)
+        snd_sfx_chn_free(ch0);
+
+    if(ram)
+        snd_mem_free(ram);
+
+    sem_signal(&stream_sem);
+    errno = saved_errno;
+    return SND_STREAM_INVALID;
 }
 
 snd_stream_hnd_t snd_stream_reinit(snd_stream_hnd_t hnd, snd_stream_callback_t cb) {

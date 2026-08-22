@@ -3,8 +3,10 @@
    spu.c
    Copyright (C) 2000, 2001 Megan Potter
    Copyright (C) 2023, 2024, 2026 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
  */
 
+#include <string.h>
 #include <kos/thread.h>
 #include <kos/regfield.h>
 #include <arch/arch.h>
@@ -37,32 +39,46 @@ kernel; so don't use them if you don't need to =).
 #define SNDREGADDR(x) (0xa0700000 + (x))
 #define CHNREGADDR(chn, x) SNDREGADDR(0x80*(chn) + (x))
 
-/* memcpy and memset designed for sound RAM; for addresses, don't
-   bother to include the 0xa0800000 offset that is implied. 'length'
-   must be a multiple of 4, but if it is not it will be rounded up. */
+/* memcpy and memset designed for sound RAM; for addresses, don't include the
+   implied 0xa0800000 base. Byte tails use byte-width G2 accesses so callers
+   never have to expose padding beyond the requested source or destination. */
 void spu_memload(uintptr_t dst, const void *src_void, size_t length) {
-    uint8_t *src = (uint8_t *)src_void;
+    const uint8_t *src = src_void;
+    uint32_t words[8];
+    size_t count;
 
-    /* Make sure it's an even number of 32-bit words and convert the
-       count to a 32-bit word count */
-    length = (length + 3) >> 2;
+    if(!length)
+        return;
 
     /* Add in the SPU RAM base */
     dst |= SPU_RAM_UNCACHED_BASE;
 
-    while(length >= 8) {
-        g2_fifo_wait();
-        g2_write_block_32((uint32_t *)src, dst, 8);
-
-        src += 8 * 4;
-        dst += 8 * 4;
-        length -= 8;
+    while((dst & 3) && length) {
+        g2_write_8(dst++, *src++);
+        --length;
     }
 
-    if(length > 0) {
-        g2_fifo_wait();
-        g2_write_block_32((uint32_t *)src, dst, length);
+    while(length >= sizeof(words)) {
+        memcpy(words, src, sizeof(words));
+        g2_write_block_32(words, dst, 8);
+
+        src += sizeof(words);
+        dst += sizeof(words);
+        length -= sizeof(words);
     }
+
+    count = length / sizeof(uint32_t);
+
+    if(count) {
+        memcpy(words, src, count * sizeof(uint32_t));
+        g2_write_block_32(words, dst, count);
+        src += count * sizeof(uint32_t);
+        dst += count * sizeof(uint32_t);
+        length -= count * sizeof(uint32_t);
+    }
+
+    while(length--)
+        g2_write_8(dst++, *src++);
 }
 
 void spu_memload_sq(uintptr_t dst, const void *src_void, size_t length) {
@@ -75,12 +91,13 @@ void spu_memload_sq(uintptr_t dst, const void *src_void, size_t length) {
         return;
     }
 
-    /* Round up to the nearest multiple of 4 */
-    length = __align_up(length, 4);
+    if((dst & 31) || length < 32) {
+        spu_memload(dst, src_void, length);
+        return;
+    }
 
     /* Using SQs for all that is divisible by 32 */
     aligned_len = length & ~31;
-    length &= 31;
 
     /* Add in the SPU RAM base (cached area) */
     dst |= SPU_RAM_BASE;
@@ -104,35 +121,26 @@ void spu_memload_sq(uintptr_t dst, const void *src_void, size_t length) {
 
     g2_unlock(ctx);
 
-    if(length > 0) {
-        /* Make sure the destination is in a non-cached area */
-        dst |= MEM_AREA_P2_BASE;
-        dst += aligned_len;
-        src += aligned_len;
-        g2_fifo_wait();
-        g2_write_block_32((uint32_t *)src, dst, length >> 2);
-    }
+    length -= aligned_len;
+
+    if(length)
+        spu_memload((dst & ~SPU_RAM_BASE) + aligned_len, src + aligned_len,
+                    length);
 }
 
 void spu_memload_dma(uintptr_t dst, const void *src_void, size_t length) {
-    uint8_t *src = (uint8_t *)src_void;
     size_t aligned_len;
 
     if(length < 32) {
         spu_memload(dst, src_void, length);
         return;
     }
-    if(!__is_aligned(src_void, 32)) {
+    if(!__is_aligned(src_void, 32) || (dst & 31) || (length & 31)) {
         spu_memload_sq(dst, src_void, length);
         return;
     }
 
-    /* Round up to the nearest multiple of 4 */
-    length = __align_up(length, 4);
-
-    /* Using DMA (or SQ's on fail) for all that is divisible by 32 */
-    aligned_len = length & ~31;
-    length &= 31;
+    aligned_len = length;
 
     do {
         if(spu_dma_transfer((void *)src_void, dst, aligned_len, 1, NULL, NULL) < 0) {
@@ -145,48 +153,57 @@ void spu_memload_dma(uintptr_t dst, const void *src_void, size_t length) {
         break;
     } while(1);
 
-    if(length > 0) {
-        /* Make sure the destination is in a non-cached area */
-        dst |= (MEM_AREA_P2_BASE | SPU_RAM_BASE);
-        dst += aligned_len;
-        src += aligned_len;
-        g2_fifo_wait();
-        g2_write_block_32((uint32_t *)src, dst, length >> 2);
-    }
 }
 
 void spu_memread(void *dst_void, uintptr_t src, size_t length) {
     uint8_t *dst = (uint8_t *)dst_void;
+    uint32_t words[8];
+    size_t count;
 
-    /* Make sure it's an even number of 32-bit words and convert the
-       count to a 32-bit word count */
-    length = (length + 3) >> 2;
+    if(!length)
+        return;
 
     /* Add in the SPU RAM base */
     src |= SPU_RAM_UNCACHED_BASE;
 
-    while(length >= 8) {
-        g2_fifo_wait();
-        g2_read_block_32((uint32_t *)dst, src, 8);
-
-        src += 8 * 4;
-        dst += 8 * 4;
-        length -= 8;
+    while((src & 3) && length) {
+        *dst++ = g2_read_8(src++);
+        --length;
     }
 
-    if(length > 0) {
-        g2_fifo_wait();
-        g2_read_block_32((uint32_t *)dst, src, length);
+    while(length >= sizeof(words)) {
+        g2_read_block_32(words, src, 8);
+        memcpy(dst, words, sizeof(words));
+
+        src += sizeof(words);
+        dst += sizeof(words);
+        length -= sizeof(words);
     }
+
+    count = length / sizeof(uint32_t);
+
+    if(count) {
+        g2_read_block_32(words, src, count);
+        memcpy(dst, words, count * sizeof(uint32_t));
+        dst += count * sizeof(uint32_t);
+        src += count * sizeof(uint32_t);
+        length -= count * sizeof(uint32_t);
+    }
+
+    while(length--)
+        *dst++ = g2_read_8(src++);
 }
 
 void spu_memset(uintptr_t dst, uint32_t what, size_t length) {
     uint32_t  blank[8];
+    uint8_t pattern[4];
+    size_t written = 0;
     int i;
 
-    /* Make sure it's an even number of 32-bit words and convert the
-       count to a 32-bit word count */
-    length = (length + 3) >> 2;
+    memcpy(pattern, &what, sizeof(pattern));
+
+    if(!length)
+        return;
 
     /* Initialize the array */
     for(i = 0; i < 8; i++)
@@ -195,30 +212,50 @@ void spu_memset(uintptr_t dst, uint32_t what, size_t length) {
     /* Add in the SPU RAM base */
     dst |= SPU_RAM_UNCACHED_BASE;
 
-    while(length >= 8) {
-        g2_fifo_wait();
+    while((dst & 3) && length) {
+        g2_write_8(dst++, pattern[written++ & 3]);
+        --length;
+    }
+
+    if(written & 3) {
+        uint8_t *bytes = (uint8_t *)blank;
+
+        for(i = 0; i < 8 * 4; ++i)
+            bytes[i] = pattern[(written + (size_t)i) & 3];
+    }
+
+    while(length >= 8 * sizeof(uint32_t)) {
         g2_write_block_32(blank, dst, 8);
 
         dst += 8 * 4;
-        length -= 8;
+        length -= 8 * 4;
+        written += 8 * 4;
     }
 
-    if(length > 0) {
-        g2_fifo_wait();
-        g2_write_block_32(blank, dst, length);
+    if(length >= sizeof(uint32_t)) {
+        size_t words = length / sizeof(uint32_t);
+
+        g2_write_block_32(blank, dst, words);
+        dst += words * sizeof(uint32_t);
+        length -= words * sizeof(uint32_t);
+        written += words * sizeof(uint32_t);
     }
+
+    while(length--)
+        g2_write_8(dst++, pattern[written++ & 3]);
 }
 
 void spu_memset_sq(uintptr_t dst, uint32_t what, size_t length) {
     int aligned_len;
     g2_ctx_t ctx;
 
-    /* Round up to the nearest multiple of 4 */
-    length = __align_up(length, 4);
+    if((dst & 31) || length < 32) {
+        spu_memset(dst, what, length);
+        return;
+    }
 
     /* Using SQs for all that is divisible by 32 */
     aligned_len = length & ~31;
-    length &= 31;
 
     /* Add in the SPU RAM base (cached area) */
     dst |= SPU_RAM_BASE;
@@ -242,11 +279,10 @@ void spu_memset_sq(uintptr_t dst, uint32_t what, size_t length) {
 
     g2_unlock(ctx);
 
-    if(length > 0) {
-        /* Make sure the destination is in a non-cached area */
-        dst += aligned_len;
-        spu_memset(dst, what, length);
-    }
+    length -= aligned_len;
+
+    if(length)
+        spu_memset((dst & ~SPU_RAM_BASE) + aligned_len, what, length);
 }
 
 /* Reset the AICA channel registers */

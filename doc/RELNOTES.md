@@ -54,6 +54,10 @@ lifecycle and naming conventions.
   accounting. Added per-port stored-camera-image requests with bounded
   deadlines, validated replies, coherent progress, and detach-safe late
   completion. Live camera video remains separately scoped.
+* Hardened low-level sound output with validated command queues, sound-RAM
+  geometry and allocator status, failure-atomic stream allocation, bounded
+  raw/WAV effect loading, exact SPU byte-range copies, and coherent channel
+  status. Codecs, sequencing, and content middleware remain separate libraries.
 * Added scheduled light-gun capture with exclusive Maple field ownership,
   automatic flash restoration, coherent aim snapshots, port selection, and
   optional IRQ-context trigger and completion callbacks.

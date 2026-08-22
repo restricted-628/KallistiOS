@@ -38,7 +38,7 @@ be reconstructed as reviewable commits on top of that chain.
 | External-bus and interrupt ownership | G1, G2 DMA, and ASIC ownership layers | Cumulative branch complete | Physical contention and timing sweep |
 | Microphone input | Maple microphone transport and caller-owned capture rings | Cumulative branch base complete | Physical devices |
 | Camera stored-image transport | Maple camera driver | Cumulative branch complete | Physical devices; live video is separate |
-| Sound output robustness | AICA queue, allocator, stream, effect, and SPU services | Integration checkpoint base complete | Extraction; wider synchronized start needs firmware coordination |
+| Sound output robustness | AICA queue, allocator, stream, effect, and SPU services | Cumulative branch base complete | Wider synchronized start needs firmware coordination |
 | Runtime and filesystem lifetime | Name manager, descriptors, mounts, ordered shutdown | Cumulative branch complete | Broader application stress testing |
 
 ## Separate projects

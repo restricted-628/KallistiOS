@@ -3,6 +3,7 @@
    dc/spu.h
    Copyright (C) 2000, 2001 Megan Potter
    Copyright (C) 2023, 2024 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -40,8 +41,7 @@ __BEGIN_DECLS
     \param  to              The offset in sound RAM to copy to. Do not include
                             the 0xA0800000 part, it is implied.
     \param  from            A pointer to copy from.
-    \param  length          The number of bytes to copy. Automatically rounded
-                            up to be a multiple of 4.
+    \param  length          The exact number of bytes to copy.
 */
 void spu_memload(uintptr_t to, const void *from, size_t length);
 
@@ -54,8 +54,7 @@ void spu_memload(uintptr_t to, const void *from, size_t length);
     \param  to              The offset in sound RAM to copy to. Do not include
                             the 0xA0800000 part, it is implied.
     \param  from            A pointer to copy from.
-    \param  length          The number of bytes to copy. Automatically rounded
-                            up to be a multiple of 4.
+    \param  length          The exact number of bytes to copy.
 */
 void spu_memload_sq(uintptr_t to, const void *from, size_t length);
 
@@ -78,8 +77,7 @@ void spu_memload_dma(uintptr_t to, const void *from, size_t length);
     \param  to              A pointer to copy to.
     \param  from            The offset in sound RAM to copy from. Do not include
                             the 0xA0800000 part, it is implied.
-    \param  length          The number of bytes to copy. Automatically rounded
-                            up to be a multiple of 4.
+    \param  length          The exact number of bytes to copy.
 */
 void spu_memread(void *to, uintptr_t from, size_t length);
 
@@ -91,8 +89,8 @@ void spu_memread(void *to, uintptr_t from, size_t length);
     \param  to              The offset in sound RAM to set at. Do not include
                             the 0xA0800000 part, it is implied.
     \param  what            The value to set.
-    \param  length          The number of bytes to copy. Automatically rounded
-                            up to be a multiple of 4.
+    \param  length          The exact number of bytes to set. Partial final
+                            words preserve bytes beyond this range.
 */
 void spu_memset(uintptr_t to, uint32_t what, size_t length);
 
@@ -105,8 +103,8 @@ void spu_memset(uintptr_t to, uint32_t what, size_t length);
     \param  to              The offset in sound RAM to set at. Do not include
                             the 0xA0800000 part, it is implied.
     \param  what            The value to set.
-    \param  length          The number of bytes to copy. Automatically rounded
-                            up to be a multiple of 4.
+    \param  length          The exact number of bytes to set. Partial final
+                            words preserve bytes beyond this range.
 */
 void spu_memset_sq(uintptr_t to, uint32_t what, size_t length);
 
@@ -212,4 +210,3 @@ void spu_reset_chans(void);
 __END_DECLS
 
 #endif  /* __DC_SPU_H */
-

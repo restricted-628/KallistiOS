@@ -185,6 +185,7 @@ snd_mem_shutdown
 snd_mem_malloc
 snd_mem_free
 snd_mem_available
+snd_mem_get_status
 snd_init
 snd_shutdown
 snd_sh4_to_aica
@@ -197,6 +198,7 @@ snd_sfx_unload
 snd_sfx_load
 snd_sfx_load_ex
 snd_sfx_load_fd
+snd_sfx_load_wav_buf
 snd_sfx_play
 snd_sfx_stop_all
 snd_sfx_play_chn
@@ -230,6 +232,7 @@ snd_pcm8_split
 snd_adpcm_split
 snd_get_pos
 snd_is_playing
+snd_channel_get_status
 
 # Video
 vid_mode

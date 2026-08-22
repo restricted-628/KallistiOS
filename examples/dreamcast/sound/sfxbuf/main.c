@@ -2,6 +2,7 @@
 
    main.c
    Copyright (C) 2023 Andy Barajas
+   Copyright (C) 2026 Joseph Black
 
    This example program simply demonstrations how to load and play
    sound effects on their own channels as well as on the same channel.
@@ -10,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <kos/init.h>
 #include <dc/biosfont.h>
 #include <dc/video.h>
@@ -23,6 +25,7 @@
 #define RIGHT 255
 
 static void draw_instructions(uint8_t volume);
+static sfxhnd_t load_sfx(const char *path);
 
 static cont_state_t *get_cont_state(void);
 static int button_pressed(uint32_t current_buttons, uint32_t changed_buttons, uint32_t button);
@@ -33,35 +36,25 @@ int main(int argc, char **argv) {
     cont_state_t *cond;
 
     vid_set_mode(DM_640x480, PM_RGB555);
-    // Initialize sound system
-    snd_init();
+    /* Initialize the sound system. */
+    if(snd_init() < 0) {
+        perror("snd_init");
+        return EXIT_FAILURE;
+    }
 
-    // Load wav files found in romdisk
-    // Beep wav files found in the romdisk where provided by
-    // https://gamesounds.xyz/?dir=Sound%20Effects/Beeps
-    char *beep1buf;
-    char *beep2buf;
-    char *beep3buf;
-    char *beep4buf;
+    /* Load WAV files from memory with their actual accessible sizes. */
+    sfxhnd_t beep1 = load_sfx("/rd/beep-1.wav");
+    sfxhnd_t beep2 = load_sfx("/rd/beep-2.wav");
+    sfxhnd_t beep3 = load_sfx("/rd/beep-3.wav");
+    sfxhnd_t beep4 = load_sfx("/rd/beep-4.wav");
 
-    fs_load("/rd/beep-1.wav", (void**)&beep1buf);
-    fs_load("/rd/beep-2.wav", (void**)&beep2buf);
-    fs_load("/rd/beep-3.wav", (void**)&beep3buf);
-    fs_load("/rd/beep-4.wav", (void**)&beep4buf);
-
-    sfxhnd_t beep1 = snd_sfx_load_buf(beep1buf);
-    sfxhnd_t beep2 = snd_sfx_load_buf(beep2buf);
-    sfxhnd_t beep3 = snd_sfx_load_buf(beep3buf);
-    sfxhnd_t beep4 = snd_sfx_load_buf(beep4buf);
-
-    if (beep1buf)
-        free(beep1buf);
-    if (beep2buf)
-        free(beep2buf);
-    if (beep3buf)
-        free(beep3buf);
-    if (beep4buf)
-        free(beep4buf);
+    if(!beep1 || !beep2 || !beep3 || !beep4) {
+        fprintf(stderr, "Unable to load all sound effects: %s\n",
+                strerror(errno));
+        snd_sfx_unload_all();
+        snd_shutdown();
+        return EXIT_FAILURE;
+    }
 
     uint32_t current_buttons = 0;
     uint32_t changed_buttons = 0;
@@ -126,17 +119,27 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Unload all sound effects from sound RAM
-    snd_sfx_unload(beep1);
-    snd_sfx_unload(beep2);
-    snd_sfx_unload(beep3);
-    snd_sfx_unload(beep4);
-    // OR
-    // snd_sfx_unload_all();
+    /* Unload all sound effects from sound RAM. */
+    snd_sfx_unload_all();
 
     snd_shutdown();
 
     return 0;
+}
+
+static sfxhnd_t load_sfx(const char *path) {
+    void *buffer = NULL;
+    ssize_t size;
+    sfxhnd_t effect;
+
+    size = fs_load(path, &buffer);
+
+    if(size <= 0)
+        return SFXHND_INVALID;
+
+    effect = snd_sfx_load_wav_buf(buffer, (size_t)size);
+    free(buffer);
+    return effect;
 }
 
 static void draw_instructions(uint8_t volume) {
@@ -181,4 +184,3 @@ static int button_pressed(uint32_t current_buttons, uint32_t changed_buttons, ui
 
     return 0;
 }
-

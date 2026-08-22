@@ -4,6 +4,7 @@
    Copyright (C) 2002, 2004 Megan Potter
    Copyright (C) 2020 Lawrence Sebald
    Copyright (C) 2023, 2024 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -72,8 +73,9 @@ typedef int snd_stream_hnd_t;
     registered with snd_stream_set_callback().
 
     \param  hnd             The stream handle being referred to.
-    \param  smp_req         The number of samples requested.
-    \param  smp_recv        Used to return the number of samples available.
+    \param  smp_req         The number of interleaved bytes requested.
+    \param  smp_recv        Used to return the number of interleaved bytes
+                            available.
     \return                 A pointer to the buffer of samples. If stereo, the
                             samples should be interleaved. For best performance
                             use 32-byte aligned pointer.
@@ -89,7 +91,8 @@ typedef void *(*snd_stream_callback_t)(snd_stream_hnd_t hnd, int smp_req,
     \param  hnd             The stream handle being referred to.
     \param  left            Left channel buffer address on AICA side.
     \param  right           Right channel buffer address on AICA side.
-    \param  size_req        Requested size for each channel.
+    \param  size_req        Requested interleaved byte count. For stereo, each
+                            channel destination receives half this amount.
     \retval -1              On failure.
     \retval size_recv       On success, received size.
 */
@@ -218,7 +221,11 @@ int snd_stream_init(void);
     the buffer for splitting the stereo stream at all.
 
     \param  channels        Max channels for any streams.
-    \param  buffer_size     Max channel buffer size for any streams.
+                            Must be 1 or 2.
+    \param  buffer_size     Max channel buffer size for any streams. A nonzero
+                            value must be a multiple of 64 bytes. Zero disables
+                            the separation buffer and leaves per-stream size
+                            limited only by sound RAM.
 
     \retval -1              On failure.
     \retval 0               On success.
@@ -237,7 +244,9 @@ void snd_stream_shutdown(void);
     This function allocates a stream and sets its parameters.
 
     \param  cb              The get data callback for the stream.
-    \param  bufsize         The size of the buffer for each channel of the stream.
+    \param  bufsize         The size of the buffer for each channel of the
+                            stream. Must be positive, a multiple of 32 bytes,
+                            and no larger than the initialized limit.
     \return                 A handle to the new stream on success,
                             SND_STREAM_INVALID on failure.
 */

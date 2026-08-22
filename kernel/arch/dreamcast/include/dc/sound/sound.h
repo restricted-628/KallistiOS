@@ -27,6 +27,7 @@ __BEGIN_DECLS
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 /** \defgroup audio_driver  Driver
     \brief                  Low-level driver for SPU and audio management
@@ -88,6 +89,26 @@ int snd_mem_init(uint32_t reserve);
 */
 void snd_mem_shutdown(void);
 
+/** \brief Coherent sound-RAM allocator status. */
+typedef struct snd_mem_status {
+    bool initialized;          /**< Whether the allocator is initialized. */
+    uint32_t pool_base;        /**< First allocatable sound-RAM offset. */
+    uint32_t pool_size;        /**< Total bytes managed by the allocator. */
+    uint32_t allocated_bytes;  /**< Bytes currently allocated. */
+    uint32_t free_bytes;       /**< Total bytes in free extents. */
+    uint32_t largest_free;     /**< Largest contiguous free extent. */
+    uint32_t allocated_blocks; /**< Number of allocated extents. */
+    uint32_t free_blocks;      /**< Number of free extents. */
+} snd_mem_status_t;
+
+/** \brief Retrieve a coherent sound-RAM allocator snapshot.
+
+    \param status          Receives the allocator snapshot.
+    \retval 0              On success.
+    \retval -1             On error with errno set.
+*/
+int snd_mem_get_status(snd_mem_status_t *status);
+
 /** \brief  Initialize the sound system.
 
     This function reinitializes the whole sound system. It will not do anything
@@ -113,7 +134,10 @@ void snd_shutdown(void);
 
     \param  packet          The packet of data to copy.
     \param  size            The size of the packet, in 32-bit increments.
-    \retval 0               On success (no error conditions defined).
+    \retval 0               On success.
+    \retval -1              On invalid input, unavailable/corrupt shared queue,
+                            lock failure, or insufficient queue space. errno is
+                            set to EINVAL, ENODEV, EPROTO, or EAGAIN.
 */
 int snd_sh4_to_aica(void *packet, uint32_t size);
 
@@ -214,8 +238,6 @@ void snd_pcm8_split(uint32_t *data, uint32_t *left, uint32_t *right, size_t size
 */
 void snd_adpcm_split(uint32_t *data, uint32_t *left, uint32_t *right, size_t size);
 
-/** @} */
-
 /** \brief  Get AICA channel position.
 
     This function returns actual the channel position
@@ -237,6 +259,26 @@ uint16_t snd_get_pos(unsigned int ch);
     \return                 True if the channel is playing.
 */
 bool snd_is_playing(unsigned int ch);
+
+/** \brief Coherent playback state for one AICA channel. */
+typedef struct snd_channel_status {
+    uint16_t position;      /**< Last position published by the firmware. */
+    bool playing;           /**< Whether the channel key-on bit is active. */
+} snd_channel_status_t;
+
+/** \brief Retrieve playback state for one AICA channel.
+
+    Both fields are sampled while holding the G2 bus lock, avoiding the gap
+    between separate calls to snd_get_pos() and snd_is_playing().
+
+    \param ch              Channel number in the range 0 through 63.
+    \param status          Receives the channel snapshot.
+    \retval 0              On success.
+    \retval -1             On invalid input with errno set to EINVAL.
+*/
+int snd_channel_get_status(unsigned int ch, snd_channel_status_t *status);
+
+/** @} */
 
 __END_DECLS
 
