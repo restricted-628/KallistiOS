@@ -3,10 +3,12 @@
    fs_vmu.c
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2012, 2013, 2014, 2016 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
 */
 
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -30,17 +32,15 @@ it's pretty simple, however the filesystem uses a separate directory for each
 of the vmu slots, so if vmufs were mounted on /vmu, /vmu/a1/ is the dir for
 slot 1 on port a, and /vmu/c2 is slot 2 on port c, etc.
 
-At the moment this FS is kind of a hack because of the simplicity (and weirdness)
-of the VMU file system. For one, all files must be pretty small, so it loads
-and caches the entire file on open. For two, all files are a multiple of 512
-bytes in size (no way around this one). On top of it all, files may have an
-obnoxious header and you can't just read and write them with abandon like
-a normal file system. We'll have to find ways around this later on, but for
-now it gives the file data to you raw.
+Files are cached in full while open because VMU storage is small. Normal opens
+of a valid package expose only its logical payload; O_META exposes the complete
+block-rounded on-card image. Handles keep payload size, backing capacity, and
+package-header offset separate so padding is never reported as file data.
 
-Note: this new version now talks directly to the vmufs module and doesn't do
-any block-level I/O anymore. This layer and that one are interchangeable
-and may be used pretty much simultaneously in the same program.
+This layer delegates card I/O and mutation ordering to vmufs. An open VFS file
+is a private cached snapshot, not a reservation: concurrently modifying the
+same file through another handle, vmufs, or direct block access can produce a
+lost update even though each individual card transaction remains serialized.
 
 Define VMUFS_DEBUG in kos/opts.h, in your CFLAGS, or here if you want copious
 debug output.
@@ -59,12 +59,14 @@ typedef struct vmu_fh_str {
     char path[17];                      /* full path of the file */
     char name[13];                      /* name of the file */
     off_t loc;                          /* current position from the start in the file (bytes) */
-    off_t start;                        /* start of the data in the file (bytes) */
+    size_t start;                       /* payload offset in the backing buffer */
     maple_device_t *dev;                /* maple address of the vmu to use */
-    uint32_t filesize;                  /* file length from dirent (in 512-byte blks) */
+    size_t size;                        /* logical bytes visible through the VFS */
+    size_t capacity;                    /* payload bytes available without realloc */
     uint8_t *data;                      /* copy of the whole file */
     vmu_pkg_t *header;                  /* VMU file header */
     bool raw;                           /* file opened as raw */
+    bool dirty;                         /* backing data or package metadata changed */
 } vmu_fh_t;
 
 /* Directory handles */
@@ -88,9 +90,37 @@ static mutex_t fh_mutex;
 
 static vmu_pkg_t *dft_header;
 
-static vmu_pkg_t * vmu_pkg_dup(const vmu_pkg_t *old_hdr) {
+static int vmu_pkg_eyecatch_size(int type, size_t *size) {
+    switch(type) {
+        case VMUPKG_EC_NONE:
+            *size = 0;
+            return 0;
+        case VMUPKG_EC_16BIT:
+            *size = 72 * 56 * 2;
+            return 0;
+        case VMUPKG_EC_256COL:
+            *size = 512 + 72 * 56;
+            return 0;
+        case VMUPKG_EC_16COL:
+            *size = 32 + 72 * 56 / 2;
+            return 0;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+}
+
+static vmu_pkg_t *vmu_pkg_dup(const vmu_pkg_t *old_hdr) {
     size_t ec_size, icon_size;
     vmu_pkg_t *hdr;
+
+    if(!old_hdr || old_hdr->icon_cnt < 0 || old_hdr->icon_cnt > 3 ||
+       (old_hdr->icon_cnt && !old_hdr->icon_data) ||
+       vmu_pkg_eyecatch_size(old_hdr->eyecatch_type, &ec_size) < 0 ||
+       (ec_size && !old_hdr->eyecatch_data)) {
+        errno = EINVAL;
+        return NULL;
+    }
 
     hdr = malloc(sizeof(*hdr));
     if(!hdr)
@@ -98,9 +128,7 @@ static vmu_pkg_t * vmu_pkg_dup(const vmu_pkg_t *old_hdr) {
 
     memcpy(hdr, old_hdr, sizeof(*hdr));
 
-    if(old_hdr->eyecatch_type && old_hdr->eyecatch_data) {
-        ec_size = (72 * 56 / 2) << (3 - old_hdr->eyecatch_type);
-
+    if(ec_size) {
         hdr->eyecatch_data = malloc(ec_size);
         if(!hdr->eyecatch_data)
             goto err_free_hdr;
@@ -178,9 +206,9 @@ static vmu_fh_t *vmu_open_vmu_dir(void) {
         return NULL;
     memset(dh, 0, sizeof(vmu_dh_t));
     dh->strtype = VMU_DIR;
-    dh->dirblocks = malloc(num * sizeof(vmu_dir_t));
+    dh->dirblocks = num ? malloc(num * sizeof(vmu_dir_t)) : NULL;
 
-    if(!dh->dirblocks) {
+    if(num && !dh->dirblocks) {
         free(dh);
         return NULL;
     }
@@ -211,8 +239,10 @@ static vmu_fh_t *vmu_open_dir(maple_device_t * dev) {
         return NULL;
 
     /* Allocate a handle for the dir blocks */
-    if(!(dh = malloc(sizeof(vmu_dh_t))))
+    if(!(dh = malloc(sizeof(vmu_dh_t)))) {
+        free(dirents);
         return NULL;
+    }
     dh->strtype = VMU_DIR;
     dh->dirblocks = dirents;
     dh->rootdir = 0;
@@ -225,41 +255,45 @@ static vmu_fh_t *vmu_open_dir(maple_device_t * dev) {
 
 /* openfile function */
 static vmu_fh_t *vmu_open_file(maple_device_t * dev, const char *path, int mode) {
-    vmu_fh_t    * fd;       /* file descriptor */
-    int     realmode, rv;
-    void        * data;
-    int     datasize;
+    vmu_fh_t *fd;
+    int realmode, rv;
+    void *data;
+    int datasize;
     vmu_pkg_t vmu_pkg;
 
-    /* Malloc a new fh struct */
-    if(!(fd = malloc(sizeof(vmu_fh_t))))
+    if(!(fd = calloc(1, sizeof(*fd))))
         return NULL;
 
-    /* Fill in the filehandle struct */
     fd->strtype = VMU_FILE;
     fd->mode = mode;
     strncpy(fd->path, path, 16);
     strncpy(fd->name, path + 4, 12);
-    fd->loc = 0;
-    fd->start = 0;
     fd->dev = dev;
-    fd->header = NULL;
-    fd->raw = mode & O_META;
+    fd->raw = !!(mode & O_META);
 
     /* What mode are we opening in? If we're reading or writing without O_TRUNC
        then we need to read the old file if there is one. */
     realmode = mode & O_MODE_MASK;
+    if(realmode != O_RDONLY && realmode != O_WRONLY && realmode != O_RDWR) {
+        errno = EINVAL;
+        free(fd);
+        return NULL;
+    }
 
     if(realmode == O_RDONLY || ((realmode == O_RDWR || realmode == O_WRONLY) && !(mode & O_TRUNC))) {
         /* Try to open it */
         rv = vmufs_read(dev, fd->name, &data, &datasize);
 
         if(rv < 0) {
-            if(realmode == O_RDWR || realmode == O_WRONLY) {
+            if((realmode == O_RDWR || realmode == O_WRONLY) && rv == -2) {
                 /* In some modes failure is ok -- flag to setup a blank first block. */
                 datasize = -1;
             }
             else {
+                if(rv == -2)
+                    errno = ENOENT;
+                else if(errno == 0)
+                    errno = EIO;
                 free(fd);
                 return NULL;
             }
@@ -272,27 +306,38 @@ static vmu_fh_t *vmu_open_file(maple_device_t * dev, const char *path, int mode)
 
     /* We were flagged to set up a blank first block */
     if(datasize == -1) {
-        data = malloc(512);
+        data = calloc(1, VMUFS_BLOCK_SIZE);
         if(data == NULL) {
             free(fd);
             return NULL;
         }
-        datasize = 512;
-        memset(data, 0, 512);
-    } else if(!fd->raw && !vmu_pkg_parse(data, datasize, &vmu_pkg)) {
+
+        datasize = VMUFS_BLOCK_SIZE;
+        fd->capacity = VMUFS_BLOCK_SIZE;
+        fd->dirty = true;
+    }
+    else if(!fd->raw && !vmu_pkg_parse(data, datasize, &vmu_pkg)) {
         fd->header = vmu_pkg_dup(&vmu_pkg);
-        fd->start = (unsigned int)vmu_pkg.data - (unsigned int)data;
+        if(!fd->header) {
+            free(data);
+            free(fd);
+            return NULL;
+        }
+
+        fd->start = (size_t)(vmu_pkg.data - (uint8_t *)data);
+        fd->size = (size_t)vmu_pkg.data_len;
+        fd->capacity = (size_t)datasize - fd->start;
+    }
+    else {
+        /* Raw opens and unrecognized package files expose the complete stored
+           allocation. Package parsing failures are not open failures. */
+        fd->size = (size_t)datasize;
+        fd->capacity = (size_t)datasize;
     }
 
     fd->data = (uint8_t *)data;
-    fd->filesize = datasize / 512;
-
-    if(fd->filesize == 0) {
-        dbglog(DBG_WARNING, "VMUFS: can't open zero-length file %s\n", path);
-        free(fd->data);
-        free(fd);
-        return NULL;
-    }
+    if(mode & O_APPEND)
+        fd->loc = (off_t)fd->size;
 
     return fd;
 }
@@ -322,7 +367,19 @@ static void * vmu_open(vfs_handler_t * vfs, const char *path, int mode) {
             fh = vmu_open_dir(dev);
         }
         else {
-            if(mode & O_DIR) return 0;
+            size_t name_len;
+
+            if(mode & O_DIR || path[3] != '/' || !path[4] ||
+               strchr(path + 4, '/')) {
+                errno = ENOENT;
+                return NULL;
+            }
+
+            name_len = strlen(path + 4);
+            if(name_len > 12) {
+                errno = ENAMETOOLONG;
+                return NULL;
+            }
 
             fh = vmu_open_file(dev, path, mode);
         }
@@ -362,28 +419,34 @@ static int vmu_verify_hnd(void * hnd, int type) {
 
 /* write a file out before closing it: we aren't perfect on error handling here */
 static int vmu_write_close(void * hnd) {
-    vmu_fh_t    *fh = (vmu_fh_t*)hnd;
-    uint8_t     *data = fh->data + fh->start;
-    int         ret, data_len = fh->filesize * 512;
-    vmu_pkg_t   *hdr = fh->header ?: dft_header;
+    vmu_fh_t *fh = (vmu_fh_t *)hnd;
+    uint8_t *encoded = NULL;
+    uint8_t *write_data = fh->data + fh->start;
+    const vmu_pkg_t *hdr = fh->raw ? NULL : (fh->header ?: dft_header);
+    int ret, write_len;
 
-    if(!fh->raw) {
-        if(!hdr) {
-            dbglog(DBG_WARNING, "VMUFS: file written without header\n");
-        } else {
-            hdr->data_len = data_len;
-            hdr->data = data;
-
-            ret = vmu_pkg_build(hdr, &data, &data_len);
-            if(ret < 0)
-                return ret;
-        }
+    if(fh->size > INT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
     }
+    write_len = (int)fh->size;
 
-    ret = vmufs_write(fh->dev, fh->name, data, data_len, VMUFS_OVERWRITE);
+    if(hdr) {
+        vmu_pkg_t package = *hdr;
 
-    if(hdr)
-        free(data);
+        package.data_len = write_len;
+        package.data = write_data;
+        ret = vmu_pkg_build(&package, &encoded, &write_len);
+        if(ret < 0)
+            return ret;
+        write_data = encoded;
+    }
+    else if(!fh->raw)
+        dbglog(DBG_WARNING, "VMUFS: file written without header\n");
+
+    ret = vmufs_write(fh->dev, fh->name, write_data, write_len,
+                      VMUFS_OVERWRITE);
+    free(encoded);
 
     return ret;
 }
@@ -414,10 +477,10 @@ static int vmu_close(void * hnd) {
         case VMU_FILE:
             if((fh->mode & O_MODE_MASK) == O_WRONLY ||
                     (fh->mode & O_MODE_MASK) == O_RDWR) {
-                if((st = vmu_write_close(hnd))) {
+                if(fh->dirty && (st = vmu_write_close(hnd))) {
                     if(st == -7)
                         errno = ENOSPC;
-                    else
+                    else if(errno == 0)
                         errno = EIO;
                     retval = -1;
                 }
@@ -447,24 +510,34 @@ static ssize_t vmu_read(void * hnd, void *buffer, size_t cnt) {
     vmu_fh_t *fh;
 
     /* Check the handle */
-    if(!vmu_verify_hnd(hnd, VMU_FILE))
+    if(!vmu_verify_hnd(hnd, VMU_FILE)) {
+        errno = EBADF;
         return -1;
+    }
 
     fh = (vmu_fh_t *)hnd;
 
     /* make sure we're opened for reading */
-    if((fh->mode & O_MODE_MASK) != O_RDONLY && (fh->mode & O_MODE_MASK) != O_RDWR)
+    if((fh->mode & O_MODE_MASK) != O_RDONLY &&
+       (fh->mode & O_MODE_MASK) != O_RDWR) {
+        errno = EBADF;
+        return -1;
+    }
+
+    if(cnt && !buffer) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(cnt == 0)
         return 0;
 
-    /* Check size */
-    cnt = (fh->loc + cnt) > (fh->filesize * 512) ?
-          (fh->filesize * 512 - fh->loc) : cnt;
-
-    /* Reads past EOF return 0 */
-    if((long)cnt < 0)
+    if((size_t)fh->loc >= fh->size)
         return 0;
 
-    /* Copy out the data */
+    if(cnt > fh->size - (size_t)fh->loc)
+        cnt = fh->size - (size_t)fh->loc;
+
     memcpy(buffer, fh->data + fh->loc + fh->start, cnt);
     fh->loc += cnt;
 
@@ -473,52 +546,82 @@ static ssize_t vmu_read(void * hnd, void *buffer, size_t cnt) {
 
 /* write function */
 static ssize_t vmu_write(void * hnd, const void *buffer, size_t cnt) {
-    vmu_fh_t    *fh;
-    void        *tmp;
-    int     n;
+    vmu_fh_t *fh;
+    void *tmp;
+    size_t end, new_capacity, total_capacity;
 
     /* Check the handle we were given */
-    if(!vmu_verify_hnd(hnd, VMU_FILE))
+    if(!vmu_verify_hnd(hnd, VMU_FILE)) {
+        errno = EBADF;
         return -1;
+    }
 
     fh = (vmu_fh_t *)hnd;
 
     /* Make sure we're opened for writing */
-    if((fh->mode & O_MODE_MASK) != O_WRONLY && (fh->mode & O_MODE_MASK) != O_RDWR)
+    if((fh->mode & O_MODE_MASK) != O_WRONLY &&
+       (fh->mode & O_MODE_MASK) != O_RDWR) {
+        errno = EBADF;
         return -1;
+    }
 
-    /* Check to make sure we have enough room in data */
-    if(fh->loc + fh->start + cnt > fh->filesize * 512) {
-        /* Figure out the new block count */
-        n = ((fh->loc + fh->start + cnt) - (fh->filesize * 512));
+    if(cnt && !buffer) {
+        errno = EFAULT;
+        return -1;
+    }
 
-        if(n & 511)
-            n = (n + 512) & ~511;
+    if(cnt == 0)
+        return 0;
 
-        n = n / 512;
+    if(fh->mode & O_APPEND)
+        fh->loc = (off_t)fh->size;
 
-        dbglog(DBG_SOURCE(VMUFS_DEBUG), "VMUFS: extending file's filesize by %d\n", n);
+    if((uintmax_t)fh->loc > SIZE_MAX ||
+       cnt > SIZE_MAX - (size_t)fh->loc) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    end = (size_t)fh->loc + cnt;
 
-        /* We alloc another 512*n bytes for the file */
-        tmp = realloc(fh->data, (fh->filesize + n) * 512);
+    /* Capacity is block-rounded storage; size remains the caller-visible EOF. */
+    if(end > fh->capacity) {
+        if(end > SIZE_MAX - (VMUFS_BLOCK_SIZE - 1u)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        new_capacity = (end + VMUFS_BLOCK_SIZE - 1u) &
+                       ~(VMUFS_BLOCK_SIZE - 1u);
+        if(fh->start > SIZE_MAX - new_capacity) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        total_capacity = fh->start + new_capacity;
+
+        tmp = realloc(fh->data, total_capacity);
 
         if(!tmp) {
-            dbglog(DBG_ERROR, "VMUFS: unable to realloc another 512 bytes\n");
+            dbglog(DBG_ERROR, "VMUFS: unable to extend file buffer\n");
             return -1;
         }
 
-        /* Assign the new pointer and clear out the new space */
         fh->data = tmp;
-        memset(fh->data + fh->filesize * 512, 0, 512 * n);
-        fh->filesize += n;
+        memset(fh->data + fh->start + fh->capacity, 0,
+               new_capacity - fh->capacity);
+        fh->capacity = new_capacity;
     }
 
-    /* insert the data in buffer into fh->data at fh->loc */
-    dbglog(DBG_SOURCE(VMUFS_DEBUG), "VMUFS: adding %d bytes of data at loc %ld (%ld avail)\n",
-           cnt, fh->loc, fh->filesize * 512);
+    /* A seek beyond EOF creates a deterministic zero-filled gap, even when
+       the backing allocation contains old package padding in that interval. */
+    if((size_t)fh->loc > fh->size)
+        memset(fh->data + fh->start + fh->size, 0,
+               (size_t)fh->loc - fh->size);
 
     memcpy(fh->data + fh->loc + fh->start, buffer, cnt);
     fh->loc += cnt;
+    if(end > fh->size)
+        fh->size = end;
+    if(cnt)
+        fh->dirty = true;
 
     return cnt;
 }
@@ -534,12 +637,17 @@ static void *vmu_mmap(void * hnd) {
 
     fh = (vmu_fh_t *)hnd;
 
+    if((fh->mode & O_MODE_MASK) == O_WRONLY ||
+       (fh->mode & O_MODE_MASK) == O_RDWR)
+        fh->dirty = true;
+
     return fh->data + fh->start;
 }
 
 /* Seek elsewhere in a file */
 static off_t vmu_seek(void * hnd, off_t offset, int whence) {
     vmu_fh_t *fh;
+    off_t base, target;
 
     /* Check the handle */
     if(!vmu_verify_hnd(hnd, VMU_FILE))
@@ -547,25 +655,27 @@ static off_t vmu_seek(void * hnd, off_t offset, int whence) {
 
     fh = (vmu_fh_t *)hnd;
 
-    /* Update current position according to arguments */
     switch(whence) {
         case SEEK_SET:
+            base = 0;
             break;
         case SEEK_CUR:
-            offset += fh->loc;
+            base = fh->loc;
             break;
         case SEEK_END:
-            offset = fh->filesize * 512 - offset;
+            base = (off_t)fh->size;
             break;
         default:
+            errno = EINVAL;
             return -1;
     }
 
-    /* Check bounds; allow seek past EOF. */
-    if(offset < 0)
-        offset = 0;
+    if(__builtin_add_overflow(base, offset, &target) || target < 0) {
+        errno = EINVAL;
+        return -1;
+    }
 
-    fh->loc = offset;
+    fh->loc = target;
 
     return fh->loc;
 }
@@ -585,8 +695,7 @@ static size_t vmu_total(void * fd) {
     if(!vmu_verify_hnd(fd, VMU_FILE))
         return -1;
 
-    /* note that all filesizes are multiples of 512 for the vmu */
-    return (((vmu_fh_t *) fd)->filesize) * 512;
+    return ((vmu_fh_t *)fd)->size;
 }
 
 /* read a directory handle */
@@ -655,6 +764,7 @@ static int vmu_ioctl(void *fd, int cmd, va_list ap) {
         if(fh->strtype == VMU_FILE) {
             old_hdr = fh->header;
             fh->header = hdr;
+            fh->dirty = true;
         } else {
             old_hdr = dft_header;
             dft_header = hdr;
@@ -674,14 +784,28 @@ static int vmu_ioctl(void *fd, int cmd, va_list ap) {
 /* Delete a file */
 static int vmu_unlink(vfs_handler_t * vfs, const char *path) {
     maple_device_t  * dev = NULL;   /* address of VMU */
+    size_t name_len;
 
     (void)vfs;
+
+    if(!path) {
+        errno = EINVAL;
+        return -1;
+    }
 
     /* convert path to valid VMU address */
     dev = vmu_path_to_addr(path);
 
-    if(dev == NULL) {
+    if(dev == NULL || path[3] != '/' || !path[4] ||
+       strchr(path + 4, '/')) {
         dbglog(DBG_ERROR, "VMUFS: vmu_unlink on invalid path '%s'\n", path);
+        errno = ENOENT;
+        return -1;
+    }
+
+    name_len = strlen(path + 4);
+    if(name_len > 12) {
+        errno = ENAMETOOLONG;
         return -1;
     }
 
@@ -691,10 +815,17 @@ static int vmu_unlink(vfs_handler_t * vfs, const char *path) {
 static int vmu_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
                     int flag) {
     maple_device_t *dev;
-    size_t len = strlen(path);
+    size_t len;
 
     (void)vfs;
     (void)flag;
+
+    if(!path || !st) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    len = strlen(path);
 
     /* Root directory '/vmu' */
     if(len == 0 || (len == 1 && *path == '/')) {
@@ -707,14 +838,6 @@ static int vmu_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
 
         return 0;
     }
-    else if(len > 4) {
-            /* The only thing we can stat right now is full VMUs, and what that
-       will get you is a count of free blocks in "size". */
-        /* XXXX: This isn't right, but it'll keep the old functionality of this
-           function, at least. */
-        errno = ENOTDIR;
-        return -1;
-    }
 
     dev = vmu_path_to_addr(path);
 
@@ -723,14 +846,46 @@ static int vmu_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
         return -1;
     }
 
-    /* Get the number of free blocks */
     memset(st, 0, sizeof(struct stat));
     st->st_dev = (dev_t)((uintptr_t)dev);
-    st->st_mode = S_IFDIR | S_IRUSR | S_IXUSR | S_IRGRP | 
-        S_IXGRP | S_IROTH | S_IXOTH;
-    st->st_size = vmufs_free_blocks(dev);
-    st->st_nlink = 1;
     st->st_blksize = 512;
+
+    if(len == 3 || (len == 4 && path[3] == '/')) {
+        st->st_mode = S_IFDIR | S_IRUSR | S_IXUSR | S_IRGRP |
+            S_IXGRP | S_IROTH | S_IXOTH;
+        st->st_size = vmufs_free_blocks(dev);
+        st->st_nlink = 1;
+    }
+    else if(len > 4 && path[3] == '/' && !strchr(path + 4, '/') &&
+            strlen(path + 4) <= sizeof(((vmu_fh_t *)0)->name) - 1u) {
+        void *data = NULL;
+        int data_size = 0;
+        vmu_pkg_t package;
+        int saved_errno = errno;
+
+        int rv = vmufs_read(dev, path + 4, &data, &data_size);
+
+        if(rv < 0) {
+            if(rv == -2)
+                errno = ENOENT;
+            else if(errno == 0)
+                errno = EIO;
+            return -1;
+        }
+
+        st->st_mode = S_IFREG | S_IRWXU | S_IRWXG | S_IRWXO;
+        st->st_size = data_size;
+        st->st_nlink = 1;
+        if(vmu_pkg_parse(data, (size_t)data_size, &package) == 0)
+            st->st_size = package.data_len;
+        else
+            errno = saved_errno;
+        free(data);
+    }
+    else {
+        errno = ENOENT;
+        return -1;
+    }
 
     return 0;
 }
@@ -738,8 +893,6 @@ static int vmu_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
 static int vmu_fcntl(void *fd, int cmd, va_list ap) {
     vmu_fh_t *fh;
     int rv = -1;
-
-    (void)ap;
 
     /* Check the handle */
     if(!vmu_verify_hnd(fd, VMU_ANY)) {
@@ -760,6 +913,14 @@ static int vmu_fcntl(void *fd, int cmd, va_list ap) {
             break;
 
         case F_SETFL:
+            if(fh->strtype == VMU_FILE) {
+                int flags = va_arg(ap, int);
+
+                fh->mode = (fh->mode & ~O_APPEND) | (flags & O_APPEND);
+            }
+            rv = 0;
+            break;
+
         case F_GETFD:
         case F_SETFD:
             rv = 0;
@@ -794,6 +955,11 @@ static int vmu_rewinddir(void * fd) {
 static int vmu_fstat(void *fd, struct stat *st) {
     vmu_fh_t *fh;
 
+    if(!st) {
+        errno = EINVAL;
+        return -1;
+    }
+
     /* Check the handle */
     if(!vmu_verify_hnd(fd, VMU_ANY)) {
         errno = EBADF;
@@ -805,8 +971,14 @@ static int vmu_fstat(void *fd, struct stat *st) {
     st->st_dev = (dev_t)((uintptr_t)fh->dev);
     st->st_mode =  S_IRWXU | S_IRWXG | S_IRWXO;
     st->st_mode |= (fh->strtype == VMU_DIR) ? S_IFDIR : S_IFREG;
-    st->st_size = (fh->strtype == VMU_DIR) ? 
-        vmufs_free_blocks(((vmu_dh_t *)fh)->dev) : (int)(fh->filesize * 512);
+    if(fh->strtype == VMU_DIR) {
+        vmu_dh_t *dh = (vmu_dh_t *)fh;
+
+        st->st_size = dh->rootdir ? -1 : vmufs_free_blocks(dh->dev);
+    }
+    else {
+        st->st_size = (off_t)fh->size;
+    }
     st->st_nlink = (fh->strtype == VMU_DIR) ? 2 : 1;
     st->st_blksize = 512;
 
@@ -884,6 +1056,11 @@ int fs_vmu_shutdown(void) {
                     dbglog(DBG_ERROR, "fs_vmu_shutdown: still-open file '%s' not written!\n", c->path);
                 }
 
+                if(c->header) {
+                    free(c->header->eyecatch_data);
+                    free(c->header->icon_data);
+                    free(c->header);
+                }
                 free(c->data);
                 break;
         }
@@ -898,6 +1075,7 @@ int fs_vmu_shutdown(void) {
         free(dft_header->eyecatch_data);
         free(dft_header->icon_data);
         free(dft_header);
+        dft_header = NULL;
     }
 
     return 0;
