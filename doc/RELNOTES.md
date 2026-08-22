@@ -49,6 +49,11 @@ lifecycle and naming conventions.
   and option data, descriptor metadata, coherent transitions, and safe handling
   of malformed responses while preserving the established leading status
   layout.
+* Added response-aware microphone controls and caller-buffered capture rings
+  with independent readers, bounded copy-out, seeking, and exact overrun
+  accounting. Added per-port stored-camera-image requests with bounded
+  deadlines, validated replies, coherent progress, and detach-safe late
+  completion. Live camera video remains separately scoped.
 * Added scheduled light-gun capture with exclusive Maple field ownership,
   automatic flash restoration, coherent aim snapshots, port selection, and
   optional IRQ-context trigger and completion callbacks.

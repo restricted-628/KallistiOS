@@ -2,6 +2,7 @@
 #
 # examples/dreamcast/dreameye/basic/Makefile
 # Copyright (C) 2009 Lawrence Sebald
+# Copyright (C) 2026 Joseph Black
 #
 
 TARGET = dreameye.elf

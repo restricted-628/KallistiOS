@@ -1,15 +1,10 @@
-# KallistiOS ##version##
 #
+# Buffered microphone capture example
 # Copyright (C) 2026 Joseph Black
 #
-# examples/dreamcast/dreameye/sd/Makefile
-#
 
-TARGET = dreameye-sd.elf
-OBJS = dreameye-sd.o
-
-# Compile cleanly, or die trying!
-KOS_CFLAGS += -Werror -W -std=gnu99
+TARGET = sip-buffered.elf
+OBJS = sip-buffered.o
 
 all: rm-elf $(TARGET)
 
@@ -22,7 +17,7 @@ rm-elf:
 	-rm -f $(TARGET)
 
 $(TARGET): $(OBJS)
-	kos-cc -o $(TARGET) $(OBJS) -lkosext2fs
+	kos-cc -o $(TARGET) $(OBJS)
 
 run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
