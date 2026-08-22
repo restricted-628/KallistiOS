@@ -3,6 +3,7 @@
    init.c
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2015 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <stdio.h>
@@ -229,24 +230,24 @@ int  __weak_symbol arch_auto_init(void) {
 }
 
 void  __weak_symbol arch_auto_shutdown(void) {
-    /* Restore the native transport before it is torn down below. */
+    /* Restore the default transport before it is torn down below. */
     dcload_syscall_net_shutdown();
+
+    /* Detach existing descriptors before unloading a module which may
+       implement their handler. Module close hooks may still open temporary
+       descriptors while the rest of the runtime is available. */
+    if(fs_shutdown_weak)
+        fs_fdtbl_destroy();
+
+    /* Modules may own threads, handlers, and hardware resources. */
+    KOS_INIT_FLAG_CALL(library_shutdown);
+
+    /* Refuse new descriptors and close any created during module cleanup
+       before filesystem handlers begin unpublishing. */
+    KOS_INIT_FLAG_CALL(fs_shutdown);
 
     if (!KOS_PLATFORM_IS_NAOMI)
         KOS_INIT_FLAG_CALL(net_shutdown);
-
-    snd_shutdown();
-    hardware_shutdown();
-    /* XXX: We should investigate shrinking this irq_disabled
-       time. Until then, all these shut downs happen with
-       irqs disabled which prevents things like safely joining
-       threads or sending cleanup commands to hardware.
-    */
-    irq_disable();
-    timer_shutdown();
-    pvr_shutdown();
-
-    KOS_INIT_FLAG_CALL(library_shutdown);
 
     KOS_INIT_FLAG_CALL(fs_dcload_shutdown);
     KOS_INIT_FLAG_CALL(vmu_fs_shutdown);
@@ -259,14 +260,21 @@ void  __weak_symbol arch_auto_shutdown(void) {
     KOS_INIT_FLAG_CALL(fs_romdisk_shutdown);
     KOS_INIT_FLAG_CALL(fs_null_shutdown);
     KOS_INIT_FLAG_CALL(fs_dev_shutdown);
-
-    /* As a workaround, shut down the base FS before fs_pty
-       to avoid triggering bugs. */
-    KOS_INIT_FLAG_CALL(fs_shutdown);
-
     KOS_INIT_FLAG_CALL(fs_pty_shutdown);
 
+    nmmgr_shutdown();
+
+    /* Hardware cleanup can wait for workers and use interrupts here. */
+    snd_shutdown();
+    pvr_shutdown();
+    hardware_shutdown();
+
     thd_shutdown();
+
+    /* Nothing below this point needs a thread, callback, or interrupt-driven
+       hardware cleanup operation. */
+    irq_disable();
+    timer_shutdown();
     rtc_shutdown();
 }
 
