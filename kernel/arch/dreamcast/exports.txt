@@ -233,6 +233,8 @@ kbd_set_queue
 kbd_get_key
 kbd_get_snapshot
 kbd_get_info
+mouse_get_snapshot
+mouse_get_info
 maple_driver_reg
 maple_driver_unreg
 maple_driver_attach
