@@ -2,6 +2,7 @@
 
    arch/dreamcast/include/arch/mmu.h
    Copyright (C) 2001 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -59,14 +60,11 @@ __BEGIN_DECLS
 
     Since the software has to handle TLB misses on the SH-4, we have freedom
     to use any page table format we want (and thus save space), but we must
-    make it quick to access. The SH-4 can address a maximum of 512M of address
-    space per "area", but we only care about one area, so this is the total
-    maximum addressable space. With 4K pages, that works out to 2^17 pages
-    that must be mappable, or 17 bits. We use 18 bits just to be sure (there
-    are a few left over).
+    make it quick to access. KOS models the complete 2 GiB P0/U0 virtual
+    region. With 4 KiB pages, that is 2^19 possible virtual pages.
 
     Page tables (per-process) are a sparse two-level array. The virtual address
-    space is actually 2^30 bytes, or 2^(30-12)=2^18 pages, so there must be
+    space is 2^31 bytes, or 2^(31-12)=2^19 pages, so there must be
     a possibility of having that many page entries per process space. A full
     page table for a process would be 1M, so this is obviously too big!! Thus
     the sparse array.
@@ -79,8 +77,8 @@ __BEGIN_DECLS
     can grow from there as necessary.
 
     Virtual addresses are broken up as follows:
-    - Bits 31 - 22     10 bits top-level page directory
-    - Bits 21 - 13     9 bits bottom-level page entry
+    - Bits 30 - 21     10 bits top-level page directory
+    - Bits 20 - 12     9 bits bottom-level page entry
     - Bits 11 - 0      Byte index into page
 
 */
@@ -218,7 +216,8 @@ void mmu_use_table(mmucontext_t *context);
     without a process. Since KOS doesn't actually have a process model of its
     own, that means you will only ever have one of these, if any.
 
-    \param  asid            The address space ID of this process.
+    \param  asid            The address space ID of this process (0 through
+                            255).
     \return                 The newly created context or NULL on fail.
 */
 mmucontext_t *mmu_context_create(int asid);
@@ -226,9 +225,14 @@ mmucontext_t *mmu_context_create(int asid);
 /** \brief   Destroy an MMU context when a process is being destroyed.
     \ingroup mmu
 
-    This function cleans up a MMU context, deallocating any memory its using.
+    This function cleans up an MMU context, deallocating its page tables and
+    retiring its cached data and ASID-tagged TLB translations. Destroying the
+    current context also clears mmu_cxt_current safely.
 
     \param  context         The context to clean up after.
+
+    \note The caller must serialize this operation against page-table access
+          and mutation in other threads.
 */
 void mmu_context_destroy(mmucontext_t *context);
 
@@ -281,10 +285,79 @@ void mmu_switch_context(mmucontext_t *context);
     \param  cache           Cache scheme for page (see \ref mmu_cache_values).
     \param  share           Set to share between processes (meaningless).
     \param  dirty           Set to mark the page as dirty.
+
+    \note This legacy operation cannot report validation or allocation failure.
+          New code should use mmu_page_map_ex().
 */
 void mmu_page_map(mmucontext_t *context, int virtpage, int physpage,
                   int count, page_prot_t prot, page_cache_t cache,
                   bool share, bool dirty);
+
+/** \brief   Map sequential 4 KiB pages with checked, all-or-nothing setup.
+    \ingroup mmu
+
+    This is the error-reporting form of mmu_page_map(). Missing second-level
+    page tables are allocated before any mapping is changed. Existing live TLB
+    translations are invalidated before replacement.
+
+    \param  context         The context to modify.
+    \param  virtpage        The first virtual page to map.
+    \param  physpage        The first physical page to map.
+    \param  count           The number of sequential pages to map.
+    \param  prot            Memory protection for the pages.
+    \param  cache           Cache policy for the pages.
+    \param  share           Whether the mappings are shared.
+    \param  dirty           Whether writes are initially permitted.
+    \retval 0               On success.
+    \retval -1              On error, with errno set.
+
+    \note Mapping-table mutation is not safe to perform concurrently from
+          multiple threads.
+    \note Virtual and physical addresses are expressed as 4 KiB page numbers.
+          The virtual range is the P0/U0 region and physical pages are limited
+          to the SH-4's 512 MiB physical address space.
+*/
+int mmu_page_map_ex(mmucontext_t *context,
+                    int virtpage, int physpage, int count,
+                    page_prot_t prot, page_cache_t cache,
+                    bool share, bool dirty);
+
+/** \brief   Remove sequential 4 KiB page mappings.
+    \ingroup mmu
+
+    Cached data is purged before current mappings are removed, and matching
+    UTLB/ITLB translations are invalidated. Unmapped pages in the requested
+    range are ignored.
+
+    \param  context         The context to modify.
+    \param  virtpage        The first virtual page to unmap.
+    \param  count           The number of sequential pages to unmap.
+    \retval 0               On success.
+    \retval -1              On error, with errno set.
+
+    \note The caller must serialize this operation against other page-table
+          mutation and context destruction.
+*/
+int mmu_page_unmap(mmucontext_t *context, int virtpage, int count);
+
+/** \brief   Change the cache policy of mapped 4 KiB pages.
+    \ingroup mmu
+
+    Every page in the range must already be mapped. The update is rejected
+    without changing any page if one is absent.
+
+    \param  context         The context to modify.
+    \param  virtpage        The first virtual page to update.
+    \param  count           The number of sequential pages to update.
+    \param  cache           The new cache policy.
+    \retval 0               On success.
+    \retval -1              On error, with errno set.
+
+    \note The caller must serialize this operation against other page-table
+          mutation and context destruction.
+*/
+int mmu_page_set_cache(mmucontext_t *context, int virtpage, int count,
+                       page_cache_t cache);
 
 /** \brief   Copy a chunk of data from a process' address space into a kernel
              buffer, taking into account page mappings.
@@ -365,8 +438,8 @@ mmu_mapfunc_t mmu_map_set_callback(mmu_mapfunc_t newfunc);
     \param  cached          True if the mapped memory area is cached,
                             false otherwise.
     \retval 0               On success.
-    \retval -1              When the virtual or physical addresses are not
-                            aligned to the page size.
+    \retval -1              On invalid arguments or when all safe static TLB
+                            entries have been reserved, with errno set.
 */
 int mmu_page_map_static(uintptr_t virt, uintptr_t phys,
                         page_size_t page_size,
