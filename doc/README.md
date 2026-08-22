@@ -8,6 +8,8 @@ for KOS-created background execution are recorded in the
 [background execution audit](background-execution-audit.md).
 Checked cache ranges and P2 alias handling are documented in the
 [cache-maintenance safety guide](cache-maintenance.md).
+Checked page-table mutation and targeted TLB retirement are documented in the
+[MMU mapping safety guide](mmu-mapping.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.

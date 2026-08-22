@@ -12,6 +12,7 @@ This page serves as an index for all KallistiOS examples.
   - gdb_breaking
   - memtest32
   - mmu
+    - mapping-safety
   - posix_resource
   - stackprotector
   - stacktrace

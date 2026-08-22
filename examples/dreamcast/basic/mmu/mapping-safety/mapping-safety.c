@@ -69,6 +69,22 @@ int main(int argc, char **argv) {
     }
 
     mmu_init();
+
+    errno = 0;
+    if(mmu_page_map_static(0x11000000u, 0x20000000u,
+                           PAGE_SIZE_4K, MMU_ALL_RDWR, false) == 0 ||
+       errno != EINVAL) {
+        result = fail("out-of-range static physical mapping rejection");
+        goto shutdown;
+    }
+
+    errno = 0;
+    context = mmu_context_create(256);
+    if(context || errno != EINVAL) {
+        result = fail("invalid ASID rejection");
+        goto destroy;
+    }
+
     context = mmu_context_create(7);
     if(!context) {
         result = fail("context creation");
@@ -86,6 +102,14 @@ int main(int argc, char **argv) {
         goto destroy;
     }
 
+    errno = 0;
+    if(mmu_page_map_ex(context, MMU_PAGES * MMU_SUB_PAGES - 1,
+                       first_physical, 2, MMU_ALL_RDWR, MMU_NO_CACHE,
+                       false, true) == 0 || errno != EINVAL) {
+        result = fail("wrapping virtual page range rejection");
+        goto destroy;
+    }
+
     if(mmu_page_map_ex(context, TEST_VIRTUAL_PAGE, first_physical, 1,
                        MMU_ALL_RDWR, MMU_NO_CACHE, false, true) < 0) {
         result = fail("initial mapping");
@@ -96,6 +120,15 @@ int main(int argc, char **argv) {
        mmu_phys_to_virt(context, first_physical) != TEST_VIRTUAL_PAGE) {
         errno = EIO;
         result = fail("initial translation");
+        goto destroy;
+    }
+
+    page = test_page(context);
+    errno = 0;
+    if(mmu_page_set_cache(context, TEST_VIRTUAL_PAGE, 2,
+                          MMU_CACHE_BACK) == 0 ||
+       errno != ENOENT || !page || page->cache) {
+        result = fail("all-or-nothing cache-policy update");
         goto destroy;
     }
 
