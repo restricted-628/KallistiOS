@@ -22,6 +22,10 @@ lifecycle and naming conventions.
   terminal sense data, finalizers, and callbacks dispatched outside IRQ and
   transport-worker context. Request and callback workers are created on first
   use.
+* Added typed TMU channel ownership and opt-in software timer events, together
+  with caller-stacked cooperative fibers, synchronization objects, and explicit
+  service executors. Ordinary threads carry no fiber state or stack allocation;
+  service wake/message delivery cannot falsely complete a mutex or event wait.
 * Extended ISO9660 with selectable BIOS/direct transport, aligned-sector and
   arbitrary-byte asynchronous reads, preseek, staged streaming, media
   invalidation, directory prefetch, and cache statistics. The 32 KiB bounce

@@ -43,6 +43,9 @@ __BEGIN_DECLS
 #include <kos/limits.h>
 #include <kos/linker.h>
 #include <kos/thread.h>
+#include <kos/fiber.h>
+#include <kos/fiber_sync.h>
+#include <kos/fiber_service.h>
 #include <kos/sem.h>
 #include <kos/rwsem.h>
 #include <kos/once.h>
@@ -62,6 +65,7 @@ __BEGIN_DECLS
 #include <kos/string.h>
 #include <kos/init.h>
 #include <kos/oneshot_timer.h>
+#include <kos/timer_event.h>
 #include <kos/workqueue.h>
 #include <kos/regfield.h>
 #include <kos/spinlock.h>

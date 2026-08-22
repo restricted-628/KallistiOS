@@ -179,6 +179,47 @@ thd_get_errno
 thd_set_mode
 thd_block_now
 
+# Cooperative fibers
+fiber_attach
+fiber_create
+fiber_destroy
+fiber_switch
+fiber_current
+fiber_main
+fiber_get_data
+fiber_get_state
+fiber_set_switch_callback
+
+# Cooperative fiber synchronization
+fiber_event_create
+fiber_event_destroy
+fiber_event_wait
+fiber_event_set
+fiber_event_clear
+fiber_event_is_set
+fiber_mutex_create
+fiber_mutex_destroy
+fiber_mutex_lock
+fiber_mutex_trylock
+fiber_mutex_unlock
+
+# Fiber service executors
+fiber_service_executor_create
+fiber_service_add
+fiber_service_queue_configure
+fiber_service_executor_start
+fiber_service_executor_destroy
+fiber_service_wake
+fiber_service_request_stop
+fiber_service_post
+fiber_service_receive
+fiber_service_get_queue_info
+fiber_service_wait
+fiber_service_yield
+fiber_service_stop_requested
+fiber_service_get_state
+fiber_service_executor_get_thread
+
 # Threaded work queues
 workqueue_create
 workqueue_destroy
@@ -189,6 +230,13 @@ workqueue_cancel
 workqueue_cancel_ex
 workqueue_job_get_info
 workqueue_get_thread
+
+# Shared software timers
+timer_event_create
+timer_event_destroy
+timer_event_arm
+timer_event_cancel
+timer_event_get_info
 
 # Libraries
 #library_print_list

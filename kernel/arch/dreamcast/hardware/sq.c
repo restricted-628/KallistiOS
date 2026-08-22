@@ -12,6 +12,7 @@
 #include <assert.h>
 #include <errno.h>
 
+#include <arch/fiber.h>
 #include <arch/mmu.h>
 #include <dc/sq.h>
 #include <kos/cache.h>
@@ -171,6 +172,12 @@ void sq_unlock(void) {
     }
 
     mutex_unlock(&sq_mutex);
+}
+
+bool arch_fiber_cooperative_state_switchable(void) {
+    /* Interrupts are masked by transfer callers, so this ownership snapshot is
+       stable on SH-4. Ordinary SQ users do no fiber-specific bookkeeping. */
+    return !thd_current || !sq_mutex.count || sq_mutex.holder != thd_current;
 }
 
 void sq_wait(void) {

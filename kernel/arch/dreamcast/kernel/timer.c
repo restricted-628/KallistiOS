@@ -4,10 +4,14 @@
    Copyright (C) 2000, 2001, 2002 Megan Potter
    Copyright (C) 2023 Falco Girgis
    Copyright (C) 2023, 2024 Paul Cercueil <paul@crapouillou.net>
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <assert.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #include <arch/arch.h>
 #include <arch/timer.h>
@@ -76,9 +80,109 @@ static const unsigned tcors[] = { TCOR0, TCOR1, TCOR2 };
 static const unsigned tcnts[] = { TCNT0, TCNT1, TCNT2 };
 static const unsigned tcrs[] = { TCR0, TCR1, TCR2 };
 
+/*
+ * TMU1 is the only channel not reserved by a core KOS facility. The typed
+ * owner below prevents legacy KOS timer entry points from reprogramming it
+ * while a library or application holds an exclusive claim. Direct register
+ * writes necessarily remain outside this protection boundary.
+ */
+struct timer_channel {
+    int channel;
+    timer_channel_clock_t clock;
+    uint32_t period_ticks;
+    unsigned int irq_priority;
+    timer_channel_callback_t callback;
+    void *callback_data;
+    uint64_t expirations;
+    bool configured;
+
+    uint32_t saved_tcor;
+    uint32_t saved_tcnt;
+    uint16_t saved_tcr;
+    unsigned int saved_irq_priority;
+    irq_cb_t saved_irq_handler;
+};
+
+static timer_channel_t *timer_channel_owner;
+
+static bool timer_channel_raw_busy(int which) {
+    if(which == TMU1 && timer_channel_owner) {
+        errno = EBUSY;
+        return true;
+    }
+
+    return false;
+}
+
+static void timer_irq_priority_set_direct(int which, unsigned int priority) {
+    irq_set_priority(IRQ_SRC_TMU0 - which, priority);
+}
+
+static int timer_channel_clock_params(timer_channel_clock_t clock,
+                                      uint16_t *tpsc, uint32_t *divisor) {
+    switch(clock) {
+        case TIMER_CHANNEL_CLOCK_DIV_4:
+            if(tpsc)
+                *tpsc = PCK_DIV_4;
+            break;
+        case TIMER_CHANNEL_CLOCK_DIV_16:
+            if(tpsc)
+                *tpsc = PCK_DIV_16;
+            break;
+        case TIMER_CHANNEL_CLOCK_DIV_64:
+            if(tpsc)
+                *tpsc = PCK_DIV_64;
+            break;
+        case TIMER_CHANNEL_CLOCK_DIV_256:
+            if(tpsc)
+                *tpsc = PCK_DIV_256;
+            break;
+        case TIMER_CHANNEL_CLOCK_DIV_1024:
+            if(tpsc)
+                *tpsc = PCK_DIV_1024;
+            break;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+
+    if(divisor)
+        *divisor = (uint32_t)clock;
+
+    return 0;
+}
+
+static void timer_channel_irq_handler(irq_t source, irq_context_t *context,
+                                      void *data) {
+    timer_channel_t *channel = timer_channel_owner;
+    timer_channel_callback_t callback;
+    void *callback_data;
+
+    (void)source;
+    (void)context;
+    (void)data;
+
+    if(!channel)
+        return;
+
+    /* Acknowledge before invoking user code so a stopped channel is quiet. */
+    TIMER16(tcrs[TMU1]) &= ~UNF;
+    ++channel->expirations;
+
+    callback = channel->callback;
+    callback_data = channel->callback_data;
+    if(callback)
+        callback(channel, callback_data);
+}
+
 /* Apply timer configuration to registers. */
 static int timer_prime_apply(int which, uint32_t count, int interrupts) {
-    assert(which <= TMU2);
+    assert(which >= TMU0 && which <= TMU2);
+
+    irq_disable_scoped();
+
+    if(timer_channel_raw_busy(which))
+        return -1;
 
     TIMER32(tcnts[which]) = count;
     TIMER32(tcors[which]) = count;
@@ -97,8 +201,17 @@ static int timer_prime_apply(int which, uint32_t count, int interrupts) {
 /* Pre-initialize a timer; set values but don't start it.
    "speed" is the number of desired ticks per second. */
 int timer_prime(int which, uint32_t speed, int interrupts) {
+    uint64_t divisor;
+    uint32_t cd;
+
+    if(speed == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
     /* Initialize counters; formula is P0/(tps*div) */
-    const uint32_t cd = TIMER_PCK / (speed * TDIV(TIMER_TPSC));
+    divisor = (uint64_t)speed * TDIV(TIMER_TPSC);
+    cd = (uint32_t)(TIMER_PCK / divisor);
 
     return timer_prime_apply(which, cd, interrupts);
 }
@@ -108,14 +221,20 @@ int timer_prime(int which, uint32_t speed, int interrupts) {
 static int timer_prime_wait(int which, uint32_t millis, int interrupts) {
     /* Calculate the countdown, formula is P0 * millis/div*1000. We
        rearrange the math a bit here to avoid integer overflows. */
-    const uint32_t cd = (TIMER_PCK / TDIV(TIMER_TPSC)) * millis / 1000;
+    const uint32_t cd = (uint32_t)(((uint64_t)(TIMER_PCK /
+                                TDIV(TIMER_TPSC)) * millis) / 1000);
 
     return timer_prime_apply(which, cd, interrupts);
 }
 
 /* Start a timer -- starts it running (and interrupts if applicable) */
 int timer_start(int which) {
-    assert(which <= TMU2);
+    assert(which >= TMU0 && which <= TMU2);
+
+    irq_disable_scoped();
+
+    if(timer_channel_raw_busy(which))
+        return -1;
 
     TIMER8(TSTR) |= BIT(which);
     return 0;
@@ -123,7 +242,12 @@ int timer_start(int which) {
 
 /* Stop a timer -- and disables its interrupt */
 int timer_stop(int which) {
-    assert(which <= TMU2);
+    assert(which >= TMU0 && which <= TMU2);
+
+    irq_disable_scoped();
+
+    if(timer_channel_raw_busy(which))
+        return -1;
 
     timer_disable_ints(which);
 
@@ -134,14 +258,14 @@ int timer_stop(int which) {
 }
 
 int timer_running(int which) {
-    assert(which <= TMU2);
+    assert(which >= TMU0 && which <= TMU2);
 
     return !!(TIMER8(TSTR) & BIT(which));
 }
 
 /* Returns the count value of a timer */
 uint32_t timer_count(int which) {
-    assert(which <= TMU2);
+    assert(which >= TMU0 && which <= TMU2);
 
     return TIMER32(tcnts[which]);
 }
@@ -150,7 +274,12 @@ uint32_t timer_count(int which) {
 int timer_clear(int which) {
     uint16_t value;
 
-    assert(which <= TMU2);
+    assert(which >= TMU0 && which <= TMU2);
+
+    irq_disable_scoped();
+
+    if(timer_channel_raw_busy(which))
+        return -1;
     value = TIMER16(tcrs[which]);
 
     TIMER16(tcrs[which]) &= ~UNF;
@@ -159,17 +288,315 @@ int timer_clear(int which) {
 
 /* Enable timer interrupts; needs to move to irq.c sometime. */
 void timer_enable_ints(int which) {
-    irq_set_priority(IRQ_SRC_TMU0 - which, TIMER_PRIO);
+    assert(which >= TMU0 && which <= TMU2);
+
+    irq_disable_scoped();
+
+    if(timer_channel_raw_busy(which))
+        return;
+
+    timer_irq_priority_set_direct(which, TIMER_PRIO);
 }
 
 /* Disable timer interrupts; needs to move to irq.c sometime. */
 void timer_disable_ints(int which) {
-    irq_set_priority(IRQ_SRC_TMU0 - which, IRQ_PRIO_MASKED);
+    assert(which >= TMU0 && which <= TMU2);
+
+    irq_disable_scoped();
+
+    if(timer_channel_raw_busy(which))
+        return;
+
+    timer_irq_priority_set_direct(which, IRQ_PRIO_MASKED);
 }
 
 /* Check whether ints are enabled */
 int timer_ints_enabled(int which) {
+    assert(which >= TMU0 && which <= TMU2);
+
     return irq_get_priority(IRQ_SRC_TMU0 - which) > 0;
+}
+
+timer_channel_t *timer_channel_claim(int channel) {
+    timer_channel_t *owner;
+    irq_mask_t old;
+
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return NULL;
+    }
+
+    if(channel < TMU0 || channel > TMU2) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if(channel != TMU1) {
+        errno = EBUSY;
+        return NULL;
+    }
+
+    owner = calloc(1, sizeof(*owner));
+    if(!owner)
+        return NULL;
+
+    old = irq_disable();
+    if(timer_channel_owner || (TIMER8(TSTR) & BIT(TMU1))) {
+        irq_restore(old);
+        free(owner);
+        errno = EBUSY;
+        return NULL;
+    }
+
+    owner->channel = TMU1;
+    owner->saved_tcor = TIMER32(tcors[TMU1]);
+    owner->saved_tcnt = TIMER32(tcnts[TMU1]);
+    owner->saved_tcr = TIMER16(tcrs[TMU1]);
+    owner->saved_irq_priority = irq_get_priority(IRQ_SRC_TMU1);
+    owner->saved_irq_handler = irq_get_handler(EXC_TMU1_TUNI1);
+
+    timer_irq_priority_set_direct(TMU1, IRQ_PRIO_MASKED);
+    TIMER8(TSTR) &= ~BIT(TMU1);
+    TIMER16(tcrs[TMU1]) &= ~(UNIE | UNF);
+    irq_set_handler(EXC_TMU1_TUNI1, timer_channel_irq_handler, NULL);
+    timer_channel_owner = owner;
+    irq_restore(old);
+
+    return owner;
+}
+
+int timer_channel_configure(timer_channel_t *channel,
+                            const timer_channel_config_t *config) {
+    uint16_t tpsc;
+
+    if(!channel || !config || config->period_ticks == 0 ||
+       (config->callback && (config->irq_priority == 0 ||
+                             config->irq_priority > 15))) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(timer_channel_clock_params(config->clock, &tpsc, NULL) < 0)
+        return -1;
+
+    irq_disable_scoped();
+
+    if(channel != timer_channel_owner) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(TIMER8(TSTR) & BIT(TMU1)) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    timer_irq_priority_set_direct(TMU1, IRQ_PRIO_MASKED);
+    TIMER32(tcors[TMU1]) = config->period_ticks - 1u;
+    TIMER32(tcnts[TMU1]) = config->period_ticks - 1u;
+    TIMER16(tcrs[TMU1]) = tpsc | (config->callback ? UNIE : 0);
+
+    channel->clock = config->clock;
+    channel->period_ticks = config->period_ticks;
+    channel->irq_priority = config->irq_priority;
+    channel->callback = config->callback;
+    channel->callback_data = config->callback_data;
+    channel->expirations = 0;
+    channel->configured = true;
+
+    return 0;
+}
+
+int timer_channel_start(timer_channel_t *channel) {
+    irq_disable_scoped();
+
+    if(!channel || channel != timer_channel_owner) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!channel->configured) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    TIMER16(tcrs[TMU1]) &= ~UNF;
+    if(channel->callback)
+        timer_irq_priority_set_direct(TMU1, channel->irq_priority);
+    TIMER8(TSTR) |= BIT(TMU1);
+
+    return 0;
+}
+
+int timer_channel_stop(timer_channel_t *channel) {
+    irq_disable_scoped();
+
+    if(!channel || channel != timer_channel_owner) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    TIMER8(TSTR) &= ~BIT(TMU1);
+    timer_irq_priority_set_direct(TMU1, IRQ_PRIO_MASKED);
+
+    return 0;
+}
+
+int timer_channel_get_info(const timer_channel_t *channel,
+                           timer_channel_info_t *info) {
+    uint32_t remaining = 0;
+
+    if(!channel || !info) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    irq_disable_scoped();
+
+    if(channel != timer_channel_owner) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(channel->configured)
+        remaining = TIMER32(tcnts[TMU1]) + 1u;
+
+    *info = (timer_channel_info_t) {
+        .channel = channel->channel,
+        .clock = channel->clock,
+        .period_ticks = channel->period_ticks,
+        .remaining_ticks = remaining,
+        .expirations = channel->expirations,
+        .configured = channel->configured,
+        .running = !!(TIMER8(TSTR) & BIT(TMU1)),
+    };
+
+    return 0;
+}
+
+int timer_channel_release(timer_channel_t *channel) {
+    irq_mask_t old;
+
+    if(!channel) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+
+    old = irq_disable();
+    if(channel != timer_channel_owner) {
+        irq_restore(old);
+        errno = EINVAL;
+        return -1;
+    }
+
+    TIMER8(TSTR) &= ~BIT(TMU1);
+    timer_irq_priority_set_direct(TMU1, IRQ_PRIO_MASKED);
+    TIMER32(tcors[TMU1]) = channel->saved_tcor;
+    TIMER32(tcnts[TMU1]) = channel->saved_tcnt;
+    TIMER16(tcrs[TMU1]) = channel->saved_tcr;
+    irq_set_handler(EXC_TMU1_TUNI1, channel->saved_irq_handler.hdl,
+                    channel->saved_irq_handler.data);
+    timer_irq_priority_set_direct(TMU1, channel->saved_irq_priority);
+    timer_channel_owner = NULL;
+    irq_restore(old);
+
+    free(channel);
+    return 0;
+}
+
+int timer_channel_ticks_to_ns(timer_channel_clock_t clock, uint32_t ticks,
+                              uint64_t *nanoseconds) {
+    uint32_t divisor;
+    uint64_t scaled;
+    uint64_t whole;
+    uint64_t remainder;
+
+    if(!nanoseconds) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(timer_channel_clock_params(clock, NULL, &divisor) < 0)
+        return -1;
+
+    scaled = (uint64_t)ticks * divisor;
+    whole = scaled / TIMER_PCK;
+    remainder = scaled % TIMER_PCK;
+    *nanoseconds = whole * 1000000000ULL +
+                   remainder * 1000000000ULL / TIMER_PCK;
+
+    return 0;
+}
+
+int timer_channel_ns_to_ticks(timer_channel_clock_t clock,
+                              uint64_t nanoseconds, uint32_t *ticks) {
+    uint32_t divisor;
+    uint64_t denominator;
+    uint64_t reduced_clock = TIMER_PCK;
+    uint64_t common = 320;
+    uint64_t whole;
+    uint64_t remainder;
+    uint64_t result;
+
+    if(!ticks) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(timer_channel_clock_params(clock, NULL, &divisor) < 0)
+        return -1;
+
+    /* TIMER_PCK and every supported divisor*1e9 denominator share 320. */
+    denominator = (uint64_t)divisor * 1000000000ULL / common;
+    reduced_clock /= common;
+    whole = nanoseconds / denominator;
+    remainder = nanoseconds % denominator;
+
+    if(whole > UINT32_MAX / reduced_clock) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    result = whole * reduced_clock;
+    if(remainder) {
+        uint64_t fraction = remainder * reduced_clock / denominator;
+
+        if(remainder * reduced_clock % denominator)
+            ++fraction;
+        result += fraction;
+    }
+
+    if(result > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    *ticks = (uint32_t)result;
+    return 0;
+}
+
+int timer_channel_elapsed_ticks(uint32_t start_remaining,
+                                uint32_t end_remaining,
+                                uint32_t period_ticks,
+                                uint32_t *elapsed_ticks) {
+    if(!elapsed_ticks || period_ticks == 0 || start_remaining == 0 ||
+       end_remaining == 0 || start_remaining > period_ticks ||
+       end_remaining > period_ticks) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(start_remaining >= end_remaining)
+        *elapsed_ticks = start_remaining - end_remaining;
+    else
+        *elapsed_ticks = start_remaining + (period_ticks - end_remaining);
+
+    return 0;
 }
 
 /* Seconds elapsed (since KOS startup), updated from the TMU2 underflow ISR */
@@ -346,6 +773,10 @@ int timer_init(void) {
 
 /* Shutdown */
 void timer_shutdown(void) {
+    /* Release optional TMU1 ownership before tearing down the IRQ system. */
+    if(timer_channel_owner)
+        timer_channel_release(timer_channel_owner);
+
     /* Shutdown primary timer stuff */
     timer_primary_shutdown();
 

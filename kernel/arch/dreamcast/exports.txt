@@ -109,6 +109,15 @@ timer_clear
 timer_enable_ints
 timer_disable_ints
 timer_ints_enabled
+timer_channel_claim
+timer_channel_configure
+timer_channel_start
+timer_channel_stop
+timer_channel_get_info
+timer_channel_release
+timer_channel_ticks_to_ns
+timer_channel_ns_to_ticks
+timer_channel_elapsed_ticks
 
 # Kernel image replacement
 arch_exec_at
