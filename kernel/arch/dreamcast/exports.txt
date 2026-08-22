@@ -364,6 +364,7 @@ vmufs_read_dirent
 vmufs_write
 vmufs_delete
 vmufs_rename
+vmufs_set_file_attributes
 vmufs_free_blocks
 vmufs_free_executable_blocks
 vmufs_format
@@ -372,6 +373,7 @@ vmufs_read_blocks_async
 vmufs_write_async
 vmufs_delete_async
 vmufs_rename_async
+vmufs_set_file_attributes_async
 vmufs_format_async
 vmufs_defragment_async
 vmufs_request_get_status

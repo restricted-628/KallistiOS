@@ -1401,6 +1401,90 @@ int vmufs_rename(maple_device_t *dev, const char *old_name,
     return vmufs_rename_observed(dev, old_name, new_name, NULL);
 }
 
+int vmufs_set_file_attributes_observed(
+    maple_device_t *dev, const char *fn,
+    const vmufs_file_attributes_t *attributes,
+    const vmufs_transaction_observer_t *observer) {
+    vmu_root_t root;
+    vmu_dir_t *dir = NULL;
+    uint16_t *fat = NULL;
+    size_t fn_length, dir_entries;
+    uint8_t copyprotect;
+    int fatsize, dirsize, index, rv = -1;
+
+    if(!dev || !fn || !attributes) {
+        errno = EINVAL;
+        return -1;
+    }
+    fn_length = filename_length(fn, 13u);
+    if(fn_length == 0 || fn_length > 12u) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(vmufs_setup(dev, &root, &dir, &dirsize, &fat, &fatsize) < 0) {
+        if(errno == 0)
+            errno = EIO;
+        return -1;
+    }
+
+    dir_entries = (size_t)dirsize / sizeof(*dir);
+    for(size_t i = 0; i < dir_entries; ++i)
+        dir[i].dirty = 0;
+
+    if(mutation_preflight(&root, fat, fatsize, dir, dirsize) < 0)
+        goto ex;
+
+    index = vmufs_dir_find(&root, dir, fn);
+    if(index < 0) {
+        errno = ENOENT;
+        goto ex;
+    }
+    if(attributes->header_offset >= dir[index].filesize) {
+        errno = EINVAL;
+        goto ex;
+    }
+
+    copyprotect = attributes->copy_protected ? 0xff : 0x00;
+    if(dir[index].copyprotect == copyprotect &&
+       dir[index].hdroff == attributes->header_offset) {
+        transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                           0, 0, 0, 0, true);
+        rv = 0;
+        goto ex;
+    }
+
+    transaction_update(observer, VMUFS_TRANSACTION_DIRECTORY,
+                       0, 1, 0, 0, false);
+    if(transaction_cancelled(observer)) {
+        errno = ECANCELED;
+        rv = VMUFS_TRANSACTION_CANCELLED;
+        goto ex;
+    }
+
+    dir[index].copyprotect = copyprotect;
+    dir[index].hdroff = attributes->header_offset;
+    dir[index].dirty = 1;
+    if(vmufs_dir_write(dev, &root, dir) < 0) {
+        errno = EIO;
+        goto ex;
+    }
+
+    transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                       1, 1, 0, 0, true);
+    rv = 0;
+
+ex:
+    vmufs_teardown(dir, fat);
+    return rv;
+}
+
+int vmufs_set_file_attributes(
+    maple_device_t *dev, const char *fn,
+    const vmufs_file_attributes_t *attributes) {
+    return vmufs_set_file_attributes_observed(dev, fn, attributes, NULL);
+}
+
 int vmufs_free_blocks(maple_device_t *dev) {
     vmu_root_t  root;
     uint16_t      *fat = NULL;

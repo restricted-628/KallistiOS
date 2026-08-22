@@ -133,6 +133,11 @@ int vmufs_rename_observed(
     maple_device_t *dev, const char *old_name, const char *new_name,
     const vmufs_transaction_observer_t *observer);
 
+int vmufs_set_file_attributes_observed(
+    maple_device_t *dev, const char *fn,
+    const vmufs_file_attributes_t *attributes,
+    const vmufs_transaction_observer_t *observer);
+
 int vmufs_defragment_observed(
     maple_device_t *dev, const vmufs_transaction_observer_t *observer);
 

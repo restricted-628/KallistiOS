@@ -437,6 +437,23 @@ int vmufs_delete(maple_device_t *dev, const char *fn);
 int vmufs_rename(maple_device_t *dev, const char *old_name,
                  const char *new_name);
 
+/** \brief Update safe directory attributes without rewriting file data.
+
+    The complete filesystem is validated before mutation. The header offset
+    must identify a block inside the existing file. Only the containing
+    directory block is committed; the file name, type, timestamp, allocation,
+    and contents are preserved.
+
+    \param dev         VMU containing the file.
+    \param fn          Existing file name of at most 12 bytes.
+    \param attributes  New copy-protection and header-offset values.
+    \retval 0          Attributes committed or already identical.
+    \retval -1         Invalid arguments, metadata, or device failure.
+*/
+int vmufs_set_file_attributes(
+    maple_device_t *dev, const char *fn,
+    const vmufs_file_attributes_t *attributes);
+
 /** \brief Format a standard 128 KiB memory card.
 
     Quick format invalidates the current root, clears the directory, writes a
@@ -495,7 +512,8 @@ typedef enum vmufs_request_operation {
     VMUFS_REQUEST_FORMAT,      /**< \brief Whole-card format. */
     VMUFS_REQUEST_DEFRAGMENT,  /**< \brief Safe file repacking. */
     VMUFS_REQUEST_RENAME,      /**< \brief Transactional file rename. */
-    VMUFS_REQUEST_READ         /**< \brief Bounded file-block read. */
+    VMUFS_REQUEST_READ,        /**< \brief Bounded file-block read. */
+    VMUFS_REQUEST_SET_ATTRIBUTES /**< \brief Directory attribute update. */
 } vmufs_request_operation_t;
 
 typedef enum vmufs_request_state {
@@ -598,6 +616,23 @@ vmufs_request_t *vmufs_delete_async(
 */
 vmufs_request_t *vmufs_rename_async(
     maple_device_t *dev, const char *old_name, const char *new_name,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a safe directory-attribute update.
+
+    The filename and attribute values are copied during submission.
+    Cancellation takes effect before the directory block is committed.
+
+    \param dev            VMU containing the file.
+    \param fn             Existing file name of at most 12 bytes.
+    \param attributes     New copy-protection and header-offset values.
+    \param callback       Optional progress and terminal callback.
+    \param callback_data  Caller data passed to \p callback.
+    \return               New request, or NULL with errno set.
+*/
+vmufs_request_t *vmufs_set_file_attributes_async(
+    maple_device_t *dev, const char *fn,
+    const vmufs_file_attributes_t *attributes,
     vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a destructive standard-card format.

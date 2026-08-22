@@ -69,8 +69,9 @@ lifecycle and naming conventions.
   failed allocations leave the in-memory FAT unchanged, and executable images
   require contiguous free space beginning at block zero. A high-level query
   now reports that executable-eligible prefix separately from total free space.
-* Added validated VMU file renaming, including `/vmu` VFS rename support.
-  Existing destinations are removed before their blocks are reclaimed, so an
+* Added validated VMU file renaming, including `/vmu` VFS rename support, and
+  directory-only updates for copy protection and file-header offset. Existing
+  rename destinations are removed before their blocks are reclaimed, so an
   interrupted replacement can leak space but cannot cross-link live files.
 * The `/vmu` VFS now distinguishes logical package payload length from
   block-rounded backing storage. Reads, seeks, totals, `stat()`, `fstat()`,
@@ -82,11 +83,11 @@ lifecycle and naming conventions.
   defragmentation that packs ordinary files high, retains an executable at
   block zero, safely stages relocation cycles, and refuses before mutation
   when insufficient scratch space prevents an interruption-safe schedule.
-* Added lazy asynchronous VMU range-read, save, delete, rename, format, and
-  defragment requests with coherent block-level progress, cancellation at
-  transaction-safe boundaries, and application callbacks dispatched outside
-  the storage worker and IRQ context. Save data is read back before allocation
-  metadata can make its chain visible.
+* Added lazy asynchronous VMU range-read, save, delete, rename, attribute,
+  format, and defragment requests with coherent block-level progress,
+  cancellation at transaction-safe boundaries, and application callbacks
+  dispatched outside the storage worker and IRQ context. Save data is read
+  back before allocation metadata can make its chain visible.
 
 RELEASE NOTES for 2.2.2
 -----------------------

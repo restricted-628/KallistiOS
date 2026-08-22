@@ -89,6 +89,12 @@ typedef struct {
     uint8_t         pad1[3];        /**< \brief All zeros on card */
 } vmu_dir_t;
 
+/** \brief Mutable directory attributes for an existing VMU file. */
+typedef struct vmufs_file_attributes {
+    uint16_t header_offset; /**< \brief File-header offset in 512-byte blocks. */
+    uint8_t copy_protected; /**< \brief Nonzero prevents manager-level copies. */
+} vmufs_file_attributes_t;
+
 /** \brief Parameters stored in a newly formatted standard VMU root block. */
 typedef struct vmufs_format_options {
     uint8_t use_custom_color;  /**< \brief Whether custom_color is active. */
