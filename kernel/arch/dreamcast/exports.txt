@@ -364,6 +364,13 @@ vmufs_delete
 vmufs_free_blocks
 vmufs_format
 vmufs_defragment
+vmufs_format_async
+vmufs_defragment_async
+vmufs_request_get_status
+vmufs_request_cancel
+vmufs_request_wait
+vmufs_request_wait_callback
+vmufs_request_destroy
 
 # Math
 mat_store

@@ -990,10 +990,12 @@ int vmufs_free_blocks(maple_device_t *dev) {
 
 int vmufs_init(void) {
     mutex_init(&mutex, MUTEX_TYPE_NORMAL);
+    (void)vmufs_request_system_init();
     return 0;
 }
 
 int vmufs_shutdown(void) {
+    vmufs_request_system_shutdown();
     mutex_destroy(&mutex);
     return 0;
 }

@@ -9,7 +9,7 @@
 
 OBJS  = fs_iso9660.o fs_vmu.o fs_dcload.o vmufs.o vmufs_validate.o \
         vmufs_chain.o vmufs_maintenance_model.o vmufs_defrag_schedule.o \
-        vmufs_maintenance.o
+        vmufs_maintenance.o vmufs_request.o
 SUBDIRS =
 
 include $(KOS_BASE)/Makefile.prefab

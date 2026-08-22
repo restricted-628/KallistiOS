@@ -27,6 +27,7 @@
 #ifndef __DC_VMUFS_H
 #define __DC_VMUFS_H
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <kos/cdefs.h>
 __BEGIN_DECLS
@@ -421,6 +422,102 @@ int vmufs_format(maple_device_t *dev,
     \retval -1      Failure; errno is `ENOSPC`, `EILSEQ`, `ENOMEM`, or `EIO`.
 */
 int vmufs_defragment(maple_device_t *dev);
+
+/** \defgroup vfs_vmu_requests Asynchronous VMU maintenance requests
+    \brief Lazy queued maintenance with progress and safe cancellation.
+    \ingroup vfs_vmu
+
+    The request and callback workers are created together on the first valid
+    asynchronous submission. Applications using only synchronous VMU access
+    therefore reserve no request-worker stacks. Callbacks run outside both the
+    VMU storage worker and interrupt context.
+
+    @{ */
+
+typedef struct vmufs_request vmufs_request_t;
+
+typedef enum vmufs_request_operation {
+    VMUFS_REQUEST_FORMAT,      /**< \brief Whole-card format. */
+    VMUFS_REQUEST_DEFRAGMENT   /**< \brief Safe file repacking. */
+} vmufs_request_operation_t;
+
+typedef enum vmufs_request_state {
+    VMUFS_REQUEST_QUEUED,      /**< \brief Waiting for the worker. */
+    VMUFS_REQUEST_RUNNING,     /**< \brief Storage operation active. */
+    VMUFS_REQUEST_COMPLETE,    /**< \brief Successful terminal state. */
+    VMUFS_REQUEST_CANCELLED,   /**< \brief Safely cancelled. */
+    VMUFS_REQUEST_ERROR        /**< \brief Failed terminal state. */
+} vmufs_request_state_t;
+
+typedef enum vmufs_request_phase {
+    VMUFS_REQUEST_PHASE_QUEUED,
+    VMUFS_REQUEST_PHASE_PREPARING,
+    VMUFS_REQUEST_PHASE_DATA,
+    VMUFS_REQUEST_PHASE_FAT,
+    VMUFS_REQUEST_PHASE_DIRECTORY,
+    VMUFS_REQUEST_PHASE_CLEANUP,
+    VMUFS_REQUEST_PHASE_ERASING,
+    VMUFS_REQUEST_PHASE_FINISHED
+} vmufs_request_phase_t;
+
+typedef struct vmufs_request_status {
+    vmufs_request_operation_t operation; /**< \brief Requested operation. */
+    vmufs_request_state_t state;         /**< \brief Request lifecycle. */
+    vmufs_request_phase_t phase;         /**< \brief Transaction phase. */
+    int result;                          /**< \brief VMUFS result. */
+    int error;                           /**< \brief errno value. */
+    size_t completed_blocks;             /**< \brief Completed writes. */
+    size_t total_blocks;                 /**< \brief Planned writes. */
+    size_t data_blocks_completed;        /**< \brief Completed data writes. */
+    size_t data_blocks;                  /**< \brief Planned data writes. */
+    bool committed;                      /**< \brief Full request committed. */
+} vmufs_request_status_t;
+
+typedef void (*vmufs_request_callback_t)(
+    vmufs_request_t *request, const vmufs_request_status_t *status, void *data);
+
+/* Callbacks must return and must not destroy their own request. They may call
+   ordinary VMU APIs, although a progress callback can block until the active
+   storage transaction releases the VMU filesystem mutex. */
+
+/** \brief Queue a destructive standard-card format.
+
+    Options are copied during submission. Cancellation is accepted while the
+    request is queued and before the invalid-root write.
+*/
+vmufs_request_t *vmufs_format_async(
+    maple_device_t *dev, const vmufs_format_options_t *options,
+    vmufs_format_mode_t mode, vmufs_request_callback_t callback,
+    void *callback_data);
+
+/** \brief Queue interruption-safe whole-card defragmentation.
+
+    Cancellation takes effect between copy-on-write commit barriers. A file
+    move whose staging FAT has been published is completed before cancellation
+    can become terminal.
+*/
+vmufs_request_t *vmufs_defragment_async(
+    maple_device_t *dev, vmufs_request_callback_t callback,
+    void *callback_data);
+
+int vmufs_request_get_status(const vmufs_request_t *request,
+                             vmufs_request_status_t *status);
+int vmufs_request_cancel(vmufs_request_t *request);
+
+/** \brief Wait for terminal storage completion; zero timeout waits forever. */
+int vmufs_request_wait(vmufs_request_t *request, uint32_t timeout,
+                       vmufs_request_status_t *status);
+
+/** \brief Wait for terminal completion and callback delivery.
+
+    Calling this from the VMU callback dispatcher fails with `EDEADLK`.
+*/
+int vmufs_request_wait_callback(vmufs_request_t *request, uint32_t timeout);
+
+/** \brief Destroy a terminal request after its callback has returned. */
+int vmufs_request_destroy(vmufs_request_t *request);
+
+/** @} */
 
 /** \brief  Return the number of user blocks free for file writing.
 
