@@ -3,6 +3,7 @@
    exports.c
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2024 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -65,17 +66,18 @@ void export_init(void) {
 
 export_sym_t *export_lookup(const char *name) {
     nmmgr_handler_t *nmmgr;
-    nmmgr_list_t *nmmgrs;
+    char path[NAME_MAX];
+    size_t index;
     int i;
     symtab_handler_t *sth;
 
-    /* Get the name manager list */
-    nmmgrs = nmmgr_get_list();
+    for(index = 0;
+        nmmgr_handler_get_path(index, NMMGR_TYPE_SYMTAB, 0, 0, path,
+                               sizeof(path)) == 0;
+        ++index) {
+        nmmgr = nmmgr_lookup_ref(path);
 
-    /* Go through and look at each symtab entry */
-    SLIST_FOREACH(nmmgr, nmmgrs, list_ent) {
-        /* Not a symtab -> ignore */
-        if(nmmgr->type != NMMGR_TYPE_SYMTAB)
+        if(!nmmgr)
             continue;
 
         sth = (symtab_handler_t *)nmmgr;
@@ -85,9 +87,15 @@ export_sym_t *export_lookup(const char *name) {
             if(sth->table[i].name == NULL)
                 break;
 
-            if(!strcmp(name, sth->table[i].name))
-                return sth->table + i;
+            if(!strcmp(name, sth->table[i].name)) {
+                export_sym_t *result = sth->table + i;
+
+                nmmgr_handler_release(nmmgr);
+                return result;
+            }
         }
+
+        nmmgr_handler_release(nmmgr);
     }
 
     return NULL;
@@ -99,7 +107,7 @@ export_sym_t *export_lookup_path(const char *name, const char *path) {
     int i;
 
     /* Get the name manager list */
-    nmmgr = nmmgr_lookup(path);
+    nmmgr = nmmgr_lookup_ref(path);
 
     if(nmmgr == NULL) {
         return NULL;
@@ -107,29 +115,35 @@ export_sym_t *export_lookup_path(const char *name, const char *path) {
     sth = (symtab_handler_t *)nmmgr;
 
     for(i = 0; sth->table[i].name; i++) {
-        if(!strcmp(name, sth->table[i].name))
-            return sth->table + i;
+        if(!strcmp(name, sth->table[i].name)) {
+            export_sym_t *result = sth->table + i;
+
+            nmmgr_handler_release(nmmgr);
+            return result;
+        }
     }
 
+    nmmgr_handler_release(nmmgr);
     return NULL;
 }
 
 export_sym_t *export_lookup_addr(uintptr_t addr) {
     nmmgr_handler_t *nmmgr;
-    nmmgr_list_t *nmmgrs;
+    char path[NAME_MAX];
+    size_t index;
     int i;
     symtab_handler_t *sth;
 
     uintptr_t dist = ~0;
     export_sym_t *best = NULL;
 
-    /* Get the name manager list */
-    nmmgrs = nmmgr_get_list();
+    for(index = 0;
+        nmmgr_handler_get_path(index, NMMGR_TYPE_SYMTAB, 0, 0, path,
+                               sizeof(path)) == 0;
+        ++index) {
+        nmmgr = nmmgr_lookup_ref(path);
 
-    /* Go through and look at each symtab entry */
-    SLIST_FOREACH(nmmgr, nmmgrs, list_ent) {
-        /* Not a symtab -> ignore */
-        if(nmmgr->type != NMMGR_TYPE_SYMTAB)
+        if(!nmmgr)
             continue;
 
         sth = (symtab_handler_t *)nmmgr;
@@ -141,6 +155,8 @@ export_sym_t *export_lookup_addr(uintptr_t addr) {
                 best = sth->table + i;
             }
         }
+
+        nmmgr_handler_release(nmmgr);
     }
 
     return best;

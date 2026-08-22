@@ -3,6 +3,7 @@
    kos/exports.h
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2024 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -69,12 +70,22 @@ typedef struct symtab_handler {
 void export_init(void);
 
 /** \brief  Look up a symbol by name.
+
+    The returned entry is borrowed from its owning symbol table. Code which can
+    unload dynamically registered symbol tables concurrently must serialize
+    that unload until it has finished using the entry.
+
     \param  name            The symbol to look up
     \return                 The export structure, or NULL on failure
 */
 export_sym_t *export_lookup(const char *name);
 
 /** \brief  Look up a symbol by name and Name Manager path.
+
+    The returned entry is borrowed from its owning symbol table. Code which can
+    unload that table concurrently must serialize the unload until it has
+    finished using the entry.
+
     \param  name            The symbol to look up
     \param  path            The Name Manager path to look up
     \return                 The export structure, or NULL on failure
@@ -83,6 +94,11 @@ export_sym_t *export_lookup_path(const char *name, const char *path);
 
 /** \brief  Look up a symbol by approx addr.
             It can be useful for unhandled exceptions messages.
+
+    The returned entry is borrowed from its owning symbol table. Code which can
+    unload dynamically registered symbol tables concurrently must serialize
+    that unload until it has finished using the entry.
+
     \param  addr            The symbol to look up
     \return                 The export structure, or NULL on failure
 */
