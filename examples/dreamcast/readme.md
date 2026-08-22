@@ -44,6 +44,7 @@ This page serves as an index for all KallistiOS examples.
   - direct-read
   - direct-recovery
   - direct-status
+  - direct-iso9660
   - media-recognition
   - request
   - sector-range
@@ -70,6 +71,7 @@ This page serves as an index for all KallistiOS examples.
   - sd
 - filesystem
   - browse
+  - iso9660-async
   - pty
   - sd
 - g1ata
