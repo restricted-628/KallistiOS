@@ -56,6 +56,11 @@ lifecycle and naming conventions.
   validation for root geometry, exact FAT chains, cycles, cross-links,
   duplicate names, orphan blocks, and executable-eligible free space. Normal
   VMU setup now rejects unsafe geometry before allocating or reading metadata.
+* Added geometry-aware VMU file reads that resolve and validate an exact FAT
+  chain before touching the card. Hardened VMU package construction and parsing
+  against unaligned input, truncated layouts, integer overflow, unterminated
+  text fields, invalid icon metadata, and checksum mismatch without modifying
+  the caller's encoded buffer.
 
 RELEASE NOTES for 2.2.2
 -----------------------
