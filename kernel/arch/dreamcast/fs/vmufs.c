@@ -2,6 +2,7 @@
 
    vmufs.c
    Copyright (C) 2003 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -500,6 +501,16 @@ static int vmufs_setup(maple_device_t *dev, vmu_root_t *root, vmu_dir_t **dir, i
     if(!root || vmufs_root_read(dev, root) < 0)
         goto dead;
 
+    /* Reject corrupt or unsupported geometry before it can influence an
+       allocation size or physical metadata block number. */
+    if(vmufs_root_validate(root, VMUFS_STANDARD_CARD_BLOCKS) < 0) {
+        dbglog(DBG_ERROR,
+               "vmufs_setup: invalid or unsupported filesystem geometry "
+               "on device %c%c\n",
+               dev->port + 'A', dev->unit + '0');
+        goto dead;
+    }
+
     if(dir) {
         /* Alloc enough space for the whole dir */
         *dirsize = vmufs_dir_blocks(root);
@@ -512,7 +523,7 @@ static int vmufs_setup(maple_device_t *dev, vmu_root_t *root, vmu_dir_t **dir, i
         }
 
         /* Ensure that the dir is 0'd to avoid possible uninitialized reads */
-        memset(*dir, 0, sizeof(*dirsize));
+        memset(*dir, 0, *dirsize);
 
         /* Read it */
         if(vmufs_dir_read(dev, root, *dir) < 0) {

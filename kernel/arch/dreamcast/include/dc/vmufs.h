@@ -2,6 +2,7 @@
 
    dc/vmufs.h
    Copyright (C) 2003 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -20,6 +21,7 @@
     \author Megan Potter
     \see    dc/vmu_pkg.h
     \see    dc/fs_vmu.h
+    \see    dc/vmufs_meta.h
 */
 
 #ifndef __DC_VMUFS_H
@@ -30,59 +32,11 @@
 __BEGIN_DECLS
 
 #include <dc/maple.h>
+#include <dc/vmufs_meta.h>
 
 /** \addtogroup vfs_vmu
     @{
 */
-
-/** \brief  BCD timestamp, used several places in the vmufs.
-    \headerfile dc/vmufs.h
-*/
-typedef struct {
-    uint8_t cent;   /**< \brief Century */
-    uint8_t year;   /**< \brief Year, within century */
-    uint8_t month;  /**< \brief Month of the year */
-    uint8_t day;    /**< \brief Day of the month */
-    uint8_t hour;   /**< \brief Hour of the day */
-    uint8_t min;    /**< \brief Minutes */
-    uint8_t sec;    /**< \brief Seconds */
-    uint8_t dow;    /**< \brief Day of week (0 = monday, etc) */
-} vmu_timestamp_t;
-
-/** \brief  VMU FS Root block layout.
-    \headerfile dc/vmufs.h
-*/
-typedef struct {
-    uint8_t         magic[16];      /**< \brief All should contain 0x55 */
-    uint8_t         use_custom;     /**< \brief 0 = standard, 1 = custom */
-    uint8_t         custom_color[4];/**< \brief blue, green, red, alpha */
-    uint8_t         pad1[27];       /**< \brief All zeros */
-    vmu_timestamp_t timestamp;      /**< \brief BCD timestamp */
-    uint8_t         pad2[8];        /**< \brief All zeros */
-    uint8_t         unk1[6];        /**< \brief ??? */
-    uint16_t        fat_loc;        /**< \brief FAT location */
-    uint16_t        fat_size;       /**< \brief FAT size in blocks */
-    uint16_t        dir_loc;        /**< \brief Directory location */
-    uint16_t        dir_size;       /**< \brief Directory size in blocks */
-    uint16_t        icon_shape;     /**< \brief Icon shape for this VMS */
-    uint16_t        blk_cnt;        /**< \brief Number of user blocks */
-    uint8_t         unk2[430];      /**< \brief ??? */
-} vmu_root_t;
-
-/** \brief  VMU FS Directory entries, 32 bytes each.
-    \headerfile dc/vmufs.h
-*/
-typedef struct {
-    uint8_t         filetype;       /**< \brief 0x00 = no file; 0x33 = data; 0xcc = a game */
-    uint8_t         copyprotect;    /**< \brief 0x00 = copyable; 0xff = copy protected */
-    uint16_t        firstblk;       /**< \brief Location of the first block in the file */
-    char            filename[12];   /**< \brief Note: there is no null terminator */
-    vmu_timestamp_t timestamp;      /**< \brief File time */
-    uint16_t        filesize;       /**< \brief Size of the file in blocks */
-    uint16_t        hdroff;         /**< \brief Offset of header, in blocks from start of file */
-    uint8_t         dirty;          /**< \brief See header notes */
-    uint8_t         pad1[3];        /**< \brief All zeros */
-} vmu_dir_t;
 
 /* Notes about the "dirty" field on vmu_dir_t :)
 

@@ -300,6 +300,9 @@ vmu_block_read
 vmu_block_write
 vmu_set_icon
 vmufb_present_ex
+vmufs_root_validate
+vmufs_validate
+vmufs_fat_free_executable
 
 # MIE
 mie_port0_mode
