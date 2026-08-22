@@ -16,6 +16,9 @@ Caller-backed allocator ownership, validation, and resource behavior are
 documented in the [independent heap guide](independent-heaps.md).
 Priority ordering, interrupt-safe removal, and deferred callback reclamation
 are documented in the [VBlank callback safety guide](vblank-callback-safety.md).
+Exclusive ASIC event ownership and its interaction with legacy and threaded
+handlers are documented in the
+[ASIC event ownership guide](asic-event-ownership.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.
