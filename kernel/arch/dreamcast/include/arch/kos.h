@@ -35,6 +35,7 @@ __BEGIN_DECLS
 #include <dc/fs_iso9660.h>
 #include <dc/fs_vmu.h>
 #include <dc/g1ata.h>
+#include <dc/gdrom_direct.h>
 #include <dc/g2bus.h>
 #include <dc/maple.h>
 #include <dc/maple/controller.h>

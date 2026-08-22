@@ -25,6 +25,28 @@ g1_ata_blockdev_for_device
 g1_ata_init
 g1_ata_shutdown
 
+# Direct GD-ROM transport
+gdrom_direct_test_unit
+gdrom_direct_get_error
+gdrom_direct_get_status
+gdrom_direct_get_mode
+gdrom_direct_set_mode
+gdrom_direct_seek
+gdrom_direct_probe
+gdrom_direct_reinitialize
+gdrom_direct_read_toc
+gdrom_direct_get_subcode
+gdrom_direct_cdda_get_status
+gdrom_direct_cdda_play
+gdrom_direct_cdda_pause
+gdrom_direct_cdda_resume
+gdrom_direct_cdda_stop
+gdrom_direct_cdda_scan
+gdrom_direct_get_session
+gdrom_direct_read_sectors
+gdrom_direct_read_sectors_dma
+gdrom_direct_dma_diagnose
+
 # Bios Font
 bfont_set_foreground_color
 bfont_set_background_color
@@ -54,6 +76,10 @@ cdrom_set_sector_size
 cdrom_change_datatype
 cdrom_exec_cmd
 cdrom_exec_cmd_timed
+cdrom_decode_sense
+cdrom_status_to_result
+cdrom_result_to_errno
+cdrom_sense_to_result
 cdrom_abort_cmd
 cdrom_get_status
 cdrom_get_subcode
