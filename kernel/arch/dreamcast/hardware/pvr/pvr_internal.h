@@ -144,11 +144,15 @@ typedef struct {
 typedef struct {
     pvr_ta_layout_t layout;
     pvr_ta_pass_layout_t passes[PVR_MULTIPASS_MAX_PASSES];
+    pvr_dma_buffers_t *dma_buffers;
     uint32_t lists_enabled[PVR_MULTIPASS_MAX_PASSES];
     uint32_t list_reg_mask[PVR_MULTIPASS_MAX_PASSES];
     size_t pass_count;
     size_t build_pass;
     size_t ta_pass;
+    int dma_frame;
+    bool dma_chain_active;
+    bool dma_pass_fed;
     uint32_t fault_sequence;
 } pvr_multipass_state_t;
 
@@ -301,6 +305,9 @@ void pvr_activate_pass(size_t pass);
 /* True when the active TA pass is permitted to release the renderer. */
 bool pvr_registration_is_final(void);
 
+/* Return one frame/pass DMA staging record. */
+volatile pvr_dma_buffers_t *pvr_pass_dma_buffer(int frame, size_t pass);
+
 
 /**** pvr_misc.c ******************************************************/
 
@@ -341,6 +348,9 @@ void pvr_sync_view(void);
 
 /* Synchronize the registration buffer with what's in pvr_state */
 void pvr_sync_reg_buffer(void);
+
+/* Continue the active TA bank to a prevalidated next pass. IRQs must be off. */
+void pvr_continue_ta_pass(size_t next_pass);
 
 /* Begin a render operation that has been queued completely */
 void pvr_begin_queued_render(void);

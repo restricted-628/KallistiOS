@@ -53,8 +53,8 @@ initial object-pointer block for the tile and list.
 
 ## Public API
 
-The direct implementation adds two opt-in operations without changing the
-layout or behavior of `pvr_init_params_t`:
+The implementation adds three opt-in operations without changing the layout or
+behavior of `pvr_init_params_t`:
 
 ```
 int pvr_init_multipass(const pvr_init_params_t *common,
@@ -62,6 +62,10 @@ int pvr_init_multipass(const pvr_init_params_t *common,
                        size_t pass_count);
 
 int pvr_scene_next_pass(void);
+
+int pvr_set_pass_vertbuf_checked(size_t pass, pvr_list_t list,
+                                 void *buffer, size_t len,
+                                 void **old_buffer);
 
 ```
 
@@ -74,10 +78,9 @@ registration boundary, and admits the next pass. It fails on the configured
 final pass. `pvr_scene_finish()` closes the final pass and queues the one
 renderer submission.
 
-Directly submitted lists need no main-RAM vertex buffer. Multipass
-initialization currently rejects `dma_enabled`; a future pass-specific checked
-buffer operation will accompany DMA and hybrid submission rather than aliasing
-the established pass-zero buffers.
+Directly submitted lists need no main-RAM vertex buffer. Buffered submission
+requires a pass-specific allocation for each enabled list. The established
+checked vertex-buffer operation continues to address pass zero.
 
 The API does not expose pass objects, copied context structures, or foreign
 work-area conventions. Higher-level scene systems can build over this state
@@ -108,10 +111,9 @@ The parameter buffer remains shared because continuation preserves the TA
 parameter cursor. It therefore keeps the established `vertex_buf_size`
 meaning: the total VRAM parameter capacity for the complete scene.
 
-The implemented direct path allocates no DMA staging. Future DMA staging is per
-frame, pass, and list; its control structures will be allocated only for an
-opt-in multipass initialization, and the application will continue to own the
-staging memory. No worker thread or permanent large buffer is added.
+DMA staging metadata is per frame, pass, and list and exists only in the small
+opt-in multipass control allocation. The application owns the actual staging
+memory. No worker thread or permanent large buffer is added.
 
 Initialization must reject a layout that crosses either 4 MiB frame-bank
 boundary. Failure is reported before clearing VRAM or changing live PVR state.
@@ -131,10 +133,9 @@ IDLE
   -> COMPLETE
 ```
 
-The implemented direct submission combines `BUILDING` and `REGISTERING`, as
-the one-pass path already does. DMA submission may later finish building all
-passes before registration begins; it must reuse the same hardware
-pass-boundary invariants.
+Direct submission combines `BUILDING` and `REGISTERING`, as the one-pass path
+already does. DMA submission finishes building all passes before registration
+begins and reuses the same hardware pass-boundary invariants from IRQ context.
 
 At an intermediate boundary:
 
@@ -155,10 +156,10 @@ continuing registration.
 The list-completion IRQ path now compares against the active pass's enabled
 mask and applies a final-pass test before releasing the renderer.
 
-An intermediate list-complete interrupt records pass completion and wakes the
-thread waiting in `pvr_scene_next_pass()`. It does not toggle `ta_target`,
-synchronize a new registration bank, clear `ta_busy`, or start the renderer.
-A future queued DMA chain must preserve this rule.
+An intermediate list-complete interrupt wakes the direct-submission thread or,
+for buffered submission, continues the TA and starts the next pass's DMA chain.
+It does not toggle `ta_target`, synchronize a new registration bank, clear
+`ta_busy`, or start the renderer.
 
 The continuation register sequence and the related OPB base/allocation writes
 must be IRQ-serialized with list-completion handling. Application code must
@@ -177,8 +178,6 @@ completion, performs continuation, and returns with the next pass ready for
 store-queue submission.
 
 ### DMA
-
-Not yet exposed for multipass initialization.
 
 Each pass has independent list staging pointers and lengths. Scene construction
 advances through passes in main RAM. When the frame is queued, the DMA chain
@@ -217,8 +216,8 @@ that was flushed early is never replayed at scene completion.
    to the existing layout.~~
 3. ~~Add a direct-submission example that draws distinguishable geometry in at
    least three passes and verifies completion/fault state.~~
-4. Add a DMA example with separate per-pass buffers, then a hybrid variant that
-   flushes one list before the boundary.
+4. ~~Add a DMA example with separate per-pass buffers.~~ Add a hybrid variant
+   only after early-flush pass ownership is implemented.
 5. Inject invalid pass transitions, undersized buffers, disabled lists, and a
    deliberately insufficient VRAM configuration.
 6. Cross-build the full tree and verify exports and generated documentation.

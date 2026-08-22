@@ -774,10 +774,14 @@ int pvr_init(const pvr_init_params_t *params);
     boundaries. Applications advance between passes with
     pvr_scene_next_pass().
 
-    This initial interface supports direct store-queue submission. A non-zero
-    params->dma_enabled is rejected with `ENOTSUP`; pass-specific buffered and
-    DMA submission requires independent staging storage and is intentionally
-    deferred to a separate additive interface.
+    Both direct store-queue and buffered DMA submission are supported. Buffered
+    mode requires pvr_set_pass_vertbuf_checked() for every enabled list in
+    every pass. The interrupt chain preserves pass ownership and prevents
+    unrelated PVR DMA from interleaving between continuation boundaries.
+
+    Hybrid early flushing is intentionally deferred: pvr_list_flush() reports
+    `ENOTSUP` during a multipass scene rather than ambiguously mixing pass-zero
+    and later-pass staging.
 
     The pass configuration is copied during initialization. No multipass
     control allocation is made by pvr_init(), so applications that keep the
@@ -791,8 +795,8 @@ int pvr_init(const pvr_init_params_t *params);
                             PVR_MULTIPASS_MAX_PASSES.
 
     \retval 0               On success.
-    \retval -1              On error, with errno set to `EINVAL`, `ENOTSUP`,
-                            `ENOMEM`, `EOVERFLOW`, or `ENOSPC` as appropriate.
+    \retval -1              On error, with errno set to `EINVAL`, `ENOMEM`,
+                            `EOVERFLOW`, or `ENOSPC` as appropriate.
 */
 int pvr_init_multipass(const pvr_init_params_t *params,
                        const pvr_pass_config_t *passes, size_t pass_count);
@@ -925,6 +929,30 @@ void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len);
 int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
                             void **old_buffer);
 
+/** \brief Assign a double-buffered vertex staging allocation to one pass/list.
+    \ingroup pvr_vertex_dma
+
+    The allocation is split evenly between the two RAM frame banks, matching
+    pvr_set_vertbuf_checked(). Each enabled list in a buffered multipass scene
+    requires its own allocation. The application retains ownership and must not
+    release or modify it while the PVR is initialized.
+
+    Multipass hybrid flushing is not yet enabled: buffered initialization
+    requires every enabled pass/list pair to have an assigned staging buffer.
+
+    \param pass             Zero-based registration pass.
+    \param list             Primitive list within the pass.
+    \param buffer           32-byte-aligned staging allocation.
+    \param len              Total allocation size; at least 128 bytes and a
+                            multiple of 64.
+    \param old_buffer       Optional destination for the previous allocation.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set appropriately.
+*/
+int pvr_set_pass_vertbuf_checked(size_t pass, pvr_list_t list, void *buffer,
+                                 size_t len, void **old_buffer);
+
 /** \brief   Retrieve a pointer to the current output location in the DMA buffer
              for the requested list.
     \ingroup pvr_vertex_dma
@@ -963,14 +991,15 @@ void pvr_scene_begin(void);
 /** \brief Finish the current registration pass and begin the next one.
     \ingroup pvr_scene_mgmt
 
-    This operation closes every enabled list not already closed, waits for the
-    tile accelerator to consume their end markers, and performs the hardware
-    continuation sequence. It does not reset the shared parameter or overflow
-    cursors and does not start rendering.
+    In direct mode, this operation closes every enabled list not already
+    closed, waits for the tile accelerator to consume their end markers, and
+    performs the hardware continuation sequence. In buffered mode, it closes
+    the current pass in its pass-owned staging buffers; the IRQ-driven DMA
+    chain performs continuation after pvr_scene_finish(). Neither path resets
+    the shared parameter or overflow cursors or starts rendering early.
 
     The call is valid only for a scene started after pvr_init_multipass(), and
-    only before the configured final pass. The current implementation supports
-    direct submission; initialization rejects vertex DMA mode.
+    only before the configured final pass.
 
     \retval 0               The next pass is ready for list submission.
     \retval -1              On error, with errno set to `ENODEV`, `ENOTSUP`,

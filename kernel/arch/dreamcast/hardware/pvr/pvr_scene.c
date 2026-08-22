@@ -32,6 +32,9 @@
 #  define PVR_DEBUG 1
 #endif
 
+static volatile pvr_dma_buffers_t *current_build_buffer(void);
+static int finish_buffered_pass(void);
+
 /*
 
    Scene rendering
@@ -61,23 +64,26 @@ static void set_next_default_background(uint32_t width, uint32_t height) {
     };
 }
 
-static void *set_vertbuf_unchecked(pvr_list_t list, void *buffer, size_t len) {
+static void *set_vertbuf_unchecked(size_t pass, pvr_list_t list, void *buffer,
+                                   size_t len) {
+    volatile pvr_dma_buffers_t *frame0 = pvr_pass_dma_buffer(0, pass);
+    volatile pvr_dma_buffers_t *frame1 = pvr_pass_dma_buffer(1, pass);
     void *oldbuf;
 
     // Save the old value.
-    oldbuf = pvr_state.dma_buffers[0].base[list];
+    oldbuf = frame0->base[list];
 
     // Write new values.
-    pvr_state.dma_buffers[0].base[list] = (uint8_t *)buffer;
-    pvr_state.dma_buffers[0].ptr[list] = 0;
-    pvr_state.dma_buffers[0].size[list] = len / 2;
-    pvr_state.dma_buffers[0].flushed &= ~BIT(list);
-    pvr_state.dma_buffers[0].ready = 0;
-    pvr_state.dma_buffers[1].base[list] = ((uint8_t *)buffer) + len / 2;
-    pvr_state.dma_buffers[1].ptr[list] = 0;
-    pvr_state.dma_buffers[1].size[list] = len / 2;
-    pvr_state.dma_buffers[1].flushed &= ~BIT(list);
-    pvr_state.dma_buffers[1].ready = 0;
+    frame0->base[list] = (uint8_t *)buffer;
+    frame0->ptr[list] = 0;
+    frame0->size[list] = len / 2;
+    frame0->flushed &= ~BIT(list);
+    frame0->ready = 0;
+    frame1->base[list] = ((uint8_t *)buffer) + len / 2;
+    frame1->ptr[list] = 0;
+    frame1->size[list] = len / 2;
+    frame1->flushed &= ~BIT(list);
+    frame1->ready = 0;
 
     return oldbuf;
 }
@@ -100,14 +106,15 @@ void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
     assert(len >= 128 && !(len & 63));
 
     old_irq = irq_disable();
-    oldbuf = set_vertbuf_unchecked(list, buffer, len);
+    oldbuf = set_vertbuf_unchecked(0, list, buffer, len);
     irq_restore(old_irq);
 
     return oldbuf;
 }
 
-int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
-                            void **old_buffer) {
+static int set_pass_vertbuf_checked(size_t pass, pvr_list_t list, void *buffer,
+                                    size_t len, void **old_buffer) {
+    uint32_t enabled;
     void *oldbuf;
     int old_irq;
 
@@ -131,7 +138,26 @@ int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
         return -1;
     }
 
-    if(!(pvr_state.lists_enabled & BIT(list))) {
+    if(pvr_state.multipass) {
+        if(pass >= pvr_state.multipass->pass_count) {
+            irq_restore(old_irq);
+            errno = EINVAL;
+            return -1;
+        }
+
+        enabled = pvr_state.multipass->lists_enabled[pass];
+    }
+    else {
+        if(pass != 0) {
+            irq_restore(old_irq);
+            errno = EINVAL;
+            return -1;
+        }
+
+        enabled = pvr_state.lists_enabled;
+    }
+
+    if(!(enabled & BIT(list))) {
         irq_restore(old_irq);
         errno = EINVAL;
         return -1;
@@ -139,20 +165,35 @@ int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
 
     /* A queued RAM frame may still contain offsets into the old allocation,
        even after the application's scene has ended. */
-    if(pvr_state.scene_active || pvr_state.dma_buffers[0].ready
-       || pvr_state.dma_buffers[1].ready) {
+    if(pvr_state.scene_active || pvr_pass_dma_buffer(0, pass)->ready ||
+            pvr_pass_dma_buffer(1, pass)->ready) {
         irq_restore(old_irq);
         errno = EBUSY;
         return -1;
     }
 
-    oldbuf = set_vertbuf_unchecked(list, buffer, len);
+    oldbuf = set_vertbuf_unchecked(pass, list, buffer, len);
 
     if(old_buffer)
         *old_buffer = oldbuf;
 
     irq_restore(old_irq);
     return 0;
+}
+
+int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
+                            void **old_buffer) {
+    return set_pass_vertbuf_checked(0, list, buffer, len, old_buffer);
+}
+
+int pvr_set_pass_vertbuf_checked(size_t pass, pvr_list_t list, void *buffer,
+                                 size_t len, void **old_buffer) {
+    if(!pvr_state.multipass) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    return set_pass_vertbuf_checked(pass, list, buffer, len, old_buffer);
 }
 
 void *pvr_vertbuf_tail(pvr_list_t list) {
@@ -162,11 +203,13 @@ void *pvr_vertbuf_tail(pvr_list_t list) {
     assert(pvr_state.dma_mode);
 
     // Get the buffer base.
-    bufbase = pvr_state.dma_buffers[pvr_state.ram_target].base[list];
+    bufbase = pvr_pass_dma_buffer(pvr_state.ram_target,
+        pvr_state.multipass ? pvr_state.multipass->build_pass : 0)->base[list];
     assert(bufbase);
 
     // Return the current end of the buffer.
-    return bufbase + pvr_state.dma_buffers[pvr_state.ram_target].ptr[list];
+    return bufbase + pvr_pass_dma_buffer(pvr_state.ram_target,
+        pvr_state.multipass ? pvr_state.multipass->build_pass : 0)->ptr[list];
 }
 
 void pvr_vertbuf_written(pvr_list_t list, size_t amt) {
@@ -176,10 +219,14 @@ void pvr_vertbuf_written(pvr_list_t list, size_t amt) {
     assert(pvr_state.dma_mode);
 
     // Change the current end of the buffer.
-    val = pvr_state.dma_buffers[pvr_state.ram_target].ptr[list];
+    volatile pvr_dma_buffers_t *buffer = pvr_pass_dma_buffer(
+        pvr_state.ram_target,
+        pvr_state.multipass ? pvr_state.multipass->build_pass : 0);
+
+    val = buffer->ptr[list];
     val += amt;
-    assert(val < pvr_state.dma_buffers[pvr_state.ram_target].size[list]);
-    pvr_state.dma_buffers[pvr_state.ram_target].ptr[list] = val;
+    assert(val < buffer->size[list]);
+    buffer->ptr[list] = val;
 }
 
 static void pvr_start_ta_rendering(void) {
@@ -237,10 +284,18 @@ void pvr_scene_begin(void) {
 
     // Clear these out in case we're using DMA.
     if(pvr_state.dma_mode) {
-        pvr_state.dma_buffers[pvr_state.ram_target].flushed = 0;
+        size_t pass_count = pvr_state.multipass ?
+            pvr_state.multipass->pass_count : 1;
+        size_t pass;
 
-        for(i = 0; i < PVR_OPB_COUNT; i++) {
-            pvr_state.dma_buffers[pvr_state.ram_target].ptr[i] = 0;
+        for(pass = 0; pass < pass_count; ++pass) {
+            volatile pvr_dma_buffers_t *buffer =
+                pvr_pass_dma_buffer(pvr_state.ram_target, pass);
+
+            buffer->flushed = 0;
+
+            for(i = 0; i < PVR_OPB_COUNT; ++i)
+                buffer->ptr[i] = 0;
         }
 
         pvr_sync_stats(PVR_SYNC_BUFSTART);
@@ -279,7 +334,6 @@ static int finish_direct_pass_lists(void) {
 
 int pvr_scene_next_pass(void) {
     pvr_multipass_state_t *multipass = pvr_state.multipass;
-    volatile pvr_ta_buffers_t *buffer;
     size_t next_pass;
     int old_irq;
     int wait_result = 0;
@@ -299,14 +353,22 @@ int pvr_scene_next_pass(void) {
         return -1;
     }
 
-    if(pvr_state.dma_mode) {
-        errno = ENOTSUP;
-        return -1;
-    }
-
     if(multipass->build_pass + 1u >= multipass->pass_count) {
         errno = EALREADY;
         return -1;
+    }
+
+    if(pvr_state.dma_mode) {
+        if(finish_buffered_pass() < 0)
+            return -1;
+
+        next_pass = multipass->build_pass + 1u;
+        multipass->build_pass = next_pass;
+        pvr_activate_pass(next_pass);
+        pvr_state.lists_closed = 0;
+        pvr_state.list_reg_open = PVR_LIST_NONE;
+        pvr_status_advance();
+        return 0;
     }
 
     if(finish_direct_pass_lists() < 0)
@@ -338,20 +400,7 @@ int pvr_scene_next_pass(void) {
        and their software masks are transitioned as one operation. */
     next_pass = multipass->build_pass + 1u;
     multipass->build_pass = next_pass;
-    multipass->ta_pass = next_pass;
-    pvr_activate_pass(next_pass);
-    pvr_state.lists_transferred = 0;
-    pvr_state.lists_closed = 0;
-    pvr_state.list_reg_open = PVR_LIST_NONE;
-
-    buffer = pvr_state.ta_buffers + pvr_state.ta_target;
-    PVR_SET(PVR_TA_OPB_START, buffer->opb +
-            multipass->layout.pass_opb_offset[next_pass]);
-    PVR_SET(PVR_OPB_CFG, multipass->list_reg_mask[next_pass]);
-    PVR_SET(PVR_TA_LIST_CONT, BIT(31));
-    (void)PVR_GET(PVR_TA_LIST_CONT);
-
-    pvr_status_advance();
+    pvr_continue_ta_pass(next_pass);
     irq_restore(old_irq);
     return 0;
 }
@@ -581,7 +630,7 @@ int pvr_user_clip_submit(pvr_list_t list, const pvr_user_clip_t *clip) {
         return -1;
     }
 
-    buffer = pvr_state.dma_buffers + pvr_state.ram_target;
+    buffer = current_build_buffer();
     if(pvr_state.dma_mode && buffer->base[list])
         return pvr_list_prim(list, &command, sizeof(command));
 
@@ -595,9 +644,16 @@ int pvr_user_clip_submit(pvr_list_t list, const pvr_user_clip_t *clip) {
 
 static bool pvr_list_dma;
 
+static volatile pvr_dma_buffers_t *current_build_buffer(void) {
+    size_t pass = pvr_state.multipass ?
+        pvr_state.multipass->build_pass : 0;
+
+    return pvr_pass_dma_buffer(pvr_state.ram_target, pass);
+}
+
 inline static bool pvr_list_uses_dma(pvr_list_t list) {
     return pvr_state.dma_mode &&
-           pvr_state.dma_buffers[pvr_state.ram_target].base[list];
+           current_build_buffer()->base[list];
 }
 
 /* Begin collecting data for the given list type. Lists do not have to be
@@ -622,7 +678,14 @@ int pvr_list_begin(pvr_list_t list) {
         return -1;
     }
 
-    b = pvr_state.dma_buffers + pvr_state.ram_target;
+    b = current_build_buffer();
+
+    /* Until hybrid pass ownership lands, a buffered multipass list cannot
+       silently fall through to direct TA submission. */
+    if(pvr_state.multipass && pvr_state.dma_mode && !b->base[list]) {
+        errno = ENODEV;
+        return -1;
+    }
 
     if(pvr_state.dma_mode && b->flushed & BIT(list)) {
         errno = EALREADY;
@@ -728,7 +791,7 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
         return -1;
     }
 
-    b = pvr_state.dma_buffers + pvr_state.ram_target;
+    b = current_build_buffer();
 
     if(!pvr_state.dma_mode || !b->base[list]) {
         errno = ENODEV;
@@ -773,12 +836,17 @@ int pvr_list_flush(pvr_list_t list) {
         return -1;
     }
 
+    if(pvr_state.multipass) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
     if(!pvr_state.scene_active) {
         errno = EPERM;
         return -1;
     }
 
-    b = pvr_state.dma_buffers + pvr_state.ram_target;
+    b = current_build_buffer();
 
     if(!b->base[list]) {
         errno = ENODEV;
@@ -843,6 +911,46 @@ int pvr_list_flush(pvr_list_t list) {
     return 0;
 }
 
+static int finish_buffered_pass(void) {
+    volatile pvr_dma_buffers_t *buffer = current_build_buffer();
+    int list;
+
+    if(pvr_state.list_reg_open != PVR_LIST_NONE && pvr_list_finish() < 0)
+        return -1;
+
+    for(list = 0; list < PVR_OPB_COUNT; ++list) {
+        if(!(pvr_state.lists_enabled & BIT(list)))
+            continue;
+
+        if(!buffer->base[list]) {
+            errno = ENODEV;
+            return -1;
+        }
+
+        if(!buffer->ptr[list]) {
+            if(buffer->size[list] < 64) {
+                errno = ENOSPC;
+                return -1;
+            }
+
+            pvr_blank_polyhdr_buf(list,
+                (pvr_poly_hdr_t *)buffer->base[list]);
+            buffer->ptr[list] = 32;
+        }
+
+        if(buffer->ptr[list] > buffer->size[list] ||
+                buffer->size[list] - buffer->ptr[list] < 32) {
+            errno = ENOSPC;
+            return -1;
+        }
+
+        memset(buffer->base[list] + buffer->ptr[list], 0, 32);
+        buffer->ptr[list] += 32;
+    }
+
+    return 0;
+}
+
 /* Call this after you have finished submitting all data for a frame; once
    this has been called, you can not submit any more data until one of the
    pvr_scene_begin() functions is called again. An error (-1) is returned if
@@ -865,58 +973,75 @@ int pvr_scene_finish(void) {
 
     // If we're in DMA mode, then this works a little differently...
     if(pvr_state.dma_mode) {
-        // If any enabled lists are empty, fill them with a blank polyhdr. Also
-        // add a zero-marker to the end of each list.
-        b = pvr_state.dma_buffers + pvr_state.ram_target;
+        if(pvr_state.multipass) {
+            size_t pass;
 
-        for(i = 0; i < PVR_OPB_COUNT; i++) {
-            /* We never enabled the list globally with pvr_init() - skip it */
-            if(!(pvr_state.lists_enabled & BIT(i)))
-                continue;
+            if(finish_buffered_pass() < 0)
+                return -1;
 
-            /* pvr_list_flush() already sent both this list and its delimiter.
-               Sending it again here would duplicate every primitive. */
-            if(b->flushed & BIT(i))
-                continue;
+            pvr_start_ta_rendering();
 
-            /* If any lists weren't used in this scene, submit blank ones now */
-            if(!(pvr_state.lists_closed & BIT(i))) {
-                pvr_list_begin(i);
-                pvr_blank_polyhdr(i);
-                pvr_list_finish();
-            }
+            o = irq_disable();
+            pvr_state.multipass->dma_frame = pvr_state.ram_target;
+            pvr_state.multipass->ta_pass = 0;
+            pvr_state.multipass->dma_chain_active = true;
+            pvr_state.multipass->dma_pass_fed = false;
+            pvr_state.lists_dmaed = 0;
+            pvr_state.lists_transferred = 0;
+            pvr_activate_pass(0);
 
-            /* We never associated an in-RAM DMA vertex buffer with the given
-               list type, because we're using hybrid rendering and submitted
-               that list type directly - skip it */
-            if(!b->base[i])
-                continue;
+            for(pass = 0; pass < pvr_state.multipass->pass_count; ++pass)
+                pvr_pass_dma_buffer(pvr_state.ram_target, pass)->ready = 1;
 
-            // Make sure there's at least one primitive in each.
-            if(b->ptr[i] == 0) {
-                pvr_blank_polyhdr_buf(i, (pvr_poly_hdr_t*)(b->base[i]));
-                b->ptr[i] += 32;
-            }
+            pvr_state.ram_target ^= 1;
+            irq_restore(o);
 
-            // Put a zero-marker on the end.
-            memset(b->base[i] + b->ptr[i], 0, 32);
-            b->ptr[i] += 32;
-
-            // Verify that there is no overrun.
-            assert(b->ptr[i] <= b->size[i]);
+            pvr_sync_stats(PVR_SYNC_BUFDONE);
+            pvr_start_dma();
         }
+        else {
+            /* Fill empty enabled lists and append one delimiter per buffered
+               list. Lists already flushed by the hybrid path are skipped. */
+            b = current_build_buffer();
 
-        pvr_start_ta_rendering();
+            for(i = 0; i < PVR_OPB_COUNT; i++) {
+                if(!(pvr_state.lists_enabled & BIT(i)))
+                    continue;
 
-        // Flip buffers and mark them complete.
-        o = irq_disable();
-        pvr_state.dma_buffers[pvr_state.ram_target].ready = 1;
-        pvr_state.ram_target ^= 1;
-        irq_restore(o);
+                if(b->flushed & BIT(i))
+                    continue;
 
-        pvr_sync_stats(PVR_SYNC_BUFDONE);
+                if(!(pvr_state.lists_closed & BIT(i))) {
+                    pvr_list_begin(i);
+                    pvr_blank_polyhdr(i);
+                    pvr_list_finish();
+                }
 
-        pvr_start_dma();
+                if(!b->base[i])
+                    continue;
+
+                if(b->ptr[i] == 0) {
+                    pvr_blank_polyhdr_buf(i,
+                                          (pvr_poly_hdr_t *)(b->base[i]));
+                    b->ptr[i] += 32;
+                }
+
+                memset(b->base[i] + b->ptr[i], 0, 32);
+                b->ptr[i] += 32;
+                assert(b->ptr[i] <= b->size[i]);
+            }
+
+            pvr_start_ta_rendering();
+
+            o = irq_disable();
+            pvr_state.dma_buffers[pvr_state.ram_target].ready = 1;
+            pvr_state.ram_target ^= 1;
+            irq_restore(o);
+
+            pvr_sync_stats(PVR_SYNC_BUFDONE);
+
+            pvr_start_dma();
+        }
     }
     else {
         if(finish_direct_pass_lists() < 0)

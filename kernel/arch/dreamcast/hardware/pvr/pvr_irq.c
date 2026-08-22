@@ -28,12 +28,21 @@
 
 // Find the next list to DMA out. If we have none left to do, then do
 // nothing. Otherwise, start the DMA and chain back to us upon completion.
+static void pvr_render_lists(void);
+static void registration_complete(void);
+
 static void dma_next_list(void *thread) {
     volatile pvr_dma_buffers_t * b;
     unsigned int i;
 
     // Get the buffers for this frame.
-    b = pvr_state.dma_buffers + (pvr_state.ram_target ^ 1);
+    if(pvr_state.multipass) {
+        b = pvr_pass_dma_buffer(pvr_state.multipass->dma_frame,
+                                pvr_state.multipass->ta_pass);
+    }
+    else {
+        b = pvr_state.dma_buffers + (pvr_state.ram_target ^ 1);
+    }
 
     for(i = 0; i < PVR_OPB_COUNT; i++) {
         if((pvr_state.lists_enabled & BIT(i))
@@ -62,6 +71,20 @@ static void dma_next_list(void *thread) {
             pvr_dma_load_ta(b->base[i], b->ptr[i], 0, dma_next_list, thread);
             return;
         }
+    }
+
+    /* Multipass keeps the DMA lock across the registration boundary. The list
+       completion path continues the TA, then restarts this chain for the next
+       pass. */
+    if(pvr_state.multipass) {
+        pvr_state.multipass->dma_pass_fed = true;
+
+        /* Usually the TA list interrupt follows DMA completion because its EOL
+           is the final transferred block. Handle the opposite IRQ order too. */
+        if(pvr_state.lists_transferred == pvr_state.lists_enabled)
+            registration_complete();
+
+        return;
     }
 
     // If that was the last one, then free up the DMA channel.
@@ -117,6 +140,58 @@ static void pvr_render_lists(void) {
         genwait_wake_all((void *)&pvr_state.ta_busy);
         thd_schedule(true);
     }
+}
+
+static void finish_multipass_dma_chain(void) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+    size_t pass;
+
+    assert(multipass && multipass->dma_chain_active);
+
+    for(pass = 0; pass < multipass->pass_count; ++pass)
+        pvr_pass_dma_buffer(multipass->dma_frame, pass)->ready = 0;
+
+    multipass->dma_chain_active = false;
+    multipass->dma_pass_fed = false;
+    pvr_state.lists_dmaed = 0;
+    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+}
+
+static void registration_complete(void) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+
+    if(multipass && pvr_state.dma_mode) {
+        size_t next_pass;
+
+        if(!multipass->dma_pass_fed)
+            return;
+
+        if(!pvr_registration_is_final()) {
+            next_pass = multipass->ta_pass + 1u;
+            multipass->dma_pass_fed = false;
+            pvr_state.lists_dmaed = 0;
+            pvr_continue_ta_pass(next_pass);
+            dma_next_list(NULL);
+            return;
+        }
+
+        finish_multipass_dma_chain();
+    }
+    else {
+        /* Direct intermediate completion admits the thread that owns the
+           serialized continuation register transition. */
+        genwait_wake_all((void *)&pvr_state.lists_transferred);
+
+        if(!pvr_registration_is_final()) {
+            thd_schedule(true);
+            return;
+        }
+    }
+
+    pvr_sync_stats(PVR_SYNC_REGDONE);
+    pvr_event_dispatch(PVR_EVENT_REGISTRATION_COMPLETE,
+                       pvr_state.lists_transferred);
+    pvr_render_lists();
 }
 
 void pvr_vblank_handler(uint32_t code, void *data) {
@@ -248,20 +323,8 @@ void pvr_int_handler(uint32_t code, void *data) {
             if(pvr_state.lists_transferred != pvr_state.lists_enabled)
                 return;
 
-            /* Intermediate pass completion admits the thread performing the
-               continuation sequence. It must not publish scene-level
-               registration completion or release the renderer. */
-            genwait_wake_all((void *)&pvr_state.lists_transferred);
-
-            if(!pvr_registration_is_final()) {
-                thd_schedule(true);
-                return;
-            }
-
-            pvr_sync_stats(PVR_SYNC_REGDONE);
-            pvr_event_dispatch(PVR_EVENT_REGISTRATION_COMPLETE,
-                               pvr_state.lists_transferred);
-            break;
+            registration_complete();
+            return;
     }
 
     // If all lists are fully transferred and a render is not in progress,

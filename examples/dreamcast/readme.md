@@ -148,6 +148,7 @@ This page serves as an index for all KallistiOS examples.
   - hybrid_lists
   - material_state
   - multipass
+  - multipass_dma
   - modifier_volume
   - modifier_volume_tex
   - modifier_volume_zclip

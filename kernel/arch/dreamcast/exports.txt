@@ -519,6 +519,7 @@ pvr_poly_cxt_col
 pvr_poly_cxt_txr
 pvr_set_vertbuf
 pvr_set_vertbuf_checked
+pvr_set_pass_vertbuf_checked
 pvr_scene_begin
 pvr_scene_next_pass
 pvr_scene_begin_txr

@@ -175,6 +175,19 @@ bool pvr_registration_is_final(void) {
         pvr_state.multipass->pass_count;
 }
 
+volatile pvr_dma_buffers_t *pvr_pass_dma_buffer(int frame, size_t pass) {
+    /* Direct registration still uses the legacy descriptors as harmless
+       scratch state for common scene/status code. Only buffered multipass
+       allocates pass-owned descriptors. */
+    if(!pvr_state.multipass || !pvr_state.multipass->dma_buffers)
+        return pvr_state.dma_buffers + frame;
+
+    assert(frame >= 0 && frame < 2 &&
+           pass < pvr_state.multipass->pass_count);
+    return pvr_state.multipass->dma_buffers +
+        (size_t)frame * pvr_state.multipass->pass_count + pass;
+}
+
 
 /* Allocate PVR buffers given a set of parameters
 

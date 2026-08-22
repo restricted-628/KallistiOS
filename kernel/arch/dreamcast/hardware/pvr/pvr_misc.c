@@ -255,8 +255,9 @@ int pvr_get_pipeline_status(pvr_pipeline_status_t *status) {
     status->render_to_texture = pvr_state.was_to_texture;
     status->enabled_lists = pvr_state.lists_enabled;
     status->transferred_lists = pvr_state.lists_transferred;
-    status->flushed_lists =
-        pvr_state.dma_buffers[pvr_state.ram_target].flushed;
+    status->flushed_lists = pvr_pass_dma_buffer(
+        pvr_state.ram_target,
+        pvr_state.multipass ? pvr_state.multipass->build_pass : 0)->flushed;
     status->open_list = pvr_state.list_reg_open;
     status->ram_target = pvr_state.ram_target;
     status->ta_target = pvr_state.ta_target;
@@ -396,6 +397,29 @@ void pvr_sync_reg_buffer(void) {
     printf("TA_OL_BASE: %08lx\nTA_OL_LIMIT: %08lx\nTA_NEXT_OPB: %08lx\n",
            PVR_GET(TA_OL_BASE), PVR_GET(TA_OL_LIMIT), PVR_GET(TA_NEXT_OPB) << 2);
 #endif
+}
+
+void pvr_continue_ta_pass(size_t next_pass) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+    volatile pvr_ta_buffers_t *buffer;
+
+    assert(multipass && next_pass < multipass->pass_count);
+
+    multipass->ta_pass = next_pass;
+    pvr_activate_pass(next_pass);
+    pvr_state.lists_transferred = 0;
+    pvr_state.lists_closed = 0;
+    pvr_state.list_reg_open = PVR_LIST_NONE;
+
+    /* Continuation preserves the shared parameter write position and overflow
+       cursor. Only the next pass's initial OPB and allocation sizes change. */
+    buffer = pvr_state.ta_buffers + pvr_state.ta_target;
+    PVR_SET(PVR_TA_OPB_START, buffer->opb +
+            multipass->layout.pass_opb_offset[next_pass]);
+    PVR_SET(PVR_OPB_CFG, multipass->list_reg_mask[next_pass]);
+    PVR_SET(PVR_TA_LIST_CONT, BIT(31));
+    (void)PVR_GET(PVR_TA_LIST_CONT);
+    pvr_status_advance();
 }
 
 /* Begin a render operation that has been queued completely (i.e., the

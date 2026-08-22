@@ -50,13 +50,6 @@ int pvr_init_multipass(const pvr_init_params_t *params,
         return -1;
     }
 
-    /* Buffered passes need independent frame/pass/list staging. Refuse the
-       old two-frame, one-pass buffers rather than aliasing pass data. */
-    if(params->dma_enabled) {
-        errno = ENOTSUP;
-        return -1;
-    }
-
     multipass = calloc(1, sizeof(*multipass));
 
     if(!multipass) {
@@ -65,6 +58,17 @@ int pvr_init_multipass(const pvr_init_params_t *params,
     }
 
     multipass->pass_count = pass_count;
+
+    if(params->dma_enabled) {
+        multipass->dma_buffers = calloc(2u * pass_count,
+                                        sizeof(*multipass->dma_buffers));
+
+        if(!multipass->dma_buffers) {
+            free(multipass);
+            errno = ENOMEM;
+            return -1;
+        }
+    }
 
     for(pass = 0; pass < pass_count; ++pass) {
         int list;
@@ -79,6 +83,7 @@ int pvr_init_multipass(const pvr_init_params_t *params,
                         (uint32_t)passes[pass].opb_sizes[list] * 4u;
                     break;
                 default:
+                    free(multipass->dma_buffers);
                     free(multipass);
                     errno = EINVAL;
                     return -1;
@@ -93,6 +98,7 @@ int pvr_init_multipass(const pvr_init_params_t *params,
         if(pvr_state.multipass == multipass)
             pvr_state.multipass = NULL;
 
+        free(multipass->dma_buffers);
         free(multipass);
         return -1;
     }
@@ -322,6 +328,7 @@ int pvr_shutdown(void) {
     sem_destroy((semaphore_t *)&pvr_state.dma_lock);
 
     pvr_state.multipass = NULL;
+    free(multipass ? multipass->dma_buffers : NULL);
     free(multipass);
 
     /* Clear video memory */
