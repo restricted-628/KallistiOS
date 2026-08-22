@@ -5,6 +5,7 @@
    Copyright (C) 2004 Megan Potter
    Copyright (C) 2023 Andy Barajas
    Copyright (C) 2023 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
    http://www.boob.co.uk
  */
@@ -43,8 +44,12 @@ static void pvr_dma_irq_hnd(uint32_t code, void *data) {
     (void)code;
     (void)data;
 
-    if(dma_transfer_get_remaining(DMA_CHANNEL_2) != 0)
+    if(dma_transfer_get_remaining(DMA_CHANNEL_2) != 0) {
         dbglog(DBG_INFO, "pvr_dma: The dma did not complete successfully\n");
+        pvr_fault_record(PVR_FAULT_DMA_INCOMPLETE, code);
+    }
+
+    pvr_status_advance();
 
     /* Call the callback, if any. */
     if(dma_callback) {
@@ -138,6 +143,7 @@ int pvr_dma_transfer(const void *src, uintptr_t dest, size_t count,
     pvr_dma[PVR_STATE] = pvr_dest_addr(dest, type);
     pvr_dma[PVR_LEN] = count;
     pvr_dma[PVR_DST] = 0x1;
+    pvr_status_advance();
 
     /* Wait for us to be signaled */
     if(block)

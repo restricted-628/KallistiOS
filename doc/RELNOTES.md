@@ -5,8 +5,8 @@ Copyright (C) 2024-2026 Donald Haase
 Copyright (C) 2025 Eric Fradella  
 Copyright (C) 2026 Joseph Black
 
-UNRELEASED DREAMCAST I/O WORK
------------------------------
+UNRELEASED DREAMCAST CAPABILITY WORK
+------------------------------------
 
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
@@ -14,6 +14,12 @@ lifecycle and naming conventions.
 * Added shared, fail-closed G1 controller arbitration for GD-ROM and ATA.
   Drivers now use the public G1 ownership API instead of the former private
   `_g1_ata_sem` symbol.
+* Completed buffered PVR list flushing and hybrid per-list submission, allowing
+  selected lists to use RAM/DMA while other lists use direct store-queue input
+  in the same scene without replaying early transfers.
+* Added coherent PVR pipeline snapshots and persistent fault records with
+  per-fault counters and captured TA buffer registers. Fault interrupts are
+  monitored in all builds while their debug logging remains optional.
 * Added an opt-in post-boot direct GD-ROM transport with bounded packet PIO and
   DMA, status, geometry, mode, recovery, CDDA, streaming, diagnostics, and
   asynchronous request integration. Boot-time disc authorization remains the

@@ -117,6 +117,7 @@ static void pvr_start_ta_rendering(void) {
         // Starting from that point, we consider that the Tile Accelerator
         // might be busy.
         pvr_state.ta_busy = 1;
+        pvr_status_advance();
     }
 }
 
@@ -147,6 +148,8 @@ void pvr_scene_begin(void) {
         // We assume registration is starting immediately
         pvr_sync_stats(PVR_SYNC_REGSTART);
     }
+
+    pvr_status_advance();
 }
 
 void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry) {
@@ -226,6 +229,7 @@ int pvr_list_begin(pvr_list_t list) {
 
     /* Ok, set the flag */
     pvr_state.list_reg_open = list;
+    pvr_status_advance();
 
     return 0;
 }
@@ -263,6 +267,7 @@ int pvr_list_finish(void) {
     }
 
     pvr_state.list_reg_open = PVR_LIST_NONE;
+    pvr_status_advance();
 
     return 0;
 }
@@ -414,6 +419,7 @@ int pvr_list_flush(pvr_list_t list) {
        scene may begin while this frame is still progressing through the TA. */
     b->flushed |= BIT(list);
     pvr_state.lists_closed |= BIT(list);
+    pvr_status_advance();
 
     return 0;
 }
@@ -503,6 +509,7 @@ int pvr_scene_finish(void) {
     }
 
     pvr_state.scene_active = false;
+    pvr_status_advance();
 
     /* Ok, now it's just a matter of waiting for the interrupt... */
     return 0;

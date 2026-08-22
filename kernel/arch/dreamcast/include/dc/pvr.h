@@ -32,6 +32,7 @@
     \author Lawrence Sebald
     \author Benoit Miller
     \author Ruslan Rostovtsev
+    \author Joseph Black
 */
 
 #ifndef __DC_PVR_H

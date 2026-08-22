@@ -2,6 +2,7 @@
 
    pvr_init_shutdown.c
    Copyright (C) 2002, 2004 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -134,19 +135,18 @@ int pvr_init(const pvr_init_params_t *params) {
     asic_evt_set_handler(ASIC_EVT_PVR_RENDERDONE_TSP, pvr_int_handler, NULL);
     asic_evt_enable(ASIC_EVT_PVR_RENDERDONE_TSP, ASIC_IRQ_DEFAULT);
 
-    /* Hook up interrupt handlers for error events */
-    if(__is_defined(PVR_RENDER_DBG)) {
-        asic_evt_set_handler(ASIC_EVT_PVR_ISP_OUTOFMEM, pvr_int_handler, NULL);
-        asic_evt_enable(ASIC_EVT_PVR_ISP_OUTOFMEM, ASIC_IRQ_DEFAULT);
-        asic_evt_set_handler(ASIC_EVT_PVR_STRIP_HALT, pvr_int_handler, NULL);
-        asic_evt_enable(ASIC_EVT_PVR_STRIP_HALT, ASIC_IRQ_DEFAULT);
-        asic_evt_set_handler(ASIC_EVT_PVR_OPB_OUTOFMEM, pvr_int_handler, NULL);
-        asic_evt_enable(ASIC_EVT_PVR_OPB_OUTOFMEM, ASIC_IRQ_DEFAULT);
-        asic_evt_set_handler(ASIC_EVT_PVR_TA_INPUT_ERR, pvr_int_handler, NULL);
-        asic_evt_enable(ASIC_EVT_PVR_TA_INPUT_ERR, ASIC_IRQ_DEFAULT);
-        asic_evt_set_handler(ASIC_EVT_PVR_TA_INPUT_OVERFLOW, pvr_int_handler, NULL);
-        asic_evt_enable(ASIC_EVT_PVR_TA_INPUT_OVERFLOW, ASIC_IRQ_DEFAULT);
-    }
+    /* Fault events are always enabled because the public status API latches
+       them even when their debug messages are compiled out. */
+    asic_evt_set_handler(ASIC_EVT_PVR_ISP_OUTOFMEM, pvr_int_handler, NULL);
+    asic_evt_enable(ASIC_EVT_PVR_ISP_OUTOFMEM, ASIC_IRQ_DEFAULT);
+    asic_evt_set_handler(ASIC_EVT_PVR_STRIP_HALT, pvr_int_handler, NULL);
+    asic_evt_enable(ASIC_EVT_PVR_STRIP_HALT, ASIC_IRQ_DEFAULT);
+    asic_evt_set_handler(ASIC_EVT_PVR_OPB_OUTOFMEM, pvr_int_handler, NULL);
+    asic_evt_enable(ASIC_EVT_PVR_OPB_OUTOFMEM, ASIC_IRQ_DEFAULT);
+    asic_evt_set_handler(ASIC_EVT_PVR_TA_INPUT_ERR, pvr_int_handler, NULL);
+    asic_evt_enable(ASIC_EVT_PVR_TA_INPUT_ERR, ASIC_IRQ_DEFAULT);
+    asic_evt_set_handler(ASIC_EVT_PVR_TA_INPUT_OVERFLOW, pvr_int_handler, NULL);
+    asic_evt_enable(ASIC_EVT_PVR_TA_INPUT_OVERFLOW, ASIC_IRQ_DEFAULT);
 
     /* 3d-specific parameters; these are all about rendering and
        nothing to do with setting up the video; some stuff in here
@@ -175,6 +175,7 @@ int pvr_init(const pvr_init_params_t *params) {
 
     /* Set us as valid and return success */
     pvr_state.valid = 1;
+    pvr_status_advance();
 
     /* Validate our memory pool */
     pvr_mem_initialize((pvr_ptr_t)(PVR_RAM_INT_BASE + pvr_state.texture_base), PVR_RAM_SIZE - pvr_state.texture_base);
@@ -198,18 +199,28 @@ int pvr_shutdown(void) {
 
     /* Unhook any int handlers */
     vblank_handler_remove(pvr_state.vbl_handle);
-    asic_evt_remove_handler(ASIC_EVT_PVR_OPAQUEDONE);
     asic_evt_disable(ASIC_EVT_PVR_OPAQUEDONE, ASIC_IRQ_DEFAULT);
-    asic_evt_remove_handler(ASIC_EVT_PVR_OPAQUEMODDONE);
+    asic_evt_remove_handler(ASIC_EVT_PVR_OPAQUEDONE);
     asic_evt_disable(ASIC_EVT_PVR_OPAQUEMODDONE, ASIC_IRQ_DEFAULT);
-    asic_evt_remove_handler(ASIC_EVT_PVR_TRANSDONE);
+    asic_evt_remove_handler(ASIC_EVT_PVR_OPAQUEMODDONE);
     asic_evt_disable(ASIC_EVT_PVR_TRANSDONE, ASIC_IRQ_DEFAULT);
-    asic_evt_remove_handler(ASIC_EVT_PVR_TRANSMODDONE);
+    asic_evt_remove_handler(ASIC_EVT_PVR_TRANSDONE);
     asic_evt_disable(ASIC_EVT_PVR_TRANSMODDONE, ASIC_IRQ_DEFAULT);
-    asic_evt_remove_handler(ASIC_EVT_PVR_PTDONE);
+    asic_evt_remove_handler(ASIC_EVT_PVR_TRANSMODDONE);
     asic_evt_disable(ASIC_EVT_PVR_PTDONE, ASIC_IRQ_DEFAULT);
-    asic_evt_remove_handler(ASIC_EVT_PVR_RENDERDONE_TSP);
+    asic_evt_remove_handler(ASIC_EVT_PVR_PTDONE);
     asic_evt_disable(ASIC_EVT_PVR_RENDERDONE_TSP, ASIC_IRQ_DEFAULT);
+    asic_evt_remove_handler(ASIC_EVT_PVR_RENDERDONE_TSP);
+    asic_evt_disable(ASIC_EVT_PVR_ISP_OUTOFMEM, ASIC_IRQ_DEFAULT);
+    asic_evt_remove_handler(ASIC_EVT_PVR_ISP_OUTOFMEM);
+    asic_evt_disable(ASIC_EVT_PVR_STRIP_HALT, ASIC_IRQ_DEFAULT);
+    asic_evt_remove_handler(ASIC_EVT_PVR_STRIP_HALT);
+    asic_evt_disable(ASIC_EVT_PVR_OPB_OUTOFMEM, ASIC_IRQ_DEFAULT);
+    asic_evt_remove_handler(ASIC_EVT_PVR_OPB_OUTOFMEM);
+    asic_evt_disable(ASIC_EVT_PVR_TA_INPUT_ERR, ASIC_IRQ_DEFAULT);
+    asic_evt_remove_handler(ASIC_EVT_PVR_TA_INPUT_ERR);
+    asic_evt_disable(ASIC_EVT_PVR_TA_INPUT_OVERFLOW, ASIC_IRQ_DEFAULT);
+    asic_evt_remove_handler(ASIC_EVT_PVR_TA_INPUT_OVERFLOW);
 
     /* Shut down PVR DMA */
     pvr_dma_shutdown();

@@ -148,6 +148,7 @@ This page serves as an index for all KallistiOS examples.
   - modifier_volume_tex
   - modifier_volume_zclip
   - palette
+  - pipeline_status
   - plasma
   - pvrline
   - pvrmark

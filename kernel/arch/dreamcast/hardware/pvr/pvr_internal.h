@@ -170,6 +170,8 @@ typedef struct {
     int     render_busy;                // >0 if a render is in progress
     int     render_completed;           // >1 if a render has recently finished
     bool    scene_active;               // Scene accepts list data until finish
+    uint32_t status_sequence;           // Software-visible pipeline transitions
+    pvr_fault_status_t fault_status;    // Persistent interrupt fault record
 
     // Memory pointers / buffers
     pvr_dma_buffers_t   dma_buffers[2];     // DMA buffers (if any)
@@ -281,6 +283,12 @@ void pvr_init_tile_matrices(bool presort);
 
 /* Update statistical counters */
 void pvr_sync_stats(int event);
+
+/* Advance the public pipeline-state sequence without losing IRQ transitions. */
+void pvr_status_advance(void);
+
+/* Latch a PVR fault and the diagnostic register state observed with it. */
+void pvr_fault_record(pvr_fault_t fault, uint32_t event);
 
 /* Synchronize the viewed page with what's in pvr_state */
 void pvr_sync_view(void);

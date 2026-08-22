@@ -110,6 +110,7 @@ static void pvr_render_lists(void) {
         pvr_state.ta_busy = 0;
 
         pvr_state.was_to_texture = pvr_state.curr_to_texture;
+        pvr_status_advance();
 
         // Signal the client code to continue onwards.
         genwait_wake_all((void *)&pvr_state.ta_busy);
@@ -136,6 +137,7 @@ void pvr_vblank_handler(uint32_t code, void *data) {
 
         // Clear the render completed flag.
         pvr_state.render_completed = 0;
+        pvr_status_advance();
     }
 
     // We may have a pending render, that couldn't be done as the previous
@@ -144,46 +146,62 @@ void pvr_vblank_handler(uint32_t code, void *data) {
 }
 
 void pvr_int_handler(uint32_t code, void *data) {
+    pvr_fault_t fault = PVR_FAULT_NONE;
+    bool status_changed = false;
+
     (void)data;
 
     // What kind of event did we get?
     switch(code) {
         case ASIC_EVT_PVR_OPAQUEDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_OP_POLY);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_TRANSDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_TR_POLY);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_OPAQUEMODDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_OP_MOD);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_TRANSMODDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_TR_MOD);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_PTDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_PT_POLY);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_RENDERDONE_TSP:
             pvr_state.render_busy = 0;
             if(!pvr_state.was_to_texture)
                 pvr_state.render_completed = 1;
             pvr_sync_stats(PVR_SYNC_RNDDONE);
+            status_changed = true;
 
             genwait_wake_all((void *)&pvr_state.render_busy);
             break;
     }
 
-    /* Show register values on each interrupt */
+    if(status_changed)
+        pvr_status_advance();
+
+    /* Faults are always latched. Logging remains controlled by the existing
+       debug source so release builds get diagnostics without log traffic. */
     switch (code) {
         case ASIC_EVT_PVR_ISP_OUTOFMEM:
+            fault = PVR_FAULT_ISP_OUT_OF_MEMORY;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_ISP_OUTOFMEM\n");
             break;
 
         case ASIC_EVT_PVR_STRIP_HALT:
+            fault = PVR_FAULT_STRIP_HALT;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_STRIP_HALT\n");
             break;
 
         case ASIC_EVT_PVR_OPB_OUTOFMEM:
+            fault = PVR_FAULT_OPB_OUT_OF_MEMORY;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_OPB_OUTOFMEM\n"
             "pvr_irq: PVR_TA_OPB_START: %08lx\n"
             "pvr_irq: PVR_TA_OPB_END: %08lx\n"
@@ -192,13 +210,18 @@ void pvr_int_handler(uint32_t code, void *data) {
             break;
 
         case ASIC_EVT_PVR_TA_INPUT_ERR:
+            fault = PVR_FAULT_TA_INPUT_ERROR;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_TA_INPUT_ERR\n");
             break;
 
         case ASIC_EVT_PVR_TA_INPUT_OVERFLOW:
+            fault = PVR_FAULT_TA_INPUT_OVERFLOW;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_TA_INPUT_OVERFLOW\n");
             break;
     }
+
+    if(fault != PVR_FAULT_NONE)
+        pvr_fault_record(fault, code);
 
     /* Update our stats if we finished all registration */
     switch(code) {

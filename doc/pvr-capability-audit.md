@@ -45,10 +45,10 @@ than place another renderer above them.
 | --- | --- | --- |
 | Device and display lifecycle | Substantially covered | Replace assertion-only public failures with checked results where practical; expose missing scanout queries only when they describe stable hardware state. |
 | Direct list submission | Covered | Preserve the low-overhead store-queue path. |
-| Buffered list submission | Partially covered | Implement `pvr_list_flush()` and make buffer overflow, list reuse, and invalid ordering reportable rather than silently corrupting a scene. |
-| Hybrid submission | Designed but incomplete | Track flushed lists per RAM frame so buffered and direct lists can coexist without duplicate DMA or premature reuse. |
-| Pipeline status | Basic aggregate statistics only | Add a coherent registration, DMA, render, display, and fault snapshot with monotonic sequence counters. |
-| Completion and fault events | DMA callback only; render faults are logged | Add optional callbacks/events for registration completion, render completion, display, YUV completion, and TA/ISP overflow or input faults. Keep interrupt-context contracts explicit. |
+| Buffered list submission | Operational with checked writes | Add a checked companion for buffer assignment without breaking the existing pointer-returning API. |
+| Hybrid submission | Covered | Preserve per-RAM-frame flushed-list ownership and prevent replay. |
+| Pipeline status | Covered | Extend fields only for stable software or hardware state. |
+| Completion and fault events | Faults are persistent; DMA callback exists | Add optional callbacks/events for registration completion, render completion, display, YUV completion, and TA/ISP overflow or input faults. Keep interrupt-context contracts explicit. |
 | Multi-pass scene control | No first-class pass object | Add a KOS pass description only after hybrid submission and status tracking are sound. Per-pass sort mode and user clipping are the essential behaviors. |
 | User clipping | Header representation exists | Add checked helpers for constructing and submitting user-clip commands; validate tile coordinates against the active render target. |
 | Global/pixel clipping | Internal fixed state | Add checked setters and queries, including render-to-texture dimensions. |
@@ -76,9 +76,11 @@ than place another renderer above them.
    change.
 3. `pvr_txr_load_ex()` advertises flags that it rejects, including 32-bit input
    and on-the-fly VQ encoding; inverted preformatted uploads are also rejected.
-4. Render fault interrupts log text but do not preserve a queryable fault
-   record or notify an application.
-5. The scene pipeline has fixed waits and sparse terminal-state reporting.
+4. ~~Render fault interrupts log text but do not preserve a queryable fault
+   record.~~ Closed for polling: faults are latched with counters and TA
+   register snapshots. Optional event notification remains open.
+5. The scene pipeline still has fixed waits. Sparse terminal-state reporting
+   is closed by the coherent pipeline snapshot.
 6. User clipping is representable in a polygon header, but KOS provides no
    checked command-construction or submission helper.
 7. Texture subregion, mip-level, and codebook-only updates are absent.
@@ -123,3 +125,18 @@ physical-hardware validation.
 
 The emulator result validates software state transitions and transfer ordering.
 Physical DMA timing and contention remain hardware-day items.
+
+### Pipeline status and persistent faults
+
+- a coherent snapshot reports scene, DMA, registration, render, display,
+  render-target, list, and buffer-index state;
+- a monotonic sequence identifies software-visible transitions;
+- ISP, strip, object-pointer-buffer, TA-input, and incomplete-DMA faults latch
+  independently with occurrence counters;
+- the latest fault preserves the raw interrupt event and TA buffer registers;
+- selected fault flags can be cleared without racing a new interrupt;
+- the focused example cross-builds and completes in interpreter-mode
+  emulation, including null-output and invalid-mask misuse checks.
+
+Physical fault injection, overflow behavior, and recovery remain hardware-day
+items. Emulator validation covers the normal interrupt and snapshot paths only.

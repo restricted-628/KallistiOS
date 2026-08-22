@@ -5,6 +5,7 @@
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file       dc/pvr/pvr_misc.h
@@ -193,6 +194,104 @@ typedef struct pvr_stats {
     \retval -1              If the PVR is not initialized
 */
 int pvr_get_stats(pvr_stats_t *stat);
+
+/** \defgroup pvr_pipeline_status Pipeline Status and Faults
+    \brief                         Coherent PVR pipeline state and fault records
+    \ingroup                       pvr_stats
+
+    @{
+*/
+
+/** \brief Persistent PVR fault flags.
+
+    These flags describe faults observed since initialization or since the
+    corresponding flag was cleared with pvr_clear_faults(). A fault remains
+    latched after its interrupt has returned so applications can diagnose
+    failures without parsing debug output.
+*/
+typedef enum pvr_fault {
+    PVR_FAULT_NONE              = 0,
+    PVR_FAULT_ISP_OUT_OF_MEMORY = 1u << 0,
+    PVR_FAULT_STRIP_HALT        = 1u << 1,
+    PVR_FAULT_OPB_OUT_OF_MEMORY = 1u << 2,
+    PVR_FAULT_TA_INPUT_ERROR    = 1u << 3,
+    PVR_FAULT_TA_INPUT_OVERFLOW = 1u << 4,
+    PVR_FAULT_DMA_INCOMPLETE    = 1u << 5,
+    PVR_FAULT_ALL               = (1u << 6) - 1u
+} pvr_fault_t;
+
+/** \brief Persistent details for the latest PVR fault.
+
+    Register values are sampled in interrupt context when the fault is
+    observed. They are diagnostic snapshots and must not be interpreted as
+    current register state after the pipeline continues.
+*/
+typedef struct pvr_fault_status {
+    uint32_t sequence;             /**< \brief Number of faults observed. */
+    uint32_t mask;                 /**< \brief Currently latched fault flags. */
+    pvr_fault_t last_fault;        /**< \brief Most recently observed fault. */
+    uint32_t last_event;           /**< \brief Raw ASIC event code, if applicable. */
+    uint32_t counts[6];            /**< \brief Count for fault bits 0 through 5. */
+    uint32_t opb_start;            /**< \brief TA object-pointer-buffer start. */
+    uint32_t opb_end;              /**< \brief TA object-pointer-buffer end. */
+    uint32_t opb_position;         /**< \brief TA object-pointer-buffer position. */
+    uint32_t vertex_start;         /**< \brief TA vertex-buffer start. */
+    uint32_t vertex_end;           /**< \brief TA vertex-buffer end. */
+    uint32_t vertex_position;      /**< \brief TA vertex-buffer position. */
+} pvr_fault_status_t;
+
+/** \brief Coherent snapshot of the software-visible PVR pipeline.
+
+    The complete structure is copied with interrupts disabled. The sequence
+    value advances on software-visible pipeline transitions; callers can use it
+    to detect whether a later snapshot represents new state.
+*/
+typedef struct pvr_pipeline_status {
+    uint32_t sequence;             /**< \brief Pipeline transition sequence. */
+    uint32_t initialized;          /**< \brief Non-zero when PVR is initialized. */
+    uint32_t scene_active;         /**< \brief Scene currently accepts geometry. */
+    uint32_t vertex_dma_enabled;   /**< \brief Buffered vertex DMA mode enabled. */
+    uint32_t dma_busy;             /**< \brief Shared PVR DMA engine is active. */
+    uint32_t ta_busy;              /**< \brief TA registration is in progress. */
+    uint32_t render_busy;          /**< \brief ISP/TSP rendering is in progress. */
+    uint32_t display_pending;      /**< \brief Completed frame awaits display. */
+    uint32_t registration_to_texture; /**< \brief TA scene targets texture RAM. */
+    uint32_t render_to_texture;    /**< \brief ISP/TSP render targets texture RAM. */
+    uint32_t enabled_lists;        /**< \brief Enabled pvr_list_t bit mask. */
+    uint32_t transferred_lists;    /**< \brief Lists accepted by the TA. */
+    uint32_t flushed_lists;        /**< \brief Current RAM-frame lists flushed early. */
+    int32_t open_list;             /**< \brief Open pvr_list_t or PVR_LIST_NONE. */
+    uint32_t ram_target;           /**< \brief Current RAM vertex-buffer index. */
+    uint32_t ta_target;            /**< \brief Current TA buffer index. */
+    uint32_t view_target;          /**< \brief Current displayed framebuffer index. */
+    pvr_fault_status_t faults;     /**< \brief Persistent fault information. */
+} pvr_pipeline_status_t;
+
+/** \brief Read a coherent PVR pipeline and fault snapshot.
+
+    \param  status          Destination structure.
+
+    \retval 0               On success.
+    \retval -1              If status is NULL or PVR is not initialized, with
+                            errno set to EINVAL or ENODEV respectively.
+*/
+int pvr_get_pipeline_status(pvr_pipeline_status_t *status);
+
+/** \brief Clear selected persistent PVR fault flags.
+
+    Fault counters and the latest-fault record remain available as historical
+    diagnostics. A fault arriving concurrently with this call is ordered by
+    interrupt exclusion and cannot be lost.
+
+    \param  mask            Combination of pvr_fault_t flags to clear.
+
+    \retval 0               On success.
+    \retval -1              If mask contains unknown bits or PVR is not
+                            initialized, with errno set to EINVAL or ENODEV.
+*/
+int pvr_clear_faults(uint32_t mask);
+
+/** @} */
 
 __END_DECLS
 

@@ -3,13 +3,16 @@
    pvr_misc.c
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2014 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 #include <float.h>
 
+#include <arch/irq.h>
 #include <kos/timer.h>
 #include <dc/pvr.h>
 #include <dc/video.h>
@@ -75,6 +78,103 @@ int pvr_get_stats(pvr_stats_t *stat) {
     stat->buf_last_time = pvr_state.buf_last_len;
     stat->frame_count = pvr_state.frame_count;
 
+    return 0;
+}
+
+void pvr_status_advance(void) {
+    int old_irq = irq_disable();
+
+    ++pvr_state.status_sequence;
+    irq_restore(old_irq);
+}
+
+void pvr_fault_record(pvr_fault_t fault, uint32_t event) {
+    int old_irq;
+    unsigned int index;
+
+    if(!fault || (fault & (fault - 1u)) || (fault & ~PVR_FAULT_ALL))
+        return;
+
+    index = (unsigned int)__builtin_ctz((unsigned int)fault);
+    old_irq = irq_disable();
+
+    ++pvr_state.fault_status.sequence;
+    pvr_state.fault_status.mask |= fault;
+    pvr_state.fault_status.last_fault = fault;
+    pvr_state.fault_status.last_event = event;
+    ++pvr_state.fault_status.counts[index];
+    pvr_state.fault_status.opb_start = PVR_GET(PVR_TA_OPB_START);
+    pvr_state.fault_status.opb_end = PVR_GET(PVR_TA_OPB_END);
+    pvr_state.fault_status.opb_position = PVR_GET(PVR_TA_OPB_POS) << 2;
+    pvr_state.fault_status.vertex_start = PVR_GET(PVR_TA_VERTBUF_START);
+    pvr_state.fault_status.vertex_end = PVR_GET(PVR_TA_VERTBUF_END);
+    pvr_state.fault_status.vertex_position = PVR_GET(PVR_TA_VERTBUF_POS);
+    ++pvr_state.status_sequence;
+
+    irq_restore(old_irq);
+}
+
+int pvr_get_pipeline_status(pvr_pipeline_status_t *status) {
+    int old_irq;
+
+    if(!status) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    status->sequence = pvr_state.status_sequence;
+    status->initialized = pvr_state.valid;
+    status->scene_active = pvr_state.scene_active;
+    status->vertex_dma_enabled = pvr_state.dma_mode;
+    status->dma_busy = !pvr_dma_ready();
+    status->ta_busy = pvr_state.ta_busy;
+    status->render_busy = pvr_state.render_busy;
+    status->display_pending = pvr_state.render_completed;
+    status->registration_to_texture = pvr_state.curr_to_texture;
+    status->render_to_texture = pvr_state.was_to_texture;
+    status->enabled_lists = pvr_state.lists_enabled;
+    status->transferred_lists = pvr_state.lists_transferred;
+    status->flushed_lists =
+        pvr_state.dma_buffers[pvr_state.ram_target].flushed;
+    status->open_list = pvr_state.list_reg_open;
+    status->ram_target = pvr_state.ram_target;
+    status->ta_target = pvr_state.ta_target;
+    status->view_target = pvr_state.view_target;
+    memcpy(&status->faults, (const void *)&pvr_state.fault_status,
+           sizeof(status->faults));
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_clear_faults(uint32_t mask) {
+    int old_irq;
+
+    if(mask & ~PVR_FAULT_ALL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    pvr_state.fault_status.mask &= ~mask;
+    ++pvr_state.status_sequence;
+
+    irq_restore(old_irq);
     return 0;
 }
 
