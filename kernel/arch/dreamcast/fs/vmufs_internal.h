@@ -14,6 +14,29 @@
 
 #include <dc/vmufs_meta.h>
 
+typedef struct maple_device maple_device_t;
+
+#define VMUFS_TRANSACTION_CANCELLED (-9)
+
+typedef enum vmufs_transaction_phase {
+    VMUFS_TRANSACTION_PREPARING,
+    VMUFS_TRANSACTION_DATA,
+    VMUFS_TRANSACTION_FAT,
+    VMUFS_TRANSACTION_DIRECTORY,
+    VMUFS_TRANSACTION_CLEANUP,
+    VMUFS_TRANSACTION_ERASING,
+    VMUFS_TRANSACTION_FINISHED
+} vmufs_transaction_phase_t;
+
+typedef struct vmufs_transaction_observer {
+    bool (*cancelled)(void *data);
+    void (*update)(void *data, vmufs_transaction_phase_t phase,
+                   size_t completed_blocks, size_t total_blocks,
+                   size_t data_blocks_completed, size_t data_blocks,
+                   bool committed);
+    void *data;
+} vmufs_transaction_observer_t;
+
 typedef struct vmufs_defrag_plan {
     uint16_t source[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
     uint16_t target[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
@@ -87,5 +110,16 @@ int vmufs_defrag_schedule_build(const vmu_root_t *root,
                                 const vmu_dir_t *directory,
                                 size_t directory_entries,
                                 vmufs_defrag_schedule_t *schedule);
+
+int vmufs_format_observed(maple_device_t *dev,
+                          const vmufs_format_options_t *options,
+                          vmufs_format_mode_t mode,
+                          const vmufs_transaction_observer_t *observer);
+
+int vmufs_defragment_observed(
+    maple_device_t *dev, const vmufs_transaction_observer_t *observer);
+
+int vmufs_request_system_init(void);
+void vmufs_request_system_shutdown(void);
 
 #endif /* __DC_VMUFS_INTERNAL_H */
