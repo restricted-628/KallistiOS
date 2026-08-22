@@ -622,6 +622,7 @@ Striplength set to 2 */
 #define PVR_TA_PM2_UVFLIP          GENMASK(18, 17)
 #define PVR_TA_PM2_UVCLAMP         GENMASK(16, 15)
 #define PVR_TA_PM2_FILTER          GENMASK(14, 13)
+#define PVR_TA_PM2_SUPERSAMPLE     BIT(12)
 #define PVR_TA_PM2_MIPBIAS         GENMASK(11, 8)
 #define PVR_TA_PM2_TXRENV          GENMASK(7, 6)
 #define PVR_TA_PM2_USIZE           GENMASK(5, 3)
@@ -851,6 +852,26 @@ int pvr_vertex_dma_enabled(void);
     \return                 The old buffer location (if any)
 */
 void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len);
+
+/** \brief   Assign a vertex buffer with checked failure reporting.
+    \ingroup pvr_list_mgmt
+
+    This is the error-reporting companion to pvr_set_vertbuf(). The complete
+    allocation is split equally between the two RAM frames used by buffered
+    list submission. Assignment is refused while a scene or a queued RAM frame
+    could still refer to the previous buffer.
+
+    \param  list            Enabled primitive list receiving the buffer.
+    \param  buffer          32-byte-aligned main-memory allocation.
+    \param  len             Allocation size, at least 128 and a multiple of 64.
+    \param  old_buffer      Optional destination for the previous allocation.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV, EPERM,
+                            or EBUSY.
+*/
+int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
+                            void **old_buffer);
 
 /** \brief   Retrieve a pointer to the current output location in the DMA buffer
              for the requested list.
@@ -1231,6 +1252,17 @@ int pvr_wait_render_done(void);
     \ingroup pvr_ctx
 */
 
+/** \defgroup pvr_compile_flags Extended compilation flags
+    \brief                         Optional texture-header controls
+    \ingroup                       pvr_primitives_compilation
+    @{
+*/
+#define PVR_COMPILE_SUPERSAMPLE   (1u << 0) /**< Supersample the outside texture. */
+#define PVR_COMPILE_SUPERSAMPLE_2 (1u << 1) /**< Supersample the inside texture. */
+#define PVR_COMPILE_ALL_FLAGS     (PVR_COMPILE_SUPERSAMPLE | \
+                                   PVR_COMPILE_SUPERSAMPLE_2)
+/** @} */
+
 /** \brief   Compile a polygon context into a polygon header.
     \ingroup pvr_primitives_compilation
 
@@ -1241,6 +1273,20 @@ int pvr_wait_render_done(void);
     \param  src             The context to compile.
 */
 void pvr_poly_compile(pvr_poly_hdr_t *dst, const pvr_poly_cxt_t *src);
+
+/** \brief   Compile a polygon context with optional header controls.
+    \ingroup pvr_primitives_compilation
+
+    This preserves pvr_poly_cxt_t's layout while exposing texture
+    supersampling through the high-level compiler. The second flag affects the
+    inside-volume state when a two-volume header is generated.
+
+    \param  dst             Where to store the compiled header.
+    \param  src             The context to compile.
+    \param  flags           Bitwise OR of values in pvr_compile_flags.
+*/
+void pvr_poly_compile_ex(pvr_poly_hdr_t *dst, const pvr_poly_cxt_t *src,
+                         uint32_t flags);
 
 /** \defgroup pvr_ctx_init     Initialization
     \brief                     Functions for initializing PVR polygon contexts
@@ -1289,6 +1335,19 @@ void pvr_poly_cxt_txr(pvr_poly_cxt_t *dst, pvr_list_t list,
 */
 void pvr_sprite_compile(pvr_sprite_hdr_t *dst,
                         const pvr_sprite_cxt_t *src);
+
+/** \brief   Compile a sprite context with optional header controls.
+    \ingroup pvr_primitives_compilation
+
+    PVR_COMPILE_SUPERSAMPLE controls the sprite texture. The inside-volume
+    flag is not valid for sprite headers.
+
+    \param  dst             Where to store the compiled header.
+    \param  src             The context to compile.
+    \param  flags           Zero or PVR_COMPILE_SUPERSAMPLE.
+*/
+void pvr_sprite_compile_ex(pvr_sprite_hdr_t *dst,
+                           const pvr_sprite_cxt_t *src, uint32_t flags);
 
 /** \brief   Fill in a sprite context for non-textured sprites.
     \ingroup pvr_ctx_init
@@ -1352,6 +1411,19 @@ void pvr_mod_compile(pvr_mod_hdr_t *dst, pvr_list_t list, uint32_t mode,
     \param  src             The context to compile.
 */
 void pvr_poly_mod_compile(pvr_poly_mod_hdr_t *dst, const pvr_poly_cxt_t *src);
+
+/** \brief   Compile a two-volume polygon context with optional controls.
+    \ingroup pvr_primitives_compilation
+
+    PVR_COMPILE_SUPERSAMPLE controls the outside-volume texture and
+    PVR_COMPILE_SUPERSAMPLE_2 controls the inside-volume texture.
+
+    \param  dst             Where to store the compiled header.
+    \param  src             The context to compile.
+    \param  flags           Bitwise OR of values in pvr_compile_flags.
+*/
+void pvr_poly_mod_compile_ex(pvr_poly_mod_hdr_t *dst,
+                             const pvr_poly_cxt_t *src, uint32_t flags);
 
 /** \brief   Fill in a polygon context for non-textured polygons affected by a
              modifier volume.

@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <arch/irq.h>
 #include <kos/dbglog.h>
 #include <kos/genwait.h>
 #include <kos/regfield.h>
@@ -60,20 +61,8 @@ static void set_next_default_background(uint32_t width, uint32_t height) {
     };
 }
 
-void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
+static void *set_vertbuf_unchecked(pvr_list_t list, void *buffer, size_t len) {
     void *oldbuf;
-
-    // Make sure we have global DMA usage enabled. The DMA can still
-    // be used in other situations, but the user must take care of
-    // that themselves.
-    assert(pvr_state.dma_mode);
-
-    // Make sure it's an _enabled_ list.
-    assert(pvr_state.lists_enabled & BIT(list));
-
-    // Make sure the buffer parameters are valid.
-    assert(__is_aligned(buffer, 32));
-    assert(!(len & 63));
 
     // Save the old value.
     oldbuf = pvr_state.dma_buffers[0].base[list];
@@ -91,6 +80,79 @@ void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
     pvr_state.dma_buffers[1].ready = 0;
 
     return oldbuf;
+}
+
+void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
+    void *oldbuf;
+    int old_irq;
+
+    // Make sure we have global DMA usage enabled. The DMA can still
+    // be used in other situations, but the user must take care of
+    // that themselves.
+    assert(pvr_state.dma_mode);
+
+    // Make sure it's an _enabled_ list.
+    assert(list >= PVR_LIST_OP_POLY && list <= PVR_LIST_PT_POLY);
+    assert(pvr_state.lists_enabled & BIT(list));
+
+    // Make sure the buffer parameters are valid.
+    assert(__is_aligned(buffer, 32));
+    assert(len >= 128 && !(len & 63));
+
+    old_irq = irq_disable();
+    oldbuf = set_vertbuf_unchecked(list, buffer, len);
+    irq_restore(old_irq);
+
+    return oldbuf;
+}
+
+int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
+                            void **old_buffer) {
+    void *oldbuf;
+    int old_irq;
+
+    if(list < PVR_LIST_OP_POLY || list > PVR_LIST_PT_POLY || !buffer
+       || !__is_aligned(buffer, 32) || len < 128 || (len & 63)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!pvr_state.dma_mode) {
+        irq_restore(old_irq);
+        errno = EPERM;
+        return -1;
+    }
+
+    if(!(pvr_state.lists_enabled & BIT(list))) {
+        irq_restore(old_irq);
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* A queued RAM frame may still contain offsets into the old allocation,
+       even after the application's scene has ended. */
+    if(pvr_state.scene_active || pvr_state.dma_buffers[0].ready
+       || pvr_state.dma_buffers[1].ready) {
+        irq_restore(old_irq);
+        errno = EBUSY;
+        return -1;
+    }
+
+    oldbuf = set_vertbuf_unchecked(list, buffer, len);
+
+    if(old_buffer)
+        *old_buffer = oldbuf;
+
+    irq_restore(old_irq);
+    return 0;
 }
 
 void *pvr_vertbuf_tail(pvr_list_t list) {

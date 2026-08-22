@@ -58,6 +58,110 @@ void pvr_set_zclip(float zc) {
         pvr_state.next_background.depth = zc;
 }
 
+static bool clamp_endpoints_valid(uint32_t minimum, uint32_t maximum) {
+    unsigned int shift;
+
+    for(shift = 0; shift < 32; shift += 8) {
+        if(((minimum >> shift) & 0xffu) > ((maximum >> shift) & 0xffu))
+            return false;
+    }
+
+    return true;
+}
+
+int pvr_set_color_clamp(uint32_t minimum, uint32_t maximum) {
+    int old_irq;
+
+    if(!clamp_endpoints_valid(minimum, maximum)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    /* Keep the endpoint pair coherent with respect to threads and PVR IRQs.
+       Rendering must still be synchronized by the caller when the pair should
+       take effect at a frame boundary. */
+    PVR_SET(PVR_COLOR_CLAMP_MIN, minimum);
+    PVR_SET(PVR_COLOR_CLAMP_MAX, maximum);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_get_color_clamp(uint32_t *minimum, uint32_t *maximum) {
+    int old_irq;
+
+    if(!minimum || !maximum || minimum == maximum) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    *minimum = PVR_GET(PVR_COLOR_CLAMP_MIN);
+    *maximum = PVR_GET(PVR_COLOR_CLAMP_MAX);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_set_punch_through_alpha(uint32_t threshold) {
+    int old_irq;
+
+    if(threshold > UINT8_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    PVR_SET(PVR_PT_ALPHA_REF, threshold);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_get_punch_through_alpha(uint8_t *threshold) {
+    int old_irq;
+
+    if(!threshold) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    *threshold = (uint8_t)PVR_GET(PVR_PT_ALPHA_REF);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
 /* Return the current VBlank count */
 int pvr_get_vbl_count(void) {
     return pvr_state.vbl_count;

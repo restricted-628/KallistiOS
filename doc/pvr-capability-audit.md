@@ -43,25 +43,26 @@ than place another renderer above them.
 
 | Family | Current KOS state | Closure work |
 | --- | --- | --- |
-| Device and display lifecycle | Substantially covered | Replace assertion-only public failures with checked results where practical; expose missing scanout queries only when they describe stable hardware state. |
+| System configuration and lifecycle | Core initialization is covered | Add checked companions instead of changing established assertion-based entry points; do not create a second device owner. |
+| Display modes and scanout | Mode setting, blanking, border, dithering, and framebuffer access are covered by `video` | Add stable scanline, horizontal-blank, filter, and surface queries through `video`; do not duplicate them in PVR. |
+| Timing and callbacks | VBlank and PVR completion/fault events are covered | Audit horizontal-blank and scanline scheduling. Preserve bounded IRQ callbacks and opt-in allocation. |
 | Direct list submission | Covered | Preserve the low-overhead store-queue path. |
-| Buffered list submission | Operational with checked writes | Add a checked companion for buffer assignment without breaking the existing pointer-returning API. |
-| Hybrid submission | Covered | Preserve per-RAM-frame flushed-list ownership and prevent replay. |
-| Pipeline status | Covered | Extend fields only for stable software or hardware state. |
-| Completion and fault events | Covered | Preserve bounded IRQ-context dispatch, safe self-removal, and opt-in allocation. |
-| Multi-pass scene control | No first-class pass object | Add a KOS pass description only after hybrid submission and status tracking are sound. Per-pass sort mode and user clipping are the essential behaviors. |
-| User clipping | Covered | Preserve six-bit X/four-bit Y command bounds and active-target validation. |
-| Global/pixel clipping | Covered per scene | Keep clip state attached to its scene across framebuffer and texture targets. |
-| Background plane | Covered for untextured color planes | Audit textured background state separately if a concrete use case requires it. |
-| Texture allocation | General allocator and checked surfaces covered | Keep contiguous multi-surface reservations scoped to a demonstrated streaming need and use the existing allocator. |
-| Texture upload | Checked synchronous paths covered | Add explicit asynchronous completion objects without weakening the synchronous bounds. |
-| Texture conversion | Checked 4/8/16-bpp twiddling covered | Keep palette creation and VQ encoding in content tools rather than placing an unbounded encoder in the kernel. |
-| YUV conversion | Low-level DMA covered | Add destination configuration, geometry validation, progress/completion reporting, and a safe asynchronous wrapper. |
-| Palette and fog | Substantially covered | Add bulk checked palette updates and complete the fog-mode documentation and tests. |
-| Render targets | Sized 16-bit target covered | Audit additional pixel modes, target switching, completion ordering, and texture hazards. |
-| Display controls | Mostly available in `video` | Reuse the video subsystem; do not duplicate blanking, mode setting, border color, or dithering in PVR. Add only missing checked queries or synchronization. |
-| Diagnostics and recovery | Logs and fixed 100 ms waits | Preserve fault details, distinguish timeout from hardware faults, provide reset/recovery only where register state can be restored safely. |
-| Transform math | Existing KOS matrix API; external optimized library available | Keep transforms outside the PVR driver. Evaluate independent SH-4 math improvements separately and avoid making the renderer depend on an optional library. |
+| Buffered list submission | Checked writes and hybrid flushing are covered | Finish checked buffer assignment and preserve per-RAM-frame ownership. |
+| Multi-pass scene control | No first-class pass sequence | Model each pass as a complete TA registration bank with per-pass list memory, sort policy, direct-list selection, and modifier-list mapping. A begin/end wrapper alone is insufficient. |
+| User and pixel clipping | Covered per scene | Keep clip state attached to its scene across framebuffer and texture targets. |
+| Background plane | Covered for untextured color planes | Textured backgrounds remain optional because ordinary geometry expresses them without special scene state. |
+| Global material state | Fog and cheap-shadow controls are broad; clamp endpoints and punch-through threshold were missing | Provide checked packed-color clamp, threshold, bulk palette, and header supersampling controls. Audit culling threshold and vertical-filter coefficients separately. |
+| Context and header construction | Most polygon, sprite, modifier, two-volume, blend, depth, fog, UV, palette, and texture fields are covered | Preserve public context layout. Add extended compilation flags for missing packed-header controls; treat individual header mutation helpers as optional optimizations. |
+| Render submission identity | Global pipeline state and events are covered | Add per-render completion identity only if it can represent queued registration, render, display, and render-to-texture completion without ambiguous frame counters. |
+| Render targets | Sized 16-bit render-to-texture is covered | Audit additional output formats, no-flip rendering, completion ordering, and sampling hazards. |
+| Texture allocation | General allocator and checked caller-owned surfaces are covered | Add contiguous multi-surface reservations for demonstrated streaming and batch-conversion needs. Do not move raw pointer allocations behind an unsafe collector. |
+| Texture formats | Linear, twiddled, mipmapped, paletted, full-codebook VQ, stride, rectangle, and YUV are represented | Validate reduced-codebook VQ and any VQ/palette combinations against hardware before extending the surface layout vocabulary. |
+| Texture upload | Checked synchronous and immediate-admission asynchronous paths are covered | Add checked readback and framebuffer-binding helpers with explicit render/sampling hazard rules. |
+| Texture conversion | Checked 4/8/16-bpp twiddling is covered | Keep palette creation and VQ encoding in content tools rather than placing unbounded encoders in the kernel. |
+| YUV conversion | Checked single-destination synchronous and asynchronous conversion is covered | Add contiguous multi-destination conversion only with bounded geometry, progress, and ownership. |
+| Palette and fog | Palette format, single entries, fog colors, density, and table generation are covered | Complete checked bulk palette writes plus fog-mode documentation and packing tests. |
+| Diagnostics and recovery | Coherent status, fault latching, and events are covered | Replace remaining fixed waits only where a safe recovery sequence is known. |
+| Transform math | Existing KOS matrix API; optional optimized math can remain external | Keep transforms outside the PVR driver. A future scene library may consume both without making the driver depend on either. |
 
 ## Known concrete defects and incomplete paths
 
@@ -69,11 +70,10 @@ than place another renderer above them.
    public.~~ Closed: it now transfers one buffered list synchronously and tracks
    the flushed state on the owning double-buffered RAM frame.
 2. ~~Buffered submission relies on assertions for list bounds, pointer
-   alignment, buffer capacity, and enabled-list checks.~~ Partially closed:
-   primitive submission, list reuse, scene lifetime, and buffer capacity now
-   report errors. The older buffer-assignment API still uses assertions and
-   needs a checked companion rather than a source-incompatible signature
-   change.
+   alignment, buffer capacity, and enabled-list checks.~~ Closed without a
+   source break: the established buffer-assignment function retains its
+   contract and a checked companion rejects invalid, disabled, or still-owned
+   buffers.
 3. ~~`pvr_txr_load_ex()` unconditionally twiddles despite preformatted flags and
    exposes no checked failure path.~~ Closed: the compatibility wrapper now uses
    an error-reporting implementation that distinguishes conversion from
@@ -83,25 +83,36 @@ than place another renderer above them.
    record or notify an application.~~ Closed: faults are latched with counters
    and TA register snapshots, and optional event handlers receive the fault.
 5. The scene pipeline still has fixed waits. Sparse terminal-state reporting
-   is closed by the coherent pipeline snapshot.
+   is closed by the coherent pipeline snapshot; per-render identity remains a
+   separate design problem.
 6. ~~User clipping is representable in a polygon header, but KOS provides no
    checked command-construction or submission helper.~~ Closed for direct and
    buffered lists, including active-target tile validation.
 7. ~~Texture subregion, mip-level, codebook-only, asynchronous, and checked YUV
    updates are absent.~~ Closed with bounded synchronous operations plus
    immediate-admission asynchronous request objects.
+8. ~~Packed global clamp endpoints, punch-through threshold, checked bulk
+   palette writes, and high-level texture supersampling were inaccessible or
+   incomplete.~~ Closed with checked register APIs, bounded palette ranges, and
+   extended compilers that preserve established context layouts.
 
 ## Dependency order
 
-1. Complete and validate hybrid list submission.
-2. Add typed pipeline status and fault capture.
-3. Add user/global/pixel clipping helpers and background-plane description.
-4. ~~Add texture surface metadata plus checked full and partial transfers.~~
-5. ~~Add asynchronous texture/YUV completion objects.~~
-6. Add pass descriptions over the completed list and clip primitives.
-7. Expand render-target formats and display synchronization where hardware
-   validation supports them.
-8. Run a final API, examples, exports, documentation, and resource-cost audit.
+1. ~~Complete and validate hybrid list submission.~~
+2. ~~Add typed pipeline status, persistent faults, and events.~~
+3. ~~Add clipping and background-plane descriptions.~~
+4. ~~Add texture surfaces plus checked synchronous and asynchronous updates.~~
+5. ~~Close global material and packed-header state needed by higher-level scene
+   generation.~~
+6. Design complete multi-pass TA registration banks rather than a shallow
+   scene wrapper.
+7. Add per-render completion identity and finish render-target/no-flip hazard
+   contracts.
+8. Add only hardware-validated advanced texture layouts, readback, contiguous
+   reservations, and batch YUV conversion.
+9. Close remaining display timing and filter controls in `video`.
+10. Run the final API, examples, exports, documentation, and resource-cost
+    audit before defining an optional higher-level scene interface.
 
 ## Validation gates
 
@@ -239,3 +250,25 @@ hardware validation items.
 Emulation verifies software state transitions and the emulator's interrupt
 model. Physical interrupt ordering, DMA/converter timing, cache visibility, and
 concurrent texture sampling remain hardware validation items.
+
+### Global material and header state
+
+- packed ARGB8888 clamp endpoints have checked set and readback operations,
+  including per-channel endpoint validation;
+- the eight-bit punch-through alpha threshold has checked set and readback
+  operations without changing the previous initialization value;
+- one bounded palette operation updates any contiguous subset of the 1024-entry
+  hardware table and rejects overruns before the first write;
+- extended polygon, sprite, and two-volume compilers expose the packed texture
+  supersampling bit without changing context structure sizes or adding work to
+  the established compiler path;
+- checked vertex-buffer assignment validates list state, alignment, total
+  allocation size, active scenes, and RAM frames still queued against the old
+  allocation;
+- every new operation is present in the Dreamcast export table, and the full
+  KOS rebuild plus the focused example cross-build complete successfully.
+
+The focused ELF boots and runs in emulation without an observed SH-4 exception.
+That host run did not expose the program's serial completion line, so it is not
+recorded as a full runtime pass. Clamp timing during a live render,
+supersampling quality, and palette visibility remain physical-hardware gates.

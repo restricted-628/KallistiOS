@@ -116,6 +116,58 @@ void pvr_set_shadow_scale(bool enable, float scale_value);
 */
 void pvr_set_zclip(float zc);
 
+/** \brief Set global color-clamp endpoints.
+    \ingroup pvr_global
+
+    Color clamping is applied only by primitive headers that enable their
+    color-clamp bit. Each packed ARGB channel in minimum must be less than or
+    equal to the corresponding channel in maximum.
+
+    \param  minimum         Packed ARGB8888 lower endpoint.
+    \param  maximum         Packed ARGB8888 upper endpoint.
+
+    \retval 0               On success.
+    \retval -1              If PVR is unavailable or the endpoints are invalid,
+                            with errno set to ENODEV or EINVAL.
+*/
+int pvr_set_color_clamp(uint32_t minimum, uint32_t maximum);
+
+/** \brief Read the current global color-clamp endpoints.
+    \ingroup pvr_global
+
+    \param  minimum         Destination for the packed ARGB8888 lower endpoint.
+    \param  maximum         Distinct destination for the packed ARGB8888 upper
+                            endpoint.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_get_color_clamp(uint32_t *minimum, uint32_t *maximum);
+
+/** \brief Set the punch-through alpha comparison threshold.
+    \ingroup pvr_global
+
+    Punch-through fragments with alpha below threshold are discarded and
+    fragments at or above it are treated as fully opaque.
+
+    \param  threshold       Alpha threshold in the inclusive range 0 through
+                            255.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_set_punch_through_alpha(uint32_t threshold);
+
+/** \brief Read the punch-through alpha comparison threshold.
+    \ingroup pvr_global
+
+    \param  threshold       Destination for the current eight-bit threshold.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_get_punch_through_alpha(uint8_t *threshold);
+
 /** \brief One vertex of an untextured background plane.
     \ingroup pvr_scene_mgmt
 

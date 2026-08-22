@@ -37,6 +37,11 @@ lifecycle and naming conventions.
   YUV420/YUV422 macroblock input sizing and conversion whose request completes
   only after both channel-2 DMA and converter completion interrupts. These
   opt-in operations create no worker, queue, permanent buffer, or idle thread.
+* Added checked PVR color-clamp endpoints, punch-through alpha threshold,
+  bounded bulk palette writes, and vertex-buffer assignment. Extended polygon,
+  sprite, and two-volume header compilation exposes texture supersampling
+  without enlarging established public context structures or adding work to
+  the legacy compiler path.
 * Completed the established extended texture loader with checked dimensions,
   honest preformatted-copy behavior, bounded transfer selection, and an
   error-reporting entry point while preserving the original void wrapper.
