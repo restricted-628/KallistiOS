@@ -89,6 +89,20 @@ typedef struct {
     uint8_t         pad1[3];        /**< \brief All zeros on card */
 } vmu_dir_t;
 
+/** \brief Parameters stored in a newly formatted standard VMU root block. */
+typedef struct vmufs_format_options {
+    uint8_t use_custom_color;  /**< \brief Whether custom_color is active. */
+    uint8_t custom_color[4];   /**< \brief Blue, green, red, and alpha. */
+    vmu_timestamp_t timestamp; /**< \brief Volume creation timestamp. */
+    uint16_t icon_shape;       /**< \brief Volume icon shape, from 0 to 123. */
+} vmufs_format_options_t;
+
+/** \brief Amount of existing card data cleared by vmufs_format(). */
+typedef enum vmufs_format_mode {
+    VMUFS_FORMAT_QUICK, /**< \brief Rewrite filesystem metadata only. */
+    VMUFS_FORMAT_FULL   /**< \brief Clear data blocks before metadata. */
+} vmufs_format_mode_t;
+
 /** \brief First detected VMU metadata inconsistency. */
 typedef enum vmufs_validation_error {
     VMUFS_VALIDATION_OK = 0,

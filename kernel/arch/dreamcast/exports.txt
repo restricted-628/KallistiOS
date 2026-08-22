@@ -362,6 +362,8 @@ vmufs_read_dirent
 vmufs_write
 vmufs_delete
 vmufs_free_blocks
+vmufs_format
+vmufs_defragment
 
 # Math
 mat_store

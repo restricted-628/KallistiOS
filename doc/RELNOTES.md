@@ -71,6 +71,11 @@ lifecycle and naming conventions.
   append writes, sparse gaps, and package rebuilds use the logical EOF, while
   `O_META` continues to expose the complete stored image. Unmodified writable
   handles no longer rewrite a card merely because they were closed.
+* Added quick and full standard-card formatting with invalid-root-first commit
+  ordering and final metadata verification. Added copy-on-write
+  defragmentation that packs ordinary files high, retains an executable at
+  block zero, safely stages relocation cycles, and refuses before mutation
+  when insufficient scratch space prevents an interruption-safe schedule.
 
 RELEASE NOTES for 2.2.2
 -----------------------

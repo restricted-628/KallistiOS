@@ -383,6 +383,45 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf, int insize, in
 */
 int vmufs_delete(maple_device_t *dev, const char *fn);
 
+/** \brief Format a standard 128 KiB memory card.
+
+    Quick format invalidates the current root, clears the directory, writes a
+    canonical FAT, and publishes the new root last. Full format additionally
+    clears every user and unused data block. Once the invalid root is written,
+    cancellation is not applicable and interruption leaves the card
+    detectably unformatted rather than exposing partially replaced geometry.
+
+    This operation destroys every file on the card.
+
+    \param dev      Memory card to format.
+    \param options  Volume color, timestamp, and icon metadata.
+    \param mode     Quick or full format.
+    \retval 0       Format and read-back verification succeeded.
+    \retval -1      Failure; errno describes the argument or device error.
+*/
+int vmufs_format(maple_device_t *dev,
+                 const vmufs_format_options_t *options,
+                 vmufs_format_mode_t mode);
+
+/** \brief Safely pack files to maximize low-block contiguous free space.
+
+    Each file move is copy-on-write: target data and a staging FAT are written
+    before the directory switches chains, and the old chain is released last.
+    Dependency cycles use blocks that remain free in the final layout as
+    temporary storage. If no interruption-safe schedule exists, the operation
+    fails with `ENOSPC` before changing the card.
+
+    A successful result keeps an executable at block zero and packs ordinary
+    files from the high end downward. At every completed block-write boundary,
+    each directory entry selects either its complete old file or complete new
+    file. Direct raw access to the same card must be excluded by the caller.
+
+    \param dev      Memory card to defragment.
+    \retval 0       Defragmentation completed or was unnecessary.
+    \retval -1      Failure; errno is `ENOSPC`, `EILSEQ`, `ENOMEM`, or `EIO`.
+*/
+int vmufs_defragment(maple_device_t *dev);
+
 /** \brief  Return the number of user blocks free for file writing.
 
     You should check this number before attempting to write.

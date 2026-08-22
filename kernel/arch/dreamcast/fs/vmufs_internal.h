@@ -14,15 +14,6 @@
 
 #include <dc/vmufs_meta.h>
 
-/* These image-only structures remain private until the corresponding device
-   operations have independently proven interruption-safe commit protocols. */
-typedef struct vmufs_format_options {
-    uint8_t use_custom_color;
-    uint8_t custom_color[4];
-    vmu_timestamp_t timestamp;
-    uint16_t icon_shape;
-} vmufs_format_options_t;
-
 typedef struct vmufs_defrag_plan {
     uint16_t source[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
     uint16_t target[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
