@@ -333,6 +333,44 @@ static int test_commit_prefixes(void) {
     return 0;
 }
 
+static int test_orphan_repair(void) {
+    uint16_t fat[TEST_FAT_ENTRIES];
+    vmu_dir_t dir[TEST_DIR_ENTRIES];
+    vmu_root_t root;
+    size_t reclaimed = 99;
+
+    make_card(&root, fat, dir);
+    fat[199] = 198;
+    fat[198] = VMUFS_FAT_EOF;
+    make_entry(&dir[0], "LIVE", 199, 2);
+    fat[50] = 49;
+    fat[49] = VMUFS_FAT_EOF;
+    if(validate_orphans_only(&root, fat, dir) < 0 ||
+       vmufs_fat_reclaim_orphans(&root, fat, TEST_FAT_ENTRIES,
+                                 dir, TEST_DIR_ENTRIES, &reclaimed) < 0 ||
+       reclaimed != 2 || fat[50] != VMUFS_FAT_FREE ||
+       fat[49] != VMUFS_FAT_FREE || fat[199] != 198 ||
+       fat[198] != VMUFS_FAT_EOF)
+        return -1;
+
+    reclaimed = 99;
+    if(vmufs_fat_reclaim_orphans(&root, fat, TEST_FAT_ENTRIES,
+                                 dir, TEST_DIR_ENTRIES, &reclaimed) < 0 ||
+       reclaimed != 0)
+        return -1;
+
+    /* The pure cleanup helper also fails closed if ownership changes between
+       validation and planning; no cross-linked block is reclaimed. */
+    make_entry(&dir[1], "CROSS", 199, 2);
+    errno = 0;
+    if(vmufs_fat_reclaim_orphans(&root, fat, TEST_FAT_ENTRIES,
+                                 dir, TEST_DIR_ENTRIES, &reclaimed) == 0 ||
+       errno != EILSEQ)
+        return -1;
+
+    return 0;
+}
+
 static int test_package_round_trip(void) {
     uint8_t icon[512];
     static const uint8_t payload[] = {1, 3, 5, 7, 9};
@@ -445,6 +483,7 @@ static int test_package_arguments(void) {
 
 int main(void) {
     if(test_chains() < 0 || test_commit_prefixes() < 0 ||
+       test_orphan_repair() < 0 ||
        test_package_round_trip() < 0 ||
        test_package_arguments() < 0) {
         fprintf(stderr, "vmu-storage-test: FAIL errno=%d\n", errno);

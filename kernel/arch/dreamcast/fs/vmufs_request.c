@@ -48,6 +48,7 @@ struct vmufs_request {
     char **filenames;
     size_t filename_count;
     vmufs_delete_result_t *delete_result;
+    vmufs_repair_result_t *repair_result;
     vmufs_format_options_t options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -76,6 +77,7 @@ typedef struct vmufs_request_submission {
     const char *const *filenames;
     size_t filename_count;
     vmufs_delete_result_t *delete_result;
+    vmufs_repair_result_t *repair_result;
     const vmufs_format_options_t *options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -281,6 +283,15 @@ static void process_request(vmufs_request_t *request) {
             request->dev, (const char *const *)request->filenames,
             request->filename_count, request->delete_result, &observer);
         break;
+    case VMUFS_REQUEST_REWRITE:
+        result = vmufs_rewrite_blocks_observed(
+            request->dev, request->filename, request->first_block,
+            request->input, request->block_count, &observer);
+        break;
+    case VMUFS_REQUEST_REPAIR:
+        result = vmufs_repair_observed(
+            request->dev, request->repair_result, &observer);
+        break;
     default:
         errno = EINVAL;
         result = -1;
@@ -387,17 +398,20 @@ static vmufs_request_t *submit_request(
 
     if(!submission || !submission->dev ||
        !(submission->dev->info.functions & MAPLE_FUNC_MEMCARD) ||
-       submission->operation > VMUFS_REQUEST_DELETE_FILES ||
+       submission->operation > VMUFS_REQUEST_REPAIR ||
        ((submission->operation == VMUFS_REQUEST_WRITE ||
          submission->operation == VMUFS_REQUEST_DELETE ||
          submission->operation == VMUFS_REQUEST_RENAME ||
          submission->operation == VMUFS_REQUEST_READ ||
-         submission->operation == VMUFS_REQUEST_SET_ATTRIBUTES) &&
+         submission->operation == VMUFS_REQUEST_SET_ATTRIBUTES ||
+         submission->operation == VMUFS_REQUEST_REWRITE) &&
         !submission->filename) ||
        (submission->operation == VMUFS_REQUEST_RENAME &&
         !submission->destination) ||
        (submission->operation == VMUFS_REQUEST_READ &&
         submission->block_count && !submission->output) ||
+       (submission->operation == VMUFS_REQUEST_REWRITE &&
+        submission->block_count && !submission->input) ||
        (submission->operation == VMUFS_REQUEST_SET_ATTRIBUTES &&
         !submission->attributes) ||
        (submission->operation == VMUFS_REQUEST_VOLUME_INFO &&
@@ -406,6 +420,8 @@ static vmufs_request_t *submit_request(
         (!submission->delete_result ||
          (submission->filename_count && !submission->filenames) ||
          submission->filename_count > VMUFS_REQUEST_MAX_FILENAMES)) ||
+       (submission->operation == VMUFS_REQUEST_REPAIR &&
+        !submission->repair_result) ||
        (submission->operation == VMUFS_REQUEST_WRITE &&
         ((submission->input_size && !submission->input) ||
          submission->input_size > INT_MAX ||
@@ -480,6 +496,7 @@ static vmufs_request_t *submit_request(
     request->volume_info = submission->volume_info;
     request->filename_count = submission->filename_count;
     request->delete_result = submission->delete_result;
+    request->repair_result = submission->repair_result;
     if(submission->filename_count) {
         request->filenames = calloc(submission->filename_count,
                                     sizeof(*request->filenames));
@@ -516,6 +533,9 @@ static vmufs_request_t *submit_request(
             .allocation_cleanup_complete = true
         };
     }
+    else if(submission->operation == VMUFS_REQUEST_REPAIR) {
+        *submission->repair_result = (vmufs_repair_result_t) {0};
+    }
 
     mutex_lock(&request_mutex);
     if(shutting_down || workers_start_locked() < 0) {
@@ -541,6 +561,24 @@ vmufs_request_t *vmufs_read_blocks_async(
         .dev = dev,
         .filename = fn,
         .output = outbuf,
+        .first_block = first_block,
+        .block_count = block_count,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
+}
+
+vmufs_request_t *vmufs_rewrite_blocks_async(
+    maple_device_t *dev, const char *fn, size_t first_block,
+    const void *inbuf, size_t block_count,
+    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_REWRITE,
+        .dev = dev,
+        .filename = fn,
+        .input = inbuf,
         .first_block = first_block,
         .block_count = block_count,
         .callback = callback,
@@ -605,6 +643,20 @@ vmufs_request_t *vmufs_delete_files_async(
         .filenames = filenames,
         .filename_count = file_count,
         .delete_result = result,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
+}
+
+vmufs_request_t *vmufs_repair_async(
+    maple_device_t *dev, vmufs_repair_result_t *result,
+    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_REPAIR,
+        .dev = dev,
+        .repair_result = result,
         .callback = callback,
         .callback_data = callback_data
     };

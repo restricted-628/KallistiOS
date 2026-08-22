@@ -81,6 +81,11 @@ lifecycle and naming conventions.
   preflight, directory-before-FAT ordering, confirmed-removal accounting, and
   explicit reporting when an unacknowledged directory write makes the exact
   on-card result uncertain.
+* Added synchronous and lazy asynchronous bounded VMU file rewrites. Normal
+  files preserve all directory metadata through a copy-on-write chain switch;
+  executable files use pre-read rollback because their required block-zero
+  placement prevents dual-chain publication. Added validated orphan-only FAT
+  repair that never reclaims a block reachable from a live directory entry.
 * The `/vmu` VFS now distinguishes logical package payload length from
   block-rounded backing storage. Reads, seeks, totals, `stat()`, `fstat()`,
   append writes, sparse gaps, and package rebuilds use the logical EOF, while

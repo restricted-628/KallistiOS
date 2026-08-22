@@ -174,6 +174,13 @@ typedef struct vmufs_delete_result {
     uint8_t allocation_cleanup_complete; /**< \brief Confirmed removals have no leaked blocks. */
 } vmufs_delete_result_t;
 
+/** \brief Outcome of reclaiming unreferenced allocation blocks. */
+typedef struct vmufs_repair_result {
+    size_t orphan_blocks_found; /**< \brief Unreferenced allocated blocks found. */
+    size_t reclaimed_blocks;    /**< \brief Blocks published free in the FAT. */
+    uint8_t cleanup_complete;   /**< \brief The repaired FAT write was acknowledged. */
+} vmufs_repair_result_t;
+
 /** \brief Validate root geometry for a card using KOS's root-block location.
 
     The current KOS VMU block driver supports one 512-byte FAT block. This

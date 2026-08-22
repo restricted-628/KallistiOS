@@ -96,6 +96,10 @@ int vmufs_chain_allocate(const vmu_root_t *root, uint16_t *fat,
 void vmufs_chain_release(uint16_t *fat, const uint16_t *blocks,
                          size_t block_count);
 
+int vmufs_fat_reclaim_orphans(const vmu_root_t *root, uint16_t *fat,
+                              size_t fat_entries, const vmu_dir_t *directory,
+                              size_t directory_entries, size_t *reclaimed);
+
 int vmufs_format_build(const vmufs_format_options_t *options,
                        vmu_root_t *root, uint16_t *fat,
                        size_t fat_entries);
@@ -121,6 +125,11 @@ int vmufs_read_blocks_observed(
     void *outbuf, size_t block_count,
     const vmufs_transaction_observer_t *observer);
 
+int vmufs_rewrite_blocks_observed(
+    maple_device_t *dev, const char *fn, size_t first_block,
+    const void *inbuf, size_t block_count,
+    const vmufs_transaction_observer_t *observer);
+
 int vmufs_get_volume_info_observed(
     maple_device_t *dev, vmufs_volume_info_t *info,
     const vmufs_transaction_observer_t *observer);
@@ -136,6 +145,10 @@ int vmufs_delete_observed(
 int vmufs_delete_files_observed(
     maple_device_t *dev, const char *const *filenames, size_t file_count,
     vmufs_delete_result_t *result,
+    const vmufs_transaction_observer_t *observer);
+
+int vmufs_repair_observed(
+    maple_device_t *dev, vmufs_repair_result_t *result,
     const vmufs_transaction_observer_t *observer);
 
 int vmufs_rename_observed(

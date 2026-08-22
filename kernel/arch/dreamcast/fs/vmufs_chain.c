@@ -119,3 +119,46 @@ void vmufs_chain_release(uint16_t *fat, const uint16_t *blocks,
     for(size_t i = 0; i < block_count; ++i)
         fat[blocks[i]] = VMUFS_FAT_FREE;
 }
+
+int vmufs_fat_reclaim_orphans(const vmu_root_t *root, uint16_t *fat,
+                              size_t fat_entries, const vmu_dir_t *directory,
+                              size_t directory_entries, size_t *reclaimed) {
+    bool reachable[VMUFS_FAT_ENTRY_COUNT] = {false};
+    uint16_t blocks[VMUFS_FAT_ENTRY_COUNT];
+    size_t count = 0;
+
+    if(reclaimed)
+        *reclaimed = 0;
+    if(!root || !fat || !directory || !reclaimed || root->blk_cnt == 0 ||
+       root->blk_cnt > VMUFS_FAT_ENTRY_COUNT ||
+       fat_entries < root->blk_cnt) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for(size_t i = 0; i < directory_entries; ++i) {
+        const vmu_dir_t *entry = &directory[i];
+
+        if(entry->filetype == 0)
+            continue;
+        if(vmufs_chain_collect(root, fat, fat_entries, entry, blocks,
+                               VMUFS_FAT_ENTRY_COUNT) < 0)
+            return -1;
+        for(size_t j = 0; j < entry->filesize; ++j) {
+            if(reachable[blocks[j]]) {
+                errno = EILSEQ;
+                return -1;
+            }
+            reachable[blocks[j]] = true;
+        }
+    }
+
+    for(size_t i = 0; i < root->blk_cnt; ++i) {
+        if(fat[i] != VMUFS_FAT_FREE && !reachable[i]) {
+            fat[i] = VMUFS_FAT_FREE;
+            ++count;
+        }
+    }
+    *reclaimed = count;
+    return 0;
+}

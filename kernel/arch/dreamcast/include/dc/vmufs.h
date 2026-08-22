@@ -365,6 +365,33 @@ int vmufs_read_blocks(maple_device_t *dev, const char *fn,
                       size_t first_block, void *outbuf,
                       size_t block_count);
 
+/** \brief Replace an exact file-relative range of 512-byte blocks.
+
+    Ordinary files are replaced copy-on-write: unmodified blocks are copied
+    into a new chain, the new FAT is committed, the directory switches chains,
+    and the old chain is reclaimed last. The file's type, timestamp, name,
+    copy protection, size, and header offset are preserved.
+
+    An executable file cannot use that ordering because both the old and new
+    images must begin at physical block zero. KOS reads every original target
+    block before the first write, accepts cancellation only before that write,
+    verifies each replacement, and attempts rollback after an I/O failure.
+    Power loss or removal after the first executable block write can still
+    leave a partially rewritten executable; the media layout has no journal.
+
+    \param dev          VMU containing the file.
+    \param fn           File name.
+    \param first_block  First file-relative block to replace.
+    \param inbuf        Source for \p block_count complete blocks.
+    \param block_count  Number of blocks to replace; zero is permitted.
+    \retval 0           Rewrite completed.
+    \retval -1          No file data was deliberately changed.
+    \retval -2          An executable rewrite or rollback became uncertain.
+*/
+int vmufs_rewrite_blocks(maple_device_t *dev, const char *fn,
+                         size_t first_block, const void *inbuf,
+                         size_t block_count);
+
 /** \brief  Read a file from the VMU, using a pre-read dirent.
 
     This function is faster to use than vmufs_read() if you already have done
@@ -464,6 +491,20 @@ int vmufs_delete_files(
     maple_device_t *dev, const char *const *filenames, size_t file_count,
     vmufs_delete_result_t *result);
 
+/** \brief Reclaim only allocation blocks unreachable from every live file.
+
+    The complete filesystem must either be valid or contain orphan allocation
+    as its only inconsistency. Cross-links, cycles, duplicate names, malformed
+    chains, and unsafe geometry are rejected without a write. The operation
+    changes only the FAT and never guesses an orphan's former owner.
+
+    \param dev     Memory card to repair.
+    \param result  Detailed outcome, initialized on every accepted call.
+    \retval 0      The FAT is valid and any orphan cleanup was acknowledged.
+    \retval -1     Validation, allocation, or device I/O failed.
+*/
+int vmufs_repair(maple_device_t *dev, vmufs_repair_result_t *result);
+
 /** \brief Rename a file, replacing an existing destination safely.
 
     File contents, timestamp, type, copy protection, and header offset are
@@ -562,7 +603,9 @@ typedef enum vmufs_request_operation {
     VMUFS_REQUEST_READ,        /**< \brief Bounded file-block read. */
     VMUFS_REQUEST_SET_ATTRIBUTES, /**< \brief Directory attribute update. */
     VMUFS_REQUEST_VOLUME_INFO, /**< \brief Volume inspection. */
-    VMUFS_REQUEST_DELETE_FILES /**< \brief Transactional multi-file deletion. */
+    VMUFS_REQUEST_DELETE_FILES, /**< \brief Transactional multi-file deletion. */
+    VMUFS_REQUEST_REWRITE,     /**< \brief Bounded file-block replacement. */
+    VMUFS_REQUEST_REPAIR       /**< \brief Orphan allocation reclamation. */
 } vmufs_request_operation_t;
 
 typedef enum vmufs_request_state {
@@ -624,6 +667,17 @@ typedef void (*vmufs_request_callback_t)(
 vmufs_request_t *vmufs_read_blocks_async(
     maple_device_t *dev, const char *fn, size_t first_block,
     void *outbuf, size_t block_count,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue an exact file-relative block range replacement.
+
+    The filename is copied during submission. The source buffer remains owned
+    by the caller and must stay readable until terminal storage completion.
+    Cancellation and commit behavior match vmufs_rewrite_blocks().
+*/
+vmufs_request_t *vmufs_rewrite_blocks_async(
+    maple_device_t *dev, const char *fn, size_t first_block,
+    const void *inbuf, size_t block_count,
     vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a complete volume-information query.
@@ -692,6 +746,15 @@ vmufs_request_t *vmufs_delete_async(
 vmufs_request_t *vmufs_delete_files_async(
     maple_device_t *dev, const char *const *filenames, size_t file_count,
     vmufs_delete_result_t *result,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue validated orphan-only allocation repair.
+
+    The result remains caller-owned and writable until terminal storage
+    completion. Cancellation is accepted before the repaired FAT write.
+*/
+vmufs_request_t *vmufs_repair_async(
+    maple_device_t *dev, vmufs_repair_result_t *result,
     vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a transactional rename on one VMU.
