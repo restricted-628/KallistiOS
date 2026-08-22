@@ -41,15 +41,20 @@ static volatile uint32_t *const pvr_dma = (volatile uint32_t *)0xa05f6800;
 #define PVR_LMMODE1 0x88/4
 
 static void pvr_dma_irq_hnd(uint32_t code, void *data) {
+    uint32_t detail = 0;
+
     (void)code;
     (void)data;
 
     if(dma_transfer_get_remaining(DMA_CHANNEL_2) != 0) {
         dbglog(DBG_INFO, "pvr_dma: The dma did not complete successfully\n");
         pvr_fault_record(PVR_FAULT_DMA_INCOMPLETE, code);
+        pvr_event_dispatch(PVR_EVENT_FAULT, PVR_FAULT_DMA_INCOMPLETE);
+        detail = PVR_FAULT_DMA_INCOMPLETE;
     }
 
     pvr_status_advance();
+    pvr_event_dispatch(PVR_EVENT_DMA_COMPLETE, detail);
 
     /* Call the callback, if any. */
     if(dma_callback) {

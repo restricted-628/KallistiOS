@@ -48,7 +48,7 @@ than place another renderer above them.
 | Buffered list submission | Operational with checked writes | Add a checked companion for buffer assignment without breaking the existing pointer-returning API. |
 | Hybrid submission | Covered | Preserve per-RAM-frame flushed-list ownership and prevent replay. |
 | Pipeline status | Covered | Extend fields only for stable software or hardware state. |
-| Completion and fault events | Faults are persistent; DMA callback exists | Add optional callbacks/events for registration completion, render completion, display, YUV completion, and TA/ISP overflow or input faults. Keep interrupt-context contracts explicit. |
+| Completion and fault events | Covered | Preserve bounded IRQ-context dispatch, safe self-removal, and opt-in allocation. |
 | Multi-pass scene control | No first-class pass object | Add a KOS pass description only after hybrid submission and status tracking are sound. Per-pass sort mode and user clipping are the essential behaviors. |
 | User clipping | Header representation exists | Add checked helpers for constructing and submitting user-clip commands; validate tile coordinates against the active render target. |
 | Global/pixel clipping | Internal fixed state | Add checked setters and queries, including render-to-texture dimensions. |
@@ -77,8 +77,8 @@ than place another renderer above them.
 3. `pvr_txr_load_ex()` advertises flags that it rejects, including 32-bit input
    and on-the-fly VQ encoding; inverted preformatted uploads are also rejected.
 4. ~~Render fault interrupts log text but do not preserve a queryable fault
-   record.~~ Closed for polling: faults are latched with counters and TA
-   register snapshots. Optional event notification remains open.
+   record or notify an application.~~ Closed: faults are latched with counters
+   and TA register snapshots, and optional event handlers receive the fault.
 5. The scene pipeline still has fixed waits. Sparse terminal-state reporting
    is closed by the coherent pipeline snapshot.
 6. User clipping is representable in a polygon header, but KOS provides no
@@ -140,3 +140,15 @@ Physical DMA timing and contention remain hardware-day items.
 
 Physical fault injection, overflow behavior, and recovery remain hardware-day
 items. Emulator validation covers the normal interrupt and snapshot paths only.
+
+### Pipeline completion and fault events
+
+- registration, render, display, DMA, and fault events share one opt-in handler
+  vocabulary;
+- callbacks run in documented IRQ context and allocate no worker or stack;
+- registration order is stable and a callback may remove itself or a later
+  handler without invalidating dispatch;
+- the status example verifies callback-side snapshots, self-removal, invalid
+  masks, stale handles, and normal completion counts;
+- the hybrid-list example verifies one DMA event per explicit list transfer and
+  rejects any DMA fault.

@@ -19,6 +19,8 @@
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
 static uint8_t tr_buffer[TR_BUFFER_SIZE] __attribute__((aligned(32)));
+static volatile uint32_t dma_completions;
+static volatile uint32_t dma_faults;
 
 static const pvr_init_params_t pvr_params = {
     { PVR_BINSIZE_16, PVR_BINSIZE_0, PVR_BINSIZE_16,
@@ -30,6 +32,15 @@ static const pvr_init_params_t pvr_params = {
     2,
     1
 };
+
+static void observe_dma(pvr_event_t event, uint32_t detail, void *user_data) {
+    (void)user_data;
+
+    if(event == PVR_EVENT_DMA_COMPLETE && detail == 0)
+        ++dma_completions;
+    else if(event == PVR_EVENT_FAULT)
+        ++dma_faults;
+}
 
 static void submit_triangle(const pvr_poly_hdr_t *header, uint32_t color,
                             float left, float top, float right, float bottom,
@@ -53,6 +64,7 @@ int main(int argc, char **argv) {
     pvr_poly_hdr_t op_header;
     pvr_poly_hdr_t tr_header;
     bool tested_duplicate = false;
+    int event_handle;
     unsigned int frame;
 
     (void)argc;
@@ -61,6 +73,9 @@ int main(int argc, char **argv) {
     assert(pvr_init(&pvr_params) == 0);
     assert(pvr_set_vertbuf(PVR_LIST_TR_POLY, tr_buffer,
                            sizeof(tr_buffer)) == NULL);
+    event_handle = pvr_event_handler_add(
+        PVR_EVENT_DMA_COMPLETE | PVR_EVENT_FAULT, observe_dma, NULL);
+    assert(event_handle >= 0);
 
     pvr_poly_cxt_col(&op_context, PVR_LIST_OP_POLY);
     pvr_poly_compile(&op_header, &op_context);
@@ -99,6 +114,9 @@ int main(int argc, char **argv) {
     assert(pvr_wait_ready() == 0);
     assert(pvr_wait_render_done() == 0);
     vid_waitvbl();
+    assert(pvr_event_handler_remove(event_handle) == 0);
+    assert(dma_completions == 120);
+    assert(dma_faults == 0);
 
     puts("RESULT: PASS (buffered/direct list submission)");
     pvr_shutdown();

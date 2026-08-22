@@ -11,7 +11,7 @@ OBJS := pvr_mem_core.o pvr_mem.o
 OBJS += pvr_buffers.o pvr_irq.o
 
 # Init / Shutdown / Globals / Misc
-OBJS += pvr_init_shutdown.o pvr_globals.o pvr_misc.o
+OBJS += pvr_init_shutdown.o pvr_globals.o pvr_misc.o pvr_events.o
 
 # Fast Tile Accelerator upload function
 OBJS += pvr_send_to_ta.o
@@ -29,5 +29,4 @@ OBJS += pvr_prim.o pvr_scene.o
 OBJS += pvr_texture.o pvr_dma.o
 
 include $(KOS_BASE)/Makefile.prefab
-
 

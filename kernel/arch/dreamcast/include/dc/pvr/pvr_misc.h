@@ -293,6 +293,77 @@ int pvr_clear_faults(uint32_t mask);
 
 /** @} */
 
+/** \defgroup pvr_pipeline_events Pipeline Events
+    \brief                         Optional PVR completion and fault callbacks
+    \ingroup                       pvr_pipeline_status
+
+    @{
+*/
+
+/** \brief PVR pipeline event flags. */
+typedef enum pvr_event {
+    PVR_EVENT_REGISTRATION_COMPLETE = 1u << 0,
+    PVR_EVENT_RENDER_COMPLETE       = 1u << 1,
+    PVR_EVENT_DISPLAY               = 1u << 2,
+    PVR_EVENT_DMA_COMPLETE          = 1u << 3,
+    PVR_EVENT_FAULT                 = 1u << 4,
+    PVR_EVENT_ALL                   = (1u << 5) - 1u
+} pvr_event_t;
+
+/** \brief PVR event callback.
+
+    The callback runs in interrupt context and must remain bounded. It must not
+    allocate memory, block, start or stop the PVR, or submit rendering work. It
+    may call pvr_get_pipeline_status(), clear latched fault flags, or remove an
+    event handler.
+
+    The detail value depends on event:
+
+    - PVR_EVENT_REGISTRATION_COMPLETE: completed list mask;
+    - PVR_EVENT_RENDER_COMPLETE: non-zero for a texture render target;
+    - PVR_EVENT_DISPLAY: displayed framebuffer index;
+    - PVR_EVENT_DMA_COMPLETE: zero on success or PVR_FAULT_DMA_INCOMPLETE;
+    - PVR_EVENT_FAULT: the observed pvr_fault_t flag.
+
+    \param  event           One pvr_event_t flag.
+    \param  detail          Event-specific detail described above.
+    \param  user_data       Pointer supplied when registering the handler.
+*/
+typedef void (*pvr_event_callback_t)(pvr_event_t event, uint32_t detail,
+                                     void *user_data);
+
+/** \brief Register an optional PVR pipeline event handler.
+
+    Handlers run in registration order. Registration allocates one small
+    bookkeeping object; no event infrastructure allocates memory or creates a
+    thread merely because PVR support is initialized.
+
+    \param  event_mask      Non-zero combination of pvr_event_t flags.
+    \param  callback        Bounded interrupt-context callback.
+    \param  user_data       Pointer passed to callback.
+
+    \return                 Non-negative handler ID on success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV,
+                            ENOMEM, EOVERFLOW, or EPERM.
+*/
+int pvr_event_handler_add(uint32_t event_mask,
+                          pvr_event_callback_t callback, void *user_data);
+
+/** \brief Remove a PVR pipeline event handler.
+
+    This function is safe from within an event callback. Removal takes effect
+    before a later handler dispatch when that handler has not already begun;
+    memory reclamation is deferred to thread context.
+
+    \param  handle          ID returned by pvr_event_handler_add().
+
+    \retval 0               On success.
+    \retval -1              If handle is unknown, with errno set to ENOENT.
+*/
+int pvr_event_handler_remove(int handle);
+
+/** @} */
+
 __END_DECLS
 
 #endif /* __DC_PVR_PVR_MISC_H */

@@ -500,6 +500,8 @@ pvr_get_vbl_count
 pvr_get_stats
 pvr_get_pipeline_status
 pvr_clear_faults
+pvr_event_handler_add
+pvr_event_handler_remove
 pvr_set_pal_format
 pvr_poly_compile
 pvr_poly_cxt_col

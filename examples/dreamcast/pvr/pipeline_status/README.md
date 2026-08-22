@@ -7,7 +7,9 @@ snapshots at deterministic API boundaries. It verifies:
 - active-scene and open-list transitions;
 - a monotonic transition sequence;
 - an empty persistent fault record during normal rendering;
-- checked failures for a null destination and an invalid fault mask.
+- opt-in registration, render, and display callbacks;
+- safe self-removal from interrupt-context dispatch;
+- checked failures for null destinations, invalid masks, and stale handles.
 
 The expected image is a green triangle on a black background. The program
 aborts if a contract check fails. On success it prints

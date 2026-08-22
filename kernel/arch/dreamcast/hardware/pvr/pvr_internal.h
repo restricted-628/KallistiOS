@@ -290,6 +290,11 @@ void pvr_status_advance(void);
 /* Latch a PVR fault and the diagnostic register state observed with it. */
 void pvr_fault_record(pvr_fault_t fault, uint32_t event);
 
+/* Initialize, dispatch, and destroy optional IRQ-context event handlers. */
+void pvr_event_init(void);
+void pvr_event_shutdown(void);
+void pvr_event_dispatch(pvr_event_t event, uint32_t detail);
+
 /* Synchronize the viewed page with what's in pvr_state */
 void pvr_sync_view(void);
 

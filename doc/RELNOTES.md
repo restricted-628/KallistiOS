@@ -20,6 +20,9 @@ lifecycle and naming conventions.
 * Added coherent PVR pipeline snapshots and persistent fault records with
   per-fault counters and captured TA buffer registers. Fault interrupts are
   monitored in all builds while their debug logging remains optional.
+* Added opt-in PVR registration, render, display, DMA, and fault events with
+  bounded IRQ-context callbacks, safe self-removal, and no worker thread or
+  allocation until a handler is registered.
 * Added an opt-in post-boot direct GD-ROM transport with bounded packet PIO and
   DMA, status, geometry, mode, recovery, CDDA, streaming, diagnostics, and
   asynchronous request integration. Boot-time disc authorization remains the

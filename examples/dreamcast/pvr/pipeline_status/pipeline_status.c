@@ -15,6 +15,63 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
+typedef struct event_counts {
+    volatile uint32_t registration;
+    volatile uint32_t render;
+    volatile uint32_t display;
+    volatile uint32_t fault;
+    volatile uint32_t callback_error;
+} event_counts_t;
+
+static volatile uint32_t one_shot_count;
+static volatile uint32_t one_shot_remove_error;
+static int one_shot_handle = -1;
+
+static void count_event(pvr_event_t event, uint32_t detail, void *user_data) {
+    event_counts_t *counts = user_data;
+    pvr_pipeline_status_t status;
+
+    if(pvr_get_pipeline_status(&status) < 0) {
+        ++counts->callback_error;
+        return;
+    }
+
+    switch(event) {
+        case PVR_EVENT_REGISTRATION_COMPLETE:
+            if(detail != status.enabled_lists)
+                ++counts->callback_error;
+            ++counts->registration;
+            break;
+        case PVR_EVENT_RENDER_COMPLETE:
+            if(detail != status.render_to_texture)
+                ++counts->callback_error;
+            ++counts->render;
+            break;
+        case PVR_EVENT_DISPLAY:
+            if(detail != status.view_target)
+                ++counts->callback_error;
+            ++counts->display;
+            break;
+        case PVR_EVENT_FAULT:
+            ++counts->fault;
+            break;
+        default:
+            ++counts->callback_error;
+            break;
+    }
+}
+
+static void remove_one_shot(pvr_event_t event, uint32_t detail,
+                            void *user_data) {
+    (void)event;
+    (void)detail;
+    (void)user_data;
+
+    ++one_shot_count;
+    if(pvr_event_handler_remove(one_shot_handle) < 0)
+        ++one_shot_remove_error;
+}
+
 static void submit_triangle(const pvr_poly_hdr_t *header) {
     const pvr_vertex_t vertices[3] __attribute__((aligned(32))) = {
         { .flags = PVR_CMD_VERTEX, .x = 160.0f, .y = 380.0f, .z = 1.0f,
@@ -35,6 +92,8 @@ int main(int argc, char **argv) {
     pvr_pipeline_status_t status;
     pvr_poly_cxt_t context;
     pvr_poly_hdr_t header;
+    event_counts_t counts = { 0 };
+    int event_handle;
     unsigned int frame;
 
     (void)argc;
@@ -42,6 +101,11 @@ int main(int argc, char **argv) {
 
     errno = 0;
     assert(pvr_get_pipeline_status(&status) == -1);
+    assert(errno == ENODEV);
+
+    errno = 0;
+    assert(pvr_event_handler_add(PVR_EVENT_DISPLAY, count_event,
+                                 &counts) == -1);
     assert(errno == ENODEV);
 
     assert(pvr_init_defaults() == 0);
@@ -60,6 +124,22 @@ int main(int argc, char **argv) {
     assert(pvr_clear_faults(PVR_FAULT_ALL << 1) == -1);
     assert(errno == EINVAL);
     assert(pvr_clear_faults(PVR_FAULT_ALL) == 0);
+
+    errno = 0;
+    assert(pvr_event_handler_add(0, count_event, &counts) == -1);
+    assert(errno == EINVAL);
+    errno = 0;
+    assert(pvr_event_handler_add(PVR_EVENT_DISPLAY, NULL, NULL) == -1);
+    assert(errno == EINVAL);
+
+    event_handle = pvr_event_handler_add(
+        PVR_EVENT_REGISTRATION_COMPLETE | PVR_EVENT_RENDER_COMPLETE |
+        PVR_EVENT_DISPLAY | PVR_EVENT_FAULT,
+        count_event, &counts);
+    assert(event_handle >= 0);
+    one_shot_handle = pvr_event_handler_add(
+        PVR_EVENT_REGISTRATION_COMPLETE, remove_one_shot, NULL);
+    assert(one_shot_handle >= 0);
 
     pvr_poly_cxt_col(&context, PVR_LIST_OP_POLY);
     pvr_poly_compile(&header, &context);
@@ -99,10 +179,22 @@ int main(int argc, char **argv) {
     assert(pvr_wait_render_done() == 0);
     vid_waitvbl();
 
+    assert(pvr_event_handler_remove(event_handle) == 0);
+    errno = 0;
+    assert(pvr_event_handler_remove(event_handle) == -1);
+    assert(errno == ENOENT);
+
     assert(pvr_get_pipeline_status(&status) == 0);
     assert(status.sequence > initial.sequence);
     assert(status.faults.mask == PVR_FAULT_NONE);
     assert(status.faults.sequence == 0);
+    assert(counts.registration > 0);
+    assert(counts.render > 0);
+    assert(counts.display > 0);
+    assert(counts.fault == 0);
+    assert(counts.callback_error == 0);
+    assert(one_shot_count == 1);
+    assert(one_shot_remove_error == 0);
 
     puts("RESULT: PASS (PVR pipeline status)");
     pvr_shutdown();

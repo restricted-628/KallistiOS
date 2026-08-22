@@ -14,5 +14,7 @@ as excess blue or an otherwise unstable overlap, while a missing transfer
 leaves only the red triangle.
 
 The first frame also verifies that a second flush of the same list fails with
-`EALREADY`. The example aborts if that contract is violated, otherwise renders
-120 frames and prints `RESULT: PASS (buffered/direct list submission)`.
+`EALREADY`. It also counts one successful PVR DMA completion event per frame
+and rejects any latched DMA fault. The example aborts if a contract is
+violated, otherwise renders 120 frames and prints
+`RESULT: PASS (buffered/direct list submission)`.

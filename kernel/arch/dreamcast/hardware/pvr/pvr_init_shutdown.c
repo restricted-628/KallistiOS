@@ -82,6 +82,7 @@ int pvr_init(const pvr_init_params_t *params) {
     pvr_init_tile_matrices(!!params->autosort_disabled);
 
     pvr_state.list_reg_open = PVR_LIST_NONE;
+    pvr_event_init();
 
     /* Sync all the hardware registers with our pipeline state. */
     pvr_sync_view();
@@ -224,6 +225,7 @@ int pvr_shutdown(void) {
 
     /* Shut down PVR DMA */
     pvr_dma_shutdown();
+    pvr_event_shutdown();
 
     /* Invalidate our memory pool */
     pvr_mem_initialize((pvr_ptr_t)NULL, 0);

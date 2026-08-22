@@ -138,6 +138,7 @@ void pvr_vblank_handler(uint32_t code, void *data) {
         // Clear the render completed flag.
         pvr_state.render_completed = 0;
         pvr_status_advance();
+        pvr_event_dispatch(PVR_EVENT_DISPLAY, pvr_state.view_target);
     }
 
     // We may have a pending render, that couldn't be done as the previous
@@ -187,6 +188,10 @@ void pvr_int_handler(uint32_t code, void *data) {
     if(status_changed)
         pvr_status_advance();
 
+    if(code == ASIC_EVT_PVR_RENDERDONE_TSP)
+        pvr_event_dispatch(PVR_EVENT_RENDER_COMPLETE,
+                           pvr_state.was_to_texture);
+
     /* Faults are always latched. Logging remains controlled by the existing
        debug source so release builds get diagnostics without log traffic. */
     switch (code) {
@@ -220,8 +225,10 @@ void pvr_int_handler(uint32_t code, void *data) {
             break;
     }
 
-    if(fault != PVR_FAULT_NONE)
+    if(fault != PVR_FAULT_NONE) {
         pvr_fault_record(fault, code);
+        pvr_event_dispatch(PVR_EVENT_FAULT, fault);
+    }
 
     /* Update our stats if we finished all registration */
     switch(code) {
@@ -235,6 +242,8 @@ void pvr_int_handler(uint32_t code, void *data) {
                 return;
 
             pvr_sync_stats(PVR_SYNC_REGDONE);
+            pvr_event_dispatch(PVR_EVENT_REGISTRATION_COMPLETE,
+                               pvr_state.lists_transferred);
             break;
     }
 
