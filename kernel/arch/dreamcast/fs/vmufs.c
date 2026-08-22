@@ -736,16 +736,41 @@ static size_t filename_length(const char *filename, size_t maximum) {
     return length;
 }
 
-int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
-                int insize, int flags) {
+static bool transaction_cancelled(
+    const vmufs_transaction_observer_t *observer) {
+    return observer && observer->cancelled &&
+           observer->cancelled(observer->data);
+}
+
+static void transaction_update(
+    const vmufs_transaction_observer_t *observer,
+    vmufs_transaction_phase_t phase, size_t completed_blocks,
+    size_t total_blocks, size_t data_blocks_completed,
+    size_t data_blocks, bool committed) {
+    if(observer && observer->update) {
+        observer->update(observer->data, phase, completed_blocks,
+                         total_blocks, data_blocks_completed,
+                         data_blocks, committed);
+    }
+}
+
+/* Returns 0 for success, -7 for insufficient space, and another negative
+   value for validation, media, or commit failure. */
+int vmufs_write_observed(maple_device_t *dev, const char *fn,
+                         const void *inbuf, int insize, int flags,
+                         const vmufs_transaction_observer_t *observer) {
     uint16_t old_blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
     uint16_t new_blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    uint8_t verify[VMUFS_BLOCK_SIZE];
     vmu_root_t root;
     vmu_dir_t *dir = NULL, nd;
     uint16_t *fat = NULL;
     uint8_t *padded = NULL;
     const uint8_t *file_data;
     size_t fn_length, padded_size, block_count;
+    size_t completed_blocks = 0, data_blocks_completed = 0;
+    size_t total_blocks, dir_entries;
+    bool committed = false;
     int fatsize, dirsize, idx, rv = 0;
 
     if(!dev || !fn || insize < 0 || (insize && !inbuf) ||
@@ -791,6 +816,12 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
         return -1;
     }
 
+    /* The on-card dirty byte is not trusted as an instruction to rewrite an
+       unrelated directory block. Only this transaction marks its edits. */
+    dir_entries = (size_t)dirsize / sizeof(*dir);
+    for(size_t i = 0; i < dir_entries; ++i)
+        dir[i].dirty = 0;
+
     if(mutation_preflight(&root, fat, fatsize, dir, dirsize) < 0) {
         rv = -3;
         goto ex;
@@ -814,6 +845,10 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
     nd.dirty = 1;
 
     if(idx < 0) {
+        total_blocks = block_count + 2u;
+        transaction_update(observer, VMUFS_TRANSACTION_DATA,
+                           0, total_blocks, 0, block_count, false);
+
         if(vmufs_dir_free(&root, dir) <= 0) {
             errno = ENOSPC;
             rv = -4;
@@ -831,6 +866,13 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
 
         nd.firstblk = new_blocks[0];
         for(size_t i = 0; i < block_count; ++i) {
+            if(transaction_cancelled(observer)) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = ECANCELED;
+                rv = VMUFS_TRANSACTION_CANCELLED;
+                goto ex;
+            }
+
             if(vmu_block_write(dev, new_blocks[i],
                                file_data + i * VMUFS_BLOCK_SIZE) != 0) {
                 vmufs_chain_release(fat, new_blocks, block_count);
@@ -838,6 +880,38 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
                 rv = -4;
                 goto ex;
             }
+
+            ++completed_blocks;
+            ++data_blocks_completed;
+            transaction_update(observer, VMUFS_TRANSACTION_DATA,
+                               completed_blocks, total_blocks,
+                               data_blocks_completed, block_count, false);
+        }
+
+        /* Do not publish allocation metadata until every new data block can
+           be read back byte-for-byte. Failure leaves only unreferenced data. */
+        for(size_t i = 0; i < block_count; ++i) {
+            if(transaction_cancelled(observer)) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = ECANCELED;
+                rv = VMUFS_TRANSACTION_CANCELLED;
+                goto ex;
+            }
+            if(vmu_block_read(dev, new_blocks[i], verify) != 0 ||
+               memcmp(verify, file_data + i * VMUFS_BLOCK_SIZE,
+                      VMUFS_BLOCK_SIZE) != 0) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = EIO;
+                rv = -4;
+                goto ex;
+            }
+        }
+
+        if(transaction_cancelled(observer)) {
+            vmufs_chain_release(fat, new_blocks, block_count);
+            errno = ECANCELED;
+            rv = VMUFS_TRANSACTION_CANCELLED;
+            goto ex;
         }
 
         if(vmufs_dir_add(&root, dir, &nd) < 0) {
@@ -849,20 +923,34 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
 
         /* Data first, allocation metadata second, directory last: no visible
            entry can name a chain whose data or FAT has not been committed. */
+        transaction_update(observer, VMUFS_TRANSACTION_FAT,
+                           completed_blocks, total_blocks,
+                           data_blocks_completed, block_count, false);
         if(vmufs_fat_write(dev, &root, fat) < 0) {
             errno = EIO;
             rv = -5;
             goto ex;
         }
 
+        ++completed_blocks;
+        transaction_update(observer, VMUFS_TRANSACTION_DIRECTORY,
+                           completed_blocks, total_blocks,
+                           data_blocks_completed, block_count, false);
         if(vmufs_dir_write(dev, &root, dir) < 0) {
             errno = EIO;
             rv = -6;
             goto ex;
         }
+
+        ++completed_blocks;
+        committed = true;
     }
     else {
         vmu_dir_t old_entry = dir[idx];
+
+        total_blocks = block_count + 3u;
+        transaction_update(observer, VMUFS_TRANSACTION_DATA,
+                           0, total_blocks, 0, block_count, false);
 
         if(vmufs_chain_collect(&root, fat,
                                VMUFS_BLOCK_SIZE / sizeof(*fat),
@@ -887,6 +975,13 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
 
         nd.firstblk = new_blocks[0];
         for(size_t i = 0; i < block_count; ++i) {
+            if(transaction_cancelled(observer)) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = ECANCELED;
+                rv = VMUFS_TRANSACTION_CANCELLED;
+                goto ex;
+            }
+
             if(vmu_block_write(dev, new_blocks[i],
                                file_data + i * VMUFS_BLOCK_SIZE) != 0) {
                 vmufs_chain_release(fat, new_blocks, block_count);
@@ -894,14 +989,51 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
                 rv = -4;
                 goto ex;
             }
+
+            ++completed_blocks;
+            ++data_blocks_completed;
+            transaction_update(observer, VMUFS_TRANSACTION_DATA,
+                               completed_blocks, total_blocks,
+                               data_blocks_completed, block_count, false);
         }
 
+        for(size_t i = 0; i < block_count; ++i) {
+            if(transaction_cancelled(observer)) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = ECANCELED;
+                rv = VMUFS_TRANSACTION_CANCELLED;
+                goto ex;
+            }
+            if(vmu_block_read(dev, new_blocks[i], verify) != 0 ||
+               memcmp(verify, file_data + i * VMUFS_BLOCK_SIZE,
+                      VMUFS_BLOCK_SIZE) != 0) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = EIO;
+                rv = -4;
+                goto ex;
+            }
+        }
+
+        if(transaction_cancelled(observer)) {
+            vmufs_chain_release(fat, new_blocks, block_count);
+            errno = ECANCELED;
+            rv = VMUFS_TRANSACTION_CANCELLED;
+            goto ex;
+        }
+
+        transaction_update(observer, VMUFS_TRANSACTION_FAT,
+                           completed_blocks, total_blocks,
+                           data_blocks_completed, block_count, false);
         if(vmufs_fat_write(dev, &root, fat) < 0) {
             errno = EIO;
             rv = -5;
             goto ex;
         }
 
+        ++completed_blocks;
+        transaction_update(observer, VMUFS_TRANSACTION_DIRECTORY,
+                           completed_blocks, total_blocks,
+                           data_blocks_completed, block_count, false);
         memcpy(&dir[idx], &nd, sizeof(nd));
         dir[idx].dirty = 1;
         if(vmufs_dir_write(dev, &root, dir) < 0) {
@@ -909,6 +1041,12 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
             rv = -6;
             goto ex;
         }
+
+        ++completed_blocks;
+        committed = true;
+        transaction_update(observer, VMUFS_TRANSACTION_CLEANUP,
+                           completed_blocks, total_blocks,
+                           data_blocks_completed, block_count, true);
 
         /* The new entry is authoritative. Failure here leaks the old blocks
            but cannot damage either the replacement or another live file. */
@@ -918,18 +1056,31 @@ int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
             rv = -8;
             goto ex;
         }
+
+        ++completed_blocks;
     }
 
+    transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                       completed_blocks, total_blocks,
+                       data_blocks_completed, block_count, committed);
 ex:
     vmufs_teardown(dir, fat);
     free(padded);
     return rv;
 }
 
-int vmufs_delete(maple_device_t *dev, const char *fn) {
+int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
+                int insize, int flags) {
+    return vmufs_write_observed(dev, fn, inbuf, insize, flags, NULL);
+}
+
+int vmufs_delete_observed(
+    maple_device_t *dev, const char *fn,
+    const vmufs_transaction_observer_t *observer) {
     vmu_root_t root;
     vmu_dir_t *dir = NULL;
     uint16_t *fat = NULL;
+    size_t completed_blocks = 0, dir_entries;
     int fatsize, dirsize, rv = 0;
 
     if(!dev || !fn) {
@@ -943,6 +1094,10 @@ int vmufs_delete(maple_device_t *dev, const char *fn) {
         return -2;
     }
 
+    dir_entries = (size_t)dirsize / sizeof(*dir);
+    for(size_t i = 0; i < dir_entries; ++i)
+        dir[i].dirty = 0;
+
     if(mutation_preflight(&root, fat, fatsize, dir, dirsize) < 0) {
         rv = -2;
         goto ex;
@@ -954,6 +1109,14 @@ int vmufs_delete(maple_device_t *dev, const char *fn) {
         goto ex;
     }
 
+    transaction_update(observer, VMUFS_TRANSACTION_DIRECTORY,
+                       0, 2, 0, 0, false);
+    if(transaction_cancelled(observer)) {
+        errno = ECANCELED;
+        rv = VMUFS_TRANSACTION_CANCELLED;
+        goto ex;
+    }
+
     /* Removing the directory entry first makes deletion authoritative while
        the old blocks remain allocated. Failed FAT cleanup can only leak space. */
     if(vmufs_dir_write(dev, &root, dir) < 0) {
@@ -962,15 +1125,25 @@ int vmufs_delete(maple_device_t *dev, const char *fn) {
         goto ex;
     }
 
+    ++completed_blocks;
+    transaction_update(observer, VMUFS_TRANSACTION_CLEANUP,
+                       completed_blocks, 2, 0, 0, true);
     if(vmufs_fat_write(dev, &root, fat) < 0) {
         errno = EIO;
         rv = -2;
         goto ex;
     }
 
+    ++completed_blocks;
+    transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                       completed_blocks, 2, 0, 0, true);
 ex:
     vmufs_teardown(dir, fat);
     return rv;
+}
+
+int vmufs_delete(maple_device_t *dev, const char *fn) {
+    return vmufs_delete_observed(dev, fn, NULL);
 }
 
 int vmufs_free_blocks(maple_device_t *dev) {

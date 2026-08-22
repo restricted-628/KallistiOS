@@ -116,6 +116,14 @@ int vmufs_format_observed(maple_device_t *dev,
                           vmufs_format_mode_t mode,
                           const vmufs_transaction_observer_t *observer);
 
+int vmufs_write_observed(maple_device_t *dev, const char *fn,
+                         const void *inbuf, int insize, int flags,
+                         const vmufs_transaction_observer_t *observer);
+
+int vmufs_delete_observed(
+    maple_device_t *dev, const char *fn,
+    const vmufs_transaction_observer_t *observer);
+
 int vmufs_defragment_observed(
     maple_device_t *dev, const vmufs_transaction_observer_t *observer);
 
