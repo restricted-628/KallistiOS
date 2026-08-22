@@ -31,9 +31,8 @@ __BEGIN_DECLS
 
     These routines use the GD-ROM drive's packet interface directly,
     without submitting a command to the Dreamcast BIOS. Calling one is an
-    explicit opt-in operation. The ISO9660 `/cd` driver can also be opted into
-    this transport with fs_iso9660_set_backend(); its default remains the BIOS
-    command server.
+    explicit opt-in operation. Filesystem backend selection is a separate
+    integration layer; the existing BIOS command server remains the default.
 
     Direct commands share KOS's G1 controller ownership with the BIOS-backed
     GD-ROM and ATA drivers. PIO and DMA have emulator controls, but these APIs
@@ -262,6 +261,17 @@ int gdrom_direct_get_status(gdrom_direct_status_t *status, uint32_t timeout,
 int gdrom_direct_get_mode(gdrom_direct_mode_t *mode, uint32_t timeout,
                           gdrom_direct_result_t *result);
 
+/** \brief Queue a direct SPI hardware-information query.
+
+    `mode` and optional `result` must remain valid until the request becomes
+    terminal. The returned request uses `CD_CMD_REQ_MODE` and the common KOS
+    cancellation, wait, callback, and destruction rules.
+*/
+cdrom_request_t *gdrom_direct_get_mode_async(
+    gdrom_direct_mode_t *mode, uint32_t timeout,
+    gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
+
 /** \brief Replace all writable direct SPI hardware-information fields.
 
     KOS first reads the current 32-byte page, then sends only its writable byte
@@ -273,6 +283,16 @@ int gdrom_direct_get_mode(gdrom_direct_mode_t *mode, uint32_t timeout,
 int gdrom_direct_set_mode(const gdrom_direct_mode_settings_t *settings,
                           uint32_t timeout,
                           gdrom_direct_result_t *result);
+
+/** \brief Queue a direct SPI hardware-information update.
+
+    The settings are copied into the request. Optional `result` must remain
+    valid until terminal state. The request reports `CD_CMD_SET_MODE`.
+*/
+cdrom_request_t *gdrom_direct_set_mode_async(
+    const gdrom_direct_mode_settings_t *settings, uint32_t timeout,
+    gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
 
 /** \brief Move the GD-ROM pickup to an absolute frame through direct SPI.
 
@@ -287,6 +307,29 @@ int gdrom_direct_set_mode(const gdrom_direct_mode_settings_t *settings,
 */
 int gdrom_direct_seek(uint32_t fad, uint32_t timeout,
                       gdrom_direct_result_t *result);
+
+/** \brief Queue a pickup seek through the direct SPI transport.
+
+    The returned \ref cdrom_request_t uses the common KOS queue, terminal
+    states, cancellation, callback, wait, and destruction rules and identifies
+    `CDROM_REQUEST_BACKEND_DIRECT`. In-flight cancellation enters bounded SPI
+    command recovery before the request becomes terminal.
+
+    `result`, when non-NULL, is populated if execution starts and must remain
+    valid until the request becomes terminal. A request cancelled while still
+    queued leaves it untouched.
+
+    \param  fad           Destination absolute frame address, at least 150.
+    \param  timeout       Required nonzero command timeout in milliseconds.
+    \param  result        Optional direct transport result at terminal state.
+    \param  callback      Optional common request completion callback.
+    \param  callback_data User data passed to the callback.
+
+    \return               A queued request, or `NULL` with errno set.
+*/
+cdrom_request_t *gdrom_direct_seek_async(
+    uint32_t fad, uint32_t timeout, gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
 
 /** \brief Perform a bounded TEST_UNIT/error/status direct-drive probe.
 
@@ -321,6 +364,16 @@ int gdrom_direct_probe(gdrom_direct_probe_result_t *result, uint32_t timeout);
 */
 int gdrom_direct_reinitialize(gdrom_direct_reinit_result_t *result,
                               uint32_t timeout);
+
+/** \brief Queue a post-boot direct-drive reinitialization sequence.
+
+    `result` must remain valid until the request becomes terminal. The request
+    reports `CD_CMD_INIT` and follows the common cancellation, wait,
+    callback, and destruction rules.
+*/
+cdrom_request_t *gdrom_direct_reinitialize_async(
+    gdrom_direct_reinit_result_t *result, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
 
 /** \brief Read a disc table of contents through direct SPI GET_TOC.
 
@@ -366,6 +419,17 @@ int gdrom_direct_cdda_get_status(
     cdrom_cdda_status_t *status, uint32_t timeout,
     gdrom_direct_result_t *result);
 
+/** \brief Queue a typed direct CDDA playback-state query.
+
+    `status` and optional `result` must remain valid until the returned request
+    becomes terminal. Both are populated before successful terminal status is
+    published. A request cancelled while queued leaves them untouched.
+*/
+cdrom_request_t *gdrom_direct_cdda_get_status_async(
+    cdrom_cdda_status_t *status, uint32_t timeout,
+    gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
+
 /** \brief Start CDDA playback through direct SPI.
 
     `mode` accepts the existing `CDDA_TRACKS` and `CDDA_SECTORS` values. Sector
@@ -379,9 +443,25 @@ int gdrom_direct_cdda_play(
     uint32_t start, uint32_t end, uint32_t loops, int mode,
     uint32_t timeout, gdrom_direct_result_t *result);
 
+/** \brief Queue direct CDDA playback with the common KOS request lifecycle.
+
+    The returned request reports the corresponding play command and
+    `CDROM_REQUEST_BACKEND_DIRECT`. Its optional `result` must remain valid
+    until terminal state.
+*/
+cdrom_request_t *gdrom_direct_cdda_play_async(
+    uint32_t start, uint32_t end, uint32_t loops, int mode,
+    uint32_t timeout, gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
+
 /** \brief Pause current CDDA playback through direct SPI CD_SEEK. */
 int gdrom_direct_cdda_pause(uint32_t timeout,
                             gdrom_direct_result_t *result);
+
+/** \brief Queue a direct CDDA pause request. */
+cdrom_request_t *gdrom_direct_cdda_pause_async(
+    uint32_t timeout, gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
 
 /** \brief Resume the existing CDDA range through direct SPI CD_PLAY.
 
@@ -392,9 +472,19 @@ int gdrom_direct_cdda_pause(uint32_t timeout,
 int gdrom_direct_cdda_resume(uint32_t timeout,
                              gdrom_direct_result_t *result);
 
+/** \brief Queue a direct CDDA resume request. */
+cdrom_request_t *gdrom_direct_cdda_resume_async(
+    uint32_t timeout, gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
+
 /** \brief Stop CDDA playback and return the pickup home through direct SPI. */
 int gdrom_direct_cdda_stop(uint32_t timeout,
                            gdrom_direct_result_t *result);
+
+/** \brief Queue a direct CDDA stop request. */
+cdrom_request_t *gdrom_direct_cdda_stop_async(
+    uint32_t timeout, gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
 
 /** \brief Start direct CDDA scan playback.
 
@@ -403,6 +493,12 @@ int gdrom_direct_cdda_stop(uint32_t timeout,
 */
 int gdrom_direct_cdda_scan(bool reverse, uint8_t speed, uint32_t timeout,
                            gdrom_direct_result_t *result);
+
+/** \brief Queue direct CDDA scan playback. */
+cdrom_request_t *gdrom_direct_cdda_scan_async(
+    bool reverse, uint8_t speed, uint32_t timeout,
+    gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
 
 /** \brief Read direct SPI session geometry.
 
@@ -422,6 +518,22 @@ int gdrom_direct_get_session(uint8_t session,
                              uint32_t timeout,
                              gdrom_direct_result_t *result);
 
+/** \brief Open a bounded sector range on the direct transport.
+
+    This is the direct SPI constructor for the common
+    \ref cdrom_sector_range_t interface. Opening allocates only KOS
+    bookkeeping and does not access the drive or BIOS command server. Reads,
+    preseek, and staged streaming retain the supplied exact cooked-sector type.
+
+    \param start_fad       First absolute frame address, at least 150.
+    \param sector_count    Required nonzero number of sectors.
+    \param sector_type     Mode-1 or Mode-2 Form-1 cooked sectors.
+    \return                A new range, or `NULL` with errno set.
+*/
+cdrom_sector_range_t *gdrom_direct_sector_range_open(
+    uint32_t start_fad, size_t sector_count,
+    gdrom_direct_sector_type_t sector_type);
+
 /** \brief Read cooked 2048-byte sectors through the direct PIO transport.
 
     This experimental operation issues one SPI `CD_READ` command without the
@@ -430,8 +542,8 @@ int gdrom_direct_get_session(uint8_t session,
     exactly 2048 payload bytes per sector.
 
     The caller must split larger operations. Limiting each command to sixteen
-    sectors bounds continuous G1 ownership so other G1 clients can run between
-    reads.
+    sectors bounds continuous G1 ownership while direct DMA and asynchronous
+    scheduling are still under development.
 
     \param  buffer       Destination aligned to at least two bytes.
     \param  fad          First absolute frame address; must be at least 150.
@@ -478,6 +590,63 @@ int gdrom_direct_read_sectors_dma(
     void *buffer, uint32_t fad, size_t sectors,
     gdrom_direct_sector_type_t sector_type, uint32_t timeout,
     gdrom_direct_result_t *result);
+
+/** \brief Queue a cooked-sector read through the direct GD-DMA transport.
+
+    This is the asynchronous form of the experimental direct DMA operation.
+    It returns a normal \ref cdrom_request_t and therefore uses the common KOS
+    request queue, progress, cancellation, timeout, wait, callback, and destroy
+    rules. The request status identifies
+    `CDROM_REQUEST_BACKEND_DIRECT`; its BIOS response/detail fields are not a
+    direct-drive result. `result`, when non-NULL, is populated if the direct
+    executor starts and must remain valid until the request becomes terminal.
+    A request cancelled while it is still queued leaves that object untouched.
+
+    Cancellation wakes the sleeping direct-DMA owner and runs the same bounded
+    Holly stop and SPI soft-reset recovery as the synchronous operation.
+
+    \param  buffer        Destination aligned to 32 bytes in system RAM.
+    \param  fad           First absolute frame address; must be at least 150.
+    \param  sectors       Required count from 1 through 16.
+    \param  sector_type   Exact 2048-byte sector format expected from the disc.
+    \param  timeout       Required nonzero operation timeout in milliseconds.
+    \param  result        Optional direct transport result, valid at terminal state.
+    \param  callback      Optional common request completion callback.
+    \param  callback_data User data passed to the callback.
+
+    \return               A queued request, or `NULL` with errno set.
+*/
+cdrom_request_t *gdrom_direct_read_sectors_dma_async(
+    void *buffer, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+    gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a direct SPI staged-read session.
+
+    This direct counterpart to \ref cdrom_stream_session_start issues one
+    `CD_READ2` packet command and leaves its read-ahead range resident in the
+    drive buffer. The application drains that range with ordinary
+    \ref cdrom_stream_session_transfer_async requests. No BIOS GD-ROM command
+    server syscall is used by either the session or its transfers.
+
+    The session owns G1 continuously until its full range is transferred,
+    cancellation, an error, or `idle_timeout`. Its status and every transfer
+    status report `CDROM_REQUEST_BACKEND_DIRECT`. The range is limited by the
+    SPI command's 16-bit sector-count field.
+
+    \param fad            First absolute frame address; must be at least 150.
+    \param sectors        Required count from 1 through 65535.
+    \param sector_type    Exact 2048-byte sector format expected from the disc.
+    \param start_timeout  Required nonzero startup timeout in milliseconds.
+    \param idle_timeout   Required nonzero ready-idle timeout in milliseconds.
+
+    \return               A queued direct session, or `NULL` with errno set.
+*/
+cdrom_stream_session_t *gdrom_direct_stream_session_start(
+    uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t sector_type, uint32_t start_timeout,
+    uint32_t idle_timeout);
 
 /** \brief Exercise bounded direct-DMA abort and protection-fault recovery.
 

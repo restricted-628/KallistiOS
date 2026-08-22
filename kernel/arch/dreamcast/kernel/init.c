@@ -117,6 +117,10 @@ KOS_INIT_FLAG_WEAK(vmu_fs_shutdown, true);
 KOS_INIT_FLAG_WEAK(fs_iso9660_init, true);
 KOS_INIT_FLAG_WEAK(fs_iso9660_shutdown, true);
 
+/* Defined alongside the hardware driver's other init-flag pointers. Request
+   workers must stop before ISO9660 destroys state used by their finalizers. */
+extern void (*cdrom_shutdown_weak)(void);
+
 void dcload_init(void) {
     if (syscall_dcload_detected()) {
         dbglog(DBG_INFO, "dc-load console support enabled\n");
@@ -251,8 +255,10 @@ void  __weak_symbol arch_auto_shutdown(void) {
 
     KOS_INIT_FLAG_CALL(fs_dcload_shutdown);
     KOS_INIT_FLAG_CALL(vmu_fs_shutdown);
-    if (!KOS_PLATFORM_IS_NAOMI)
+    if (!KOS_PLATFORM_IS_NAOMI) {
+        KOS_INIT_FLAG_CALL(cdrom_shutdown);
         KOS_INIT_FLAG_CALL(fs_iso9660_shutdown);
+    }
 
     KOS_INIT_FLAG_CALL(fs_rnd_shutdown);
 

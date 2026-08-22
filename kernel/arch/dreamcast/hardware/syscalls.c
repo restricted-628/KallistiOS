@@ -79,6 +79,7 @@
 /* SYSTEM functions */
 #define FUNC_SYSTEM_RESET           -1
 #define FUNC_SYSTEM_BIOS_MENU       1
+#define FUNC_SYSTEM_DISC_CHECK      2
 #define FUNC_SYSTEM_CD_MENU         3
 
 /* A param we submit when functions have unused variables */
@@ -247,6 +248,11 @@ int syscall_misc_setvector(uint32_t super, uintptr_t handler) {
 
 /* Function pointer type definition for system call functions. */
 typedef void (*system_func)(int) __noreturn;
+
+int syscall_system_disc_check(void) {
+    int (*system)(int) = (int (*)(int))(*((uintptr_t *) VEC_SYSTEM));
+    return system(FUNC_SYSTEM_DISC_CHECK);
+}
 
 void syscall_system_reset(void) {
     system_func system = (system_func)(*((uintptr_t *) VEC_SYSTEM));

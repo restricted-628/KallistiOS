@@ -22,6 +22,8 @@
 #include <kos/timer.h>
 
 #include "g1_bus.h"
+#include "cdrom_request.h"
+#include "gdrom_direct_internal.h"
 #include "gdrom_spi.h"
 
 /* Register ordering in this file is a load-bearing part of the transport.
@@ -72,6 +74,39 @@ typedef struct gdrom_direct_dma_operation {
 typedef bool (*gdrom_direct_cancel_t)(void *data);
 typedef void (*gdrom_direct_progress_t)(size_t bytes, void *data);
 
+typedef struct gdrom_direct_async_read {
+    void *buffer;
+    uint32_t fad;
+    size_t sectors;
+    gdrom_direct_sector_type_t sector_type;
+    uint32_t timeout;
+    gdrom_direct_result_t *result;
+} gdrom_direct_async_read_t;
+
+typedef struct gdrom_direct_async_seek {
+    uint32_t fad;
+    uint32_t timeout;
+    gdrom_direct_result_t *result;
+} gdrom_direct_async_seek_t;
+
+typedef enum gdrom_direct_mode_operation {
+    GDROM_DIRECT_MODE_GET = 0,
+    GDROM_DIRECT_MODE_SET
+} gdrom_direct_mode_operation_t;
+
+typedef struct gdrom_direct_async_mode {
+    gdrom_direct_mode_operation_t operation;
+    gdrom_direct_mode_settings_t settings;
+    gdrom_direct_mode_t *mode;
+    uint32_t timeout;
+    gdrom_direct_result_t *result;
+} gdrom_direct_async_mode_t;
+
+typedef struct gdrom_direct_async_reinit {
+    gdrom_direct_reinit_result_t *result;
+    uint32_t timeout;
+} gdrom_direct_async_reinit_t;
+
 typedef enum gdrom_direct_cdda_operation {
     GDROM_DIRECT_CDDA_PLAY = 0,
     GDROM_DIRECT_CDDA_PAUSE,
@@ -80,6 +115,29 @@ typedef enum gdrom_direct_cdda_operation {
     GDROM_DIRECT_CDDA_SCAN,
     GDROM_DIRECT_CDDA_STATUS
 } gdrom_direct_cdda_operation_t;
+
+typedef struct gdrom_direct_async_cdda {
+    gdrom_direct_cdda_operation_t operation;
+    uint32_t start;
+    uint32_t end;
+    uint32_t loops;
+    int mode;
+    bool reverse;
+    uint8_t speed;
+    uint32_t timeout;
+    gdrom_direct_result_t *result;
+    cdrom_cdda_status_t *status;
+} gdrom_direct_async_cdda_t;
+
+struct gdrom_direct_stream {
+    gdrom_direct_dma_operation_t operation;
+    g1_bus_dma_client_t dma_client;
+    bool command_client;
+    bool command_active;
+    bool bus_faulted;
+    size_t total_bytes;
+    size_t transferred_bytes;
+};
 
 typedef enum gdrom_direct_dma_test_mode {
     GDROM_DIRECT_DMA_TEST_NONE = 0,
@@ -1393,24 +1451,6 @@ int gdrom_direct_get_subcode(
                                 NULL, NULL);
 }
 
-static void decode_cdda_status(
-        const uint8_t subcode[14], cdrom_cdda_status_t *status) {
-    uint32_t elapsed = ((uint32_t)subcode[7] << 16)
-        | ((uint32_t)subcode[8] << 8) | subcode[9];
-
-    status->audio_status = (cd_sub_audio_t)subcode[1];
-    status->control = subcode[4] >> 4;
-    status->adr = subcode[4] & 0x0f;
-    status->track = subcode[5];
-    status->index = subcode[6];
-    status->track_elapsed_frames = elapsed;
-    status->track_minutes = elapsed / (75 * 60);
-    status->track_seconds = (elapsed / 75) % 60;
-    status->track_frames = elapsed % 75;
-    status->fad = ((uint32_t)subcode[11] << 16)
-        | ((uint32_t)subcode[12] << 8) | subcode[13];
-}
-
 static int cdda_status_internal(
         cdrom_cdda_status_t *status, uint32_t timeout,
         gdrom_direct_result_t *result, gdrom_direct_cancel_t cancel,
@@ -1425,7 +1465,7 @@ static int cdda_status_internal(
                             timeout, result, cancel, cancel_data) < 0)
         return -1;
 
-    decode_cdda_status(subcode, status);
+    cdrom_decode_cdda_status_internal(subcode, status);
     return 0;
 }
 
@@ -2086,6 +2126,723 @@ int gdrom_direct_read_sectors_dma(
                                      timeout, result,
                                      GDROM_DIRECT_DMA_TEST_NONE, NULL,
                                      NULL, NULL, NULL);
+}
+
+static bool direct_request_cancelled(void *data) {
+    return cdrom_request_cancel_requested_internal(data);
+}
+
+static void direct_request_progress(size_t bytes, void *data) {
+    cdrom_request_update_direct_progress(data, bytes);
+}
+
+static int direct_request_result(int error,
+                                 const gdrom_direct_result_t *result) {
+    if(error == ECANCELED)
+        return ERR_ABORTED;
+    if(error == ETIMEDOUT)
+        return ERR_TIMEOUT;
+    if((error == EBUSY || error == EAGAIN))
+        return ERR_BUSY;
+    if(error == ENOENT)
+        return ERR_ILLEGAL_REQUEST;
+    if(error == EIO && result && result->sense_valid)
+        return cdrom_sense_to_result(&result->sense);
+    return ERR_SYS;
+}
+
+static int direct_mode_execute(cdrom_request_t *request, void *data) {
+    gdrom_direct_async_mode_t *mode = data;
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *result = mode->result
+        ? mode->result : &local_result;
+    int rv;
+
+    if(mode->operation == GDROM_DIRECT_MODE_GET)
+        rv = get_mode_internal(mode->mode, mode->timeout, result,
+                               direct_request_cancelled, request);
+    else
+        rv = set_mode_internal(&mode->settings, mode->timeout, result,
+                               direct_request_cancelled, request);
+
+    if(rv == 0)
+        return ERR_OK;
+    return direct_request_result(errno, result);
+}
+
+cdrom_request_t *gdrom_direct_get_mode_async(
+        gdrom_direct_mode_t *mode, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_mode_t operation = {
+        .operation = GDROM_DIRECT_MODE_GET,
+        .mode = mode,
+        .timeout = timeout,
+        .result = result,
+    };
+
+    if(!mode || !timeout) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return cdrom_request_submit_executor(
+        CD_CMD_REQ_MODE, &operation, sizeof(operation), 0, 0, 0, timeout,
+        direct_mode_execute, NULL, NULL, callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_set_mode_async(
+        const gdrom_direct_mode_settings_t *settings, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_mode_t operation = {
+        .operation = GDROM_DIRECT_MODE_SET,
+        .timeout = timeout,
+        .result = result,
+    };
+
+    if(!valid_mode_settings(settings) || !timeout) {
+        errno = EINVAL;
+        return NULL;
+    }
+    operation.settings = *settings;
+    return cdrom_request_submit_executor(
+        CD_CMD_SET_MODE, &operation, sizeof(operation), 0, 0, 0, timeout,
+        direct_mode_execute, NULL, NULL, callback, callback_data);
+}
+
+static int direct_reinitialize_execute(cdrom_request_t *request, void *data) {
+    gdrom_direct_async_reinit_t *reinit = data;
+    const gdrom_direct_result_t *transport =
+        &reinit->result->reset_transport;
+
+    if(reinitialize_internal(reinit->result, reinit->timeout,
+                             direct_request_cancelled, request) == 0)
+        return ERR_OK;
+
+    if(reinit->result->reset_transport.recovery_succeeded) {
+        switch(reinit->result->probe.last_command) {
+            case GDROM_DIRECT_PROBE_REQ_ERROR:
+                transport = &reinit->result->probe.error_transport;
+                break;
+            case GDROM_DIRECT_PROBE_REQ_STAT:
+                transport = &reinit->result->probe.status_transport;
+                break;
+            case GDROM_DIRECT_PROBE_TEST_UNIT:
+                transport = &reinit->result->probe.test_unit_transport;
+                break;
+            case GDROM_DIRECT_PROBE_NONE:
+            default:
+                break;
+        }
+    }
+    return direct_request_result(errno, transport);
+}
+
+cdrom_request_t *gdrom_direct_reinitialize_async(
+        gdrom_direct_reinit_result_t *result, uint32_t timeout,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_reinit_t reinit = {
+        .result = result,
+        .timeout = timeout,
+    };
+
+    if(!result || !timeout) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return cdrom_request_submit_executor(
+        CD_CMD_INIT, &reinit, sizeof(reinit), 0, 0, 0, timeout,
+        direct_reinitialize_execute, NULL, NULL, callback, callback_data);
+}
+
+static int direct_cdda_execute(cdrom_request_t *request, void *data) {
+    gdrom_direct_async_cdda_t *cdda = data;
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *result = cdda->result
+        ? cdda->result : &local_result;
+    int rv;
+
+    switch(cdda->operation) {
+        case GDROM_DIRECT_CDDA_PLAY:
+            rv = cdda_play_internal(
+                cdda->start, cdda->end, cdda->loops, cdda->mode,
+                cdda->timeout, result, direct_request_cancelled, request);
+            break;
+        case GDROM_DIRECT_CDDA_STATUS:
+            rv = cdda_status_internal(
+                cdda->status, cdda->timeout, result,
+                direct_request_cancelled, request);
+            break;
+        default:
+            rv = cdda_simple_internal(
+                cdda->operation, cdda->reverse, cdda->speed,
+                cdda->timeout, result, direct_request_cancelled, request);
+            break;
+    }
+
+    if(rv == 0)
+        return ERR_OK;
+    return direct_request_result(errno, result);
+}
+
+static cdrom_request_t *submit_direct_cdda(
+        cd_cmd_code_t command, const gdrom_direct_async_cdda_t *cdda,
+        cdrom_request_callback_t callback, void *callback_data) {
+    return cdrom_request_submit_executor(
+        command, cdda, sizeof(*cdda), 0, 0, 0, cdda->timeout,
+        direct_cdda_execute, NULL, NULL, callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_cdda_get_status_async(
+        cdrom_cdda_status_t *status, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_cdda_t cdda = {
+        .operation = GDROM_DIRECT_CDDA_STATUS,
+        .timeout = timeout,
+        .result = result,
+        .status = status,
+    };
+
+    if(!status || !timeout) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return submit_direct_cdda(CD_CMD_GETSCD, &cdda,
+                              callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_cdda_play_async(
+        uint32_t start, uint32_t end, uint32_t loops, int mode,
+        uint32_t timeout, gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_cdda_t cdda = {
+        .operation = GDROM_DIRECT_CDDA_PLAY,
+        .start = start,
+        .end = end,
+        .loops = loops,
+        .mode = mode,
+        .timeout = timeout,
+        .result = result,
+    };
+
+    if(!valid_cdda_play_arguments(start, end, loops, mode, timeout)) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return submit_direct_cdda(
+        mode == CDDA_TRACKS ? CD_CMD_PLAY_TRACKS : CD_CMD_PLAY_SECTORS,
+        &cdda, callback, callback_data);
+}
+
+static cdrom_request_t *cdda_simple_async(
+        gdrom_direct_cdda_operation_t operation, cd_cmd_code_t command,
+        bool reverse, uint8_t speed, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_cdda_t cdda = {
+        .operation = operation,
+        .reverse = reverse,
+        .speed = speed,
+        .timeout = timeout,
+        .result = result,
+    };
+
+    if(!timeout) {
+        errno = EINVAL;
+        return NULL;
+    }
+    return submit_direct_cdda(command, &cdda, callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_cdda_pause_async(
+        uint32_t timeout, gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    return cdda_simple_async(
+        GDROM_DIRECT_CDDA_PAUSE, CD_CMD_PAUSE, false, 0,
+        timeout, result, callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_cdda_resume_async(
+        uint32_t timeout, gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    return cdda_simple_async(
+        GDROM_DIRECT_CDDA_RESUME, CD_CMD_RELEASE, false, 0,
+        timeout, result, callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_cdda_stop_async(
+        uint32_t timeout, gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    return cdda_simple_async(
+        GDROM_DIRECT_CDDA_STOP, CD_CMD_STOP, false, 0,
+        timeout, result, callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_cdda_scan_async(
+        bool reverse, uint8_t speed, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    return cdda_simple_async(
+        GDROM_DIRECT_CDDA_SCAN, CD_CMD_SCAN_CD, reverse, speed,
+        timeout, result, callback, callback_data);
+}
+
+int gdrom_direct_read_sectors_dma_request(
+        cdrom_request_t *request, void *buffer, uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result) {
+    if(!request) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return read_sectors_dma_internal(
+        buffer, fad, sectors, sector_type, timeout, result,
+        GDROM_DIRECT_DMA_TEST_NONE, cdrom_request_event_internal(request),
+        direct_request_cancelled, direct_request_progress, request);
+}
+
+static void direct_stream_release(gdrom_direct_stream_t *stream,
+                                  gdrom_direct_result_t *result) {
+    if(!stream)
+        return;
+
+    g1_bus_dma_disable();
+    if(g1_bus_dma_in_progress()
+            && wait_dma_inactive(timer_ms_gettime64()
+                                 + GDROM_DMA_CLEANUP_MS) < 0) {
+        g1_bus_mark_faulted();
+        stream->bus_faulted = true;
+    }
+
+    if(!stream->bus_faulted && stream->command_active
+            && settle_or_recover_command(&stream->command_active, true,
+                                         result) < 0) {
+        g1_bus_mark_faulted();
+        stream->bus_faulted = true;
+    }
+
+    if(stream->operation.command_masked && !stream->bus_faulted) {
+        *(volatile uint32_t *)ASIC_ACK_B = 1u;
+        (void)g1_bus_gd_command_client_unmask();
+        stream->operation.command_masked = false;
+    }
+    stream->operation.active = false;
+    if(stream->command_client)
+        (void)g1_bus_gd_command_client_unregister();
+    if(stream->dma_client != G1_BUS_DMA_CLIENT_INVALID)
+        (void)g1_bus_dma_client_unregister(stream->dma_client);
+
+    if(!stream->bus_faulted) {
+        G1_OUT8(G1_ATA_CTL, GDROM_CTL_INTERRUPTS_ON);
+        g1_bus_unlock();
+    }
+    free(stream);
+}
+
+gdrom_direct_stream_t *gdrom_direct_stream_begin(
+        cdrom_request_t *owner, semaphore_t *wake, uint32_t fad,
+        size_t sectors, gdrom_direct_sector_type_t sector_type,
+        uint32_t timeout, gdrom_direct_result_t *result) {
+    gdrom_direct_stream_t *stream;
+    gdrom_spi_packet_t packet;
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *observed = result ? result : &local_result;
+    gdrom_spi_expected_type_t expected;
+    uint64_t deadline;
+    uint32_t remaining;
+    uint8_t status;
+    uint8_t reason;
+
+    if(!owner || !wake || fad < 150u || fad > GDROM_SPI_MAX_U24
+            || !sectors || sectors > UINT16_MAX || !timeout
+            || sectors - 1u > GDROM_SPI_MAX_U24 - fad
+            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
+                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    expected = sector_type == GDROM_DIRECT_SECTOR_MODE1
+        ? GDROM_SPI_EXPECT_MODE1 : GDROM_SPI_EXPECT_MODE2_FORM1;
+    if(gdrom_spi_read2(&packet, GDROM_SPI_SELECT_DATA, expected,
+                       GDROM_SPI_POINT_FAD, fad, (uint16_t)sectors,
+                       fad + (uint32_t)sectors) != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    stream = calloc(1, sizeof(*stream));
+    if(!stream) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    stream->dma_client = G1_BUS_DMA_CLIENT_INVALID;
+    stream->operation.event = wake;
+    stream->operation.dma_code = ASIC_EVT_GD_DMA;
+    stream->total_bytes = sectors * GDROM_DIRECT_SECTOR_SIZE;
+    memset(observed, 0, sizeof(*observed));
+    observed->phase = GDROM_DIRECT_PHASE_WAIT_IDLE;
+
+    deadline = timer_ms_gettime64() + timeout;
+    if(g1_bus_lock_timed(timeout) < 0)
+        goto fail_free;
+    if(direct_request_cancelled(owner)) {
+        errno = ECANCELED;
+        goto fail_release;
+    }
+
+    G1_OUT32(G1_ATA_PIO_RACCESS_WAIT, G1_ACCESS_PIO_DEFAULT);
+    G1_OUT32(G1_ATA_PIO_WACCESS_WAIT, G1_ACCESS_PIO_DEFAULT);
+    if(deadline_timeout(deadline, &remaining) < 0
+            || g1_bus_select_device_timed(0, remaining, NULL) < 0
+            || deadline_timeout(deadline, &remaining) < 0
+            || g1_bus_wait_status(0, G1_ATA_SR_BSY | G1_ATA_SR_DRQ,
+                                  remaining, &status) < 0)
+        goto fail_release;
+
+    G1_OUT8(G1_ATA_CTL, GDROM_CTL_INTERRUPTS_OFF);
+    (void)G1_IN8(G1_ATA_STATUS_REG);
+    *(volatile uint32_t *)ASIC_ACK_B = 1u;
+
+    stream->command_active = true;
+    if(set_dma_mode2(deadline, observed) < 0)
+        goto fail_release;
+    stream->command_active = false;
+
+    stream->dma_client = g1_bus_dma_client_register(
+        direct_dma_irq, &stream->operation);
+    if(stream->dma_client == G1_BUS_DMA_CLIENT_INVALID)
+        goto fail_release;
+    stream->operation.active = true;
+    if(g1_bus_gd_command_client_register(
+            direct_command_irq, &stream->operation) < 0)
+        goto fail_release;
+    stream->command_client = true;
+
+    G1_OUT32(G1_ATA_DMA_RACCESS_WAIT, G1_ACCESS_WDMA_MODE2);
+    G1_OUT8(G1_ATA_CTL, GDROM_CTL_INTERRUPTS_ON);
+    G1_OUT8(G1_ATA_FEATURES, G1_ATA_FEATURE_DMA);
+    G1_OUT8(G1_ATA_LBA_LOW, 0);
+    G1_OUT8(G1_ATA_LBA_MID, 0);
+    G1_OUT8(G1_ATA_LBA_HIGH, 0);
+    G1_OUT8(G1_ATA_COMMAND_REG, G1_ATA_CMD_PACKET);
+    stream->command_active = true;
+    ata_400ns_delay();
+
+    observed->phase = GDROM_DIRECT_PHASE_WAIT_PACKET;
+    if(wait_packet_ready(deadline, observed,
+                         direct_request_cancelled, owner) < 0)
+        goto fail_release;
+
+    status = G1_IN8(G1_ATA_STATUS_REG);
+    reason = G1_IN8(G1_ATA_IRQ_REASON);
+    observed->ata_status = status;
+    observed->interrupt_reason = reason;
+    if(!(status & G1_ATA_SR_DRQ)
+            || (reason & GDROM_REASON_MASK) != GDROM_REASON_PACKET_OUT) {
+        errno = EPROTO;
+        goto fail_release;
+    }
+
+    rearm_command_irq(&stream->operation);
+    write_packet(&packet);
+    ata_400ns_delay();
+    observed->phase = GDROM_DIRECT_PHASE_WAIT_DMA;
+    return stream;
+
+fail_release:
+    direct_stream_release(stream, observed);
+    return NULL;
+fail_free:
+    free(stream);
+    return NULL;
+}
+
+static int direct_stream_terminal_status(
+        gdrom_direct_stream_t *stream, cdrom_request_t *owner,
+        cdrom_request_t *transfer, uint64_t deadline,
+        gdrom_direct_result_t *result) {
+    uint8_t status;
+    uint8_t reason;
+
+    for(;;) {
+        status = G1_IN8(G1_ATA_ALTSTATUS);
+        /* BSY is normally clear during a packet data phase, so it cannot by
+           itself identify command completion. Wait until DRQ has also fallen
+           and the interrupt-reason bits describe the terminal status phase.
+           CHECK/DF are terminal regardless of the reason byte. */
+        if(!(status & G1_ATA_SR_BSY)) {
+            reason = G1_IN8(G1_ATA_IRQ_REASON);
+            if((status & (G1_ATA_SR_ERR | G1_ATA_SR_DF))
+                    || (!(status & G1_ATA_SR_DRQ)
+                        && (reason & GDROM_REASON_MASK)
+                            == GDROM_REASON_STATUS))
+                break;
+        }
+        if(direct_request_cancelled(owner)
+                || direct_request_cancelled(transfer)) {
+            errno = ECANCELED;
+            return -1;
+        }
+        if(timer_ms_gettime64() >= deadline) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        sem_wait_timed(stream->operation.event,
+                       GDROM_DMA_PROGRESS_POLL_MS);
+    }
+
+    status = G1_IN8(G1_ATA_STATUS_REG);
+    reason = G1_IN8(G1_ATA_IRQ_REASON);
+    stream->command_active = false;
+    result->phase = GDROM_DIRECT_PHASE_COMPLETE;
+    result->ata_status = status;
+    result->interrupt_reason = reason;
+    if(status & G1_ATA_SR_ERR)
+        result->ata_error = G1_IN8(G1_ATA_ERROR);
+    if(status & (G1_ATA_SR_ERR | G1_ATA_SR_DF)) {
+        errno = EIO;
+        (void)capture_check_sense_locked(result, NULL);
+        return -1;
+    }
+    if((reason & GDROM_REASON_MASK) != GDROM_REASON_STATUS) {
+        errno = EPROTO;
+        return -1;
+    }
+    return 0;
+}
+
+int gdrom_direct_stream_transfer(
+        gdrom_direct_stream_t *stream, cdrom_request_t *owner,
+        cdrom_request_t *transfer, void *buffer, size_t bytes,
+        uint32_t timeout, gdrom_direct_result_t *result) {
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *observed = result ? result : &local_result;
+    uintptr_t buffer_address = (uintptr_t)buffer;
+    uint32_t physical_address;
+    uint32_t physical_bank;
+    uint64_t deadline;
+    bool cacheable;
+
+    if(!stream || !owner || !transfer || !buffer || !bytes || !timeout
+            || (buffer_address & 31u) || (bytes & 31u)
+            || bytes > stream->total_bytes - stream->transferred_bytes) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    physical_address = (uint32_t)(buffer_address & MEM_AREA_CACHE_MASK);
+    physical_bank = physical_address & 0xff000000u;
+    if((physical_bank != 0x0c000000u
+            && physical_bank != 0x0e000000u)
+            || bytes - 1u > (physical_bank | 0x00ffffffu)
+                              - physical_address) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    memset(observed, 0, sizeof(*observed));
+    observed->phase = GDROM_DIRECT_PHASE_WAIT_DMA;
+    deadline = timer_ms_gettime64() + timeout;
+    cacheable = (buffer_address & MEM_AREA_P2_BASE) != MEM_AREA_P2_BASE;
+    if(cacheable)
+        dcache_inval_range(buffer_address, bytes);
+
+    stream->operation.dma_event = false;
+    stream->operation.dma_code = ASIC_EVT_GD_DMA;
+    /* A streaming SPI command is already holding data in the drive buffer.
+       Each transfer only re-arms Holly: protection and geometry first, enable
+       second, and GDST last. */
+    G1_OUT32(G1_ATA_DMA_PROTECTION_P2,
+             dma_protection_value(physical_address, bytes));
+    G1_OUT32(G1_ATA_DMA_ADDRESS, physical_address);
+    G1_OUT32(G1_ATA_DMA_LENGTH, bytes);
+    G1_OUT32(G1_ATA_DMA_DIRECTION, G1_DMA_TO_MEMORY);
+    G1_OUT32(G1_ATA_DMA_ENABLE, 1);
+    G1_OUT32(G1_ATA_DMA_STATUS, 1);
+
+    for(;;) {
+        size_t progress = G1_IN32(G1_ATA_DMA_CURRENT_LEN);
+
+        observed->dma_current_address =
+            G1_IN32(G1_ATA_DMA_CURRENT_ADDR);
+        observed->dma_transferred = progress;
+        direct_request_progress(progress, transfer);
+        if(!g1_bus_dma_in_progress())
+            break;
+        if(direct_request_cancelled(owner)
+                || direct_request_cancelled(transfer)) {
+            errno = ECANCELED;
+            goto fail_dma;
+        }
+        if(timer_ms_gettime64() >= deadline) {
+            errno = ETIMEDOUT;
+            goto fail_dma;
+        }
+        sem_wait_timed(stream->operation.event,
+                       GDROM_DMA_PROGRESS_POLL_MS);
+    }
+
+    g1_bus_dma_disable();
+    observed->dma_event_seen = stream->operation.dma_event;
+    observed->dma_event = stream->operation.dma_code;
+    observed->dma_current_address = G1_IN32(G1_ATA_DMA_CURRENT_ADDR);
+    observed->dma_transferred = G1_IN32(G1_ATA_DMA_CURRENT_LEN);
+    observed->transferred = observed->dma_transferred;
+    if(cacheable)
+        dcache_inval_range(buffer_address, bytes);
+
+    if(stream->operation.dma_event
+            && stream->operation.dma_code != ASIC_EVT_GD_DMA) {
+        errno = EIO;
+        return -1;
+    }
+    if(observed->dma_transferred != bytes) {
+        errno = EPROTO;
+        return -1;
+    }
+
+    stream->transferred_bytes += bytes;
+    if(stream->transferred_bytes == stream->total_bytes) {
+        if(direct_stream_terminal_status(stream, owner, transfer,
+                                         deadline, observed) < 0)
+            return -1;
+    }
+    else if(stream->operation.command_event) {
+        /* CD_READ2 must remain active until the requested physical range has
+           been drained. Early terminal INTRQ is a drive error/protocol fault. */
+        if(direct_stream_terminal_status(stream, owner, transfer,
+                                         deadline, observed) < 0)
+            return -1;
+        errno = EPROTO;
+        return -1;
+    }
+
+    return 0;
+
+fail_dma:
+    g1_bus_dma_disable();
+    if(wait_dma_inactive(timer_ms_gettime64() + GDROM_DMA_CLEANUP_MS) < 0
+            && g1_bus_dma_in_progress()) {
+        g1_bus_mark_faulted();
+        stream->bus_faulted = true;
+    }
+    if(cacheable && !g1_bus_dma_in_progress())
+        dcache_inval_range(buffer_address, bytes);
+    return -1;
+}
+
+int gdrom_direct_stream_end(gdrom_direct_stream_t *stream,
+                            gdrom_direct_result_t *result) {
+    if(!stream) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    direct_stream_release(stream, result);
+    return g1_bus_is_faulted() ? -1 : 0;
+}
+
+static int direct_request_execute(cdrom_request_t *request, void *data) {
+    gdrom_direct_async_read_t *read = data;
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *result = read->result
+        ? read->result : &local_result;
+
+    if(gdrom_direct_read_sectors_dma_request(
+            request, read->buffer, read->fad, read->sectors,
+            read->sector_type, read->timeout, result) == 0)
+        return ERR_OK;
+
+    return direct_request_result(errno, result);
+}
+
+cdrom_request_t *gdrom_direct_read_sectors_dma_async(
+        void *buffer, uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_read_t read = {
+        .buffer = buffer,
+        .fad = fad,
+        .sectors = sectors,
+        .sector_type = sector_type,
+        .timeout = timeout,
+        .result = result,
+    };
+    size_t bytes;
+
+    if(!buffer || ((uintptr_t)buffer & 31u) || fad < 150u
+            || fad > GDROM_SPI_MAX_U24 || !sectors
+            || sectors > GDROM_DIRECT_DMA_MAX_SECTORS || !timeout
+            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
+                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)
+            || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    bytes = sectors * GDROM_DIRECT_SECTOR_SIZE;
+    return cdrom_request_submit_executor(
+        CD_CMD_DMAREAD, &read, sizeof(read), bytes, bytes, bytes, timeout,
+        direct_request_execute, NULL, NULL, callback, callback_data);
+}
+
+cdrom_stream_session_t *gdrom_direct_stream_session_start(
+        uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t start_timeout,
+        uint32_t idle_timeout) {
+    if(sectors > SIZE_MAX / GDROM_DIRECT_SECTOR_SIZE) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+
+    return cdrom_stream_session_start_internal(
+        fad, sectors, GDROM_DIRECT_SECTOR_SIZE,
+        sectors * GDROM_DIRECT_SECTOR_SIZE, start_timeout, idle_timeout,
+        CDROM_REQUEST_BACKEND_DIRECT, sector_type, NULL, NULL);
+}
+
+static int direct_seek_execute(cdrom_request_t *request, void *data) {
+    gdrom_direct_async_seek_t *seek = data;
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *result = seek->result
+        ? seek->result : &local_result;
+
+    if(seek_internal(seek->fad, seek->timeout, result,
+                     direct_request_cancelled, request) == 0)
+        return ERR_OK;
+    return direct_request_result(errno, result);
+}
+
+cdrom_request_t *gdrom_direct_seek_async_internal(
+        uint32_t fad, uint32_t timeout, gdrom_direct_result_t *result,
+        cdrom_request_finalizer_t finalizer, void *finalizer_data,
+        cdrom_request_callback_t callback, void *callback_data) {
+    gdrom_direct_async_seek_t seek = {
+        .fad = fad,
+        .timeout = timeout,
+        .result = result,
+    };
+
+    if(fad < 150u || fad > GDROM_SPI_MAX_U24 || !timeout) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    return cdrom_request_submit_executor(
+        CD_CMD_SEEK, &seek, sizeof(seek), 0, 0, 0, timeout,
+        direct_seek_execute, finalizer, finalizer_data,
+        callback, callback_data);
+}
+
+cdrom_request_t *gdrom_direct_seek_async(
+        uint32_t fad, uint32_t timeout, gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    return gdrom_direct_seek_async_internal(
+        fad, timeout, result, NULL, NULL, callback, callback_data);
 }
 
 int gdrom_direct_dma_diagnose(

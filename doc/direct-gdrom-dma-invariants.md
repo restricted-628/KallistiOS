@@ -62,6 +62,10 @@ transfer is active.
   G1 ownership. Callers must divide larger operations.
 - The transport result reports bytes actually transferred before completion
   or failure.
+- Request-engine reads divide larger operations into bounded segments and
+  requeue between them so unrelated G1 clients can make progress.
+- Requested payload, useful data, and physical I/O remain separate counters
+  in asynchronous status.
 
 ## Cache coherency
 
@@ -85,12 +89,16 @@ registered clients.
 - Interrupt clients wake only the thread which owns the direct command.
 - Stale interrupt state is matched against the active DMA operation before it
   can terminate anything.
+- Application callbacks run on the isolated callback worker, never in
+  interrupt context or on the transport worker.
 - Access-during-DMA, illegal-address, and overrun conditions are terminal bus
   faults unless safe quiescence is established.
 
-## Timeout and diagnostic aborts
+## Cancellation, timeout, and diagnostic aborts
 
 - Every public transport operation requires a nonzero timeout.
+- Queued requests cancel without touching hardware.
+- Active cancellation wakes the DMA owner and enters bounded recovery.
 - The controlled DMA diagnostic can force an abort after starting Holly.
 - A failed stop proceeds to bounded recovery.
 - A timeout never becomes an unbounded wait during cleanup.
@@ -108,6 +116,19 @@ Recovery is deliberately conservative:
 
 The direct backend does not attempt cold-boot optical-drive authorization.
 
+## Staged streaming
+
+A staged session owns the drive while read-ahead data remains in the drive
+buffer. Transfers from that buffer use ordinary request objects.
+
+- Every session requires a nonzero idle timeout.
+- The timeout bounds application-controlled ownership of G1.
+- A closing flag orders timeout/cancellation against concurrent transfer
+  publication.
+- Transfers bypass the normal command queue because the session already owns
+  the drive.
+- Session state and transfer progress remain separate.
+
 ## Validation requirements
 
 Before a direct-backend change is accepted, it must pass:
@@ -117,12 +138,12 @@ Before a direct-backend change is accepted, it must pass:
 - direct status and readiness diagnostics;
 - bounded PIO reads compared byte-for-byte with the BIOS backend;
 - aligned DMA reads with destination guards;
-- timeout, forced-error, and post-recovery reuse checks;
+- cancellation, timeout, forced-error, and post-recovery reuse checks;
 - BIOS/direct coexistence tests through shared G1 ownership;
 - dynarec and interpreter emulator runs without an SH-4 exception.
 
-Request-engine cancellation, staged sessions, and ISO9660 integration are
-separate dependent topics and carry their own validation gates.
+ISO9660 integration is a separate dependent topic and carries its own
+validation gates.
 
 Physical-drive timing, tray behavior, CD-R variability, and cache aliases still
 require hardware validation. None of those gates may be converted into a
