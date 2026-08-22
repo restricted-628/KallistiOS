@@ -11,7 +11,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef PVR_MULTIPASS_MAX_PASSES
 #define PVR_MULTIPASS_MAX_PASSES 8u
+#endif
 #define PVR_REGION_WORDS_PER_ENTRY 6u
 #define PVR_REGION_HEADER_BYTES 0x48u
 

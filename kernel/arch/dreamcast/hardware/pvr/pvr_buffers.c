@@ -41,6 +41,9 @@ static void pvr_init_tile_matrix(int which, bool presort) {
     uint32_t      *vr;  /* Note: We're working in 4-byte pointer maths in this function */
     pvr_ta_pass_layout_t pass;
     pvr_ta_layout_t layout;
+    const pvr_ta_pass_layout_t *passes;
+    const pvr_ta_layout_t *active_layout;
+    uint32_t offset;
     int result;
     int i;
 
@@ -55,25 +58,35 @@ static void pvr_init_tile_matrix(int which, bool presort) {
     /* Header of zeros */
     vr += BYTES_TO_WORDS(buf->tile_matrix - PVR_REGION_HEADER_BYTES);
 
-    for(i = 0; i < PVR_REGION_HEADER_BYTES; i += 4)
+    for(offset = 0; offset < PVR_REGION_HEADER_BYTES; offset += 4)
         * vr++ = 0;
 
-    for(i = 0; i < PVR_OPB_COUNT; ++i)
-        pass.opb_size[i] = pvr_state.opb_size[i];
+    if(pvr_state.multipass) {
+        passes = pvr_state.multipass->passes;
+        active_layout = &pvr_state.multipass->layout;
+    }
+    else {
+        for(i = 0; i < PVR_OPB_COUNT; ++i)
+            pass.opb_size[i] = pvr_state.opb_size[i];
 
-    pass.presort = presort;
+        pass.presort = presort;
 
-    result = pvr_ta_layout_calculate(&layout, pvr_state.tw, pvr_state.th,
-                                     &pass, 1);
-    assert(result == 0);
+        result = pvr_ta_layout_calculate(&layout, pvr_state.tw, pvr_state.th,
+                                         &pass, 1);
+        assert(result == 0);
 
-    if(result < 0)
-        return;
+        if(result < 0)
+            return;
 
-    assert(layout.total_opb_size == buf->opb_size);
-    assert(layout.region_words * sizeof(uint32_t) == buf->tile_matrix_size);
-    result = pvr_ta_layout_build_regions(vr, layout.region_words, buf->opb,
-                                         &layout, &pass);
+        passes = &pass;
+        active_layout = &layout;
+    }
+
+    assert(active_layout->total_opb_size == buf->opb_size);
+    assert(active_layout->region_words * sizeof(uint32_t) ==
+           buf->tile_matrix_size);
+    result = pvr_ta_layout_build_regions(vr, active_layout->region_words,
+                                         buf->opb, active_layout, passes);
     assert(result == 0);
 }
 
@@ -88,6 +101,8 @@ void pvr_init_tile_matrices(bool presort) {
 void pvr_set_presort_mode(bool presort) {
     uint32_t tile_matrix;
     uint32_t *vr;
+    size_t pass_count = pvr_state.multipass ?
+        pvr_state.multipass->pass_count : 1;
     int x, y;
 
     if(__predict_false(!pvr_state.vbuf_doublebuf))
@@ -98,12 +113,66 @@ void pvr_set_presort_mode(bool presort) {
 
     for(x = 0; x < pvr_state.tw; x++) {
         for(y = 0; y < pvr_state.th; y++) {
-            vr[0] = (y << 8) | (x << 2) | (presort << 29);
-            vr += 6;
+            size_t pass;
+
+            for(pass = 0; pass < pass_count; ++pass) {
+                if(presort)
+                    vr[0] |= BIT(29);
+                else
+                    vr[0] &= ~BIT(29);
+
+                vr += PVR_REGION_WORDS_PER_ENTRY;
+            }
         }
     }
 
-    vr[-6] |= BIT(31);
+    if(pvr_state.multipass) {
+        size_t pass;
+
+        for(pass = 0; pass < pass_count; ++pass)
+            pvr_state.multipass->passes[pass].presort = presort;
+    }
+}
+
+static void calculate_pass_masks(const pvr_ta_pass_layout_t *pass,
+                                 uint32_t *enabled, uint32_t *register_mask) {
+    int i;
+
+    *enabled = 0;
+    *register_mask = 0;
+
+    for(i = 0; i < PVR_OPB_COUNT; ++i) {
+        uint32_t size_code = pass->opb_size[i] / 32u;
+
+        if(!size_code)
+            continue;
+
+        /* The 128-byte bin uses register encoding three rather than four. */
+        if(size_code == 4)
+            size_code = 3;
+
+        *enabled |= BIT(i);
+        *register_mask |= size_code << (4 * i);
+    }
+}
+
+void pvr_activate_pass(size_t pass) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+    int i;
+
+    assert(multipass && pass < multipass->pass_count);
+
+    pvr_state.lists_enabled = multipass->lists_enabled[pass];
+    pvr_state.list_reg_mask = multipass->list_reg_mask[pass];
+
+    for(i = 0; i < PVR_OPB_COUNT; ++i)
+        pvr_state.opb_size[i] = (int)multipass->passes[pass].opb_size[i];
+}
+
+bool pvr_registration_is_final(void) {
+    return !pvr_state.multipass ||
+        pvr_state.multipass->ta_pass + 1u ==
+        pvr_state.multipass->pass_count;
 }
 
 
@@ -118,9 +187,12 @@ up and placed at 0x000000 and 0x400000.
 
 */
 static int calculate_buffer_plan(const pvr_init_params_t *params,
+                                 pvr_multipass_state_t *multipass,
                                  pvr_ta_pass_layout_t *pass,
                                  pvr_ta_layout_t *layout,
                                  pvr_ta_frame_layout_t *frame_layout) {
+    const pvr_ta_pass_layout_t *passes;
+    size_t pass_count;
     uint32_t width;
     uint32_t height;
     uint32_t tile_width;
@@ -163,25 +235,37 @@ static int calculate_buffer_plan(const pvr_init_params_t *params,
     height = (height + 31u) & ~UINT32_C(31);
     tile_height = height / 32u;
 
-    for(i = 0; i < PVR_OPB_COUNT; ++i) {
-        switch(params->opb_sizes[i]) {
-            case PVR_BINSIZE_0:
-            case PVR_BINSIZE_8:
-            case PVR_BINSIZE_16:
-            case PVR_BINSIZE_32:
-                pass->opb_size[i] = (uint32_t)params->opb_sizes[i] * 4u;
-                break;
-            default:
-                errno = EINVAL;
-                return -1;
+    if(multipass) {
+        passes = multipass->passes;
+        pass_count = multipass->pass_count;
+    }
+    else {
+        for(i = 0; i < PVR_OPB_COUNT; ++i) {
+            switch(params->opb_sizes[i]) {
+                case PVR_BINSIZE_0:
+                case PVR_BINSIZE_8:
+                case PVR_BINSIZE_16:
+                case PVR_BINSIZE_32:
+                    pass->opb_size[i] =
+                        (uint32_t)params->opb_sizes[i] * 4u;
+                    break;
+                default:
+                    errno = EINVAL;
+                    return -1;
+            }
         }
+
+        pass->presort = !!params->autosort_disabled;
+        passes = pass;
+        pass_count = 1;
     }
 
-    pass->presort = !!params->autosort_disabled;
-
     if(pvr_ta_layout_calculate(layout, tile_width, tile_height,
-                               pass, 1) < 0)
+                               passes, pass_count) < 0)
         return -1;
+
+    if(multipass)
+        multipass->layout = *layout;
 
     bytes_per_pixel = (uint32_t)vid_pmode_bpp[vid_mode->pm];
 
@@ -200,15 +284,18 @@ static int calculate_buffer_plan(const pvr_init_params_t *params,
         frame_size);
 }
 
-int pvr_buffers_validate(const pvr_init_params_t *params) {
+int pvr_buffers_validate(const pvr_init_params_t *params,
+                         pvr_multipass_state_t *multipass) {
     pvr_ta_pass_layout_t pass;
     pvr_ta_layout_t layout;
     pvr_ta_frame_layout_t frame_layout;
 
-    return calculate_buffer_plan(params, &pass, &layout, &frame_layout);
+    return calculate_buffer_plan(params, multipass, &pass, &layout,
+                                 &frame_layout);
 }
 
-int pvr_allocate_buffers(const pvr_init_params_t *params) {
+int pvr_allocate_buffers(const pvr_init_params_t *params,
+                         pvr_multipass_state_t *multipass) {
     volatile pvr_ta_buffers_t   *buf;
     volatile pvr_frame_buffers_t    *fbuf;
     pvr_ta_pass_layout_t pass;
@@ -217,7 +304,8 @@ int pvr_allocate_buffers(const pvr_init_params_t *params) {
     uint32_t bank_usage;
     int i, j;
 
-    if(calculate_buffer_plan(params, &pass, &layout, &frame_layout) < 0)
+    if(calculate_buffer_plan(params, multipass, &pass, &layout,
+                             &frame_layout) < 0)
         return -1;
 
     /* Set screen sizes; pvr_init has ensured that we have a valid mode
@@ -249,22 +337,28 @@ int pvr_allocate_buffers(const pvr_init_params_t *params) {
     pvr_state.curr_pclip_y = pvr_state.pclip_y;
 
     /* The shared overflow area grows toward increasing addresses. */
-    pvr_state.list_reg_mask = 0;
+    if(multipass) {
+        size_t pass_index;
 
-    for(i = 0; i < PVR_OPB_COUNT; i++) {
-        uint32_t size_code = pass.opb_size[i] / 32u;
-
-        pvr_state.opb_size[i] = (int)pass.opb_size[i];
-
-        if(size_code > 0) {
-            /* Convert 1, 2, and 4 units to the register's 1, 2, and 3
-               encodings. */
-            if(size_code == 4)
-                size_code = 3;
-
-            pvr_state.lists_enabled |= BIT(i);
-            pvr_state.list_reg_mask |= size_code << (4 * i);
+        for(pass_index = 0; pass_index < multipass->pass_count;
+                ++pass_index) {
+            calculate_pass_masks(&multipass->passes[pass_index],
+                                 &multipass->lists_enabled[pass_index],
+                                 &multipass->list_reg_mask[pass_index]);
         }
+
+        pvr_activate_pass(0);
+    }
+    else {
+        uint32_t enabled;
+        uint32_t register_mask;
+
+        calculate_pass_masks(&pass, &enabled, &register_mask);
+        pvr_state.lists_enabled = enabled;
+        pvr_state.list_reg_mask = register_mask;
+
+        for(i = 0; i < PVR_OPB_COUNT; ++i)
+            pvr_state.opb_size[i] = (int)pass.opb_size[i];
     }
 
     /* Initialize each buffer set */

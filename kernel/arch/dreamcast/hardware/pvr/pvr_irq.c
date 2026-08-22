@@ -87,6 +87,7 @@ static void pvr_render_lists(void) {
     if(pvr_state.ta_busy
        && !pvr_state.render_busy
        && (!pvr_state.render_completed || pvr_state.curr_to_texture)
+       && pvr_registration_is_final()
        && pvr_state.lists_transferred == pvr_state.lists_enabled) {
 
         /* XXX Note:
@@ -246,6 +247,16 @@ void pvr_int_handler(uint32_t code, void *data) {
 
             if(pvr_state.lists_transferred != pvr_state.lists_enabled)
                 return;
+
+            /* Intermediate pass completion admits the thread performing the
+               continuation sequence. It must not publish scene-level
+               registration completion or release the renderer. */
+            genwait_wake_all((void *)&pvr_state.lists_transferred);
+
+            if(!pvr_registration_is_final()) {
+                thd_schedule(true);
+                return;
+            }
 
             pvr_sync_stats(PVR_SYNC_REGDONE);
             pvr_event_dispatch(PVR_EVENT_REGISTRATION_COMPLETE,

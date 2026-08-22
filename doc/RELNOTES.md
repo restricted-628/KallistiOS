@@ -45,6 +45,11 @@ lifecycle and naming conventions.
 * PVR initialization now validates the complete vertex, object-list, region,
   and frame-buffer layout before clearing VRAM or changing hardware state.
   Invalid bin sizes, overflow, and frame-bank exhaustion fail cleanly.
+* Added opt-in direct PVR multipass registration for one through eight passes.
+  Each pass has independent bins and translucent sorting, while hardware
+  continuation preserves shared parameters, depth, and tile accumulation until
+  one final renderer submission. The established one-pass path retains its ABI,
+  allocation model, and DMA behavior.
 * Completed the established extended texture loader with checked dimensions,
   honest preformatted-copy behavior, bounded transfer selection, and an
   error-reporting entry point while preserving the original void wrapper.

@@ -152,7 +152,7 @@ __BEGIN_DECLS
 #define PVR_YUV_CFG             0x014c  /**< \brief YUV configuration */
 #define PVR_YUV_STAT            0x0150  /**< \brief The number of YUV macroblocks converted */
 
-#define PVR_UNK_0160            0x0160  /**< \brief ?? */
+#define PVR_TA_LIST_CONT        0x0160  /**< \brief Continue TA list registration */
 #define PVR_TA_OPB_INIT         0x0164  /**< \brief Object pointer buffer position init */
 
 #define PVR_FOG_TABLE_BASE      0x0200  /**< \brief Base of the fog table */

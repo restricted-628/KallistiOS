@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <dc/pvr.h>
 #include <dc/video.h>
@@ -31,11 +32,80 @@ int pvr_init_defaults(void) {
     return pvr_init(&pvr_default_params);
 }
 
+static int pvr_init_common(const pvr_init_params_t *params,
+                           pvr_multipass_state_t *multipass);
+
+int pvr_init(const pvr_init_params_t *params) {
+    return pvr_init_common(params, NULL);
+}
+
+int pvr_init_multipass(const pvr_init_params_t *params,
+                       const pvr_pass_config_t *passes, size_t pass_count) {
+    pvr_multipass_state_t *multipass;
+    size_t pass;
+
+    if(!params || !passes || !pass_count ||
+            pass_count > PVR_MULTIPASS_MAX_PASSES) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Buffered passes need independent frame/pass/list staging. Refuse the
+       old two-frame, one-pass buffers rather than aliasing pass data. */
+    if(params->dma_enabled) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    multipass = calloc(1, sizeof(*multipass));
+
+    if(!multipass) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    multipass->pass_count = pass_count;
+
+    for(pass = 0; pass < pass_count; ++pass) {
+        int list;
+
+        for(list = 0; list < PVR_OPB_COUNT; ++list) {
+            switch(passes[pass].opb_sizes[list]) {
+                case PVR_BINSIZE_0:
+                case PVR_BINSIZE_8:
+                case PVR_BINSIZE_16:
+                case PVR_BINSIZE_32:
+                    multipass->passes[pass].opb_size[list] =
+                        (uint32_t)passes[pass].opb_sizes[list] * 4u;
+                    break;
+                default:
+                    free(multipass);
+                    errno = EINVAL;
+                    return -1;
+            }
+        }
+
+        multipass->passes[pass].presort =
+            !!passes[pass].autosort_disabled;
+    }
+
+    if(pvr_init_common(params, multipass) < 0) {
+        if(pvr_state.multipass == multipass)
+            pvr_state.multipass = NULL;
+
+        free(multipass);
+        return -1;
+    }
+
+    return 0;
+}
+
 /* Initialize the PVR chip to ready status, enabling the specified lists
    and using the specified parameters; note that bins and vertex buffers
    come from the texture memory pool! Expects that a 2D mode was
    initialized already using the vid_* API. */
-int pvr_init(const pvr_init_params_t *params) {
+static int pvr_init_common(const pvr_init_params_t *params,
+                           pvr_multipass_state_t *multipass) {
     uint16_t vscale = 1024;
 
     /* If we're already initialized, fail */
@@ -60,7 +130,7 @@ int pvr_init(const pvr_init_params_t *params) {
 
     /* Reject an invalid or oversized memory plan before vid_empty() destroys
        the current VRAM contents or any PVR register is changed. */
-    if(pvr_buffers_validate(params) < 0)
+    if(pvr_buffers_validate(params, multipass) < 0)
         return -1;
 
     /* Clear out video memory */
@@ -72,6 +142,7 @@ int pvr_init(const pvr_init_params_t *params) {
 
     /* Start off with a nice empty structure */
     memset((void *)&pvr_state, 0, sizeof(pvr_state));
+    pvr_state.multipass = multipass;
 
     /* Enable DMA if the user wants that. */
     pvr_state.dma_mode = params->dma_enabled;
@@ -82,7 +153,7 @@ int pvr_init(const pvr_init_params_t *params) {
     pvr_state.vbuf_doublebuf = !params->vbuf_doublebuf_disabled;
 
     /* Everything's clear, do the initial buffer pointer setup */
-    if(pvr_allocate_buffers(params) < 0)
+    if(pvr_allocate_buffers(params, multipass) < 0)
         return -1;
 
     /* Initialize tile matrices */
@@ -197,8 +268,12 @@ int pvr_init(const pvr_init_params_t *params) {
 /* Shut down the PVR chip from ready status, leaving it in 2D mode as it
    was before the init. */
 int pvr_shutdown(void) {
+    pvr_multipass_state_t *multipass;
+
     if(!pvr_state.valid)
         return -1;
+
+    multipass = pvr_state.multipass;
 
     /* Set us invalid */
     pvr_state.valid = 0;
@@ -245,6 +320,9 @@ int pvr_shutdown(void) {
 
     /* Destroy the mutex */
     sem_destroy((semaphore_t *)&pvr_state.dma_lock);
+
+    pvr_state.multipass = NULL;
+    free(multipass);
 
     /* Clear video memory */
     vid_empty();

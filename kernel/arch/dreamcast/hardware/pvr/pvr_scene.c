@@ -215,6 +215,14 @@ static void pvr_start_ta_rendering(void) {
 void pvr_scene_begin(void) {
     int i;
 
+    if(pvr_state.multipass) {
+        pvr_state.multipass->build_pass = 0;
+        pvr_state.multipass->ta_pass = 0;
+        pvr_state.multipass->fault_sequence =
+            pvr_state.fault_status.sequence;
+        pvr_activate_pass(0);
+    }
+
     pvr_state.next_to_texture = 0;
     set_next_full_pixel_clip((uint32_t)vid_mode->width,
                              (uint32_t)vid_mode->height);
@@ -243,6 +251,109 @@ void pvr_scene_begin(void) {
     }
 
     pvr_status_advance();
+}
+
+static int finish_direct_pass_lists(void) {
+    int i;
+
+    if(pvr_state.list_reg_open != PVR_LIST_NONE && pvr_list_finish() < 0)
+        return -1;
+
+    /* Every enabled list must contribute an end marker before continuation or
+       final rendering. Empty lists receive the established blank header. */
+    for(i = 0; i < PVR_OPB_COUNT; ++i) {
+        if((pvr_state.lists_enabled & BIT(i)) &&
+                !(pvr_state.lists_closed & BIT(i))) {
+            if(pvr_list_begin(i) < 0)
+                return -1;
+
+            pvr_blank_polyhdr(i);
+
+            if(pvr_list_finish() < 0)
+                return -1;
+        }
+    }
+
+    return 0;
+}
+
+int pvr_scene_next_pass(void) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+    volatile pvr_ta_buffers_t *buffer;
+    size_t next_pass;
+    int old_irq;
+    int wait_result = 0;
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!multipass) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    if(pvr_state.dma_mode) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(multipass->build_pass + 1u >= multipass->pass_count) {
+        errno = EALREADY;
+        return -1;
+    }
+
+    if(finish_direct_pass_lists() < 0)
+        return -1;
+
+    old_irq = irq_disable();
+
+    if(pvr_state.lists_transferred != pvr_state.lists_enabled) {
+        wait_result = genwait_wait((void *)&pvr_state.lists_transferred,
+                                   "PVR multipass boundary", 100);
+    }
+
+    if(wait_result < 0) {
+        bool faulted = multipass->fault_sequence !=
+            pvr_state.fault_status.sequence;
+
+        irq_restore(old_irq);
+        errno = faulted ? EIO : ETIMEDOUT;
+        return -1;
+    }
+
+    if(multipass->fault_sequence != pvr_state.fault_status.sequence) {
+        irq_restore(old_irq);
+        errno = EIO;
+        return -1;
+    }
+
+    /* The IRQ cannot complete another list while the continuation registers
+       and their software masks are transitioned as one operation. */
+    next_pass = multipass->build_pass + 1u;
+    multipass->build_pass = next_pass;
+    multipass->ta_pass = next_pass;
+    pvr_activate_pass(next_pass);
+    pvr_state.lists_transferred = 0;
+    pvr_state.lists_closed = 0;
+    pvr_state.list_reg_open = PVR_LIST_NONE;
+
+    buffer = pvr_state.ta_buffers + pvr_state.ta_target;
+    PVR_SET(PVR_TA_OPB_START, buffer->opb +
+            multipass->layout.pass_opb_offset[next_pass]);
+    PVR_SET(PVR_OPB_CFG, multipass->list_reg_mask[next_pass]);
+    PVR_SET(PVR_TA_LIST_CONT, BIT(31));
+    (void)PVR_GET(PVR_TA_LIST_CONT);
+
+    pvr_status_advance();
+    irq_restore(old_irq);
+    return 0;
 }
 
 void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry) {
@@ -506,6 +617,11 @@ int pvr_list_begin(pvr_list_t list) {
         return -1;
     }
 
+    if(!(pvr_state.lists_enabled & BIT(list))) {
+        errno = ENODEV;
+        return -1;
+    }
+
     b = pvr_state.dma_buffers + pvr_state.ram_target;
 
     if(pvr_state.dma_mode && b->flushed & BIT(list)) {
@@ -740,6 +856,13 @@ int pvr_scene_finish(void) {
         return -1;
     }
 
+    if(pvr_state.multipass &&
+            pvr_state.multipass->build_pass + 1u !=
+            pvr_state.multipass->pass_count) {
+        errno = EPERM;
+        return -1;
+    }
+
     // If we're in DMA mode, then this works a little differently...
     if(pvr_state.dma_mode) {
         // If any enabled lists are empty, fill them with a blank polyhdr. Also
@@ -796,19 +919,8 @@ int pvr_scene_finish(void) {
         pvr_start_dma();
     }
     else {
-        /* If a list was open, close it */
-        if(pvr_state.list_reg_open != PVR_LIST_NONE)
-            pvr_list_finish();
-
-        /* If any lists weren't submitted, then submit blank ones now */
-        for(i = 0; i < PVR_OPB_COUNT; i++) {
-            if((pvr_state.lists_enabled & BIT(i))
-                    && (!(pvr_state.lists_closed & BIT(i)))) {
-                pvr_list_begin(i);
-                pvr_blank_polyhdr(i);
-                pvr_list_finish();
-            }
-        }
+        if(finish_direct_pass_lists() < 0)
+            return -1;
     }
 
     pvr_state.scene_active = false;

@@ -651,6 +651,26 @@ Striplength set to 2 */
 #define PVR_BINSIZE_32  32  /**< \brief 32-word (128-byte) length */
 /** @} */
 
+/** \brief Maximum number of hardware registration passes in one scene.
+    \ingroup pvr_init
+*/
+#define PVR_MULTIPASS_MAX_PASSES 8u
+
+/** \brief Configuration for one tile-accelerator registration pass.
+    \ingroup pvr_init
+
+    Each pass has an independent set of primitive bins and translucent sort
+    policy. Vertex storage is shared by the complete scene because the tile
+    accelerator preserves its parameter cursor between passes.
+*/
+typedef struct pvr_pass_config {
+    /** \brief Primitive bin sizes, in the same order as pvr_init_params_t. */
+    int opb_sizes[5];
+
+    /** \brief Disable translucent polygon autosorting for this pass. */
+    int autosort_disabled;
+} pvr_pass_config_t;
+
 /** \brief   PVR initialization structure
     \ingroup pvr_init
 
@@ -744,6 +764,38 @@ static const pvr_init_params_t pvr_default_params = {
                             mode active is not suitable for 3D
 */
 int pvr_init(const pvr_init_params_t *params);
+
+/** \brief Initialize the PVR for hardware multipass registration.
+    \ingroup pvr_init
+
+    Multipass registration submits several independently binned geometry
+    passes to the tile accelerator, then renders their combined region array
+    once. Depth and accumulated tile color are preserved across pass
+    boundaries. Applications advance between passes with
+    pvr_scene_next_pass().
+
+    This initial interface supports direct store-queue submission. A non-zero
+    params->dma_enabled is rejected with `ENOTSUP`; pass-specific buffered and
+    DMA submission requires independent staging storage and is intentionally
+    deferred to a separate additive interface.
+
+    The pass configuration is copied during initialization. No multipass
+    control allocation is made by pvr_init(), so applications that keep the
+    established one-pass API do not pay for this feature.
+
+    \param  params          Common vertex, framebuffer, and overflow settings.
+                            params->opb_sizes and params->autosort_disabled are
+                            ignored in favor of passes.
+    \param  passes         Array of pass-specific bin and sort settings.
+    \param  pass_count     Number of entries in passes, from one through
+                            PVR_MULTIPASS_MAX_PASSES.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to `EINVAL`, `ENOTSUP`,
+                            `ENOMEM`, `EOVERFLOW`, or `ENOSPC` as appropriate.
+*/
+int pvr_init_multipass(const pvr_init_params_t *params,
+                       const pvr_pass_config_t *passes, size_t pass_count);
 
 /** \brief   Simple PVR initialization.
     \ingroup pvr_init
@@ -908,6 +960,24 @@ void pvr_vertbuf_written(pvr_list_t list, size_t amt);
 */
 void pvr_scene_begin(void);
 
+/** \brief Finish the current registration pass and begin the next one.
+    \ingroup pvr_scene_mgmt
+
+    This operation closes every enabled list not already closed, waits for the
+    tile accelerator to consume their end markers, and performs the hardware
+    continuation sequence. It does not reset the shared parameter or overflow
+    cursors and does not start rendering.
+
+    The call is valid only for a scene started after pvr_init_multipass(), and
+    only before the configured final pass. The current implementation supports
+    direct submission; initialization rejects vertex DMA mode.
+
+    \retval 0               The next pass is ready for list submission.
+    \retval -1              On error, with errno set to `ENODEV`, `ENOTSUP`,
+                            `EPERM`, `EALREADY`, `ETIMEDOUT`, or `EIO`.
+*/
+int pvr_scene_next_pass(void);
+
 /** \brief   Begin collecting data for a frame of 3D output to the specified
              texture.
     \ingroup pvr_scene_mgmt
@@ -1066,7 +1136,8 @@ int pvr_user_clip_submit(pvr_list_t list, const pvr_user_clip_t *clip);
 
     \param  list            The list to open.
     \retval 0               On success.
-    \retval -1              If the specified list has already been closed.
+    \retval -1              If the list is invalid, disabled for the active
+                            pass, or has already been closed.
 */
 int pvr_list_begin(pvr_list_t list);
 
@@ -1199,7 +1270,8 @@ int pvr_list_flush(pvr_list_t list);
     pvr_scene_begin() or pvr_scene_begin_rtt() functions is called again.
 
     \retval 0               On success.
-    \retval -1              On error (no scene started).
+    \retval -1              On error (no scene started, or a multipass scene
+                            has not reached its final pass).
 */
 int pvr_scene_finish(void);
 

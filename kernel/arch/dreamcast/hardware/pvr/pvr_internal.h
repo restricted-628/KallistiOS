@@ -20,6 +20,8 @@
 #include <stdbool.h>
 #include <kos/sem.h>
 
+#include "pvr_multipass_layout.h"
+
 /**** State stuff ***************************************************/
 
 /* The internal workings of the PVR2 are quite complex, and thank goodness
@@ -138,6 +140,18 @@ typedef struct {
     uint32_t  frame, frame_size;      // Output frame buffer, size
 } pvr_frame_buffers_t;
 
+/* Per-use multipass state. The fixed one-pass API leaves this unallocated. */
+typedef struct {
+    pvr_ta_layout_t layout;
+    pvr_ta_pass_layout_t passes[PVR_MULTIPASS_MAX_PASSES];
+    uint32_t lists_enabled[PVR_MULTIPASS_MAX_PASSES];
+    uint32_t list_reg_mask[PVR_MULTIPASS_MAX_PASSES];
+    size_t pass_count;
+    size_t build_pass;
+    size_t ta_pass;
+    uint32_t fault_sequence;
+} pvr_multipass_state_t;
+
 /* PVR status structure; not only will this hold status information,
    but it will also server as the wait object for the frame-complete
    genwaits. */
@@ -150,6 +164,7 @@ typedef struct {
     uint32_t  list_reg_mask;            // Active lists register mask
     int       dma_mode;                 // 1 if we are using DMA to transfer vertices
     int       opb_size[PVR_OPB_COUNT];  // opb size flags
+    pvr_multipass_state_t *multipass;    // Optional pass control and layout
 
     // Pipeline state
     int     ram_target;                 // RAM buffer we're writing into
@@ -270,13 +285,21 @@ typedef struct pvr_bkg_poly {
 
 /* Initialize buffers for TA/ISP/TSP usage */
 /* Validate the complete one-pass VRAM layout without changing driver state. */
-int pvr_buffers_validate(const pvr_init_params_t *params);
+int pvr_buffers_validate(const pvr_init_params_t *params,
+                         pvr_multipass_state_t *multipass);
 
 /* Allocate the prevalidated one-pass TA/ISP/TSP buffers. */
-int pvr_allocate_buffers(const pvr_init_params_t *params);
+int pvr_allocate_buffers(const pvr_init_params_t *params,
+                         pvr_multipass_state_t *multipass);
 
 /* Fill the tile matrices (after it's initialized) */
 void pvr_init_tile_matrices(bool presort);
+
+/* Select one pass's enabled lists and OPB allocation register value. */
+void pvr_activate_pass(size_t pass);
+
+/* True when the active TA pass is permitted to release the renderer. */
+bool pvr_registration_is_final(void);
 
 
 /**** pvr_misc.c ******************************************************/

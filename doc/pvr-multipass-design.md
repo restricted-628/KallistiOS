@@ -51,9 +51,9 @@ The control word uses these fields:
 An absent list pointer is `0x80000000`. A present pointer names that pass's
 initial object-pointer block for the tile and list.
 
-## Public API shape
+## Public API
 
-The implementation should add three opt-in operations without changing the
+The direct implementation adds two opt-in operations without changing the
 layout or behavior of `pvr_init_params_t`:
 
 ```
@@ -63,23 +63,21 @@ int pvr_init_multipass(const pvr_init_params_t *common,
 
 int pvr_scene_next_pass(void);
 
-int pvr_set_pass_vertbuf_checked(size_t pass, pvr_list_t list,
-                                 void *buffer, size_t len,
-                                 void **old_buffer);
 ```
 
 `pvr_pass_config_t` contains the five OPB sizes and the translucent sort policy
-for one pass. The supported pass count is one through eight. A count of one is
-behaviorally equivalent to `pvr_init()`.
+for one pass. The supported pass count is one through eight. A count of one
+uses the same region and registration behavior as direct `pvr_init()`.
 
 `pvr_scene_next_pass()` closes the current pass, establishes the required
 registration boundary, and admits the next pass. It fails on the configured
 final pass. `pvr_scene_finish()` closes the final pass and queues the one
 renderer submission.
 
-Existing `pvr_set_vertbuf()` and `pvr_set_vertbuf_checked()` address pass zero.
-The pass-specific checked operation is required for additional DMA-buffered
-passes. Directly submitted lists need no main-RAM vertex buffer.
+Directly submitted lists need no main-RAM vertex buffer. Multipass
+initialization currently rejects `dma_enabled`; a future pass-specific checked
+buffer operation will accompany DMA and hybrid submission rather than aliasing
+the established pass-zero buffers.
 
 The API does not expose pass objects, copied context structures, or foreign
 work-area conventions. Higher-level scene systems can build over this state
@@ -110,9 +108,10 @@ The parameter buffer remains shared because continuation preserves the TA
 parameter cursor. It therefore keeps the established `vertex_buf_size`
 meaning: the total VRAM parameter capacity for the complete scene.
 
-DMA staging is per frame, pass, and list. Its control structures are allocated
-only for an opt-in multipass initialization, and the application continues to
-own the staging memory. No worker thread or permanent large buffer is added.
+The implemented direct path allocates no DMA staging. Future DMA staging is per
+frame, pass, and list; its control structures will be allocated only for an
+opt-in multipass initialization, and the application will continue to own the
+staging memory. No worker thread or permanent large buffer is added.
 
 Initialization must reject a layout that crosses either 4 MiB frame-bank
 boundary. Failure is reported before clearing VRAM or changing live PVR state.
@@ -132,9 +131,10 @@ IDLE
   -> COMPLETE
 ```
 
-Direct submission can combine `BUILDING` and `REGISTERING`, as it does today.
-DMA submission may finish building all passes before registration begins.
-Those paths share the same hardware pass-boundary routine.
+The implemented direct submission combines `BUILDING` and `REGISTERING`, as
+the one-pass path already does. DMA submission may later finish building all
+passes before registration begins; it must reuse the same hardware
+pass-boundary invariants.
 
 At an intermediate boundary:
 
@@ -152,14 +152,13 @@ continuing registration.
 
 ## IRQ and synchronization invariants
 
-The current list-completion IRQ path starts rendering as soon as the global
-enabled-list mask is complete. Multipass must replace that condition with the
-enabled mask for the active hardware pass and a final-pass test.
+The list-completion IRQ path now compares against the active pass's enabled
+mask and applies a final-pass test before releasing the renderer.
 
-An intermediate list-complete interrupt records pass completion and wakes a
-thread waiting in `pvr_scene_next_pass()`, or advances the queued DMA chain. It
-must not toggle `ta_target`, synchronize a new registration bank, clear
-`ta_busy`, or start the renderer.
+An intermediate list-complete interrupt records pass completion and wakes the
+thread waiting in `pvr_scene_next_pass()`. It does not toggle `ta_target`,
+synchronize a new registration bank, clear `ta_busy`, or start the renderer.
+A future queued DMA chain must preserve this rule.
 
 The continuation register sequence and the related OPB base/allocation writes
 must be IRQ-serialized with list-completion handling. Application code must
@@ -179,12 +178,16 @@ store-queue submission.
 
 ### DMA
 
+Not yet exposed for multipass initialization.
+
 Each pass has independent list staging pointers and lengths. Scene construction
 advances through passes in main RAM. When the frame is queued, the DMA chain
 feeds pass zero. At the end of a hardware pass, continuation occurs before the
 first DMA for the next pass begins.
 
 ### Hybrid
+
+Not yet exposed for multipass initialization.
 
 Direct and buffered lists may coexist in a pass. A pass boundary waits for both
 the already-flushed direct/buffered lists and any remaining DMA lists. A list
@@ -200,22 +203,20 @@ that was flushed early is never replayed at scene completion.
 - `pvr_scene_next_pass()` reports `EPERM` outside an active scene, `EALREADY`
   on the final pass, and propagates timeout or hardware-fault results from the
   registration boundary.
-- Pass-specific vertex-buffer assignment reports `EINVAL` for an invalid pass
-  or list, and otherwise follows the checked one-pass buffer contract.
-- A fault during any pass aborts the complete scene. Rendering a partial pass
-  chain is not permitted.
+- A fault during an intermediate pass makes continuation fail with `EIO`.
+  Rendering a partial pass chain is not permitted.
 - Shutdown cancels an unfinished multipass scene before freeing its small
   control allocation.
 
 ## Validation plan
 
-1. Add a host test for combined OPB offsets, tile-major region ordering,
+1. ~~Add a host test for combined OPB offsets, tile-major region ordering,
    absent-list markers, and all control-word transitions for one through eight
-   passes.
-2. Verify that the one-pass generated region array is byte-for-byte identical
-   to the existing layout.
-3. Add a direct-submission example that draws distinguishable geometry in at
-   least three passes and verifies completion/fault state.
+   passes.~~
+2. ~~Verify that the one-pass generated region array is byte-for-byte identical
+   to the existing layout.~~
+3. ~~Add a direct-submission example that draws distinguishable geometry in at
+   least three passes and verifies completion/fault state.~~
 4. Add a DMA example with separate per-pass buffers, then a hybrid variant that
    flushes one list before the boundary.
 5. Inject invalid pass transitions, undersized buffers, disabled lists, and a

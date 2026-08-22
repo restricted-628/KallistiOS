@@ -358,15 +358,28 @@ void pvr_sync_view(void) {
 /* Synchronize the registration buffer with what's in pvr_state */
 void pvr_sync_reg_buffer(void) {
     volatile pvr_ta_buffers_t *buf;
+    uint32_t opb_start;
 
     buf = pvr_state.ta_buffers + pvr_state.ta_target;
+
+    /* A new TA bank always begins at pass zero. Later passes preserve the
+       shared parameter and overflow cursors through PVR_TA_LIST_CONT. */
+    if(pvr_state.multipass) {
+        pvr_state.multipass->ta_pass = 0;
+        pvr_activate_pass(0);
+        opb_start = buf->opb +
+            pvr_state.multipass->layout.pass_opb_offset[0];
+    }
+    else {
+        opb_start = buf->opb;
+    }
 
     /* Reset TA */
     //PVR_SET(PVR_RESET, PVR_RESET_TA);
     //PVR_SET(PVR_RESET, PVR_RESET_NONE);
 
     /* Set buffer pointers */
-    PVR_SET(PVR_TA_OPB_START,       buf->opb);
+    PVR_SET(PVR_TA_OPB_START,       opb_start);
     PVR_SET(PVR_TA_OPB_INIT,        buf->opb + buf->opb_size);
     PVR_SET(PVR_TA_OPB_END,         buf->opb + buf->opb_size * (1 + buf->opb_overflow_count));
     PVR_SET(PVR_TA_VERTBUF_START,   buf->vertex);
