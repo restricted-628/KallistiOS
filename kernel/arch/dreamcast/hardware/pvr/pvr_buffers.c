@@ -8,6 +8,8 @@
  */
 
 #include <assert.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <dc/pvr.h>
 #include <dc/video.h>
@@ -28,9 +30,7 @@
 /* There's quite a bit of byte vs word conversion in this file
  * these macros just help make that more readable */
 #define BYTES_TO_WORDS(x) ((x) >> 2)
-#define WORDS_TO_BYTES(x) ((x) << 2)
-
-#define PVR_TILE_MATRIX_HEADER_SIZE 0x48
+#define PVR_FRAME_BANK_SIZE UINT32_C(0x00400000)
 
 
 /* Fill Tile Matrix buffers. This function takes a base address and sets up
@@ -53,9 +53,9 @@ static void pvr_init_tile_matrix(int which, bool presort) {
     */
 
     /* Header of zeros */
-    vr += BYTES_TO_WORDS(buf->tile_matrix - PVR_TILE_MATRIX_HEADER_SIZE);
+    vr += BYTES_TO_WORDS(buf->tile_matrix - PVR_REGION_HEADER_BYTES);
 
-    for(i = 0; i < PVR_TILE_MATRIX_HEADER_SIZE; i += 4)
+    for(i = 0; i < PVR_REGION_HEADER_BYTES; i += 4)
         * vr++ = 0;
 
     for(i = 0; i < PVR_OPB_COUNT; ++i)
@@ -117,30 +117,116 @@ available texture RAM, the PVR structures for the two frames are broken
 up and placed at 0x000000 and 0x400000.
 
 */
-void pvr_allocate_buffers(const pvr_init_params_t *params) {
+static int calculate_buffer_plan(const pvr_init_params_t *params,
+                                 pvr_ta_pass_layout_t *pass,
+                                 pvr_ta_layout_t *layout,
+                                 pvr_ta_frame_layout_t *frame_layout) {
+    uint32_t width;
+    uint32_t height;
+    uint32_t tile_width;
+    uint32_t tile_height;
+    uint32_t bytes_per_pixel;
+    uint32_t frame_size;
+    int i;
+
+    if(!params || !pass || !layout || !frame_layout || !vid_mode ||
+            vid_mode->width <= 0 || vid_mode->height <= 0 ||
+            params->vertex_buf_size <= 0 || params->opb_overflow_count < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    width = (uint32_t)vid_mode->width;
+    height = (uint32_t)vid_mode->height;
+
+    if(width & 31u) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    tile_width = width / 32u;
+
+    if(params->fsaa_enabled) {
+        if(tile_width > UINT32_MAX / 2u) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+
+        tile_width *= 2u;
+    }
+
+    if(height > UINT32_MAX - 31u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    height = (height + 31u) & ~UINT32_C(31);
+    tile_height = height / 32u;
+
+    for(i = 0; i < PVR_OPB_COUNT; ++i) {
+        switch(params->opb_sizes[i]) {
+            case PVR_BINSIZE_0:
+            case PVR_BINSIZE_8:
+            case PVR_BINSIZE_16:
+            case PVR_BINSIZE_32:
+                pass->opb_size[i] = (uint32_t)params->opb_sizes[i] * 4u;
+                break;
+            default:
+                errno = EINVAL;
+                return -1;
+        }
+    }
+
+    pass->presort = !!params->autosort_disabled;
+
+    if(pvr_ta_layout_calculate(layout, tile_width, tile_height,
+                               pass, 1) < 0)
+        return -1;
+
+    bytes_per_pixel = (uint32_t)vid_pmode_bpp[vid_mode->pm];
+
+    if(!bytes_per_pixel || width > UINT32_MAX / height ||
+            width * height > UINT32_MAX / bytes_per_pixel) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    frame_size = width * height * bytes_per_pixel;
+
+    return pvr_ta_frame_layout_calculate(
+        frame_layout, 0, PVR_FRAME_BANK_SIZE,
+        (uint32_t)params->vertex_buf_size, layout->total_opb_size,
+        (uint32_t)params->opb_overflow_count, layout->region_words,
+        frame_size);
+}
+
+int pvr_buffers_validate(const pvr_init_params_t *params) {
+    pvr_ta_pass_layout_t pass;
+    pvr_ta_layout_t layout;
+    pvr_ta_frame_layout_t frame_layout;
+
+    return calculate_buffer_plan(params, &pass, &layout, &frame_layout);
+}
+
+int pvr_allocate_buffers(const pvr_init_params_t *params) {
     volatile pvr_ta_buffers_t   *buf;
     volatile pvr_frame_buffers_t    *fbuf;
+    pvr_ta_pass_layout_t pass;
+    pvr_ta_layout_t layout;
+    pvr_ta_frame_layout_t frame_layout;
+    uint32_t bank_usage;
     int i, j;
-    uint32_t  outaddr, sconst, opb_size_accum, opb_total_size;
+
+    if(calculate_buffer_plan(params, &pass, &layout, &frame_layout) < 0)
+        return -1;
 
     /* Set screen sizes; pvr_init has ensured that we have a valid mode
        and all that by now, so we can freely dig into the vid_mode
        structure here. */
     pvr_state.w = vid_mode->width;
-    pvr_state.h = vid_mode->height;
-    pvr_state.tw = pvr_state.w / 32;
-    pvr_state.th = pvr_state.h / 32;
-
-    /* FSAA -> double the tile buffer width */
-    if(pvr_state.fsaa)
-        pvr_state.tw *= 2;
-
-    /* We can actually handle non-mod-32 heights pretty easily -- just extend
-       the frame buffer a bit, but use a pixel clip for the real mode. */
-    if(!__is_aligned(pvr_state.h, 32)) {
-        pvr_state.h = (pvr_state.h + 32) & ~31;
-        pvr_state.th++;
-    }
+    pvr_state.h = (int)(layout.tile_height * 32u);
+    pvr_state.tw = (int)layout.tile_width;
+    pvr_state.th = (int)layout.tile_height;
 
     pvr_state.tsize_const = ((pvr_state.th - 1) << 16)
                             | ((pvr_state.tw - 1) << 0);
@@ -162,58 +248,35 @@ void pvr_allocate_buffers(const pvr_init_params_t *params) {
     pvr_state.curr_pclip_x = pvr_state.pclip_x;
     pvr_state.curr_pclip_y = pvr_state.pclip_y;
 
-    /* Look at active lists and figure out how much to allocate
-       for each poly type */
-    opb_total_size = 0;
-
-    /* Previously, we specified BIT(20) to say that the OPB grows "down" when
-       the TA needs more than one. To make it grow "up" instead (increasing addresses),
-       we set 0 as the default value.
-     */
-#if 0
-    pvr_state.list_reg_mask = BIT(20);
-#else
+    /* The shared overflow area grows toward increasing addresses. */
     pvr_state.list_reg_mask = 0;
-#endif
 
     for(i = 0; i < PVR_OPB_COUNT; i++) {
-        pvr_state.opb_size[i] = WORDS_TO_BYTES(params->opb_sizes[i]);   /* in bytes */
+        uint32_t size_code = pass.opb_size[i] / 32u;
 
-        /* Calculate the total size of the OPBs for this list */
-        opb_total_size += pvr_state.opb_size[i] * pvr_state.tw * pvr_state.th;
+        pvr_state.opb_size[i] = (int)pass.opb_size[i];
 
-        switch(params->opb_sizes[i]) {
-            case PVR_BINSIZE_0:
-                sconst = 0;
-                break;
-            case PVR_BINSIZE_8:
-                sconst = 1;
-                break;
-            case PVR_BINSIZE_16:
-                sconst = 2;
-                break;
-            case PVR_BINSIZE_32:
-                sconst = 3;
-                break;
-            default:
-                assert_msg(0, "invalid poly_buf_size");
-                sconst = 2;
-                break;
-        }
+        if(size_code > 0) {
+            /* Convert 1, 2, and 4 units to the register's 1, 2, and 3
+               encodings. */
+            if(size_code == 4)
+                size_code = 3;
 
-        if(sconst > 0) {
             pvr_state.lists_enabled |= BIT(i);
-            pvr_state.list_reg_mask |= sconst << (4 * i);
+            pvr_state.list_reg_mask |= size_code << (4 * i);
         }
     }
 
     /* Initialize each buffer set */
     for(i = 0; i < 2; i++) {
-        /* Frame 0 goes at 0, Frame 1 goes at 0x400000 (half way) */
-        if(i == 0)
-            outaddr = 0;
-        else
-            outaddr = 0x400000;
+        const uint32_t bank_base = (uint32_t)i * PVR_FRAME_BANK_SIZE;
+
+        if(pvr_ta_frame_layout_calculate(
+                &frame_layout, bank_base, PVR_FRAME_BANK_SIZE,
+                (uint32_t)params->vertex_buf_size, layout.total_opb_size,
+                (uint32_t)params->opb_overflow_count, layout.region_words,
+                frame_layout.frame_size) < 0)
+            return -1;
 
         /* Select a pvr_buffers_t. Note that there's no good reason
            to allocate the frame buffers at the same time as the TA
@@ -222,54 +285,33 @@ void pvr_allocate_buffers(const pvr_init_params_t *params) {
         fbuf = pvr_state.frame_buffers + i;
 
         /* Vertex buffer */
-        buf->vertex = outaddr;
-        buf->vertex_size = params->vertex_buf_size;
-        outaddr += buf->vertex_size;
-        /* N-byte align */
-        outaddr = __align_up(outaddr, 128);
+        buf->vertex = frame_layout.vertex;
+        buf->vertex_size = frame_layout.vertex_size;
 
         /* Object Pointer Blocks */
-        buf->opb = outaddr;
-        buf->opb_size = opb_total_size;
+        buf->opb = frame_layout.opb;
+        buf->opb_size = frame_layout.opb_size;
 
         /* Allocate extra space for overflow (when one OPB isn't big enough) */
         buf->opb_overflow_count = params->opb_overflow_count;
-        outaddr += opb_total_size * (1 + buf->opb_overflow_count);
 
         /* Set up the opb pointers to each section */
-        opb_size_accum = 0;
         for(j = 0; j < PVR_OPB_COUNT; j++) {
-            buf->opb_addresses[j] = buf->opb + opb_size_accum;
-            opb_size_accum += pvr_state.opb_size[j] * pvr_state.tw * pvr_state.th;
+            buf->opb_addresses[j] = buf->opb +
+                layout.list_opb_offset[0][j];
         }
 
-        assert(buf->opb_size == opb_size_accum);
-
-        /* N-byte align */
-        outaddr = __align_up(outaddr, 128);
-
-        /* Tile Matrix header */
-        outaddr += PVR_TILE_MATRIX_HEADER_SIZE;
-
-        /* Tile Matrix */
-        buf->tile_matrix = outaddr;
-        buf->tile_matrix_size = WORDS_TO_BYTES(6 + 6 * pvr_state.tw * pvr_state.th);
-        outaddr += buf->tile_matrix_size;
-
-        /* N-byte align */
-        outaddr = __align_up(outaddr, 128);
+        buf->tile_matrix = frame_layout.tile_matrix;
+        buf->tile_matrix_size = frame_layout.tile_matrix_size;
 
         /* Output buffer */
-        fbuf->frame = outaddr;
-        fbuf->frame_size = pvr_state.w * pvr_state.h * vid_pmode_bpp[vid_mode->pm];
-        outaddr += fbuf->frame_size;
-
-        /* N-byte align */
-        outaddr = __align_up(outaddr, 128);
+        fbuf->frame = frame_layout.frame;
+        fbuf->frame_size = frame_layout.frame_size;
     }
 
-    /* Texture ram is whatever is left */
-    pvr_state.texture_base = (outaddr - 0x400000) * 2;
+    /* The 32-bit frame-bank usage maps to twice as much linear 64-bit VRAM. */
+    bank_usage = frame_layout.bank_end - PVR_FRAME_BANK_SIZE;
+    pvr_state.texture_base = bank_usage * 2u;
 
 #if 0
     dbglog(DBG_KDEBUG, "pvr: initialized PVR buffers:\n");
@@ -300,4 +342,6 @@ void pvr_allocate_buffers(const pvr_init_params_t *params) {
     dbglog(DBG_KDEBUG, "Free texture memory: %ld bytes\n",
            0x800000 - pvr_state.texture_base);
 #endif  /* !NDEBUG */
+
+    return 0;
 }

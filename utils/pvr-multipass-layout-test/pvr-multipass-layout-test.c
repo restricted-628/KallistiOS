@@ -139,10 +139,38 @@ static void test_maximum_pass_count(void) {
     assert(layout.region_words == 28806);
 }
 
+static void test_frame_layout(void) {
+    pvr_ta_frame_layout_t frame;
+
+    assert(pvr_ta_frame_layout_calculate(&frame, 0, 0x00400000,
+                                         0x1000, 0x200, 1, 30,
+                                         0x1000) == 0);
+    assert(frame.vertex == 0);
+    assert(frame.vertex_size == 0x1000);
+    assert(frame.opb == 0x1000);
+    assert(frame.opb_size == 0x200);
+    assert(frame.opb_end == 0x1400);
+    assert(frame.tile_matrix == 0x1448);
+    assert(frame.tile_matrix_size == 120);
+    assert(frame.frame == 0x1500);
+    assert(frame.frame_size == 0x1000);
+    assert(frame.bank_end == 0x2500);
+
+    assert(pvr_ta_frame_layout_calculate(&frame, 0x00400000,
+                                         0x00400000, 0x1000,
+                                         0x200, 1, 30, 0x1000) == 0);
+    assert(frame.vertex == 0x00400000);
+    assert(frame.opb == 0x00401000);
+    assert(frame.tile_matrix == 0x00401448);
+    assert(frame.frame == 0x00401500);
+    assert(frame.bank_end == 0x00402500);
+}
+
 static void test_rejections(void) {
     pvr_ta_pass_layout_t pass = {
         .opb_size = { 32, 0, 0, 0, 0 }
     };
+    pvr_ta_frame_layout_t frame;
     pvr_ta_layout_t layout;
     uint32_t regions[12];
 
@@ -181,6 +209,24 @@ static void test_rejections(void) {
     assert(pvr_ta_layout_build_regions(regions, 12, 0x00fffff0,
                                        &layout, &pass) == -1);
     assert(errno == EINVAL);
+
+    errno = 0;
+    assert(pvr_ta_frame_layout_calculate(NULL, 0, 0x400000,
+                                         0x1000, 0x200, 1, 12,
+                                         0x1000) == -1);
+    assert(errno == EINVAL);
+
+    errno = 0;
+    assert(pvr_ta_frame_layout_calculate(&frame, 0, 0x1000,
+                                         0x1000, 0x200, 1,
+                                         12, 0x1000) == -1);
+    assert(errno == ENOSPC);
+
+    errno = 0;
+    assert(pvr_ta_frame_layout_calculate(&frame, UINT32_MAX - 0x100, 0x200,
+                                         0x1000, 0x200, 1, 12,
+                                         0x1000) == -1);
+    assert(errno == EOVERFLOW);
 }
 
 int main(void) {
@@ -188,6 +234,7 @@ int main(void) {
     test_two_pass_controls_and_offsets();
     test_three_pass_tile_order();
     test_maximum_pass_count();
+    test_frame_layout();
     test_rejections();
     puts("pvr multipass layout tests passed");
     return 0;

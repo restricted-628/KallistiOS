@@ -42,6 +42,9 @@ lifecycle and naming conventions.
   sprite, and two-volume header compilation exposes texture supersampling
   without enlarging established public context structures or adding work to
   the legacy compiler path.
+* PVR initialization now validates the complete vertex, object-list, region,
+  and frame-buffer layout before clearing VRAM or changing hardware state.
+  Invalid bin sizes, overflow, and frame-bank exhaustion fail cleanly.
 * Completed the established extended texture loader with checked dimensions,
   honest preformatted-copy behavior, bounded transfer selection, and an
   error-reporting entry point while preserving the original void wrapper.

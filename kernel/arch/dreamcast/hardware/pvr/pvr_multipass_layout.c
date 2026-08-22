@@ -18,6 +18,7 @@
 #define PVR_REGION_PRESORT       (UINT32_C(1) << 29)
 #define PVR_REGION_KEEP_TILE     (UINT32_C(1) << 28)
 #define PVR_REGION_VRAM_LIMIT    UINT32_C(0x01000000)
+#define PVR_BUFFER_ALIGNMENT     UINT32_C(128)
 
 static bool opb_size_valid(uint32_t size) {
     return size == 0 || size == 32 || size == 64 || size == 128;
@@ -36,6 +37,16 @@ static bool multiply_u32(uint32_t lhs, uint32_t rhs, uint32_t *result) {
         return false;
 
     *result = lhs * rhs;
+    return true;
+}
+
+static bool align_u32(uint32_t value, uint32_t alignment, uint32_t *result) {
+    const uint32_t mask = alignment - 1u;
+
+    if(value > UINT32_MAX - mask)
+        return false;
+
+    *result = (value + mask) & ~mask;
     return true;
 }
 
@@ -193,4 +204,76 @@ int pvr_ta_layout_build_regions(uint32_t *regions, size_t capacity_words,
     }
 
     return 0;
+}
+
+int pvr_ta_frame_layout_calculate(pvr_ta_frame_layout_t *frame_layout,
+                                  uint32_t bank_base, uint32_t bank_size,
+                                  uint32_t vertex_size,
+                                  uint32_t total_opb_size,
+                                  uint32_t opb_overflow_count,
+                                  size_t region_words,
+                                  uint32_t frame_size) {
+    uint32_t bank_limit;
+    uint32_t opb_copies;
+    uint32_t opb_allocation;
+    uint32_t region_bytes;
+    uint32_t cursor;
+
+    if(!frame_layout || !bank_size || !vertex_size || !total_opb_size ||
+            !region_words || !frame_size ||
+            region_words > UINT32_MAX / sizeof(uint32_t)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!add_u32(bank_base, bank_size, &bank_limit) ||
+            !add_u32(opb_overflow_count, 1u, &opb_copies) ||
+            !multiply_u32(total_opb_size, opb_copies, &opb_allocation)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    region_bytes = (uint32_t)(region_words * sizeof(uint32_t));
+    *frame_layout = (pvr_ta_frame_layout_t) {
+        .vertex = bank_base,
+        .vertex_size = vertex_size,
+        .opb_size = total_opb_size,
+        .tile_matrix_size = region_bytes,
+        .frame_size = frame_size
+    };
+
+    if(!add_u32(bank_base, vertex_size, &cursor) ||
+            !align_u32(cursor, PVR_BUFFER_ALIGNMENT, &cursor))
+        goto overflow;
+
+    frame_layout->opb = cursor;
+
+    if(!add_u32(cursor, opb_allocation, &cursor) ||
+            !align_u32(cursor, PVR_BUFFER_ALIGNMENT, &cursor))
+        goto overflow;
+
+    if(!add_u32(cursor, PVR_REGION_HEADER_BYTES,
+                &frame_layout->tile_matrix) ||
+            !add_u32(frame_layout->tile_matrix, region_bytes, &cursor) ||
+            !align_u32(cursor, PVR_BUFFER_ALIGNMENT, &cursor))
+        goto overflow;
+
+    frame_layout->opb_end = frame_layout->opb + opb_allocation;
+    frame_layout->frame = cursor;
+
+    if(!add_u32(cursor, frame_size, &cursor) ||
+            !align_u32(cursor, PVR_BUFFER_ALIGNMENT, &cursor))
+        goto overflow;
+
+    if(cursor > bank_limit) {
+        errno = ENOSPC;
+        return -1;
+    }
+
+    frame_layout->bank_end = cursor;
+    return 0;
+
+overflow:
+    errno = EOVERFLOW;
+    return -1;
 }

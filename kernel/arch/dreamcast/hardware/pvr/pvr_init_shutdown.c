@@ -7,6 +7,7 @@
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <dc/pvr.h>
@@ -43,19 +44,24 @@ int pvr_init(const pvr_init_params_t *params) {
         return -1;
     }
 
-    /* Make sure we got valid parameters */
-    assert(params != NULL);
-
-    /* Make sure that a video mode has been initialized */
-    assert(vid_mode != NULL);
-    assert(vid_mode->width != 0 && vid_mode->height != 0);
+    if(!params || !vid_mode || vid_mode->width <= 0 ||
+            vid_mode->height <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
 
     /* Check for compatibility with 3D stuff */
     if(!__is_aligned(vid_mode->width, 32)) {
         dbglog(DBG_WARNING, "pvr: mode %dx%d isn't usable for 3D (width not multiples of 32)\n",
                vid_mode->width, vid_mode->height);
+        errno = ENOTSUP;
         return -1;
     }
+
+    /* Reject an invalid or oversized memory plan before vid_empty() destroys
+       the current VRAM contents or any PVR register is changed. */
+    if(pvr_buffers_validate(params) < 0)
+        return -1;
 
     /* Clear out video memory */
     vid_empty();
@@ -76,7 +82,8 @@ int pvr_init(const pvr_init_params_t *params) {
     pvr_state.vbuf_doublebuf = !params->vbuf_doublebuf_disabled;
 
     /* Everything's clear, do the initial buffer pointer setup */
-    pvr_allocate_buffers(params);
+    if(pvr_allocate_buffers(params) < 0)
+        return -1;
 
     /* Initialize tile matrices */
     pvr_init_tile_matrices(!!params->autosort_disabled);

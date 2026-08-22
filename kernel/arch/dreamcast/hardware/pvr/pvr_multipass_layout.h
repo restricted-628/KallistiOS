@@ -13,6 +13,7 @@
 
 #define PVR_MULTIPASS_MAX_PASSES 8u
 #define PVR_REGION_WORDS_PER_ENTRY 6u
+#define PVR_REGION_HEADER_BYTES 0x48u
 
 typedef struct pvr_ta_pass_layout {
     uint32_t opb_size[5];
@@ -31,6 +32,19 @@ typedef struct pvr_ta_layout {
     size_t region_words;
 } pvr_ta_layout_t;
 
+typedef struct pvr_ta_frame_layout {
+    uint32_t vertex;
+    uint32_t vertex_size;
+    uint32_t opb;
+    uint32_t opb_size;
+    uint32_t opb_end;
+    uint32_t tile_matrix;
+    uint32_t tile_matrix_size;
+    uint32_t frame;
+    uint32_t frame_size;
+    uint32_t bank_end;
+} pvr_ta_frame_layout_t;
+
 int pvr_ta_layout_calculate(pvr_ta_layout_t *layout, uint32_t tile_width,
                             uint32_t tile_height,
                             const pvr_ta_pass_layout_t *passes,
@@ -40,5 +54,13 @@ int pvr_ta_layout_build_regions(uint32_t *regions, size_t capacity_words,
                                 uint32_t opb_base,
                                 const pvr_ta_layout_t *layout,
                                 const pvr_ta_pass_layout_t *passes);
+
+int pvr_ta_frame_layout_calculate(pvr_ta_frame_layout_t *frame_layout,
+                                  uint32_t bank_base, uint32_t bank_size,
+                                  uint32_t vertex_size,
+                                  uint32_t total_opb_size,
+                                  uint32_t opb_overflow_count,
+                                  size_t region_words,
+                                  uint32_t frame_size);
 
 #endif /* __PVR_MULTIPASS_LAYOUT_H */
