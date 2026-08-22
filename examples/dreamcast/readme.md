@@ -15,6 +15,17 @@ This page serves as an index for all KallistiOS examples.
   - stackprotector
   - stacktrace
   - threading
+    - atomics
+    - barrier
+    - compiler_tls
+    - general
+    - once
+    - recursive_lock
+    - reentrant_mutex
+    - rwsem
+    - spinlock_test
+    - tls
+    - workqueue-safety
   - watchdog
 - cdrom
   - stream
