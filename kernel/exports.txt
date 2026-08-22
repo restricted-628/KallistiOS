@@ -65,9 +65,14 @@ include kos.h
 
 # Name Manager
 nmmgr_lookup
+nmmgr_lookup_ref
 nmmgr_get_list
 nmmgr_handler_add
+nmmgr_handler_retain
+nmmgr_handler_release
 nmmgr_handler_remove
+nmmgr_handler_remove_timed
+nmmgr_handler_get_path
 
 # File System
 elf_load
