@@ -52,6 +52,10 @@ Function comments located in vmufs.h.
    be much of an issue :) */
 static mutex_t mutex;
 
+static int mutation_preflight(const vmu_root_t *root,
+                              const uint16_t *fat, int fatsize,
+                              const vmu_dir_t *dir, int dirsize);
+
 /* Convert a decimal number to BCD; max of two digits */
 static uint8_t __pure dec_to_bcd(int dec) {
     uint8_t rv = 0;
@@ -115,6 +119,7 @@ int vmufs_fat_blocks(vmu_root_t *root_buf) {
 /* Common code for both dir_read and dir_write */
 static int vmufs_dir_ops(maple_device_t *dev, vmu_root_t *root, vmu_dir_t *dir_buf, bool write) {
     int rv;
+    uint32_t write_buf[VMUFS_BLOCK_SIZE / sizeof(uint32_t)];
 
     /* Find the directory starting block and length */
     uint16_t dir_block = root->dir_loc;
@@ -126,22 +131,32 @@ static int vmufs_dir_ops(maple_device_t *dev, vmu_root_t *root, vmu_dir_t *dir_b
 
         if(write) {
             /* Scan this block for changes */
-            for(size_t i = 0; i < 512 / sizeof(vmu_dir_t); i++) {
-                if(dir_buf[i].dirty) {
+            for(size_t i = 0;
+                i < VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t); ++i) {
+                if(dir_buf[i].dirty)
                     needsop = true;
-                }
-
-                dir_buf[i].dirty = 0;
             }
         }
         else
             needsop = true;
 
         if(needsop) {
-            if(!write)
+            if(!write) {
                 rv = vmu_block_read(dev, dir_block, (uint8_t *)dir_buf);
-            else
-                rv = vmu_block_write(dev, dir_block, (uint8_t *)dir_buf);
+            }
+            else {
+                vmu_dir_t *write_dir = (vmu_dir_t *)write_buf;
+
+                /* Dirty is an in-memory retry marker, not on-card metadata.
+                   Write a sanitized copy so a failure preserves the markers. */
+                memcpy(write_buf, dir_buf, sizeof(write_buf));
+                for(size_t i = 0;
+                    i < VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t); ++i) {
+                    write_dir[i].dirty = 0;
+                }
+
+                rv = vmu_block_write(dev, dir_block, (uint8_t *)write_buf);
+            }
 
             if(rv != 0) {
                 dbglog(DBG_ERROR, "vmufs_dir_%s: can't %s block %d on device %c%c\n",
@@ -150,11 +165,18 @@ static int vmufs_dir_ops(maple_device_t *dev, vmu_root_t *root, vmu_dir_t *dir_b
                        (int)dir_block, dev->port + 'A', dev->unit + '0');
                 return -1;
             }
+
+            if(write) {
+                for(size_t i = 0;
+                    i < VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t); ++i) {
+                    dir_buf[i].dirty = 0;
+                }
+            }
         }
 
         dir_block--;
         dir_size--;
-        dir_buf += 512 / sizeof(vmu_dir_t); /* == 16 */
+        dir_buf += VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t); /* == 16 */
     }
 
     return 0;
@@ -312,52 +334,23 @@ int vmufs_file_read_ex(maple_device_t *dev, const vmu_root_t *root,
                                    dirent, outbuf);
 }
 
-/* Find an open block for writing in the FAT */
-static int vmufs_find_block(vmu_root_t *root, uint16_t *fat, vmu_dir_t *dirent) {
-    if(dirent->filetype == 0x33) {
-        /* Data files -- count down from top */
-        for(int i = root->blk_cnt - 1; i >= 0; i--) {
-            if(fat[i] == 0xfffc)
-                return i;
-        }
-    }
-    else if(dirent->filetype == 0xcc) {
-        /* VMU games -- count up from bottom */
-        for(int i = 0; i < root->blk_cnt; i++) {
-            if(fat[i] == 0xfffc)
-                return i;
-        }
-    }
-    else {
-        /* Dunno what this is! */
-        char fn[13] = {0};
-        memcpy(fn, dirent->filename, 12);
-        dbglog(DBG_ERROR, "vmufs_find_block: file '%s' has unknown type %d\n", fn, dirent->filetype);
-        return -1;
-    }
-
-    /* No free blocks left */
-    {
-        char fn[13] = {0};
-        memcpy(fn, dirent->filename, 12);
-        dbglog(DBG_ERROR, "vmufs_find_block: can't find any more free blocks for file '%s'\n", fn);
-    }
-    return -2;
-}
-
 int vmufs_file_write(maple_device_t *dev, vmu_root_t *root, uint16_t *fat,
                      vmu_dir_t *dir, vmu_dir_t *newdirent, void *filebuf, int size) {
-    int curblk, blkleft, rv;
-    int vmuspaceleft;
+    uint16_t blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
     uint8_t *out = (uint8_t *)filebuf;
 
-    /* Files must be at least one block long */
-    if(size <= 0) {
+    if(!dev || !root || !fat || !dir || !newdirent || !filebuf || size <= 0) {
         char fn[13] = {0};
-        memcpy(fn, newdirent->filename, 12);
+        if(newdirent)
+            memcpy(fn, newdirent->filename, sizeof(newdirent->filename));
         dbglog(DBG_ERROR, "vmufs_file_write: file '%s' is too short (%d blocks)\n", fn, size);
+        errno = EINVAL;
         return -3;
     }
+
+    if(mutation_preflight(root, fat, VMUFS_BLOCK_SIZE, dir,
+                          root->dir_size * VMUFS_BLOCK_SIZE) < 0)
+        return -3;
 
     /* Make sure this file isn't already in the directory */
     if(vmufs_dir_find(root, dir, newdirent->filename) >= 0) {
@@ -368,64 +361,39 @@ int vmufs_file_write(maple_device_t *dev, vmu_root_t *root, uint16_t *fat,
         return -4;
     }
 
-    /* Don't even start if there isn't enough room to write the whole file */
-    vmuspaceleft = vmufs_fat_free(root, fat);
-
-    if(vmuspaceleft < size) {
-        dbglog(DBG_INFO, "vmufs_file_write: not enough space for file. Need %d blocks, have %d\n", size, vmuspaceleft);
-        return -2;  /* Same error as is returned if a block can not be found below */
+    if(vmufs_dir_free(root, dir) <= 0) {
+        errno = ENOSPC;
+        return -6;
     }
 
-    /* Find ourselves an open slot for the first block */
-    curblk = newdirent->firstblk = vmufs_find_block(root, fat, newdirent);
+    if(vmufs_chain_allocate(root, fat,
+                            VMUFS_BLOCK_SIZE / sizeof(*fat),
+                            newdirent->filetype, (size_t)size,
+                            blocks, sizeof(blocks) / sizeof(blocks[0])) < 0)
+        return errno == ENOSPC ? -2 : -3;
 
-    if(curblk < 0)
-        return curblk;
+    newdirent->firstblk = blocks[0];
+    newdirent->filesize = (uint16_t)size;
 
-    /* And the blocks remaining */
-    blkleft = newdirent->filesize = size;
-
-    /* While we've got stuff remaining... */
-    while(blkleft > 0) {
-        /* Write the block */
-        rv = vmu_block_write(dev, curblk, out);
+    for(size_t i = 0; i < (size_t)size; ++i) {
+        int rv = vmu_block_write(dev, blocks[i], out);
 
         if(rv != 0) {
             dbglog(DBG_ERROR, "vmufs_file_write: can't write block %d on device %c%c (error %d)\n",
-                   curblk, dev->port + 'A', dev->unit + '0', rv);
+                   blocks[i], dev->port + 'A', dev->unit + '0', rv);
+            vmufs_chain_release(fat, blocks, (size_t)size);
+            errno = EIO;
             return -5;
         }
 
-        /* Scoot our counters */
-        blkleft--;
-        out += 512;
-
-        /* If we have blocks left, find another free block. Otherwise,
-           write out a terminator. */
-        if(blkleft) {
-            // Set the pointer to the terminator just in case:
-            // a) vmufs_find_block() fails to find a block, AND
-            // b) the calling code for some reason writes the FAT back out anyway.
-            // This may render the save game unusable but at least we won't link
-            // into some other file (or worse, a game!)
-            fat[curblk] = 0xfffa;
-            rv = vmufs_find_block(root, fat, newdirent);
-
-            if(rv < 0)
-                return rv;
-
-            fat[curblk] = rv;
-            curblk = rv;
-        }
-        else {
-            fat[curblk] = 0xfffa;
-        }
+        out += VMUFS_BLOCK_SIZE;
     }
 
     /* Add the entry to the directory */
     if(vmufs_dir_add(root, dir, newdirent) < 0) {
         dbglog(DBG_ERROR, "vmufs_file_write: can't find an open dirent on device %c%c\n",
                dev->port + 'A', dev->unit + '0');
+        vmufs_chain_release(fat, blocks, (size_t)size);
         return -6;
     }
 
@@ -433,7 +401,16 @@ int vmufs_file_write(maple_device_t *dev, vmu_root_t *root, uint16_t *fat,
 }
 
 int vmufs_file_delete(vmu_root_t *root, uint16_t *fat, vmu_dir_t *dir, const char *fn) {
-    int blk, nextblk;
+    uint16_t blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+
+    if(!root || !fat || !dir || !fn) {
+        errno = EINVAL;
+        return -2;
+    }
+
+    if(mutation_preflight(root, fat, VMUFS_BLOCK_SIZE, dir,
+                          root->dir_size * VMUFS_BLOCK_SIZE) < 0)
+        return -2;
 
     /* Find the file */
     int idx = vmufs_dir_find(root, dir, fn);
@@ -443,22 +420,16 @@ int vmufs_file_delete(vmu_root_t *root, uint16_t *fat, vmu_dir_t *dir, const cha
         return -1;
     }
 
-    /* Find its first block, and go through clearing FAT blocks. */
-    blk = dir[idx].firstblk;
-
-    while(blk != 0xfffa) {
-        if(blk == 0xfffc || blk > root->blk_cnt) {
-            dbglog(DBG_ERROR, "vmufs_file_delete: inconsistency -- corrupt FAT or dir\n");
-            return -2;
-        }
-
-        /* Free it */
-        nextblk = fat[blk];
-        fat[blk] = 0xfffc;
-
-        /* Move to the next one */
-        blk = nextblk;
+    if(vmufs_chain_collect(root, fat,
+                           VMUFS_BLOCK_SIZE / sizeof(*fat),
+                           &dir[idx], blocks,
+                           sizeof(blocks) / sizeof(blocks[0])) < 0) {
+        dbglog(DBG_ERROR,
+               "vmufs_file_delete: inconsistency -- corrupt FAT or dir\n");
+        return -2;
     }
+
+    vmufs_chain_release(fat, blocks, dir[idx].filesize);
 
     /* Now clear out its dirent also */
     memset(dir + idx, 0, sizeof(vmu_dir_t));
@@ -475,7 +446,7 @@ int vmufs_fat_free(vmu_root_t *root, uint16_t *fat) {
 
     for(size_t i = 0; i < root->blk_cnt; i++) {
         /* only count user blocks */
-        if(fat[i] == 0xfffc)
+        if(fat[i] == VMUFS_FAT_FREE)
             freeblocks++;
     }
 
@@ -723,130 +694,280 @@ int vmufs_read_dirent(maple_device_t *dev, vmu_dir_t *dirent, void **outbuf, int
 }
 
 /* Returns 0 for success, -7 for 'not enough space', and other values for other errors. :-)  */
-int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf, int insize, int flags) {
-    vmu_root_t  root;
-    vmu_dir_t   *dir = NULL, nd;
-    uint16_t    *fat = NULL;
-    int     oldinsize, fatsize, dirsize, idx, rv = 0, st, fnlength;
+static int mutation_preflight(const vmu_root_t *root,
+                              const uint16_t *fat, int fatsize,
+                              const vmu_dir_t *dir, int dirsize) {
+    vmufs_validation_t validation;
+    int saved_errno = errno;
+    int validation_errno;
 
-    /* Round up the size if necessary */
-    oldinsize = insize;
-    insize = (insize + 511) & ~511;
+    if(vmufs_validate(root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                      (size_t)fatsize / sizeof(*fat), dir,
+                      (size_t)dirsize / sizeof(*dir), &validation) == 0)
+        return 0;
 
-    if(insize == 0) insize = 512;
-
-    if(oldinsize != insize) {
-        dbglog(DBG_WARNING, "vmufs_write: padded file '%s' from %d to %d bytes\n",
-               fn, oldinsize, insize);
+    validation_errno = errno;
+    if(validation_errno == EILSEQ &&
+       vmufs_validation_allows_mutation(&validation)) {
+        /* Orphans reduce capacity but cannot alias a live file. Preserve them
+           until an explicit repair rather than guessing their former owner. */
+        dbglog(DBG_WARNING,
+               "vmufs: preserving %zu orphan block(s) during mutation\n",
+               validation.orphan_blocks);
+        errno = saved_errno;
+        return 0;
     }
 
-    /* Init everything */
-    if(vmufs_setup(dev, &root, &dir, &dirsize, &fat, &fatsize) < 0)
+    dbglog(DBG_ERROR,
+           "vmufs: refusing mutation of corrupt metadata "
+           "(error %d, entry %zu, block %u)\n",
+           validation.first_error, validation.first_dir_index,
+           validation.first_block);
+    errno = validation_errno;
+    return -1;
+}
+
+static size_t filename_length(const char *filename, size_t maximum) {
+    size_t length = 0;
+
+    while(length < maximum && filename[length])
+        ++length;
+
+    return length;
+}
+
+int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf,
+                int insize, int flags) {
+    uint16_t old_blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    uint16_t new_blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    vmu_root_t root;
+    vmu_dir_t *dir = NULL, nd;
+    uint16_t *fat = NULL;
+    uint8_t *padded = NULL;
+    const uint8_t *file_data;
+    size_t fn_length, padded_size, block_count;
+    int fatsize, dirsize, idx, rv = 0;
+
+    if(!dev || !fn || insize < 0 || (insize && !inbuf) ||
+       (flags & ~(VMUFS_OVERWRITE | VMUFS_VMUGAME | VMUFS_NOCOPY))) {
+        errno = EINVAL;
         return -1;
+    }
 
-    /* Check if the file already exists */
+    fn_length = filename_length(fn, sizeof(nd.filename) + 1u);
+    if(fn_length == 0 || fn_length > sizeof(nd.filename) ||
+       (size_t)insize > SIZE_MAX - (VMUFS_BLOCK_SIZE - 1u)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    padded_size = insize ?
+        ((size_t)insize + VMUFS_BLOCK_SIZE - 1u) &
+            ~(VMUFS_BLOCK_SIZE - 1u) :
+        VMUFS_BLOCK_SIZE;
+    block_count = padded_size / VMUFS_BLOCK_SIZE;
+    if(block_count > VMUFS_BLOCK_SIZE / sizeof(uint16_t)) {
+        errno = ENOSPC;
+        return -7;
+    }
+
+    if(padded_size != (size_t)insize) {
+        padded = calloc(1, padded_size);
+        if(!padded)
+            return -1;
+
+        if(insize)
+            memcpy(padded, inbuf, (size_t)insize);
+        file_data = padded;
+    }
+    else {
+        file_data = inbuf;
+    }
+
+    if(vmufs_setup(dev, &root, &dir, &dirsize, &fat, &fatsize) < 0) {
+        free(padded);
+        if(errno == 0)
+            errno = EIO;
+        return -1;
+    }
+
+    if(mutation_preflight(&root, fat, fatsize, dir, dirsize) < 0) {
+        rv = -3;
+        goto ex;
+    }
+
     idx = vmufs_dir_find(&root, dir, fn);
-
-    if(idx >= 0) {
-        if(!(flags & VMUFS_OVERWRITE)) {
-            dbglog(DBG_ERROR, "vmufs_write: file '%s' already exists on device %c%c\n",
-                   fn, dev->port + 'A', dev->unit + '0');
-            rv = -2;
-            goto ex;
-        }
-        else {
-            if(vmufs_file_delete(&root, fat, dir, fn) < 0) {
-                dbglog(DBG_ERROR, "vmufs_write: can't delete old file '%s' on device %c%c\n",
-                       fn, dev->port + 'A', dev->unit + '0');
-                rv = -3;
-                goto ex;
-            }
-        }
+    if(idx >= 0 && !(flags & VMUFS_OVERWRITE)) {
+        errno = EEXIST;
+        rv = -2;
+        goto ex;
     }
 
-    /* Fill out a new dirent for this file */
     memset(&nd, 0, sizeof(nd));
-    nd.filetype = (flags & VMUFS_VMUGAME) ? 0xcc : 0x33;
+    nd.filetype = (flags & VMUFS_VMUGAME) ?
+        VMUFS_FILETYPE_GAME : VMUFS_FILETYPE_DATA;
     nd.copyprotect = (flags & VMUFS_NOCOPY) ? 0xff : 0x00;
-    nd.firstblk = 0;
-
-    fnlength = strlen(fn);
-    fnlength = fnlength > 12 ? 12 : fnlength;
-    memcpy(nd.filename, fn, fnlength);
-    if(fnlength < 12) {
-        memset(nd.filename + fnlength, '\0', 12 - fnlength);
-    }
-
+    memcpy(nd.filename, fn, fn_length);
     vmufs_dir_fill_time(&nd);
-    nd.filesize = insize / 512;
+    nd.filesize = (uint16_t)block_count;
     nd.hdroff = (flags & VMUFS_VMUGAME) ? 1 : 0;
     nd.dirty = 1;
 
-    // If any of these fail, the action to take can be decided by the caller.
-
-    /* Write out the data and update our structs */
-    if((st = vmufs_file_write(dev, &root, fat, dir, &nd, inbuf, insize / 512)) < 0) {
-        if(st == -2)
-            rv = -7;
-        else
+    if(idx < 0) {
+        if(vmufs_dir_free(&root, dir) <= 0) {
+            errno = ENOSPC;
             rv = -4;
-        goto ex;
+            goto ex;
+        }
+
+        if(vmufs_chain_allocate(&root, fat,
+                                VMUFS_BLOCK_SIZE / sizeof(*fat),
+                                nd.filetype, block_count, new_blocks,
+                                sizeof(new_blocks) /
+                                    sizeof(new_blocks[0])) < 0) {
+            rv = errno == ENOSPC ? -7 : -4;
+            goto ex;
+        }
+
+        nd.firstblk = new_blocks[0];
+        for(size_t i = 0; i < block_count; ++i) {
+            if(vmu_block_write(dev, new_blocks[i],
+                               file_data + i * VMUFS_BLOCK_SIZE) != 0) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = EIO;
+                rv = -4;
+                goto ex;
+            }
+        }
+
+        if(vmufs_dir_add(&root, dir, &nd) < 0) {
+            vmufs_chain_release(fat, new_blocks, block_count);
+            errno = ENOSPC;
+            rv = -4;
+            goto ex;
+        }
+
+        /* Data first, allocation metadata second, directory last: no visible
+           entry can name a chain whose data or FAT has not been committed. */
+        if(vmufs_fat_write(dev, &root, fat) < 0) {
+            errno = EIO;
+            rv = -5;
+            goto ex;
+        }
+
+        if(vmufs_dir_write(dev, &root, dir) < 0) {
+            errno = EIO;
+            rv = -6;
+            goto ex;
+        }
+    }
+    else {
+        vmu_dir_t old_entry = dir[idx];
+
+        if(vmufs_chain_collect(&root, fat,
+                               VMUFS_BLOCK_SIZE / sizeof(*fat),
+                               &old_entry, old_blocks,
+                               sizeof(old_blocks) /
+                                   sizeof(old_blocks[0])) < 0) {
+            errno = EILSEQ;
+            rv = -3;
+            goto ex;
+        }
+
+        /* Keep the old chain allocated and authoritative until a complete new
+           chain has been written and its staging FAT is durable. */
+        if(vmufs_chain_allocate(&root, fat,
+                                VMUFS_BLOCK_SIZE / sizeof(*fat),
+                                nd.filetype, block_count, new_blocks,
+                                sizeof(new_blocks) /
+                                    sizeof(new_blocks[0])) < 0) {
+            rv = errno == ENOSPC ? -7 : -4;
+            goto ex;
+        }
+
+        nd.firstblk = new_blocks[0];
+        for(size_t i = 0; i < block_count; ++i) {
+            if(vmu_block_write(dev, new_blocks[i],
+                               file_data + i * VMUFS_BLOCK_SIZE) != 0) {
+                vmufs_chain_release(fat, new_blocks, block_count);
+                errno = EIO;
+                rv = -4;
+                goto ex;
+            }
+        }
+
+        if(vmufs_fat_write(dev, &root, fat) < 0) {
+            errno = EIO;
+            rv = -5;
+            goto ex;
+        }
+
+        memcpy(&dir[idx], &nd, sizeof(nd));
+        dir[idx].dirty = 1;
+        if(vmufs_dir_write(dev, &root, dir) < 0) {
+            errno = EIO;
+            rv = -6;
+            goto ex;
+        }
+
+        /* The new entry is authoritative. Failure here leaks the old blocks
+           but cannot damage either the replacement or another live file. */
+        vmufs_chain_release(fat, old_blocks, old_entry.filesize);
+        if(vmufs_fat_write(dev, &root, fat) < 0) {
+            errno = EIO;
+            rv = -8;
+            goto ex;
+        }
     }
 
-    /* Ok, everything's looking good so far.. update the FAT */
-    if(vmufs_fat_write(dev, &root, fat) < 0) {
-        rv = -5;
-        goto ex;
-    }
-
-    /* This is the critical point. If the dir doesn't save correctly, then
-       we may have an unusable card (until it's reformatted) or leaked
-       blocks not attached to a file. Cross your fingers! */
-    if(vmufs_dir_write(dev, &root, dir) < 0) {
-        /* doh! */
-        dbglog(DBG_ERROR, "vmufs_write: warning, card may be corrupted or leaking blocks!\n");
-        rv = -6;
-        goto ex;
-    }
-
-    /* Looks like everything was good */
 ex:
     vmufs_teardown(dir, fat);
+    free(padded);
     return rv;
 }
 
 int vmufs_delete(maple_device_t *dev, const char *fn) {
-    vmu_root_t  root;
-    vmu_dir_t   *dir = NULL;
-    uint16_t    *fat = NULL;
-    int     fatsize, dirsize, rv = 0;
+    vmu_root_t root;
+    vmu_dir_t *dir = NULL;
+    uint16_t *fat = NULL;
+    int fatsize, dirsize, rv = 0;
 
-    /* Init everything */
-    if(vmufs_setup(dev, &root, &dir, &dirsize, &fat, &fatsize) < 0)
+    if(!dev || !fn) {
+        errno = EINVAL;
         return -2;
+    }
 
-    /* Ok, try to delete the file */
+    if(vmufs_setup(dev, &root, &dir, &dirsize, &fat, &fatsize) < 0) {
+        if(errno == 0)
+            errno = EIO;
+        return -2;
+    }
+
+    if(mutation_preflight(&root, fat, fatsize, dir, dirsize) < 0) {
+        rv = -2;
+        goto ex;
+    }
+
     rv = vmufs_file_delete(&root, fat, dir, fn);
+    if(rv < 0) {
+        errno = rv == -1 ? ENOENT : EILSEQ;
+        goto ex;
+    }
 
-    if(rv < 0) goto ex;
-
-    /* If we succeeded, write back the dir and fat */
+    /* Removing the directory entry first makes deletion authoritative while
+       the old blocks remain allocated. Failed FAT cleanup can only leak space. */
     if(vmufs_dir_write(dev, &root, dir) < 0) {
+        errno = EIO;
         rv = -2;
         goto ex;
     }
 
-    /* This is the critical point. If the fat doesn't save correctly, then
-       we may have an unusable card (until it's reformatted) or leaked
-       blocks not attached to a file. Cross your fingers! */
     if(vmufs_fat_write(dev, &root, fat) < 0) {
-        /* doh! */
-        dbglog(DBG_ERROR, "vmufs_delete: warning, card may be corrupted or leaking blocks!\n");
+        errno = EIO;
         rv = -2;
         goto ex;
     }
 
-    /* Looks like everything was good */
 ex:
     vmufs_teardown(dir, fat);
     return rv;

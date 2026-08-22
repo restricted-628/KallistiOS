@@ -217,7 +217,8 @@ int vmufs_file_read_ex(maple_device_t *dev, const vmu_root_t *root,
 
     The named file should not exist in the directory already. The directory and
     FAT will _not_ be sync'd back to the VMU, this must be done manually.
-    Assumes the mutex is held.
+    Allocation is all-or-nothing and the whole supplied filesystem snapshot is
+    validated before any data block is written. Assumes the mutex is held.
 
     \param  dev             The VMU to write to.
     \param  root            The VMU root block.
@@ -233,7 +234,8 @@ int vmufs_file_write(maple_device_t *dev, vmu_root_t *root, uint16_t *fat,
 
 /** \brief  Given a previously-read FAT and directory, delete the named file.
 
-    No changes are made to the VMU itself, just the in-memory structs.
+    No changes are made to the VMU itself, just the in-memory structs. The whole
+    supplied filesystem snapshot is validated before its chain is released.
 
     \param  root            The VMU root block.
     \param  fat             The FAT to be modified.
@@ -331,9 +333,24 @@ int vmufs_read_dirent(maple_device_t *dev, vmu_dir_t *dirent, void **outbuf, int
 /** \brief Write a file to the VMU.
 
     If the named file already exists, then the function checks 'flags'. If
-    VMUFS_OVERWRITE is set, then the old file is deleted first before the new
-    one is written (this all happens atomically). On partial failure, some data
-    blocks may have been written, but in general the card should not be damaged.
+    VMUFS_OVERWRITE is set, replacement uses copy-on-write: new data and a FAT
+    containing both chains are committed before the directory selects the new
+    file, and the old chain is reclaimed last. Enough currently free space must
+    exist for the complete replacement in addition to the old file.
+
+    New files commit data first, FAT second, and directory last. Interrupted
+    cleanup can leak allocated blocks, but no committed directory entry is
+    deliberately made to reference incomplete or already-freed data. Before
+    changing the card, KOS validates all directory and FAT ownership; unsafe
+    corruption is rejected with `errno` set to `EILSEQ`.
+
+    Executable images require one contiguous free prefix beginning at block
+    zero. Fragmented total free space is not sufficient.
+
+    Calls are serialized against other VMUFS operations by the filesystem
+    mutex. Direct block access or another filesystem implementation operating
+    on the same card is outside that protection and must be excluded by the
+    application.
 
     \param  dev             The VMU to write to.
     \param  fn              The filename to write.
@@ -341,11 +358,24 @@ int vmufs_read_dirent(maple_device_t *dev, vmu_dir_t *dirent, void **outbuf, int
     \param  insize          The size of the file in bytes.
     \param  flags           Flags for the write (i.e, VMUFS_OVERWRITE,
                             VMUFS_VMUGAME, VMUFS_NOCOPY).
-    \return                 0 on success, or <0 for failure.
+    \retval 0               Success.
+    \retval -7              Insufficient valid allocation space.
+    \retval -8              Replacement committed, but the old chain could not
+                            be reclaimed and may remain orphaned.
+    \return                 Another negative value on failure.
 */
 int vmufs_write(maple_device_t *dev, const char *fn, void *inbuf, int insize, int flags);
 
 /** \brief  Delete a file from the VMU.
+
+    The complete filesystem is validated first. The directory entry is removed
+    before its blocks are released, so failed cleanup can leak space but cannot
+    make another live entry reference blocks that have already been reused.
+
+    Calls are serialized against other VMUFS operations by the filesystem
+    mutex. Direct block access or another filesystem implementation operating
+    on the same card is outside that protection and must be excluded by the
+    application.
 
     \retval 0               On success.
     \retval -1              If the file is not found.

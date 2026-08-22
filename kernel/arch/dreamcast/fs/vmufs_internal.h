@@ -35,4 +35,12 @@ int vmufs_chain_collect(const vmu_root_t *root, const uint16_t *fat,
                         size_t fat_entries, const vmu_dir_t *entry,
                         uint16_t *blocks, size_t block_capacity);
 
+int vmufs_chain_allocate(const vmu_root_t *root, uint16_t *fat,
+                         size_t fat_entries, uint8_t filetype,
+                         size_t block_count, uint16_t *blocks,
+                         size_t block_capacity);
+
+void vmufs_chain_release(uint16_t *fat, const uint16_t *blocks,
+                         size_t block_count);
+
 #endif /* __DC_VMUFS_INTERNAL_H */
