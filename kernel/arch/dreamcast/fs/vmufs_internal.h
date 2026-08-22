@@ -32,6 +32,27 @@ typedef struct vmufs_defrag_plan {
     size_t dirty_dir_blocks;
 } vmufs_defrag_plan_t;
 
+#define VMUFS_DEFRAG_MAX_STEPS \
+    (2u * VMUFS_STANDARD_DIR_BLOCKS * VMUFS_BLOCK_SIZE / \
+     sizeof(vmu_dir_t))
+#define VMUFS_DEFRAG_MAX_TARGETS \
+    (2u * VMUFS_BLOCK_SIZE / sizeof(uint16_t))
+
+typedef struct vmufs_defrag_step {
+    uint16_t directory_index;
+    uint16_t target_offset;
+    uint16_t block_count;
+    bool final_target;
+} vmufs_defrag_step_t;
+
+typedef struct vmufs_defrag_schedule {
+    vmufs_defrag_step_t steps[VMUFS_DEFRAG_MAX_STEPS];
+    uint16_t targets[VMUFS_DEFRAG_MAX_TARGETS];
+    size_t step_count;
+    size_t target_count;
+    size_t staged_steps;
+} vmufs_defrag_schedule_t;
+
 /* Host-side image tools use these variants when the root block is known from
    image geometry rather than assumed to occupy the standard physical block. */
 int vmufs_root_validate_at(const vmu_root_t *root, size_t card_blocks,
@@ -69,5 +90,11 @@ int vmufs_defrag_plan_build(const vmu_root_t *root, const uint16_t *fat,
                             size_t fat_entries, vmu_dir_t *directory,
                             size_t directory_entries,
                             vmufs_defrag_plan_t *plan);
+
+int vmufs_defrag_schedule_build(const vmu_root_t *root,
+                                const uint16_t *fat, size_t fat_entries,
+                                const vmu_dir_t *directory,
+                                size_t directory_entries,
+                                vmufs_defrag_schedule_t *schedule);
 
 #endif /* __DC_VMUFS_INTERNAL_H */
