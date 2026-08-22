@@ -2,6 +2,7 @@
 
    dc/asic.h
    Copyright (C) 2001-2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -17,6 +18,7 @@
     dealt with here).
 
     \author Megan Potter
+    \author Joseph Black
 */
 
 #ifndef __DC_ASIC_H
@@ -26,6 +28,7 @@
 __BEGIN_DECLS
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /** \defgroup asic  Events
     \brief          Events pertaining to the DC's System ASIC
@@ -195,15 +198,95 @@ typedef struct {
     void *data;
 } asic_evt_handler_entry_t;
 
+/** \defgroup asic_ownership Exclusive Event Ownership
+    \brief Exclusive ASIC event claims and status inspection
+    \ingroup asic
+    @{
+*/
+
+/** \brief Opaque exclusive claim on one ASIC event source. */
+typedef uint32_t asic_evt_claim_t;
+
+/** \brief Invalid ASIC event claim value. */
+#define ASIC_EVT_CLAIM_INVALID 0u
+
+/** \brief Coherent ASIC event-source status snapshot. */
+typedef struct asic_evt_status {
+    uint16_t code;            /**< Event code. */
+    uint8_t enabled_levels;   /**< Bit mask of ASIC_IRQ* levels. */
+    bool handler_present;     /**< A handler is installed. */
+    bool exclusively_claimed; /**< Handler is protected by a claim. */
+    uint64_t dispatches;      /**< Number of dispatched occurrences. */
+} asic_evt_status_t;
+
+/** \brief Exclusively claim, install, and enable an ASIC event handler.
+
+    Claims prevent legacy handler replacement and give the owner one balanced
+    lifecycle for the handler and interrupt mask. A source which already has a
+    handler or is enabled at any interrupt level is considered busy; the claim
+    does not silently take over pre-existing state. No memory or worker thread
+    is allocated. The handler runs in interrupt context.
+
+    \param code            ASIC event code.
+    \param irqlevel        One of the ASIC_IRQ* levels.
+    \param handler         Interrupt-context handler.
+    \param data            Opaque handler argument.
+    \param claim           Receives the claim token.
+    On failure, `claim` is set to ASIC_EVT_CLAIM_INVALID when it is non-NULL.
+
+    \retval 0              Event claimed and enabled.
+    \retval -1             Error, with `EINVAL` or `EBUSY` in `errno`.
+*/
+int asic_evt_claim(uint16_t code, uint8_t irqlevel,
+                   asic_evt_handler handler, void *data,
+                   asic_evt_claim_t *claim);
+
+/** \brief Temporarily mask an exclusively claimed ASIC event.
+
+    \retval 0              Event masked.
+    \retval -1             Claim is stale or invalid, with `ENOENT` in `errno`.
+*/
+int asic_evt_claim_mask(asic_evt_claim_t claim);
+
+/** \brief Unmask an exclusively claimed ASIC event.
+
+    \retval 0              Event unmasked at its claimed interrupt level.
+    \retval -1             Claim is stale or invalid, with `ENOENT` in `errno`.
+*/
+int asic_evt_claim_unmask(asic_evt_claim_t claim);
+
+/** \brief Disable, remove, and release an ASIC event claim.
+
+    \retval 0              Claim released.
+    \retval -1             Claim is stale or invalid, with `ENOENT` in `errno`.
+*/
+int asic_evt_release(asic_evt_claim_t claim);
+
+/** \brief Copy a coherent event-source status snapshot.
+
+    \retval 0              Snapshot copied.
+    \retval -1             Invalid event or output pointer, with `EINVAL`.
+*/
+int asic_evt_get_status(uint16_t code, asic_evt_status_t *status);
+
+/** @} */
+
 /** \brief   Set or remove an ASIC handler.
     \ingroup asic
 
     This function will register an event handler for a given event code, or if
     the handler is NULL, unregister any that is currently registered.
 
+    An exclusively claimed event cannot be changed through this legacy entry
+    point. A threaded handler must be removed with asic_evt_remove_handler().
+    In either case, the existing entry is returned unchanged and `errno` is set
+    to `EBUSY`.
+
     \param  code            The ASIC event code to hook (see \ref asic_events).
     \param  handler         The function to call when the event happens.
     \param  data            A user pointer that will be passed to the callback.
+
+    Invalid event codes return an empty entry and set `errno` to `EINVAL`.
 
 */
 asic_evt_handler_entry_t asic_evt_set_handler(uint16_t code, asic_evt_handler handler, void *data);
@@ -225,6 +308,11 @@ asic_evt_handler_entry_t asic_evt_set_handler(uint16_t code, asic_evt_handler ha
     \param  unmask          An optional function that will be called by the
                             thread after the handler function returned, to
                             re-enable the interrupt.
+
+    \retval 0              Threaded handler installed.
+    \retval -1             Invalid input, allocation failure, or an event with
+                            an existing handler or claim. `errno` is `EINVAL`,
+                            an allocation error, or `EBUSY`, respectively.
 */
 int asic_evt_request_threaded_handler(uint16_t code, asic_evt_handler handler,
                                       void *data,
@@ -233,6 +321,11 @@ int asic_evt_request_threaded_handler(uint16_t code, asic_evt_handler handler,
 
 /** \brief   Unregister any handler set to the given ASIC event.
     \ingroup asic
+
+    Removing a threaded handler from its own worker callback is refused with
+    `errno` set to `EDEADLK`; the handler remains installed.
+    Invalid event codes set `errno` to `EINVAL`, and claimed events remain
+    installed with `errno` set to `EBUSY`.
 
     \param  code            The ASIC event code to unhook (see
                             \ref asic_events).
@@ -255,6 +348,9 @@ void asic_evt_disable_all(void);
     at the given IRQ level. Generally, you will never have to do this yourself
     unless you're adding in some new functionality.
 
+    An invalid event or level sets `errno` to `EINVAL`. An exclusively claimed
+    event remains unchanged and sets `errno` to `EBUSY`.
+
     \param  code            The ASIC event code to unhook (see
                             \ref asic_events).
     \param  irqlevel        The IRQ level it was hooked on (see
@@ -271,6 +367,9 @@ void asic_evt_disable(uint16_t code, uint8_t irqlevel);
     the hook function for the event, you must do that separately with
     asic_evt_set_handler(). Generally, unless you're adding in new
     functionality, you'll never have to do this.
+
+    An invalid event or level sets `errno` to `EINVAL`. An exclusively claimed
+    event remains unchanged and sets `errno` to `EBUSY`.
 
     \param  code            The ASIC event code to hook (see \ref asic_events).
     \param  irqlevel        The IRQ level to hook on (see \ref asic_irq_lv).

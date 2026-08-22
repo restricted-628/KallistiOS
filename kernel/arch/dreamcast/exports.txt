@@ -8,9 +8,16 @@ arch_icache_sync_range
 
 # ASIC
 asic_evt_set_handler
+asic_evt_request_threaded_handler
+asic_evt_remove_handler
 asic_evt_disable_all
 asic_evt_disable
 asic_evt_enable
+asic_evt_claim
+asic_evt_claim_mask
+asic_evt_claim_unmask
+asic_evt_release
+asic_evt_get_status
 
 # G2 Bus
 g2_read_8

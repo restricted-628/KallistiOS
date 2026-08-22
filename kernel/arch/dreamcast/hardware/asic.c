@@ -2,6 +2,7 @@
 
    asic.c
    Copyright (c)2000,2001,2002,2003 Megan Potter
+   Copyright (C) 2026 Joseph Black
 */
 
 /*
@@ -48,11 +49,6 @@
    DMA and disable interrupts. Any other treatment may cause serious
    data corruption between the ASIC and the G2 peripherals.
 
-   For more information on all of this see:
-
-   http://www.segatech.com/technical/dcblock/index.html
-   http://mc.pp.se/dc/
-
  */
 
 /* Small interrupt listing (from the two Marcus's =)
@@ -98,15 +94,26 @@
 #include <string.h>
 #include <stdio.h>
 #include <assert.h>
+#include <errno.h>
 #include <dc/asic.h>
 #include <kos/genwait.h>
 #include <kos/irq.h>
 #include <kos/regfield.h>
 #include <kos/worker_thread.h>
 
-/* XXX These based on g1ata.c and pvr.h and should be replaced by a standardized method */
-#define IN32(addr)         (* ( (volatile uint32_t *)(addr) ) )
-#define OUT32(addr, data)  IN32(addr) = (data)
+/* Keep the register access in one overridable boundary so the ownership state
+   machine can be exercised by the host regression harness. Production builds
+   use the direct SH-4 MMIO definitions below. */
+#ifndef ASIC_MMIO_READ32
+#define ASIC_MMIO_READ32(addr) (*((volatile uint32_t *)(addr)))
+#endif
+#ifndef ASIC_MMIO_WRITE32
+#define ASIC_MMIO_WRITE32(addr, data) \
+    (*((volatile uint32_t *)(addr)) = (data))
+#endif
+
+#define IN32(addr)         ASIC_MMIO_READ32(addr)
+#define OUT32(addr, data)  ASIC_MMIO_WRITE32(addr, data)
 
 /* The set of asic regs are spaced by 0x10 with 0x4 between each sub reg */
 #define ASIC_EVT_REG_ADDR(irq, sub) (ASIC_IRQD_A + ((irq) * 0x10) + ((sub) * 0x4))
@@ -128,20 +135,221 @@ struct asic_thdata {
    function will handle the exception. */
 static asic_evt_handler_entry_t
 asic_evt_handlers[ASIC_EVT_REGS][ASIC_EVT_REG_HNDS];
+static uint16_t asic_evt_claim_generation[ASIC_EVT_REGS][ASIC_EVT_REG_HNDS];
+static uint8_t asic_evt_claim_level[ASIC_EVT_REGS][ASIC_EVT_REG_HNDS];
+static bool asic_evt_claim_active[ASIC_EVT_REGS][ASIC_EVT_REG_HNDS];
+static uint64_t asic_evt_dispatches[ASIC_EVT_REGS][ASIC_EVT_REG_HNDS];
+static struct asic_thdata
+    *asic_evt_threaded[ASIC_EVT_REGS][ASIC_EVT_REG_HNDS];
+
+static bool asic_evt_code_valid(uint16_t code) {
+    return ((code >> 8) & 0xff) < ASIC_EVT_REGS
+        && (code & 0xff) < ASIC_EVT_REG_HNDS;
+}
+
+static asic_evt_claim_t asic_evt_make_claim(uint16_t code,
+                                            uint16_t generation) {
+    return ((uint32_t)generation << 16) | code;
+}
+
+static bool asic_evt_claim_valid(asic_evt_claim_t claim,
+                                 uint8_t *evtreg, uint8_t *evt) {
+    uint16_t code = (uint16_t)claim;
+    uint16_t generation = (uint16_t)(claim >> 16);
+
+    if(!claim || !generation || !asic_evt_code_valid(code))
+        return false;
+
+    *evtreg = (uint8_t)(code >> 8);
+    *evt = (uint8_t)code;
+    return asic_evt_claim_active[*evtreg][*evt]
+        && asic_evt_claim_generation[*evtreg][*evt] == generation;
+}
 
 /* Set a handler, or remove a handler */
 asic_evt_handler_entry_t asic_evt_set_handler(uint16_t code, asic_evt_handler hnd, void *data) {
     uint8_t evtreg, evt;
     asic_evt_handler_entry_t old;
+    irq_mask_t irq_state;
+
+    if(!asic_evt_code_valid(code)) {
+        errno = EINVAL;
+        return (asic_evt_handler_entry_t) { NULL, NULL };
+    }
 
     evtreg = (code >> 8) & 0xff;
     evt = code & 0xff;
-
-    assert((evtreg < ASIC_EVT_REGS) && (evt < ASIC_EVT_REG_HNDS));
+    irq_state = irq_disable();
 
     old = asic_evt_handlers[evtreg][evt];
+
+    /* An exclusive owner must use its claim token to release the event. */
+    if(asic_evt_claim_active[evtreg][evt]
+            || (asic_evt_threaded[evtreg][evt]
+                && (hnd != old.hdl || data != old.data))) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return old;
+    }
+
     asic_evt_handlers[evtreg][evt] = (asic_evt_handler_entry_t){ hnd, data };
+    irq_restore(irq_state);
     return old;
+}
+
+int asic_evt_claim(uint16_t code, uint8_t irqlevel,
+                   asic_evt_handler handler, void *data,
+                   asic_evt_claim_t *claim) {
+    irq_mask_t irq_state;
+    uint16_t generation;
+    uint8_t evtreg, evt, level;
+    uint32_t addr;
+
+    if(!claim) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *claim = ASIC_EVT_CLAIM_INVALID;
+
+    if(!asic_evt_code_valid(code) || irqlevel >= ASIC_IRQ_MAX || !handler) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    evtreg = (uint8_t)(code >> 8);
+    evt = (uint8_t)code;
+    irq_state = irq_disable();
+
+    for(level = 0; level < ASIC_IRQ_MAX; ++level) {
+        addr = ASIC_EVT_REG_ADDR(level, evtreg);
+        if(IN32(addr) & BIT(evt)) {
+            irq_restore(irq_state);
+            errno = EBUSY;
+            return -1;
+        }
+    }
+
+    if(asic_evt_handlers[evtreg][evt].hdl
+            || asic_evt_claim_active[evtreg][evt]) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return -1;
+    }
+
+    generation = ++asic_evt_claim_generation[evtreg][evt];
+
+    if(!generation)
+        generation = ++asic_evt_claim_generation[evtreg][evt];
+
+    asic_evt_handlers[evtreg][evt] =
+        (asic_evt_handler_entry_t) { handler, data };
+    asic_evt_claim_level[evtreg][evt] = irqlevel;
+    asic_evt_claim_active[evtreg][evt] = true;
+
+    addr = ASIC_EVT_REG_ADDR(irqlevel, evtreg);
+    OUT32(addr, IN32(addr) | BIT(evt));
+    *claim = asic_evt_make_claim(code, generation);
+    irq_restore(irq_state);
+    return 0;
+}
+
+int asic_evt_claim_mask(asic_evt_claim_t claim) {
+    irq_mask_t irq_state;
+    uint8_t evtreg, evt, level;
+    uint32_t addr;
+
+    irq_state = irq_disable();
+
+    if(!asic_evt_claim_valid(claim, &evtreg, &evt)) {
+        irq_restore(irq_state);
+        errno = ENOENT;
+        return -1;
+    }
+
+    level = asic_evt_claim_level[evtreg][evt];
+    addr = ASIC_EVT_REG_ADDR(level, evtreg);
+    OUT32(addr, IN32(addr) & ~BIT(evt));
+    irq_restore(irq_state);
+    return 0;
+}
+
+int asic_evt_claim_unmask(asic_evt_claim_t claim) {
+    irq_mask_t irq_state;
+    uint8_t evtreg, evt, level;
+    uint32_t addr;
+
+    irq_state = irq_disable();
+
+    if(!asic_evt_claim_valid(claim, &evtreg, &evt)) {
+        irq_restore(irq_state);
+        errno = ENOENT;
+        return -1;
+    }
+
+    level = asic_evt_claim_level[evtreg][evt];
+    addr = ASIC_EVT_REG_ADDR(level, evtreg);
+    OUT32(addr, IN32(addr) | BIT(evt));
+    irq_restore(irq_state);
+    return 0;
+}
+
+int asic_evt_release(asic_evt_claim_t claim) {
+    irq_mask_t irq_state;
+    uint8_t evtreg, evt, level;
+    uint32_t addr;
+
+    irq_state = irq_disable();
+
+    if(!asic_evt_claim_valid(claim, &evtreg, &evt)) {
+        irq_restore(irq_state);
+        errno = ENOENT;
+        return -1;
+    }
+
+    for(level = 0; level < ASIC_IRQ_MAX; ++level) {
+        addr = ASIC_EVT_REG_ADDR(level, evtreg);
+        OUT32(addr, IN32(addr) & ~BIT(evt));
+    }
+
+    asic_evt_handlers[evtreg][evt] =
+        (asic_evt_handler_entry_t) { NULL, NULL };
+    asic_evt_claim_active[evtreg][evt] = false;
+    asic_evt_claim_level[evtreg][evt] = ASIC_IRQ_DEFAULT;
+    irq_restore(irq_state);
+    return 0;
+}
+
+int asic_evt_get_status(uint16_t code, asic_evt_status_t *status) {
+    irq_mask_t irq_state;
+    uint8_t evtreg, evt, level, levels = 0;
+
+    if(status)
+        memset(status, 0, sizeof(*status));
+
+    if(!asic_evt_code_valid(code) || !status) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    evtreg = (uint8_t)(code >> 8);
+    evt = (uint8_t)code;
+    irq_state = irq_disable();
+
+    for(level = 0; level < ASIC_IRQ_MAX; ++level) {
+        if(IN32(ASIC_EVT_REG_ADDR(level, evtreg)) & BIT(evt))
+            levels |= (uint8_t)BIT(level);
+    }
+
+    *status = (asic_evt_status_t) {
+        .code = code,
+        .enabled_levels = levels,
+        .handler_present = asic_evt_handlers[evtreg][evt].hdl != NULL,
+        .exclusively_claimed = asic_evt_claim_active[evtreg][evt],
+        .dispatches = asic_evt_dispatches[evtreg][evt]
+    };
+    irq_restore(irq_state);
+    return 0;
 }
 
 /* The ASIC event handler; this is called from the global IRQ handler
@@ -167,8 +375,10 @@ static void handler_irq9(irq_t source, irq_context_t *context, void *data) {
         for(i = 0; i < ASIC_EVT_REG_HNDS; i++) {
             entry = &handlers[reg][i];
 
-            if((mask & BIT(i)) && entry->hdl != NULL)
+            if((mask & BIT(i)) && entry->hdl != NULL) {
+                ++asic_evt_dispatches[reg][i];
                 entry->hdl((reg << 8) | i, entry->data);
+            }
         }
     }
 }
@@ -186,30 +396,54 @@ void asic_evt_disable_all(void) {
 
 /* Disable a particular G2 event */
 void asic_evt_disable(uint16_t code, uint8_t irqlevel) {
-    assert(irqlevel < ASIC_IRQ_MAX);
-
     uint8_t evtreg, evt;
+    irq_mask_t irq_state;
+
+    if(!asic_evt_code_valid(code) || irqlevel >= ASIC_IRQ_MAX) {
+        errno = EINVAL;
+        return;
+    }
 
     evtreg = (code >> 8) & 0xff;
     evt = code & 0xff;
+    irq_state = irq_disable();
+
+    if(asic_evt_claim_active[evtreg][evt]) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return;
+    }
 
     uint32_t addr = ASIC_EVT_REG_ADDR(irqlevel, evtreg);
     uint32_t val = IN32(addr);
     OUT32(addr, val & ~BIT(evt));
+    irq_restore(irq_state);
 }
 
 /* Enable a particular G2 event */
 void asic_evt_enable(uint16_t code, uint8_t irqlevel) {
-    assert(irqlevel < ASIC_IRQ_MAX);
-
     uint8_t evtreg, evt;
+    irq_mask_t irq_state;
+
+    if(!asic_evt_code_valid(code) || irqlevel >= ASIC_IRQ_MAX) {
+        errno = EINVAL;
+        return;
+    }
 
     evtreg = (code >> 8) & 0xff;
     evt = code & 0xff;
+    irq_state = irq_disable();
+
+    if(asic_evt_claim_active[evtreg][evt]) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return;
+    }
 
     uint32_t addr = ASIC_EVT_REG_ADDR(irqlevel, evtreg);
     uint32_t val = IN32(addr);
     OUT32(addr, val | BIT(evt));
+    irq_restore(irq_state);
 }
 
 /* Initialize events */
@@ -222,6 +456,10 @@ static void asic_evt_init(void) {
 
     /* Clear out the event table */
     memset(asic_evt_handlers, 0, sizeof(asic_evt_handlers));
+    memset(asic_evt_claim_level, 0, sizeof(asic_evt_claim_level));
+    memset(asic_evt_claim_active, 0, sizeof(asic_evt_claim_active));
+    memset(asic_evt_dispatches, 0, sizeof(asic_evt_dispatches));
+    memset(asic_evt_threaded, 0, sizeof(asic_evt_threaded));
 
     /* Hook IRQ9,B,D */
     irq_set_handler(EXC_IRQ9, handler_irq9, asic_evt_handlers);
@@ -231,8 +469,27 @@ static void asic_evt_init(void) {
 
 /* Shutdown events */
 static void asic_evt_shutdown(void) {
+    uint8_t reg, evt;
+
     /* Disable all events */
     asic_evt_disable_all();
+
+    /* Explicitly-created threaded handlers own workers that must be joined. */
+    for(reg = 0; reg < ASIC_EVT_REGS; ++reg) {
+        for(evt = 0; evt < ASIC_EVT_REG_HNDS; ++evt) {
+            struct asic_thdata *thdata = asic_evt_threaded[reg][evt];
+
+            asic_evt_handlers[reg][evt] =
+                (asic_evt_handler_entry_t) { NULL, NULL };
+            asic_evt_claim_active[reg][evt] = false;
+            asic_evt_threaded[reg][evt] = NULL;
+
+            if(thdata) {
+                thd_worker_destroy(thdata->worker);
+                free(thdata);
+            }
+        }
+    }
 
     /* Unhook handlers */
     irq_set_handler(EXC_IRQ9, NULL, NULL);
@@ -275,25 +532,28 @@ int asic_evt_request_threaded_handler(uint16_t code, asic_evt_handler hnd,
                                       void (*unmask)(uint16_t))
 {
     struct asic_thdata *thdata;
-    uint32_t flags;
+    irq_mask_t irq_state;
     kthread_t *thd;
+    uint8_t evtreg, evt;
+
+    if(!asic_evt_code_valid(code) || !hnd) {
+        errno = EINVAL;
+        return -1;
+    }
 
     thdata = malloc(sizeof(*thdata));
     if(!thdata)
-        return -1; /* TODO: What return code? */
+        return -1;
 
     thdata->hdl = hnd;
     thdata->data = data;
     thdata->ack_and_mask = ack_and_mask;
     thdata->unmask = unmask;
 
-    flags = irq_disable();
-
     thdata->worker = thd_worker_create(asic_threaded_irq, thdata);
     if(!thdata->worker) {
-        irq_restore(flags);
         free(thdata);
-        return -1; /* TODO: What return code? */
+        return -1;
     }
 
     /* Set a reasonable name to ID the thread */
@@ -305,9 +565,23 @@ int asic_evt_request_threaded_handler(uint16_t code, asic_evt_handler hnd,
     /* Highest priority */
     //thd_set_prio(thd, 0);
 
-    asic_evt_set_handler(code, asic_thirq_dispatch, thdata);
+    evtreg = (uint8_t)(code >> 8);
+    evt = (uint8_t)code;
+    irq_state = irq_disable();
 
-    irq_restore(flags);
+    if(asic_evt_handlers[evtreg][evt].hdl
+            || asic_evt_claim_active[evtreg][evt]) {
+        irq_restore(irq_state);
+        thd_worker_destroy(thdata->worker);
+        free(thdata);
+        errno = EBUSY;
+        return -1;
+    }
+
+    asic_evt_threaded[evtreg][evt] = thdata;
+    asic_evt_handlers[evtreg][evt] =
+        (asic_evt_handler_entry_t) { asic_thirq_dispatch, thdata };
+    irq_restore(irq_state);
 
     return 0;
 }
@@ -317,15 +591,39 @@ void asic_evt_remove_handler(uint16_t code)
     asic_evt_handler_entry_t entry;
     struct asic_thdata *thdata;
     uint8_t evtreg, evt;
+    irq_mask_t irq_state;
+
+    if(!asic_evt_code_valid(code)) {
+        errno = EINVAL;
+        return;
+    }
 
     evtreg = (code >> 8) & 0xff;
     evt = code & 0xff;
+    irq_state = irq_disable();
+
+    if(asic_evt_claim_active[evtreg][evt]) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return;
+    }
 
     entry = asic_evt_handlers[evtreg][evt];
-    asic_evt_set_handler(code, NULL, NULL);
+    thdata = asic_evt_threaded[evtreg][evt];
 
-    if(entry.hdl == asic_thirq_dispatch) {
-        thdata = entry.data;
+    if(thdata && thd_get_current() == thd_worker_get_thread(thdata->worker)) {
+        irq_restore(irq_state);
+        errno = EDEADLK;
+        return;
+    }
+
+    asic_evt_handlers[evtreg][evt] =
+        (asic_evt_handler_entry_t) { NULL, NULL };
+    asic_evt_threaded[evtreg][evt] = NULL;
+    irq_restore(irq_state);
+
+    if(thdata) {
+        assert(thdata == entry.data);
 
         thd_worker_destroy(thdata->worker);
         free(thdata);
