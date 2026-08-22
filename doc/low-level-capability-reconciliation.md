@@ -8,10 +8,9 @@ behavior, not source vocabulary, work-area conventions, or compatibility
 symbols. New facilities belong to existing KOS subsystems and retain KOS
 lifecycle, error, threading, and ownership rules.
 
-The cumulative review branch currently contains the dependency chain through
-VMU storage closure. Later rows marked **integration checkpoint** already have
-software implementations in the protected integration tree, but still need to
-be reconstructed as reviewable commits on top of that chain.
+The cumulative review branch now contains every low-level implementation row
+listed below. The protected integration tree remains a forensic reference, but
+no production implementation file exists only in that older checkpoint.
 
 ## Capability matrix
 
@@ -56,3 +55,19 @@ exports, documentation, host tests where practical, cross-build, and examples
 agree. Emulator execution is integration evidence. Electrical behavior,
 removable-media timing, flash interruption, and third-party device behavior
 remain explicit physical-hardware gates.
+
+## Software validation record
+
+- The complete KOS and addon tree clean-builds with SH GCC 16.2.0.
+- All 18 production-model host suites pass, including raw VMU image,
+  transaction, ownership, protocol, timer, platform-policy, and capture-ring
+  checks.
+- All 47 changed or added Dreamcast examples clean-build against the cumulative
+  library.
+- All 329 exports added since the base revision resolve to definitions in the
+  final `libkallisti.a`.
+- The production-code comparison against the protected integration checkpoint
+  contains no capability implementation present only in that checkpoint.
+
+These checks close software implementation and integration. They do not replace
+the physical-hardware gates recorded in the table.
