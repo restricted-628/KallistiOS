@@ -11,7 +11,7 @@ VMU_UTIL_DIR = $(KOS_ROOT)/kernel/arch/dreamcast/util
 INCLUDES = -I$(KOS_ROOT)/kernel/arch/dreamcast/include -I$(VMUFS_DIR)
 TARGET = vmu-storage-test
 SOURCES = vmu-storage-test.c $(VMUFS_DIR)/vmufs_chain.c \
-	$(VMU_UTIL_DIR)/vmu_pkg_codec.c
+	$(VMUFS_DIR)/vmufs_validate.c $(VMU_UTIL_DIR)/vmu_pkg_codec.c
 
 .PHONY: all test clean
 

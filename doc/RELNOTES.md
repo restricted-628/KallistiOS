@@ -61,6 +61,11 @@ lifecycle and naming conventions.
   against unaligned input, truncated layouts, integer overflow, unterminated
   text fields, invalid icon metadata, and checksum mismatch without modifying
   the caller's encoded buffer.
+* VMU saves and deletions now gate all mutations on whole-filesystem ownership
+  validation. New saves use data/FAT/directory commit ordering, replacements
+  use copy-on-write, deletions remove the directory entry before freeing data,
+  failed allocations leave the in-memory FAT unchanged, and executable images
+  require contiguous free space beginning at block zero.
 
 RELEASE NOTES for 2.2.2
 -----------------------

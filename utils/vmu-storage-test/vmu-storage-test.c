@@ -22,6 +22,8 @@
 #endif
 
 #define TEST_FAT_ENTRIES (VMUFS_BLOCK_SIZE / sizeof(uint16_t))
+#define TEST_DIR_ENTRIES \
+    (VMUFS_STANDARD_DIR_BLOCKS * VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t))
 
 uint16_t net_crc16ccitt(const uint8_t *data, int size, uint16_t start) {
     uint16_t value = start;
@@ -42,6 +44,31 @@ static void make_fat(uint16_t *fat) {
         fat[i] = VMUFS_FAT_FREE;
 }
 
+static void make_card(vmu_root_t *root, uint16_t *fat, vmu_dir_t *dir) {
+    memset(root, 0, sizeof(*root));
+    memset(root->magic, 0x55, sizeof(root->magic));
+    root->fat_loc = VMUFS_STANDARD_FAT_BLOCK;
+    root->fat_size = 1;
+    root->dir_loc = VMUFS_STANDARD_DIR_BLOCK;
+    root->dir_size = VMUFS_STANDARD_DIR_BLOCKS;
+    root->blk_cnt = VMUFS_STANDARD_USER_BLOCKS;
+    make_fat(fat);
+    memset(dir, 0, TEST_DIR_ENTRIES * sizeof(*dir));
+}
+
+static void make_entry(vmu_dir_t *entry, const char *name,
+                       uint16_t first_block, uint16_t blocks) {
+    size_t length = strlen(name);
+
+    memset(entry, 0, sizeof(*entry));
+    entry->filetype = VMUFS_FILETYPE_DATA;
+    entry->firstblk = first_block;
+    entry->filesize = blocks;
+    if(length > sizeof(entry->filename))
+        length = sizeof(entry->filename);
+    memcpy(entry->filename, name, length);
+}
+
 static int expect_chain_error(const vmu_root_t *root, const uint16_t *fat,
                               const vmu_dir_t *entry, int expected_errno) {
     uint16_t blocks[TEST_FAT_ENTRIES];
@@ -56,6 +83,7 @@ static int expect_chain_error(const vmu_root_t *root, const uint16_t *fat,
 
 static int test_chains(void) {
     uint16_t fat[TEST_FAT_ENTRIES];
+    uint16_t saved_fat[TEST_FAT_ENTRIES];
     uint16_t blocks[TEST_FAT_ENTRIES];
     vmu_root_t root = { .blk_cnt = VMUFS_STANDARD_USER_BLOCKS };
     vmu_dir_t entry = { .firstblk = 199, .filesize = 2 };
@@ -102,6 +130,97 @@ static int test_chains(void) {
     errno = 0;
     if(vmufs_chain_collect(&root, fat, TEST_FAT_ENTRIES, &entry,
                            blocks, 1) == 0 || errno != EINVAL)
+        return -1;
+
+    make_fat(fat);
+    fat[0] = VMUFS_FAT_EOF;
+    memcpy(saved_fat, fat, sizeof(fat));
+    errno = 0;
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_GAME, 2, blocks,
+                            TEST_FAT_ENTRIES) == 0 || errno != ENOSPC ||
+       memcmp(fat, saved_fat, sizeof(fat)) != 0)
+        return -1;
+
+    make_fat(fat);
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_GAME, 2, blocks,
+                            TEST_FAT_ENTRIES) < 0 ||
+       blocks[0] != 0 || blocks[1] != 1 || fat[0] != 1 ||
+       fat[1] != VMUFS_FAT_EOF)
+        return -1;
+    vmufs_chain_release(fat, blocks, 2);
+    if(fat[0] != VMUFS_FAT_FREE || fat[1] != VMUFS_FAT_FREE)
+        return -1;
+
+    return 0;
+}
+
+static int validate_orphans_only(const vmu_root_t *root,
+                                 const uint16_t *fat,
+                                 const vmu_dir_t *dir) {
+    vmufs_validation_t validation;
+
+    return vmufs_validate(root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                          TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                          &validation) < 0 && errno == EILSEQ &&
+           vmufs_validation_allows_mutation(&validation) ? 0 : -1;
+}
+
+static int test_commit_prefixes(void) {
+    uint16_t fat[TEST_FAT_ENTRIES];
+    uint16_t old_blocks[2], new_blocks[2];
+    vmu_dir_t dir[TEST_DIR_ENTRIES];
+    vmufs_validation_t validation;
+    vmu_root_t root;
+
+    /* New save: data writes do not alter metadata; the FAT-only prefix is an
+       orphan, and installing the directory makes the filesystem complete. */
+    make_card(&root, fat, dir);
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, new_blocks, 2) < 0 ||
+       validate_orphans_only(&root, fat, dir) < 0)
+        return -1;
+    make_entry(&dir[0], "NEW", new_blocks[0], 2);
+    if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                      TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                      &validation) < 0)
+        return -1;
+
+    /* Replacement: the old file remains valid while the new chain is staged;
+       after the directory switches, only the old chain is orphaned. */
+    make_card(&root, fat, dir);
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, old_blocks, 2) < 0)
+        return -1;
+    make_entry(&dir[0], "SAVE", old_blocks[0], 2);
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, new_blocks, 2) < 0 ||
+       validate_orphans_only(&root, fat, dir) < 0)
+        return -1;
+    make_entry(&dir[0], "SAVE", new_blocks[0], 2);
+    if(validate_orphans_only(&root, fat, dir) < 0)
+        return -1;
+    vmufs_chain_release(fat, old_blocks, 2);
+    if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                      TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                      &validation) < 0)
+        return -1;
+
+    /* Delete: removing the directory first leaves an orphan-only prefix;
+       releasing the former chain completes a valid empty filesystem. */
+    make_card(&root, fat, dir);
+    if(vmufs_chain_allocate(&root, fat, TEST_FAT_ENTRIES,
+                            VMUFS_FILETYPE_DATA, 2, old_blocks, 2) < 0)
+        return -1;
+    make_entry(&dir[0], "DELETE", old_blocks[0], 2);
+    memset(&dir[0], 0, sizeof(dir[0]));
+    if(validate_orphans_only(&root, fat, dir) < 0)
+        return -1;
+    vmufs_chain_release(fat, old_blocks, 2);
+    if(vmufs_validate(&root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+                      TEST_FAT_ENTRIES, dir, TEST_DIR_ENTRIES,
+                      &validation) < 0)
         return -1;
 
     return 0;
@@ -218,7 +337,8 @@ static int test_package_arguments(void) {
 }
 
 int main(void) {
-    if(test_chains() < 0 || test_package_round_trip() < 0 ||
+    if(test_chains() < 0 || test_commit_prefixes() < 0 ||
+       test_package_round_trip() < 0 ||
        test_package_arguments() < 0) {
         fprintf(stderr, "vmu-storage-test: FAIL errno=%d\n", errno);
         return 1;
