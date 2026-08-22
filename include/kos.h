@@ -61,6 +61,7 @@ __BEGIN_DECLS
 #include <kos/string.h>
 #include <kos/init.h>
 #include <kos/oneshot_timer.h>
+#include <kos/workqueue.h>
 #include <kos/regfield.h>
 #include <kos/spinlock.h>
 

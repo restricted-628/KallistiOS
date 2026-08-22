@@ -169,6 +169,17 @@ thd_get_errno
 thd_set_mode
 thd_block_now
 
+# Threaded work queues
+workqueue_create
+workqueue_destroy
+workqueue_kill
+workqueue_enqueue
+workqueue_enqueue_ex
+workqueue_cancel
+workqueue_cancel_ex
+workqueue_job_get_info
+workqueue_get_thread
+
 # Libraries
 #library_print_list
 #library_by_libid
