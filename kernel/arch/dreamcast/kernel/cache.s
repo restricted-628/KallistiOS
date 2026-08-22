@@ -9,6 +9,7 @@
 ! Copyright (C) 2024, 2025 Paul Cercueil
 ! Copyright (C) 2025 Matt Slevinsky
 ! Copyright (C) 2025 TapamN
+! Copyright (C) 2026 Joseph Black
 !
 ! Optimized assembler code for managing the cache.
 !
@@ -30,6 +31,29 @@ _arch_icache_inval_range:
 
     bt       .iinval_exit    ! Exit early if no blocks to flush
 
+    ! Reject a byte range whose final address wraps around the address space.
+    mov      r5, r2
+    add      #-1, r2
+    mov      r4, r3
+    add      r2, r3
+    cmp/hs   r4, r3
+    bf       .iinval_exit
+
+    ! Cache tags and OCB* operands must name the cacheable alias. P2 carries
+    ! the same physical address, but cache-control operations against it are
+    ! ineffective.
+    mov      r4, r2
+    mov.l    area_mask, r1
+    and      r1, r2
+    mov.l    p2_mask, r1
+    cmp/eq   r1, r2
+    bf       .iinval_alias_done
+    mov.l    cache_mask, r1
+    and      r1, r4
+    mov.l    p1_base, r1
+    or       r1, r4
+.iinval_alias_done:
+
     mov.l    p2_mask, r1
     or       r1, r0
     jmp      @r0
@@ -43,10 +67,12 @@ _arch_icache_inval_range:
     or       r1, r0
     ldc      r0, sr
 
-    ! Get ending address from size and align start address
+    ! Compute the inclusive final cache line and align both endpoints.
+    add      #-1, r5
     add      r4, r5
     mov.l    align_mask, r0
     and      r0, r4
+    and      r0, r5
     mov.l    ica_addr, r1
     mov.l    ic_entry_mask, r2
     mov.l    ic_valid_mask, r3
@@ -55,15 +81,17 @@ _arch_icache_inval_range:
 .iinval_loop:
     ! Invalidate I cache
     mov      r4, r6
-    add      #32, r4       ! Move on to next cache block
     mov      r6, r7
     and      r2, r6        ! v & CACHE_IC_ENTRY_MASK
-    cmp/hi   r4, r5
     or       r1, r6        ! CACHE_IC_ADDRESS_ARRAY | (v & CACHE_IC_ENTRY_MASK)
     and      r3, r7        ! v & 0xfffffc00
-    bt/s     .iinval_loop
     mov.l    r7, @r6       ! Invalidate cache entry
+    cmp/eq   r5, r4
+    bt       .iinval_done
+    bra      .iinval_loop
+    add      #32, r4       ! Move on to next cache block
 
+.iinval_done:
     ! make sure we have enough instrs before returning to P1
     nop
     nop
@@ -92,6 +120,29 @@ _arch_icache_sync_range:
     mov.l    ifr_addr, r0
 
     bt       .iflush_exit    ! Exit early if no blocks to flush
+
+    ! Reject a byte range whose final address wraps around the address space.
+    mov      r5, r2
+    add      #-1, r2
+    mov      r4, r3
+    add      r2, r3
+    cmp/hs   r4, r3
+    bf       .iflush_exit
+
+    ! Normalize a direct P2 alias before both the data-cache write-back and
+    ! instruction-cache tag invalidation.
+    mov      r4, r2
+    mov.l    area_mask, r1
+    and      r1, r2
+    mov.l    p2_mask, r1
+    cmp/eq   r1, r2
+    bf       .iflush_alias_done
+    mov.l    cache_mask, r1
+    and      r1, r4
+    mov.l    p1_base, r1
+    or       r1, r4
+.iflush_alias_done:
+
     mov.l    p2_mask, r1
 
     or       r1, r0
@@ -106,10 +157,12 @@ _arch_icache_sync_range:
     or       r1, r0
     ldc      r0, sr
 
-    ! Get ending address from size and align start address
+    ! Compute the inclusive final cache line and align both endpoints.
+    add      #-1, r5
     add      r4, r5
     mov.l    align_mask, r0
     and      r0, r4
+    and      r0, r5
     mov.l    ica_addr, r1
     mov.l    ic_entry_mask, r2
     mov.l    ic_valid_mask, r3
@@ -117,16 +170,18 @@ _arch_icache_sync_range:
 .iflush_loop:
     ! Invalidate I cache
     mov      r4, r6
-    add      #32, r4       ! Move on to next cache block
     mov      r6, r7
     and      r2, r6        ! v & CACHE_IC_ENTRY_MASK
-    cmp/hi   r4, r5
     or       r1, r6        ! CACHE_IC_ADDRESS_ARRAY | (v & CACHE_IC_ENTRY_MASK)
     ocbwb    @r7           ! Write back D cache
     and      r3, r7        ! v & 0xfffffc00
-    bt/s     .iflush_loop
     mov.l    r7, @r6       ! Invalidate cache entry
+    cmp/eq   r5, r4
+    bt       .iflush_done
+    bra      .iflush_loop
+    add      #32, r4       ! Move on to next cache block
 
+.iflush_done:
     ! make sure we have enough instrs before returning to P1
     nop
     nop
@@ -219,6 +274,12 @@ iir_addr:
     .long    .iinval_real
 p2_mask:
     .long    0xa0000000
+area_mask:
+    .long    0xe0000000
+cache_mask:
+    .long    0x1fffffff
+p1_base:
+    .long    0x80000000
 ormask:
     .long    0x100000f0
 align_mask:
