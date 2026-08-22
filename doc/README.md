@@ -14,6 +14,8 @@ Store-queue ownership, recursion, and MMU-mode invariants are documented in the
 [store-queue safety guide](store-queue-safety.md).
 Caller-backed allocator ownership, validation, and resource behavior are
 documented in the [independent heap guide](independent-heaps.md).
+Priority ordering, interrupt-safe removal, and deferred callback reclamation
+are documented in the [VBlank callback safety guide](vblank-callback-safety.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.

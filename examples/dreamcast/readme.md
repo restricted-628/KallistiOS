@@ -29,6 +29,7 @@ This page serves as an index for all KallistiOS examples.
     - rwsem
     - spinlock_test
     - tls
+    - vblank-priority
     - workqueue-safety
   - watchdog
 - cdrom
