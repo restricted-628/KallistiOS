@@ -16,6 +16,7 @@ This page serves as an index for all KallistiOS examples.
   - posix_resource
   - stackprotector
   - stacktrace
+  - sq-safety
   - threading
     - atomics
     - barrier

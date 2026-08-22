@@ -10,6 +10,8 @@ Checked cache ranges and P2 alias handling are documented in the
 [cache-maintenance safety guide](cache-maintenance.md).
 Checked page-table mutation and targeted TLB retirement are documented in the
 [MMU mapping safety guide](mmu-mapping.md).
+Store-queue ownership, recursion, and MMU-mode invariants are documented in the
+[store-queue safety guide](store-queue-safety.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.
