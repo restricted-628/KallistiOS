@@ -129,6 +129,28 @@ buffer. Transfers from that buffer use ordinary request objects.
   the drive.
 - Session state and transfer progress remain separate.
 
+## ISO9660 integration
+
+The `/cd` filesystem selects one physical backend before its first mount
+attempt and keeps that selection fixed until shutdown. Open descriptions and
+in-flight requests therefore cannot cross between BIOS and direct transports.
+
+- Whole-sector reads are divided into the same bounded physical commands as
+  arbitrary-byte reads and requeue between segments.
+- Partial sectors and unaligned destinations use one 32 KiB bounce workspace.
+  It is allocated only by the first request which needs it. The serialized
+  request worker copies each completed bounce segment into its caller buffer
+  before another request can reuse the workspace.
+- Async finalizers release retained file descriptions and update descriptor
+  state before terminal completion becomes visible. User callbacks remain on
+  the separate callback worker.
+- Directory snapshots retain at most 128 KiB. Each in-flight prefetch may also
+  own a transient, sector-rounded image of up to 128 KiB until installation.
+- Snapshot identity includes the media generation as well as extent and size.
+  Reset or media change clears the list and advances that generation.
+- The media-monitor thread is started by the first real `/cd` mount attempt,
+  so programs which never use the filesystem reserve no monitor stack.
+
 ## Validation requirements
 
 Before a direct-backend change is accepted, it must pass:
@@ -140,10 +162,9 @@ Before a direct-backend change is accepted, it must pass:
 - aligned DMA reads with destination guards;
 - cancellation, timeout, forced-error, and post-recovery reuse checks;
 - BIOS/direct coexistence tests through shared G1 ownership;
+- ISO9660 synchronous, asynchronous, unaligned, preseek, directory-prefetch,
+  and staged reads;
 - dynarec and interpreter emulator runs without an SH-4 exception.
-
-ISO9660 integration is a separate dependent topic and carries its own
-validation gates.
 
 Physical-drive timing, tray behavior, CD-R variability, and cache aliases still
 require hardware validation. None of those gates may be converted into a

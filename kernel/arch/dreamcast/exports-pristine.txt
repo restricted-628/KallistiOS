@@ -143,6 +143,20 @@ cdrom_cdda_pause
 cdrom_cdda_resume
 cdrom_spin_down
 
+# ISO9660
+fs_iso9660_set_backend
+fs_iso9660_get_backend
+fs_iso9660_get_file_info
+fs_iso9660_get_path_info
+fs_iso9660_get_cache_stats
+fs_iso9660_prefetch_directory
+fs_iso9660_prefetch_directory_async
+fs_iso9660_read_direct
+fs_iso9660_read_direct_async
+fs_iso9660_read_async
+fs_iso9660_stream_start
+fs_iso9660_preseek_async
+
 # FlashRom
 flashrom_info
 flashrom_read
