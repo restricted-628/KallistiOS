@@ -2,6 +2,7 @@
 
    fs_null.c
    Copyright (C) 2024 Donald Haase
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <stdio.h>
@@ -256,6 +257,8 @@ void fs_null_init(void) {
 void fs_null_shutdown(void) {
     null_fh_t *c, *n;
 
+    nmmgr_handler_remove(&vh.nmmgr);
+
     mutex_lock(&fh_mutex);
 
     /* First, clean up any open files */
@@ -265,7 +268,4 @@ void fs_null_shutdown(void) {
 
     mutex_unlock(&fh_mutex);
     mutex_destroy(&fh_mutex);
-
-    nmmgr_handler_remove(&vh.nmmgr);
 }
-

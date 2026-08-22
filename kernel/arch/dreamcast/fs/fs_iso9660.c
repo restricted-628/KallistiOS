@@ -1301,6 +1301,10 @@ void fs_iso9660_shutdown(void) {
     /* De-register with vblank */
     vblank_handler_remove(iso_vblank_hnd);
 
+    /* Stop new VFS calls and drain retained users before freeing state used by
+       the handler entry points. */
+    nmmgr_handler_remove(&vh.nmmgr);
+
     /* Dealloc cache block space */
     free(cache_data);
     free(caches);
@@ -1308,6 +1312,4 @@ void fs_iso9660_shutdown(void) {
     /* Free muteces */
     mutex_destroy(&cache_mutex);
     mutex_destroy(&fh_mutex);
-
-    nmmgr_handler_remove(&vh.nmmgr);
 }
