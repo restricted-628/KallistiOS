@@ -203,8 +203,12 @@ static inline void dcache_purge_range(uintptr_t start, size_t count) {
 
     This function flushes the entire data/operand cache, ensuring that all
     cache blocks marked as dirty are written back to memory and all cache
-    entries are invalidated. It does not require an additional buffer and is
-    preferred when memory resources are constrained.
+    entries are invalidated.
+
+    \note When optimizing for speed, the implementation reserves an internal
+          16 KiB aligned eviction buffer in each translation unit that emits
+          this inline function. Size-optimized builds use an address-array
+          walk instead. Prefer a bounded range purge when memory cost matters.
 */
 static inline void dcache_purge_all(void) {
     arch_dcache_purge_all();

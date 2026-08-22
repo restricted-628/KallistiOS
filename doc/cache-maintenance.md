@@ -36,6 +36,14 @@ existing whole-cache thresholds.
 These rules preserve the public void interfaces: invalid ranges return without
 touching cache state rather than introducing a new error channel.
 
+## Whole-cache purge workspace
+
+The speed-optimized `dcache_purge_all()` implementation uses a 16 KiB aligned
+static eviction buffer in each translation unit that emits the inline helper.
+Size-optimized builds use an address-array walk instead. A caller that knows
+the affected addresses should prefer line or bounded-range maintenance to
+avoid pulling that workspace into its binary.
+
 ## Validation
 
 `examples/dreamcast/basic/cache-safety` verifies P2 write-back and purge, the
