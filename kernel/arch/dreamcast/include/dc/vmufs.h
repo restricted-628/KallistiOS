@@ -176,7 +176,9 @@ int vmufs_dir_add(vmu_root_t *root, vmu_dir_t *dir, vmu_dir_t *newdirent);
             load the indicated file from the VMU.
 
     An appropriate amount of space must have been allocated previously in the
-    buffer. Assumes the mutex is held.
+    buffer. Assumes the mutex is held. New code should prefer
+    vmufs_file_read_ex(), which can distinguish user-data blocks from metadata
+    using the root geometry.
 
     \param  dev             The VMU to read from.
     \param  fat             The FAT of the VMU.
@@ -186,6 +188,29 @@ int vmufs_dir_add(vmu_root_t *root, vmu_dir_t *dir, vmu_dir_t *newdirent);
     \return                 0 on success, <0 on failure.
 */
 int vmufs_file_read(maple_device_t *dev, uint16_t *fat, vmu_dir_t *dirent, void *outbuf);
+
+/** \brief Read a file after validating its complete FAT chain and geometry.
+
+    Unlike vmufs_file_read(), this entry point uses the supplied root block to
+    constrain every FAT index to the user-data region. The complete chain is
+    resolved before the first device read, so invalid metadata cannot select a
+    metadata block and leaves \p outbuf untouched.
+
+    The caller must hold the VMU filesystem mutex and provide room for exactly
+    `dirent->filesize * VMUFS_BLOCK_SIZE` bytes.
+
+    \param dev      The VMU to read from.
+    \param root     Its validated filesystem root block.
+    \param fat      Its loaded FAT.
+    \param dirent   Directory entry identifying the file.
+    \param outbuf   Caller-owned output buffer.
+    \retval 0       The complete file was read.
+    \retval -1      Arguments, geometry, or the FAT chain were invalid.
+    \retval -2      A device block read failed.
+*/
+int vmufs_file_read_ex(maple_device_t *dev, const vmu_root_t *root,
+                       const uint16_t *fat, const vmu_dir_t *dirent,
+                       void *outbuf);
 
 /** \brief  Given a pointer to a mostly-filled directory struct and a previously
             loaded directory and FAT, write the indicated file to the VMU.

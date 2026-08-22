@@ -6,6 +6,7 @@
 
 */
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +17,8 @@
 #include <dc/vmufs.h>
 #include <dc/maple.h>
 #include <dc/maple/vmu.h>
+
+#include "vmufs_internal.h"
 
 /*
 
@@ -243,51 +246,70 @@ int vmufs_dir_add(vmu_root_t *root, vmu_dir_t *dir, vmu_dir_t *newdirent) {
     return -1;
 }
 
-int vmufs_file_read(maple_device_t *dev, uint16_t *fat, vmu_dir_t *dirent, void *outbuf) {
-    uint8_t *out = (uint8_t *)outbuf;
+static int vmufs_file_read_bounded(maple_device_t *dev,
+                                   const vmu_root_t *root,
+                                   const uint16_t *fat, size_t fat_entries,
+                                   const vmu_dir_t *dirent, void *outbuf) {
+    uint16_t blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    uint8_t *out = outbuf;
 
-    /* Find the first block */
-    int curblk = dirent->firstblk;
+    if(!dev || !root || !fat || !dirent || !outbuf) {
+        errno = EINVAL;
+        return -1;
+    }
 
-    /* And the blocks remaining */
-    int blkleft = dirent->filesize;
+    /* Resolve the complete chain before the first device access. Corrupt
+       metadata therefore cannot select a metadata block, index beyond the FAT,
+       loop over one block, or leave a partially filled output buffer. */
+    if(vmufs_chain_collect(root, fat, fat_entries, dirent, blocks,
+                           sizeof(blocks) / sizeof(blocks[0])) < 0) {
+        char fn[13] = {0};
 
-    /* While we've got stuff remaining... */
-    while(blkleft > 0) {
-        /* Make sure the FAT matches up with the directory */
-        if(curblk == 0xfffc || curblk == 0xfffa) {
-            char fn[13] = {0};
-            memcpy(fn, dirent->filename, 12);
-            dbglog(DBG_ERROR, "vmufs_file_read: file '%s' ends prematurely in fat on device %c%c\n",
-                   fn, dev->port + 'A', dev->unit + '0');
-            return -1;
-        }
+        memcpy(fn, dirent->filename, sizeof(dirent->filename));
+        dbglog(DBG_ERROR,
+               "vmufs_file_read: file '%s' has an invalid FAT chain on "
+               "device %c%c\n",
+               fn, dev->port + 'A', dev->unit + '0');
+        return -1;
+    }
 
-        /* Read the block */
-        int rv = vmu_block_read(dev, curblk, out);
+    for(size_t i = 0; i < dirent->filesize; ++i) {
+        int rv = vmu_block_read(dev, blocks[i], out);
 
         if(rv != 0) {
-            dbglog(DBG_ERROR, "vmufs_file_read: can't read block %d on device %c%c (error %d)\n",
-                   curblk, dev->port + 'A', dev->unit + '0', rv);
+            dbglog(DBG_ERROR,
+                   "vmufs_file_read: can't read block %u on device %c%c "
+                   "(error %d)\n",
+                   blocks[i], dev->port + 'A', dev->unit + '0', rv);
+            errno = EIO;
             return -2;
         }
 
-        /* Scoot our counters */
-        curblk = fat[curblk];
-        blkleft--;
-        out += 512;
-    }
-
-    /* Make sure the FAT matches up with the directory */
-    if(curblk != 0xfffa) {
-        char fn[13] = {0};
-        memcpy(fn, dirent->filename, 12);
-        dbglog(DBG_ERROR, "vmufs_file_read: file '%s' is sized shorter than in the FAT on device %c%c\n",
-               fn, dev->port + 'A', dev->unit + '0');
-        return -3;
+        out += VMUFS_BLOCK_SIZE;
     }
 
     return 0;
+}
+
+int vmufs_file_read(maple_device_t *dev, uint16_t *fat,
+                    vmu_dir_t *dirent, void *outbuf) {
+    vmu_root_t root = {
+        .blk_cnt = VMUFS_BLOCK_SIZE / sizeof(uint16_t)
+    };
+
+    return vmufs_file_read_bounded(dev, &root, fat,
+                                   VMUFS_BLOCK_SIZE / sizeof(*fat),
+                                   dirent, outbuf);
+}
+
+int vmufs_file_read_ex(maple_device_t *dev, const vmu_root_t *root,
+                       const uint16_t *fat, const vmu_dir_t *dirent,
+                       void *outbuf) {
+    if(vmufs_root_validate(root, VMUFS_STANDARD_CARD_BLOCKS) < 0)
+        return -1;
+
+    return vmufs_file_read_bounded(dev, root, fat, root->blk_cnt,
+                                   dirent, outbuf);
 }
 
 /* Find an open block for writing in the FAT */
@@ -624,7 +646,9 @@ ex:
 }
 
 /* Shared code between read/read_dirent */
-static int vmufs_read_common(maple_device_t *dev, vmu_dir_t *dirent, uint16_t *fat, void **outbuf, int *outsize) {
+static int vmufs_read_common(maple_device_t *dev, const vmu_root_t *root,
+                             vmu_dir_t *dirent, uint16_t *fat,
+                             void **outbuf, int *outsize) {
     /* Allocate the output space */
     *outsize = dirent->filesize * 512;
     *outbuf = malloc(*outsize);
@@ -636,7 +660,7 @@ static int vmufs_read_common(maple_device_t *dev, vmu_dir_t *dirent, uint16_t *f
     }
 
     /* Ok, go ahead and read it */
-    if(vmufs_file_read(dev, fat, dirent, *outbuf) < 0) {
+    if(vmufs_file_read_ex(dev, root, fat, dirent, *outbuf) < 0) {
         free(*outbuf);
         *outbuf = NULL;
         *outsize = 0;
@@ -669,7 +693,7 @@ int vmufs_read(maple_device_t *dev, const char *fn, void **outbuf, int *outsize)
         goto ex;
     }
 
-    if(vmufs_read_common(dev, dir + idx, fat, outbuf, outsize) < 0) {
+    if(vmufs_read_common(dev, &root, dir + idx, fat, outbuf, outsize) < 0) {
         rv = -3;
         goto ex;
     }
@@ -691,7 +715,7 @@ int vmufs_read_dirent(maple_device_t *dev, vmu_dir_t *dirent, void **outbuf, int
     if(vmufs_setup(dev, &root, NULL, NULL, &fat, &fatsize) < 0)
         return -1;
 
-    if(vmufs_read_common(dev, dirent, fat, outbuf, outsize) < 0)
+    if(vmufs_read_common(dev, &root, dirent, fat, outbuf, outsize) < 0)
         rv = -2;
 
     vmufs_teardown(NULL, fat);

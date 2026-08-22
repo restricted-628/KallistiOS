@@ -29,4 +29,10 @@ int vmufs_validate_at(const vmu_root_t *root, size_t card_blocks,
 bool vmufs_validation_allows_mutation(
     const vmufs_validation_t *result);
 
+/* Resolve a directory entry into an exact, bounded physical block list before
+   any caller performs card I/O or mutates a FAT copy. */
+int vmufs_chain_collect(const vmu_root_t *root, const uint16_t *fat,
+                        size_t fat_entries, const vmu_dir_t *entry,
+                        uint16_t *blocks, size_t block_capacity);
+
 #endif /* __DC_VMUFS_INTERNAL_H */

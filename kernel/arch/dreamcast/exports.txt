@@ -303,6 +303,7 @@ vmufb_present_ex
 vmufs_root_validate
 vmufs_validate
 vmufs_fat_free_executable
+vmufs_file_read_ex
 
 # MIE
 mie_port0_mode

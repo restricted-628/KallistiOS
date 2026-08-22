@@ -2,6 +2,7 @@
 
    dc/vmu_pkg.h
    Copyright (C) 2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -20,10 +21,12 @@
 #ifndef __DC_VMU_PKG_H
 #define __DC_VMU_PKG_H
 
-#include <kos/cdefs.h>
-__BEGIN_DECLS
-
+#include <stddef.h>
 #include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /** \defgroup   vmu_package     Header Package
     \brief                      API for Managing VMU File Headers
@@ -104,7 +107,9 @@ typedef struct vmu_hdr {
     \param  src             The vmu_pkg_t to convert.
     \param  dst             The buffer (will be allocated for you).
     \param  dst_size        The size of the output.
-    \return                 0 on success, <0 on failure.
+    On failure, \p dst is set to `NULL` and \p dst_size is set to zero.
+
+    \return                 0 on success, <0 on failure with `errno` set.
 */
 int vmu_pkg_build(vmu_pkg_t *src, uint8_t ** dst, int * dst_size);
 
@@ -117,7 +122,11 @@ int vmu_pkg_build(vmu_pkg_t *src, uint8_t ** dst, int * dst_size);
     \param  data            The buffer to parse.
     \param  data_size       The size of the buffer, in bytes.
     \param  pkg             Where to store the vmu_pkg_t.
-    \retval -1              On invalid CRC in the data.
+    The parser accepts unaligned input and does not modify it. On failure,
+    \p pkg is cleared whenever it is non-NULL.
+
+    \retval -1              Invalid arguments, encoded layout, size, or CRC;
+                            `errno` is `EILSEQ` for encoded corruption.
     \retval 0               On success.
 */
 int vmu_pkg_parse(uint8_t *data, size_t data_size, vmu_pkg_t *pkg);
@@ -146,6 +155,8 @@ int vmu_pkg_parse(uint8_t *data, size_t data_size, vmu_pkg_t *pkg);
 */
 int vmu_pkg_load_icon(vmu_pkg_t *pkg, const char *icon_fn);
 
-__END_DECLS
+#ifdef __cplusplus
+}
+#endif
 
 #endif  /* __DC_VMU_PKG_H */
