@@ -338,14 +338,8 @@ void pvr_begin_queued_render(void) {
     PVR_SET(PVR_BGPLANE_CFG, vert_end); /* Bkg plane location */
     zclip.f = pvr_state.zclip;
     PVR_SET(PVR_BGPLANE_Z, zclip.i);
-    if(!pvr_state.curr_to_texture) {
-        PVR_SET(PVR_PCLIP_X, pvr_state.pclip_x);
-        PVR_SET(PVR_PCLIP_Y, pvr_state.pclip_y);
-    }
-    else {
-        PVR_SET(PVR_PCLIP_X, ((target_w - 1) << 16) | 0);
-        PVR_SET(PVR_PCLIP_Y, ((target_h - 1) << 16) | 0);
-    }
+    PVR_SET(PVR_PCLIP_X, pvr_state.curr_pclip_x);
+    PVR_SET(PVR_PCLIP_Y, pvr_state.curr_pclip_y);
 
     if(!pvr_state.curr_to_texture)
         PVR_SET(PVR_RENDER_MODULO, (pvr_state.w * vid_pmode_bpp[vid_mode->pm]) / 8);

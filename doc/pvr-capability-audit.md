@@ -50,8 +50,8 @@ than place another renderer above them.
 | Pipeline status | Covered | Extend fields only for stable software or hardware state. |
 | Completion and fault events | Covered | Preserve bounded IRQ-context dispatch, safe self-removal, and opt-in allocation. |
 | Multi-pass scene control | No first-class pass object | Add a KOS pass description only after hybrid submission and status tracking are sound. Per-pass sort mode and user clipping are the essential behaviors. |
-| User clipping | Header representation exists | Add checked helpers for constructing and submitting user-clip commands; validate tile coordinates against the active render target. |
-| Global/pixel clipping | Internal fixed state | Add checked setters and queries, including render-to-texture dimensions. |
+| User clipping | Covered | Preserve six-bit X/four-bit Y command bounds and active-target validation. |
+| Global/pixel clipping | Covered per scene | Keep clip state attached to its scene across framebuffer and texture targets. |
 | Background plane | Fixed color is public; plane representation is internal | Expose a checked background-plane description without leaking mutable driver state. |
 | Texture allocation | General allocator covered | Add optional surface descriptors for dimensions, format, byte span, and ownership. Fixed-address and contiguous reservations should build on the existing allocator rather than introduce a second heap. |
 | Texture upload | Full raw upload and DMA covered | Add checked partial rectangle uploads, mip-level uploads, codebook-only updates, and explicit completion objects. |
@@ -81,8 +81,9 @@ than place another renderer above them.
    and TA register snapshots, and optional event handlers receive the fault.
 5. The scene pipeline still has fixed waits. Sparse terminal-state reporting
    is closed by the coherent pipeline snapshot.
-6. User clipping is representable in a polygon header, but KOS provides no
-   checked command-construction or submission helper.
+6. ~~User clipping is representable in a polygon header, but KOS provides no
+   checked command-construction or submission helper.~~ Closed for direct and
+   buffered lists, including active-target tile validation.
 7. Texture subregion, mip-level, and codebook-only updates are absent.
 
 ## Dependency order
@@ -152,3 +153,17 @@ items. Emulator validation covers the normal interrupt and snapshot paths only.
   masks, stale handles, and normal completion counts;
 - the hybrid-list example verifies one DMA event per explicit list transfer and
   rejects any DMA fault.
+
+### Pixel and user clipping
+
+- inclusive pixel rectangles are configured per scene before TA registration;
+- clip state follows the correct framebuffer or texture render target through
+  the pipeline instead of depending on mutable global state;
+- packed 24-bit framebuffer clips reject odd coordinates explicitly;
+- user-clip commands validate list type, coordinate ordering, six-bit X and
+  four-bit Y hardware fields, and the active target's tile dimensions;
+- commands submit through either buffered RAM lists or the currently open
+  direct list without introducing a second list abstraction;
+- the focused example validates command words, ordering failures, target
+  bounds, disabled lists, persistent zero-fault state, and 120 rendered frames
+  in interpreter-mode emulation.

@@ -3,6 +3,7 @@
    pvr_buffers.c
    Copyright (C) 2002, 2004 Megan Potter
    Copyright (C) 2014 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -199,6 +200,14 @@ void pvr_allocate_buffers(const pvr_init_params_t *params) {
     pvr_state.pclip_bottom = vid_mode->height - 1;
     pvr_state.pclip_x = (pvr_state.pclip_right << 16) | (pvr_state.pclip_left);
     pvr_state.pclip_y = (pvr_state.pclip_bottom << 16) | (pvr_state.pclip_top);
+    pvr_state.next_pclip_left = pvr_state.pclip_left;
+    pvr_state.next_pclip_right = pvr_state.pclip_right;
+    pvr_state.next_pclip_top = pvr_state.pclip_top;
+    pvr_state.next_pclip_bottom = pvr_state.pclip_bottom;
+    pvr_state.next_pclip_x = pvr_state.pclip_x;
+    pvr_state.next_pclip_y = pvr_state.pclip_y;
+    pvr_state.curr_pclip_x = pvr_state.pclip_x;
+    pvr_state.curr_pclip_y = pvr_state.pclip_y;
 
     /* Look at active lists and figure out how much to allocate
        for each poly type */

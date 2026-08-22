@@ -18,6 +18,7 @@
 #include <kos/regfield.h>
 #include <kos/thread.h>
 #include <dc/pvr.h>
+#include <dc/video.h>
 #include <dc/sq.h>
 #include "pvr_internal.h"
 
@@ -35,6 +36,15 @@
    Please see ../../include/dc/pvr.h for more info on this API!
 
 */
+
+static void set_next_full_pixel_clip(uint32_t width, uint32_t height) {
+    pvr_state.next_pclip_left = 0;
+    pvr_state.next_pclip_top = 0;
+    pvr_state.next_pclip_right = width - 1u;
+    pvr_state.next_pclip_bottom = height - 1u;
+    pvr_state.next_pclip_x = (pvr_state.next_pclip_right << 16);
+    pvr_state.next_pclip_y = (pvr_state.next_pclip_bottom << 16);
+}
 
 void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
     void *oldbuf;
@@ -113,6 +123,8 @@ static void pvr_start_ta_rendering(void) {
         pvr_state.to_txr_h = pvr_state.next_to_txr_h;
         pvr_state.to_txr_stride_px = pvr_state.next_to_txr_stride_px;
         pvr_state.to_txr_addr = pvr_state.next_to_txr_addr;
+        pvr_state.curr_pclip_x = pvr_state.next_pclip_x;
+        pvr_state.curr_pclip_y = pvr_state.next_pclip_y;
 
         // Starting from that point, we consider that the Tile Accelerator
         // might be busy.
@@ -127,6 +139,8 @@ void pvr_scene_begin(void) {
     int i;
 
     pvr_state.next_to_texture = 0;
+    set_next_full_pixel_clip((uint32_t)vid_mode->width,
+                             (uint32_t)vid_mode->height);
     pvr_state.scene_active = true;
     pvr_state.ta_checked_ready = 0;
     pvr_state.lists_closed = 0;
@@ -175,8 +189,153 @@ int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
     pvr_scene_begin();
 
     pvr_state.next_to_texture = 1;
+    set_next_full_pixel_clip(render_w, render_h);
+    pvr_status_advance();
 
     return 0;
+}
+
+int pvr_scene_set_pixel_clip(const pvr_pixel_clip_t *clip) {
+    uint32_t target_width, target_height;
+
+    if(!clip) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    if(pvr_state.ta_checked_ready) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    target_width = pvr_state.next_to_texture ?
+        pvr_state.next_to_txr_w : (uint32_t)vid_mode->width;
+    target_height = pvr_state.next_to_texture ?
+        pvr_state.next_to_txr_h : (uint32_t)vid_mode->height;
+
+    if(clip->left > clip->right || clip->top > clip->bottom ||
+            clip->right >= target_width || clip->bottom >= target_height) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.next_to_texture && vid_mode->pm == PM_RGB888P &&
+            ((clip->left | clip->top | clip->right | clip->bottom) & 1u)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    pvr_state.next_pclip_left = clip->left;
+    pvr_state.next_pclip_top = clip->top;
+    pvr_state.next_pclip_right = clip->right;
+    pvr_state.next_pclip_bottom = clip->bottom;
+    pvr_state.next_pclip_x = (clip->right << 16) | clip->left;
+    pvr_state.next_pclip_y = (clip->bottom << 16) | clip->top;
+    pvr_status_advance();
+
+    return 0;
+}
+
+int pvr_scene_get_pixel_clip(pvr_pixel_clip_t *clip) {
+    if(!clip) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    clip->left = pvr_state.next_pclip_left;
+    clip->top = pvr_state.next_pclip_top;
+    clip->right = pvr_state.next_pclip_right;
+    clip->bottom = pvr_state.next_pclip_bottom;
+
+    return 0;
+}
+
+int pvr_user_clip_compile(pvr_poly_hdr_t *command, pvr_list_t list,
+                          const pvr_user_clip_t *clip) {
+    if(!command || !clip || list < PVR_LIST_OP_POLY ||
+            list > PVR_LIST_PT_POLY || clip->left > clip->right ||
+            clip->top > clip->bottom || clip->right > PVR_USER_CLIP_MAX_X ||
+            clip->bottom > PVR_USER_CLIP_MAX_Y) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(command, 0, sizeof(*command));
+    command->cmd = PVR_CMD_USERCLIP | FIELD_PREP(PVR_TA_CMD_TYPE, list);
+    command->start_x = clip->left;
+    command->start_y = clip->top;
+    command->end_x = clip->right;
+    command->end_y = clip->bottom;
+
+    return 0;
+}
+
+int pvr_user_clip_submit(pvr_list_t list, const pvr_user_clip_t *clip) {
+    pvr_poly_hdr_t command;
+    uint32_t target_width, target_height;
+    uint32_t tile_width, tile_height;
+    volatile pvr_dma_buffers_t *buffer;
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    if(pvr_user_clip_compile(&command, list, clip) < 0)
+        return -1;
+
+    if(!(pvr_state.lists_enabled & BIT(list))) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    target_width = pvr_state.next_to_texture ?
+        pvr_state.next_to_txr_w : (uint32_t)vid_mode->width;
+    target_height = pvr_state.next_to_texture ?
+        pvr_state.next_to_txr_h : (uint32_t)vid_mode->height;
+    tile_width = (target_width + 31u) / 32u;
+    tile_height = (target_height + 31u) / 32u;
+
+    if(clip->right >= tile_width || clip->bottom >= tile_height) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    buffer = pvr_state.dma_buffers + pvr_state.ram_target;
+    if(pvr_state.dma_mode && buffer->base[list])
+        return pvr_list_prim(list, &command, sizeof(command));
+
+    if(pvr_state.list_reg_open != list) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    return pvr_prim(&command, sizeof(command));
 }
 
 static bool pvr_list_dma;

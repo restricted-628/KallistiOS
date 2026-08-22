@@ -142,6 +142,7 @@ This page serves as an index for all KallistiOS examples.
 - pvr
   - bumpmap
   - cheap_shadow
+  - clipping
   - fb_tex
   - hybrid_lists
   - modifier_volume

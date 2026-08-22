@@ -23,6 +23,9 @@ lifecycle and naming conventions.
 * Added opt-in PVR registration, render, display, DMA, and fault events with
   bounded IRQ-context callbacks, safe self-removal, and no worker thread or
   allocation until a handler is registered.
+* Added checked per-scene pixel clipping for framebuffer and texture targets,
+  plus bounded tile-granular user-clip command compilation and submission for
+  both direct and buffered polygon lists.
 * Added an opt-in post-boot direct GD-ROM transport with bounded packet PIO and
   DMA, status, geometry, mode, recovery, CDDA, streaming, diagnostics, and
   asynchronous request integration. Boot-time disc authorization remains the

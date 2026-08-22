@@ -932,11 +932,105 @@ void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry)
 int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
                         uint32_t render_h, uint32_t stride_px);
 
+/** \brief Inclusive pixel clipping rectangle for one scene.
+    \ingroup pvr_scene_mgmt
+*/
+typedef struct pvr_pixel_clip {
+    uint32_t left;            /**< \brief Leftmost rendered pixel. */
+    uint32_t top;             /**< \brief Topmost rendered pixel. */
+    uint32_t right;           /**< \brief Rightmost rendered pixel. */
+    uint32_t bottom;          /**< \brief Bottommost rendered pixel. */
+} pvr_pixel_clip_t;
+
+/** \brief Set the pixel clipping rectangle for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    Call this after pvr_scene_begin() or pvr_scene_begin_rtt() and before the
+    scene begins TA registration. Direct submission therefore requires this
+    call before the first pvr_list_begin(); buffered submission permits it until
+    the first explicit list flush or scene completion.
+
+    Coordinates are inclusive and must fit the active framebuffer or texture
+    render area. Packed 24-bit framebuffer output requires even coordinates;
+    invalid values are rejected rather than rounded silently.
+
+    \param  clip            Pixel clipping rectangle.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV, EPERM,
+                            or EBUSY.
+*/
+int pvr_scene_set_pixel_clip(const pvr_pixel_clip_t *clip);
+
+/** \brief Get the pixel clipping rectangle configured for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    \param  clip            Destination rectangle.
+
+    \retval 0               On success.
+    \retval -1              If clip is NULL, PVR is unavailable, or no scene
+                            is active, with errno set appropriately.
+*/
+int pvr_scene_get_pixel_clip(pvr_pixel_clip_t *clip);
+
 
 /** \defgroup pvr_list_mgmt Polygon Lists
     \brief                  PVR API for managing list submission
     \ingroup                pvr_scene_mgmt
 */
+
+/** \brief Inclusive tile rectangle for a TA user-clip command.
+    \ingroup pvr_list_mgmt
+
+    One tile is 32 by 32 pixels. Hardware command fields provide six bits for
+    X and four bits for Y; submission additionally checks the active render
+    area.
+*/
+typedef struct pvr_user_clip {
+    uint32_t left;            /**< \brief Leftmost tile. */
+    uint32_t top;             /**< \brief Topmost tile. */
+    uint32_t right;           /**< \brief Rightmost tile. */
+    uint32_t bottom;          /**< \brief Bottommost tile. */
+} pvr_user_clip_t;
+
+#define PVR_USER_CLIP_MAX_X 63u /**< \brief Largest encoded user-clip X tile. */
+#define PVR_USER_CLIP_MAX_Y 15u /**< \brief Largest encoded user-clip Y tile. */
+
+/** \brief Compile a checked TA user-clip command.
+    \ingroup pvr_list_mgmt
+
+    This function is independent of scene state and is suitable for preparing
+    a command in advance. pvr_user_clip_submit() adds active-target and list
+    ordering checks.
+
+    \param  command         Destination 32-byte command.
+    \param  list            List affected by the command.
+    \param  clip            Inclusive tile rectangle.
+
+    \retval 0               On success.
+    \retval -1              On invalid pointers, list, ordering, or hardware
+                            coordinate range, with errno set to EINVAL.
+*/
+int pvr_user_clip_compile(pvr_poly_hdr_t *command, pvr_list_t list,
+                          const pvr_user_clip_t *clip);
+
+/** \brief Compile and submit a user-clip command to one list.
+    \ingroup pvr_list_mgmt
+
+    For a directly submitted list, that list must currently be open. A buffered
+    list may receive the command directly in its RAM buffer. Do not insert a
+    user-clip command between the first vertex of a strip and its end-of-strip
+    vertex.
+
+    \param  list            List affected by the command.
+    \param  clip            Inclusive tile rectangle.
+
+    \retval 0               On success.
+    \retval -1              On invalid coordinates, inactive scene, disabled
+                            list, direct-list ordering, flushed list, or buffer
+                            exhaustion, with errno set appropriately.
+*/
+int pvr_user_clip_submit(pvr_list_t list, const pvr_user_clip_t *clip);
 
 /** \brief   Begin collecting data for the given list type.
     \ingroup pvr_list_mgmt

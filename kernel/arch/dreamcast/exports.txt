@@ -510,11 +510,15 @@ pvr_set_vertbuf
 pvr_scene_begin
 pvr_scene_begin_txr
 pvr_scene_begin_rtt
+pvr_scene_set_pixel_clip
+pvr_scene_get_pixel_clip
 pvr_list_begin
 pvr_list_finish
 pvr_prim
 pvr_list_prim
 pvr_list_flush
+pvr_user_clip_compile
+pvr_user_clip_submit
 pvr_scene_finish
 pvr_wait_ready
 pvr_check_ready

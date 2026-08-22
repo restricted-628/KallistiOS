@@ -187,6 +187,10 @@ typedef struct {
     uint32_t  pclip_left, pclip_right;    // X pixel clip constants
     uint32_t  pclip_top, pclip_bottom;    // Y pixel clip constants
     uint32_t  pclip_x, pclip_y;           // Composited clip constants
+    uint32_t  next_pclip_left, next_pclip_right;
+    uint32_t  next_pclip_top, next_pclip_bottom;
+    uint32_t  next_pclip_x, next_pclip_y;
+    uint32_t  curr_pclip_x, curr_pclip_y;
     uint32_t  bg_color;                   // Background color in ARGB format
 
     /* Running statistics on the PVR system. All vars are in terms
