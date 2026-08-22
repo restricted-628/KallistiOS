@@ -37,6 +37,9 @@ struct vmufs_request {
     const void *input;
     int input_size;
     int flags;
+    void *output;
+    size_t first_block;
+    size_t block_count;
     vmufs_format_options_t options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -217,6 +220,11 @@ static void process_request(vmufs_request_t *request) {
         result = vmufs_rename_observed(request->dev, request->filename,
                                        request->destination, &observer);
         break;
+    case VMUFS_REQUEST_READ:
+        result = vmufs_read_blocks_observed(
+            request->dev, request->filename, request->first_block,
+            request->output, request->block_count, &observer);
+        break;
     default:
         errno = EINVAL;
         result = -1;
@@ -319,6 +327,7 @@ static vmufs_request_t *submit_request(
     vmufs_request_operation_t operation, maple_device_t *dev,
     const char *filename, const char *destination,
     const void *input, size_t input_size, int flags,
+    void *output, size_t first_block, size_t block_count,
     const vmufs_format_options_t *options, vmufs_format_mode_t mode,
     vmufs_request_callback_t callback, void *callback_data) {
     vmufs_request_t *request;
@@ -326,11 +335,13 @@ static vmufs_request_t *submit_request(
     size_t destination_size = 0;
 
     if(!dev || !(dev->info.functions & MAPLE_FUNC_MEMCARD) ||
-       operation > VMUFS_REQUEST_RENAME ||
+       operation > VMUFS_REQUEST_READ ||
        ((operation == VMUFS_REQUEST_WRITE ||
          operation == VMUFS_REQUEST_DELETE ||
-         operation == VMUFS_REQUEST_RENAME) && !filename) ||
+         operation == VMUFS_REQUEST_RENAME ||
+         operation == VMUFS_REQUEST_READ) && !filename) ||
        (operation == VMUFS_REQUEST_RENAME && !destination) ||
+       (operation == VMUFS_REQUEST_READ && block_count && !output) ||
        (operation == VMUFS_REQUEST_WRITE &&
         ((input_size && !input) || input_size > INT_MAX ||
          (flags & ~(VMUFS_OVERWRITE | VMUFS_VMUGAME | VMUFS_NOCOPY)))) ||
@@ -370,6 +381,9 @@ static vmufs_request_t *submit_request(
     request->input = input;
     request->input_size = (int)input_size;
     request->flags = flags;
+    request->output = output;
+    request->first_block = first_block;
+    request->block_count = block_count;
     if(options)
         request->options = *options;
     request->mode = mode;
@@ -395,27 +409,37 @@ static vmufs_request_t *submit_request(
     return request;
 }
 
+vmufs_request_t *vmufs_read_blocks_async(
+    maple_device_t *dev, const char *fn, size_t first_block,
+    void *outbuf, size_t block_count,
+    vmufs_request_callback_t callback, void *callback_data) {
+    return submit_request(VMUFS_REQUEST_READ, dev, fn, NULL, NULL, 0, 0,
+                          outbuf, first_block, block_count, NULL,
+                          VMUFS_FORMAT_QUICK, callback, callback_data);
+}
+
 vmufs_request_t *vmufs_write_async(
     maple_device_t *dev, const char *fn, const void *inbuf, size_t insize,
     int flags, vmufs_request_callback_t callback, void *callback_data) {
     return submit_request(VMUFS_REQUEST_WRITE, dev, fn, NULL, inbuf, insize,
-                          flags, NULL, VMUFS_FORMAT_QUICK, callback,
-                          callback_data);
+                          flags, NULL, 0, 0, NULL, VMUFS_FORMAT_QUICK,
+                          callback, callback_data);
 }
 
 vmufs_request_t *vmufs_delete_async(
     maple_device_t *dev, const char *fn,
     vmufs_request_callback_t callback, void *callback_data) {
     return submit_request(VMUFS_REQUEST_DELETE, dev, fn, NULL, NULL, 0, 0,
-                          NULL, VMUFS_FORMAT_QUICK, callback, callback_data);
+                          NULL, 0, 0, NULL, VMUFS_FORMAT_QUICK, callback,
+                          callback_data);
 }
 
 vmufs_request_t *vmufs_rename_async(
     maple_device_t *dev, const char *old_name, const char *new_name,
     vmufs_request_callback_t callback, void *callback_data) {
     return submit_request(VMUFS_REQUEST_RENAME, dev, old_name, new_name,
-                          NULL, 0, 0, NULL, VMUFS_FORMAT_QUICK, callback,
-                          callback_data);
+                          NULL, 0, 0, NULL, 0, 0, NULL,
+                          VMUFS_FORMAT_QUICK, callback, callback_data);
 }
 
 vmufs_request_t *vmufs_format_async(
@@ -429,15 +453,15 @@ vmufs_request_t *vmufs_format_async(
                           sizeof(fat) / sizeof(fat[0])) < 0)
         return NULL;
     return submit_request(VMUFS_REQUEST_FORMAT, dev, NULL, NULL, NULL, 0, 0,
-                          options, mode, callback, callback_data);
+                          NULL, 0, 0, options, mode, callback, callback_data);
 }
 
 vmufs_request_t *vmufs_defragment_async(
     maple_device_t *dev, vmufs_request_callback_t callback,
     void *callback_data) {
     return submit_request(VMUFS_REQUEST_DEFRAGMENT, dev, NULL, NULL, NULL,
-                          0, 0, NULL, VMUFS_FORMAT_QUICK, callback,
-                          callback_data);
+                          0, 0, NULL, 0, 0, NULL, VMUFS_FORMAT_QUICK,
+                          callback, callback_data);
 }
 
 int vmufs_request_get_status(const vmufs_request_t *request,

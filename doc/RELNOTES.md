@@ -56,11 +56,13 @@ lifecycle and naming conventions.
   validation for root geometry, exact FAT chains, cycles, cross-links,
   duplicate names, orphan blocks, and executable-eligible free space. Normal
   VMU setup now rejects unsafe geometry before allocating or reading metadata.
-* Added geometry-aware VMU file reads that resolve and validate an exact FAT
-  chain before touching the card. Hardened VMU package construction and parsing
-  against unaligned input, truncated layouts, integer overflow, unterminated
-  text fields, invalid icon metadata, and checksum mismatch without modifying
-  the caller's encoded buffer.
+* Added direct file-metadata queries and geometry-aware full-file and bounded
+  block-range VMU reads that resolve and validate an exact FAT chain before
+  touching the destination. Raw block reads now reject malformed response
+  lengths before copying. Hardened VMU package construction and parsing against
+  unaligned input, truncated layouts, integer overflow, unterminated text
+  fields, invalid icon metadata, and checksum mismatch without modifying the
+  caller's encoded buffer.
 * VMU saves and deletions now gate all mutations on whole-filesystem ownership
   validation. New saves use data/FAT/directory commit ordering, replacements
   use copy-on-write, deletions remove the directory entry before freeing data,
@@ -80,11 +82,11 @@ lifecycle and naming conventions.
   defragmentation that packs ordinary files high, retains an executable at
   block zero, safely stages relocation cycles, and refuses before mutation
   when insufficient scratch space prevents an interruption-safe schedule.
-* Added lazy asynchronous VMU save, delete, rename, format, and defragment
-  requests with coherent block-level progress, cancellation at transaction-
-  safe boundaries, and application callbacks dispatched outside the storage
-  worker and IRQ context. Save data is read back before allocation metadata can
-  make its chain visible.
+* Added lazy asynchronous VMU range-read, save, delete, rename, format, and
+  defragment requests with coherent block-level progress, cancellation at
+  transaction-safe boundaries, and application callbacks dispatched outside
+  the storage worker and IRQ context. Save data is read back before allocation
+  metadata can make its chain visible.
 
 RELEASE NOTES for 2.2.2
 -----------------------

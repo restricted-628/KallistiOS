@@ -567,6 +567,15 @@ static void vmufs_teardown(vmu_dir_t *dir, uint16_t *fat) {
     vmufs_mutex_unlock();
 }
 
+static size_t filename_length(const char *filename, size_t maximum) {
+    size_t length = 0;
+
+    while(length < maximum && filename[length])
+        ++length;
+
+    return length;
+}
+
 int vmufs_readdir(maple_device_t *dev, vmu_dir_t **outbuf, int *outcnt) {
     vmu_root_t root;
     vmu_dir_t *dir;
@@ -613,6 +622,42 @@ int vmufs_readdir(maple_device_t *dev, vmu_dir_t **outbuf, int *outcnt) {
 
 ex:
     vmufs_teardown(NULL, NULL);
+    return rv;
+}
+
+int vmufs_get_file_info(maple_device_t *dev, const char *fn,
+                        vmu_dir_t *info) {
+    vmu_root_t root;
+    vmu_dir_t *dir = NULL;
+    size_t fn_length;
+    int dirsize, index, rv = -1;
+
+    if(!dev || !fn || !info) {
+        errno = EINVAL;
+        return -1;
+    }
+    fn_length = filename_length(fn, 13u);
+    if(fn_length == 0 || fn_length > 12u) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(vmufs_setup(dev, &root, &dir, &dirsize, NULL, NULL) < 0) {
+        if(errno == 0)
+            errno = EIO;
+        return -1;
+    }
+
+    index = vmufs_dir_find(&root, dir, fn);
+    if(index < 0) {
+        errno = ENOENT;
+        goto ex;
+    }
+    *info = dir[index];
+    info->dirty = 0;
+    rv = 0;
+
+ex:
+    vmufs_teardown(dir, NULL);
     return rv;
 }
 
@@ -727,15 +772,6 @@ static int mutation_preflight(const vmu_root_t *root,
     return -1;
 }
 
-static size_t filename_length(const char *filename, size_t maximum) {
-    size_t length = 0;
-
-    while(length < maximum && filename[length])
-        ++length;
-
-    return length;
-}
-
 static bool transaction_cancelled(
     const vmufs_transaction_observer_t *observer) {
     return observer && observer->cancelled &&
@@ -752,6 +788,86 @@ static void transaction_update(
                          total_blocks, data_blocks_completed,
                          data_blocks, committed);
     }
+}
+
+int vmufs_read_blocks_observed(
+    maple_device_t *dev, const char *fn, size_t first_block,
+    void *outbuf, size_t block_count,
+    const vmufs_transaction_observer_t *observer) {
+    uint16_t blocks[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    vmu_root_t root;
+    vmu_dir_t *dir = NULL;
+    uint16_t *fat = NULL;
+    uint8_t *output = outbuf;
+    size_t fn_length;
+    int fatsize, dirsize, index, rv = -1;
+
+    if(!dev || !fn || (block_count && !outbuf)) {
+        errno = EINVAL;
+        return -1;
+    }
+    fn_length = filename_length(fn, 13u);
+    if(fn_length == 0 || fn_length > 12u) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(vmufs_setup(dev, &root, &dir, &dirsize, &fat, &fatsize) < 0) {
+        if(errno == 0)
+            errno = EIO;
+        return -1;
+    }
+
+    index = vmufs_dir_find(&root, dir, fn);
+    if(index < 0) {
+        errno = ENOENT;
+        goto ex;
+    }
+    if(first_block > dir[index].filesize ||
+       block_count > (size_t)dir[index].filesize - first_block) {
+        errno = EINVAL;
+        goto ex;
+    }
+    if(vmufs_chain_collect(&root, fat,
+                           (size_t)fatsize / sizeof(*fat), &dir[index],
+                           blocks, sizeof(blocks) / sizeof(blocks[0])) < 0) {
+        errno = EILSEQ;
+        goto ex;
+    }
+
+    transaction_update(observer, VMUFS_TRANSACTION_DATA,
+                       0, block_count, 0, block_count, false);
+    for(size_t i = 0; i < block_count; ++i) {
+        if(transaction_cancelled(observer)) {
+            errno = ECANCELED;
+            rv = VMUFS_TRANSACTION_CANCELLED;
+            goto ex;
+        }
+        if(vmu_block_read(dev, blocks[first_block + i],
+                          output + i * VMUFS_BLOCK_SIZE) != 0) {
+            if(errno == 0)
+                errno = EIO;
+            goto ex;
+        }
+        transaction_update(observer, VMUFS_TRANSACTION_DATA,
+                           i + 1u, block_count, i + 1u, block_count, false);
+    }
+
+    transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                       block_count, block_count,
+                       block_count, block_count, true);
+    rv = 0;
+
+ex:
+    vmufs_teardown(dir, fat);
+    return rv;
+}
+
+int vmufs_read_blocks(maple_device_t *dev, const char *fn,
+                      size_t first_block, void *outbuf,
+                      size_t block_count) {
+    return vmufs_read_blocks_observed(dev, fn, first_block, outbuf,
+                                      block_count, NULL);
 }
 
 /* Returns 0 for success, -7 for insufficient space, and another negative

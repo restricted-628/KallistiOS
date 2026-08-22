@@ -297,6 +297,21 @@ int vmufs_mutex_unlock(void);
     \return                 0 on success, or <0 on failure. */
 int vmufs_readdir(maple_device_t *dev, vmu_dir_t **outbuf, int *outcnt);
 
+/** \brief Read one file's directory metadata without loading its data.
+
+    The returned entry contains the stored block count, type, timestamp,
+    copy-protection value, and header offset. Its in-memory dirty marker is
+    always cleared.
+
+    \param dev   VMU to inspect.
+    \param fn    File name.
+    \param info  Destination directory entry.
+    \retval 0    Metadata copied successfully.
+    \retval -1   Invalid arguments, missing file, or device failure.
+*/
+int vmufs_get_file_info(maple_device_t *dev, const char *fn,
+                        vmu_dir_t *info);
+
 /** \brief  Read a file from the VMU.
 
     The output buffer will be allocated for you using malloc(), and the size of
@@ -311,6 +326,24 @@ int vmufs_readdir(maple_device_t *dev, vmu_dir_t **outbuf, int *outcnt);
     \return                 0 on success, or <0 on failure.
 */
 int vmufs_read(maple_device_t *dev, const char *fn, void **outbuf, int *outsize);
+
+/** \brief Read an exact file-relative range of 512-byte blocks.
+
+    The complete FAT chain is resolved and validated before the destination is
+    modified. The range must fit entirely inside the file. Each successful raw
+    block response is validated before its 512 bytes are copied to \p outbuf.
+
+    \param dev          VMU containing the file.
+    \param fn           File name.
+    \param first_block  First file-relative block to read.
+    \param outbuf       Destination for \p block_count contiguous blocks.
+    \param block_count  Number of blocks to read; zero is permitted.
+    \retval 0           Complete range read successfully.
+    \retval -1          Invalid range, metadata, response, or device failure.
+*/
+int vmufs_read_blocks(maple_device_t *dev, const char *fn,
+                      size_t first_block, void *outbuf,
+                      size_t block_count);
 
 /** \brief  Read a file from the VMU, using a pre-read dirent.
 
@@ -461,7 +494,8 @@ typedef enum vmufs_request_operation {
     VMUFS_REQUEST_DELETE,      /**< \brief Transactional file deletion. */
     VMUFS_REQUEST_FORMAT,      /**< \brief Whole-card format. */
     VMUFS_REQUEST_DEFRAGMENT,  /**< \brief Safe file repacking. */
-    VMUFS_REQUEST_RENAME       /**< \brief Transactional file rename. */
+    VMUFS_REQUEST_RENAME,      /**< \brief Transactional file rename. */
+    VMUFS_REQUEST_READ         /**< \brief Bounded file-block read. */
 } vmufs_request_operation_t;
 
 typedef enum vmufs_request_state {
@@ -489,11 +523,11 @@ typedef struct vmufs_request_status {
     vmufs_request_phase_t phase;         /**< \brief Transaction phase. */
     int result;                          /**< \brief VMUFS result. */
     int error;                           /**< \brief errno value. */
-    size_t completed_blocks;             /**< \brief Completed writes. */
-    size_t total_blocks;                 /**< \brief Planned writes. */
-    size_t data_blocks_completed;        /**< \brief Completed data writes. */
-    size_t data_blocks;                  /**< \brief Planned data writes. */
-    bool committed;                      /**< \brief Visible result committed. */
+    size_t completed_blocks;             /**< \brief Completed block work. */
+    size_t total_blocks;                 /**< \brief Planned block work. */
+    size_t data_blocks_completed;        /**< \brief Completed data blocks. */
+    size_t data_blocks;                  /**< \brief Planned data blocks. */
+    bool committed;                      /**< \brief Result fully published. */
 } vmufs_request_status_t;
 
 typedef void (*vmufs_request_callback_t)(
@@ -502,6 +536,28 @@ typedef void (*vmufs_request_callback_t)(
 /* Callbacks must return and must not destroy their own request. They may call
    ordinary VMU APIs, although a progress callback can block until the active
    storage transaction releases the VMU filesystem mutex. */
+
+/** \brief Queue an exact file-relative block range read.
+
+    The filename is copied during submission. The output buffer remains owned
+    by the caller and must stay writable until terminal storage completion.
+    On every terminal state, the first `data_blocks_completed * 512` bytes are
+    complete and valid; bytes after that prefix have not been modified by the
+    request. Cancellation takes effect between block reads.
+
+    \param dev            VMU containing the file.
+    \param fn             File name of at most 12 bytes.
+    \param first_block    First file-relative block to read.
+    \param outbuf         Destination for \p block_count contiguous blocks.
+    \param block_count    Number of blocks to read; zero is permitted.
+    \param callback       Optional progress and terminal callback.
+    \param callback_data  Caller data passed to \p callback.
+    \return               New request, or NULL with errno set.
+*/
+vmufs_request_t *vmufs_read_blocks_async(
+    maple_device_t *dev, const char *fn, size_t first_block,
+    void *outbuf, size_t block_count,
+    vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a transactional file save.
 
