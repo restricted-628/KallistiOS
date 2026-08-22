@@ -3,14 +3,15 @@
    hardware/g1ata.c
    Copyright (C) 2013, 2014, 2015 Lawrence Sebald
    Copyright (C) 2015, 2023, 2024, 2025 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 
-#include <dc/g1ata.h>
 #include <dc/asic.h>
+#include <dc/g1ata.h>
 #include <dc/memory.h>
 
 #include <kos/cache.h>
@@ -23,12 +24,14 @@
 
 #include <arch/arch.h>
 
+#include "g1_bus.h"
+
 /*
    This file implements support for accessing devices over the G1 bus by the
    AT Attachment (aka ATA, PATA, or IDE) protocol. See, the GD-ROM drive is
    actually just an ATA device that implements a different packet command set
-   than the normal ATAPI set. Not only that, but Sega left everything in the
-   hardware to actually support two devices on the bus at a time. Thus, you can
+   than the normal ATAPI set. The hardware supports two devices on the bus at
+   a time. Thus, you can
    put together a very simple passthrough adapter to get a normal 40-pin IDE
    port to work with and hook up a hard drive to. In theory, you could also hook
    up various other devices including DVD drives, CD Burners, and the whole nine
@@ -59,8 +62,7 @@
    Anyway, that's enough for this wall of text...
 */
 
-/* An ATA device. For the moment, we only support one of these, which happens to
-   be the slave device on the only ATA bus Sega gave us. */
+/* An ATA device. For the moment, only the slave device is supported. */
 static struct {
     uint32_t command_sets;
     uint32_t capabilities;
@@ -78,54 +80,12 @@ typedef struct ata_devdata {
     uint64_t end_block;
 } ata_devdata_t;
 
-/* ATA-related registers. Some of these serve very different purposes when read
-   than they do when written (hence why some addresses are duplicated). */
-#define G1_ATA_ALTSTATUS        0xA05F7018      /* Read */
-#define G1_ATA_CTL              0xA05F7018      /* Write */
-#define G1_ATA_DATA             0xA05F7080      /* Read/Write */
-#define G1_ATA_ERROR            0xA05F7084      /* Read */
-#define G1_ATA_FEATURES         0xA05F7084      /* Write */
-#define G1_ATA_IRQ_REASON       0xA05F7088      /* Read */
-#define G1_ATA_SECTOR_COUNT     0xA05F7088      /* Write */
-#define G1_ATA_LBA_LOW          0xA05F708C      /* Read/Write */
-#define G1_ATA_LBA_MID          0xA05F7090      /* Read/Write */
-#define G1_ATA_LBA_HIGH         0xA05F7094      /* Read/Write */
-#define G1_ATA_CHS_SECTOR       G1_ATA_LBA_LOW
-#define G1_ATA_CHS_CYL_LOW      G1_ATA_LBA_MID
-#define G1_ATA_CHS_CYL_HIGH     G1_ATA_LBA_HIGH
-#define G1_ATA_DEVICE_SELECT    0xA05F7098      /* Read/Write */
-#define G1_ATA_STATUS_REG       0xA05F709C      /* Read */
-#define G1_ATA_COMMAND_REG      0xA05F709C      /* Write */
-
-/* PIO-related registers. */
-#define G1_ATA_PIO_RACCESS_WAIT 0xA05F7490      /* Write-only */
-#define G1_ATA_PIO_WACCESS_WAIT 0xA05F7494      /* Write-only */
-
-/* DMA-related registers. */
-#define G1_ATA_DMA_RACCESS_WAIT 0xA05F74A0      /* Write-only */
-#define G1_ATA_DMA_WACCESS_WAIT 0xA05F74A4      /* Write-only */
-#define G1_ATA_DMA_ADDRESS      0xA05F7404      /* Read/Write */
-#define G1_ATA_DMA_LENGTH       0xA05F7408      /* Read/Write */
-#define G1_ATA_DMA_DIRECTION    0xA05F740C      /* Read/Write */
-#define G1_ATA_DMA_ENABLE       0xA05F7414      /* Read/Write */
-#define G1_ATA_DMA_STATUS       0xA05F7418      /* Read/Write */
-
 /* Protection register code. */
 #define G1_DMA_UNLOCK_CODE      0x8843
 /* System memory protection unlock value. */
 #define G1_DMA_UNLOCK_SYSMEM    (G1_DMA_UNLOCK_CODE << 16 | 0x407F)
 /* All memory protection unlock value. */
 #define G1_DMA_UNLOCK_ALLMEM    (G1_DMA_UNLOCK_CODE << 16 | 0x007F)
-
-/* Bitmasks for the STATUS_REG/ALT_STATUS registers. */
-#define G1_ATA_SR_ERR   0x01
-#define G1_ATA_SR_IDX   0x02
-#define G1_ATA_SR_CORR  0x04
-#define G1_ATA_SR_DRQ   0x08
-#define G1_ATA_SR_DSC   0x10
-#define G1_ATA_SR_DF    0x20
-#define G1_ATA_SR_DRDY  0x40
-#define G1_ATA_SR_BSY   0x80
 
 /* ATA Commands we might like to send. */
 #define ATA_CMD_READ_SECTORS        0x20
@@ -154,14 +114,6 @@ typedef struct ata_devdata {
 #define ATA_MAX_SECTORS_LBA28       256
 #define ATA_MAX_SECTORS_LBA48       65536
 
-/* Access timing data. */
-#define G1_ACCESS_WDMA_MODE2        0x00001001
-#define G1_ACCESS_PIO_DEFAULT       0x00000222
-
-/* DMA Settings. */
-#define G1_DMA_TO_DEVICE            0
-#define G1_DMA_TO_MEMORY            1
-
 /* Macros to access the ATA registers */
 #define OUT32(addr, data) *((volatile uint32_t *)(addr)) = data
 #define OUT16(addr, data) *((volatile uint16_t *)(addr)) = data
@@ -172,7 +124,6 @@ typedef struct ata_devdata {
 
 static int initted = 0;
 static int devices = 0;
-static uint8_t dev_selected = 0x00;
 static uint8_t orig_dev = 0x00;
 
 /* Variables related to DMA. */
@@ -181,21 +132,19 @@ static int dma_blocking = 0;
 static uint8_t dma_cmd = 0;
 static size_t dma_nb_sectors = 0;
 static uint64_t dma_sector = 0;
+static uint32_t dma_irq_code = ASIC_EVT_GD_DMA;
 static semaphore_t dma_done = SEM_INITIALIZER(0);
-static asic_evt_handler_entry_t old_dma_irq;
-
-/* From cdrom.c */
-extern semaphore_t _g1_ata_sem;
+static g1_bus_dma_client_t dma_irq_client = G1_BUS_DMA_CLIENT_INVALID;
 
 #define g1_ata_wait_status(n) \
-    do {} while((IN8(G1_ATA_ALTSTATUS) & (n)))
+    ((void)g1_bus_wait_status(0, (n), 0, NULL))
 
 #define g1_ata_wait_nbsy() g1_ata_wait_status(G1_ATA_SR_BSY)
 
 #define g1_ata_wait_bsydrq() g1_ata_wait_status(G1_ATA_SR_DRQ | G1_ATA_SR_BSY)
 
 #define g1_ata_wait_drdy() \
-    do {} while(!(IN8(G1_ATA_ALTSTATUS) & G1_ATA_SR_DRDY))
+    ((void)g1_bus_wait_status(G1_ATA_SR_DRDY, 0, 0, NULL))
 
 static inline int use_lba28(uint64_t sector, size_t count) {
     return ((sector + count) < 0x0FFFFFFF) && (count <= ATA_MAX_SECTORS_LBA28);
@@ -205,20 +154,16 @@ static inline int use_lba28(uint64_t sector, size_t count) {
 
 /* Is a G1 DMA in progress? */
 int g1_dma_in_progress(void) {
-    return IN32(G1_ATA_DMA_STATUS);
+    return g1_bus_dma_in_progress();
 }
 
 /* G1 mutex handling. */
 inline int g1_ata_mutex_lock(void) {
-    return sem_wait_irqsafe(&_g1_ata_sem);
+    return g1_bus_lock();
 }
 
 inline int g1_ata_mutex_unlock(void) {
-    /* Make sure to select the GD-ROM drive back. */
-    if(hardware_sys_mode(NULL) == HW_TYPE_RETAIL) {
-        g1_ata_select_device(G1_ATA_MASTER);
-    }
-    return sem_signal(&_g1_ata_sem);
+    return g1_bus_unlock();
 }
 
 static void g1_ata_set_sector_and_count(uint64_t sector, size_t count, int lba28) {
@@ -239,8 +184,10 @@ static void g1_ata_set_sector_and_count(uint64_t sector, size_t count, int lba28
 }
 
 static void g1_dma_done(void) {
+    bool blocking = dma_blocking != 0;
+
     /* Signal the calling thread to continue, if it is blocking. */
-    if(dma_blocking) {
+    if(blocking) {
         sem_signal(&dma_done);
         thd_schedule(true);
         dma_blocking = 0;
@@ -248,22 +195,39 @@ static void g1_dma_done(void) {
 
     dma_in_progress = 0;
 
-    /* Make sure to select the GD-ROM drive back. */
-    g1_ata_mutex_unlock();
+    /* A blocking caller still has to acknowledge device status. It retains
+       ownership until dma_common() completes those task-file accesses. */
+    if(!blocking)
+        g1_ata_mutex_unlock();
 }
 
-static void g1_dma_irq_hnd(uint32_t code, void *data) {
+static bool g1_dma_irq_hnd(uint32_t code, void *data) {
     int can_lba48 = CAN_USE_LBA48();
     size_t nb_sectors;
     uint8_t status;
 
-    /* XXXX: Probably should look at the code to make sure it isn't an error. */
     (void)data;
+
+    if(!dma_in_progress)
+        return false;
+
+    if(code != ASIC_EVT_GD_DMA) {
+        /* Error events are terminal. Do not acknowledge the ATA task-file or
+           continue an LBA28 chain as if this were normal completion. */
+        g1_bus_dma_disable();
+        dma_irq_code = code;
+        dbglog(DBG_ERROR,
+               "g1_dma_irq_hnd: G1 DMA hardware error event %04lx\n",
+               (unsigned long)code);
+        g1_dma_done();
+        return true;
+    }
 
     if(dma_in_progress && !can_lba48 && dma_nb_sectors > ATA_MAX_SECTORS_LBA28) {
         dma_sector += ATA_MAX_SECTORS_LBA28;
         dma_nb_sectors -= ATA_MAX_SECTORS_LBA28;
-        nb_sectors = dma_nb_sectors <= ATA_MAX_SECTORS_LBA28 ? dma_nb_sectors : ATA_MAX_SECTORS_LBA28;
+        nb_sectors = dma_nb_sectors <= ATA_MAX_SECTORS_LBA28
+            ? dma_nb_sectors : ATA_MAX_SECTORS_LBA28;
 
         /* Make sure to acknowledge the IRQ before continuing */
         status = IN8(G1_ATA_STATUS_REG);
@@ -272,7 +236,7 @@ static void g1_dma_irq_hnd(uint32_t code, void *data) {
         if(status & (G1_ATA_SR_ERR | G1_ATA_SR_DF)) {
             dbglog(DBG_ERROR, "g1_dma_irq_hnd: Error detected in DMA chain, aborting\n");
             g1_dma_done();
-            return;
+            return true;
         }
 
         /* Set the DMA parameters for the next transfer. */
@@ -296,52 +260,12 @@ static void g1_dma_irq_hnd(uint32_t code, void *data) {
     else if(dma_in_progress) {
         g1_dma_done();
     }
-    else {
-        if(old_dma_irq.hdl) {
-            old_dma_irq.hdl(code, old_dma_irq.data);
-        }
-    }
-}
-
-static int g1_ata_dma_done(void *d) {
-    (void)d;
-
-    return !g1_dma_in_progress();
+    return true;
 }
 
 /* Set the device select register to select a particular device. */
 uint8_t g1_ata_select_device(uint8_t dev) {
-    uint8_t old = IN8(G1_ATA_DEVICE_SELECT);
-
-    /* Are we actually switching devices? */
-    if(((dev ^ dev_selected) & 0x10)) {
-        /* We might run into some trouble here if this is called in an IRQ
-           handler, so treat that case specially... */
-        if(irq_inside_int()) {
-            /* If there's a DMA going, then punt. We don't want to sit around
-               forever waiting... */
-            if(g1_dma_in_progress())
-                return 0x0F;
-
-            if(IN8(G1_ATA_ALTSTATUS) & (G1_ATA_SR_DRQ | G1_ATA_SR_BSY))
-                return 0x0F;
-        }
-        else {
-            /* Wait for any in-progress DMA transfers to finish. */
-            thd_poll((thd_cb_t)g1_ata_dma_done, NULL, 0);
-
-            /* According to section 7.10 of the ATA-5 spec, setting the device
-               select register with either of BSY or DRQ asserted produces an
-               indeterminite result. */
-            g1_ata_wait_bsydrq();
-        }
-    }
-
-    /* Write the register value out and return the old value. */
-    OUT8(G1_ATA_DEVICE_SELECT, dev);
-    dev_selected = dev;
-
-    return old;
+    return g1_bus_select_device(dev);
 }
 
 /* This one is an inline function since it needs to return something... */
@@ -357,9 +281,11 @@ static inline int g1_ata_wait_drq(void) {
 
 static int dma_common(uint8_t cmd, size_t nsects, uint32_t addr, int dir,
                       int block) {
+    int rv = 0;
     uint8_t status;
 
     dma_cmd = cmd;
+    dma_irq_code = ASIC_EVT_GD_DMA;
 
     /* Set the DMA parameters up. */
     OUT32(G1_ATA_DMA_ADDRESS, addr);
@@ -380,7 +306,16 @@ static int dma_common(uint8_t cmd, size_t nsects, uint32_t addr, int dir,
     OUT32(G1_ATA_DMA_STATUS, 1);
 
     if(block) {
-        sem_wait(&dma_done);
+        if(sem_wait(&dma_done) < 0) {
+            rv = -1;
+            goto out;
+        }
+
+        if(dma_irq_code != ASIC_EVT_GD_DMA) {
+            errno = EIO;
+            rv = -1;
+            goto out;
+        }
 
         /* Ack the IRQ. */
         status = IN8(G1_ATA_STATUS_REG);
@@ -388,14 +323,18 @@ static int dma_common(uint8_t cmd, size_t nsects, uint32_t addr, int dir,
         /* Was there an error doing the transfer? */
         if(status & G1_ATA_SR_ERR) {
             errno = EIO;
-            return -1;
+            rv = -1;
+            goto out;
         }
 
         /* Since we're blocking, make sure the drive is completely done. */
         g1_ata_wait_bsydrq();
     }
 
-    return 0;
+out:
+    if(block)
+        g1_ata_mutex_unlock();
+    return rv;
 }
 
 int g1_ata_read_chs(uint16_t c, uint8_t h, uint8_t s, size_t count,
@@ -710,7 +649,8 @@ int g1_ata_read_lba_dma(uint64_t sector, size_t count, void *buf,
     /* Use the physical memory address. */
     addr &= MEM_AREA_CACHE_MASK;
 
-    /* Lock the mutex. It will be unlocked later in the IRQ handler. */
+    /* Nonblocking DMA unlocks in the IRQ handler. Blocking DMA retains G1
+       until dma_common() acknowledges the terminal device status. */
     if(g1_ata_mutex_lock())
         return -1;
 
@@ -901,7 +841,8 @@ int g1_ata_write_lba_dma(uint64_t sector, size_t count, const void *buf,
     /* Use the physical memory address. */
     addr &= MEM_AREA_CACHE_MASK;
 
-    /* Lock the mutex. It will be unlocked in the IRQ handler later. */
+    /* Nonblocking DMA unlocks in the IRQ handler. Blocking DMA retains G1
+       until dma_common() acknowledges the terminal device status. */
     if(g1_ata_mutex_lock())
         return -1;
 
@@ -1409,23 +1350,22 @@ int g1_ata_init(void) {
     if(initted)
         return 0;
 
-    orig_dev = dev_selected = IN8(G1_ATA_DEVICE_SELECT);
+    orig_dev = g1_bus_device_state_init();
 
     /* Scan for devices. */
     if((devices = g1_ata_scan()) < 0) {
         devices = 0;
+        memset(&device, 0, sizeof(device));
+        g1_bus_select_device(orig_dev);
         return -1;
     }
 
-    /* Hook all the DMA related events. */
-    old_dma_irq = asic_evt_set_handler(ASIC_EVT_GD_DMA, g1_dma_irq_hnd, NULL);
-    asic_evt_set_handler(ASIC_EVT_GD_DMA_OVERRUN, g1_dma_irq_hnd, NULL);
-    asic_evt_set_handler(ASIC_EVT_GD_DMA_ILLADDR, g1_dma_irq_hnd, NULL);
-
-    if(old_dma_irq.hdl == NULL) {
-        asic_evt_enable(ASIC_EVT_GD_DMA, ASIC_IRQB);
-        asic_evt_enable(ASIC_EVT_GD_DMA_OVERRUN, ASIC_IRQB);
-        asic_evt_enable(ASIC_EVT_GD_DMA_ILLADDR, ASIC_IRQB);
+    dma_irq_client = g1_bus_dma_client_register(g1_dma_irq_hnd, NULL);
+    if(dma_irq_client == G1_BUS_DMA_CLIENT_INVALID) {
+        devices = 0;
+        memset(&device, 0, sizeof(device));
+        g1_bus_select_device(orig_dev);
+        return -1;
     }
 
     initted = 1;
@@ -1439,32 +1379,16 @@ void g1_ata_shutdown(void) {
         g1_ata_flush();
 
     /* Reselect whatever was selected at boot (probably the GD-ROM). */
-    OUT8(G1_ATA_DEVICE_SELECT, orig_dev);
+    g1_bus_select_device(orig_dev);
 
     devices = 0;
     initted = 0;
 
     memset(&device, 0, sizeof(device));
 
-    /* Unhook the events and disable the IRQs. */
-    if(old_dma_irq.hdl) {
-        /* CDROM driver uses the same handler for 3 events. */
-        asic_evt_set_handler(ASIC_EVT_GD_DMA,
-            old_dma_irq.hdl, old_dma_irq.data);
-        asic_evt_set_handler(ASIC_EVT_GD_DMA_OVERRUN,
-            old_dma_irq.hdl, old_dma_irq.data);
-        asic_evt_set_handler(ASIC_EVT_GD_DMA_ILLADDR,
-            old_dma_irq.hdl, old_dma_irq.data);
-
-        old_dma_irq.hdl = NULL;
-    }
-    else {
-        asic_evt_disable(ASIC_EVT_GD_DMA, ASIC_IRQB);
-        asic_evt_remove_handler(ASIC_EVT_GD_DMA);
-        asic_evt_disable(ASIC_EVT_GD_DMA_OVERRUN, ASIC_IRQB);
-        asic_evt_remove_handler(ASIC_EVT_GD_DMA_OVERRUN);
-        asic_evt_disable(ASIC_EVT_GD_DMA_ILLADDR, ASIC_IRQB);
-        asic_evt_remove_handler(ASIC_EVT_GD_DMA_ILLADDR);
+    if(dma_irq_client != G1_BUS_DMA_CLIENT_INVALID) {
+        g1_bus_dma_client_unregister(dma_irq_client);
+        dma_irq_client = G1_BUS_DMA_CLIENT_INVALID;
     }
 
 }

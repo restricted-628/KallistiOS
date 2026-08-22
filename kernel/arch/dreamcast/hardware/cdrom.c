@@ -7,6 +7,7 @@
    Copyright (C) 2014 Donald Haase
    Copyright (C) 2023, 2024, 2025 Ruslan Rostovtsev
    Copyright (C) 2024 Andy Barajas
+   Copyright (C) 2026 Joseph Black
 
  */
 #include <assert.h>
@@ -25,6 +26,8 @@
 #include <kos/mutex.h>
 #include <kos/sem.h>
 #include <kos/dbglog.h>
+
+#include "g1_bus.h"
 
 /*
 
@@ -52,9 +55,6 @@ struct cmd_transfer_data {
     size_t size;
 };
 
-/* The G1 ATA access semaphore */
-semaphore_t _g1_ata_sem = SEM_INITIALIZER(1);
-
 /* Command handling */
 static gdc_cmd_hnd_t cmd_hnd = 0;
 static cd_cmd_chk_t cmd_response = CD_CMD_NOT_FOUND;
@@ -65,7 +65,7 @@ static bool dma_in_progress = false;
 static bool dma_blocking = false;
 static bool dma_auto_unlock = false;
 static semaphore_t dma_done = SEM_INITIALIZER(0);
-static asic_evt_handler_entry_t old_dma_irq = {NULL, NULL};
+static g1_bus_dma_client_t dma_irq_client = G1_BUS_DMA_CLIENT_INVALID;
 static int vblank_hnd = -1;
 
 /* Streaming */
@@ -173,16 +173,22 @@ int cdrom_exec_cmd(cd_cmd_code_t cmd, void *param) {
 }
 
 int cdrom_exec_cmd_timed(cd_cmd_code_t cmd, void *param, uint32_t timeout) {
+    int rv;
 
-    sem_wait_scoped(&_g1_ata_sem);
+    if(g1_bus_lock() < 0)
+        return ERR_SYS;
+
     cmd_hnd = cdrom_req_cmd(cmd, param);
 
     if(cmd_hnd <= 0) {
-        return ERR_SYS;
+        rv = ERR_SYS;
+        goto out;
     }
 
     /* Start the process of executing the command. */
     if(cdrom_poll(&cmd_hnd, timeout, cdrom_check_cmd_done) == ERR_TIMEOUT) {
+        /* The abort path acquires G1 when no DMA operation already owns it. */
+        (void)g1_bus_unlock();
         cdrom_abort_cmd(1000, true);
         return ERR_TIMEOUT;
     }
@@ -192,19 +198,24 @@ int cdrom_exec_cmd_timed(cd_cmd_code_t cmd, void *param, uint32_t timeout) {
     }
 
     if(cmd_response == CD_CMD_COMPLETED || cmd_response == CD_CMD_STREAMING) {
-        return ERR_OK;
+        rv = ERR_OK;
     }
     else if(cmd_response == CD_CMD_NOT_FOUND) {
-        return ERR_NO_ACTIVE;
+        rv = ERR_NO_ACTIVE;
     }
     else if(cmd_status.err1 == 2) {
-        return ERR_NO_DISC;
+        rv = ERR_NO_DISC;
     }
     else if(cmd_status.err1 == 6) {
-        return ERR_DISC_CHG;
+        rv = ERR_DISC_CHG;
+    }
+    else {
+        rv = ERR_SYS;
     }
 
-    return ERR_SYS;
+out:
+    (void)g1_bus_unlock();
+    return rv;
 }
 
 int cdrom_abort_cmd(uint32_t timeout, bool abort_dma) {
@@ -220,10 +231,13 @@ int cdrom_abort_cmd(uint32_t timeout, bool abort_dma) {
         dma_in_progress = false;
         dma_blocking = false;
         dma_auto_unlock = false;
-        /* G1 ATA mutex already locked */
+        /* The active DMA operation already owns G1. */
     }
     else {
-        sem_wait(&_g1_ata_sem);
+        if(g1_bus_lock() < 0) {
+            irq_restore(old);
+            return ERR_SYS;
+        }
     }
 
     irq_restore(old);
@@ -243,7 +257,7 @@ int cdrom_abort_cmd(uint32_t timeout, bool abort_dma) {
         cdrom_stream_set_callback(0, NULL);
     }
 
-    sem_signal(&_g1_ata_sem);
+    (void)g1_bus_unlock();
     return rv;
 }
 
@@ -255,13 +269,13 @@ int cdrom_get_status(int *status, int *disc_type) {
     /* We might be called in an interrupt to check for ISO cache
        flushing, so make sure we're not interrupting something
        already in progress. */
-    if(sem_wait_irqsafe(&_g1_ata_sem))
+    if(g1_bus_lock() < 0)
         /* DH: Figure out a better return to signal error */
         return -1;
 
     rv = syscall_gdrom_check_drive(&stat);
 
-    sem_signal(&_g1_ata_sem);
+    (void)g1_bus_unlock();
 
     if(rv >= 0) {
         rv = ERR_OK;
@@ -287,8 +301,10 @@ int cdrom_get_status(int *status, int *disc_type) {
 int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int sector_size) {
     cd_check_drive_status_t status;
     cd_sec_mode_params_t params;
+    int rv;
 
-    sem_wait_scoped(&_g1_ata_sem);
+    if(g1_bus_lock() < 0)
+        return ERR_SYS;
 
     /* Check if we are using default params */
     if(sector_size == 2352) {
@@ -319,7 +335,9 @@ int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int se
     params.sector_size = sector_size;   /* sector size */
 
     cur_sector_size = sector_size;
-    return syscall_gdrom_sector_mode(&params);
+    rv = syscall_gdrom_sector_mode(&params);
+    (void)g1_bus_unlock();
+    return rv;
 }
 
 /* Re-init the drive, e.g., after a disc change, etc */
@@ -354,12 +372,16 @@ int cdrom_read_toc(cd_toc_t *toc_buffer, bool high_density) {
 }
 
 static int cdrom_read_sectors_dma_irq(cd_read_params_t *params) {
+    int rv;
 
-    sem_wait_scoped(&_g1_ata_sem);
+    if(g1_bus_lock() < 0)
+        return ERR_SYS;
+
     cmd_hnd = cdrom_req_cmd(CD_CMD_DMAREAD, params);
 
     if(cmd_hnd <= 0) {
-        return ERR_SYS;
+        rv = ERR_SYS;
+        goto out;
     }
     dma_in_progress = true;
     dma_blocking = true;
@@ -387,16 +409,21 @@ static int cdrom_read_sectors_dma_irq(cd_read_params_t *params) {
     cmd_hnd = 0;
 
     if(cmd_response == CD_CMD_COMPLETED || cmd_response == CD_CMD_NOT_FOUND) {
-        return ERR_OK;
+        rv = ERR_OK;
     }
     else if(cmd_status.err1 == 2) {
-        return ERR_NO_DISC;
+        rv = ERR_NO_DISC;
     }
     else if(cmd_status.err1 == 6) {
-        return ERR_DISC_CHG;
+        rv = ERR_DISC_CHG;
+    }
+    else {
+        rv = ERR_SYS;
     }
 
-    return ERR_SYS;
+out:
+    (void)g1_bus_unlock();
+    return rv;
 }
 
 /* Enhanced Sector reading: Choose mode to read in. */
@@ -480,18 +507,19 @@ int cdrom_stream_stop(bool abort_dma) {
     if(abort_dma && dma_in_progress) {
         return cdrom_abort_cmd(1000, true);
     }
-    sem_wait(&_g1_ata_sem);
+    if(g1_bus_lock() < 0)
+        return ERR_SYS;
 
     cdrom_poll(&cmd_hnd, 0, cdrom_check_abort_streaming);
 
     if(cmd_response == CD_CMD_STREAMING) {
-        sem_signal(&_g1_ata_sem);
+        (void)g1_bus_unlock();
         return cdrom_abort_cmd(1000, false);
     }
 
     cmd_hnd = 0;
     stream_enabled = false;
-    sem_signal(&_g1_ata_sem);
+    (void)g1_bus_unlock();
 
     if(stream_cb) {
         cdrom_stream_set_callback(0, NULL);
@@ -541,7 +569,8 @@ int cdrom_stream_request(void *buffer, size_t size, bool block) {
     }
 
     params.size = size;
-    sem_wait(&_g1_ata_sem);
+    if(g1_bus_lock() < 0)
+        return ERR_SYS;
 
     if(stream_dma) {
         dma_in_progress = true;
@@ -554,7 +583,7 @@ int cdrom_stream_request(void *buffer, size_t size, bool block) {
             dma_in_progress = false;
             dma_blocking = false;
             dma_auto_unlock = false;
-            sem_signal(&_g1_ata_sem);
+            (void)g1_bus_unlock();
             return ERR_SYS;
         }
         if(!block) {
@@ -565,7 +594,7 @@ int cdrom_stream_request(void *buffer, size_t size, bool block) {
     else {
         rs = syscall_gdrom_pio_transfer(cmd_hnd, &params);
         if(rs < 0) {
-            sem_signal(&_g1_ata_sem);
+            (void)g1_bus_unlock();
             return ERR_SYS;
         }
     }
@@ -582,7 +611,7 @@ int cdrom_stream_request(void *buffer, size_t size, bool block) {
             stream_cb(stream_cb_param);
     }
 
-    sem_signal(&_g1_ata_sem);
+    (void)g1_bus_unlock();
     return ERR_OK;
 }
 
@@ -696,7 +725,9 @@ static void cdrom_vblank(uint32_t evt, void *data) {
         syscall_gdrom_exec_server();
         cmd_response = syscall_gdrom_check_command(cmd_hnd, &cmd_status);
 
-        if(cmd_response != CD_CMD_PROCESSING && cmd_response != CD_CMD_BUSY && cmd_response != CD_CMD_STREAMING) {
+        if(cmd_response != CD_CMD_PROCESSING
+                && cmd_response != CD_CMD_BUSY
+                && cmd_response != CD_CMD_STREAMING) {
             dma_in_progress = false;
 
             if(dma_blocking) {
@@ -708,31 +739,42 @@ static void cdrom_vblank(uint32_t evt, void *data) {
     }
 }
 
-static void g1_dma_irq_hnd(uint32_t code, void *data) {
+static bool g1_dma_irq_hnd(uint32_t code, void *data) {
     (void)data;
 
-    if(dma_in_progress) {
-        dma_in_progress = false;
+    if(!dma_in_progress)
+        return false;
 
+    dma_in_progress = false;
+
+    if(code != ASIC_EVT_GD_DMA) {
+        /* DMA faults are terminal, not command-server completion events. */
+        g1_bus_dma_disable();
+        cmd_response = CD_CMD_FAILED;
+        cmd_status = (cd_cmd_chk_status_t) { 0 };
+        dbglog(DBG_ERROR,
+               "g1_dma_irq_hnd: GD DMA hardware error event %04lx\n",
+               (unsigned long)code);
+    }
+    else {
         syscall_gdrom_exec_server();
         cmd_response = syscall_gdrom_check_command(cmd_hnd, &cmd_status);
+    }
 
-        if(dma_blocking) {
-            dma_blocking = false;
-            sem_signal(&dma_done);
-            thd_schedule(true);
-        }
-        else if(dma_auto_unlock) {
-            sem_signal(&_g1_ata_sem);
-            dma_auto_unlock = false;
-        }
-        if(stream_enabled) {
-            syscall_gdrom_dma_callback((uintptr_t)stream_cb, stream_cb_param);
-        }
+    if(dma_blocking) {
+        dma_blocking = false;
+        sem_signal(&dma_done);
+        thd_schedule(true);
     }
-    else if(old_dma_irq.hdl) {
-        old_dma_irq.hdl(code, old_dma_irq.data);
+    else if(dma_auto_unlock) {
+        (void)g1_bus_unlock();
+        dma_auto_unlock = false;
     }
+
+    if(code == ASIC_EVT_GD_DMA && stream_enabled)
+        syscall_gdrom_dma_callback((uintptr_t)stream_cb, stream_cb_param);
+
+    return true;
 }
 
 /*
@@ -771,7 +813,11 @@ void cdrom_init(void) {
         return;
     }
 
-    sem_wait(&_g1_ata_sem);
+    if(g1_bus_lock() < 0) {
+        dbglog(DBG_ERROR,
+               "cdrom_init: G1 is unavailable; CD-ROM remains disabled\n");
+        return;
+    }
 
     /*
         First, check the protection status to determine if it's necessary 
@@ -800,20 +846,22 @@ void cdrom_init(void) {
     syscall_gdrom_init();
 
     unlock_dma_memory();
-    sem_signal(&_g1_ata_sem);
+    (void)g1_bus_unlock();
 
-    /* Hook all the DMA related events. */
-    old_dma_irq = asic_evt_set_handler(ASIC_EVT_GD_DMA, g1_dma_irq_hnd, NULL);
-    asic_evt_set_handler(ASIC_EVT_GD_DMA_OVERRUN, g1_dma_irq_hnd, NULL);
-    asic_evt_set_handler(ASIC_EVT_GD_DMA_ILLADDR, g1_dma_irq_hnd, NULL);
-
-    if(old_dma_irq.hdl == NULL) {
-        asic_evt_enable(ASIC_EVT_GD_DMA, ASIC_IRQB);
-        asic_evt_enable(ASIC_EVT_GD_DMA_OVERRUN, ASIC_IRQB);
-        asic_evt_enable(ASIC_EVT_GD_DMA_ILLADDR, ASIC_IRQB);
+    dma_irq_client = g1_bus_dma_client_register(g1_dma_irq_hnd, NULL);
+    if(dma_irq_client == G1_BUS_DMA_CLIENT_INVALID) {
+        dbglog(DBG_ERROR, "cdrom_init: couldn't register G1 DMA client\n");
+        return;
     }
 
     vblank_hnd = vblank_handler_add(cdrom_vblank, NULL);
+    if(vblank_hnd < 0) {
+        dbglog(DBG_ERROR, "cdrom_init: couldn't register vblank handler\n");
+        (void)g1_bus_dma_client_unregister(dma_irq_client);
+        dma_irq_client = G1_BUS_DMA_CLIENT_INVALID;
+        return;
+    }
+
     inited = true;
 
     cdrom_reinit();
@@ -827,25 +875,9 @@ void cdrom_shutdown(void) {
 
     vblank_handler_remove(vblank_hnd);
 
-    /* Unhook the events and disable the IRQs. */
-    if(old_dma_irq.hdl) {
-        /* G1-ATA driver uses the same handler for 3 events. */
-        asic_evt_set_handler(ASIC_EVT_GD_DMA,
-            old_dma_irq.hdl, old_dma_irq.data);
-        asic_evt_set_handler(ASIC_EVT_GD_DMA_OVERRUN,
-            old_dma_irq.hdl, old_dma_irq.data);
-        asic_evt_set_handler(ASIC_EVT_GD_DMA_ILLADDR,
-            old_dma_irq.hdl, old_dma_irq.data);
-
-        old_dma_irq.hdl = NULL;
-    }
-    else {
-        asic_evt_disable(ASIC_EVT_GD_DMA, ASIC_IRQB);
-        asic_evt_remove_handler(ASIC_EVT_GD_DMA);
-        asic_evt_disable(ASIC_EVT_GD_DMA_OVERRUN, ASIC_IRQB);
-        asic_evt_remove_handler(ASIC_EVT_GD_DMA_OVERRUN);
-        asic_evt_disable(ASIC_EVT_GD_DMA_ILLADDR, ASIC_IRQB);
-        asic_evt_remove_handler(ASIC_EVT_GD_DMA_ILLADDR);
+    if(dma_irq_client != G1_BUS_DMA_CLIENT_INVALID) {
+        (void)g1_bus_dma_client_unregister(dma_irq_client);
+        dma_irq_client = G1_BUS_DMA_CLIENT_INVALID;
     }
     inited = false;
 }

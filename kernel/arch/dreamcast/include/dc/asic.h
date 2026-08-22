@@ -89,6 +89,7 @@ __BEGIN_DECLS
 #define ASIC_EVT_GD_DMA             0x000e  /**< \brief GD-Rom DMA complete */
 #define ASIC_EVT_GD_DMA_OVERRUN     0x020d  /**< \brief GD-Rom DMA overrun */
 #define ASIC_EVT_GD_DMA_ILLADDR     0x020c  /**< \brief GD-Rom DMA illegal address */
+#define ASIC_EVT_GD_DMA_ACCESS      0x020e  /**< \brief G1 access during GD-Rom DMA */
 /** @} */
 
 /** \defgroup asic_events_maple     Maple
