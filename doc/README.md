@@ -19,6 +19,9 @@ are documented in the [VBlank callback safety guide](vblank-callback-safety.md).
 Exclusive ASIC event ownership and its interaction with legacy and threaded
 handlers are documented in the
 [ASIC event ownership guide](asic-event-ownership.md).
+G2 PIO state preservation, DMA lifecycle rules, cache ownership, and MMU-safe
+address handling are documented in the
+[G2 DMA safety guide](g2-dma-safety.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.
