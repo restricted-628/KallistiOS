@@ -11,6 +11,7 @@ INCLUDES = -I$(KOS_ROOT)/kernel/arch/dreamcast/include -I$(VMUFS_DIR)
 TARGET = vmufs-maintenance-test
 SOURCES = vmufs-maintenance-test.c \
 	$(VMUFS_DIR)/vmufs_maintenance_model.c \
+	$(VMUFS_DIR)/vmufs_defrag_schedule.c \
 	$(VMUFS_DIR)/vmufs_validate.c \
 	$(VMUFS_DIR)/vmufs_chain.c
 

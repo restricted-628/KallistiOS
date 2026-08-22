@@ -150,6 +150,131 @@ static void fill_block(block_image_t block, size_t iteration,
     }
 }
 
+static int verify_file_data(const vmu_root_t *root, const uint16_t *fat,
+                            const vmu_dir_t *dir,
+                            const block_image_t *image,
+                            block_image_t expected[TEST_MAX_FILES]
+                                                  [TEST_MAX_FILE_BLOCKS],
+                            size_t file_count) {
+    for(size_t file = 0; file < file_count; ++file) {
+        uint16_t block = dir[file].firstblk;
+
+        for(size_t step = 0; step < dir[file].filesize; ++step) {
+            if(block >= root->blk_cnt ||
+               memcmp(image[block], expected[file][step],
+                      VMUFS_BLOCK_SIZE) != 0)
+                return -1;
+            block = fat[block];
+        }
+    }
+
+    return 0;
+}
+
+static int simulate_schedule(
+    const vmu_root_t *root, const uint16_t *initial_fat,
+    const vmu_dir_t *initial_dir, const block_image_t *initial_image,
+    block_image_t expected[TEST_MAX_FILES][TEST_MAX_FILE_BLOCKS],
+    size_t file_count, const vmufs_defrag_schedule_t *schedule) {
+    uint16_t fat[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    uint16_t staging_fat[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    uint16_t old_blocks[TEST_USER_BLOCKS];
+    vmu_dir_t dir[TEST_DIR_ENTRIES];
+    block_image_t image[TEST_USER_BLOCKS];
+    block_image_t shadow[TEST_USER_BLOCKS];
+    vmufs_validation_t validation;
+
+    memcpy(fat, initial_fat, sizeof(fat));
+    memcpy(dir, initial_dir, sizeof(dir));
+    memcpy(image, initial_image, sizeof(image));
+
+    for(size_t step_index = 0; step_index < schedule->step_count;
+        ++step_index) {
+        const vmufs_defrag_step_t *step = &schedule->steps[step_index];
+        const uint16_t *targets = &schedule->targets[step->target_offset];
+        vmu_dir_t *entry;
+
+        if(step->directory_index >= TEST_DIR_ENTRIES ||
+           step->target_offset > schedule->target_count ||
+           step->block_count >
+               schedule->target_count - step->target_offset)
+            return -1;
+        entry = &dir[step->directory_index];
+        if(step->block_count != entry->filesize ||
+           vmufs_chain_collect(root, fat,
+                               VMUFS_BLOCK_SIZE / sizeof(fat[0]),
+                               entry, old_blocks, TEST_USER_BLOCKS) < 0)
+            return -1;
+
+        for(size_t i = 0; i < step->block_count; ++i) {
+            if(targets[i] >= root->blk_cnt ||
+               fat[targets[i]] != VMUFS_FAT_FREE)
+                return -1;
+            memcpy(shadow[i], image[old_blocks[i]], VMUFS_BLOCK_SIZE);
+        }
+
+        /* Data lands only in free blocks. The old metadata and every old file
+           therefore remain valid throughout this phase. */
+        for(size_t i = 0; i < step->block_count; ++i)
+            memcpy(image[targets[i]], shadow[i], VMUFS_BLOCK_SIZE);
+        if(vmufs_validate(root, TEST_CARD_BLOCKS, fat,
+                          VMUFS_BLOCK_SIZE / sizeof(fat[0]), dir,
+                          TEST_DIR_ENTRIES, &validation) < 0 ||
+           verify_file_data(root, fat, dir, image, expected,
+                            file_count) < 0)
+            return -1;
+
+        /* Publishing the new chain in the FAT first makes it an orphan while
+           the directory still selects the complete old chain. */
+        memcpy(staging_fat, fat, sizeof(staging_fat));
+        for(size_t i = 0; i < step->block_count; ++i) {
+            staging_fat[targets[i]] = i + 1u < step->block_count ?
+                targets[i + 1u] : VMUFS_FAT_EOF;
+        }
+        if(vmufs_validate(root, TEST_CARD_BLOCKS, staging_fat,
+                          VMUFS_BLOCK_SIZE / sizeof(staging_fat[0]), dir,
+                          TEST_DIR_ENTRIES, &validation) == 0 ||
+           !vmufs_validation_allows_mutation(&validation) ||
+           verify_file_data(root, staging_fat, dir, image, expected,
+                            file_count) < 0)
+            return -1;
+
+        /* Switching one directory entry selects the complete new chain. The
+           old chain is now the only orphan and remains allocated. */
+        entry->firstblk = targets[0];
+        memcpy(fat, staging_fat, sizeof(fat));
+        if(vmufs_validate(root, TEST_CARD_BLOCKS, fat,
+                          VMUFS_BLOCK_SIZE / sizeof(fat[0]), dir,
+                          TEST_DIR_ENTRIES, &validation) == 0 ||
+           !vmufs_validation_allows_mutation(&validation) ||
+           verify_file_data(root, fat, dir, image, expected,
+                            file_count) < 0)
+            return -1;
+
+        vmufs_chain_release(fat, old_blocks, step->block_count);
+        if(vmufs_validate(root, TEST_CARD_BLOCKS, fat,
+                          VMUFS_BLOCK_SIZE / sizeof(fat[0]), dir,
+                          TEST_DIR_ENTRIES, &validation) < 0 ||
+           verify_file_data(root, fat, dir, image, expected,
+                            file_count) < 0)
+            return -1;
+    }
+
+    for(size_t i = 0; i < TEST_DIR_ENTRIES; ++i)
+        dir[i].dirty = 0;
+    {
+        vmufs_defrag_plan_t plan;
+
+        if(vmufs_defrag_plan_build(root, fat,
+                                   VMUFS_BLOCK_SIZE / sizeof(fat[0]),
+                                   dir, TEST_DIR_ENTRIES, &plan) < 0 ||
+           plan.moved_blocks != 0 || plan.dirty_dir_blocks != 0)
+            return -1;
+    }
+
+    return 0;
+}
+
 static int test_random_defrag_models(void) {
     for(size_t iteration = 0; iteration < TEST_ITERATIONS; ++iteration) {
         vmu_root_t root;
@@ -159,6 +284,8 @@ static int test_random_defrag_models(void) {
         block_image_t source_image[TEST_USER_BLOCKS] = {{0}};
         block_image_t final_image[TEST_USER_BLOCKS] = {{0}};
         block_image_t expected[TEST_MAX_FILES][TEST_MAX_FILE_BLOCKS] = {{{0}}};
+        vmu_dir_t original_dir[TEST_DIR_ENTRIES];
+        vmufs_defrag_schedule_t schedule;
         vmufs_defrag_plan_t plan;
         vmufs_defrag_plan_t second_plan;
         vmufs_validation_t validation;
@@ -199,6 +326,15 @@ static int test_random_defrag_models(void) {
             next_source += blocks;
             live_blocks += blocks;
         }
+
+        memcpy(original_dir, dir, sizeof(dir));
+        if(vmufs_defrag_schedule_build(&root, fat,
+                                       sizeof(fat) / sizeof(fat[0]),
+                                       original_dir, TEST_DIR_ENTRIES,
+                                       &schedule) < 0 ||
+           simulate_schedule(&root, fat, original_dir, source_image,
+                             expected, file_count, &schedule) < 0)
+            return -1;
 
         if(vmufs_defrag_plan_build(&root, fat,
                                    sizeof(fat) / sizeof(fat[0]),
@@ -245,6 +381,48 @@ static int test_random_defrag_models(void) {
            memcmp(plan.fat, second_plan.fat, sizeof(plan.fat)) != 0)
             return -1;
     }
+
+    return 0;
+}
+
+static int test_cycle_admission(void) {
+    vmu_root_t root;
+    uint16_t fat[VMUFS_BLOCK_SIZE / sizeof(uint16_t)];
+    vmu_dir_t dir[TEST_DIR_ENTRIES];
+    vmufs_defrag_schedule_t schedule;
+
+    make_empty(&root, fat, dir);
+    make_file(&dir[0], 0, VMUFS_FILETYPE_DATA, 197, 2);
+    make_file(&dir[1], 1, VMUFS_FILETYPE_DATA, 199, 2);
+    fat[197] = 196;
+    fat[196] = VMUFS_FAT_EOF;
+    fat[199] = 198;
+    fat[198] = VMUFS_FAT_EOF;
+    if(vmufs_defrag_schedule_build(&root, fat,
+                                   sizeof(fat) / sizeof(fat[0]), dir,
+                                   TEST_DIR_ENTRIES, &schedule) < 0 ||
+       schedule.staged_steps != 1 || schedule.step_count != 3)
+        return -1;
+
+    /* A completely full card with the same dependency cycle has no blocks in
+       which a complete old file can remain authoritative during staging. */
+    make_empty(&root, fat, dir);
+    make_file(&dir[0], 0, VMUFS_FILETYPE_DATA, 99, 100);
+    for(size_t block = 100; block > 0; --block) {
+        fat[block - 1u] = block > 1u ?
+            (uint16_t)(block - 2u) : VMUFS_FAT_EOF;
+    }
+    make_file(&dir[1], 1, VMUFS_FILETYPE_DATA, 199, 100);
+    for(size_t block = 200; block > 100; --block) {
+        fat[block - 1u] = block > 101u ?
+            (uint16_t)(block - 2u) : VMUFS_FAT_EOF;
+    }
+    memset(&schedule, 0xa5, sizeof(schedule));
+    if(vmufs_defrag_schedule_build(&root, fat,
+                                   sizeof(fat) / sizeof(fat[0]), dir,
+                                   TEST_DIR_ENTRIES, &schedule) == 0 ||
+       errno != ENOSPC)
+        return -1;
 
     return 0;
 }
@@ -348,6 +526,10 @@ int main(void) {
     }
     if(test_full_card_boundary() < 0) {
         fprintf(stderr, "full-card boundary test failed\n");
+        return 1;
+    }
+    if(test_cycle_admission() < 0) {
+        fprintf(stderr, "cycle-admission test failed\n");
         return 1;
     }
     if(test_rejection_is_nonmutating() < 0) {
