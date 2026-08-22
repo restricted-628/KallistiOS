@@ -8,6 +8,8 @@ This page serves as an index for all KallistiOS examples.
   - breaking
   - cache-safety
   - dma
+    - g2-state
+    - speedtest
   - exec
   - fpu
   - gdb_breaking
