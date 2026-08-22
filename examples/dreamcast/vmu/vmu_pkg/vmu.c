@@ -2,6 +2,7 @@
 
    vmu.c
    (c)2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 */
 
 /* This simple example shows how to use the vmu_pkg_* functions to write
@@ -9,6 +10,7 @@
    any other VMU file from the BIOS menus. */
 
 #include <kos.h>
+#include <errno.h>
 
 /* An icon is always 32x32 4bpp */
 #define ICON_SIZE (32 * 32 / 2)
@@ -94,29 +96,37 @@ int wait_start(void) {
                 bfont_draw_str(vram_s + INFO_Y * SCREEN_W + 10, SCREEN_W, 0, "No Controller");
                 cont_warning_displayed = true;
             }
+            thd_pass();
             continue;
         }
 
         state = (cont_state_t *)maple_dev_status(cont);
 
-        if(!state) continue;
+        if(!state) {
+            thd_pass();
+            continue;
+        }
 
         new_vmu();
 
         if(state->buttons & CONT_START)
             return 0;
+
+        thd_pass();
     }
 }
 
 static unsigned char vmu_icon[ICON_SIZE * NB_ICONS_MAX];
 
 /* Here's the actual meat of it */
-void write_entry(void) {
-    vmu_pkg_t   pkg;
-    uint8_t       data[DATA_LEN], *pkg_out;
-    int     pkg_size;
-    int     i;
-    file_t      f;
+static int write_and_verify_entry(void) {
+    uint8_t data[DATA_LEN], verify[DATA_LEN];
+    vmu_pkg_t pkg = {0};
+    struct stat st;
+    ssize_t transferred;
+    size_t total;
+    int failed = 0;
+    file_t f;
 
     strcpy(pkg.desc_short, "VMU Test");
     strcpy(pkg.desc_long, "This is a test VMU file");
@@ -128,26 +138,80 @@ void write_entry(void) {
     pkg.data_len = DATA_LEN;
     pkg.data = data;
 
-    for(i = 0; i < DATA_LEN; i++)
+    for(int i = 0; i < DATA_LEN; i++)
         data[i] = i & 255;
 
-    vmu_pkg_load_icon(&pkg, "/rd/ebook.ico");
-    vmu_pkg_build(&pkg, &pkg_out, &pkg_size);
-
-    fs_unlink("/vmu/a1/TESTFILE");
-    f = fs_open("/vmu/a1/TESTFILE", O_WRONLY);
-
-    if(f == FILEHND_INVALID) {
-        printf("error writing\n");
-        return;
+    if(vmu_pkg_load_icon(&pkg, "/rd/ebook.ico") < 0) {
+        printf("Unable to load the package icon: %s\n", strerror(errno));
+        return -1;
     }
 
-    fs_write(f, data, sizeof(data));
-    fs_vmu_set_header(f, &pkg);
-    fs_close(f);
+    f = fs_open("/vmu/a1/TESTFILE", O_WRONLY | O_TRUNC);
+
+    if(f == FILEHND_INVALID) {
+        printf("Unable to open TESTFILE: %s\n", strerror(errno));
+        return -1;
+    }
+
+    transferred = fs_write(f, data, sizeof(data));
+    if(transferred != (ssize_t)sizeof(data) ||
+       fs_vmu_set_header(f, &pkg) < 0)
+        failed = 1;
+    if(fs_close(f) < 0)
+        failed = 1;
+    if(failed) {
+        printf("Unable to write TESTFILE: %s\n", strerror(errno));
+        return -1;
+    }
+
+    f = fs_open("/vmu/a1/TESTFILE", O_RDONLY);
+    if(f == FILEHND_INVALID) {
+        printf("Unable to reopen TESTFILE: %s\n", strerror(errno));
+        return -1;
+    }
+
+    total = fs_total(f);
+    transferred = fs_read(f, verify, sizeof(verify));
+    if(total != DATA_LEN || transferred != (ssize_t)sizeof(verify) ||
+       memcmp(data, verify, sizeof(data)) != 0)
+        failed = 1;
+    if(fs_seek(f, -1, SEEK_END) != DATA_LEN - 1 ||
+       fs_read(f, verify, 1) != 1 || verify[0] != data[DATA_LEN - 1])
+        failed = 1;
+    if(fs_close(f) < 0)
+        failed = 1;
+    if(fs_stat("/vmu/a1/TESTFILE", &st, 0) < 0 ||
+       st.st_size != DATA_LEN)
+        failed = 1;
+    if(failed) {
+        printf("TESTFILE payload verification failed: %s\n", strerror(errno));
+        return -1;
+    }
+
+    f = fs_open("/vmu/a1/TESTFILE", O_RDONLY | O_META);
+    if(f == FILEHND_INVALID) {
+        printf("Unable to open raw TESTFILE: %s\n", strerror(errno));
+        return -1;
+    }
+    total = fs_total(f);
+    if(total <= DATA_LEN || total % VMUFS_BLOCK_SIZE != 0)
+        failed = 1;
+    if(fs_close(f) < 0)
+        failed = 1;
+    if(failed) {
+        printf("TESTFILE raw allocation verification failed\n");
+        return -1;
+    }
+
+    printf("Verified %d payload bytes inside %zu stored bytes\n",
+           DATA_LEN, total);
+    return 0;
 }
 
 int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+
     bfont_draw_str(vram_s + 20 * SCREEN_W + 20, SCREEN_W, 0,
                    "Put a VMU you don't care too much about");
     bfont_draw_str(vram_s + 42 * SCREEN_W + 20, SCREEN_W, 0,
@@ -157,8 +221,8 @@ int main(int argc, char **argv) {
     if(wait_start() < 0) return 0;
 
     /* If there was a vmu found, write to it */
-    if(dev_found) write_entry();
+    if(dev_found)
+        write_and_verify_entry();
 
     return 0;
 }
-

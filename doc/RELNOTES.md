@@ -66,6 +66,11 @@ lifecycle and naming conventions.
   use copy-on-write, deletions remove the directory entry before freeing data,
   failed allocations leave the in-memory FAT unchanged, and executable images
   require contiguous free space beginning at block zero.
+* The `/vmu` VFS now distinguishes logical package payload length from
+  block-rounded backing storage. Reads, seeks, totals, `stat()`, `fstat()`,
+  append writes, sparse gaps, and package rebuilds use the logical EOF, while
+  `O_META` continues to expose the complete stored image. Unmodified writable
+  handles no longer rewrite a card merely because they were closed.
 
 RELEASE NOTES for 2.2.2
 -----------------------
