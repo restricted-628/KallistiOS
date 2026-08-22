@@ -3,6 +3,7 @@
    maple_queue.c
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2015 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
  */
 
 #include <stdatomic.h>
@@ -27,53 +28,56 @@ void maple_queue_flush(void) {
     out = (uint32_t *)maple_state.dma_buffer;
     last = NULL;
 
-    /* Make sure we end up with space for the gun enable command... */
-    if(maple_state.gun_port > -1)
-        amt = 12;
-
-    /* Go through and process each frame... */
-    TAILQ_FOREACH(i, &maple_state.frame_queue, frameq) {
-        /* Are we running out of space? */
-        if((i->length * 4 + amt) > MAPLE_DMA_SIZE)
-            break;
-
-        /* Is this frame stale? */
-        if(i->state != MAPLE_FRAME_UNSENT)
-            continue;
-
-        i->state = MAPLE_FRAME_SENT;
-
-        /* Save the last descriptor head for the "last" flag */
-        last = out;
-
-        /* First word: message length and destination port */
-        *out++ = i->length | (i->dst_port << 16);
-
-        /* Second word: receive buffer physical address */
-        *out++ = ((uint32_t)i->recv_buf) & MEM_AREA_CACHE_MASK;
-
-        /* Third word: command, addressing, packet length */
-        *out++ = (i->cmd & 0xff) | (maple_addr(i->dst_port, i->dst_unit) << 8)
-                 | ((i->dst_port << 6) << 16)
-                 | ((i->length & 0xff) << 24);
-
-        /* Finally, parameter words, if any */
-        if(i->length > 0) {
-            memcpy(out, i->send_buf, i->length * 4);
-            out += i->length;
-        }
-
-        cnt++;
-        amt += i->length * 4;
-    }
-
-    /* Are we entering gun mode this frame? */
+    /* A gun descriptor must own the DMA list. It leaves the selected port
+       monitoring for the remainder of the video field, so any descriptor in
+       front of it shortens the usable scan range. Keep ordinary frames UNSENT
+       and service them after the capture completes. */
     if(maple_state.gun_port > -1) {
+        maple_state.gun_active_port = maple_state.gun_port;
+        maple_state.gun_port = -1;
+
         last = out;
-        *out++ = 0x200 | (maple_state.gun_port << 16);
+        *out++ = 0x200 | (maple_state.gun_active_port << 16);
         *out++ = 0;
         *out++ = 0;
-        cnt++;
+        cnt = 1;
+    }
+    else {
+        /* Go through and process each frame... */
+        TAILQ_FOREACH(i, &maple_state.frame_queue, frameq) {
+            /* Are we running out of space? */
+            if((i->length * 4 + amt) > MAPLE_DMA_SIZE)
+                break;
+
+            /* Is this frame stale? */
+            if(i->state != MAPLE_FRAME_UNSENT)
+                continue;
+
+            i->state = MAPLE_FRAME_SENT;
+
+            /* Save the last descriptor head for the "last" flag */
+            last = out;
+
+            /* First word: message length and destination port */
+            *out++ = i->length | (i->dst_port << 16);
+
+            /* Second word: receive buffer physical address */
+            *out++ = ((uint32_t)i->recv_buf) & MEM_AREA_CACHE_MASK;
+
+            /* Third word: command, addressing, packet length */
+            *out++ = (i->cmd & 0xff) | (maple_addr(i->dst_port, i->dst_unit) << 8)
+                     | ((i->dst_port << 6) << 16)
+                     | ((i->length & 0xff) << 24);
+
+            /* Finally, parameter words, if any */
+            if(i->length > 0) {
+                memcpy(out, i->send_buf, i->length * 4);
+                out += i->length;
+            }
+
+            cnt++;
+            amt += i->length * 4;
+        }
     }
 
     /* Did we actually do anything...? */

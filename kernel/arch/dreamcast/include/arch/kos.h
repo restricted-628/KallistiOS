@@ -41,6 +41,7 @@ __BEGIN_DECLS
 #include <dc/maple/controller.h>
 #include <dc/maple/dreameye.h>
 #include <dc/maple/keyboard.h>
+#include <dc/maple/lightgun.h>
 #include <dc/maple/mouse.h>
 #include <dc/maple/purupuru.h>
 #include <dc/maple/sip.h>

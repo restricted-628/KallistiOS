@@ -4,6 +4,7 @@
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2015 Lawrence Sebald
    Copyright (C) 2016 Joe Fenton
+   Copyright (C) 2026 Joseph Black
  */
 
 #include <malloc.h>
@@ -13,6 +14,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <dc/maple.h>
+#include <dc/maple/lightgun.h>
 #include <dc/asic.h>
 #include <dc/pvr.h>
 #include <kos/dbglog.h>
@@ -308,11 +310,13 @@ void maple_dma_irq_hnd(uint32_t code, void *data) {
             maple_frame_unlock(i);
     }
 
-    /* If gun mode is enabled, read the latched H/V counter values. */
-    if(state->gun_port > -1) {
+    /* If a gun capture owned this DMA, publish its latched H/V counters. */
+    if(state->gun_active_port > -1) {
+        int port = state->gun_active_port;
         uint32_t gun = PVR_GET(PVR_GUN_POS);
         state->gun_x = gun & 0x3ff;
         state->gun_y = (gun >> 16) & 0x3ff;
-        state->gun_port = -1;
+        state->gun_active_port = -1;
+        lightgun_capture_complete(port, state->gun_x, state->gun_y);
     }
 }

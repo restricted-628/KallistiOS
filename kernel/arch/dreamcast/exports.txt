@@ -225,6 +225,10 @@ vid_shutdown
 
 # Maple
 cont_btn_callback
+cont_get_snapshot
+cont_set_sample_handler
+cont_set_trigger_thresholds
+cont_snapshot_is_soft_reset
 kbd_set_queue
 kbd_get_key
 maple_driver_reg
@@ -246,6 +250,16 @@ maple_raddr
 maple_pcaps
 maple_perror
 maple_dev_valid
+maple_dev_function_data
+maple_dev_connection_direction
+lightgun_set_enabled_ports
+lightgun_get_enabled_ports
+lightgun_request_capture
+lightgun_get_snapshot
+lightgun_set_capture_handler
+lightgun_set_trigger_filter
+lightgun_set_flash_color
+lightgun_get_flash_color
 vmu_draw_lcd
 vmu_block_read
 vmu_block_write

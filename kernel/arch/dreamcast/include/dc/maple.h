@@ -4,6 +4,7 @@
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2015 Lawrence Sebald
    Copyright (C) 2026 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
    This new driver's design is based loosely on the LinuxDC maple
    bus driver.
@@ -249,13 +250,23 @@ typedef struct maple_frame {
 typedef struct maple_devinfo {
     uint32_t  functions;              /**< \brief Function codes supported */
     uint32_t  function_data[3];       /**< \brief Additional data per function */
-    uint8_t   area_code;              /**< \brief Region code */
-    uint8_t   connector_direction;    /**< \brief 0: UP (most controllers), 1: DOWN (lightgun, microphones) */
+    uint8_t   area_code;              /**< \brief Supported-region bit mask */
+    uint8_t   connector_direction;    /**< \brief Raw packed connection directions; use maple_dev_connection_direction() */
     char      product_name[30] __attribute__ ((nonstring));       /**< \brief Name of device */
     char      product_license[60] __attribute__ ((nonstring));    /**< \brief License statement */
-    uint16_t  standby_power;          /**< \brief Power consumption (standby) */
-    uint16_t  max_power;              /**< \brief Power consumption (max) */
+    uint16_t  standby_power;          /**< \brief Standby power in 0.1 mA units */
+    uint16_t  max_power;              /**< \brief Maximum power in 0.1 mA units */
 } maple_devinfo_t;
+
+/** \brief   Physical direction of a Maple connection.
+    \ingroup maple
+*/
+typedef enum maple_connection_direction {
+    MAPLE_CONNECTION_TOP = 0,     /**< \brief Top side. */
+    MAPLE_CONNECTION_BOTTOM = 1,  /**< \brief Bottom side. */
+    MAPLE_CONNECTION_LEFT = 2,    /**< \brief Left side. */
+    MAPLE_CONNECTION_RIGHT = 3    /**< \brief Right side. */
+} maple_connection_direction_t;
 
 /** \brief   Maple response frame structure.
     \ingroup maple
@@ -458,7 +469,7 @@ typedef struct maple_state_str {
     /** \brief  Our vblank handler handle */
     int                         vbl_handle;
 
-    /** \brief  The port to read for lightgun status, if any. */
+    /** \brief  The port queued for the next lightgun capture, if any. */
     int                         gun_port;
 
     /** \brief  The horizontal position of the lightgun signal. */
@@ -466,6 +477,13 @@ typedef struct maple_state_str {
 
     /** \brief  The vertical position of the lightgun signal. */
     int                         gun_y;
+
+    /** \brief  The port currently owning the bus for lightgun capture.
+
+        Kept after the established public fields so adding this internal state
+        does not change the offsets of gun_x and gun_y.
+    */
+    int                         gun_active_port;
 } maple_state_t;
 
 /** \brief   Maple DMA buffer size.
@@ -608,12 +626,15 @@ const char *maple_perror(int response);
 */
 int maple_dev_valid(int p, int u);
 
-/** \brief   Enable light gun mode for this frame.
+/** \brief   Queue light gun mode for the next Maple transfer.
     \ingroup maple
 
-    This function enables light gun processing for the current frame of data.
-    Light gun mode will automatically be disabled when the data comes back for
-    this frame.
+    A light-gun transfer must be the final and only descriptor in its Maple DMA
+    list so the selected port can monitor the complete following video field.
+    Ordinary queued Maple frames remain unsent until the capture completes.
+
+    Only one capture may be queued or active at a time. Light gun mode is
+    automatically disabled when its DMA completes.
 
     \param  port            The port to enable light gun mode on.
     \return                 MAPLE_EOK on success, MAPLE_EFAIL on error.
@@ -623,11 +644,8 @@ int maple_gun_enable(int port);
 /** \brief   Disable light gun mode.
     \ingroup maple
 
-    There is probably very little reason to call this function. Light gun mode
-    is ordinarily disabled and is automatically disabled after the data has been
-    read from the device. The only reason to call this function is if you call
-    the maple_gun_enable() function, and then change your mind during the same
-    frame.
+    This cancels a capture which has been queued but not submitted to the Maple
+    hardware. An active capture cannot be cancelled and completes normally.
 */
 void maple_gun_disable(void);
 
@@ -858,6 +876,49 @@ int maple_enum_count(void);
 */
 maple_device_t *maple_enum_dev(int p, int u);
 
+/** \brief   Get a device function's descriptor in KOS capability-mask order.
+    \ingroup maple
+
+    Maple devices publish at most three function-data descriptors, ordered by
+    descending function-code bit. This helper performs that mapping and
+    validates that \p function contains exactly one function bit. The returned
+    word deliberately retains the stored order used by existing public masks
+    such as CONT_CAPABILITY_*; byte-oriented descriptors must be decoded with
+    explicit shifts or a byte swap.
+
+    \param  dev             Device whose descriptor should be queried.
+    \param  function        Exactly one MAPLE_FUNC_* value.
+    \param  data            Receives the descriptor in the stored word order
+                            used by public Maple capability masks. Byte-field
+                            protocols may need an explicit byte swap before
+                            decoding individual fields.
+    \retval true            The function has a published descriptor.
+    \retval false           Invalid arguments, unsupported function, or the
+                            function lies beyond the three published words.
+*/
+bool maple_dev_function_data(const maple_device_t *dev, uint32_t function,
+                             uint32_t *data);
+
+/** \brief   Decode a device's physical connection direction.
+    \ingroup maple
+
+    The Maple device-info response overloads one byte with two encodings. For a
+    root device, two two-bit fields describe its first and second expansion
+    sockets. For an attached device, a one-hot low nibble describes the side by
+    which that device is attached; only connection zero exists in that form.
+
+    \param  dev             Device whose connection metadata should be decoded.
+    \param  connection      Root socket index (zero or one), or zero for an
+                            attached device's own orientation.
+    \param  direction       Receives the decoded physical direction.
+    \retval true            The requested direction was present and valid.
+    \retval false           Invalid arguments, an unavailable connection, or
+                            malformed attached-device direction bits.
+*/
+bool maple_dev_connection_direction(const maple_device_t *dev,
+                                    unsigned int connection,
+                                    maple_connection_direction_t *direction);
+
 /** \brief   Get the Nth device of the requested type (where N is zero-indexed).
     \ingroup maple
 
@@ -886,8 +947,11 @@ maple_device_t *maple_enum_type_ex(int n, uint32_t func, uint32_t cap);
 /** \brief   Get the status struct for the requested maple device.
     \ingroup maple
 
-    This function will wait until the status is valid before returning.
-    You should cast to the appropriate type you're expecting.
+    This function does not block. The returned driver-owned area is allocated
+    when the device attaches and may still contain its initial zero state before
+    the driver's first successful poll. You should cast to the appropriate type
+    you're expecting. Prefer a driver-specific snapshot accessor when one is
+    available and a coherent copy or first-sample detection matters.
 
     \param  dev             The device to look up.
     \return                 The device's status.

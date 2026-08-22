@@ -5,13 +5,12 @@
 */
 
 #include <stdio.h>
-#include <time.h>
-
 #include <kos/dbgio.h>
 
 #include <dc/biosfont.h>
 #include <dc/maple.h>
 #include <dc/maple/controller.h>
+#include <dc/maple/lightgun.h>
 #include <dc/pvr.h>
 #include <dc/video.h>
 
@@ -20,10 +19,8 @@
 
    Some things to note about using the light gun:
    1. Things work better if the player is aiming at a very bright section of the
-      screen. That's why this example blanks the screen to white (only using
-      black where it draws text). I'd suggest having at least one frame of a
-      bright color before polling the gun, plus one frame while you're polling
-      it. That way you take care of any interlacing effects.
+      screen. The light-gun driver flashes each capture field automatically,
+      and this example also keeps the play area white.
    2. The light gun will (of course) only work with CRT televisions or monitors.
    3. You can only poll one gun at a time. This is a hardware limitation. You
       can switch back and forth between guns, but only one can actively be
@@ -33,14 +30,15 @@
       Start buttons, generally.
 */
 
-/* 200 ms delay */
-static const long unsigned int button_delay = ((CLOCKS_PER_SEC * 200) / 1000);
-
 int main(int argc, char *argv[]) {
-    int x, y, gun = 0;
+    int x, y;
+    uint32_t last_capture = 0;
     maple_device_t *dev;
-    cont_state_t *state;
-    clock_t last = 0, now;
+    cont_snapshot_t controller;
+    lightgun_snapshot_t gun;
+
+    (void)argc;
+    (void)argv;
 
     /* Do any printing to the screen and make it be black text on a white
        background (as much as we can anyway). I should eventually make it so you
@@ -49,6 +47,10 @@ int main(int argc, char *argv[]) {
     bfont_set_foreground_color(0x00000000);
     bfont_set_background_color(0xFFFFFFFF);
     pvr_init_defaults();
+
+    /* Trigger edges on any connected gun now schedule exclusive
+       light-gun captures. Port A wins if multiple guns fire together. */
+    lightgun_set_enabled_ports(LIGHTGUN_PORT_ALL);
 
     /* Blank the whole screen to white. */
     for(y = 0; y < 480; ++y) {
@@ -60,8 +62,6 @@ int main(int argc, char *argv[]) {
     for(;;) {
         /* Wait for vblank... */
         vid_waitvbl();
-        now = clock();
-
         /* Blank the "play" area of the screen to white. */
         for(y = 0; y < 480; ++y) {
             for(x = 128; x < 640; ++x) {
@@ -69,34 +69,26 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        /* Did we hit the trigger last frame? If so, grab the counter values and
-           print them out to the screen. */
-        if(gun) {
-            maple_gun_read_pos(&x, &y);
-            printf("%d %d\n", x, y);
-            gun = 0;
+        /* A snapshot is published coherently when the special Maple capture
+           completes. Values are raw PVR counters and need game calibration. */
+        if(lightgun_get_snapshot(&gun) == 0 &&
+           gun.sequence != last_capture) {
+            printf("port %c: %d %d\n", 'A' + gun.port, gun.x, gun.y);
+            last_capture = gun.sequence;
         }
 
         /* Grab the light gun and poll it for whether any interesting buttons
            are pressed. */
         if((dev = maple_enum_type(0, MAPLE_FUNC_LIGHTGUN))) {
-            /* The light gun "status" is just that of its buttons. The data for
-               positioning actually is read from a video register... */
-            if((state = (cont_state_t *)maple_dev_status(dev))) {
-                /* Exit if the user pressed start. */
-                if((state->buttons & CONT_START))
-                    break;
-
-                /* The light gun's trigger is mapped to the A button. See if the
-                   user is pulling the trigger and enable the gun if needed. */
-                if((state->buttons & CONT_A) && last + button_delay < now) {
-                    maple_gun_enable(dev->port);
-                    last = now;
-                    gun = 1;
-                }
-            }
+            /* Button state remains the normal controller function. The driver
+               already used the coherent A-button edge to schedule the aim
+               capture; the application only needs Start here. */
+            if(cont_get_snapshot(dev, &controller) == 0 &&
+               (controller.state.buttons & CONT_START))
+                break;
         }
     }
 
+    lightgun_set_enabled_ports(0);
     return 0;
 }

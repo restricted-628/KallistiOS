@@ -3,6 +3,7 @@
    maple_util.c
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2015 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
  */
 
 #include <assert.h>
@@ -12,6 +13,7 @@
 #include <dc/memory.h>
 #include <dc/maple.h>
 #include <kos/dbglog.h>
+#include <kos/irq.h>
 
 /* Enable / Disable the bus */
 void maple_bus_enable(void) {
@@ -154,16 +156,29 @@ int maple_dev_valid(int p, int u) {
 }
 
 int maple_gun_enable(int port) {
-    if(port >= 0 && port < 4) {
+    irq_mask_t irq;
+
+    if(port < 0 || port >= MAPLE_PORT_COUNT)
+        return MAPLE_EFAIL;
+
+    irq = irq_disable();
+
+    if(maple_state.gun_port < 0 && maple_state.gun_active_port < 0) {
         maple_state.gun_port = port;
+        irq_restore(irq);
         return MAPLE_EOK;
     }
 
+    irq_restore(irq);
     return MAPLE_EFAIL;
 }
 
 void maple_gun_disable(void) {
+    irq_mask_t irq = irq_disable();
+
     maple_state.gun_port = -1;
+
+    irq_restore(irq);
 }
 
 void maple_gun_read_pos(int *x, int *y) {
