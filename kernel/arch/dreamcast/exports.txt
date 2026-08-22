@@ -29,6 +29,7 @@ g2_fifo_wait
 
 # VBlank
 vblank_handler_add
+vblank_handler_add_prio
 vblank_handler_remove
 
 # SCIF
