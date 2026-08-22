@@ -111,7 +111,10 @@ int pvr_dma_transfer(const void *src, uintptr_t dest, size_t count,
 
     /* Check for 32-byte alignment */
     if(src_addr & 0x1F) {
-        dbglog(DBG_ERROR, "pvr_dma: src is not 32-byte aligned\n");
+        dbglog(DBG_ERROR,
+               "pvr_dma: src %p maps to %08lx and is not 32-byte aligned "
+               "(%lu bytes)\n",
+               src, (unsigned long)src_addr, (unsigned long)count);
         errno = EFAULT;
         return -1;
     }

@@ -143,6 +143,7 @@ This page serves as an index for all KallistiOS examples.
   - bumpmap
   - cheap_shadow
   - fb_tex
+  - hybrid_lists
   - modifier_volume
   - modifier_volume_tex
   - modifier_volume_zclip

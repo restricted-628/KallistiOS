@@ -4,10 +4,12 @@
    Copyright (C) 2002,2004 Megan Potter
    Copyright (C) 2024 Falco Girgis
    Copyright (C) 2026 Troy Davis
+   Copyright (C) 2026 Joseph Black
 
  */
 
 #include <assert.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -56,10 +58,12 @@ void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
     pvr_state.dma_buffers[0].base[list] = (uint8_t *)buffer;
     pvr_state.dma_buffers[0].ptr[list] = 0;
     pvr_state.dma_buffers[0].size[list] = len / 2;
+    pvr_state.dma_buffers[0].flushed &= ~BIT(list);
     pvr_state.dma_buffers[0].ready = 0;
     pvr_state.dma_buffers[1].base[list] = ((uint8_t *)buffer) + len / 2;
     pvr_state.dma_buffers[1].ptr[list] = 0;
     pvr_state.dma_buffers[1].size[list] = len / 2;
+    pvr_state.dma_buffers[1].flushed &= ~BIT(list);
     pvr_state.dma_buffers[1].ready = 0;
 
     return oldbuf;
@@ -122,6 +126,7 @@ void pvr_scene_begin(void) {
     int i;
 
     pvr_state.next_to_texture = 0;
+    pvr_state.scene_active = true;
     pvr_state.ta_checked_ready = 0;
     pvr_state.lists_closed = 0;
 
@@ -130,6 +135,8 @@ void pvr_scene_begin(void) {
 
     // Clear these out in case we're using DMA.
     if(pvr_state.dma_mode) {
+        pvr_state.dma_buffers[pvr_state.ram_target].flushed = 0;
+
         for(i = 0; i < PVR_OPB_COUNT; i++) {
             pvr_state.dma_buffers[pvr_state.ram_target].ptr[i] = 0;
         }
@@ -181,6 +188,25 @@ inline static bool pvr_list_uses_dma(pvr_list_t list) {
    submitted at once. If the given list has already been closed, then an
    error (-1) is returned. */
 int pvr_list_begin(pvr_list_t list) {
+    volatile pvr_dma_buffers_t *b;
+
+    if(list < PVR_LIST_OP_POLY || list > PVR_LIST_PT_POLY) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    b = pvr_state.dma_buffers + pvr_state.ram_target;
+
+    if(pvr_state.dma_mode && b->flushed & BIT(list)) {
+        errno = EALREADY;
+        return -1;
+    }
+
     /* Check to make sure we can do this */
     if(PVR_DEBUG && !pvr_state.dma_mode && pvr_state.lists_closed & BIT(list)) {
         dbglog(DBG_WARNING, "pvr_list_begin: attempt to open already closed list\n");
@@ -267,18 +293,39 @@ int pvr_prim(const void *data, size_t size) {
 int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
     volatile pvr_dma_buffers_t * b;
 
+    if(list < PVR_LIST_OP_POLY || list > PVR_LIST_PT_POLY || !data ||
+            !size || (size & 31)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
     b = pvr_state.dma_buffers + pvr_state.ram_target;
 
-    /* Ensure we associated a DMA vertex buffer with this list type. */
-    assert(b->base[list]);
+    if(!pvr_state.dma_mode || !b->base[list]) {
+        errno = ENODEV;
+        return -1;
+    }
 
-    /* Ensure data size is multiple of 32-bytes. */
-    assert(!(size & 31));
-    /* Ensure at least 4-byte alignment. */
-    assert(!((uintptr_t)data & 0x3));
+    if(b->flushed & BIT(list)) {
+        errno = EALREADY;
+        return -1;
+    }
 
-    /* Ensure we won't overflow the vertex buffer. */
-    assert(b->ptr[list] + size <= b->size[list]);
+    if((uintptr_t)data & 0x3) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(b->ptr[list] > b->size[list] ||
+            size > b->size[list] - b->ptr[list]) {
+        errno = ENOSPC;
+        return -1;
+    }
 
     memcpy(b->base[list] + b->ptr[list], data, size);
     b->ptr[list] += size;
@@ -287,10 +334,88 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
 }
 
 int pvr_list_flush(pvr_list_t list) {
-    (void)list;
+    volatile pvr_dma_buffers_t *b;
+    uint32_t old_ptr;
+    size_t transfer_size;
+    int rv;
 
-    assert_msg(0, "not implemented yet");
-    return -1;
+    if(list < PVR_LIST_OP_POLY || list > PVR_LIST_PT_POLY) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!pvr_state.valid || !pvr_state.dma_mode) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
+    b = pvr_state.dma_buffers + pvr_state.ram_target;
+
+    if(!b->base[list]) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(b->flushed & BIT(list)) {
+        errno = EALREADY;
+        return -1;
+    }
+
+    if(pvr_state.list_reg_open != PVR_LIST_NONE &&
+            pvr_state.list_reg_open != list) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    old_ptr = b->ptr[list];
+
+    /* An empty list still needs one parameter block before its delimiter. */
+    if(!old_ptr) {
+        if(b->size[list] < 64) {
+            errno = ENOSPC;
+            return -1;
+        }
+
+        pvr_blank_polyhdr_buf(list,
+                              (pvr_poly_hdr_t *)(b->base[list] + old_ptr));
+        b->ptr[list] += 32;
+    }
+
+    if(b->ptr[list] > b->size[list] ||
+            b->size[list] - b->ptr[list] < 32) {
+        b->ptr[list] = old_ptr;
+        errno = ENOSPC;
+        return -1;
+    }
+
+    /* A zero parameter block is the TA end-of-list delimiter. */
+    memset(b->base[list] + b->ptr[list], 0, 32);
+    b->ptr[list] += 32;
+    transfer_size = b->ptr[list];
+
+    pvr_state.list_reg_open = PVR_LIST_NONE;
+    pvr_start_ta_rendering();
+
+    sem_wait((semaphore_t *)&pvr_state.dma_lock);
+    rv = pvr_dma_load_ta(b->base[list], transfer_size, true, NULL, NULL);
+    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+
+    if(rv < 0) {
+        b->ptr[list] = old_ptr;
+        return -1;
+    }
+
+    /* This state belongs to the RAM frame, not the global scene. The next
+       scene may begin while this frame is still progressing through the TA. */
+    b->flushed |= BIT(list);
+    pvr_state.lists_closed |= BIT(list);
+
+    return 0;
 }
 
 /* Call this after you have finished submitting all data for a frame; once
@@ -301,6 +426,11 @@ int pvr_scene_finish(void) {
     int i, o;
     volatile pvr_dma_buffers_t *b;
 
+    if(!pvr_state.scene_active) {
+        errno = EPERM;
+        return -1;
+    }
+
     // If we're in DMA mode, then this works a little differently...
     if(pvr_state.dma_mode) {
         // If any enabled lists are empty, fill them with a blank polyhdr. Also
@@ -310,6 +440,11 @@ int pvr_scene_finish(void) {
         for(i = 0; i < PVR_OPB_COUNT; i++) {
             /* We never enabled the list globally with pvr_init() - skip it */
             if(!(pvr_state.lists_enabled & BIT(i)))
+                continue;
+
+            /* pvr_list_flush() already sent both this list and its delimiter.
+               Sending it again here would duplicate every primitive. */
+            if(b->flushed & BIT(i))
                 continue;
 
             /* If any lists weren't used in this scene, submit blank ones now */
@@ -366,6 +501,8 @@ int pvr_scene_finish(void) {
             }
         }
     }
+
+    pvr_state.scene_active = false;
 
     /* Ok, now it's just a matter of waiting for the interrupt... */
     return 0;

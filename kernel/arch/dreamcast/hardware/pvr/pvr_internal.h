@@ -2,6 +2,7 @@
 
    pvr_internal.h
    Copyright (C) 2002, 2003, 2004 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -128,6 +129,7 @@ typedef struct {
     uint8_t     *base[PVR_OPB_COUNT];  // DMA buffers, if assigned
     uint32_t    ptr[PVR_OPB_COUNT];    // DMA buffer write pointer, if used
     uint32_t    size[PVR_OPB_COUNT];   // DMA buffer sizes, or zero if none
+    uint32_t    flushed;               // Lists already transferred to the TA
     int         ready;                 // >0 if these buffers are ready to be DMAed
 } pvr_dma_buffers_t;
 
@@ -167,6 +169,7 @@ typedef struct {
     int     ta_busy;                    // >0 if a scene is ongoing and the TA hasn't signaled completion
     int     render_busy;                // >0 if a render is in progress
     int     render_completed;           // >1 if a render has recently finished
+    bool    scene_active;               // Scene accepts list data until finish
 
     // Memory pointers / buffers
     pvr_dma_buffers_t   dma_buffers[2];     // DMA buffers (if any)

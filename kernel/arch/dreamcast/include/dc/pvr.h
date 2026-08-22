@@ -4,6 +4,7 @@
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
    Low-level PVR 3D interface for the DC
 */
@@ -1053,13 +1054,25 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
 /** \brief   Flush the buffered data of the given list type to the TA.
     \ingroup pvr_list_mgmt
 
-    This function is currently not implemented, and calling it will result in an
-    assertion failure. It is intended to be used later in a "hybrid" mode where
-    both direct and DMA TA submission is possible.
+    This completes the buffered list, appends its end marker, and transfers it
+    synchronously to the TA. The list cannot be written, reopened, or flushed
+    again during the current scene. pvr_scene_finish() will not transfer it a
+    second time.
+
+    This operation enables hybrid submission: selected lists can be collected
+    in RAM while other lists are submitted directly. It blocks until the DMA
+    engine has accepted the complete list, but it does not wait for rendering or
+    display.
+
+    The scene API is not thread-safe. List construction, flushing, and scene
+    completion must be serialized by the application.
 
     \param  list            The list to flush.
 
-    \retval -1              On error (it is not possible to succeed).
+    \retval 0               On success.
+    \retval -1              On error, with `errno` set to `EINVAL`, `EPERM`,
+                            `ENOTSUP`, `ENODEV`, `EALREADY`, `EBUSY`, `ENOSPC`,
+                            or an error reported by the DMA layer.
 */
 int pvr_list_flush(pvr_list_t list);
 

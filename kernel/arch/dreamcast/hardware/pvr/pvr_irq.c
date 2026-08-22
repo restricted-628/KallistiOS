@@ -2,6 +2,7 @@
 
    pvr_irq.c
    Copyright (C)2002,2004 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -37,6 +38,13 @@ static void dma_next_list(void *thread) {
     for(i = 0; i < PVR_OPB_COUNT; i++) {
         if((pvr_state.lists_enabled & BIT(i))
                 && !(pvr_state.lists_dmaed & BIT(i))) {
+
+            /* Hybrid submission may transfer selected buffered lists before
+               scene_finish(). Those lists must not be replayed by this chain. */
+            if(b->flushed & BIT(i)) {
+                pvr_state.lists_dmaed |= BIT(i);
+                continue;
+            }
 
             /* If we are in PVR DMA mode, yet we haven't associated a
                RAM-residing vertex buffer with the current list
