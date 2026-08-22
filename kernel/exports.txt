@@ -74,6 +74,16 @@ nmmgr_handler_remove
 nmmgr_handler_remove_timed
 nmmgr_handler_get_path
 
+# Independent Heaps
+mm_heap_create
+mm_heap_destroy
+mm_heap_alloc
+mm_heap_calloc
+mm_heap_realloc
+mm_heap_free
+mm_heap_get_stats
+mm_heap_validate
+
 # File System
 elf_load
 elf_free
