@@ -121,6 +121,10 @@ int vmufs_read_blocks_observed(
     void *outbuf, size_t block_count,
     const vmufs_transaction_observer_t *observer);
 
+int vmufs_get_volume_info_observed(
+    maple_device_t *dev, vmufs_volume_info_t *info,
+    const vmufs_transaction_observer_t *observer);
+
 int vmufs_write_observed(maple_device_t *dev, const char *fn,
                          const void *inbuf, int insize, int flags,
                          const vmufs_transaction_observer_t *observer);

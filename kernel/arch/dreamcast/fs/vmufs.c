@@ -55,6 +55,12 @@ static mutex_t mutex;
 static int mutation_preflight(const vmu_root_t *root,
                               const uint16_t *fat, int fatsize,
                               const vmu_dir_t *dir, int dirsize);
+static bool transaction_cancelled(
+    const vmufs_transaction_observer_t *observer);
+static void transaction_update(
+    const vmufs_transaction_observer_t *observer,
+    vmufs_transaction_phase_t phase, size_t completed, size_t total,
+    size_t data_completed, size_t data_blocks, bool committed);
 
 /* Convert a decimal number to BCD; max of two digits */
 static uint8_t __pure dec_to_bcd(int dec) {
@@ -488,7 +494,11 @@ static int vmufs_setup(maple_device_t *dev, vmu_root_t *root, vmu_dir_t **dir, i
         return -1;
     }
 
-    vmufs_mutex_lock();
+    if(vmufs_mutex_lock() < 0) {
+        if(errno == 0)
+            errno = EBUSY;
+        return -1;
+    }
 
     /* Read its root block */
     if(!root || vmufs_root_read(dev, root) < 0)
@@ -659,6 +669,177 @@ int vmufs_get_file_info(maple_device_t *dev, const char *fn,
 ex:
     vmufs_teardown(dir, NULL);
     return rv;
+}
+
+static bool root_magic_valid(const vmu_root_t *root) {
+    for(size_t i = 0; i < sizeof(root->magic); ++i) {
+        if(root->magic[i] != 0x55)
+            return false;
+    }
+
+    return true;
+}
+
+static void volume_validation_root_error(
+    vmufs_volume_info_t *info, vmufs_validation_error_t error) {
+    info->validation.first_error = error;
+    info->validation.first_dir_index = SIZE_MAX;
+    info->validation.first_block = UINT16_MAX;
+    info->validation.error_count = 1;
+}
+
+int vmufs_get_volume_info_observed(
+    maple_device_t *dev, vmufs_volume_info_t *info,
+    const vmufs_transaction_observer_t *observer) {
+    vmufs_volume_info_t result;
+    vmu_root_t root;
+    vmu_dir_t *dir = NULL;
+    uint16_t *fat = NULL;
+    size_t completed = 0, total = 1;
+    size_t dir_bytes, fat_bytes;
+    int saved_errno, validation_rv, rv = -1;
+
+    if(!dev || !(dev->info.functions & MAPLE_FUNC_MEMCARD) || !info) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(&result, 0, sizeof(result));
+    result.validation.first_dir_index = SIZE_MAX;
+    result.validation.first_block = UINT16_MAX;
+    transaction_update(observer, VMUFS_TRANSACTION_PREPARING,
+                       completed, total, 0, 0, false);
+    if(transaction_cancelled(observer)) {
+        errno = ECANCELED;
+        return VMUFS_TRANSACTION_CANCELLED;
+    }
+
+    if(vmufs_mutex_lock() < 0) {
+        if(errno == 0)
+            errno = EBUSY;
+        return -1;
+    }
+    if(vmufs_root_read(dev, &root) < 0) {
+        if(errno == 0)
+            errno = EIO;
+        goto ex;
+    }
+    ++completed;
+
+    if(!root_magic_valid(&root)) {
+        result.state = VMUFS_VOLUME_UNFORMATTED;
+        volume_validation_root_error(
+            &result, VMUFS_VALIDATION_BAD_ROOT_MAGIC);
+        goto publish;
+    }
+
+    if(vmufs_root_validate(&root, VMUFS_STANDARD_CARD_BLOCKS) < 0) {
+        if(errno == ENOTSUP) {
+            result.state = VMUFS_VOLUME_UNSUPPORTED;
+            volume_validation_root_error(
+                &result, VMUFS_VALIDATION_UNSUPPORTED_FAT);
+        }
+        else {
+            result.state = VMUFS_VOLUME_CORRUPT;
+            volume_validation_root_error(
+                &result, VMUFS_VALIDATION_BAD_ROOT_GEOMETRY);
+        }
+        goto publish;
+    }
+
+    result.format.use_custom_color = root.use_custom;
+    memcpy(result.format.custom_color, root.custom_color,
+           sizeof(result.format.custom_color));
+    result.format.timestamp = root.timestamp;
+    result.format.icon_shape = root.icon_shape;
+    result.total_blocks = root.blk_cnt;
+    result.directory_entries =
+        (size_t)root.dir_size * VMUFS_BLOCK_SIZE / sizeof(vmu_dir_t);
+    total += root.dir_size + root.fat_size;
+    transaction_update(observer, VMUFS_TRANSACTION_PREPARING,
+                       completed, total, 0, 0, false);
+
+    dir_bytes = (size_t)root.dir_size * VMUFS_BLOCK_SIZE;
+    fat_bytes = (size_t)root.fat_size * VMUFS_BLOCK_SIZE;
+    dir = malloc(dir_bytes);
+    fat = malloc(fat_bytes);
+    if(!dir || !fat) {
+        errno = ENOMEM;
+        goto ex;
+    }
+
+    for(size_t i = 0; i < root.dir_size; ++i) {
+        if(transaction_cancelled(observer)) {
+            errno = ECANCELED;
+            rv = VMUFS_TRANSACTION_CANCELLED;
+            goto ex;
+        }
+        if(vmu_block_read(dev, root.dir_loc - i,
+                          (uint8_t *)dir + i * VMUFS_BLOCK_SIZE) != 0) {
+            if(errno == 0)
+                errno = EIO;
+            goto ex;
+        }
+        ++completed;
+        transaction_update(observer, VMUFS_TRANSACTION_DIRECTORY,
+                           completed, total, 0, 0, false);
+    }
+
+    for(size_t i = 0; i < root.fat_size; ++i) {
+        if(transaction_cancelled(observer)) {
+            errno = ECANCELED;
+            rv = VMUFS_TRANSACTION_CANCELLED;
+            goto ex;
+        }
+        if(vmu_block_read(dev, root.fat_loc - i,
+                          (uint8_t *)fat + i * VMUFS_BLOCK_SIZE) != 0) {
+            if(errno == 0)
+                errno = EIO;
+            goto ex;
+        }
+        ++completed;
+        transaction_update(observer, VMUFS_TRANSACTION_FAT,
+                           completed, total, 0, 0, false);
+    }
+
+    errno = 0;
+    validation_rv = vmufs_validate(
+        &root, VMUFS_STANDARD_CARD_BLOCKS, fat,
+        fat_bytes / sizeof(*fat), dir, dir_bytes / sizeof(*dir),
+        &result.validation);
+    saved_errno = errno;
+    if(validation_rv == 0) {
+        result.state = VMUFS_VOLUME_READY;
+    }
+    else if(vmufs_validation_allows_mutation(&result.validation)) {
+        result.state = VMUFS_VOLUME_DEGRADED;
+    }
+    else if(saved_errno == EILSEQ) {
+        result.state = VMUFS_VOLUME_CORRUPT;
+    }
+    else {
+        errno = saved_errno ? saved_errno : EIO;
+        goto ex;
+    }
+
+publish:
+    *info = result;
+    transaction_update(observer, VMUFS_TRANSACTION_FINISHED,
+                       completed, total, 0, 0, true);
+    errno = 0;
+    rv = 0;
+
+ex:
+    saved_errno = errno;
+    free(fat);
+    free(dir);
+    vmufs_mutex_unlock();
+    errno = saved_errno;
+    return rv;
+}
+
+int vmufs_get_volume_info(maple_device_t *dev, vmufs_volume_info_t *info) {
+    return vmufs_get_volume_info_observed(dev, info, NULL);
 }
 
 /* Shared code between read/read_dirent */

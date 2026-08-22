@@ -358,6 +358,7 @@ vmufs_mutex_lock
 vmufs_mutex_unlock
 vmufs_readdir
 vmufs_get_file_info
+vmufs_get_volume_info
 vmufs_read
 vmufs_read_blocks
 vmufs_read_dirent
@@ -370,6 +371,7 @@ vmufs_free_executable_blocks
 vmufs_format
 vmufs_defragment
 vmufs_read_blocks_async
+vmufs_get_volume_info_async
 vmufs_write_async
 vmufs_delete_async
 vmufs_rename_async

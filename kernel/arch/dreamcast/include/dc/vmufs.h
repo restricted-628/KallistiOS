@@ -312,6 +312,26 @@ int vmufs_readdir(maple_device_t *dev, vmu_dir_t **outbuf, int *outcnt);
 int vmufs_get_file_info(maple_device_t *dev, const char *fn,
                         vmu_dir_t *info);
 
+/** \brief Inspect a memory card's filesystem and allocation state.
+
+    A readable card returns 0 even when its filesystem is unformatted,
+    corrupt, degraded, or unsupported; inspect `info->state` for that result.
+    Missing root magic is classified as unformatted, including the deliberate
+    invalid-root state left by an interrupted format. A degraded volume has
+    only orphaned allocation blocks and remains safe for ordinary mutations,
+    although those blocks consume capacity until repaired or reformatted.
+
+    The complete result is published only after all required metadata reads
+    and validation succeed. This synchronous query does not start the optional
+    VMU request workers.
+
+    \param dev   Memory card to inspect.
+    \param info  Destination for the complete volume summary.
+    \retval 0    Card read and classified; inspect `info->state`.
+    \retval -1   Invalid arguments, allocation failure, or device I/O failure.
+*/
+int vmufs_get_volume_info(maple_device_t *dev, vmufs_volume_info_t *info);
+
 /** \brief  Read a file from the VMU.
 
     The output buffer will be allocated for you using malloc(), and the size of
@@ -513,7 +533,8 @@ typedef enum vmufs_request_operation {
     VMUFS_REQUEST_DEFRAGMENT,  /**< \brief Safe file repacking. */
     VMUFS_REQUEST_RENAME,      /**< \brief Transactional file rename. */
     VMUFS_REQUEST_READ,        /**< \brief Bounded file-block read. */
-    VMUFS_REQUEST_SET_ATTRIBUTES /**< \brief Directory attribute update. */
+    VMUFS_REQUEST_SET_ATTRIBUTES, /**< \brief Directory attribute update. */
+    VMUFS_REQUEST_VOLUME_INFO  /**< \brief Volume inspection. */
 } vmufs_request_operation_t;
 
 typedef enum vmufs_request_state {
@@ -575,6 +596,22 @@ typedef void (*vmufs_request_callback_t)(
 vmufs_request_t *vmufs_read_blocks_async(
     maple_device_t *dev, const char *fn, size_t first_block,
     void *outbuf, size_t block_count,
+    vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a complete volume-information query.
+
+    The output remains owned by the caller and must stay writable until
+    terminal storage completion. It is modified only when the request
+    completes successfully. Cancellation is checked between metadata blocks.
+
+    \param dev            Memory card to inspect.
+    \param info           Destination for the complete volume summary.
+    \param callback       Optional progress and terminal callback.
+    \param callback_data  Caller data passed to \p callback.
+    \return               New request, or NULL with errno set.
+*/
+vmufs_request_t *vmufs_get_volume_info_async(
+    maple_device_t *dev, vmufs_volume_info_t *info,
     vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a transactional file save.

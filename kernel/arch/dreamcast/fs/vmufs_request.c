@@ -41,6 +41,7 @@ struct vmufs_request {
     size_t first_block;
     size_t block_count;
     vmufs_file_attributes_t attributes;
+    vmufs_volume_info_t *volume_info;
     vmufs_format_options_t options;
     vmufs_format_mode_t mode;
     vmufs_request_callback_t callback;
@@ -52,6 +53,25 @@ struct vmufs_request {
     bool callback_terminal_pending;
     bool callback_terminal_delivered;
 };
+
+typedef struct vmufs_request_submission {
+    vmufs_request_operation_t operation;
+    maple_device_t *dev;
+    const char *filename;
+    const char *destination;
+    const void *input;
+    size_t input_size;
+    int flags;
+    void *output;
+    size_t first_block;
+    size_t block_count;
+    const vmufs_file_attributes_t *attributes;
+    vmufs_volume_info_t *volume_info;
+    const vmufs_format_options_t *options;
+    vmufs_format_mode_t mode;
+    vmufs_request_callback_t callback;
+    void *callback_data;
+} vmufs_request_submission_t;
 
 static STAILQ_HEAD(request_queue_head, vmufs_request) request_queue =
     STAILQ_HEAD_INITIALIZER(request_queue);
@@ -231,6 +251,10 @@ static void process_request(vmufs_request_t *request) {
             request->dev, request->filename, &request->attributes,
             &observer);
         break;
+    case VMUFS_REQUEST_VOLUME_INFO:
+        result = vmufs_get_volume_info_observed(
+            request->dev, request->volume_info, &observer);
+        break;
     default:
         errno = EINVAL;
         result = -1;
@@ -330,45 +354,49 @@ static void callback_worker_routine(void *data) {
 }
 
 static vmufs_request_t *submit_request(
-    vmufs_request_operation_t operation, maple_device_t *dev,
-    const char *filename, const char *destination,
-    const void *input, size_t input_size, int flags,
-    void *output, size_t first_block, size_t block_count,
-    const vmufs_file_attributes_t *attributes,
-    const vmufs_format_options_t *options, vmufs_format_mode_t mode,
-    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t *submission) {
     vmufs_request_t *request;
     size_t filename_size = 0;
     size_t destination_size = 0;
 
-    if(!dev || !(dev->info.functions & MAPLE_FUNC_MEMCARD) ||
-       operation > VMUFS_REQUEST_SET_ATTRIBUTES ||
-       ((operation == VMUFS_REQUEST_WRITE ||
-         operation == VMUFS_REQUEST_DELETE ||
-         operation == VMUFS_REQUEST_RENAME ||
-         operation == VMUFS_REQUEST_READ ||
-         operation == VMUFS_REQUEST_SET_ATTRIBUTES) && !filename) ||
-       (operation == VMUFS_REQUEST_RENAME && !destination) ||
-       (operation == VMUFS_REQUEST_READ && block_count && !output) ||
-       (operation == VMUFS_REQUEST_SET_ATTRIBUTES && !attributes) ||
-       (operation == VMUFS_REQUEST_WRITE &&
-        ((input_size && !input) || input_size > INT_MAX ||
-         (flags & ~(VMUFS_OVERWRITE | VMUFS_VMUGAME | VMUFS_NOCOPY)))) ||
-       (operation == VMUFS_REQUEST_FORMAT &&
-        (!options || (mode != VMUFS_FORMAT_QUICK &&
-                      mode != VMUFS_FORMAT_FULL)))) {
+    if(!submission || !submission->dev ||
+       !(submission->dev->info.functions & MAPLE_FUNC_MEMCARD) ||
+       submission->operation > VMUFS_REQUEST_VOLUME_INFO ||
+       ((submission->operation == VMUFS_REQUEST_WRITE ||
+         submission->operation == VMUFS_REQUEST_DELETE ||
+         submission->operation == VMUFS_REQUEST_RENAME ||
+         submission->operation == VMUFS_REQUEST_READ ||
+         submission->operation == VMUFS_REQUEST_SET_ATTRIBUTES) &&
+        !submission->filename) ||
+       (submission->operation == VMUFS_REQUEST_RENAME &&
+        !submission->destination) ||
+       (submission->operation == VMUFS_REQUEST_READ &&
+        submission->block_count && !submission->output) ||
+       (submission->operation == VMUFS_REQUEST_SET_ATTRIBUTES &&
+        !submission->attributes) ||
+       (submission->operation == VMUFS_REQUEST_VOLUME_INFO &&
+        !submission->volume_info) ||
+       (submission->operation == VMUFS_REQUEST_WRITE &&
+        ((submission->input_size && !submission->input) ||
+         submission->input_size > INT_MAX ||
+         (submission->flags &
+          ~(VMUFS_OVERWRITE | VMUFS_VMUGAME | VMUFS_NOCOPY)))) ||
+       (submission->operation == VMUFS_REQUEST_FORMAT &&
+        (!submission->options ||
+         (submission->mode != VMUFS_FORMAT_QUICK &&
+          submission->mode != VMUFS_FORMAT_FULL)))) {
         errno = EINVAL;
         return NULL;
     }
-    if(filename) {
-        filename_size = filename_length(filename, 13u);
+    if(submission->filename) {
+        filename_size = filename_length(submission->filename, 13u);
         if(filename_size == 0 || filename_size > 12u) {
             errno = EINVAL;
             return NULL;
         }
     }
-    if(destination) {
-        destination_size = filename_length(destination, 13u);
+    if(submission->destination) {
+        destination_size = filename_length(submission->destination, 13u);
         if(destination_size == 0 || destination_size > 12u) {
             errno = EINVAL;
             return NULL;
@@ -380,28 +408,31 @@ static vmufs_request_t *submit_request(
         errno = ENOMEM;
         return NULL;
     }
-    request->dev = dev;
-    if(filename)
-        memcpy(request->filename, filename, filename_size + 1u);
-    if(destination) {
-        memcpy(request->destination, destination,
+    request->dev = submission->dev;
+    if(submission->filename) {
+        memcpy(request->filename, submission->filename,
+               filename_size + 1u);
+    }
+    if(submission->destination) {
+        memcpy(request->destination, submission->destination,
                destination_size + 1u);
     }
-    request->input = input;
-    request->input_size = (int)input_size;
-    request->flags = flags;
-    request->output = output;
-    request->first_block = first_block;
-    request->block_count = block_count;
-    if(attributes)
-        request->attributes = *attributes;
-    if(options)
-        request->options = *options;
-    request->mode = mode;
-    request->callback = callback;
-    request->callback_data = callback_data;
-    request->callback_terminal_delivered = callback == NULL;
-    request->status.operation = operation;
+    request->input = submission->input;
+    request->input_size = (int)submission->input_size;
+    request->flags = submission->flags;
+    request->output = submission->output;
+    request->first_block = submission->first_block;
+    request->block_count = submission->block_count;
+    if(submission->attributes)
+        request->attributes = *submission->attributes;
+    request->volume_info = submission->volume_info;
+    if(submission->options)
+        request->options = *submission->options;
+    request->mode = submission->mode;
+    request->callback = submission->callback;
+    request->callback_data = submission->callback_data;
+    request->callback_terminal_delivered = submission->callback == NULL;
+    request->status.operation = submission->operation;
     request->status.state = VMUFS_REQUEST_QUEUED;
     request->status.phase = VMUFS_REQUEST_PHASE_QUEUED;
 
@@ -424,42 +455,94 @@ vmufs_request_t *vmufs_read_blocks_async(
     maple_device_t *dev, const char *fn, size_t first_block,
     void *outbuf, size_t block_count,
     vmufs_request_callback_t callback, void *callback_data) {
-    return submit_request(VMUFS_REQUEST_READ, dev, fn, NULL, NULL, 0, 0,
-                          outbuf, first_block, block_count, NULL, NULL,
-                          VMUFS_FORMAT_QUICK, callback, callback_data);
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_READ,
+        .dev = dev,
+        .filename = fn,
+        .output = outbuf,
+        .first_block = first_block,
+        .block_count = block_count,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
+}
+
+vmufs_request_t *vmufs_get_volume_info_async(
+    maple_device_t *dev, vmufs_volume_info_t *info,
+    vmufs_request_callback_t callback, void *callback_data) {
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_VOLUME_INFO,
+        .dev = dev,
+        .volume_info = info,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
 }
 
 vmufs_request_t *vmufs_write_async(
     maple_device_t *dev, const char *fn, const void *inbuf, size_t insize,
     int flags, vmufs_request_callback_t callback, void *callback_data) {
-    return submit_request(VMUFS_REQUEST_WRITE, dev, fn, NULL, inbuf, insize,
-                          flags, NULL, 0, 0, NULL, NULL, VMUFS_FORMAT_QUICK,
-                          callback, callback_data);
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_WRITE,
+        .dev = dev,
+        .filename = fn,
+        .input = inbuf,
+        .input_size = insize,
+        .flags = flags,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
 }
 
 vmufs_request_t *vmufs_delete_async(
     maple_device_t *dev, const char *fn,
     vmufs_request_callback_t callback, void *callback_data) {
-    return submit_request(VMUFS_REQUEST_DELETE, dev, fn, NULL, NULL, 0, 0,
-                          NULL, 0, 0, NULL, NULL, VMUFS_FORMAT_QUICK, callback,
-                          callback_data);
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_DELETE,
+        .dev = dev,
+        .filename = fn,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
 }
 
 vmufs_request_t *vmufs_rename_async(
     maple_device_t *dev, const char *old_name, const char *new_name,
     vmufs_request_callback_t callback, void *callback_data) {
-    return submit_request(VMUFS_REQUEST_RENAME, dev, old_name, new_name,
-                          NULL, 0, 0, NULL, 0, 0, NULL, NULL,
-                          VMUFS_FORMAT_QUICK, callback, callback_data);
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_RENAME,
+        .dev = dev,
+        .filename = old_name,
+        .destination = new_name,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
 }
 
 vmufs_request_t *vmufs_set_file_attributes_async(
     maple_device_t *dev, const char *fn,
     const vmufs_file_attributes_t *attributes,
     vmufs_request_callback_t callback, void *callback_data) {
-    return submit_request(VMUFS_REQUEST_SET_ATTRIBUTES, dev, fn, NULL,
-                          NULL, 0, 0, NULL, 0, 0, attributes, NULL,
-                          VMUFS_FORMAT_QUICK, callback, callback_data);
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_SET_ATTRIBUTES,
+        .dev = dev,
+        .filename = fn,
+        .attributes = attributes,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
 }
 
 vmufs_request_t *vmufs_format_async(
@@ -472,17 +555,29 @@ vmufs_request_t *vmufs_format_async(
     if(vmufs_format_build(options, &root, fat,
                           sizeof(fat) / sizeof(fat[0])) < 0)
         return NULL;
-    return submit_request(VMUFS_REQUEST_FORMAT, dev, NULL, NULL, NULL, 0, 0,
-                          NULL, 0, 0, NULL, options, mode, callback,
-                          callback_data);
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_FORMAT,
+        .dev = dev,
+        .options = options,
+        .mode = mode,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
 }
 
 vmufs_request_t *vmufs_defragment_async(
     maple_device_t *dev, vmufs_request_callback_t callback,
     void *callback_data) {
-    return submit_request(VMUFS_REQUEST_DEFRAGMENT, dev, NULL, NULL, NULL,
-                          0, 0, NULL, 0, 0, NULL, NULL, VMUFS_FORMAT_QUICK,
-                          callback, callback_data);
+    const vmufs_request_submission_t submission = {
+        .operation = VMUFS_REQUEST_DEFRAGMENT,
+        .dev = dev,
+        .callback = callback,
+        .callback_data = callback_data
+    };
+
+    return submit_request(&submission);
 }
 
 int vmufs_request_get_status(const vmufs_request_t *request,

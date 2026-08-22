@@ -95,6 +95,20 @@ typedef struct vmufs_file_attributes {
     uint8_t copy_protected; /**< \brief Nonzero prevents manager-level copies. */
 } vmufs_file_attributes_t;
 
+/** \brief High-level state of the filesystem found on a memory card. */
+typedef enum vmufs_volume_state {
+    /** No valid root magic, including an interrupted format. */
+    VMUFS_VOLUME_UNFORMATTED,
+    /** Valid geometry, directory, FAT, and file ownership. */
+    VMUFS_VOLUME_READY,
+    /** Structurally safe filesystem with allocated orphan blocks. */
+    VMUFS_VOLUME_DEGRADED,
+    /** Recognized but unsafe root or filesystem metadata. */
+    VMUFS_VOLUME_CORRUPT,
+    /** Recognized geometry that this VMUFS implementation cannot address. */
+    VMUFS_VOLUME_UNSUPPORTED
+} vmufs_volume_state_t;
+
 /** \brief Parameters stored in a newly formatted standard VMU root block. */
 typedef struct vmufs_format_options {
     uint8_t use_custom_color;  /**< \brief Whether custom_color is active. */
@@ -141,6 +155,15 @@ typedef struct vmufs_validation {
     size_t orphan_blocks;                  /**< \brief Allocated but unowned */
     size_t executable_free_blocks;         /**< \brief Free prefix at block 0 */
 } vmufs_validation_t;
+
+/** \brief Filesystem geometry, volume settings, and allocation summary. */
+typedef struct vmufs_volume_info {
+    vmufs_volume_state_t state;       /**< \brief Classified volume state. */
+    vmufs_format_options_t format;    /**< \brief Stored volume settings. */
+    size_t total_blocks;              /**< \brief Addressable user blocks. */
+    size_t directory_entries;         /**< \brief Total directory capacity. */
+    vmufs_validation_t validation;    /**< \brief Ownership and free-space data. */
+} vmufs_volume_info_t;
 
 /** \brief Validate root geometry for a card using KOS's root-block location.
 

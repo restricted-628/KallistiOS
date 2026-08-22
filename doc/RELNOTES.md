@@ -63,6 +63,10 @@ lifecycle and naming conventions.
   unaligned input, truncated layouts, integer overflow, unterminated text
   fields, invalid icon metadata, and checksum mismatch without modifying the
   caller's encoded buffer.
+* Added synchronous and lazy asynchronous VMU volume inspection that
+  distinguishes ready, orphan-degraded, unformatted, corrupt, and unsupported
+  filesystems while reporting directory usage and both ordinary and
+  executable-eligible free space.
 * VMU saves and deletions now gate all mutations on whole-filesystem ownership
   validation. New saves use data/FAT/directory commit ordering, replacements
   use copy-on-write, deletions remove the directory entry before freeing data,
