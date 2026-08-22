@@ -103,6 +103,7 @@ This page serves as an index for all KallistiOS examples.
   - basic
 - maple
   - [**controller-snapshot**](maple/controller-snapshot/): Validates coherent controller samples, transitions, capability decoding, and callbacks
+  - [**keyboard-snapshot**](maple/keyboard-snapshot/): Validates keyboard metadata, key state, and coherent snapshots
   - [**lightgun-capture**](maple/lightgun-capture/): Demonstrates scheduled light-gun capture and coherent aim snapshots
 - [**micropython**](micropython/): Demonstrates basic usage of the MicroPython kos-port
 - modem

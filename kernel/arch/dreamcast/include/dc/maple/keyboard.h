@@ -4,6 +4,7 @@
    Copyright (C) 2000-2002 Jordan DeLong and Megan Potter
    Copyright (C) 2012 Lawrence Sebald
    Copyright (C) 2025 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -174,14 +175,53 @@ typedef union kbd_leds {
     This is the list of possible values for kbd_state_t::region.
 */
 typedef enum kbd_region {
-    KBD_REGION_JP = 1, /**< \brief Japanese keyboard */
-    KBD_REGION_US = 2, /**< \brief US keyboard */
-    KBD_REGION_UK = 3, /**< \brief UK keyboard */
-    KBD_REGION_DE = 4, /**< \brief German keyboard */
-    KBD_REGION_FR = 5, /**< \brief French keyboard */
-    KBD_REGION_IT = 6, /**< \brief Italian keyboard (not supported yet) */
-    KBD_REGION_ES = 7  /**< \brief Spanish keyboard */
+    KBD_REGION_UNKNOWN = 0, /**< \brief Reserved or unrecognized region */
+    KBD_REGION_JP = 1,     /**< \brief Japanese keyboard */
+    KBD_REGION_US = 2,     /**< \brief US keyboard */
+    KBD_REGION_UK = 3,     /**< \brief UK keyboard */
+    KBD_REGION_DE = 4,     /**< \brief German keyboard */
+    KBD_REGION_FR = 5,     /**< \brief French keyboard */
+    KBD_REGION_IT = 6,     /**< \brief Italian keyboard */
+    KBD_REGION_ES = 7,     /**< \brief Spanish keyboard */
+    KBD_REGION_SE = 8,     /**< \brief Swedish keyboard */
+    KBD_REGION_CH = 9,     /**< \brief Swiss keyboard */
+    KBD_REGION_NL = 10,    /**< \brief Dutch keyboard */
+    KBD_REGION_PT = 11,    /**< \brief Portuguese keyboard */
+    KBD_REGION_LATIN = 12, /**< \brief Latin American keyboard */
+    KBD_REGION_CA_FR = 13, /**< \brief Canadian French keyboard */
+    KBD_REGION_RU = 14,    /**< \brief Russian keyboard */
+    KBD_REGION_CN = 15,    /**< \brief Chinese keyboard */
+    KBD_REGION_KR = 16     /**< \brief Korean keyboard */
 } kbd_region_t;
+
+/** \brief Physical key-count/layout type reported by a Dreamcast keyboard. */
+typedef enum kbd_type {
+    KBD_TYPE_UNKNOWN = 0, /**< \brief Reserved or unrecognized type */
+    KBD_TYPE_89 = 1,      /**< \brief 89-key keyboard */
+    KBD_TYPE_92 = 2,      /**< \brief 92-key keyboard */
+    KBD_TYPE_101 = 3,     /**< \brief 101-key keyboard */
+    KBD_TYPE_102 = 4,     /**< \brief 102-key keyboard */
+    KBD_TYPE_104 = 5,     /**< \brief 104-key keyboard */
+    KBD_TYPE_105 = 6,     /**< \brief 105-key keyboard */
+    KBD_TYPE_106 = 7,     /**< \brief 106-key keyboard */
+    KBD_TYPE_109 = 8,     /**< \brief 109-key keyboard */
+    KBD_TYPE_87 = 9,      /**< \brief 87-key keyboard */
+    KBD_TYPE_88 = 10      /**< \brief 88-key keyboard */
+} kbd_type_t;
+
+/** \brief Ownership of the keyboard's lock LEDs. */
+typedef enum kbd_led_control {
+    KBD_LED_CONTROL_HOST = 0x00,    /**< \brief Dreamcast controls LEDs */
+    KBD_LED_CONTROL_KEYBOARD = 0x80 /**< \brief Keyboard controls LEDs */
+} kbd_led_control_t;
+
+/** \brief Decoded hardware metadata from the keyboard function descriptor. */
+typedef struct kbd_info {
+    kbd_region_t region;       /**< \brief Physical keyboard language/layout. */
+    kbd_type_t type;           /**< \brief Physical key-count/layout type. */
+    kbd_leds_t supported_leds; /**< \brief LEDs implemented by the device. */
+    uint8_t led_control;       /**< \brief LED owner; see kbd_led_control_t. */
+} kbd_info_t;
 
 /** \brief Raw Keyboard Key Identifiers
 
@@ -465,8 +505,26 @@ typedef struct kbd_state {
         kbd_mods_t last_modifiers;  /** \brief  Modifier key status. Stored to track changes. */
     };
 
-    /** \brief  Keyboard type/region. */
-    kbd_region_t region;
+    union {
+        /** \brief Decoded immutable hardware information. */
+        kbd_info_t info;
+
+        /* Preserve the established state->region spelling while making the
+           remaining descriptor fields available without duplicate storage. */
+        struct {
+            /** \brief Physical keyboard language/layout. */
+            kbd_region_t region;
+            /** \brief Physical key-count/layout type. */
+            kbd_type_t type;
+            /** \brief LEDs implemented by the device. */
+            kbd_leds_t supported_leds;
+            /** \brief LED owner; see kbd_led_control_t. */
+            uint8_t led_control;
+        };
+    };
+
+    /** \brief Successful-sample counter; zero means no sample is available. */
+    uint32_t sequence;
 } kbd_state_t;
 
 /** @} */
@@ -530,8 +588,40 @@ typedef struct kbd_state {
     \retval kbd_state_t*    A pointer to the internal keyboard state on success.
     \retval NULL            On failure.
 
+    \warning The returned driver-owned object can change after any Maple
+             completion interrupt. Use kbd_get_snapshot() when fields must
+             belong to one coherent sample.
+
 */
 kbd_state_t *kbd_get_state(maple_device_t *device);
+
+/** \brief Copy the complete keyboard state coherently.
+
+    Unlike kbd_get_state(), this function returns caller-owned data which
+    cannot be changed by a later Maple completion interrupt. The sequence
+    number advances once per successful keyboard response.
+
+    \param  device          Connected keyboard device.
+    \param  snapshot        Receives the coherent state copy.
+    \retval 0               A sample was copied.
+    \retval -1              Invalid arguments, disconnected device, or no
+                            completed sample; errno is EINVAL, ENODEV, or
+                            EAGAIN respectively.
+*/
+int kbd_get_snapshot(const maple_device_t *device, kbd_state_t *snapshot);
+
+/** \brief Copy decoded keyboard hardware metadata.
+
+    All four bytes of the Maple keyboard function descriptor are retained,
+    including layouts for which KOS has no built-in character translation.
+
+    \param  device          Connected keyboard device.
+    \param  info            Receives the metadata copy.
+    \retval 0               Metadata was copied.
+    \retval -1              Invalid arguments or disconnected/non-keyboard
+                            device; errno is EINVAL or ENODEV.
+*/
+int kbd_get_info(const maple_device_t *device, kbd_info_t *info);
 
 /** @} */
 
@@ -671,8 +761,8 @@ void kbd_get_event_handler(kbd_event_handler_t *callback, void **user_data);
     \p interval milliseconds after it has been held for the initial \p start time
     in milliseconds.
 
-    Specifying a value of zero for the two parameters disables this repeating key
-    behavior.
+    Specifying zero for either parameter disables repeating and normalizes both
+    stored values to zero.
 
     \note
     By default, the \p start time is 600ms while the repeating \p interval is 20ms.
@@ -709,7 +799,9 @@ void kbd_set_repeat_timing(uint16_t start, uint16_t interval);
                             figuring out what it is by the region.
 
     \return                 The value at the front of the queue, or KBD_QUEUE_END
-                            if there are no keys in the queue.
+                            if there are no keys in the queue or the device is
+                            invalid. Invalid arguments set errno to EINVAL;
+                            disconnected or non-keyboard devices set ENODEV.
 */
 int kbd_queue_pop(maple_device_t *dev, bool xlat);
 

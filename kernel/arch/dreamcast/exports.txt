@@ -231,6 +231,8 @@ cont_set_trigger_thresholds
 cont_snapshot_is_soft_reset
 kbd_set_queue
 kbd_get_key
+kbd_get_snapshot
+kbd_get_info
 maple_driver_reg
 maple_driver_unreg
 maple_driver_attach

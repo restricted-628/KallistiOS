@@ -7,9 +7,11 @@
    Copyright (C) 2024 Paul Cercueil
    Copyright (C) 2025 Falco Girgis
    Copyright (C) 2025 Troy Davis
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 
@@ -69,8 +71,16 @@ static struct {
 };
 
 void kbd_set_repeat_timing(uint16_t start, uint16_t interval) {
+    irq_mask_t irq = irq_disable();
+
+    /* Repeating requires both a delay and a cadence. Normalize either zero
+       input to the documented disabled state. */
+    if(!start || !interval)
+        start = interval = 0;
+
     repeat_timing.start    = start;
     repeat_timing.interval = interval;
+    irq_restore(irq);
 }
 
 static struct {
@@ -81,13 +91,24 @@ static struct {
 };
 
 void kbd_set_event_handler(kbd_event_handler_t callback, void *user_data) {
+    irq_mask_t irq = irq_disable();
+
     event_handler.cb = callback;
     event_handler.ud = user_data;
+
+    irq_restore(irq);
 }
 
 void kbd_get_event_handler(kbd_event_handler_t *callback, void **user_data) {
-    *callback = event_handler.cb;
-    *user_data = event_handler.ud;
+    irq_mask_t irq = irq_disable();
+
+    if(callback)
+        *callback = event_handler.cb;
+
+    if(user_data)
+        *user_data = event_handler.ud;
+
+    irq_restore(irq);
 }
 
 /*  Keyboard keymap.
@@ -434,6 +455,9 @@ static const kbd_keymap_internal_t keymaps[] = {
 };
 
 char kbd_key_to_ascii(kbd_key_t key, kbd_region_t region, kbd_mods_t mods, kbd_leds_t leds) {
+    if(region < KBD_REGION_JP || (size_t)region > KBD_NUM_KEYMAPS)
+        return 0;
+
     // Only apply Caps Lock logic to A–Z keys
     bool is_letter = (key >= KBD_KEY_A && key <= KBD_KEY_Z);
     bool shift_effect = (mods.raw & KBD_MOD_SHIFT);
@@ -462,6 +486,7 @@ char kbd_key_to_ascii(kbd_key_t key, kbd_region_t region, kbd_mods_t mods, kbd_l
 /* The keyboard queue (global for now) */
 static volatile int kbd_queue_active = 1;
 static volatile int kbd_queue_tail = 0, kbd_queue_head = 0;
+static volatile size_t kbd_queue_len = 0;
 static volatile uint16_t  kbd_queue[KBD_QUEUE_SIZE];
 
 /* Turn keyboard queueing on or off. This is mainly useful if you want
@@ -469,11 +494,15 @@ static volatile uint16_t  kbd_queue[KBD_QUEUE_SIZE];
    as much as having the keys up or down. Setting this state to
    a new value will clear the queue. */
 void kbd_set_queue(int active) {
+    irq_mask_t irq = irq_disable();
+
     if(kbd_queue_active != active) {
         kbd_queue_head = kbd_queue_tail = 0;
+        kbd_queue_len = 0;
     }
 
     kbd_queue_active = active;
+    irq_restore(irq);
 }
 
 /* Take a key scancode, encode it appropriately, and place it on the
@@ -508,9 +537,11 @@ static int kbd_enqueue(kbd_state_private_t *state, kbd_key_t keycode) {
     if(ascii == 0)
         ascii = ((uint16_t)keycode) << 8;
 
-    /* Ok... now do the enqueue to the global queue */
-    kbd_queue[kbd_queue_head] = ascii;
-    kbd_queue_head = (kbd_queue_head + 1) & (KBD_QUEUE_SIZE - 1);
+    if(kbd_queue_len < KBD_QUEUE_SIZE) {
+        kbd_queue[kbd_queue_head] = ascii;
+        kbd_queue_head = (kbd_queue_head + 1) & (KBD_QUEUE_SIZE - 1);
+        ++kbd_queue_len;
+    }
 
     return 0;
 }
@@ -518,18 +549,25 @@ static int kbd_enqueue(kbd_state_private_t *state, kbd_key_t keycode) {
 /* Take a key off the key queue, or return KBD_QUEUE_END if there is none waiting */
 int kbd_get_key(void) {
     int rv;
+    irq_mask_t irq = irq_disable();
 
     /* If queueing isn't active, there won't be anything to get */
-    if(!kbd_queue_active)
+    if(!kbd_queue_active) {
+        irq_restore(irq);
         return KBD_QUEUE_END;
+    }
 
     /* Check available */
-    if(kbd_queue_head == kbd_queue_tail)
+    if(!kbd_queue_len) {
+        irq_restore(irq);
         return KBD_QUEUE_END;
+    }
 
     rv = kbd_queue[kbd_queue_tail];
     kbd_queue_tail = (kbd_queue_tail + 1) & (KBD_QUEUE_SIZE - 1);
+    --kbd_queue_len;
 
+    irq_restore(irq);
     return rv;
 }
 
@@ -542,13 +580,78 @@ kbd_state_t *kbd_get_state(maple_device_t *device) {
     return state;
 }
 
+int kbd_get_snapshot(const maple_device_t *device, kbd_state_t *snapshot) {
+    const kbd_state_private_t *state;
+    irq_mask_t irq;
+
+    if(!device || !snapshot) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    irq = irq_disable();
+
+    if(!device->valid || !(device->info.functions & MAPLE_FUNC_KEYBOARD) ||
+       !device->status) {
+        irq_restore(irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    state = (const kbd_state_private_t *)device->status;
+
+    if(!state->base.sequence) {
+        irq_restore(irq);
+        errno = EAGAIN;
+        return -1;
+    }
+
+    *snapshot = state->base;
+    irq_restore(irq);
+    return 0;
+}
+
+int kbd_get_info(const maple_device_t *device, kbd_info_t *info) {
+    const kbd_state_private_t *state;
+    irq_mask_t irq;
+
+    if(!device || !info) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    irq = irq_disable();
+
+    if(!device->valid || !(device->info.functions & MAPLE_FUNC_KEYBOARD) ||
+       !device->status) {
+        irq_restore(irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    state = (const kbd_state_private_t *)device->status;
+    *info = state->base.info;
+    irq_restore(irq);
+    return 0;
+}
+
 /* Take a key off of a specific key queue. */
 int kbd_queue_pop(maple_device_t *dev, bool xlat) {
-    kbd_state_private_t *state = (kbd_state_private_t *)dev->status;
+    kbd_state_private_t *state;
     kbd_q_key_t rv;
+    kbd_region_t region;
     char ascii;
 
     const int irqs = irq_disable();
+
+    if(!dev || !dev->valid || !(dev->info.functions & MAPLE_FUNC_KEYBOARD) ||
+       !dev->status) {
+        irq_restore(irqs);
+        errno = dev ? ENODEV : EINVAL;
+        return KBD_QUEUE_END;
+    }
+
+    state = (kbd_state_private_t *)dev->status;
 
     if(!state->queue_len) {
         irq_restore(irqs);
@@ -556,6 +659,7 @@ int kbd_queue_pop(maple_device_t *dev, bool xlat) {
     }
 
     rv = state->key_queue[state->queue_tail];
+    region = state->base.region;
     state->queue_tail = (state->queue_tail + 1) & (KBD_QUEUE_SIZE - 1);
     --state->queue_len;
 
@@ -564,7 +668,7 @@ int kbd_queue_pop(maple_device_t *dev, bool xlat) {
     if(!xlat)
         return (int)(rv.key | (rv.mods.raw << 8) | (rv.leds.raw << 16));
 
-    ascii = kbd_key_to_ascii(rv.key, state->base.region, rv.mods, rv.leds);
+    ascii = kbd_key_to_ascii(rv.key, region, rv.mods, rv.leds);
     if(ascii != 0)
         return (int)ascii;
     else
@@ -579,7 +683,15 @@ static void kbd_check_poll(maple_frame_t *frm) {
     kbd_leds_t *leds = &pstate->leds;  // persistent LED state
     kbd_state_t *state = &pstate->base;
     kbd_cond_t *cond = (kbd_cond_t *)&state->cond;
+    kbd_event_handler_t callback;
+    void *callback_data;
+    bool host_controls_leds;
     size_t i;
+
+    host_controls_leds = !(state->led_control & KBD_LED_CONTROL_KEYBOARD);
+
+    if(!host_controls_leds)
+        pstate->leds = cond->leds;
 
     /* If the modifier keys have changed, end the key repeating. */
     if(state->last_modifiers.raw != cond->modifiers.raw) {
@@ -618,11 +730,14 @@ static void kbd_check_poll(maple_frame_t *frm) {
             kbd_key_t key = cond->keys[i];
 
             // Handle toggle keys by modifying persistent LED state
-            if(key == KBD_KEY_CAPSLOCK && state->key_states[key].value == KEY_STATE_CHANGED_DOWN) {
+            if(host_controls_leds && key == KBD_KEY_CAPSLOCK &&
+               state->key_states[key].value == KEY_STATE_CHANGED_DOWN) {
                 leds->caps_lock ^= 1;
-            } else if(key == KBD_KEY_PAD_NUMLOCK && state->key_states[key].value == KEY_STATE_CHANGED_DOWN) {
+            } else if(host_controls_leds && key == KBD_KEY_PAD_NUMLOCK &&
+                      state->key_states[key].value == KEY_STATE_CHANGED_DOWN) {
                 leds->num_lock ^= 1;
-            } else if(key == KBD_KEY_SCRLOCK && state->key_states[key].value == KEY_STATE_CHANGED_DOWN) {
+            } else if(host_controls_leds && key == KBD_KEY_SCRLOCK &&
+                      state->key_states[key].value == KEY_STATE_CHANGED_DOWN) {
                 leds->scroll_lock ^= 1;
             }
 
@@ -654,8 +769,10 @@ static void kbd_check_poll(maple_frame_t *frm) {
                 if(key != KBD_KEY_NONE) {
                     kbd_enqueue(pstate, key);
                     pstate->repeater.key = cond->keys[i];
-                    if(repeat_timing.start)
+                    if(repeat_timing.start && repeat_timing.interval)
                         pstate->repeater.timeout = timer_ms_gettime64() + repeat_timing.start;
+                    else
+                        pstate->repeater.key = KBD_KEY_NONE;
                 }
             }
             /* If the key was already being pressed and was our one allowed repeating key, then... */
@@ -680,14 +797,14 @@ static void kbd_check_poll(maple_frame_t *frm) {
                     }
                 }
 
-                if(pstate->repeater.key == cond->keys[i]) {
-                    if(repeat_timing.start) {
-                        uint64_t time = timer_ms_gettime64();
-                        if(time >= pstate->repeater.timeout)
-                            pstate->repeater.timeout = time + repeat_timing.interval;
-                        else
-                            continue;
-                    }
+                if(pstate->repeater.key == cond->keys[i] &&
+                   repeat_timing.start && repeat_timing.interval) {
+                    uint64_t time = timer_ms_gettime64();
+
+                    if(time >= pstate->repeater.timeout)
+                        pstate->repeater.timeout = time + repeat_timing.interval;
+                    else
+                        continue;
 
                     if(held_key != KBD_KEY_NONE) {
                         kbd_enqueue(pstate, held_key);
@@ -698,15 +815,25 @@ static void kbd_check_poll(maple_frame_t *frm) {
         }
     }
 
+    /* Preserve host-maintained lock state even on an otherwise empty report. */
+    cond->leds = pstate->leds;
+
+    if(++state->sequence == 0)
+        ++state->sequence;
+
     /* If we are using the event callback, check if any need called. */
-    if(!event_handler.cb) return;
+    callback = event_handler.cb;
+    callback_data = event_handler.ud;
+
+    if(!callback)
+        return;
 
     for(i = KBD_KEY_A; i < KBD_MAX_KEYS; i++) {
         switch(state->key_states[i].value) {
             case KEY_STATE_CHANGED_DOWN:
             case KEY_STATE_CHANGED_UP:
-                event_handler.cb(frm->dev, i, state->key_states[i],
-                                 cond->modifiers, cond->leds, event_handler.ud);
+                callback(frm->dev, i, state->key_states[i], cond->modifiers,
+                         cond->leds, callback_data);
                 break;
 
             case KEY_STATE_HELD_DOWN:
@@ -737,6 +864,9 @@ static void kbd_reply(maple_state_t *st, maple_frame_t *frm) {
     if(resp->response != MAPLE_RESPONSE_DATATRF)
         return;
 
+    if(resp->data_len != 1 + sizeof(kbd_cond_t) / sizeof(uint32_t))
+        return;
+
     respbuf = (uint32_t *)resp->data;
 
     if(respbuf[0] != MAPLE_FUNC_KEYBOARD)
@@ -745,13 +875,10 @@ static void kbd_reply(maple_state_t *st, maple_frame_t *frm) {
     if(!frm->dev)
         return;
 
-    /* Verify the size of the frame */
-    assert(sizeof(kbd_cond_t) == ((resp->data_len - 1) * sizeof(uint32_t)));
-
     /* Update the status area from the response */
     state = (kbd_state_t *)frm->dev->status;
     cond = (kbd_cond_t *)&state->cond;
-    memcpy(cond, respbuf + 1, (resp->data_len - 1) * sizeof(uint32_t));
+    memcpy(cond, respbuf + 1, sizeof(*cond));
     kbd_check_poll(frm);
 }
 
@@ -776,29 +903,39 @@ static void kbd_periodic(maple_driver_t *drv) {
 }
 
 static int kbd_attach(maple_driver_t *drv, maple_device_t *dev) {
-    kbd_state_t *state = (kbd_state_t *)dev->status;
-    int d = 0;
+    kbd_state_private_t *pstate = (kbd_state_private_t *)dev->status;
+    kbd_state_t *state = &pstate->base;
+    uint32_t descriptor;
 
     (void)drv;
-    /* Maple functions are enumerated, from MSB, to determine which functions
-       are on each device. The only one above the keyboard function is lightgun.
-       Only if it is ALSO a lightgun, will the keyboard function be second. */
-    if(dev->info.functions & MAPLE_FUNC_LIGHTGUN)
-        d = 1;
 
-    /* Retrieve the region data */
-    state->region = dev->info.function_data[d] & 0xFF;
+    /* Clear the actual status object, not sizeof(kbd_state_t) elements past
+       its beginning. The old pointer arithmetic wrote far beyond dev->status. */
+    memset(pstate, 0, sizeof(*pstate));
 
-    /* Unrecognized keyboards will appear as US keyboards... */
-    if(!state->region || state->region > KBD_NUM_KEYMAPS) {
-        dbglog(DBG_ERROR, "Unknown Keyboard region %u\n", state->region);
-        state->region = KBD_REGION_US;
+    if(!maple_dev_function_data(dev, MAPLE_FUNC_KEYBOARD, &descriptor)) {
+        dbglog(DBG_ERROR, "Keyboard has no decodable function descriptor\n");
+        return 0;
     }
 
-    /* Advance by one state object; adding sizeof(kbd_state_t) to this typed
-       pointer would scale the offset a second time and clear unrelated RAM. */
-    memset(state + 1, 0,
-            sizeof(kbd_state_private_t) - sizeof(kbd_state_t));
+    /* Keyboard metadata is specified as four wire-order bytes, unlike the
+       bit masks used by controller capability queries. */
+    descriptor = __builtin_bswap32(descriptor);
+
+    state->region = (kbd_region_t)((descriptor >> 24) & 0xff);
+    state->type = (kbd_type_t)((descriptor >> 16) & 0xff);
+    state->supported_leds.raw = (descriptor >> 8) & 0xff;
+    state->led_control = descriptor & 0xff;
+
+    if(state->region > KBD_REGION_KR) {
+        dbglog(DBG_ERROR, "Unknown keyboard region %u\n", state->region);
+        state->region = KBD_REGION_UNKNOWN;
+    }
+
+    if(state->type > KBD_TYPE_88) {
+        dbglog(DBG_ERROR, "Unknown keyboard type %u\n", state->type);
+        state->type = KBD_TYPE_UNKNOWN;
+    }
 
     return 0;
 }
