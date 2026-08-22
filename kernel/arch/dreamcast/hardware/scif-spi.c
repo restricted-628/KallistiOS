@@ -4,13 +4,16 @@
    Copyright (C) 2012 Lawrence Sebald
    Copyright (C) 2023, 2025 Ruslan Rostovtsev
    Copyright (C) 2024 Paul Cercueil
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <dc/scif.h>
-#include <dc/fs_dcload.h>
+#include <errno.h>
 #include <kos/timer.h>
 #include <kos/dbglog.h>
 #include <kos/regfield.h>
+
+#include "scif_config_internal.h"
 
 /* SCIF registers */
 #define SCIFREG08(x) *((volatile uint8_t *)(x))
@@ -45,11 +48,9 @@ int scif_spi_init(void) {
         dbglog(DBG_KDEBUG, "SCIF-SPI: Already in use\n");
         return -1;
     }
-    /* Make sure we're not using dcload-serial. If we are, then we definitely do
-       not have a SPI device on the serial port. */
-    if(dcload_type == DCLOAD_TYPE_SER) {
-        dbglog(DBG_KDEBUG, "scif_spi_init: no spi device -- using "
-               "dcload-serial\n");
+    /* Claiming also disables byte-I/O IRQs and rejects serial-loader use. */
+    if(_scif_spi_claim() < 0) {
+        dbglog(DBG_KDEBUG, "scif_spi_init: SCIF is already in use\n");
         return -1;
     }
 
@@ -69,9 +70,16 @@ int scif_spi_init(void) {
 }
 
 int scif_spi_shutdown(void) {
+    int result;
+
+    if(!initialized) {
+        errno = EINVAL;
+        return -1;
+    }
+
     initialized = 0;
-    scif_init();
-    return 0;
+    result = _scif_spi_release();
+    return result;
 }
 
 void scif_spi_set_cs(int v) {

@@ -3,11 +3,14 @@
    modem.c
    Copyright (C)2002, 2004 Nick Kochakian
    Copyright (C) 2024 Paul Cercueil
+   Copyright (C) 2026 Joseph Black
 
    Distributed under the terms of the KOS license.
 */
 
 #include <kos.h>
+#include <errno.h>
+#include <dc/asic.h>
 #include <dc/g2bus.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -402,6 +405,31 @@ int modemSelfTest(void) {
     return 0;
 }
 
+int modem_probe(void) {
+    asic_evt_status_t irq_status;
+    int present;
+
+    if(modemCfg.inited)
+        return 1;
+
+    if(asic_evt_get_status(ASIC_EVT_EXP_8BIT, &irq_status) < 0)
+        return -1;
+
+    if(irq_status.handler_present) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    modemHardReset();
+    present = modemSelfTest();
+    modemHardReset();
+    return present;
+}
+
+int modem_is_initialized(void) {
+    return modemCfg.inited != 0;
+}
+
 /* Modem initialization
    Does a self test to detect the presence of a modem, then
    resets the modem and sets up the default interrupt handler
@@ -425,7 +453,12 @@ int modem_init(void) {
 
     modemDataSetupBuffers();
 
-    modemIntInit();
+    if(modemIntInit() < 0) {
+        modemDataDestroyBuffers();
+        modemHardReset();
+        return 0;
+    }
+
     modemConfigurationReset();
 
     modemCfg.eventHandler = NULL;
@@ -438,6 +471,7 @@ void modem_shutdown(void) {
     if(!modemCfg.inited)
         return;
 
+    modemIntShutdown();
     modemHardReset();
     modemDataDestroyBuffers();
 

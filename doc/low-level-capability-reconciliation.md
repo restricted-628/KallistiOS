@@ -31,10 +31,10 @@ be reconstructed as reviewable commits on top of that chain.
 | Timers and callback scheduling | TMU, VBlank, work queues, timer events | Cumulative branch complete | Physical timing sweep |
 | Fibers and service executors | Optional per-thread fibers and explicit carrier services | Cumulative branch complete | Stress testing with MMU on/off |
 | MMU, cache, store queues, and independent heaps | SH-4 memory services and heap API | Cumulative branch complete | Physical cache/MMU testing |
-| Flash configuration, play history, and RTC | Flash layout transactions and RTC services | Integration checkpoint complete | Extraction and physical write timing |
-| Video/cable policy | Video mode validation and snapshots | Integration checkpoint bounded base complete | Extraction; additional timing modes remain separate |
-| Serial configuration and status | SCIF driver | Integration checkpoint bounded base complete | Extraction; DMA and raw modem pins remain separate |
-| Expansion and network-device discovery | Expansion probe and existing network drivers | Integration checkpoint complete | Extraction and physical device variants |
+| Flash configuration, play history, and RTC | Flash layout transactions and RTC services | Cumulative branch complete | Physical write timing |
+| Video/cable policy | Video mode validation and snapshots | Cumulative branch bounded base complete | Additional timing modes remain separate |
+| Serial configuration and status | SCIF driver | Cumulative branch bounded base complete | DMA and raw modem pins remain separate |
+| Expansion and network-device discovery | Expansion probe and existing network drivers | Cumulative branch complete | Physical device variants |
 | External-bus and interrupt ownership | G1, G2 DMA, and ASIC ownership layers | Cumulative branch complete | Physical contention and timing sweep |
 | Microphone input | Maple microphone transport and caller-owned capture rings | Integration checkpoint base complete | Extraction and physical devices |
 | Camera stored-image transport | Maple camera driver | Integration checkpoint complete | Extraction and physical devices; live video is separate |

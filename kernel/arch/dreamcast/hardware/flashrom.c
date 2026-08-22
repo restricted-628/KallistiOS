@@ -4,6 +4,7 @@
    Copyright (c) 2003 Megan Potter
    Copyright (C) 2008 Lawrence Sebald
    Copyright (C) 2024 Andy Barajas
+   Copyright (C) 2026 Joseph Black
 */
 
 /*
@@ -16,12 +17,19 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <dc/flashrom.h>
 #include <dc/syscalls.h>
 #include <kos/dbglog.h>
 #include <kos/irq.h>
+#include <kos/mutex.h>
 #include <kos/net.h>
+
+#include "flashrom_layout_internal.h"
+
+/* Serializes operations which program or erase the shared flash device. */
+static mutex_t flashrom_program_mutex = MUTEX_INITIALIZER;
 
 static void strcpy_no_term(char *dest, const char *src, size_t destsize) {
     size_t srclength;
@@ -68,7 +76,7 @@ int flashrom_read(int offset, void *buffer_out, int bytes) {
     return rv;
 }
 
-int flashrom_write(int offset, void *buffer, int bytes) {
+static int flashrom_write_unlocked(int offset, const void *buffer, int bytes) {
     int old, rv;
 
     old = irq_disable();
@@ -77,7 +85,18 @@ int flashrom_write(int offset, void *buffer, int bytes) {
     return rv;
 }
 
-int flashrom_delete(int offset) {
+int flashrom_write(int offset, void *buffer, int bytes) {
+    int rv;
+
+    if(mutex_lock_irqsafe(&flashrom_program_mutex) < 0)
+        return -1;
+
+    rv = flashrom_write_unlocked(offset, buffer, bytes);
+    mutex_unlock(&flashrom_program_mutex);
+    return rv;
+}
+
+static int flashrom_delete_unlocked(int offset) {
     int old, rv;
 
     old = irq_disable();
@@ -86,112 +105,401 @@ int flashrom_delete(int offset) {
     return rv;
 }
 
+int flashrom_delete(int offset) {
+    int rv;
+
+    if(mutex_lock_irqsafe(&flashrom_program_mutex) < 0)
+        return -1;
+
+    rv = flashrom_delete_unlocked(offset);
+    mutex_unlock(&flashrom_program_mutex);
+    return rv;
+}
+
 /* Higher level stuff follows */
 
-static uint16_t flashrom_calc_crc(uint8_t *buffer) {
+static uint16_t flashrom_calc_crc(const uint8_t *buffer) {
     return net_crc16ccitt(buffer, FLASHROM_OFFSET_CRC, 0xffff) ^ 0xffff;
 }
 
-int flashrom_get_block(int partid, int blockid, uint8_t *buffer_out) {
-    int start, size;
-    int bmcnt;
-    char magic[18];
-    uint8_t *bitmap;
-    int i;
+static uint16_t read_le16(const uint8_t *data) {
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8);
+}
 
-    /* First, figure out where the partition is located. */
-    if(flashrom_info(partid, &start, &size))
+typedef bool (*flashrom_record_visitor_t)(
+    const uint8_t record[FLASHROM_BLOCK_SIZE], uint16_t physical, void *data);
+
+/*
+   Block-allocated partitions contain a 64-byte header, append-only 64-byte
+   records, and a bitmap rounded up to whole 64-byte records at the end. A zero
+   bitmap bit marks an allocated record. Visit valid records newest-first so
+   holes left by maintenance do not hide a newer valid copy.
+*/
+static int flashrom_visit_blocks(int partid, flashrom_record_visitor_t visitor,
+                                 void *data) {
+    int start, size;
+    size_t total_blocks, bitmap_bytes, bitmap_blocks, record_blocks;
+    uint8_t magic[18];
+    uint8_t *bitmap;
+    uint8_t record[FLASHROM_BLOCK_SIZE];
+    size_t i;
+    bool allocated = false;
+
+    if(partid < FLASHROM_PT_SYSTEM || partid > FLASHROM_PT_BLOCK_2)
         return FLASHROM_ERR_NO_PARTITION;
 
-    /* Verify the partition */
-    if(flashrom_read(start, magic, 18) < 0) {
-        dbglog(DBG_ERROR, "flashrom_get_block: can't read part %d magic\n", partid);
+    if(flashrom_info(partid, &start, &size) || start < 0 || size < 128 ||
+       (size % FLASHROM_BLOCK_SIZE) != 0)
+        return FLASHROM_ERR_NO_PARTITION;
+
+    if(flashrom_read(start, magic, sizeof(magic)) < 0)
         return FLASHROM_ERR_READ_PART;
-    }
 
-    if(strncmp(magic, "KATANA_FLASH____", 16) || *((uint16_t *)(magic + 16)) != partid) {
-        bmcnt = *((uint16_t *)(magic + 16));
-        magic[16] = 0;
-        dbglog(DBG_ERROR, "flashrom_get_block: invalid magic '%s' or id %d in part %d\n", magic, bmcnt, partid);
+    /* The fixed partition signature is the existing on-flash format. */
+    if(memcmp(magic, "KATANA_FLASH____", 16) ||
+       read_le16(magic + 16) != (uint16_t)partid)
         return FLASHROM_ERR_BAD_MAGIC;
-    }
 
-    /* We need one bit per 64 bytes of partition size. Figure out how
-       many blocks we have in this partition (number of bits needed). */
-    bmcnt = size / 64;
+    total_blocks = (size_t)size / FLASHROM_BLOCK_SIZE;
+    bitmap_bytes = (total_blocks + 511u) & ~511u;
+    bitmap_bytes /= 8u;
+    bitmap_blocks = bitmap_bytes / FLASHROM_BLOCK_SIZE;
 
-    /* Round it to an even 64-bytes (64*8 bits). */
-    bmcnt = (bmcnt + (64 * 8) - 1) & ~(64 * 8 - 1);
-
-    /* Divide that by 8 to get the number of bytes from the end of the
-       partition that the bitmap will be located. */
-    bmcnt = bmcnt / 8;
-
-    /* This is messy but simple and safe... */
-    if(bmcnt > 65536) {
-        dbglog(DBG_ERROR, "flashrom_get_block: bogus part %p/%d\n", (void *)start, size);
+    if(bitmap_bytes == 0 || bitmap_blocks == 0 ||
+       total_blocks <= 1u + bitmap_blocks || bitmap_bytes > (size_t)size)
         return FLASHROM_ERR_BOGUS_PART;
-    }
 
-    if(!(bitmap = (uint8_t *)malloc(bmcnt)))
+    record_blocks = total_blocks - 1u - bitmap_blocks;
+    bitmap = malloc(bitmap_bytes);
+    if(!bitmap)
         return FLASHROM_ERR_NOMEM;
 
-    if(flashrom_read(start + size - bmcnt, bitmap, bmcnt) < 0) {
-        dbglog(DBG_ERROR, "flashrom_get_block: can't read part %d bitmap\n", partid);
+    if(flashrom_read(start + size - (int)bitmap_bytes, bitmap,
+                     (int)bitmap_bytes) < 0) {
         free(bitmap);
         return FLASHROM_ERR_READ_BITMAP;
     }
 
-    /* Go through all the allocated blocks, and look for the latest one
-       that has a matching logical block ID. We'll start at the end since
-       that's easiest to deal with. Block 0 is the magic block, so we
-       won't check that. */
-    for(i = 0; i < bmcnt * 8; i++) {
-        /* Little shortcut */
-        if(bitmap[i / 8] == 0)
-            i += 8;
+    for(i = record_blocks; i > 0; --i) {
+        size_t index = i - 1u;
+        uint8_t mask = (uint8_t)(0x80u >> (index & 7u));
 
-        if(bitmap[i / 8] & (0x80 >> (i % 8)))
-            break;
-    }
+        if(bitmap[index >> 3] & mask)
+            continue;
 
-    /* Done with the bitmap, free it. */
-    free(bitmap);
+        allocated = true;
 
-    /* All blocks unused -> file not found. Note that this is probably
-       a very unusual condition. */
-    if(i == 0)
-        return FLASHROM_ERR_EMPTY_PART;
-
-    i--;    /* 'i' was the first unused block, so back up one */
-
-    for(; i > 0; i--) {
-        /* Read the block; +1 because bitmap block zero is actually
-           _user_ block zero, which is physical block 1. */
-        if(flashrom_read(start + (i + 1) * 64, buffer_out, 64) < 0) {
-            dbglog(DBG_ERROR, "flashrom_get_block: can't read part %d phys block %d\n", partid, i + 1);
+        if(flashrom_read(start + (int)(i * FLASHROM_BLOCK_SIZE), record,
+                         FLASHROM_BLOCK_SIZE) < 0) {
+            free(bitmap);
             return FLASHROM_ERR_READ_BLOCK;
         }
 
-        /* Does the block ID match? */
-        if(*((uint16_t *)buffer_out) != blockid)
-            continue;
-
-        /* Check the checksum to make sure it's valid */
-        bmcnt = flashrom_calc_crc(buffer_out);
-
-        if(bmcnt != *((uint16_t *)(buffer_out + FLASHROM_OFFSET_CRC))) {
-            dbglog(DBG_WARNING, "flashrom_get_block: part %d phys block %d has invalid checksum %04x (should be %04x)\n",
-                   partid, i + 1, *((uint16_t *)(buffer_out + FLASHROM_OFFSET_CRC)), bmcnt);
+        if(read_le16(record + FLASHROM_OFFSET_CRC) !=
+           flashrom_calc_crc(record)) {
+            dbglog(DBG_WARNING,
+                   "flashrom: partition %d record %u has an invalid CRC\n",
+                   partid, (unsigned int)i);
             continue;
         }
 
-        /* Ok, looks like we got it! */
-        return FLASHROM_ERR_NONE;
+        if(visitor(record, (uint16_t)i, data)) {
+            free(bitmap);
+            return FLASHROM_ERR_NONE;
+        }
     }
 
-    /* Didn't find anything */
-    return FLASHROM_ERR_NOT_FOUND;
+    free(bitmap);
+    return allocated ? FLASHROM_ERR_NOT_FOUND : FLASHROM_ERR_EMPTY_PART;
+}
+
+typedef struct flashrom_find_block_data {
+    uint16_t blockid;
+    uint8_t *raw_out;
+    uint16_t *physical_out;
+} flashrom_find_block_data_t;
+
+static bool flashrom_find_block_visitor(
+    const uint8_t record[FLASHROM_BLOCK_SIZE], uint16_t physical, void *data) {
+    flashrom_find_block_data_t *find = data;
+
+    if(read_le16(record) != find->blockid)
+        return false;
+
+    if(find->raw_out)
+        memcpy(find->raw_out, record, FLASHROM_BLOCK_SIZE);
+    if(find->physical_out)
+        *find->physical_out = physical;
+    return true;
+}
+
+static int flashrom_find_block(int partid, uint16_t blockid,
+                               uint8_t raw_out[FLASHROM_BLOCK_SIZE],
+                               uint16_t *physical_out) {
+    flashrom_find_block_data_t data = {
+        .blockid = blockid,
+        .raw_out = raw_out,
+        .physical_out = physical_out
+    };
+
+    return flashrom_visit_blocks(partid, flashrom_find_block_visitor, &data);
+}
+
+int flashrom_get_block(int partid, int blockid, uint8_t *buffer_out) {
+    if(!buffer_out || blockid < 0 || blockid > UINT16_MAX)
+        return FLASHROM_ERR_BAD_DATA;
+
+    return flashrom_find_block(partid, (uint16_t)blockid, buffer_out, NULL);
+}
+
+int flashrom_read_block(int partid, uint16_t blockid, void *data_out,
+                        flashrom_block_info_t *info_out) {
+    uint8_t raw[FLASHROM_BLOCK_SIZE];
+    uint16_t physical;
+    int rv;
+
+    if(!data_out && !info_out)
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_find_block(partid, blockid, raw, &physical);
+    if(rv < 0)
+        return rv;
+
+    if(data_out)
+        memcpy(data_out, raw + 2, FLASHROM_BLOCK_DATA_SIZE);
+    if(info_out) {
+        info_out->logical_id = blockid;
+        info_out->physical_block = physical;
+    }
+
+    return FLASHROM_ERR_NONE;
+}
+
+static bool flashrom_all_erased(const uint8_t *data, size_t length) {
+    size_t i;
+
+    for(i = 0; i < length; ++i) {
+        if(data[i] != 0xff)
+            return false;
+    }
+
+    return true;
+}
+
+static int flashrom_require_erased_records_locked(int partid,
+                                                  size_t required) {
+    flashrom_partition_layout_t layout;
+    uint8_t magic[18];
+    uint8_t record[FLASHROM_BLOCK_SIZE];
+    uint8_t *bitmap = NULL;
+    size_t record_index;
+    size_t available = 0;
+    int start, size;
+    int rv;
+    bool dirty = false;
+
+    if(!required)
+        return FLASHROM_ERR_NONE;
+    if(flashrom_info(partid, &start, &size) || start < 0 || size < 0)
+        return FLASHROM_ERR_NO_PARTITION;
+
+    rv = flashrom_partition_layout((size_t)size, &layout);
+    if(rv < 0)
+        return rv;
+    if(flashrom_read(start, magic, sizeof(magic)) != (int)sizeof(magic))
+        return FLASHROM_ERR_READ_PART;
+    if(memcmp(magic, "KATANA_FLASH____", 16) ||
+       read_le16(magic + 16) != (uint16_t)partid)
+        return FLASHROM_ERR_BAD_MAGIC;
+
+    bitmap = malloc(layout.bitmap_bytes);
+    if(!bitmap)
+        return FLASHROM_ERR_NOMEM;
+    if(flashrom_read(start + (int)layout.bitmap_offset, bitmap,
+                     (int)layout.bitmap_bytes) !=
+       (int)layout.bitmap_bytes) {
+        rv = FLASHROM_ERR_READ_BITMAP;
+        goto out;
+    }
+
+    for(record_index = 0; record_index < layout.record_count;
+        ++record_index) {
+        uint8_t mask = (uint8_t)(0x80u >> (record_index & 7u));
+        size_t physical_offset;
+
+        if(!(bitmap[record_index >> 3] & mask))
+            continue;
+
+        physical_offset = (record_index + 1u) * FLASHROM_BLOCK_SIZE;
+        if(flashrom_read(start + (int)physical_offset, record,
+                         sizeof(record)) != (int)sizeof(record)) {
+            rv = FLASHROM_ERR_READ_BLOCK;
+            goto out;
+        }
+
+        if(!flashrom_all_erased(record, sizeof(record))) {
+            dirty = true;
+            continue;
+        }
+
+        if(++available >= required) {
+            rv = FLASHROM_ERR_NONE;
+            goto out;
+        }
+    }
+
+    rv = dirty ? FLASHROM_ERR_BAD_DATA : FLASHROM_ERR_NO_SPACE;
+
+out:
+    free(bitmap);
+    return rv;
+}
+
+static int flashrom_append_block_locked(int partid, uint16_t blockid,
+                                        const void *data,
+                                        flashrom_block_info_t *info_out) {
+    flashrom_partition_layout_t layout;
+    uint8_t magic[18];
+    uint8_t record[FLASHROM_BLOCK_SIZE];
+    uint8_t verify[FLASHROM_BLOCK_SIZE];
+    uint8_t *bitmap = NULL;
+    uint8_t *bitmap_verify = NULL;
+    size_t record_index;
+    size_t physical_offset = 0;
+    int start, size;
+    int rv = FLASHROM_ERR_BAD_DATA;
+    bool free_bit = false;
+
+    if(!data || partid < FLASHROM_PT_BLOCK_1 ||
+       partid > FLASHROM_PT_BLOCK_2)
+        return FLASHROM_ERR_BAD_DATA;
+
+    if(flashrom_info(partid, &start, &size) || start < 0 || size < 0)
+        return FLASHROM_ERR_NO_PARTITION;
+
+    rv = flashrom_partition_layout((size_t)size, &layout);
+    if(rv < 0)
+        return rv;
+
+    if(flashrom_read(start, magic, sizeof(magic)) != (int)sizeof(magic))
+        return FLASHROM_ERR_READ_PART;
+    if(memcmp(magic, "KATANA_FLASH____", 16) ||
+       read_le16(magic + 16) != (uint16_t)partid)
+        return FLASHROM_ERR_BAD_MAGIC;
+
+    bitmap = malloc(layout.bitmap_bytes);
+    bitmap_verify = malloc(layout.bitmap_bytes);
+    if(!bitmap || !bitmap_verify) {
+        rv = FLASHROM_ERR_NOMEM;
+        goto out;
+    }
+
+    if(flashrom_read(start + (int)layout.bitmap_offset, bitmap,
+                     (int)layout.bitmap_bytes) !=
+       (int)layout.bitmap_bytes) {
+        rv = FLASHROM_ERR_READ_BITMAP;
+        goto out;
+    }
+
+    /* A free record must still be erased; programmed free space is unsafe. */
+    for(record_index = 0; record_index < layout.record_count;
+        ++record_index) {
+        uint8_t mask = (uint8_t)(0x80u >> (record_index & 7u));
+
+        if(!(bitmap[record_index >> 3] & mask))
+            continue;
+
+        free_bit = true;
+        physical_offset = (record_index + 1u) * FLASHROM_BLOCK_SIZE;
+        if(flashrom_read(start + (int)physical_offset, verify,
+                         FLASHROM_BLOCK_SIZE) != FLASHROM_BLOCK_SIZE) {
+            rv = FLASHROM_ERR_READ_BLOCK;
+            goto out;
+        }
+
+        if(flashrom_all_erased(verify, sizeof(verify)))
+            break;
+    }
+
+    if(record_index == layout.record_count) {
+        rv = free_bit ? FLASHROM_ERR_BAD_DATA : FLASHROM_ERR_NO_SPACE;
+        goto out;
+    }
+
+    flashrom_record_build(blockid, data, record);
+
+    /*
+       Allocate first. If power is lost later, the CRC-invalid record is
+       ignored and the previous valid copy remains visible. This may consume
+       one record, but it never leaves programmed storage marked reusable.
+    */
+    flashrom_bitmap_allocate(bitmap, record_index);
+    if(flashrom_write_unlocked(start + (int)layout.bitmap_offset, bitmap,
+                               (int)layout.bitmap_bytes) !=
+       (int)layout.bitmap_bytes) {
+        rv = FLASHROM_ERR_WRITE_BITMAP;
+        goto out;
+    }
+    if(flashrom_read(start + (int)layout.bitmap_offset, bitmap_verify,
+                     (int)layout.bitmap_bytes) !=
+       (int)layout.bitmap_bytes ||
+       memcmp(bitmap, bitmap_verify, layout.bitmap_bytes)) {
+        rv = FLASHROM_ERR_VERIFY;
+        goto out;
+    }
+
+    /* Keep the erased CRC as the final publication barrier. */
+    if(flashrom_write_unlocked(start + (int)physical_offset, record,
+                               FLASHROM_OFFSET_CRC) != FLASHROM_OFFSET_CRC) {
+        rv = FLASHROM_ERR_WRITE_BLOCK;
+        goto out;
+    }
+    if(flashrom_read(start + (int)physical_offset, verify,
+                     FLASHROM_OFFSET_CRC) != FLASHROM_OFFSET_CRC ||
+       memcmp(record, verify, FLASHROM_OFFSET_CRC)) {
+        rv = FLASHROM_ERR_VERIFY;
+        goto out;
+    }
+
+    if(flashrom_write_unlocked(start + (int)physical_offset +
+                               FLASHROM_OFFSET_CRC,
+                               record + FLASHROM_OFFSET_CRC, 2) != 2) {
+        rv = FLASHROM_ERR_WRITE_BLOCK;
+        goto out;
+    }
+    if(flashrom_read(start + (int)physical_offset, verify,
+                     sizeof(verify)) != (int)sizeof(verify) ||
+       memcmp(record, verify, sizeof(record)) ||
+       read_le16(verify + FLASHROM_OFFSET_CRC) !=
+       flashrom_calc_crc(verify)) {
+        rv = FLASHROM_ERR_VERIFY;
+        goto out;
+    }
+
+    if(info_out) {
+        info_out->logical_id = blockid;
+        info_out->physical_block = (uint16_t)(record_index + 1u);
+    }
+    rv = FLASHROM_ERR_NONE;
+
+out:
+    free(bitmap_verify);
+    free(bitmap);
+    return rv;
+}
+
+int flashrom_append_block(int partid, uint16_t blockid, const void *data,
+                          flashrom_block_info_t *info_out) {
+    int rv;
+
+    if(!data || irq_inside_int())
+        return FLASHROM_ERR_BAD_DATA;
+    if(mutex_lock(&flashrom_program_mutex) < 0)
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_append_block_locked(partid, blockid, data, info_out);
+    mutex_unlock(&flashrom_program_mutex);
+    return rv;
 }
 
 /* This internal function returns the system config block. As far as I
@@ -217,6 +525,9 @@ int flashrom_get_syscfg(flashrom_syscfg_t *out) {
     int rv;
     syscfg_t *sc = (syscfg_t *)buffer;
 
+    if(!out)
+        return FLASHROM_ERR_BAD_DATA;
+
     /* Get the system config block */
     rv = flashrom_load_syscfg(buffer);
     if(rv < 0)  return rv;
@@ -227,6 +538,236 @@ int flashrom_get_syscfg(flashrom_syscfg_t *out) {
     out->autostart = sc->autostart == 1 ? 0 : 1;
 
     return FLASHROM_ERR_NONE;
+}
+
+int flashrom_get_syscfg_ex(flashrom_syscfg_ex_t *out) {
+    uint8_t data[FLASHROM_BLOCK_DATA_SIZE];
+    int rv;
+
+    if(!out)
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_read_block(FLASHROM_PT_BLOCK_1, FLASHROM_B1_SYSCFG,
+                             data, NULL);
+    if(rv < 0)
+        return rv;
+
+    return flashrom_syscfg_decode(data, out);
+}
+
+int flashrom_set_syscfg_ex(const flashrom_syscfg_ex_t *settings) {
+    uint8_t data[FLASHROM_BLOCK_DATA_SIZE];
+    int rv;
+
+    if(!settings || settings->language < FLASHROM_LANG_JAPANESE ||
+       settings->language > FLASHROM_LANG_ITALIAN ||
+       (settings->audio != 0 && settings->audio != 1) ||
+       (settings->autostart != 0 && settings->autostart != 1) ||
+       irq_inside_int())
+        return FLASHROM_ERR_BAD_DATA;
+    if(mutex_lock(&flashrom_program_mutex) < 0)
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_read_block(FLASHROM_PT_BLOCK_1, FLASHROM_B1_SYSCFG,
+                             data, NULL);
+    if(rv < 0)
+        goto out;
+
+    rv = flashrom_syscfg_payload_update(data, settings->settings_time,
+                                        settings->language, settings->audio,
+                                        settings->autostart);
+    if(rv < 0)
+        goto out;
+
+    rv = flashrom_append_block_locked(FLASHROM_PT_BLOCK_1,
+                                      FLASHROM_B1_SYSCFG, data, NULL);
+
+out:
+    mutex_unlock(&flashrom_program_mutex);
+    return rv;
+}
+
+typedef struct flashrom_history_packets {
+    uint16_t base_id;
+    uint8_t packets[4][FLASHROM_BLOCK_DATA_SIZE];
+    bool found[4];
+    unsigned int remaining;
+} flashrom_history_packets_t;
+
+static bool flashrom_history_packet_visitor(
+    const uint8_t record[FLASHROM_BLOCK_SIZE], uint16_t physical, void *data) {
+    flashrom_history_packets_t *history = data;
+    uint16_t blockid = read_le16(record);
+    unsigned int packet;
+
+    (void)physical;
+
+    if(blockid < history->base_id || blockid > history->base_id + 3u)
+        return false;
+
+    packet = blockid - history->base_id;
+    if(history->found[packet])
+        return false;
+
+    memcpy(history->packets[packet], record + 2, FLASHROM_BLOCK_DATA_SIZE);
+    history->found[packet] = true;
+    --history->remaining;
+    return history->remaining == 0;
+}
+
+int flashrom_play_history_read(unsigned int slot,
+                               flashrom_play_history_t *out) {
+    flashrom_history_packets_t history = {
+        .base_id = (uint16_t)(24u + slot * 4u),
+        .remaining = 4
+    };
+    int rv;
+
+    if(!out || slot >= FLASHROM_PLAY_HISTORY_SLOTS)
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_visit_blocks(FLASHROM_PT_SETTINGS,
+                               flashrom_history_packet_visitor, &history);
+    if(rv < 0 || history.remaining != 0)
+        return rv == FLASHROM_ERR_EMPTY_PART ? FLASHROM_ERR_NOT_FOUND : rv;
+
+    return flashrom_play_history_decode(history.packets, out);
+}
+
+typedef struct flashrom_history_match {
+    const char *product_number;
+    bool seen[FLASHROM_PLAY_HISTORY_SLOTS];
+    unsigned int slot;
+} flashrom_history_match_t;
+
+static bool flashrom_history_match_visitor(
+    const uint8_t record[FLASHROM_BLOCK_SIZE], uint16_t physical, void *data) {
+    flashrom_history_match_t *match = data;
+    uint16_t blockid = read_le16(record);
+    unsigned int slot;
+
+    (void)physical;
+
+    if(blockid < 24u || (blockid - 24u) % 4u != 0)
+        return false;
+
+    slot = (blockid - 24u) / 4u;
+    if(slot >= FLASHROM_PLAY_HISTORY_SLOTS || match->seen[slot])
+        return false;
+
+    match->seen[slot] = true;
+    if(memcmp(record + 4, match->product_number, 10))
+        return false;
+
+    match->slot = slot;
+    return true;
+}
+
+int flashrom_play_history_find(const char product_number[10],
+                               flashrom_play_history_t *out,
+                               unsigned int *slot_out) {
+    flashrom_history_match_t match = {
+        .product_number = product_number
+    };
+    flashrom_play_history_t history;
+    int rv;
+
+    if(!product_number || (!out && !slot_out))
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_visit_blocks(FLASHROM_PT_SETTINGS,
+                               flashrom_history_match_visitor, &match);
+    if(rv < 0)
+        return rv == FLASHROM_ERR_EMPTY_PART ? FLASHROM_ERR_NOT_FOUND : rv;
+
+    rv = flashrom_play_history_read(match.slot, &history);
+    if(rv < 0)
+        return rv;
+
+    if(out)
+        *out = history;
+    if(slot_out)
+        *slot_out = match.slot;
+    return FLASHROM_ERR_NONE;
+}
+
+int flashrom_play_history_write(
+    unsigned int slot, const flashrom_play_history_t *history,
+    flashrom_play_history_write_result_t *result_out) {
+    static const unsigned int write_order[4] = { 2, 3, 1, 0 };
+    flashrom_play_history_write_result_t result = {
+        .failed_packet = -1
+    };
+    flashrom_history_packets_t current;
+    uint8_t packets[4][FLASHROM_BLOCK_DATA_SIZE];
+    unsigned int changed = 0;
+    unsigned int i;
+    int rv;
+
+    if(result_out)
+        *result_out = result;
+    if(!history || slot >= FLASHROM_PLAY_HISTORY_SLOTS || irq_inside_int())
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_play_history_encode(history, packets);
+    if(rv < 0)
+        return rv;
+
+    memset(&current, 0, sizeof(current));
+    current.base_id = (uint16_t)(24u + slot * 4u);
+    current.remaining = 4;
+
+    if(mutex_lock(&flashrom_program_mutex) < 0)
+        return FLASHROM_ERR_BAD_DATA;
+
+    rv = flashrom_visit_blocks(FLASHROM_PT_SETTINGS,
+                               flashrom_history_packet_visitor, &current);
+    if(rv != FLASHROM_ERR_NONE && rv != FLASHROM_ERR_NOT_FOUND &&
+       rv != FLASHROM_ERR_EMPTY_PART)
+        goto out;
+
+    for(i = 0; i < 4; ++i) {
+        if(!current.found[i] ||
+           memcmp(current.packets[i], packets[i],
+                  FLASHROM_BLOCK_DATA_SIZE)) {
+            result.requested_mask |= (uint8_t)(1u << i);
+            ++changed;
+        }
+    }
+
+    rv = flashrom_require_erased_records_locked(FLASHROM_PT_SETTINGS,
+                                                changed);
+    if(rv < 0)
+        goto out;
+
+    /*
+       Volatile counters are written first. Packet 1 precedes packet 0 so a
+       changed identity is not accepted until its cross-packet CRC agrees.
+    */
+    for(i = 0; i < 4; ++i) {
+        unsigned int packet = write_order[i];
+
+        if(!(result.requested_mask & (uint8_t)(1u << packet)))
+            continue;
+
+        result.failed_packet = (int)packet;
+        rv = flashrom_append_block_locked(
+            FLASHROM_PT_SETTINGS, current.base_id + packet,
+            packets[packet], &result.records[packet]);
+        if(rv < 0)
+            goto out;
+
+        result.committed_mask |= (uint8_t)(1u << packet);
+        result.failed_packet = -1;
+    }
+
+    rv = FLASHROM_ERR_NONE;
+
+out:
+    mutex_unlock(&flashrom_program_mutex);
+    if(result_out)
+        *result_out = result;
+    return rv;
 }
 
 int flashrom_get_region(void) {

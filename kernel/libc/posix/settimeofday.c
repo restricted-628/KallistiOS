@@ -2,6 +2,7 @@
 
    settimeofday.c
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <time.h>
@@ -14,6 +15,11 @@ int settimeofday(const struct timeval *tv, const struct timezone *tz) {
 
     if(!tv) {
         errno = EFAULT;
+        return -1;
+    }
+
+    if(tv->tv_usec < 0 || tv->tv_usec >= 1000000) {
+        errno = EINVAL;
         return -1;
     }
 

@@ -2,6 +2,7 @@
 
    dc/net/lan_adapter.h
    Copyright (C) 2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -28,6 +29,12 @@ __BEGIN_DECLS
 */
 
 /* \cond */
+/* Probe by resetting the inactive 8-bit expansion interface. */
+int la_probe(void);
+
+/* Return nonzero when the adapter driver is initialized. */
+int la_is_initialized(void);
+
 /* Initialize */
 int la_init(void);
 
@@ -38,4 +45,3 @@ int la_shutdown(void);
 __END_DECLS
 
 #endif  /* __DC_NET_LAN_ADAPTER_H */
-

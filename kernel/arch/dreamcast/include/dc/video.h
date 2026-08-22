@@ -4,6 +4,7 @@
 
    Copyright (C) 2001 Anders Clerwall (scav)
    Copyright (C) 2023-2024 Donald Haase
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -137,6 +138,16 @@ typedef enum vid_display_mode {
     DM_MODE_COUNT                   /**< \brief Number of modes */
 } vid_display_mode_t;
 
+/** \brief Refresh-standard preference for generic mode resolution. */
+typedef enum vid_mode_standard {
+    /** Preserve the established KOS table-order preference. */
+    VID_MODE_STANDARD_DEFAULT = 0,
+    /** Select a 60 Hz non-PAL mode. */
+    VID_MODE_STANDARD_60HZ,
+    /** Select a 50 Hz PAL mode. */
+    VID_MODE_STANDARD_50HZ
+} vid_mode_standard_t;
+
 /** \defgroup vid_flags Flags
     \brief              vid_mode_t Field Flags
     \ingroup            video_modes
@@ -231,6 +242,49 @@ extern uint32_t *vram_l;
     \retval CT_COMPOSITE    If a composite cable or RF switch is connected.
 */
 int8_t vid_check_cable(void);
+
+/** \brief Resolve a display request without programming video hardware.
+
+    Specific DM_* indices resolve directly. Generic modes are selected for the
+    supplied cable and refresh-standard preference. The multibuffer flag is
+    honored and the resulting framebuffer count is bounded by available VRAM.
+
+    \param dm              Specific or generic display mode, optionally ORed
+                            with DM_MULTIBUFFER.
+    \param pm              Pixel mode.
+    \param cable_type      One of the connected CT_* values.
+    \param standard        Generic-mode refresh preference. VGA resolution is
+                            always 60 Hz regardless of this preference.
+    \param mode            Output resolved mode.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+*/
+int vid_mode_resolve(int dm, vid_pixel_mode_t pm, int8_t cable_type,
+                     vid_mode_standard_t standard, vid_mode_t *mode);
+
+/** \brief Validate a complete mode against a cable and available VRAM.
+
+    This function does not program hardware. A zero fb_size is accepted and
+    means that the checked setter should derive the tightly packed size.
+
+    \param mode            Mode to validate.
+    \param cable_type      Connected CT_* value or CT_ANY to skip the
+                            connection check.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+*/
+int vid_mode_validate(const vid_mode_t *mode, int8_t cable_type);
+
+/** \brief Copy the current mode into caller-owned storage.
+
+    \param mode            Output mode snapshot.
+
+    \retval 0              On success.
+    \retval -1             If video is not initialized or mode is NULL.
+*/
+int vid_get_mode(vid_mode_t *mode);
 
 /** \brief   Set the VRAM convenience pointers.
     \ingroup video_fb
@@ -376,6 +430,26 @@ void vid_waitvbl(void);
 */
 void vid_set_mode(int dm, vid_pixel_mode_t pm);
 
+/** \brief Set a built-in or generic video mode with status reporting.
+
+    This checked counterpart preserves vid_set_mode()'s established generic
+    table-order policy. Use vid_mode_resolve() followed by
+    vid_set_mode_ex_checked() for an explicit 50/60-Hz preference.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_set_mode_checked(int dm, vid_pixel_mode_t pm);
+
+/** \brief Set a mode with an explicit generic refresh-standard preference.
+
+    Specific DM_* indices remain explicit and ignore \p standard. Generic
+    modes select a compatible 50 or 60 Hz timing before any register changes.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_set_mode_standard_checked(int dm, vid_pixel_mode_t pm,
+                                  vid_mode_standard_t standard);
+
 /** \brief   Set the video mode.
     \ingroup video_modes
 
@@ -387,6 +461,15 @@ void vid_set_mode(int dm, vid_pixel_mode_t pm);
     \param  mode            A filled in vid_mode_t for the mode wanted.
 */
 void vid_set_mode_ex(vid_mode_t *mode);
+
+/** \brief Validate and set a caller-defined mode without modifying it.
+
+    fb_size is derived when zero. All geometry, pixel-mode, cable, and VRAM
+    capacity checks complete before the display is blanked or registers change.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_set_mode_ex_checked(const vid_mode_t *mode);
 
 /** \defgroup video_init Initialization
     \brief               Initialization and shutdown of the video subsystem
@@ -405,6 +488,14 @@ void vid_set_mode_ex(vid_mode_t *mode);
     \param  pixel_mode      The pixel mode to use. One of the PM_* values.
 */
 void vid_init(int disp_mode, vid_pixel_mode_t pixel_mode);
+
+/** \brief Initialize video with status reporting.
+
+    VRAM is cleared only after the requested mode has been installed.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_init_checked(int disp_mode, vid_pixel_mode_t pixel_mode);
 
 /** \brief   Shut down the video system.
 
@@ -452,4 +543,3 @@ void vid_set_dithering(bool enable);
 __END_DECLS
 
 #endif  /* __DC_VIDEO_H */
-

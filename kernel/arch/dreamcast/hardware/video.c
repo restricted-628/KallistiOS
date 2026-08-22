@@ -5,6 +5,7 @@
    Copyright (C) 2001 Anders Clerwall (scav)
    Copyright (C) 2000-2001 Megan Potter
    Copyright (C) 2023-2024 Donald Haase
+   Copyright (C) 2026 Joseph Black
  */
 
 #include <dc/video.h>
@@ -12,8 +13,11 @@
 #include <dc/sq.h>
 #include <kos/dbglog.h>
 #include <kos/platform.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
+
+#include "video_mode_internal.h"
 
 /*-----------------------------------------------------------------------------*/
 /* This table is indexed w/ DM_* */
@@ -224,71 +228,27 @@ int8_t vid_check_cable(void) {
 }
 
 /*-----------------------------------------------------------------------------*/
-void vid_set_mode(int dm, vid_pixel_mode_t pm) {
-    vid_mode_t mode;
-    int i, found, mb;
+int vid_set_mode_checked(int dm, vid_pixel_mode_t pm) {
+    return vid_set_mode_standard_checked(dm, pm,
+                                         VID_MODE_STANDARD_DEFAULT);
+}
 
+int vid_set_mode_standard_checked(int dm, vid_pixel_mode_t pm,
+                                  vid_mode_standard_t standard) {
+    vid_mode_t mode;
     int8_t ct = vid_check_cable();
 
-    /* Remove the multi-buffering flag from the mode, if its present, and save
-       the state of that flag. */
-    mb = dm & DM_MULTIBUFFER;
-    dm &= ~DM_MULTIBUFFER;
-
-    /* Check to see if we should use a direct mode index, a generic
-       mode check, or if it's just invalid. */
-    if(dm > DM_INVALID && dm < DM_SENTINEL) {
-        memcpy(&mode, &vid_builtin[dm], sizeof(vid_mode_t));
-    }
-    else if(dm >= DM_GENERIC_FIRST && dm <= DM_GENERIC_LAST) {
-        found = 0;
-
-        for(i = 1; i < DM_SENTINEL; i++) {
-            /* Is it the right generic mode? */
-            if(vid_builtin[i].generic != dm)
-                continue;
-
-            /* Do we have the right cable type? */
-            if(vid_builtin[i].cable_type != CT_ANY &&
-                    vid_builtin[i].cable_type != ct)
-                continue;
-
-            /* Ok, nothing else to check right now -- we've got our mode */
-            memcpy(&mode, &vid_builtin[i], sizeof(vid_mode_t));
-            found = 1;
-            break;
-        }
-
-        if(!found) {
-            dbglog(DBG_ERROR, "vid_set_mode: invalid generic mode %04x\n", dm);
-            return;
-        }
-    }
-    else {
-        dbglog(DBG_ERROR, "vid_set_mode: invalid mode specifier %04x\n", dm);
-        return;
+    if(vid_mode_resolve(dm, pm, ct, standard, &mode) < 0) {
+        dbglog(DBG_ERROR, "vid_set_mode: invalid mode %04x: %s\n", dm,
+               strerror(errno));
+        return -1;
     }
 
-    /* We set this here so actual mode is bit-depth independent.. */
-    mode.pm = pm;
+    return vid_set_mode_ex_checked(&mode);
+}
 
-    /* Calculate basic size needed for a framebuffer */
-    mode.fb_size = (mode.width * mode.height) * vid_pmode_bpp[mode.pm];
-
-    /* Ensure the FBs are 32-bit aligned */
-    if(mode.fb_size % 4)
-        mode.fb_size = (mode.fb_size + 4) & ~3;
-
-    if(mb == DM_MULTIBUFFER) {
-        /* Fill vram with framebuffers */
-        mode.fb_count = PVR_RAM_SIZE / mode.fb_size;
-    }
-
-    /* This is also to be generic */
-    mode.cable_type = ct;
-
-    /* This will make a private copy of our "mode" */
-    vid_set_mode_ex(&mode);
+void vid_set_mode(int dm, vid_pixel_mode_t pm) {
+    (void)vid_set_mode_checked(dm, pm);
 }
 
 enum pvr_pm_modes {
@@ -310,21 +270,8 @@ static const unsigned int vid_bpp_to_pvr_cfg2[] = {
 };
 
 /*-----------------------------------------------------------------------------*/
-void vid_set_mode_ex(vid_mode_t *mode) {
+static int vid_apply_mode(vid_mode_t *mode, int8_t ct) {
     uint32_t data;
-
-    /* Verify cable type for video mode. */
-    int8_t ct = vid_check_cable();
-
-    if(mode->cable_type != CT_ANY) {
-        if(mode->cable_type != ct) {
-            /* Maybe this should have the ability to be forced (thru param)
-               so you can set a mode with VGA params with RGB cable type? */
-            /*ct=mode->cable_type; */
-            dbglog(DBG_ERROR, "vid_set_mode: Mode not allowed for this cable type (%i!=%i)\n", mode->cable_type, ct);
-            return;
-        }
-    }
 
     /* Blank screen and reset display enable (looks nicer) */
     vid_set_enabled(false);
@@ -438,6 +385,51 @@ void vid_set_mode_ex(vid_mode_t *mode) {
 
     /* Re-enable the display */
     vid_set_enabled(true);
+
+    return 0;
+}
+
+int vid_set_mode_ex_checked(const vid_mode_t *mode) {
+    vid_mode_t prepared;
+    size_t frame_bytes;
+    int8_t cable_type;
+
+    if(!mode) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    cable_type = vid_check_cable();
+    if(vid_mode_validate_for_vram(mode, cable_type, PVR_RAM_SIZE,
+                                  &frame_bytes) < 0) {
+        dbglog(DBG_ERROR, "vid_set_mode_ex: invalid mode: %s\n",
+               strerror(errno));
+        return -1;
+    }
+
+    memcpy(&prepared, mode, sizeof(prepared));
+    prepared.cable_type = cable_type;
+    prepared.fb_size = frame_bytes;
+    return vid_apply_mode(&prepared, cable_type);
+}
+
+void vid_set_mode_ex(vid_mode_t *mode) {
+    (void)vid_set_mode_ex_checked(mode);
+}
+
+int vid_get_mode(vid_mode_t *mode) {
+    if(!mode) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(!vid_mode) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    memcpy(mode, vid_mode, sizeof(*mode));
+    return 0;
 }
 
 /*-----------------------------------------------------------------------------*/
@@ -588,10 +580,16 @@ void vid_waitvbl(void) {
 }
 
 /*-----------------------------------------------------------------------------*/
-void vid_init(int disp_mode, vid_pixel_mode_t pixel_mode) {
-    /* Set mode and clear vram */
-    vid_set_mode(disp_mode, pixel_mode);
+int vid_init_checked(int disp_mode, vid_pixel_mode_t pixel_mode) {
+    if(vid_set_mode_checked(disp_mode, pixel_mode) < 0)
+        return -1;
+
     vid_empty();
+    return 0;
+}
+
+void vid_init(int disp_mode, vid_pixel_mode_t pixel_mode) {
+    (void)vid_init_checked(disp_mode, pixel_mode);
 }
 
 /*-----------------------------------------------------------------------------*/

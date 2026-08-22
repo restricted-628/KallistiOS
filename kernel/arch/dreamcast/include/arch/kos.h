@@ -28,6 +28,7 @@ __BEGIN_DECLS
 #include <dc/asic.h>
 #include <dc/biosfont.h>
 #include <dc/cdrom.h>
+#include <dc/expansion.h>
 #include <dc/fb_console.h>
 #include <dc/flashrom.h>
 #include <dc/fmath.h>

@@ -4,6 +4,7 @@
    Copyright (C) 2000,2001,2004 Megan Potter
    Copyright (C) 2012 Lawrence Sebald
    Copyright (C) 2023 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -25,6 +26,8 @@
 __BEGIN_DECLS
 
 #include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
 #include <kos/dbgio.h>
 
 /** \defgroup system_scif   SCIF
@@ -37,12 +40,118 @@ __BEGIN_DECLS
 /** \brief  Default serial bitrate. */
 #define DEFAULT_SERIAL_BAUD 115200
 
-/** \brief  Default serial FIFO behavior. */
+/** \brief  Default legacy-buffer flush behavior. */
 #define DEFAULT_SERIAL_FIFO 1
 
+/** \brief  SCIF parity selection. */
+typedef enum scif_parity {
+    SCIF_PARITY_NONE = 0,  /**< No parity bit. */
+    SCIF_PARITY_EVEN,      /**< Even parity. */
+    SCIF_PARITY_ODD        /**< Odd parity. */
+} scif_parity_t;
+
+/** \brief  SCIF modem-flow-control selection. */
+typedef enum scif_flow_control {
+    SCIF_FLOW_NONE = 0,    /**< Ignore CTS and do not drive automatic RTS. */
+    SCIF_FLOW_HARDWARE     /**< Use the SCIF's automatic RTS/CTS control. */
+} scif_flow_control_t;
+
+/** \brief  SCIF receive-FIFO interrupt threshold. */
+typedef enum scif_rx_trigger {
+    SCIF_RX_TRIGGER_1 = 1,   /**< Interrupt at one received byte. */
+    SCIF_RX_TRIGGER_4 = 4,   /**< Interrupt at four received bytes. */
+    SCIF_RX_TRIGGER_8 = 8,   /**< Interrupt at eight received bytes. */
+    SCIF_RX_TRIGGER_14 = 14  /**< Interrupt at fourteen received bytes. */
+} scif_rx_trigger_t;
+
+/** \brief  SCIF transmit-FIFO readiness threshold. */
+typedef enum scif_tx_trigger {
+    SCIF_TX_TRIGGER_1 = 1,  /**< Ready when at most one byte remains. */
+    SCIF_TX_TRIGGER_2 = 2,  /**< Ready when at most two bytes remain. */
+    SCIF_TX_TRIGGER_4 = 4,  /**< Ready when at most four bytes remain. */
+    SCIF_TX_TRIGGER_8 = 8   /**< Ready when at most eight bytes remain. */
+} scif_tx_trigger_t;
+
+/** \brief  Checked SCIF line configuration. */
+typedef struct scif_config {
+    /** Requested bitrate, or 0 to use the external 16x serial clock. */
+    uint32_t baud;
+    /** Character width. Must be 7 or 8. */
+    uint8_t data_bits;
+    /** Stop-bit count. Must be 1 or 2. */
+    uint8_t stop_bits;
+    /** Parity selection. */
+    scif_parity_t parity;
+    /** Automatic modem-flow-control selection. */
+    scif_flow_control_t flow_control;
+    /** Receive-FIFO interrupt threshold. */
+    scif_rx_trigger_t rx_trigger;
+    /** Transmit-FIFO readiness threshold. */
+    scif_tx_trigger_t tx_trigger;
+} scif_config_t;
+
+/** \brief  Coherent SCIF state and diagnostic snapshot. */
+typedef struct scif_status {
+    /** Currently configured line parameters. */
+    scif_config_t config;
+    /** Actual internal-clock bitrate, or 0 for an external clock. */
+    uint32_t actual_baud;
+    /** Signed difference between actual and requested bitrate, in ppm. */
+    int32_t baud_error_ppm;
+    /** Bytes ready for scif_read() without blocking. */
+    size_t receive_queued;
+    /** Bytes currently waiting in the hardware transmit FIFO. */
+    size_t transmit_queued;
+    /** Bytes discarded because the software receive ring was full. */
+    uint32_t receive_dropped;
+    /** Received characters carrying a framing error. */
+    uint32_t framing_errors;
+    /** Received characters carrying a parity error. */
+    uint32_t parity_errors;
+    /** Hardware receive-overrun events. */
+    uint32_t overrun_errors;
+    /** Received break events. */
+    uint32_t breaks;
+    /** Bounded transmit or flush waits that expired. */
+    uint32_t transmit_timeouts;
+    /** Incremented whenever an error, break, drop, or timeout is recorded. */
+    uint32_t event_sequence;
+    /** True when the receive IRQ ring is active. */
+    bool irq_enabled;
+    /** True when byte-oriented SCIF access is available. */
+    bool enabled;
+} scif_status_t;
+
+/** \brief  Install a checked SCIF configuration immediately.
+
+    This reinitializes the byte-oriented SCIF port. It fails rather than
+    disturbing an active serial-loader or SCIF-SPI owner.
+
+    \param  config         Configuration to validate and install.
+    \retval 0              On success.
+    \retval -1             On error with errno set.
+*/
+int scif_configure(const scif_config_t *config);
+
+/** \brief  Return a coherent SCIF state and diagnostic snapshot.
+    \param  status         Destination for the snapshot.
+    \retval 0              On success.
+    \retval -1             If status is NULL (errno set to EINVAL).
+*/
+int scif_get_status(scif_status_t *status);
+
+/** \brief  Clear cumulative SCIF error and timeout counters. */
+void scif_clear_stats(void);
+
 /** \brief  Set serial parameters.
+
+    This compatibility entry point selects 8-N-1 framing for the next
+    scif_init() call. New code that needs checked framing or immediate
+    installation should use scif_configure().
+
     \param  baud            The bitrate to set.
-    \param  fifo            1 to enable FIFO mode.
+    \param  fifo            Non-zero to flush at the end of legacy buffered
+                            writes; zero to leave transmission in progress.
 */
 void scif_set_parameters(int baud, int fifo);
 
@@ -70,7 +179,8 @@ int scif_init(void);
 
 /** \brief  Shutdown the SCIF port.
 
-    This function disables SCIF IRQs, if they were enabled and cleans up.
+    This function disables SCIF IRQs and byte transmission/reception. A later
+    scif_init() restores the retained configuration.
 
     \retval 0               On success (no error conditions defined).
 */
@@ -78,17 +188,54 @@ int scif_shutdown(void);
 
 /** \brief  Read a single character from the SCIF port.
     \return                 The character read if one is available, otherwise -1
-                            and errno is set to EAGAIN.
+                            with errno set to EAGAIN, EBUSY, or EIO.
 */
 int scif_read(void);
+
+/** \brief  Peek at the next received character without consuming it.
+
+    In polled mode, the driver consumes one hardware-FIFO entry into an
+    internal lookahead slot; the next scif_read() returns that same byte.
+
+    \return                 The next byte, or -1 with errno set.
+*/
+int scif_peek(void);
+
+/** \brief  Return the number of immediately readable bytes.
+    \return                 A value from 0 through the receive-buffer capacity,
+                            or -1 with errno set.
+*/
+int scif_read_available(void);
+
+/** \brief  Read as many immediately available bytes as possible.
+
+    This operation never waits. A return value of 0 means no data was ready.
+
+    \param  data            Destination buffer.
+    \param  len             Destination capacity.
+    \return                 Number of bytes read, or -1 with errno set.
+*/
+int scif_read_buffer_nonblock(uint8_t *data, size_t len);
 
 /** \brief  Write a single character to the SCIF port.
     \param  c               The character to write (only the low 8-bits are
                             written).
     \retval 1               On success.
-    \retval -1              If the SCIF port is disabled (errno set to EIO).
+    \retval -1              On timeout or if byte I/O is unavailable.
 */
 int scif_write(int c);
+
+/** \brief  Attempt to write one byte without waiting.
+    \param  c               Character whose low eight bits are written.
+    \retval 1               The byte was accepted by the hardware FIFO.
+    \retval -1              No space or the port is unavailable; errno is set.
+*/
+int scif_try_write(int c);
+
+/** \brief  Return the number of free hardware transmit-FIFO entries.
+    \return                 A value from 0 through 16, or -1 with errno set.
+*/
+int scif_write_available(void);
 
 /** \brief  Flush any FIFO'd bytes out of the buffer.
 
@@ -96,7 +243,7 @@ int scif_write(int c);
     have not left yet in FIFO mode.
 
     \retval 0               On success.
-    \retval -1              If the SCIF port is disabled (errno set to EIO).
+    \retval -1              On timeout or if byte I/O is unavailable.
 */
 int scif_flush(void);
 

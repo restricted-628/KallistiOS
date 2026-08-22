@@ -3,6 +3,7 @@
    include/kos/rtc.h
    Copyright (C) 2000, 2001 Megan Potter
    Copyright (C) 2023, 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -25,6 +26,7 @@
 #include <kos/cdefs.h>
 __BEGIN_DECLS
 
+#include <stdint.h>
 #include <arch/rtc.h>
 
 #include <time.h>
@@ -50,6 +52,110 @@ __BEGIN_DECLS
 
     @{
 */
+
+/** \brief Seconds between the RTC and Unix epochs. */
+#define RTC_COUNTER_UNIX_EPOCH UINT32_C(631152000)
+
+/** \brief Civil weekday values produced by RTC conversion functions. */
+typedef enum rtc_weekday {
+    RTC_WEEKDAY_SUNDAY = 0,
+    RTC_WEEKDAY_MONDAY,
+    RTC_WEEKDAY_TUESDAY,
+    RTC_WEEKDAY_WEDNESDAY,
+    RTC_WEEKDAY_THURSDAY,
+    RTC_WEEKDAY_FRIDAY,
+    RTC_WEEKDAY_SATURDAY
+} rtc_weekday_t;
+
+/** \brief Calendar representation of an RTC counter value.
+
+    The weekday is derived when converting from a counter. It is ignored when
+    converting a calendar value to a counter or setting the RTC.
+*/
+typedef struct rtc_datetime {
+    uint16_t year;          /**< \brief Full Gregorian year. */
+    uint8_t month;          /**< \brief Month in the range 1 through 12. */
+    uint8_t day;            /**< \brief Day in the range 1 through 31. */
+    uint8_t hour;           /**< \brief Hour in the range 0 through 23. */
+    uint8_t minute;         /**< \brief Minute in the range 0 through 59. */
+    uint8_t second;         /**< \brief Second in the range 0 through 59. */
+    uint8_t weekday;        /**< \brief Derived rtc_weekday_t value. */
+} rtc_datetime_t;
+
+/** \brief Read the hardware's native 1950-epoch counter.
+
+    \param counter         Output receiving the complete 32-bit counter.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+
+    \exception EFAULT      \p counter was NULL.
+*/
+int rtc_get_counter(uint32_t *counter);
+
+/** \brief Set the hardware's native 1950-epoch counter.
+
+    The cached boot time used by CLOCK_REALTIME is updated coherently from the
+    final stable readback. This keeps realtime synchronized with the hardware
+    even when the requested value cannot be verified and the call fails.
+
+    \param counter         Counter value to write.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+
+    \exception EPERM       The value could not be written and read back.
+*/
+int rtc_set_counter(uint32_t counter);
+
+/** \brief Convert a native RTC counter to a Gregorian calendar value.
+
+    Every 32-bit counter value is representable. The conversion is purely
+    arithmetic and does not access the hardware.
+
+    \param counter         Native 1950-epoch counter.
+    \param datetime        Output calendar value.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+
+    \exception EFAULT      \p datetime was NULL.
+*/
+int rtc_counter_to_datetime(uint32_t counter, rtc_datetime_t *datetime);
+
+/** \brief Convert a Gregorian calendar value to a native RTC counter.
+
+    \param datetime        Calendar value to convert. Its weekday is ignored.
+    \param counter         Output native 1950-epoch counter.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+
+    \exception EFAULT      Either pointer was NULL.
+    \exception EINVAL      A calendar field was invalid.
+    \exception ERANGE      The valid date is outside the hardware range.
+*/
+int rtc_datetime_to_counter(const rtc_datetime_t *datetime,
+                            uint32_t *counter);
+
+/** \brief Compare two validated Gregorian calendar values.
+
+    \param lhs             Left calendar operand.
+    \param rhs             Right calendar operand.
+    \param result          Receives -1, 0, or 1.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set as for
+                            rtc_datetime_to_counter().
+*/
+int rtc_datetime_compare(const rtc_datetime_t *lhs,
+                         const rtc_datetime_t *rhs, int *result);
+
+/** \brief Read and convert the current hardware RTC value. */
+int rtc_get_datetime(rtc_datetime_t *datetime);
+
+/** \brief Validate, convert, and set the current hardware RTC value. */
+int rtc_set_datetime(const rtc_datetime_t *datetime);
 
 /** \brief   Get the current date/time.
 

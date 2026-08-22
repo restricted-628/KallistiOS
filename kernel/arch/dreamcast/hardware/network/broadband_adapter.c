@@ -5,6 +5,7 @@
    Copyright (C) 2001,2003,2005 Megan Potter
    Copyright (C) 2004 Vincent Penne
    Copyright (C) 2007, 2008, 2010 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -83,14 +84,21 @@ This driver has basically been rewritten since KOS 1.0.x.
 /* GAPS PCI stuff probably ought to be moved to another file... */
 #define GAPS_BASE 0xa1000000
 
-/* Detect a GAPS PCI bridge */
-static int gaps_detect(void) {
+static int gaps_present(void) {
     char str[16];
 
     g2_read_block_8((uint8_t *)str, GAPS_BASE + 0x1400, 16);
+    return !strncmp(str, "GAPSPCI_BRIDGE_2", 16);
+}
 
-    if(!strncmp(str, "GAPSPCI_BRIDGE_2", 16))
-    {
+int bba_probe(void) {
+    return gaps_present();
+}
+
+/* Detect and leave a GAPS PCI bridge quiescent for later initialization. */
+static int gaps_detect(void) {
+    if(gaps_present()) {
+
         /* Set this to 0 first thing */
         g2_write_32(GAPS_BASE + 0x1414, 0x00000000);
         /* Turn GAPS off */
@@ -98,8 +106,7 @@ static int gaps_detect(void) {
 
         return 0;
     }
-    else
-        return -1;
+    return -1;
 }
 
 /* Initialize GAPS PCI bridge */
@@ -138,7 +145,7 @@ static int gaps_init(void) {
        change. Considering that the DC is now out of production officially,
        there is a VERY good chance it will never change. */
 
-    /* VEN:DEV is 11db:1234 (vendor code is "Sega Enterprises, LTD")
+    /* VEN:DEV is the bridge's custom 11db:1234 identifier.
        The GAPS bridge is really just an MMU with a memory buffer that maps
        the RTL8139C to the Dreamcast's memory space, so these are actually
        the PCI configuration registers for the RTL8139, not GAPS (those are
@@ -179,7 +186,7 @@ static int gaps_init(void) {
     //Apparently the Cache should be invalidated also. Don't want to import that.
 
     /* Another magic number sequence, possibly checking previous init. */
-    /* ASCII for 'SEGA' in little-endian */
+    /* Bridge firmware signature in little-endian form. */
     if(g2_read_32(GAPS_BASE + 0x141c) == 0x41474553) {
         g2_write_32(GAPS_BASE + 0x141c, 0x55aaff00);
 
@@ -228,6 +235,7 @@ static uint32_t const txdesc[TX_NB_BUFFERS] = {
 
 /* Is the link stabilized? */
 static bool link_stable;
+static asic_evt_claim_t bba_irq_claim = ASIC_EVT_CLAIM_INVALID;
 
 /* Receive callback */
 static eth_rx_callback_t eth_rx_callback;
@@ -364,9 +372,14 @@ static int bba_hw_init(void) {
     /* Disable all multi-interrupts */
     g2_write_16(NIC(RT_MULTIINTR), 0);
 
-    /* Enable G2 interrupts */
-    asic_evt_set_handler(ASIC_EVT_EXP_PCI, bba_irq_hnd, NULL);
-    asic_evt_enable(ASIC_EVT_EXP_PCI, BBA_ASIC_IRQ);
+    /* Own the external interrupt until hardware shutdown. */
+    if(asic_evt_claim(ASIC_EVT_EXP_PCI, BBA_ASIC_IRQ, bba_irq_hnd,
+                      NULL, &bba_irq_claim) < 0) {
+        dbglog(DBG_ERROR, "bba: external interrupt is already owned\n");
+        g2_write_32(NIC(RT_RXCONFIG), 0);
+        g2_write_8(NIC(RT_CHIPCMD), 0);
+        return -4;
+    }
 
     /* Enable receive interrupts */
     /* XXX need to handle more! */
@@ -420,9 +433,10 @@ static void bba_hw_shutdown(void) {
     /* Disable receiver */
     g2_write_32(NIC(RT_RXCONFIG), 0);
 
-    /* Disable G2 interrupts */
-    asic_evt_disable(ASIC_EVT_EXP_PCI, BBA_ASIC_IRQ);
-    asic_evt_remove_handler(ASIC_EVT_EXP_PCI);
+    if(bba_irq_claim != ASIC_EVT_CLAIM_INVALID) {
+        (void)asic_evt_release(bba_irq_claim);
+        bba_irq_claim = ASIC_EVT_CLAIM_INVALID;
+    }
 }
 
 #define RXBSZ       (64 * 1024) /* must be a power of two */

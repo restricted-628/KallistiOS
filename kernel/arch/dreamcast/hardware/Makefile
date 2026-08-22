@@ -9,15 +9,15 @@ OBJS = hardware.o
 
 # BIOS services
 ifneq ($(KOS_SUBARCH), naomi)
-	OBJS += biosfont.o cdrom.o cdrom_request.o cdrom_range.o g1_bus.o \
-		gdrom_spi.o gdrom_direct.o flashrom.o
+	OBJS += biosfont.o cdrom.o cdrom_request.o cdrom_range.o expansion.o \
+		g1_bus.o gdrom_spi.o gdrom_direct.o flashrom.o flashrom_layout.o
 endif
 
 # System Calls
 OBJS += syscalls.o syscall_font.o dcload.o dcload_syscalls.o dcload_syscalls_net.o
 
 # G2
-OBJS += g2dma.o rtc.o
+OBJS += g2dma.o rtc.o rtc_calendar.o
 
 # Sound
 OBJS += spu.o
@@ -26,10 +26,10 @@ OBJS += spu.o
 OBJS += asic.o g2bus.o
 
 # Video-related
-OBJS += video.o vblank.o
+OBJS += video.o video_mode.o vblank.o
 
 # CPU-related
-OBJS += sq.o sq_fast_cpy.o scif.o sci.o ubc.o dmac.o wdt.o
+OBJS += sq.o sq_fast_cpy.o scif.o scif_config.o sci.o ubc.o dmac.o wdt.o
 
 # SPI device support
 OBJS += scif-spi.o sd.o

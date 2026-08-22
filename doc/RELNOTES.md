@@ -26,6 +26,11 @@ lifecycle and naming conventions.
   with caller-stacked cooperative fibers, synchronization objects, and explicit
   service executors. Ordinary threads carry no fiber state or stack allocation;
   service wake/message delivery cannot falsely complete a mutex or event wait.
+* Added validated flash configuration and play-history transactions, full-range
+  RTC counter/calendar conversion, checked cable-aware video-mode policy,
+  coherent SCIF configuration/status, and side-effect-bounded expansion-device
+  discovery. Physical writes, timing, and device variants remain validation
+  gates.
 * Extended ISO9660 with selectable BIOS/direct transport, aligned-sector and
   arbitrary-byte asynchronous reads, preseek, staged streaming, media
   invalidation, directory prefetch, and cache statistics. The 32 KiB bounce

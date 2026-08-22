@@ -7,6 +7,14 @@
 
 include kos.h
 
+# Expansion port
+expansion_probe
+bba_probe
+la_probe
+la_is_initialized
+modem_probe
+modem_is_initialized
+
 # G1 Bus
 g1_dma_in_progress
 g1_ata_mutex_lock
@@ -162,5 +170,16 @@ flashrom_info
 flashrom_read
 flashrom_write
 flashrom_delete
+flashrom_get_block
+flashrom_read_block
+flashrom_append_block
 flashrom_get_syscfg
+flashrom_get_syscfg_ex
+flashrom_set_syscfg_ex
+flashrom_syscfg_decode
 flashrom_get_region
+flashrom_play_history_read
+flashrom_play_history_find
+flashrom_play_history_decode
+flashrom_play_history_encode
+flashrom_play_history_write

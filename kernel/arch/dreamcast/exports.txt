@@ -1,6 +1,7 @@
 include kos.h
 include dc/sound/sound.h
 include dc/maple/mie.h
+include dc/expansion.h
 
 # Cache management
 arch_icache_inval_range
@@ -47,12 +48,20 @@ vblank_handler_remove
 
 # SCIF
 scif_set_parameters
+scif_configure
+scif_get_status
+scif_clear_stats
 scif_set_irq_usage
 scif_detected
 scif_init
 scif_shutdown
 scif_read
+scif_peek
+scif_read_available
+scif_read_buffer_nonblock
 scif_write
+scif_try_write
+scif_write_available
 scif_flush
 scif_write_buffer
 scif_read_buffer
@@ -155,8 +164,19 @@ sq_unlock
 sq_wait
 
 # RTC
+rtc_get_counter
+rtc_set_counter
+rtc_counter_to_datetime
+rtc_datetime_to_counter
+rtc_datetime_compare
+rtc_get_datetime
+rtc_set_datetime
+arch_rtc_get_counter
+arch_rtc_set_counter
 arch_rtc_unix_secs
 arch_rtc_set_unix_secs
+arch_rtc_boot_time
+arch_rtc_init
 dc_boot_time
 
 # Sound
@@ -216,6 +236,9 @@ vid_mode
 vram_s
 vram_l
 vid_check_cable
+vid_mode_resolve
+vid_mode_validate
+vid_get_mode
 vid_set_vram
 vid_set_start
 vid_get_start
@@ -228,7 +251,11 @@ vid_get_enabled
 vid_set_enabled
 vid_waitvbl
 vid_set_mode
+vid_set_mode_checked
+vid_set_mode_standard_checked
 vid_set_mode_ex
+vid_set_mode_ex_checked
+vid_init_checked
 vid_init
 vid_shutdown
 

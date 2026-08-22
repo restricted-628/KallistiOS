@@ -2,6 +2,7 @@
 
    dc/net/broadband_adapter.h
    Copyright (C) 2001-2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -351,6 +352,9 @@ int bba_tx(const uint8_t *pkt, int len, int wait);
 /** @} */
 
 /* \cond */
+/* Probe without initializing or resetting the adapter. */
+int bba_probe(void);
+
 /* Initialize */
 int bba_init(void);
 
@@ -363,4 +367,3 @@ int bba_shutdown(void);
 __END_DECLS
 
 #endif  /* __DC_NET_BROADBAND_ADAPTER_H */
-
