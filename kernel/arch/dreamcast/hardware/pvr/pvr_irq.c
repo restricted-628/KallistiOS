@@ -183,6 +183,12 @@ void pvr_int_handler(uint32_t code, void *data) {
 
             genwait_wake_all((void *)&pvr_state.render_busy);
             break;
+        case ASIC_EVT_PVR_YUV_DONE:
+            /* Converter completion is distinct from the channel-2 DMA that
+               supplies its input. The request layer orders both interrupts. */
+            pvr_txr_yuv_complete();
+            status_changed = true;
+            break;
     }
 
     if(status_changed)

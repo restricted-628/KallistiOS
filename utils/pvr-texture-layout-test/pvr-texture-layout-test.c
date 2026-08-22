@@ -93,6 +93,66 @@ static void test_vq_layouts(void) {
     expect_level(&surface, 3, 1, 1, 2048, 1);
 }
 
+static void test_yuv_input_layouts(void) {
+    pvr_txr_surface_t surface;
+    size_t byte_size = 0;
+
+    assert(pvr_txr_surface_init(&surface, 16, 16,
+                                PVR_TXR_SURFACE_YUV422,
+                                PVR_TXR_SURFACE_LINEAR, false) == 0);
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV420,
+                                          &byte_size) == 0);
+    assert(byte_size == 384);
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV422,
+                                          &byte_size) == 0);
+    assert(byte_size == 512);
+
+    assert(pvr_txr_surface_init(&surface, 1024, 1024,
+                                PVR_TXR_SURFACE_YUV422,
+                                PVR_TXR_SURFACE_LINEAR, false) == 0);
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV420,
+                                          &byte_size) == 0);
+    assert(byte_size == 1572864);
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV422,
+                                          &byte_size) == 0);
+    assert(byte_size == 2097152);
+
+    assert(pvr_txr_surface_init(&surface, 16, 16,
+                                PVR_TXR_SURFACE_YUV422,
+                                PVR_TXR_SURFACE_TWIDDLED, false) == 0);
+    errno = 0;
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV420,
+                                          &byte_size) == -1);
+    assert(errno == ENOTSUP);
+
+    assert(pvr_txr_surface_init(&surface, 8, 8,
+                                PVR_TXR_SURFACE_YUV422,
+                                PVR_TXR_SURFACE_LINEAR, false) == 0);
+    errno = 0;
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV420,
+                                          &byte_size) == -1);
+    assert(errno == EINVAL);
+
+    assert(pvr_txr_surface_init(&surface, 16, 16,
+                                PVR_TXR_SURFACE_RGB565,
+                                PVR_TXR_SURFACE_LINEAR, false) == 0);
+    errno = 0;
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV420,
+                                          &byte_size) == -1);
+    assert(errno == ENOTSUP);
+
+    errno = 0;
+    assert(pvr_txr_surface_yuv_input_size(&surface,
+                                          (pvr_txr_yuv_format_t)2,
+                                          &byte_size) == -1);
+    assert(errno == EINVAL);
+
+    errno = 0;
+    assert(pvr_txr_surface_yuv_input_size(&surface, PVR_TXR_YUV420,
+                                          NULL) == -1);
+    assert(errno == EINVAL);
+}
+
 static void test_rejections(void) {
     pvr_txr_surface_t surface;
     pvr_txr_level_info_t info;
@@ -153,6 +213,7 @@ int main(void) {
     test_plain_layouts();
     test_mipmap_layouts();
     test_vq_layouts();
+    test_yuv_input_layouts();
     test_rejections();
     puts("pvr texture layout tests passed");
     return 0;

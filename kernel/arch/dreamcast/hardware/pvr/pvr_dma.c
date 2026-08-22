@@ -29,6 +29,8 @@ static semaphore_t dma_done;
 static bool dma_blocking;
 static pvr_dma_callback_t dma_callback;
 static void *dma_cbdata;
+static size_t dma_last_remaining;
+static uint32_t dma_last_detail;
 
 /* DMA registers */
 static volatile uint32_t *const pvr_dma = (volatile uint32_t *)0xa05f6800;
@@ -41,17 +43,23 @@ static volatile uint32_t *const pvr_dma = (volatile uint32_t *)0xa05f6800;
 #define PVR_LMMODE1 0x88/4
 
 static void pvr_dma_irq_hnd(uint32_t code, void *data) {
+    size_t remaining;
     uint32_t detail = 0;
 
     (void)code;
     (void)data;
 
-    if(dma_transfer_get_remaining(DMA_CHANNEL_2) != 0) {
+    remaining = dma_transfer_get_remaining(DMA_CHANNEL_2);
+    if(remaining != 0) {
         dbglog(DBG_INFO, "pvr_dma: The dma did not complete successfully\n");
         pvr_fault_record(PVR_FAULT_DMA_INCOMPLETE, code);
         pvr_event_dispatch(PVR_EVENT_FAULT, PVR_FAULT_DMA_INCOMPLETE);
         detail = PVR_FAULT_DMA_INCOMPLETE;
     }
+
+    /* Publish the observation before invoking the one completion callback. */
+    dma_last_remaining = remaining;
+    dma_last_detail = detail;
 
     pvr_status_advance();
     pvr_event_dispatch(PVR_EVENT_DMA_COMPLETE, detail);
@@ -144,6 +152,8 @@ int pvr_dma_transfer(const void *src, uintptr_t dest, size_t count,
     dma_blocking = block;
     dma_callback = callback;
     dma_cbdata = cbdata;
+    dma_last_remaining = count;
+    dma_last_detail = 0;
 
     pvr_dma[PVR_STATE] = pvr_dest_addr(dest, type);
     pvr_dma[PVR_LEN] = count;
@@ -178,12 +188,22 @@ bool pvr_dma_ready(void) {
     return pvr_dma[PVR_DST] == 0;
 }
 
+size_t pvr_dma_completion_remaining(void) {
+    return dma_last_remaining;
+}
+
+uint32_t pvr_dma_completion_detail(void) {
+    return dma_last_detail;
+}
+
 void pvr_dma_init(void) {
     /* Create an initially blocked semaphore */
     sem_init(&dma_done, 0);
     dma_blocking = false;
     dma_callback = NULL;
     dma_cbdata = 0;
+    dma_last_remaining = 0;
+    dma_last_detail = 0;
 
     /* Use 2x32-bit TA->VRAM buses for PVR_TA_TEX_MEM */
     pvr_dma[PVR_LMMODE0] = 0;
@@ -197,10 +217,18 @@ void pvr_dma_init(void) {
 }
 
 void pvr_dma_shutdown(void) {
+    irq_disable_scoped();
+
     /* Need to ensure that no DMA is in progress */
     if(!pvr_dma_ready()) {
         pvr_dma[PVR_DST] = 0;
     }
+
+    /* The request layer publishes cancellation after this handler is removed;
+       no stale callback may retain its request in the meantime. */
+    dma_callback = NULL;
+    dma_cbdata = NULL;
+    dma_blocking = false;
 
     /* Clean up */
     asic_evt_disable(ASIC_EVT_PVR_DMA, ASIC_IRQ_DEFAULT);

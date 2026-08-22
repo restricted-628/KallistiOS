@@ -3,7 +3,8 @@
    examples/dreamcast/pvr/texture_surface/texture_surface.c
    Copyright (C) 2026 Joseph Black
 
-   Exercises checked texture metadata and bounded partial updates.
+   Exercises checked texture metadata, asynchronous transfers, and bounded
+   partial updates.
 */
 
 #include <assert.h>
@@ -11,6 +12,7 @@
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <kos.h>
 
@@ -22,6 +24,7 @@ KOS_INIT_FLAGS(INIT_DEFAULT);
 #define PATCH_HEIGHT 16u
 
 static alignas(32) uint16_t pixels[TEXTURE_WIDTH * TEXTURE_HEIGHT];
+static alignas(32) uint8_t yuv420[384];
 static uint16_t patch[PATCH_WIDTH * PATCH_HEIGHT];
 
 static void fill_checkerboard(void) {
@@ -80,11 +83,15 @@ int main(int argc, char **argv) {
     pvr_txr_surface_t bound;
     pvr_txr_surface_t mipmap;
     pvr_txr_surface_t vq;
+    pvr_txr_surface_t yuv;
     pvr_txr_level_info_t level;
+    pvr_txr_request_t *request;
+    pvr_txr_request_status_t request_status;
     pvr_pipeline_status_t status;
     pvr_poly_cxt_t context;
     pvr_poly_hdr_t header;
     uint32_t texture_format;
+    size_t yuv_input_size;
     unsigned int frame;
 
     (void)argc;
@@ -109,8 +116,13 @@ int main(int argc, char **argv) {
     assert(pvr_txr_surface_alloc(&temporary, TEXTURE_WIDTH, TEXTURE_HEIGHT,
                                  PVR_TXR_SURFACE_RGB565,
                                  PVR_TXR_SURFACE_LINEAR, false) == 0);
-    assert(pvr_txr_surface_upload(&temporary, pixels, sizeof(pixels),
-                                  PVR_TXR_TRANSFER_DMA) == 0);
+    assert(pvr_txr_surface_upload_async(&temporary, pixels, sizeof(pixels),
+                                        &request) == 0);
+    assert(pvr_txr_request_wait(request, 1000, &request_status) == 0);
+    assert(request_status.state == PVR_TXR_REQUEST_COMPLETE);
+    assert(request_status.requested_bytes == sizeof(pixels));
+    assert(request_status.completed_bytes == sizeof(pixels));
+    assert(pvr_txr_request_destroy(request) == 0);
     assert(pvr_txr_surface_pvr_format(&temporary)
            == (PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED));
     assert(pvr_txr_surface_bind(&bound, temporary.vram, temporary.capacity,
@@ -120,6 +132,23 @@ int main(int argc, char **argv) {
     assert(!bound.owns_vram && bound.vram == temporary.vram);
     pvr_txr_surface_release(&bound);
     pvr_txr_surface_release(&temporary);
+
+    assert(pvr_txr_surface_alloc(&yuv, 16, 16, PVR_TXR_SURFACE_YUV422,
+                                 PVR_TXR_SURFACE_LINEAR, false) == 0);
+    assert(pvr_txr_surface_yuv_input_size(&yuv, PVR_TXR_YUV420,
+                                          &yuv_input_size) == 0);
+    assert(yuv_input_size == sizeof(yuv420));
+    memset(yuv420, 128, 128);
+    memset(yuv420 + 128, 180, 256);
+    assert(pvr_txr_surface_yuv_upload_async(&yuv, PVR_TXR_YUV420, yuv420,
+                                            sizeof(yuv420), &request) == 0);
+    assert(pvr_txr_request_wait(request, 1000, &request_status) == 0);
+    assert(request_status.state == PVR_TXR_REQUEST_COMPLETE);
+    assert(request_status.completed_bytes == sizeof(yuv420));
+    assert(request_status.requested_macroblocks == 1);
+    assert(request_status.completed_macroblocks == 1);
+    assert(pvr_txr_request_destroy(request) == 0);
+    pvr_txr_surface_release(&yuv);
 
     assert(pvr_txr_surface_init(&mipmap, 8, 8,
                                 PVR_TXR_SURFACE_ARGB1555,

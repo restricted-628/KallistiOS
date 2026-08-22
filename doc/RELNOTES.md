@@ -32,6 +32,11 @@ lifecycle and naming conventions.
   binding, exact mip and VQ codebook layout metadata, format-word generation,
   bounded full/partial/level/codebook transfers, and rectangular updates for
   linear and twiddled uncompressed textures.
+* Added immediate-admission asynchronous PVR texture transfers with coherent
+  progress, timed waits, and terminal request ownership. Added checked
+  YUV420/YUV422 macroblock input sizing and conversion whose request completes
+  only after both channel-2 DMA and converter completion interrupts. These
+  opt-in operations create no worker, queue, permanent buffer, or idle thread.
 * Completed the established extended texture loader with checked dimensions,
   honest preformatted-copy behavior, bounded transfer selection, and an
   error-reporting entry point while preserving the original void wrapper.

@@ -230,6 +230,35 @@ typedef enum pvr_txr_transfer {
     PVR_TXR_TRANSFER_DMA      /**< Copy with blocking PVR DMA. */
 } pvr_txr_transfer_t;
 
+/** \brief Macroblock format accepted by the hardware YUV converter. */
+typedef enum pvr_txr_yuv_format {
+    PVR_TXR_YUV420 = 0, /**< 384 bytes per 16x16 macroblock. */
+    PVR_TXR_YUV422      /**< 512 bytes per 16x16 macroblock. */
+} pvr_txr_yuv_format_t;
+
+/** \brief State of an asynchronous texture transfer request. */
+typedef enum pvr_txr_request_state {
+    PVR_TXR_REQUEST_DMA = 0,    /**< Source DMA is active. */
+    PVR_TXR_REQUEST_CONVERTING, /**< YUV DMA ended; conversion remains. */
+    PVR_TXR_REQUEST_COMPLETE,   /**< Destination data is complete. */
+    PVR_TXR_REQUEST_FAILED,     /**< Transfer ended with an error. */
+    PVR_TXR_REQUEST_CANCELLED   /**< PVR shutdown cancelled the transfer. */
+} pvr_txr_request_state_t;
+
+/** \brief Coherent snapshot of an asynchronous texture transfer. */
+typedef struct pvr_txr_request_status {
+    pvr_txr_request_state_t state; /**< Current request state. */
+    size_t requested_bytes;        /**< Source bytes submitted to DMA. */
+    size_t completed_bytes;        /**< Source bytes accepted by DMA. */
+    uint32_t requested_macroblocks; /**< Expected YUV blocks, otherwise zero. */
+    uint32_t completed_macroblocks; /**< Stored YUV blocks, otherwise zero. */
+    int result;                     /**< Zero or the terminal errno value. */
+    uint32_t detail;                /**< Zero or a pvr_fault_t detail flag. */
+} pvr_txr_request_status_t;
+
+/** \brief Opaque asynchronous texture transfer request. */
+typedef struct pvr_txr_request pvr_txr_request_t;
+
 /** \brief Storage information for one logical mip level. */
 typedef struct pvr_txr_level_info {
     uint32_t width;   /**< Width of this level in texels. */
@@ -349,6 +378,100 @@ int pvr_txr_surface_upload_level(const pvr_txr_surface_t *surface,
 int pvr_txr_surface_upload_codebook(const pvr_txr_surface_t *surface,
                                     const void *src, size_t byte_size,
                                     pvr_txr_transfer_t transfer);
+
+/** \brief Start a complete asynchronous DMA upload.
+
+    Submission never waits for the shared PVR DMA channel. It returns EBUSY if
+    another checked texture or scene-list DMA owns the channel. An accepted
+    request advances from interrupt context without an application pump or
+    worker thread. The source memory, surface allocation, and descriptor must
+    remain valid until the request is terminal. Legacy raw PVR DMA calls retain
+    their established external-serialization requirement.
+
+    \return 0 with a request in \a request, or -1 with errno set.
+*/
+int pvr_txr_surface_upload_async(const pvr_txr_surface_t *surface,
+                                 const void *src, size_t byte_size,
+                                 pvr_txr_request_t **request);
+
+/** \brief Start an asynchronous DMA upload of an encoded byte range.
+
+    Source, destination, offset, and byte count must be 32-byte aligned. The
+    request follows the ownership and immediate-admission rules of
+    pvr_txr_surface_upload_async().
+*/
+int pvr_txr_surface_upload_part_async(const pvr_txr_surface_t *surface,
+                                      size_t offset, const void *src,
+                                      size_t byte_size,
+                                      pvr_txr_request_t **request);
+
+/** \brief Start an asynchronous DMA upload of one encoded mip level. */
+int pvr_txr_surface_upload_level_async(const pvr_txr_surface_t *surface,
+                                       uint32_t level, const void *src,
+                                       size_t byte_size,
+                                       pvr_txr_request_t **request);
+
+/** \brief Start an asynchronous DMA replacement of a complete VQ codebook. */
+int pvr_txr_surface_upload_codebook_async(const pvr_txr_surface_t *surface,
+                                          const void *src, size_t byte_size,
+                                          pvr_txr_request_t **request);
+
+/** \brief Validate a YUV surface and calculate its encoded source size.
+
+    The destination must be a non-mipmapped, linear YUV422 surface whose width
+    and height are multiples of 16 from 16 through 1024. Input consists of
+    complete 16x16 macroblocks in row-major order. Each YUV420 macroblock is
+    U64, V64, then Y256 bytes; each YUV422 macroblock is U64, V64, Y128,
+    U64, V64, then Y128 bytes.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_yuv_input_size(const pvr_txr_surface_t *surface,
+                                   pvr_txr_yuv_format_t format,
+                                   size_t *byte_size);
+
+/** \brief Convert and upload a complete macroblock-ordered YUV image.
+
+    Completion means both source DMA and the separate YUV conversion operation
+    are terminal. The input size must exactly match
+    pvr_txr_surface_yuv_input_size(). Submission is immediate-only and follows
+    the same lifetime rules as pvr_txr_surface_upload_async().
+
+    \return 0 with a request in \a request, or -1 with errno set.
+*/
+int pvr_txr_surface_yuv_upload_async(const pvr_txr_surface_t *surface,
+                                     pvr_txr_yuv_format_t format,
+                                     const void *src, size_t byte_size,
+                                     pvr_txr_request_t **request);
+
+/** \brief Copy a coherent asynchronous request status snapshot.
+
+    Byte progress is sampled from channel 2 while DMA is active. YUV macroblock
+    progress is sampled from the converter register and is therefore
+    hardware-granular rather than a scheduling guarantee. Progress describes
+    hardware consumption; destination data is safe to use only after successful
+    completion.
+*/
+int pvr_txr_request_get_status(const pvr_txr_request_t *request,
+                               pvr_txr_request_status_t *status);
+
+/** \brief Wait for a texture request to reach a terminal state.
+
+    A timeout of zero waits indefinitely. Timing out does not cancel the
+    hardware transfer. This function is only valid in ordinary thread context.
+
+    \return 0 on successful completion, or -1 with errno set.
+*/
+int pvr_txr_request_wait(pvr_txr_request_t *request, uint32_t timeout,
+                         pvr_txr_request_status_t *status);
+
+/** \brief Destroy a terminal asynchronous texture request.
+
+    An active request or one still observed by a waiter returns EBUSY. This
+    function must not be called from interrupt context. Applications must
+    externally serialize destroy against status queries from other threads.
+*/
+int pvr_txr_request_destroy(pvr_txr_request_t *request);
 
 /** \brief Upload a linear source rectangle into an uncompressed surface.
 

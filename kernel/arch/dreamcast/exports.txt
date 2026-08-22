@@ -539,6 +539,15 @@ pvr_txr_surface_upload_part
 pvr_txr_surface_upload_level
 pvr_txr_surface_upload_codebook
 pvr_txr_surface_upload_rect
+pvr_txr_surface_upload_async
+pvr_txr_surface_upload_part_async
+pvr_txr_surface_upload_level_async
+pvr_txr_surface_upload_codebook_async
+pvr_txr_surface_yuv_input_size
+pvr_txr_surface_yuv_upload_async
+pvr_txr_request_get_status
+pvr_txr_request_wait
+pvr_txr_request_destroy
 
 # MMU handling
 mmu_reset_itlb

@@ -301,6 +301,14 @@ void pvr_event_init(void);
 void pvr_event_shutdown(void);
 void pvr_event_dispatch(pvr_event_t event, uint32_t detail);
 
+/* Completion observations consumed by checked texture requests. */
+size_t pvr_dma_completion_remaining(void);
+uint32_t pvr_dma_completion_detail(void);
+
+/* Complete or cancel the optional per-use texture request object. */
+void pvr_txr_yuv_complete(void);
+void pvr_txr_request_shutdown(void);
+
 /* Synchronize the viewed page with what's in pvr_state */
 void pvr_sync_view(void);
 

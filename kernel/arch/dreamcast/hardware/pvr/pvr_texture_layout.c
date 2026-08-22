@@ -204,3 +204,40 @@ int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
 
     return 0;
 }
+
+int pvr_txr_surface_yuv_input_size(const pvr_txr_surface_t *surface,
+                                   pvr_txr_yuv_format_t format,
+                                   size_t *byte_size) {
+    size_t macroblocks;
+    size_t macroblock_size;
+
+    if(byte_size)
+        *byte_size = 0;
+
+    if(!byte_size || !surface_metadata_valid(surface)
+       || (format != PVR_TXR_YUV420 && format != PVR_TXR_YUV422)) {
+        if(!byte_size || (format != PVR_TXR_YUV420
+                          && format != PVR_TXR_YUV422))
+            errno = EINVAL;
+        return -1;
+    }
+
+    if(surface->format != PVR_TXR_SURFACE_YUV422
+       || surface->layout != PVR_TXR_SURFACE_LINEAR
+       || surface->mipmapped) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(surface->width < 16 || surface->height < 16
+       || (surface->width & 15u) || (surface->height & 15u)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    macroblocks = (size_t)(surface->width / 16u)
+                * (surface->height / 16u);
+    macroblock_size = format == PVR_TXR_YUV420 ? 384u : 512u;
+    *byte_size = macroblocks * macroblock_size;
+    return 0;
+}

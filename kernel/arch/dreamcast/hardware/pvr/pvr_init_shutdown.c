@@ -135,6 +135,8 @@ int pvr_init(const pvr_init_params_t *params) {
     asic_evt_enable(ASIC_EVT_PVR_PTDONE, ASIC_IRQ_DEFAULT);
     asic_evt_set_handler(ASIC_EVT_PVR_RENDERDONE_TSP, pvr_int_handler, NULL);
     asic_evt_enable(ASIC_EVT_PVR_RENDERDONE_TSP, ASIC_IRQ_DEFAULT);
+    asic_evt_set_handler(ASIC_EVT_PVR_YUV_DONE, pvr_int_handler, NULL);
+    asic_evt_enable(ASIC_EVT_PVR_YUV_DONE, ASIC_IRQ_DEFAULT);
 
     /* Fault events are always enabled because the public status API latches
        them even when their debug messages are compiled out. */
@@ -212,6 +214,8 @@ int pvr_shutdown(void) {
     asic_evt_remove_handler(ASIC_EVT_PVR_PTDONE);
     asic_evt_disable(ASIC_EVT_PVR_RENDERDONE_TSP, ASIC_IRQ_DEFAULT);
     asic_evt_remove_handler(ASIC_EVT_PVR_RENDERDONE_TSP);
+    asic_evt_disable(ASIC_EVT_PVR_YUV_DONE, ASIC_IRQ_DEFAULT);
+    asic_evt_remove_handler(ASIC_EVT_PVR_YUV_DONE);
     asic_evt_disable(ASIC_EVT_PVR_ISP_OUTOFMEM, ASIC_IRQ_DEFAULT);
     asic_evt_remove_handler(ASIC_EVT_PVR_ISP_OUTOFMEM);
     asic_evt_disable(ASIC_EVT_PVR_STRIP_HALT, ASIC_IRQ_DEFAULT);
@@ -225,6 +229,7 @@ int pvr_shutdown(void) {
 
     /* Shut down PVR DMA */
     pvr_dma_shutdown();
+    pvr_txr_request_shutdown();
     pvr_event_shutdown();
 
     /* Invalidate our memory pool */

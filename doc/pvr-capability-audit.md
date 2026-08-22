@@ -87,9 +87,9 @@ than place another renderer above them.
 6. ~~User clipping is representable in a polygon header, but KOS provides no
    checked command-construction or submission helper.~~ Closed for direct and
    buffered lists, including active-target tile validation.
-7. ~~Texture subregion, mip-level, and codebook-only updates are absent.~~
-   Closed for bounded synchronous transfers; asynchronous completion remains
-   the next tranche.
+7. ~~Texture subregion, mip-level, codebook-only, asynchronous, and checked YUV
+   updates are absent.~~ Closed with bounded synchronous operations plus
+   immediate-admission asynchronous request objects.
 
 ## Dependency order
 
@@ -97,7 +97,7 @@ than place another renderer above them.
 2. Add typed pipeline status and fault capture.
 3. Add user/global/pixel clipping helpers and background-plane description.
 4. ~~Add texture surface metadata plus checked full and partial transfers.~~
-5. Add asynchronous texture/YUV completion objects.
+5. ~~Add asynchronous texture/YUV completion objects.~~
 6. Add pass descriptions over the completed list and clip primitives.
 7. Expand render-target formats and display synchronization where hardware
    validation supports them.
@@ -208,8 +208,34 @@ items. Emulator validation covers the normal interrupt and snapshot paths only.
   VQ size and offset vectors, plus invalid layout combinations and descriptor
   corruption;
 - the focused example completes 120 frames in interpreter-mode emulation after
-  exercising checked twiddling, a blocking DMA upload, live rectangle updates,
-  overflow and type misuse, and zero persistent PVR faults.
+  exercising checked twiddling, an asynchronous DMA upload, live rectangle
+  updates, overflow and type misuse, and zero persistent PVR faults.
 
 Physical DMA timing and updates concurrent with texture sampling remain
 hardware validation items.
+
+### Asynchronous texture and YUV requests
+
+- full, byte-range, mip-level, and codebook texture DMA operations return an
+  opaque request with coherent byte progress, terminal errno, timed wait, and
+  explicit destruction;
+- admission is nonblocking: an occupied shared PVR DMA channel reports `EBUSY`
+  instead of allocating queued work or blocking the caller;
+- accepted operations advance entirely from interrupt context, with no pump,
+  carrier thread, permanent buffer, or allocation beyond the request itself;
+- YUV420 and YUV422 input geometry is checked against a nonmipmapped linear
+  YUV422 destination, including exact macroblock ordering and byte counts;
+- YUV terminal state requires both channel-2 source completion and the separate
+  converter-done event, and remains correct if the two interrupts are observed
+  in either order;
+- PVR shutdown removes completion handlers before cancelling an admitted
+  request, releases shared DMA ownership, and wakes request waiters;
+- host vectors cover both macroblock formats, maximum dimensions, incompatible
+  surface storage, illegal geometry, and invalid arguments;
+- the focused example cross-builds and completes 120 frames in interpreter-mode
+  emulation after ordinary asynchronous DMA and a one-block YUV conversion,
+  with no reported SH-4 exception or persistent PVR fault.
+
+Emulation verifies software state transitions and the emulator's interrupt
+model. Physical interrupt ordering, DMA/converter timing, cache visibility, and
+concurrent texture sampling remain hardware validation items.
