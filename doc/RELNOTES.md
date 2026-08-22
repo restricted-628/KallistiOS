@@ -76,9 +76,11 @@ lifecycle and naming conventions.
   defragmentation that packs ordinary files high, retains an executable at
   block zero, safely stages relocation cycles, and refuses before mutation
   when insufficient scratch space prevents an interruption-safe schedule.
-* Added lazy asynchronous VMU format and defragment requests with coherent
-  block-level progress, cancellation at transaction-safe boundaries, and
-  application callbacks dispatched outside the storage worker and IRQ context.
+* Added lazy asynchronous VMU save, delete, format, and defragment requests
+  with coherent block-level progress, cancellation at transaction-safe
+  boundaries, and application callbacks dispatched outside the storage worker
+  and IRQ context. Save data is read back before allocation metadata can make
+  its chain visible.
 
 RELEASE NOTES for 2.2.2
 -----------------------

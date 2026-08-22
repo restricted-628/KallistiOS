@@ -423,8 +423,8 @@ int vmufs_format(maple_device_t *dev,
 */
 int vmufs_defragment(maple_device_t *dev);
 
-/** \defgroup vfs_vmu_requests Asynchronous VMU maintenance requests
-    \brief Lazy queued maintenance with progress and safe cancellation.
+/** \defgroup vfs_vmu_requests Asynchronous VMU filesystem requests
+    \brief Lazy queued transactions with progress and safe cancellation.
     \ingroup vfs_vmu
 
     The request and callback workers are created together on the first valid
@@ -437,6 +437,8 @@ int vmufs_defragment(maple_device_t *dev);
 typedef struct vmufs_request vmufs_request_t;
 
 typedef enum vmufs_request_operation {
+    VMUFS_REQUEST_WRITE,       /**< \brief Transactional file save. */
+    VMUFS_REQUEST_DELETE,      /**< \brief Transactional file deletion. */
     VMUFS_REQUEST_FORMAT,      /**< \brief Whole-card format. */
     VMUFS_REQUEST_DEFRAGMENT   /**< \brief Safe file repacking. */
 } vmufs_request_operation_t;
@@ -470,7 +472,7 @@ typedef struct vmufs_request_status {
     size_t total_blocks;                 /**< \brief Planned writes. */
     size_t data_blocks_completed;        /**< \brief Completed data writes. */
     size_t data_blocks;                  /**< \brief Planned data writes. */
-    bool committed;                      /**< \brief Full request committed. */
+    bool committed;                      /**< \brief Visible result committed. */
 } vmufs_request_status_t;
 
 typedef void (*vmufs_request_callback_t)(
@@ -479,6 +481,37 @@ typedef void (*vmufs_request_callback_t)(
 /* Callbacks must return and must not destroy their own request. They may call
    ordinary VMU APIs, although a progress callback can block until the active
    storage transaction releases the VMU filesystem mutex. */
+
+/** \brief Queue a transactional file save.
+
+    The filename is copied during submission. The input buffer remains owned
+    by the caller and must stay readable until the request becomes terminal.
+    New and replacement files use the same commit ordering as vmufs_write().
+    Cancellation is accepted before the staging FAT is written; after that
+    barrier the transaction completes the directory commit and any cleanup.
+
+    \param dev            VMU to write.
+    \param fn             File name of at most 12 bytes.
+    \param inbuf          Input bytes, or NULL when \p insize is zero.
+    \param insize         Input size in bytes.
+    \param flags          VMUFS_OVERWRITE, VMUFS_VMUGAME, and VMUFS_NOCOPY.
+    \param callback       Optional progress and terminal callback.
+    \param callback_data  Caller data passed to \p callback.
+    \return               New request, or NULL with errno set.
+*/
+vmufs_request_t *vmufs_write_async(
+    maple_device_t *dev, const char *fn, const void *inbuf, size_t insize,
+    int flags, vmufs_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a transactional file deletion.
+
+    The filename is copied during submission. Cancellation is accepted before
+    the directory removal is committed. FAT reclamation always follows a
+    successful directory commit, even if cancellation is requested meanwhile.
+*/
+vmufs_request_t *vmufs_delete_async(
+    maple_device_t *dev, const char *fn,
+    vmufs_request_callback_t callback, void *callback_data);
 
 /** \brief Queue a destructive standard-card format.
 
