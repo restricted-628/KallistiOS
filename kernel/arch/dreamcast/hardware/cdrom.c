@@ -11,6 +11,7 @@
 
  */
 #include <assert.h>
+#include <errno.h>
 
 #include <dc/asic.h>
 #include <dc/cdrom.h>
@@ -77,6 +78,113 @@ static void *stream_cb_param = NULL;
 /* Initialization */
 static bool inited = false;
 static int cur_sector_size = 2048;
+
+int cdrom_decode_sense(const cd_cmd_chk_status_t *detail,
+                       cdrom_sense_t *sense) {
+    uint32_t additional;
+
+    if(!detail || !sense) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    additional = (uint32_t)detail->err2;
+    sense->key = (cdrom_sense_key_t)detail->err1;
+    sense->asc = additional & 0xff;
+    sense->ascq = (additional >> 8) & 0xff;
+    return 0;
+}
+
+int cdrom_sense_to_result(const cdrom_sense_t *sense) {
+    if(!sense) {
+        errno = EINVAL;
+        return ERR_SYS;
+    }
+
+    switch(sense->key) {
+        case CDROM_SENSE_RECOVERED_ERROR:
+            return ERR_RECOVERED;
+        case CDROM_SENSE_NOT_READY:
+            return sense->asc == 0x3a ? ERR_NO_DISC : ERR_NOT_READY;
+        case CDROM_SENSE_MEDIUM_ERROR:
+            return ERR_MEDIA;
+        case CDROM_SENSE_HARDWARE_ERROR:
+            return ERR_HARDWARE;
+        case CDROM_SENSE_ILLEGAL_REQUEST:
+            return ERR_ILLEGAL_REQUEST;
+        case CDROM_SENSE_UNIT_ATTENTION:
+            return ERR_DISC_CHG;
+        case CDROM_SENSE_DATA_PROTECT:
+            return ERR_PROTECT;
+        case CDROM_SENSE_ABORTED_COMMAND:
+            return ERR_ABORTED;
+        case CDROM_SENSE_NOT_READABLE:
+            return ERR_NOT_READABLE;
+        case CDROM_SENSE_G1_SEMAPHORE:
+            return ERR_BUSY;
+        case CDROM_SENSE_NONE:
+        default:
+            return ERR_SYS;
+    }
+}
+
+int cdrom_status_to_result(cd_cmd_chk_t response,
+                           const cd_cmd_chk_status_t *detail) {
+    cdrom_sense_t sense;
+
+    switch(response) {
+        case CD_CMD_COMPLETED:
+        case CD_CMD_STREAMING:
+            return ERR_OK;
+        case CD_CMD_NOT_FOUND:
+            return ERR_NO_ACTIVE;
+        case CD_CMD_PROCESSING:
+        case CD_CMD_BUSY:
+            return ERR_BUSY;
+        case CD_CMD_FAILED:
+            break;
+        default:
+            return ERR_SYS;
+    }
+
+    if(!detail || cdrom_decode_sense(detail, &sense) < 0)
+        return ERR_SYS;
+
+    return cdrom_sense_to_result(&sense);
+}
+
+int cdrom_result_to_errno(int result) {
+    switch(result) {
+        case ERR_OK:
+            return 0;
+        case ERR_NO_DISC:
+            return ENODEV;
+        case ERR_DISC_CHG:
+            return ESTALE;
+        case ERR_ABORTED:
+            return ECANCELED;
+        case ERR_NO_ACTIVE:
+            return ENOENT;
+        case ERR_TIMEOUT:
+            return ETIMEDOUT;
+        case ERR_NOT_READY:
+            return EAGAIN;
+        case ERR_ILLEGAL_REQUEST:
+            return EINVAL;
+        case ERR_PROTECT:
+            return EACCES;
+        case ERR_NOT_READABLE:
+            return ENOTSUP;
+        case ERR_BUSY:
+            return EBUSY;
+        case ERR_RECOVERED:
+        case ERR_MEDIA:
+        case ERR_HARDWARE:
+        case ERR_SYS:
+        default:
+            return EIO;
+    }
+}
 
 /* Shortcut to cdrom_reinit_ex. Typically this is the only thing changed. */
 int cdrom_set_sector_size(int size) {

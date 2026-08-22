@@ -95,7 +95,55 @@ static const uint8_t  CMD_MAX                __depr("Please use the new CD_ pref
 #define ERR_ABORTED     4   /**< \brief Command aborted */
 #define ERR_NO_ACTIVE   5   /**< \brief System inactive? */
 #define ERR_TIMEOUT     6   /**< \brief Aborted due to timeout */
+#define ERR_RECOVERED   7   /**< \brief Drive reported a recovered error */
+#define ERR_NOT_READY   8   /**< \brief Drive is temporarily not ready */
+#define ERR_MEDIA       9   /**< \brief Medium error */
+#define ERR_HARDWARE   10   /**< \brief Drive hardware error */
+#define ERR_ILLEGAL_REQUEST 11 /**< \brief Command or parameter was rejected */
+#define ERR_PROTECT    12   /**< \brief Operation is prohibited/protected */
+#define ERR_NOT_READABLE 13 /**< \brief Inserted medium cannot be read */
+#define ERR_BUSY       14   /**< \brief Command server or G1 path is busy */
 /** @} */
+
+/** \brief GD-ROM command sense keys.
+
+    These values are the drive result categories returned by the BIOS command
+    server and direct packet transport.
+*/
+typedef enum cdrom_sense_key {
+    CDROM_SENSE_NONE            = 0x00,
+    CDROM_SENSE_RECOVERED_ERROR = 0x01,
+    CDROM_SENSE_NOT_READY       = 0x02,
+    CDROM_SENSE_MEDIUM_ERROR    = 0x03,
+    CDROM_SENSE_HARDWARE_ERROR  = 0x04,
+    CDROM_SENSE_ILLEGAL_REQUEST = 0x05,
+    CDROM_SENSE_UNIT_ATTENTION  = 0x06,
+    CDROM_SENSE_DATA_PROTECT    = 0x07,
+    CDROM_SENSE_ABORTED_COMMAND = 0x0b,
+    CDROM_SENSE_NOT_READABLE    = 0x10,
+    CDROM_SENSE_G1_SEMAPHORE    = 0x20
+} cdrom_sense_key_t;
+
+/** \brief Decoded GD-ROM command sense information. */
+typedef struct cdrom_sense {
+    cdrom_sense_key_t key; /**< \brief General error category. */
+    uint8_t asc;           /**< \brief Additional sense code. */
+    uint8_t ascq;          /**< \brief Additional sense code qualifier. */
+} cdrom_sense_t;
+
+/** \brief Decode the raw status returned by the BIOS command server. */
+int cdrom_decode_sense(const cd_cmd_chk_status_t *detail,
+                       cdrom_sense_t *sense);
+
+/** \brief Map decoded drive sense to a stable KOS c ERR_* result. */
+int cdrom_sense_to_result(const cdrom_sense_t *sense);
+
+/** \brief Map a BIOS response and detail to a stable KOS c ERR_* result. */
+int cdrom_status_to_result(cd_cmd_chk_t response,
+                           const cd_cmd_chk_status_t *detail);
+
+/** \brief Map a KOS GD-ROM result to an errno value. */
+int cdrom_result_to_errno(int result);
 
 /* These are defines provided for compatibility. These defines are now part of `cd_cmd_chk_t` in dc/syscalls.h */
 static const uint8_t  FAILED      __depr("Please use the new CD_CMD_ prefixed versions.") = CD_CMD_FAILED;
@@ -393,6 +441,22 @@ void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param);
     \see    cd_sub_type_t
 */
 int cdrom_get_subcode(void *buffer, size_t buflen, cd_sub_type_t which);
+
+/** \brief Decoded CDDA playback position and Q-subcode state.
+    \ingroup gdrom
+*/
+typedef struct cdrom_cdda_status {
+    cd_sub_audio_t audio_status; /**< \brief CDDA playback state. */
+    uint8_t control;             /**< \brief Q-channel control nibble. */
+    uint8_t adr;                 /**< \brief Q-channel address nibble. */
+    uint8_t track;               /**< \brief Current track number. */
+    uint8_t index;               /**< \brief Current index within the track. */
+    uint32_t track_elapsed_frames; /**< \brief Track-relative frame count. */
+    uint32_t track_minutes;      /**< \brief Track-relative whole minutes. */
+    uint32_t track_seconds;      /**< \brief Second within the minute. */
+    uint32_t track_frames;       /**< \brief Frame within the second. */
+    uint32_t fad;                /**< \brief Absolute frame address. */
+} cdrom_cdda_status_t;
 
 /** \brief    Locate the sector of the data track.
     \ingroup  gdrom
