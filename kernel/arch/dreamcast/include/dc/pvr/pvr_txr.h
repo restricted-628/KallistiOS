@@ -6,6 +6,7 @@
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2024 Falco Girgis
    Copyright (C) 2024 Andress Barajas
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file       dc/pvr/pvr_txr.h
@@ -20,12 +21,14 @@
     \author Benoit Miller
     \author Ruslan Rostovtsev
     \author Falco Girgis
+    \author Joseph Black
 */
 
 #ifndef __DC_PVR_PVR_TEXTURE_H
 #define __DC_PVR_PVR_TEXTURE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <kos/cdefs.h>
@@ -123,11 +126,10 @@ void pvr_txr_load(const void *src, pvr_ptr_t dst, size_t count);
              the process.
     \ingroup pvr_txr_mgmt
 
-    This function loads a texture to the PVR's RAM with the specified set of
-    flags. It will currently always twiddle the data, whether you ask it to or
-    not, and many of the parameters are just plain not supported at all...
-    Pretty much the only supported flag, other than the format ones is the
-    PVR_TXRLOAD_INVERT_Y one.
+    This compatibility entry point uses pvr_txr_load_ex_checked() and asserts
+    when the checked operation fails. New code should call the checked form so
+    invalid dimensions, unsupported conversion, and transfer-alignment errors
+    can be handled without an assertion.
 
     This will be slower than using pvr_txr_load() in pretty much all cases, so
     unless you need to twiddle your texture, just use that instead.
@@ -142,6 +144,21 @@ void pvr_txr_load(const void *src, pvr_ptr_t dst, size_t count);
 */
 void pvr_txr_load_ex(const void *src, pvr_ptr_t dst,
                      uint32_t w, uint32_t h, uint32_t flags);
+
+/** \brief Checked form of pvr_txr_load_ex().
+    \ingroup pvr_txr_mgmt
+
+    Linear input is converted to twiddled storage unless
+    PVR_TXRLOAD_FMT_TWIDDLED is set. Pre-twiddled or pre-encoded VQ input can be
+    copied with CPU, store-queue, or blocking DMA transfers. Conversion and
+    vertical inversion use CPU writes because they are not contiguous transfer
+    operations. Runtime VQ encoding and nonblocking DMA are not performed by
+    this synchronous entry point.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_load_ex_checked(const void *src, pvr_ptr_t dst,
+                            uint32_t w, uint32_t h, uint32_t flags);
 
 /** \brief   Load a KOS Platform Independent Image (subject to constraint
              checking).
@@ -173,6 +190,183 @@ void pvr_txr_load_ex(const void *src, pvr_ptr_t dst,
                             loading.
 */
 void pvr_txr_load_kimg(const kos_img_t *img, pvr_ptr_t dst, uint32_t flags);
+
+/** \defgroup pvr_txr_surfaces Checked texture surfaces
+    \brief                      Caller-owned texture layout metadata
+    \ingroup                    pvr_txr_mgmt
+
+    Texture surfaces describe the storage occupied by one texture without
+    introducing a second VRAM allocator. Allocation uses pvr_mem_malloc(), and
+    a caller can instead bind an existing VRAM range. No thread, queue, or
+    permanent workspace is created by this API. The descriptor records storage
+    but does not track renderer use; applications must order writes so a region
+    is not modified while the PVR is sampling it.
+
+    @{ */
+
+/** \brief Texture pixel formats understood by checked surface operations. */
+typedef enum pvr_txr_surface_format {
+    PVR_TXR_SURFACE_ARGB1555 = 0, /**< 16-bit ARGB1555. */
+    PVR_TXR_SURFACE_RGB565,       /**< 16-bit RGB565. */
+    PVR_TXR_SURFACE_ARGB4444,     /**< 16-bit ARGB4444. */
+    PVR_TXR_SURFACE_YUV422,       /**< 16-bit YUV422. */
+    PVR_TXR_SURFACE_BUMP,         /**< 16-bit bump-map data. */
+    PVR_TXR_SURFACE_PAL4BPP,      /**< Packed 4-bit palette indices. */
+    PVR_TXR_SURFACE_PAL8BPP       /**< 8-bit palette indices. */
+} pvr_txr_surface_format_t;
+
+/** \brief Texture storage layouts understood by checked surface operations. */
+typedef enum pvr_txr_surface_layout {
+    PVR_TXR_SURFACE_TWIDDLED = 0, /**< Morton-ordered texture data. */
+    PVR_TXR_SURFACE_LINEAR,       /**< Linear power-of-two rows. */
+    PVR_TXR_SURFACE_STRIDE,       /**< Linear rows with an X32 stride. */
+    PVR_TXR_SURFACE_VQ            /**< Full 2048-byte codebook plus indices. */
+} pvr_txr_surface_layout_t;
+
+/** \brief Blocking transfer method for preformatted texture bytes. */
+typedef enum pvr_txr_transfer {
+    PVR_TXR_TRANSFER_CPU = 0, /**< Copy through the CPU-visible VRAM alias. */
+    PVR_TXR_TRANSFER_SQ,      /**< Copy with store queues. */
+    PVR_TXR_TRANSFER_DMA      /**< Copy with blocking PVR DMA. */
+} pvr_txr_transfer_t;
+
+/** \brief Storage information for one logical mip level. */
+typedef struct pvr_txr_level_info {
+    uint32_t width;   /**< Width of this level in texels. */
+    uint32_t height;  /**< Height of this level in texels. */
+    size_t offset;    /**< Byte offset from the surface's VRAM address. */
+    size_t byte_size; /**< Encoded byte count for this level. */
+} pvr_txr_level_info_t;
+
+/** \brief Caller-owned description of one texture allocation. */
+typedef struct pvr_txr_surface {
+    pvr_ptr_t vram;                   /**< Bound VRAM address, or NULL. */
+    size_t capacity;                  /**< Bytes available at \a vram. */
+    size_t byte_size;                 /**< Total bytes required. */
+    size_t codebook_size;             /**< VQ codebook bytes, otherwise zero. */
+    size_t data_size;                 /**< Texture bytes after the codebook. */
+    uint32_t width;                   /**< Top-level storage width. */
+    uint32_t height;                  /**< Top-level storage height. */
+    uint16_t mip_levels;              /**< Number of addressable levels. */
+    pvr_txr_surface_format_t format;  /**< Pixel format. */
+    pvr_txr_surface_layout_t layout;  /**< Storage layout. */
+    bool mipmapped;                   /**< Whether a complete mip chain exists. */
+    bool owns_vram;                   /**< Whether release frees \a vram. */
+} pvr_txr_surface_t;
+
+/** \brief Calculate checked texture metadata without allocating VRAM.
+
+    Width and height must be powers of two from 8 through 1024, except that an
+    X32-stride surface accepts widths from 32 through 992 in multiples of 32.
+    Mipmapped surfaces must be square. Palette formats are twiddled and cannot
+    be combined with linear or X32-stride storage. VQ currently uses the
+    hardware's full 2048-byte codebook and 16-bit texel formats.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
+                         uint32_t height, pvr_txr_surface_format_t format,
+                         pvr_txr_surface_layout_t layout, bool mipmapped);
+
+/** \brief Initialize a surface and allocate its storage with pvr_mem_malloc().
+    \warning Release an existing owned surface before reinitializing it, and do
+             not copy an owning descriptor because each allocation must have
+             exactly one owner.
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_alloc(pvr_txr_surface_t *surface, uint32_t width,
+                          uint32_t height, pvr_txr_surface_format_t format,
+                          pvr_txr_surface_layout_t layout, bool mipmapped);
+
+/** \brief Initialize a surface over caller-provided VRAM.
+
+    The address must use the 64-bit CPU-visible VRAM alias, be eight-byte
+    aligned, and have enough remaining VRAM and declared \a capacity for the
+    computed surface size. The caller retains ownership of the VRAM. Release an
+    existing owned surface before rebinding it.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
+                         size_t capacity, uint32_t width, uint32_t height,
+                         pvr_txr_surface_format_t format,
+                         pvr_txr_surface_layout_t layout, bool mipmapped);
+
+/** \brief Release owned VRAM and clear a surface descriptor. */
+void pvr_txr_surface_release(pvr_txr_surface_t *surface);
+
+/** \brief Query the byte range occupied by one logical mip level.
+
+    Level zero is the largest level even though mipmapped texture storage places
+    smaller levels first.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
+                              uint32_t level, pvr_txr_level_info_t *info);
+
+/** \brief Build the PVR_TXRFMT_* word for a surface.
+
+    Palette-bank selection is intentionally not included and can be ORed into
+    the returned value by the caller. Mipmap enable is context state rather than
+    a texture-format bit and must be set separately. X32-stride users must also
+    configure the shared stride with pvr_txr_set_stride().
+
+    \return The format word, or UINT32_MAX with errno set for an invalid
+            descriptor.
+*/
+uint32_t pvr_txr_surface_pvr_format(const pvr_txr_surface_t *surface);
+
+/** \brief Upload one complete, already encoded surface image.
+
+    The source byte order must match the surface layout, including its VQ
+    codebook and mip padding where present.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_upload(const pvr_txr_surface_t *surface, const void *src,
+                           size_t byte_size, pvr_txr_transfer_t transfer);
+
+/** \brief Upload a checked byte range from an already encoded image.
+
+    Store-queue and DMA transfers require source, destination, offset, and byte
+    count to be 32-byte aligned. CPU transfers accept arbitrary byte ranges.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_upload_part(const pvr_txr_surface_t *surface,
+                                size_t offset, const void *src,
+                                size_t byte_size,
+                                pvr_txr_transfer_t transfer);
+
+/** \brief Upload one already encoded mip level. */
+int pvr_txr_surface_upload_level(const pvr_txr_surface_t *surface,
+                                 uint32_t level, const void *src,
+                                 size_t byte_size,
+                                 pvr_txr_transfer_t transfer);
+
+/** \brief Replace the complete codebook of a VQ surface. */
+int pvr_txr_surface_upload_codebook(const pvr_txr_surface_t *surface,
+                                    const void *src, size_t byte_size,
+                                    pvr_txr_transfer_t transfer);
+
+/** \brief Upload a linear source rectangle into an uncompressed surface.
+
+    The source starts at the rectangle's upper-left texel. \a src_stride is in
+    bytes. Linear destinations are copied row by row; twiddled destinations are
+    converted in place. Twiddled YUV rectangles are rejected because their
+    component packing is not equivalent to ordinary 16-bit texels. VQ surfaces
+    require encoded level or byte-range uploads instead.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_upload_rect(const pvr_txr_surface_t *surface,
+                                uint32_t level, uint32_t dst_x,
+                                uint32_t dst_y, uint32_t width,
+                                uint32_t height, const void *src,
+                                size_t src_stride);
+
+/** @} */
 
 __END_DECLS
 #endif  /* __DC_PVR_PVR_TEXTURE_H */

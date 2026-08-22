@@ -526,7 +526,19 @@ pvr_wait_ready
 pvr_check_ready
 pvr_txr_load
 pvr_txr_load_ex
+pvr_txr_load_ex_checked
 pvr_txr_load_kimg
+pvr_txr_surface_init
+pvr_txr_surface_alloc
+pvr_txr_surface_bind
+pvr_txr_surface_release
+pvr_txr_surface_get_level
+pvr_txr_surface_pvr_format
+pvr_txr_surface_upload
+pvr_txr_surface_upload_part
+pvr_txr_surface_upload_level
+pvr_txr_surface_upload_codebook
+pvr_txr_surface_upload_rect
 
 # MMU handling
 mmu_reset_itlb

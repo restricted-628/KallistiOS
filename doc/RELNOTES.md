@@ -28,6 +28,13 @@ lifecycle and naming conventions.
   both direct and buffered polygon lists.
 * Added checked per-scene background-plane geometry, RGB888 vertex colors, and
   depth state while preserving the established solid-color interface.
+* Added caller-owned PVR texture surfaces with checked allocation or external
+  binding, exact mip and VQ codebook layout metadata, format-word generation,
+  bounded full/partial/level/codebook transfers, and rectangular updates for
+  linear and twiddled uncompressed textures.
+* Completed the established extended texture loader with checked dimensions,
+  honest preformatted-copy behavior, bounded transfer selection, and an
+  error-reporting entry point while preserving the original void wrapper.
 * Added an opt-in post-boot direct GD-ROM transport with bounded packet PIO and
   DMA, status, geometry, mode, recovery, CDDA, streaming, diagnostics, and
   asynchronous request integration. Boot-time disc authorization remains the

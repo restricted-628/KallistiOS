@@ -53,9 +53,9 @@ than place another renderer above them.
 | User clipping | Covered | Preserve six-bit X/four-bit Y command bounds and active-target validation. |
 | Global/pixel clipping | Covered per scene | Keep clip state attached to its scene across framebuffer and texture targets. |
 | Background plane | Covered for untextured color planes | Audit textured background state separately if a concrete use case requires it. |
-| Texture allocation | General allocator covered | Add optional surface descriptors for dimensions, format, byte span, and ownership. Fixed-address and contiguous reservations should build on the existing allocator rather than introduce a second heap. |
-| Texture upload | Full raw upload and DMA covered | Add checked partial rectangle uploads, mip-level uploads, codebook-only updates, and explicit completion objects. |
-| Texture conversion | 4/8/16-bpp twiddling covered | Add 32-bpp handling where the hardware format permits it; keep offline VQ encoding outside the kernel unless a bounded, independently licensed encoder is justified. |
+| Texture allocation | General allocator and checked surfaces covered | Keep contiguous multi-surface reservations scoped to a demonstrated streaming need and use the existing allocator. |
+| Texture upload | Checked synchronous paths covered | Add explicit asynchronous completion objects without weakening the synchronous bounds. |
+| Texture conversion | Checked 4/8/16-bpp twiddling covered | Keep palette creation and VQ encoding in content tools rather than placing an unbounded encoder in the kernel. |
 | YUV conversion | Low-level DMA covered | Add destination configuration, geometry validation, progress/completion reporting, and a safe asynchronous wrapper. |
 | Palette and fog | Substantially covered | Add bulk checked palette updates and complete the fog-mode documentation and tests. |
 | Render targets | Sized 16-bit target covered | Audit additional pixel modes, target switching, completion ordering, and texture hazards. |
@@ -74,8 +74,11 @@ than place another renderer above them.
    report errors. The older buffer-assignment API still uses assertions and
    needs a checked companion rather than a source-incompatible signature
    change.
-3. `pvr_txr_load_ex()` advertises flags that it rejects, including 32-bit input
-   and on-the-fly VQ encoding; inverted preformatted uploads are also rejected.
+3. ~~`pvr_txr_load_ex()` unconditionally twiddles despite preformatted flags and
+   exposes no checked failure path.~~ Closed: the compatibility wrapper now uses
+   an error-reporting implementation that distinguishes conversion from
+   preformatted copies and reports unsupported runtime VQ encoding or
+   nonblocking operation explicitly.
 4. ~~Render fault interrupts log text but do not preserve a queryable fault
    record or notify an application.~~ Closed: faults are latched with counters
    and TA register snapshots, and optional event handlers receive the fault.
@@ -84,14 +87,16 @@ than place another renderer above them.
 6. ~~User clipping is representable in a polygon header, but KOS provides no
    checked command-construction or submission helper.~~ Closed for direct and
    buffered lists, including active-target tile validation.
-7. Texture subregion, mip-level, and codebook-only updates are absent.
+7. ~~Texture subregion, mip-level, and codebook-only updates are absent.~~
+   Closed for bounded synchronous transfers; asynchronous completion remains
+   the next tranche.
 
 ## Dependency order
 
 1. Complete and validate hybrid list submission.
 2. Add typed pipeline status and fault capture.
 3. Add user/global/pixel clipping helpers and background-plane description.
-4. Add texture surface metadata plus checked full and partial transfers.
+4. ~~Add texture surface metadata plus checked full and partial transfers.~~
 5. Add asynchronous texture/YUV completion objects.
 6. Add pass descriptions over the completed list and clip primitives.
 7. Expand render-target formats and display synchronization where hardware
@@ -180,3 +185,31 @@ items. Emulator validation covers the normal interrupt and snapshot paths only.
 - the focused example validates copy-out, finite/depth/color bounds, late-update
   rejection, zero persistent faults, and 120 frames in interpreter-mode
   emulation.
+
+### Texture surface metadata and bounded transfers
+
+- caller-owned surface descriptors record VRAM capacity, format, storage
+  layout, top-level dimensions, complete mip count, codebook size, and exact
+  encoded size without allocating a manager object;
+- surfaces can own an allocation from the established PVR memory allocator or
+  bind caller-managed VRAM with explicit capacity checking;
+- logical mip level zero names the largest image while byte offsets describe
+  the hardware's smallest-first storage order;
+- full VQ surfaces reserve a 2048-byte codebook and expose separate checked
+  codebook and index-level uploads;
+- CPU, store-queue, and blocking DMA byte-range uploads enforce their actual
+  alignment and capacity contracts;
+- rectangular source data updates linear storage directly and converts 4-, 8-,
+  or 16-bit uncompressed texels into twiddled storage without a temporary
+  full-texture buffer;
+- encoded byte-range and level uploads remain available for layouts, such as VQ
+  and twiddled YUV, where an unencoded rectangle is not self-describing;
+- the host regression test passes exact plain, strided, mipmapped, palette, and
+  VQ size and offset vectors, plus invalid layout combinations and descriptor
+  corruption;
+- the focused example completes 120 frames in interpreter-mode emulation after
+  exercising checked twiddling, a blocking DMA upload, live rectangle updates,
+  overflow and type misuse, and zero persistent PVR faults.
+
+Physical DMA timing and updates concurrent with texture sampling remain
+hardware validation items.

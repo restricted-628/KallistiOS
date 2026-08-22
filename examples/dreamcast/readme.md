@@ -157,6 +157,7 @@ This page serves as an index for all KallistiOS examples.
   - pvrmark_strips
   - pvrmark_strips_direct
   - strided_texture
+  - texture_surface
   - texture_render
   - yuv_converter
 - raylib
