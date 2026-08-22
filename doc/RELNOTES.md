@@ -52,6 +52,10 @@ lifecycle and naming conventions.
 * Added validated civil-time VMU clock APIs with synchronous and asynchronous
   reads and writes, coherent completion state, and correct Sunday-zero weekday
   conversion while retaining the established time-based entry points.
+* Added host-usable VMU filesystem metadata definitions and whole-filesystem
+  validation for root geometry, exact FAT chains, cycles, cross-links,
+  duplicate names, orphan blocks, and executable-eligible free space. Normal
+  VMU setup now rejects unsafe geometry before allocating or reading metadata.
 
 RELEASE NOTES for 2.2.2
 -----------------------
