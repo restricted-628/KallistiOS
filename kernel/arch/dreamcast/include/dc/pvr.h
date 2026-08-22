@@ -779,9 +779,10 @@ int pvr_init(const pvr_init_params_t *params);
     every pass. The interrupt chain preserves pass ownership and prevents
     unrelated PVR DMA from interleaving between continuation boundaries.
 
-    Hybrid early flushing is intentionally deferred: pvr_list_flush() reports
-    `ENOTSUP` during a multipass scene rather than ambiguously mixing pass-zero
-    and later-pass staging.
+    Early list flushing is also supported. The first flush must occur in pass
+    zero; subsequent pass boundaries run in lockstep with the TA so later-pass
+    flushes retain an unambiguous hardware owner. A scene that never flushes
+    early retains fully asynchronous buffered construction.
 
     The pass configuration is copied during initialization. No multipass
     control allocation is made by pvr_init(), so applications that keep the
@@ -937,8 +938,8 @@ int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
     requires its own allocation. The application retains ownership and must not
     release or modify it while the PVR is initialized.
 
-    Multipass hybrid flushing is not yet enabled: buffered initialization
-    requires every enabled pass/list pair to have an assigned staging buffer.
+    Every enabled pass/list pair requires an assigned staging buffer, including
+    lists that the application intends to flush before a pass boundary.
 
     \param pass             Zero-based registration pass.
     \param list             Primitive list within the pass.
@@ -1279,6 +1280,13 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
     in RAM while other lists are submitted directly. It blocks until the DMA
     engine has accepted the complete list, but it does not wait for rendering or
     display.
+
+    In a multipass scene, early flushing must begin in pass zero. Once enabled,
+    pvr_scene_next_pass() synchronously drains the remaining buffered lists in
+    that pass, waits for TA acceptance, and performs continuation. This keeps
+    later pass construction aligned with the hardware pass. Calling this for
+    the first time after construction has advanced beyond pass zero fails with
+    `ENOTSUP`.
 
     The scene API is not thread-safe. List construction, flushing, and scene
     completion must be serialized by the application.

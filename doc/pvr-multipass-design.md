@@ -78,9 +78,9 @@ registration boundary, and admits the next pass. It fails on the configured
 final pass. `pvr_scene_finish()` closes the final pass and queues the one
 renderer submission.
 
-Directly submitted lists need no main-RAM vertex buffer. Buffered submission
-requires a pass-specific allocation for each enabled list. The established
-checked vertex-buffer operation continues to address pass zero.
+Directly submitted lists need no main-RAM vertex buffer. Buffered and hybrid
+submission require a pass-specific allocation for each enabled list. The
+established checked vertex-buffer operation continues to address pass zero.
 
 The API does not expose pass objects, copied context structures, or foreign
 work-area conventions. Higher-level scene systems can build over this state
@@ -186,11 +186,11 @@ first DMA for the next pass begins.
 
 ### Hybrid
 
-Not yet exposed for multipass initialization.
-
-Direct and buffered lists may coexist in a pass. A pass boundary waits for both
-the already-flushed direct/buffered lists and any remaining DMA lists. A list
-that was flushed early is never replayed at scene completion.
+The first early list flush must occur in pass zero. That switches the scene from
+build-ahead DMA to lockstep continuation: a pass boundary drains the other
+current-pass lists, waits for TA acceptance, then advances both the build and
+hardware pass. Later passes can therefore flush lists against a known active
+TA pass. A list that was flushed early is never replayed at scene completion.
 
 ## Compatibility and failure rules
 
@@ -216,8 +216,8 @@ that was flushed early is never replayed at scene completion.
    to the existing layout.~~
 3. ~~Add a direct-submission example that draws distinguishable geometry in at
    least three passes and verifies completion/fault state.~~
-4. ~~Add a DMA example with separate per-pass buffers.~~ Add a hybrid variant
-   only after early-flush pass ownership is implemented.
+4. ~~Add a DMA example with separate per-pass buffers and a hybrid variant that
+   flushes selected lists before intermediate boundaries.~~
 5. Inject invalid pass transitions, undersized buffers, disabled lists, and a
    deliberately insufficient VRAM configuration.
 6. Cross-build the full tree and verify exports and generated documentation.

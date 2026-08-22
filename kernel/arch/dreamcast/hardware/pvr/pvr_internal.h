@@ -153,6 +153,7 @@ typedef struct {
     int dma_frame;
     bool dma_chain_active;
     bool dma_pass_fed;
+    bool dma_hybrid_active;
     uint32_t fault_sequence;
 } pvr_multipass_state_t;
 

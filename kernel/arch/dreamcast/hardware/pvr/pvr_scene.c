@@ -34,6 +34,7 @@
 
 static volatile pvr_dma_buffers_t *current_build_buffer(void);
 static int finish_buffered_pass(void);
+static int flush_buffered_pass_to_ta(void);
 
 /*
 
@@ -265,6 +266,7 @@ void pvr_scene_begin(void) {
     if(pvr_state.multipass) {
         pvr_state.multipass->build_pass = 0;
         pvr_state.multipass->ta_pass = 0;
+        pvr_state.multipass->dma_hybrid_active = false;
         pvr_state.multipass->fault_sequence =
             pvr_state.fault_status.sequence;
         pvr_activate_pass(0);
@@ -363,6 +365,38 @@ int pvr_scene_next_pass(void) {
             return -1;
 
         next_pass = multipass->build_pass + 1u;
+
+        /* Once a list has been flushed early, keep software construction and
+           the hardware TA on the same pass. This makes later-pass flushes
+           unambiguous while the fully buffered path remains asynchronous. */
+        if(multipass->dma_hybrid_active) {
+            if(flush_buffered_pass_to_ta() < 0)
+                return -1;
+
+            old_irq = irq_disable();
+
+            if(pvr_state.lists_transferred != pvr_state.lists_enabled) {
+                wait_result = genwait_wait(
+                    (void *)&pvr_state.lists_transferred,
+                    "PVR multipass DMA boundary", 100);
+            }
+
+            if(wait_result < 0 || multipass->fault_sequence !=
+                    pvr_state.fault_status.sequence) {
+                bool faulted = multipass->fault_sequence !=
+                    pvr_state.fault_status.sequence;
+
+                irq_restore(old_irq);
+                errno = faulted ? EIO : ETIMEDOUT;
+                return -1;
+            }
+
+            multipass->build_pass = next_pass;
+            pvr_continue_ta_pass(next_pass);
+            irq_restore(old_irq);
+            return 0;
+        }
+
         multipass->build_pass = next_pass;
         pvr_activate_pass(next_pass);
         pvr_state.lists_closed = 0;
@@ -836,17 +870,22 @@ int pvr_list_flush(pvr_list_t list) {
         return -1;
     }
 
-    if(pvr_state.multipass) {
-        errno = ENOTSUP;
-        return -1;
-    }
-
     if(!pvr_state.scene_active) {
         errno = EPERM;
         return -1;
     }
 
     b = current_build_buffer();
+
+    /* A fully buffered scene may build ahead of the active TA pass. Early
+       flushing deliberately switches to lockstep operation and therefore has
+       to begin while both cursors still identify pass zero. */
+    if(pvr_state.multipass &&
+            pvr_state.multipass->build_pass !=
+            pvr_state.multipass->ta_pass) {
+        errno = ENOTSUP;
+        return -1;
+    }
 
     if(!b->base[list]) {
         errno = ENODEV;
@@ -906,6 +945,10 @@ int pvr_list_flush(pvr_list_t list) {
        scene may begin while this frame is still progressing through the TA. */
     b->flushed |= BIT(list);
     pvr_state.lists_closed |= BIT(list);
+
+    if(pvr_state.multipass)
+        pvr_state.multipass->dma_hybrid_active = true;
+
     pvr_status_advance();
 
     return 0;
@@ -920,6 +963,9 @@ static int finish_buffered_pass(void) {
 
     for(list = 0; list < PVR_OPB_COUNT; ++list) {
         if(!(pvr_state.lists_enabled & BIT(list)))
+            continue;
+
+        if(buffer->flushed & BIT(list))
             continue;
 
         if(!buffer->base[list]) {
@@ -951,6 +997,33 @@ static int finish_buffered_pass(void) {
     return 0;
 }
 
+static int flush_buffered_pass_to_ta(void) {
+    volatile pvr_dma_buffers_t *buffer = current_build_buffer();
+    int list;
+
+    pvr_start_ta_rendering();
+    sem_wait((semaphore_t *)&pvr_state.dma_lock);
+
+    for(list = 0; list < PVR_OPB_COUNT; ++list) {
+        if(!(pvr_state.lists_enabled & BIT(list)) ||
+                (buffer->flushed & BIT(list)))
+            continue;
+
+        if(pvr_dma_load_ta(buffer->base[list], buffer->ptr[list], true,
+                           NULL, NULL) < 0) {
+            sem_signal((semaphore_t *)&pvr_state.dma_lock);
+            return -1;
+        }
+
+        buffer->flushed |= BIT(list);
+        pvr_state.lists_closed |= BIT(list);
+    }
+
+    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+    pvr_status_advance();
+    return 0;
+}
+
 /* Call this after you have finished submitting all data for a frame; once
    this has been called, you can not submit any more data until one of the
    pvr_scene_begin() functions is called again. An error (-1) is returned if
@@ -975,6 +1048,7 @@ int pvr_scene_finish(void) {
     if(pvr_state.dma_mode) {
         if(pvr_state.multipass) {
             size_t pass;
+            size_t first_pass;
 
             if(finish_buffered_pass() < 0)
                 return -1;
@@ -983,14 +1057,20 @@ int pvr_scene_finish(void) {
 
             o = irq_disable();
             pvr_state.multipass->dma_frame = pvr_state.ram_target;
-            pvr_state.multipass->ta_pass = 0;
+            first_pass = pvr_state.multipass->dma_hybrid_active ?
+                pvr_state.multipass->ta_pass : 0;
+            pvr_state.multipass->ta_pass = first_pass;
             pvr_state.multipass->dma_chain_active = true;
             pvr_state.multipass->dma_pass_fed = false;
             pvr_state.lists_dmaed = 0;
-            pvr_state.lists_transferred = 0;
-            pvr_activate_pass(0);
 
-            for(pass = 0; pass < pvr_state.multipass->pass_count; ++pass)
+            if(!pvr_state.multipass->dma_hybrid_active)
+                pvr_state.lists_transferred = 0;
+
+            pvr_activate_pass(first_pass);
+
+            for(pass = first_pass;
+                    pass < pvr_state.multipass->pass_count; ++pass)
                 pvr_pass_dma_buffer(pvr_state.ram_target, pass)->ready = 1;
 
             pvr_state.ram_target ^= 1;

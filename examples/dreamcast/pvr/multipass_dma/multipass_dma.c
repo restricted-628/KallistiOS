@@ -7,7 +7,6 @@
 */
 
 #include <assert.h>
-#include <errno.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -83,12 +82,6 @@ int main(int argc, char **argv) {
 
         for(pass = 0; pass < 3; ++pass) {
             submit_panel(&header, left[pass], right[pass], color[pass]);
-
-            if(frame == 0 && pass == 0) {
-                errno = 0;
-                assert(pvr_list_flush(PVR_LIST_OP_POLY) == -1);
-                assert(errno == ENOTSUP);
-            }
 
             if(pass + 1 < 3)
                 assert(pvr_scene_next_pass() == 0);

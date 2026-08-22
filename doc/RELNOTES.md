@@ -49,8 +49,8 @@ lifecycle and naming conventions.
   eight passes. Each pass has independent bins, translucent sorting, and DMA
   staging, while hardware continuation preserves shared parameters, depth, and
   tile accumulation until one final renderer submission. The established
-  one-pass path retains its ABI, allocation model, and DMA behavior; multipass
-  hybrid early flushing remains separately scoped.
+  one-pass path retains its ABI, allocation model, and DMA behavior. Pass-aware
+  hybrid flushing switches only the opted-in scene to lockstep continuation.
 * Completed the established extended texture loader with checked dimensions,
   honest preformatted-copy behavior, bounded transfer selection, and an
   error-reporting entry point while preserving the original void wrapper.

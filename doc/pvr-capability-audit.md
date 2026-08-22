@@ -108,9 +108,8 @@ than place another renderer above them.
    existing one-pass fast path.~~ Closed for direct store-queue submission with
    one through eight independently binned passes, exact preflight, hardware
    continuation, final-only render release, a host layout suite, and an
-   emulator-tested three-pass example. Per-pass DMA staging and IRQ-chained
-   continuation are also closed; hybrid early flushing remains the next
-   additive tranche.
+   emulator-tested three-pass example. Per-pass DMA staging, IRQ-chained
+   continuation, and pass-aware hybrid early flushing are also closed.
 7. Add per-render completion identity and finish render-target/no-flip hazard
    contracts.
 8. Add only hardware-validated advanced texture layouts, readback, contiguous
