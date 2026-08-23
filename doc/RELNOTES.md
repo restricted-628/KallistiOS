@@ -49,6 +49,11 @@ lifecycle and naming conventions.
   mip-level CPU readback is bounded by the same metadata, while a checked
   render-target entry point accepts only compatible 16-bit linear surfaces and
   records exact target geometry through render tickets.
+* Removed shared mutable scratch matrices from the established 3D transform
+  helpers and added a bounded caller-owned matrix stack with explicit
+  overflow, underflow, and non-consuming restore operations. It allocates no
+  memory and adds no initialization or per-frame cost to applications that do
+  not use it.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes
