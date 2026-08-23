@@ -492,6 +492,11 @@ mat_perspective_apply
 mat_lookat_build
 mat_lookat_apply
 # PVR
+pvr_geometry_project
+pvr_geometry_sink_init_memory
+pvr_geometry_sink_init_current
+pvr_geometry_sink_init_buffered
+pvr_geometry_sink_emit
 pvr_txr_load_dma
 pvr_dma_ready
 pvr_dma_load_ta

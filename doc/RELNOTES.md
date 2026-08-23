@@ -58,6 +58,10 @@ lifecycle and naming conventions.
   whose order matches the established post-multiply API. The new stack,
   composition, and camera operations are available to loadable modules through
   the established Dreamcast architecture export table.
+* Added allocation-free PVR geometry projection over bounded strided canonical
+  vertex streams, with prefix-safe error reporting and caller-owned memory,
+  current-list, or explicit buffered-list sinks. The sinks preserve existing
+  direct and vertex-DMA submission while leaving scene ownership unchanged.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes

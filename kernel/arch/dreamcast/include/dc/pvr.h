@@ -22,8 +22,9 @@
     management to actual primitive rendering.
 
     \note
-    This API does \a not handle any sort of transformations
-    (including perspective!) so for that, you should look to KGL.
+    This low-level header does \a not perform transformations. Applications
+    that want checked, caller-owned projection into pvr_vertex_t streams can
+    use dc/pvr_geometry.h with the matrix APIs.
 
     \author Megan Potter
     \author Roger Cattermole

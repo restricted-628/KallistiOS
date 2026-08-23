@@ -149,6 +149,8 @@ This page serves as an index for all KallistiOS examples.
   - cheap_shadow
   - clipping
   - fb_tex
+  - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned
+    vertex streams and emits them to memory or established PVR list paths
   - hybrid_lists
   - material_state
   - multipass

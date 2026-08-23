@@ -26,7 +26,7 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
 | Transform hierarchy | No bounded matrix stack | Add a caller-owned stack with reported overflow and underflow and no allocation. |
 | Camera state | Established immediate operations plus explicit, checked perspective and look-at builders | Keep application state caller-owned; add higher-level camera policy only outside the core math layer. |
 | Frustum and visibility | No reusable object/frustum tests | Add pure math tests independently of rendering; leave spatial partitioning to applications. |
-| Mesh submission | Applications hand-build PVR vertices and strips | Add an optional geometry sink that preserves direct and buffered PVR paths and accepts caller-owned output space. |
+| Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
 | Materials | PVR contexts and compiled headers are complete at the hardware level | Add optional immutable material descriptions that compile to existing PVR headers; do not introduce another texture allocator. |
 | Object hierarchy | No reusable traversal | Add bounded, callback-driven traversal over application-owned nodes after transform state is complete. |
 | Lighting | Hardware header fields exist, but vertex lighting is application work | Add optional CPU vertex-lighting kernels with explicit normal-transform and color-clamp contracts. |
@@ -60,8 +60,8 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
    caller-owned matrix stack.
 2. ~~Add pure, explicit transform and camera descriptions with checked
    projection construction and host-side golden vectors.~~
-3. Define an optional geometry input/output contract that can target direct
-   store-queue or buffered PVR submission without owning the scene.
+3. ~~Define an optional geometry input/output contract that can target direct
+   store-queue or buffered PVR submission without owning the scene.~~
 4. Add immutable material compilation over existing PVR contexts and texture
    surfaces.
 5. Add bounded object hierarchy traversal using the caller-owned transform
@@ -105,6 +105,28 @@ future geometry layer:
 
 These functions retain no camera object, allocate no memory, create no thread,
 and add no work to applications that continue using the established helpers.
+
+## Third tranche
+
+The third tranche establishes a renderer-neutral boundary over the existing
+PVR vertex and list APIs:
+
+- `pvr_geometry_project()` consumes a bounded, strided view whose canonical
+  vertex may be embedded at the start of an application structure, applies an
+  explicit matrix, emits PVR screen X/Y and reciprocal-W depth, and preserves
+  the remaining vertex attributes;
+- malformed commands, non-finite coordinates, non-positive W, range overflow,
+  insufficient output, and unsafe overlap are reported without writing beyond
+  the documented valid prefix;
+- memory sinks write to caller-owned capacity, current-list sinks inherit the
+  active PVR direct or buffered path, and explicit-list sinks append through
+  the established vertex-DMA path;
+- sinks never begin, finish, flush, sort, retain, or otherwise own a scene.
+
+Projection and sinks retain no global state, allocate nothing, and add no cost
+to applications that use only the low-level PVR interface. Automatic clipping
+is intentionally outside this tranche; callers must provide geometry with
+positive transformed W or perform clipping before projection.
 
 ## Validation gates
 
