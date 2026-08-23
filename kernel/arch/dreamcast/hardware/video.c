@@ -514,6 +514,119 @@ int vid_set_display_filter(const vid_display_filter_t *filter) {
     return 0;
 }
 
+int vid_get_framebuffer_info(int32_t selector, vid_framebuffer_info_t *info) {
+    uint32_t displayed_offset;
+    uint32_t draw_offset;
+    uint32_t selected_offset;
+    uint32_t stride_bytes;
+    uint32_t odd_field_offset = UINT32_MAX;
+    size_t visible_bytes;
+    size_t capacity_bytes = 0;
+    uintptr_t draw_address;
+    int32_t resolved_index = -1;
+    bool draw_valid;
+    irq_mask_t old_irq;
+
+    if(info)
+        memset(info, 0, sizeof(*info));
+
+    if(!info) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(selector < VID_FRAMEBUFFER_DRAW) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+    if(!vid_mode) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(selector >= 0 && selector >= vid_mode->fb_count) {
+        irq_restore(old_irq);
+        errno = ERANGE;
+        return -1;
+    }
+
+    stride_bytes = (uint32_t)vid_mode->width * vid_pmode_bpp[vid_mode->pm];
+    visible_bytes = (size_t)stride_bytes * vid_mode->height;
+    displayed_offset = PVR_GET(PVR_FB_ADDR) & (PVR_RAM_SIZE - 1u);
+    draw_address = (uintptr_t)vram_l;
+    draw_valid = draw_address >= PVR_RAM_BASE && draw_address < PVR_RAM_TOP;
+    draw_offset = draw_valid ?
+        (uint32_t)(draw_address - PVR_RAM_BASE) : UINT32_MAX;
+
+    if(selector == VID_FRAMEBUFFER_DRAW && !draw_valid) {
+        irq_restore(old_irq);
+        errno = EIO;
+        return -1;
+    }
+
+    if(selector == VID_FRAMEBUFFER_DISPLAYED)
+        selected_offset = displayed_offset;
+    else if(selector == VID_FRAMEBUFFER_DRAW)
+        selected_offset = draw_offset;
+    else
+        selected_offset = (uint32_t)((size_t)selector * vid_mode->fb_size);
+
+    /* Resolve active PVR-managed or caller-selected addresses to a configured
+       slot only when they start at that slot's exact base. */
+    if(vid_mode->fb_size &&
+       selected_offset % vid_mode->fb_size == 0) {
+        size_t candidate = selected_offset / vid_mode->fb_size;
+
+        if(candidate < vid_mode->fb_count) {
+            resolved_index = (int32_t)candidate;
+            capacity_bytes = vid_mode->fb_size;
+        }
+    }
+
+    if(selected_offset > PVR_RAM_SIZE ||
+       visible_bytes > PVR_RAM_SIZE - selected_offset) {
+        irq_restore(old_irq);
+        errno = EIO;
+        return -1;
+    }
+
+    if(vid_mode->flags & VID_INTERLACE) {
+        if(selected_offset == displayed_offset)
+            odd_field_offset = PVR_GET(PVR_FB_IL_ADDR) &
+                               (PVR_RAM_SIZE - 1u);
+        else
+            odd_field_offset = selected_offset + stride_bytes;
+
+        if(odd_field_offset >= PVR_RAM_SIZE) {
+            irq_restore(old_irq);
+            errno = EIO;
+            return -1;
+        }
+    }
+
+    *info = (vid_framebuffer_info_t) {
+        .index = resolved_index,
+        .vram_offset = selected_offset,
+        .address = (void *)(PVR_RAM_BASE | selected_offset),
+        .odd_field_offset = odd_field_offset,
+        .visible_bytes = visible_bytes,
+        .capacity_bytes = capacity_bytes,
+        .stride_bytes = stride_bytes,
+        .width = vid_mode->width,
+        .height = vid_mode->height,
+        .pixel_mode = vid_mode->pm,
+        .displayed = selected_offset == displayed_offset,
+        .draw_target = draw_valid && selected_offset == draw_offset,
+        .interlaced = (vid_mode->flags & VID_INTERLACE) != 0
+    };
+
+    irq_restore(old_irq);
+    return 0;
+}
+
 /*-----------------------------------------------------------------------------*/
 void vid_set_vram(uint32_t base) {
     vram_s = (uint16_t*)(PVR_RAM_BASE | base);

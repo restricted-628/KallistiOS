@@ -190,6 +190,7 @@ This page serves as an index for all KallistiOS examples.
 - video
   - bfont
   - bfont-glyph-query
+  - [**framebuffer-query**](video/framebuffer-query/): Validates displayed, drawing, and indexed framebuffer surfaces
   - minifont
   - [**mode-policy**](video/mode-policy/): Resolves cable-aware 50/60 Hz video modes without installing them
   - multibuffer

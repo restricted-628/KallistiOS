@@ -226,6 +226,39 @@ typedef struct vid_display_filter {
     uint16_t vertical_scale; /**< \brief Vertical-scale coefficient. */
 } vid_display_filter_t;
 
+/** \defgroup video_fb_selectors Framebuffer selectors
+    \brief                         Special selectors for framebuffer queries
+    \ingroup                       video_fb
+    @{
+*/
+#define VID_FRAMEBUFFER_DISPLAYED (-1) /**< \brief Hardware scanout surface. */
+#define VID_FRAMEBUFFER_DRAW      (-2) /**< \brief Current CPU drawing surface. */
+/** @} */
+
+/** \brief Checked framebuffer-surface description.
+    \ingroup video_fb
+
+    index is nonnegative only when the surface begins at one of the configured
+    vid_mode_t framebuffer slots. PVR-managed and caller-selected scanout
+    addresses can therefore report index -1 and capacity_bytes zero while
+    retaining valid geometry and address information.
+*/
+typedef struct vid_framebuffer_info {
+    int32_t index;             /**< \brief Configured slot, or -1 if external. */
+    uint32_t vram_offset;      /**< \brief Offset in the 32-bit VRAM window. */
+    void *address;             /**< \brief Uncached 32-bit CPU VRAM address. */
+    uint32_t odd_field_offset; /**< \brief Interlaced odd-field offset, or UINT32_MAX. */
+    size_t visible_bytes;      /**< \brief Bytes occupied by visible rows. */
+    size_t capacity_bytes;     /**< \brief Configured slot capacity, or zero. */
+    uint32_t stride_bytes;     /**< \brief Bytes between adjacent rows. */
+    uint16_t width;            /**< \brief Visible width in pixels. */
+    uint16_t height;           /**< \brief Visible height in pixels. */
+    vid_pixel_mode_t pixel_mode; /**< \brief Framebuffer pixel encoding. */
+    bool displayed;            /**< \brief Surface is the hardware scanout base. */
+    bool draw_target;          /**< \brief Surface is the CPU drawing target. */
+    bool interlaced;           /**< \brief Active timing is interlaced. */
+} vid_framebuffer_info_t;
+
 /** \brief Physical-scanline callback invoked in interrupt context.
     \ingroup video_display
 
@@ -362,6 +395,26 @@ int vid_get_display_filter(vid_display_filter_t *filter);
     \retval -1             On invalid input, with errno set.
 */
 int vid_set_display_filter(const vid_display_filter_t *filter);
+
+/** \brief Query a configured or active framebuffer surface.
+    \ingroup video_fb
+
+    A nonnegative selector names a configured vid_mode_t framebuffer slot.
+    VID_FRAMEBUFFER_DISPLAYED samples the hardware scanout address, while
+    VID_FRAMEBUFFER_DRAW describes the surface addressed by vram_l. The mode,
+    scanout registers, and drawing pointer are sampled under one IRQ fence.
+
+    The returned address uses the uncached 32-bit VRAM window suitable for
+    framebuffer CPU access. It is not a texture pointer. capacity_bytes is zero
+    when an active surface does not coincide with a configured video slot.
+
+    \param selector        Configured slot or VID_FRAMEBUFFER_* selector.
+    \param info            Output surface description, cleared on entry.
+
+    \retval 0              Surface described successfully.
+    \retval -1             Error, with errno set.
+*/
+int vid_get_framebuffer_info(int32_t selector, vid_framebuffer_info_t *info);
 
 /** \defgroup video_raster Raster events
     \brief                  Opt-in physical-scanline event scheduling

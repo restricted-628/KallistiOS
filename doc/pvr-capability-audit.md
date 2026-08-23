@@ -44,7 +44,7 @@ than place another renderer above them.
 | Family | Current KOS state | Closure work |
 | --- | --- | --- |
 | System configuration and lifecycle | Core initialization is covered | Add checked companions instead of changing established assertion-based entry points; do not create a second device owner. |
-| Display modes and scanout | Mode setting, blanking, border, coherent physical scanout, exact filter state, physical-line raster callbacks, and framebuffer access are covered by `video` | Finish checked framebuffer-surface queries through `video`; do not duplicate them in PVR. |
+| Display modes and scanout | Mode setting, blanking, border, coherent physical scanout, exact filter state, physical-line raster callbacks, and checked framebuffer-surface queries are covered by `video` | Preserve this ownership boundary; do not duplicate display surfaces in PVR. |
 | Timing and callbacks | VBlank, one-line raster, and PVR completion/fault events are covered | Keep callbacks bounded in IRQ context; defer multi-line scheduling until field and wrap behavior is physically validated. |
 | Direct list submission | Covered | Preserve the low-overhead store-queue path. |
 | Buffered list submission | Checked writes and hybrid flushing are covered | Finish checked buffer assignment and preserve per-RAM-frame ownership. |
@@ -121,7 +121,8 @@ than place another renderer above them.
    visibility remains a hardware validation gate.
 9. ~~Close remaining display timing and filter controls in `video`.~~ Coherent
    raw scanout status, exact checked filter state, and opt-in one-line raster
-   scheduling are closed. Multi-line scheduling remains a hardware-gated
+   scheduling are closed, together with checked configured/display/draw
+   framebuffer-surface queries. Multi-line scheduling remains a hardware-gated
    extension rather than a parity requirement.
 10. Run the final API, examples, exports, documentation, and resource-cost
     audit before defining an optional higher-level scene interface.
@@ -338,4 +339,22 @@ order, supports callback-side removal without freeing in IRQ context, suspends
 during timing changes, and releases the event when its final handler is removed.
 
 Physical scanout timing, interlaced field behavior, and visible filter quality
+remain hardware validation items.
+
+### Checked framebuffer-surface queries
+
+- callers can describe any configured framebuffer slot, the hardware scanout
+  surface, or KOS's current CPU drawing surface without reading registers;
+- each coherent snapshot includes 32-bit VRAM address and offset, visible
+  geometry, stride, pixel encoding, visible byte count, known slot capacity,
+  display/draw roles, and interlaced odd-field layout;
+- an active PVR-managed or caller-selected address receives no fabricated
+  vid_mode_t slot identity or capacity when it does not match one exactly;
+- all selectors, output pointers, indices, address spans, and field addresses
+  are checked before a result is published;
+- the focused example restores the CPU drawing pointer after testing slot
+  resolution, then initializes PVR and verifies that its managed buffers remain
+  distinct from configured video slots.
+
+Physical interlaced field addressing and queries during active page flips
 remain hardware validation items.

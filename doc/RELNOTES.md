@@ -32,6 +32,9 @@ lifecycle and naming conventions.
   filters with exact vertical coefficients, and opt-in physical-line raster
   callbacks with exclusive event ownership. The established dithering setter
   now preserves unrelated framebuffer-control fields.
+* Added checked framebuffer-surface queries for configured slots, the hardware
+  scanout target, and KOS's CPU drawing target, including exact geometry, VRAM
+  offsets, visible byte counts, known capacity, and interlaced field layout.
 * Added caller-owned PVR texture surfaces with checked allocation or external
   binding, exact mip and VQ codebook layout metadata, format-word generation,
   bounded full/partial/level/codebook transfers, and rectangular updates for
