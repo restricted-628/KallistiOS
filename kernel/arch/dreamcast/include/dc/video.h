@@ -226,6 +226,16 @@ typedef struct vid_display_filter {
     uint16_t vertical_scale; /**< \brief Vertical-scale coefficient. */
 } vid_display_filter_t;
 
+/** \brief Physical-scanline callback invoked in interrupt context.
+    \ingroup video_display
+
+    The status pointer is valid only for the duration of the callback. A
+    callback must remain bounded, must not block or allocate, and may remove
+    itself or another raster handler.
+*/
+typedef void (*vid_raster_callback_t)(const vid_scanout_status_t *status,
+                                      void *user_data);
+
 /** \brief   The list of builtin video modes. Do not modify these!
     \ingroup video_modes
 */
@@ -352,6 +362,57 @@ int vid_get_display_filter(vid_display_filter_t *filter);
     \retval -1             On invalid input, with errno set.
 */
 int vid_set_display_filter(const vid_display_filter_t *filter);
+
+/** \defgroup video_raster Raster events
+    \brief                  Opt-in physical-scanline event scheduling
+    \ingroup                video_display
+    @{
+*/
+
+/** \brief Select the physical scanline used by raster callbacks.
+
+    The display hardware has one scanline comparator. All registered raster
+    callbacks therefore share this line and run in registration order. The
+    horizontal-blank position field in the same register is preserved.
+
+    Changing to a mode in which the configured line is unreachable masks the
+    event; selecting a valid line unmasks it. This function is not permitted in
+    interrupt context.
+
+    \retval 0              Line selected.
+    \retval -1             Error, with errno set.
+*/
+int vid_raster_set_scanline(uint16_t scanline);
+
+/** \brief Retrieve the configured physical raster scanline.
+
+    \retval 0              Line copied to \p scanline.
+    \retval -1             No line is configured or the output is NULL.
+*/
+int vid_raster_get_scanline(uint16_t *scanline);
+
+/** \brief Register a callback at the configured physical raster scanline.
+
+    The first handler lazily claims the HBlank event source. If another
+    low-level owner already uses it, this function fails with `EBUSY` rather
+    than replacing that owner. No thread or permanent buffer is created.
+
+    \return                Nonnegative handler ID, or -1 with errno set.
+*/
+int vid_raster_handler_add(vid_raster_callback_t callback, void *user_data);
+
+/** \brief Remove a raster callback.
+
+    This operation is safe from a raster callback. Removing the last active
+    handler releases the HBlank event claim immediately; allocation storage is
+    reclaimed by the next thread-context raster API call or shutdown.
+
+    \retval 0              Handler removed.
+    \retval -1             Unknown or stale ID, with errno set to ENOENT.
+*/
+int vid_raster_handler_remove(int handle);
+
+/** @} */
 
 /** \brief   Set the VRAM convenience pointers.
     \ingroup video_fb

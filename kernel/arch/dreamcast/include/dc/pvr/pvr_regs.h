@@ -168,6 +168,17 @@ __BEGIN_DECLS
 #define PVR_FB_CFG_2_DITHER BIT(3) /**< \brief Enable framebuffer dithering */
 /** @} */
 
+/** \defgroup pvr_hpos_irq PVR_HPOS_IRQ Values
+    \brief                  Definitions for horizontal-blank interrupt timing.
+    \ingroup                pvr_registers
+    @{
+*/
+#define PVR_HPOS_IRQ_SCANLINE GENMASK(9, 0) /**< \brief Scanline comparator */
+#define PVR_HPOS_IRQ_MODE     GENMASK(13, 12) /**< \brief Comparator mode */
+#define PVR_HPOS_IRQ_MODE_EXACT 0u /**< \brief Interrupt on an exact scanline */
+#define PVR_HPOS_IRQ_HBLANK_POSITION GENMASK(25, 16) /**< \brief HBlank position */
+/** @} */
+
 /** \defgroup pvr_addresses     Addresses and Constants
     \brief                      Miscellaneous Addresses and Constants
     \ingroup                    pvr_registers

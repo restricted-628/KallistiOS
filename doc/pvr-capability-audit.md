@@ -44,8 +44,8 @@ than place another renderer above them.
 | Family | Current KOS state | Closure work |
 | --- | --- | --- |
 | System configuration and lifecycle | Core initialization is covered | Add checked companions instead of changing established assertion-based entry points; do not create a second device owner. |
-| Display modes and scanout | Mode setting, blanking, border, coherent physical scanout, exact filter state, and framebuffer access are covered by `video` | Add horizontal-blank scheduling and finish checked framebuffer-surface queries through `video`; do not duplicate them in PVR. |
-| Timing and callbacks | VBlank and PVR completion/fault events are covered | Audit horizontal-blank and scanline scheduling. Preserve bounded IRQ callbacks and opt-in allocation. |
+| Display modes and scanout | Mode setting, blanking, border, coherent physical scanout, exact filter state, physical-line raster callbacks, and framebuffer access are covered by `video` | Finish checked framebuffer-surface queries through `video`; do not duplicate them in PVR. |
+| Timing and callbacks | VBlank, one-line raster, and PVR completion/fault events are covered | Keep callbacks bounded in IRQ context; defer multi-line scheduling until field and wrap behavior is physically validated. |
 | Direct list submission | Covered | Preserve the low-overhead store-queue path. |
 | Buffered list submission | Checked writes and hybrid flushing are covered | Finish checked buffer assignment and preserve per-RAM-frame ownership. |
 | Multi-pass scene control | No first-class pass sequence | Model each pass as a complete TA registration bank with per-pass list memory, sort policy, direct-list selection, and modifier-list mapping. A begin/end wrapper alone is insufficient. |
@@ -119,9 +119,10 @@ than place another renderer above them.
    reservations, and batch YUV conversion. Checked encoded CPU readback and
    compatible 16-bit surface render binding are closed; physical render-target
    visibility remains a hardware validation gate.
-9. Close remaining display timing and filter controls in `video`. Coherent raw
-   scanout status and exact checked filter state are closed; opt-in raster
-   scheduling remains.
+9. ~~Close remaining display timing and filter controls in `video`.~~ Coherent
+   raw scanout status, exact checked filter state, and opt-in one-line raster
+   scheduling are closed. Multi-line scheduling remains a hardware-gated
+   extension rather than a parity requirement.
 10. Run the final API, examples, exports, documentation, and resource-cost
     audit before defining an optional higher-level scene interface.
 
@@ -327,8 +328,14 @@ supersampling quality, and palette visibility remain physical-hardware gates.
 - the established dithering setter now uses the same field-preserving update
   and is included in the Dreamcast export table;
 - the focused example rejects null and zero-coefficient misuse, observes live
-  scanout progress, proves field preservation, restores the initial state, and
+  scanout progress, proves field preservation, restores the initial state,
+  observes repeated raster callbacks, verifies last-handler release, and
   passes in both interpreter and dynamic-recompiler emulation.
+
+The raster registry is allocated only when used, claims the HBlank event
+without replacing an existing owner, dispatches handlers in registration
+order, supports callback-side removal without freeing in IRQ context, suspends
+during timing changes, and releases the event when its final handler is removed.
 
 Physical scanout timing, interlaced field behavior, and visible filter quality
 remain hardware validation items.

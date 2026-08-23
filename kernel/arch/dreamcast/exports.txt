@@ -245,6 +245,10 @@ vid_get_mode
 vid_get_scanout_status
 vid_get_display_filter
 vid_set_display_filter
+vid_raster_set_scanline
+vid_raster_get_scanline
+vid_raster_handler_add
+vid_raster_handler_remove
 vid_set_vram
 vid_set_start
 vid_get_start

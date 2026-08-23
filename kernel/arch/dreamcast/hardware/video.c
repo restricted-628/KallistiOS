@@ -19,6 +19,7 @@
 #include <stdio.h>
 
 #include "video_mode_internal.h"
+#include "video_raster_internal.h"
 
 /*-----------------------------------------------------------------------------*/
 /* This table is indexed w/ DM_* */
@@ -273,6 +274,9 @@ static const unsigned int vid_bpp_to_pvr_cfg2[] = {
 static int vid_apply_mode(vid_mode_t *mode, int8_t ct) {
     uint32_t data;
 
+    /* Suspend opt-in raster callbacks while scanout timing is rewritten. */
+    vid_raster_mode_change_begin();
+
     /* Blank screen and reset display enable (looks nicer) */
     vid_set_enabled(false);
 
@@ -385,6 +389,7 @@ static int vid_apply_mode(vid_mode_t *mode, int8_t ct) {
 
     /* Re-enable the display */
     vid_set_enabled(true);
+    vid_raster_mode_changed(vid_mode->scanlines);
 
     return 0;
 }
@@ -671,6 +676,8 @@ void vid_init(int disp_mode, vid_pixel_mode_t pixel_mode) {
 
 /*-----------------------------------------------------------------------------*/
 void vid_shutdown(void) {
+    vid_raster_shutdown();
+
     /* Reset back to default mode, in case we're going back to a loader. */
     vid_init(DM_640x480, PM_RGB565);
 }

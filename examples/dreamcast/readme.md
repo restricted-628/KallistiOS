@@ -194,7 +194,7 @@ This page serves as an index for all KallistiOS examples.
   - [**mode-policy**](video/mode-policy/): Resolves cable-aware 50/60 Hz video modes without installing them
   - multibuffer
   - palmenu
-  - [**scanout-filter**](video/scanout-filter/): Validates coherent physical scanout and checked display-filter state
+  - [**scanout-filter**](video/scanout-filter/): Validates physical scanout, display filters, and opt-in raster callbacks
   - screenshot
 - vmu
   - vmu_beep
