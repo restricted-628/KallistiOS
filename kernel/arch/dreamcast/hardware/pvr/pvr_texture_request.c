@@ -41,6 +41,7 @@ static bool request_state_terminal(pvr_txr_request_state_t state) {
 
 static bool surface_storage_valid(const pvr_txr_surface_t *surface) {
     pvr_txr_level_info_t level;
+    uintptr_t address;
 
     if(pvr_txr_surface_get_level(surface, 0, &level) < 0)
         return false;
@@ -50,7 +51,16 @@ static bool surface_storage_valid(const pvr_txr_surface_t *surface) {
         return false;
     }
 
-    if(surface->capacity < surface->byte_size) {
+    address = (uintptr_t)surface->vram;
+    if(address < PVR_RAM_INT_BASE || address >= PVR_RAM_INT_TOP) {
+        errno = EFAULT;
+        return false;
+    }
+
+    /* Match synchronous validation for caller-modifiable descriptors before
+       any address is remapped into a DMA destination. */
+    if(surface->capacity < surface->byte_size ||
+            surface->capacity > PVR_RAM_INT_TOP - address) {
         errno = ENOSPC;
         return false;
     }

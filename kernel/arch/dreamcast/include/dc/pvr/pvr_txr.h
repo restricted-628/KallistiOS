@@ -324,6 +324,23 @@ int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
 /** \brief Release owned VRAM and clear a surface descriptor. */
 void pvr_txr_surface_release(pvr_txr_surface_t *surface);
 
+/** \brief Begin a render-to-texture scene on a checked surface.
+
+    The surface must be a non-mipmapped linear or X32-stride target whose
+    format matches the active 16-bit video pixel mode. The rendered dimensions
+    may be smaller than the surface but must fit its width and height; the
+    surface width becomes the output stride.
+
+    This starts the same scene lifecycle as pvr_scene_begin_rtt(). Finish with
+    pvr_scene_finish_tracked() when later CPU access or reuse must be ordered
+    against hardware completion.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_begin_render(const pvr_txr_surface_t *surface,
+                                 uint32_t render_width,
+                                 uint32_t render_height);
+
 /** \brief Query the byte range occupied by one logical mip level.
 
     Level zero is the largest level even though mipmapped texture storage places
@@ -378,6 +395,37 @@ int pvr_txr_surface_upload_level(const pvr_txr_surface_t *surface,
 int pvr_txr_surface_upload_codebook(const pvr_txr_surface_t *surface,
                                     const void *src, size_t byte_size,
                                     pvr_txr_transfer_t transfer);
+
+/** \brief Read one complete encoded surface into CPU memory.
+
+    The byte count must equal the complete encoded surface size, including a VQ
+    codebook and mip padding where present. If the surface is a render target,
+    wait for its render ticket to reach PVR_RENDER_STAGE_COMPLETE first.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_readback(const pvr_txr_surface_t *surface, void *dst,
+                             size_t byte_size);
+
+/** \brief Read a checked encoded byte range from a surface.
+
+    This is a CPU copy from the uncached VRAM alias and accepts arbitrary byte
+    alignment. The caller must enforce the same renderer and texture-sampling
+    hazards documented for full readback.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_readback_part(const pvr_txr_surface_t *surface,
+                                  size_t offset, void *dst,
+                                  size_t byte_size);
+
+/** \brief Read one encoded mip level from a surface.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_readback_level(const pvr_txr_surface_t *surface,
+                                   uint32_t level, void *dst,
+                                   size_t byte_size);
 
 /** \brief Start a complete asynchronous DMA upload.
 

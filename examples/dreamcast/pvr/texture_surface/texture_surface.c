@@ -24,6 +24,7 @@ KOS_INIT_FLAGS(INIT_DEFAULT);
 #define PATCH_HEIGHT 16u
 
 static alignas(32) uint16_t pixels[TEXTURE_WIDTH * TEXTURE_HEIGHT];
+static alignas(32) uint16_t roundtrip[TEXTURE_WIDTH * TEXTURE_HEIGHT];
 static alignas(32) uint8_t yuv420[384];
 static uint16_t patch[PATCH_WIDTH * PATCH_HEIGHT];
 
@@ -77,6 +78,25 @@ static void draw_texture(const pvr_poly_hdr_t *header) {
     pvr_prim(&vertex, sizeof(vertex));
 }
 
+static void draw_panel(const pvr_poly_hdr_t *header, float width,
+                       float height, uint32_t color) {
+    alignas(32) pvr_vertex_t vertices[4] = {
+        { .flags = PVR_CMD_VERTEX, .x = 0.0f, .y = 0.0f, .z = 1.0f,
+          .argb = color, .oargb = 0 },
+        { .flags = PVR_CMD_VERTEX, .x = width, .y = 0.0f, .z = 1.0f,
+          .argb = color, .oargb = 0 },
+        { .flags = PVR_CMD_VERTEX, .x = 0.0f, .y = height, .z = 1.0f,
+          .argb = color, .oargb = 0 },
+        { .flags = PVR_CMD_VERTEX_EOL, .x = width, .y = height, .z = 1.0f,
+          .argb = color, .oargb = 0 }
+    };
+
+    assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
+    assert(pvr_prim(header, sizeof(*header)) == 0);
+    assert(pvr_prim(vertices, sizeof(vertices)) == 0);
+    assert(pvr_list_finish() == 0);
+}
+
 int main(int argc, char **argv) {
     pvr_txr_surface_t surface;
     pvr_txr_surface_t temporary;
@@ -87,9 +107,12 @@ int main(int argc, char **argv) {
     pvr_txr_level_info_t level;
     pvr_txr_request_t *request;
     pvr_txr_request_status_t request_status;
+    pvr_render_ticket_t render_ticket;
     pvr_pipeline_status_t status;
     pvr_poly_cxt_t context;
+    pvr_poly_cxt_t render_context;
     pvr_poly_hdr_t header;
+    pvr_poly_hdr_t render_header;
     uint32_t texture_format;
     size_t yuv_input_size;
     unsigned int frame;
@@ -112,6 +135,9 @@ int main(int argc, char **argv) {
                      TEXTURE_WIDTH, TEXTURE_HEIGHT, surface.vram,
                      PVR_FILTER_BILINEAR);
     pvr_poly_compile(&header, &context);
+    pvr_poly_cxt_col(&render_context, PVR_LIST_OP_POLY);
+    render_context.gen.culling = PVR_CULLING_NONE;
+    pvr_poly_compile(&render_header, &render_context);
 
     assert(pvr_txr_surface_alloc(&temporary, TEXTURE_WIDTH, TEXTURE_HEIGHT,
                                  PVR_TXR_SURFACE_RGB565,
@@ -123,6 +149,16 @@ int main(int argc, char **argv) {
     assert(request_status.requested_bytes == sizeof(pixels));
     assert(request_status.completed_bytes == sizeof(pixels));
     assert(pvr_txr_request_destroy(request) == 0);
+    assert(pvr_txr_surface_readback(&temporary, roundtrip,
+                                    sizeof(roundtrip)) == 0);
+    assert(memcmp(roundtrip, pixels, sizeof(roundtrip)) == 0);
+    memset(roundtrip, 0, sizeof(roundtrip));
+    assert(pvr_txr_surface_readback_level(&temporary, 0, roundtrip,
+                                          sizeof(roundtrip)) == 0);
+    assert(memcmp(roundtrip, pixels, sizeof(roundtrip)) == 0);
+    memset(roundtrip, 0, sizeof(roundtrip));
+    assert(pvr_txr_surface_readback_part(&temporary, 32, roundtrip, 32) == 0);
+    assert(memcmp(roundtrip, (const uint8_t *)pixels + 32, 32) == 0);
     assert(pvr_txr_surface_pvr_format(&temporary)
            == (PVR_TXRFMT_RGB565 | PVR_TXRFMT_NONTWIDDLED));
     assert(pvr_txr_surface_bind(&bound, temporary.vram, temporary.capacity,
@@ -131,7 +167,6 @@ int main(int argc, char **argv) {
                                 PVR_TXR_SURFACE_LINEAR, false) == 0);
     assert(!bound.owns_vram && bound.vram == temporary.vram);
     pvr_txr_surface_release(&bound);
-    pvr_txr_surface_release(&temporary);
 
     assert(pvr_txr_surface_alloc(&yuv, 16, 16, PVR_TXR_SURFACE_YUV422,
                                  PVR_TXR_SURFACE_LINEAR, false) == 0);
@@ -184,6 +219,42 @@ int main(int argc, char **argv) {
                                 TEXTURE_HEIGHT, PVR_TXR_SURFACE_RGB565,
                                 PVR_TXR_SURFACE_LINEAR, false) == -1);
     assert(errno == EFAULT);
+    bound = temporary;
+    bound.vram = (pvr_ptr_t)pixels;
+    bound.owns_vram = false;
+    errno = 0;
+    assert(pvr_txr_surface_readback(&bound, roundtrip,
+                                    sizeof(roundtrip)) == -1);
+    assert(errno == EFAULT);
+    memset(&bound, 0, sizeof(bound));
+    errno = 0;
+    assert(pvr_txr_surface_readback_part(&temporary,
+                                         temporary.byte_size - 1u,
+                                         roundtrip, 2) == -1);
+    assert(errno == EINVAL);
+    errno = 0;
+    assert(pvr_txr_surface_begin_render(&surface, TEXTURE_WIDTH,
+                                        TEXTURE_HEIGHT) == -1);
+    assert(errno == ENOTSUP);
+    errno = 0;
+    assert(pvr_txr_surface_begin_render(&temporary, TEXTURE_WIDTH + 1u,
+                                        TEXTURE_HEIGHT) == -1);
+    assert(errno == EINVAL);
+
+    assert(pvr_wait_ready() == 0);
+    pvr_set_bg_color(1.0f, 0.0f, 0.0f);
+    assert(pvr_txr_surface_begin_render(&temporary, TEXTURE_WIDTH,
+                                        TEXTURE_HEIGHT) == 0);
+    draw_panel(&render_header, TEXTURE_WIDTH, TEXTURE_HEIGHT, 0xffff0000u);
+    assert(pvr_scene_finish_tracked(&render_ticket) == 0);
+    assert(render_ticket.target == temporary.vram);
+    assert(render_ticket.width == TEXTURE_WIDTH);
+    assert(render_ticket.height == TEXTURE_HEIGHT);
+    assert(render_ticket.stride == TEXTURE_WIDTH);
+    assert(pvr_render_ticket_wait(&render_ticket,
+                                  PVR_RENDER_STAGE_COMPLETE, 1000) == 0);
+
+    pvr_txr_surface_release(&temporary);
 
     for(frame = 0; frame < 120; ++frame) {
         assert(pvr_wait_ready() == 0);

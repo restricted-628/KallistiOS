@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <dc/pvr.h>
 #include <dc/sq.h>
+#include <dc/video.h>
 #include <kos/dbglog.h>
 #include <kos/regfield.h>
 #include <string.h>
@@ -46,6 +47,7 @@ size_t pvr_txr_get_stride(void) {
 
 static bool surface_storage_valid(const pvr_txr_surface_t *surface) {
     pvr_txr_level_info_t level;
+    uintptr_t address;
 
     if(pvr_txr_surface_get_level(surface, 0, &level) < 0)
         return false;
@@ -55,7 +57,16 @@ static bool surface_storage_valid(const pvr_txr_surface_t *surface) {
         return false;
     }
 
-    if(surface->capacity < surface->byte_size) {
+    address = (uintptr_t)surface->vram;
+    if(address < PVR_RAM_INT_BASE || address >= PVR_RAM_INT_TOP) {
+        errno = EFAULT;
+        return false;
+    }
+
+    /* Descriptors are caller-owned, so revalidate the complete binding rather
+       than assuming it was left unchanged after allocation or bind. */
+    if(surface->capacity < surface->byte_size ||
+            surface->capacity > PVR_RAM_INT_TOP - address) {
         errno = ENOSPC;
         return false;
     }
@@ -128,6 +139,55 @@ void pvr_txr_surface_release(pvr_txr_surface_t *surface) {
         pvr_mem_free(surface->vram);
 
     memset(surface, 0, sizeof(*surface));
+}
+
+int pvr_txr_surface_begin_render(const pvr_txr_surface_t *surface,
+                                 uint32_t render_width,
+                                 uint32_t render_height) {
+    pvr_txr_surface_format_t expected_format;
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(pvr_state.scene_active) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    if(!surface_storage_valid(surface))
+        return -1;
+
+    if(!render_width || !render_height || render_width > surface->width ||
+            render_height > surface->height) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(surface->mipmapped ||
+            (surface->layout != PVR_TXR_SURFACE_LINEAR &&
+             surface->layout != PVR_TXR_SURFACE_STRIDE)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(vid_mode->pm == PM_RGB555)
+        expected_format = PVR_TXR_SURFACE_ARGB1555;
+    else if(vid_mode->pm == PM_RGB565)
+        expected_format = PVR_TXR_SURFACE_RGB565;
+    else {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(surface->format != expected_format) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    return pvr_scene_begin_rtt(surface->vram, render_width, render_height,
+                               surface->width);
 }
 
 uint32_t pvr_txr_surface_pvr_format(const pvr_txr_surface_t *surface) {
@@ -267,6 +327,57 @@ int pvr_txr_surface_upload_codebook(const pvr_txr_surface_t *surface,
     }
 
     return pvr_txr_surface_upload_part(surface, 0, src, byte_size, transfer);
+}
+
+int pvr_txr_surface_readback_part(const pvr_txr_surface_t *surface,
+                                  size_t offset, void *dst,
+                                  size_t byte_size) {
+    const uint8_t *source;
+
+    if(!dst || !byte_size) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!surface_storage_valid(surface))
+        return -1;
+
+    if(offset > surface->byte_size ||
+            byte_size > surface->byte_size - offset) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    source = (const uint8_t *)surface->vram + offset;
+    memmove(dst, source, byte_size);
+    return 0;
+}
+
+int pvr_txr_surface_readback(const pvr_txr_surface_t *surface, void *dst,
+                             size_t byte_size) {
+    if(!surface || byte_size != surface->byte_size) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return pvr_txr_surface_readback_part(surface, 0, dst, byte_size);
+}
+
+int pvr_txr_surface_readback_level(const pvr_txr_surface_t *surface,
+                                   uint32_t level, void *dst,
+                                   size_t byte_size) {
+    pvr_txr_level_info_t info;
+
+    if(pvr_txr_surface_get_level(surface, level, &info) < 0)
+        return -1;
+
+    if(byte_size != info.byte_size) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return pvr_txr_surface_readback_part(surface, info.offset, dst,
+                                          byte_size);
 }
 
 /* Load raw texture data from an SH-4 buffer into PVR RAM */

@@ -54,10 +54,10 @@ than place another renderer above them.
 | Global material state | Fog and cheap-shadow controls are broad; clamp endpoints and punch-through threshold were missing | Provide checked packed-color clamp, threshold, bulk palette, and header supersampling controls. Audit culling threshold and vertical-filter coefficients separately. |
 | Context and header construction | Most polygon, sprite, modifier, two-volume, blend, depth, fog, UV, palette, and texture fields are covered | Preserve public context layout. Add extended compilation flags for missing packed-header controls; treat individual header mutation helpers as optional optimizations. |
 | Render submission identity | Stable allocation-free tickets cover queued registration, completed registration, rendering, target completion, and display | Preserve identity-specific waits and expose counters in coherent pipeline diagnostics. |
-| Render targets | Sized 16-bit render-to-texture and explicit completion/no-flip contracts are covered | Audit additional output formats and checked framebuffer bindings. |
+| Render targets | Sized 16-bit render-to-texture, checked surface binding, and explicit completion/no-flip contracts are covered | Audit additional output formats and checked framebuffer bindings. |
 | Texture allocation | General allocator and checked caller-owned surfaces are covered | Add contiguous multi-surface reservations for demonstrated streaming and batch-conversion needs. Do not move raw pointer allocations behind an unsafe collector. |
 | Texture formats | Linear, twiddled, mipmapped, paletted, full-codebook VQ, stride, rectangle, and YUV are represented | Validate reduced-codebook VQ and any VQ/palette combinations against hardware before extending the surface layout vocabulary. |
-| Texture upload | Checked synchronous and immediate-admission asynchronous paths are covered | Add checked readback and framebuffer-binding helpers with explicit render/sampling hazard rules. |
+| Texture upload and readback | Checked synchronous and immediate-admission asynchronous uploads plus encoded CPU readback are covered | Preserve explicit render/sampling hazard rules and add asynchronous readback only for a demonstrated need. |
 | Texture conversion | Checked 4/8/16-bpp twiddling is covered | Keep palette creation and VQ encoding in content tools rather than placing unbounded encoders in the kernel. |
 | YUV conversion | Checked single-destination synchronous and asynchronous conversion is covered | Add contiguous multi-destination conversion only with bounded geometry, progress, and ownership. |
 | Palette and fog | Palette format, single entries, fog colors, density, and table generation are covered | Complete checked bulk palette writes plus fog-mode documentation and packing tests. |
@@ -115,8 +115,10 @@ than place another renderer above them.
    contracts.~~ Closed with monotonic allocation-free tickets, five observable
    stages, identity-specific waits, exact texture-target geometry, and explicit
    separation between render completion and framebuffer display.
-8. Add only hardware-validated advanced texture layouts, readback, contiguous
-   reservations, and batch YUV conversion.
+8. Add only hardware-validated advanced texture layouts, contiguous
+   reservations, and batch YUV conversion. Checked encoded CPU readback and
+   compatible 16-bit surface render binding are closed; physical render-target
+   visibility remains a hardware validation gate.
 9. Close remaining display timing and filter controls in `video`.
 10. Run the final API, examples, exports, documentation, and resource-cost
     audit before defining an optional higher-level scene interface.
@@ -232,6 +234,8 @@ Physical completion visibility and page-flip timing remain hardware-day items.
   encoded size without allocating a manager object;
 - surfaces can own an allocation from the established PVR memory allocator or
   bind caller-managed VRAM with explicit capacity checking;
+- every transfer revalidates the caller-owned descriptor's address and declared
+  capacity against the complete 64-bit CPU-visible VRAM window;
 - logical mip level zero names the largest image while byte offsets describe
   the hardware's smallest-first storage order;
 - full VQ surfaces reserve a 2048-byte codebook and expose separate checked
@@ -243,15 +247,21 @@ Physical completion visibility and page-flip timing remain hardware-day items.
   full-texture buffer;
 - encoded byte-range and level uploads remain available for layouts, such as VQ
   and twiddled YUV, where an unencoded rectangle is not self-describing;
+- encoded full, byte-range, and mip-level readback uses the same validated
+  layout metadata and copies from the uncached CPU-visible VRAM alias;
+- a nonmipmapped linear or X32-stride surface whose format matches the active
+  16-bit render mode can begin a checked texture-target scene, with dimensions,
+  stride, and target identity preserved by its render ticket;
 - the host regression test passes exact plain, strided, mipmapped, palette, and
   VQ size and offset vectors, plus invalid layout combinations and descriptor
   corruption;
 - the focused example completes 120 frames in interpreter-mode emulation after
-  exercising checked twiddling, an asynchronous DMA upload, live rectangle
-  updates, overflow and type misuse, and zero persistent PVR faults.
+  exercising checked twiddling, an asynchronous DMA upload, exact upload
+  readback, a checked render target and ticket, live rectangle updates,
+  overflow and type misuse, and zero persistent PVR faults.
 
-Physical DMA timing and updates concurrent with texture sampling remain
-hardware validation items.
+Physical DMA timing, CPU visibility after hardware render completion, and
+updates concurrent with texture sampling remain hardware validation items.
 
 ### Asynchronous texture and YUV requests
 

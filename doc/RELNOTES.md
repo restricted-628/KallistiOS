@@ -31,7 +31,10 @@ lifecycle and naming conventions.
 * Added caller-owned PVR texture surfaces with checked allocation or external
   binding, exact mip and VQ codebook layout metadata, format-word generation,
   bounded full/partial/level/codebook transfers, and rectangular updates for
-  linear and twiddled uncompressed textures.
+  linear and twiddled uncompressed textures. Encoded full, byte-range, and
+  mip-level CPU readback is bounded by the same metadata, while a checked
+  render-target entry point accepts only compatible 16-bit linear surfaces and
+  records exact target geometry through render tickets.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes
