@@ -197,6 +197,35 @@ typedef struct vid_mode {
     size_t  fb_size;      /**< \brief Size of each framebuffer */
 } vid_mode_t;
 
+/** \brief Coherent snapshot of the physical display scanout state.
+    \ingroup video_display
+
+    The scanline is the raw hardware timing counter. It is not a framebuffer Y
+    coordinate: blanking, line doubling, interlace, and custom timing modes can
+    all make those values differ.
+*/
+typedef struct vid_scanout_status {
+    uint16_t scanline;    /**< \brief Physical scanline counter (0-1023). */
+    bool field;           /**< \brief Current interlaced field selector. */
+    bool blank;           /**< \brief Horizontal or vertical blanking active. */
+    bool hsync;           /**< \brief Horizontal synchronization active. */
+    bool vsync;           /**< \brief Vertical synchronization active. */
+} vid_scanout_status_t;
+
+/** \brief Framebuffer output-filter state.
+    \ingroup video_display
+
+    vertical_scale is the exact 16-bit hardware coefficient. The effective
+    scale factor is 1024 / vertical_scale. Exposing the coefficient avoids
+    assigning misleading names to values whose correct choice depends on the
+    complete display timing.
+*/
+typedef struct vid_display_filter {
+    bool dithering;          /**< \brief Framebuffer dithering enabled. */
+    bool antialiasing;       /**< \brief Horizontal scaler/antialiasing enabled. */
+    uint16_t vertical_scale; /**< \brief Vertical-scale coefficient. */
+} vid_display_filter_t;
+
 /** \brief   The list of builtin video modes. Do not modify these!
     \ingroup video_modes
 */
@@ -285,6 +314,44 @@ int vid_mode_validate(const vid_mode_t *mode, int8_t cable_type);
     \retval -1             If video is not initialized or mode is NULL.
 */
 int vid_get_mode(vid_mode_t *mode);
+
+/** \brief Read a coherent snapshot of the physical display scanout state.
+    \ingroup video_display
+
+    The underlying register is sampled once, so every returned field describes
+    the same instant. This function allocates no memory and is IRQ-safe.
+
+    \param status          Output scanout snapshot.
+
+    \retval 0              On success.
+    \retval -1             If \p status is NULL, with errno set to EFAULT.
+*/
+int vid_get_scanout_status(vid_scanout_status_t *status);
+
+/** \brief Read the current framebuffer output-filter state.
+    \ingroup video_display
+
+    \param filter          Output filter snapshot.
+
+    \retval 0              On success.
+    \retval -1             If \p filter is NULL, with errno set to EFAULT.
+*/
+int vid_get_display_filter(vid_display_filter_t *filter);
+
+/** \brief Set framebuffer output filters without disturbing other fields.
+    \ingroup video_display
+
+    The framebuffer and scaler control registers are updated with
+    read-modify-write operations while interrupts are disabled. Alpha-related
+    framebuffer configuration and unrelated scaler fields are preserved.
+
+    \param filter          Requested filter state. vertical_scale must be
+                            nonzero.
+
+    \retval 0              On success.
+    \retval -1             On invalid input, with errno set.
+*/
+int vid_set_display_filter(const vid_display_filter_t *filter);
 
 /** \brief   Set the VRAM convenience pointers.
     \ingroup video_fb
@@ -533,8 +600,9 @@ size_t vid_screen_shot_data(uint8_t **buffer);
 /** \brief   Enable or disable dithering.
     \ingroup video_fb
 
-    This function can be used to enable or disable dithering when a 15-bit or
-    16-bit video mode is used.
+    This compatibility setter preserves every unrelated framebuffer-control
+    field. New code that needs checked updates or coherent filter queries can
+    use vid_set_display_filter() and vid_get_display_filter().
 
     \param  enable          Whether or not dithering should be enabled.
 */

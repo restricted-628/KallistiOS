@@ -28,6 +28,9 @@ lifecycle and naming conventions.
   both direct and buffered polygon lists.
 * Added checked per-scene background-plane geometry, RGB888 vertex colors, and
   depth state while preserving the established solid-color interface.
+* Added coherent physical scanout snapshots and checked framebuffer display
+  filters with exact vertical coefficients. The established dithering setter
+  now preserves unrelated framebuffer-control fields.
 * Added caller-owned PVR texture surfaces with checked allocation or external
   binding, exact mip and VQ codebook layout metadata, format-word generation,
   bounded full/partial/level/codebook transfers, and rectangular updates for

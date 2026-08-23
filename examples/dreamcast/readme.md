@@ -191,8 +191,10 @@ This page serves as an index for all KallistiOS examples.
   - bfont
   - bfont-glyph-query
   - minifont
+  - [**mode-policy**](video/mode-policy/): Resolves cable-aware 50/60 Hz video modes without installing them
   - multibuffer
   - palmenu
+  - [**scanout-filter**](video/scanout-filter/): Validates coherent physical scanout and checked display-filter state
   - screenshot
 - vmu
   - vmu_beep

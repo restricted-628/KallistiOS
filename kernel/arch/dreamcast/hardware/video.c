@@ -12,6 +12,7 @@
 #include <dc/pvr.h>
 #include <dc/sq.h>
 #include <kos/dbglog.h>
+#include <kos/irq.h>
 #include <kos/platform.h>
 #include <errno.h>
 #include <string.h>
@@ -259,12 +260,11 @@ enum pvr_pm_modes {
     PVR_PM_RGB888,
     PVR_PM_XRGB8888,
     PVR_PM_ARGB8888,
-    PVR_PM_DITHER = 8,
 };
 
 static const unsigned int vid_bpp_to_pvr_cfg2[] = {
-    [PM_RGB555] = PVR_PM_XRGB1555 | PVR_PM_DITHER,
-    [PM_RGB565] = PVR_PM_RGB565 | PVR_PM_DITHER,
+    [PM_RGB555] = PVR_PM_XRGB1555 | PVR_FB_CFG_2_DITHER,
+    [PM_RGB565] = PVR_PM_RGB565 | PVR_FB_CFG_2_DITHER,
     [PM_RGB888P] = PVR_PM_RGB888,
     [PM_RGB0888] = PVR_PM_XRGB8888,
 };
@@ -429,6 +429,83 @@ int vid_get_mode(vid_mode_t *mode) {
     }
 
     memcpy(mode, vid_mode, sizeof(*mode));
+    return 0;
+}
+
+int vid_get_scanout_status(vid_scanout_status_t *status) {
+    uint32_t raw;
+
+    if(!status) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    /* One read makes the five related fields a coherent observation. */
+    raw = PVR_GET(PVR_SYNC_STATUS);
+    status->scanline = FIELD_GET(raw, PVR_SYNC_STATUS_SCANLINE);
+    status->field = (raw & PVR_SYNC_STATUS_FIELD) != 0;
+    status->blank = (raw & PVR_SYNC_STATUS_BLANK) != 0;
+    status->hsync = (raw & PVR_SYNC_STATUS_HSYNC) != 0;
+    status->vsync = (raw & PVR_SYNC_STATUS_VSYNC) != 0;
+    return 0;
+}
+
+int vid_get_display_filter(vid_display_filter_t *filter) {
+    uint32_t fb_cfg;
+    uint32_t scaler_cfg;
+
+    if(!filter) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    irq_disable_scoped();
+    fb_cfg = PVR_GET(PVR_FB_CFG_2);
+    scaler_cfg = PVR_GET(PVR_SCALER_CFG);
+
+    filter->dithering = (fb_cfg & PVR_FB_CFG_2_DITHER) != 0;
+    filter->antialiasing = (scaler_cfg & PVR_SCALER_CFG_FSAA) != 0;
+    filter->vertical_scale =
+        FIELD_GET(scaler_cfg, PVR_SCALER_CFG_VSCALE_FACTOR);
+    return 0;
+}
+
+int vid_set_display_filter(const vid_display_filter_t *filter) {
+    uint32_t fb_cfg;
+    uint32_t scaler_cfg;
+
+    if(!filter) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(filter->vertical_scale == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Both controls are shared registers. Preserve fields owned by other
+       framebuffer and scaler facilities while applying one coherent update. */
+    irq_disable_scoped();
+    fb_cfg = PVR_GET(PVR_FB_CFG_2);
+    scaler_cfg = PVR_GET(PVR_SCALER_CFG);
+
+    if(filter->dithering)
+        fb_cfg |= PVR_FB_CFG_2_DITHER;
+    else
+        fb_cfg &= ~PVR_FB_CFG_2_DITHER;
+
+    if(filter->antialiasing)
+        scaler_cfg |= PVR_SCALER_CFG_FSAA;
+    else
+        scaler_cfg &= ~PVR_SCALER_CFG_FSAA;
+
+    scaler_cfg &= ~PVR_SCALER_CFG_VSCALE_FACTOR;
+    scaler_cfg |= FIELD_PREP(PVR_SCALER_CFG_VSCALE_FACTOR,
+                             filter->vertical_scale);
+
+    PVR_SET(PVR_FB_CFG_2, fb_cfg);
+    PVR_SET(PVR_SCALER_CFG, scaler_cfg);
     return 0;
 }
 
@@ -599,12 +676,15 @@ void vid_shutdown(void) {
 }
 
 void vid_set_dithering(bool enable) {
-    uint32_t cfg = vid_bpp_to_pvr_cfg2[currmode.pm];
+    uint32_t cfg;
+
+    irq_disable_scoped();
+    cfg = PVR_GET(PVR_FB_CFG_2);
 
     if(enable)
-        cfg |= PVR_PM_DITHER;
+        cfg |= PVR_FB_CFG_2_DITHER;
     else
-        cfg &= ~PVR_PM_DITHER;
+        cfg &= ~PVR_FB_CFG_2_DITHER;
 
     PVR_SET(PVR_FB_CFG_2, cfg);
 }

@@ -160,6 +160,14 @@ __BEGIN_DECLS
 #define PVR_PALETTE_TABLE_BASE  0x1000  /**< \brief Base of the palette table */
 /** @} */
 
+/** \defgroup pvr_fb_cfg_2 PVR_FB_CFG_2 Values
+    \brief                   Definitions for framebuffer output configuration.
+    \ingroup                 pvr_registers
+    @{
+*/
+#define PVR_FB_CFG_2_DITHER BIT(3) /**< \brief Enable framebuffer dithering */
+/** @} */
+
 /** \defgroup pvr_addresses     Addresses and Constants
     \brief                      Miscellaneous Addresses and Constants
     \ingroup                    pvr_registers
@@ -228,6 +236,18 @@ __BEGIN_DECLS
 #define PVR_SCALER_CFG_FSAA BIT(16)  /**< \brief Enable FSAA */
 
 #define PVR_SCALER_CFG_VSCALE_FACTOR GENMASK(15, 0) /**< \brief Vertical scale factor = 1024 / value */
+/** @} */
+
+/** \defgroup pvr_sync_status PVR_SYNC_STATUS Values
+    \brief                      Definitions for the live scanout status.
+    \ingroup                    pvr_registers
+    @{
+*/
+#define PVR_SYNC_STATUS_SCANLINE GENMASK(9, 0) /**< \brief Physical scanline counter */
+#define PVR_SYNC_STATUS_FIELD    BIT(10)       /**< \brief Current interlaced field */
+#define PVR_SYNC_STATUS_BLANK    BIT(11)       /**< \brief Blanking interval active */
+#define PVR_SYNC_STATUS_HSYNC    BIT(12)       /**< \brief Horizontal sync active */
+#define PVR_SYNC_STATUS_VSYNC    BIT(13)       /**< \brief Vertical sync active */
 /** @} */
 
 __END_DECLS

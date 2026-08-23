@@ -44,7 +44,7 @@ than place another renderer above them.
 | Family | Current KOS state | Closure work |
 | --- | --- | --- |
 | System configuration and lifecycle | Core initialization is covered | Add checked companions instead of changing established assertion-based entry points; do not create a second device owner. |
-| Display modes and scanout | Mode setting, blanking, border, dithering, and framebuffer access are covered by `video` | Add stable scanline, horizontal-blank, filter, and surface queries through `video`; do not duplicate them in PVR. |
+| Display modes and scanout | Mode setting, blanking, border, coherent physical scanout, exact filter state, and framebuffer access are covered by `video` | Add horizontal-blank scheduling and finish checked framebuffer-surface queries through `video`; do not duplicate them in PVR. |
 | Timing and callbacks | VBlank and PVR completion/fault events are covered | Audit horizontal-blank and scanline scheduling. Preserve bounded IRQ callbacks and opt-in allocation. |
 | Direct list submission | Covered | Preserve the low-overhead store-queue path. |
 | Buffered list submission | Checked writes and hybrid flushing are covered | Finish checked buffer assignment and preserve per-RAM-frame ownership. |
@@ -119,7 +119,9 @@ than place another renderer above them.
    reservations, and batch YUV conversion. Checked encoded CPU readback and
    compatible 16-bit surface render binding are closed; physical render-target
    visibility remains a hardware validation gate.
-9. Close remaining display timing and filter controls in `video`.
+9. Close remaining display timing and filter controls in `video`. Coherent raw
+   scanout status and exact checked filter state are closed; opt-in raster
+   scheduling remains.
 10. Run the final API, examples, exports, documentation, and resource-cost
     audit before defining an optional higher-level scene interface.
 
@@ -310,3 +312,23 @@ The focused ELF boots and runs in emulation without an observed SH-4 exception.
 That host run did not expose the program's serial completion line, so it is not
 recorded as a full runtime pass. Clamp timing during a live render,
 supersampling quality, and palette visibility remain physical-hardware gates.
+
+### Scanout and display-filter state
+
+- one register sample yields a coherent physical scanline, field, blank,
+  horizontal-sync, and vertical-sync snapshot;
+- the raw scanline is explicitly distinguished from a logical framebuffer Y
+  coordinate for interlaced, doubled, blanked, and caller-defined timings;
+- checked filter state combines framebuffer dithering, horizontal
+  antialiasing, and the exact 16-bit vertical coefficient without inventing
+  timing-independent named presets;
+- filter changes use IRQ-fenced read-modify-write operations that preserve
+  unrelated framebuffer and scaler fields;
+- the established dithering setter now uses the same field-preserving update
+  and is included in the Dreamcast export table;
+- the focused example rejects null and zero-coefficient misuse, observes live
+  scanout progress, proves field preservation, restores the initial state, and
+  passes in both interpreter and dynamic-recompiler emulation.
+
+Physical scanout timing, interlaced field behavior, and visible filter quality
+remain hardware validation items.
