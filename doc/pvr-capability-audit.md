@@ -325,7 +325,8 @@ supersampling quality, and palette visibility remain physical-hardware gates.
   antialiasing, and the exact 16-bit vertical coefficient without inventing
   timing-independent named presets;
 - filter changes use IRQ-fenced read-modify-write operations that preserve
-  unrelated framebuffer and scaler fields;
+  unrelated framebuffer and scaler fields; full-scene antialiasing remains a
+  query-and-preserve field because its TA layout is owned by PVR initialization;
 - the established dithering setter now uses the same field-preserving update
   and is included in the Dreamcast export table;
 - the focused example rejects null and zero-coefficient misuse, observes live

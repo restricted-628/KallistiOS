@@ -14,7 +14,9 @@ as excess blue or an otherwise unstable overlap, while a missing transfer
 leaves only the red triangle.
 
 The first frame also verifies that a second flush of the same list fails with
-`EALREADY`. It also counts one successful PVR DMA completion event per frame
-and rejects any latched DMA fault. The example aborts if a contract is
-violated, otherwise renders 120 frames and prints
+`EALREADY`. It counts one successful PVR DMA completion event per frame,
+rejects any latched DMA fault, and finally proves that a completely full RAM
+list returns `ENOSPC` instead of writing its required end marker past the
+caller buffer. The example aborts if a contract is violated, otherwise renders
+120 frames and prints
 `RESULT: PASS (buffered/direct list submission)`.

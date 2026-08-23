@@ -1,3 +1,4 @@
+# KallistiOS ##version##
 #
 # PVR background-plane example
 # Copyright (C) 2026 Joseph Black

@@ -972,11 +972,14 @@ static int finish_buffered_pass(void) {
     if(pvr_state.list_reg_open != PVR_LIST_NONE && pvr_list_finish() < 0)
         return -1;
 
+    /* Preflight every enabled list before writing any blank header or EOL.
+       This keeps an ENOSPC result retryable and prevents one full caller
+       buffer from turning a later list's delimiter into an overrun. */
     for(list = 0; list < PVR_OPB_COUNT; ++list) {
-        if(!(pvr_state.lists_enabled & BIT(list)))
-            continue;
+        size_t required;
 
-        if(buffer->flushed & BIT(list))
+        if(!(pvr_state.lists_enabled & BIT(list)) ||
+                (buffer->flushed & BIT(list)))
             continue;
 
         if(!buffer->base[list]) {
@@ -984,21 +987,26 @@ static int finish_buffered_pass(void) {
             return -1;
         }
 
-        if(!buffer->ptr[list]) {
-            if(buffer->size[list] < 64) {
-                errno = ENOSPC;
-                return -1;
-            }
+        required = buffer->ptr[list] ? 32u : 64u;
 
+        if(buffer->ptr[list] > buffer->size[list] ||
+                required > buffer->size[list] - buffer->ptr[list]) {
+            errno = ENOSPC;
+            return -1;
+        }
+    }
+
+    for(list = 0; list < PVR_OPB_COUNT; ++list) {
+        if(!(pvr_state.lists_enabled & BIT(list)))
+            continue;
+
+        if(buffer->flushed & BIT(list))
+            continue;
+
+        if(!buffer->ptr[list]) {
             pvr_blank_polyhdr_buf(list,
                 (pvr_poly_hdr_t *)buffer->base[list]);
             buffer->ptr[list] = 32;
-        }
-
-        if(buffer->ptr[list] > buffer->size[list] ||
-                buffer->size[list] - buffer->ptr[list] < 32) {
-            errno = ENOSPC;
-            return -1;
         }
 
         memset(buffer->base[list] + buffer->ptr[list], 0, 32);
@@ -1096,6 +1104,25 @@ static int pvr_scene_finish_internal(pvr_render_ticket_t *ticket) {
             /* Fill empty enabled lists and append one delimiter per buffered
                list. Lists already flushed by the hybrid path are skipped. */
             b = current_build_buffer();
+
+            /* Preflight all buffered lists before changing any of them. A
+               legacy vertex buffer may be completely full, and the required
+               32-byte EOL must never be written past its declared capacity. */
+            for(i = 0; i < PVR_OPB_COUNT; ++i) {
+                size_t required;
+
+                if(!(pvr_state.lists_enabled & BIT(i)) ||
+                        (b->flushed & BIT(i)) || !b->base[i])
+                    continue;
+
+                required = b->ptr[i] ? 32u : 64u;
+
+                if(b->ptr[i] > b->size[i] ||
+                        required > b->size[i] - b->ptr[i]) {
+                    errno = ENOSPC;
+                    return -1;
+                }
+            }
 
             for(i = 0; i < PVR_OPB_COUNT; i++) {
                 if(!(pvr_state.lists_enabled & BIT(i)))

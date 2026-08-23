@@ -147,6 +147,28 @@ static void test_validation(void) {
     CHECK(errno == EINVAL);
     mode.flags &= ~UINT32_C(0x100);
 
+    mode.scanlines = 1024;
+    errno = 0;
+    CHECK(vid_mode_validate_for_vram(&mode, CT_COMPOSITE, VRAM_BYTES,
+                                     NULL) < 0);
+    CHECK(errno == ERANGE);
+    mode.scanlines = 524;
+
+    mode.clocks = 1024;
+    errno = 0;
+    CHECK(vid_mode_validate_for_vram(&mode, CT_COMPOSITE, VRAM_BYTES,
+                                     NULL) < 0);
+    CHECK(errno == ERANGE);
+    mode.clocks = 857;
+
+    mode.scanlines = 512;
+    mode.flags |= VID_LINEDOUBLE;
+    errno = 0;
+    CHECK(vid_mode_validate_for_vram(&mode, CT_VGA, VRAM_BYTES, NULL) < 0);
+    CHECK(errno == ERANGE);
+    mode.scanlines = 524;
+    mode.flags &= ~VID_LINEDOUBLE;
+
     mode.flags |= VID_PAL;
     errno = 0;
     CHECK(vid_mode_validate_for_vram(&mode, CT_VGA, VRAM_BYTES, NULL) < 0);

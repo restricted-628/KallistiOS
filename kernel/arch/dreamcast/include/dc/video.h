@@ -179,8 +179,8 @@ typedef struct vid_mode {
     int8_t    cable_type; /**< \brief Allowed cable type */
     vid_pixel_mode_t  pm; /**< \brief Pixel mode */
 
-    uint16_t  scanlines;  /**< \brief Number of scanlines */
-    uint16_t  clocks;     /**< \brief Clocks per scanline */
+    uint16_t  scanlines;  /**< \brief Maximum physical scanline counter */
+    uint16_t  clocks;     /**< \brief Maximum clock counter per scanline */
     uint16_t  bitmapx;    /**< \brief Bitmap window X position */
     uint16_t  bitmapy;    /**< \brief Bitmap window Y position (automatically
                                     increased for PAL) */
@@ -222,7 +222,7 @@ typedef struct vid_scanout_status {
 */
 typedef struct vid_display_filter {
     bool dithering;          /**< \brief Framebuffer dithering enabled. */
-    bool antialiasing;       /**< \brief Horizontal scaler/antialiasing enabled. */
+    bool antialiasing;       /**< \brief PVR-owned full-scene AA state. */
     uint16_t vertical_scale; /**< \brief Vertical-scale coefficient. */
 } vid_display_filter_t;
 
@@ -387,12 +387,15 @@ int vid_get_display_filter(vid_display_filter_t *filter);
     The framebuffer and scaler control registers are updated with
     read-modify-write operations while interrupts are disabled. Alpha-related
     framebuffer configuration and unrelated scaler fields are preserved.
+    antialiasing is a query-and-preserve field: it must match the current
+    value because changing full-scene antialiasing also requires the TA layout
+    selected by pvr_init(). Configure that mode through pvr_init_params_t.
 
     \param filter          Requested filter state. vertical_scale must be
                             nonzero.
 
     \retval 0              On success.
-    \retval -1             On invalid input, with errno set.
+    \retval -1             On invalid or unsupported input, with errno set.
 */
 int vid_set_display_filter(const vid_display_filter_t *filter);
 

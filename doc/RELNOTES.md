@@ -16,7 +16,9 @@ lifecycle and naming conventions.
   `_g1_ata_sem` symbol.
 * Completed buffered PVR list flushing and hybrid per-list submission, allowing
   selected lists to use RAM/DMA while other lists use direct store-queue input
-  in the same scene without replaying early transfers.
+  in the same scene without replaying early transfers. Scene completion now
+  preflights space for every required end marker before modifying any caller
+  buffer, so a full buffer fails with `ENOSPC` instead of overrunning storage.
 * Added coherent PVR pipeline snapshots and persistent fault records with
   per-fault counters and captured TA buffer registers. Fault interrupts are
   monitored in all builds while their debug logging remains optional.
@@ -31,7 +33,12 @@ lifecycle and naming conventions.
 * Added coherent physical scanout snapshots, checked framebuffer display
   filters with exact vertical coefficients, and opt-in physical-line raster
   callbacks with exclusive event ownership. The established dithering setter
-  now preserves unrelated framebuffer-control fields.
+  now preserves unrelated framebuffer-control fields. Full-scene
+  antialiasing remains owned by PVR initialization because it changes the TA
+  render-buffer layout as well as a display-scaler bit.
+* Checked video-mode validation now rejects horizontal or vertical timing
+  counters that do not fit their ten-bit hardware fields, including the
+  effective scanline value after VGA line doubling.
 * Added checked framebuffer-surface queries for configured slots, the hardware
   scanout target, and KOS's CPU drawing target, including exact geometry, VRAM
   offsets, visible byte counts, known capacity, and interlaced field layout.

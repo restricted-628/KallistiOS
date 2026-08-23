@@ -276,6 +276,11 @@ int pvr_txr_surface_upload_part(const pvr_txr_surface_t *surface,
         return -1;
     }
 
+    if(transfer == PVR_TXR_TRANSFER_DMA && !pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
     if(transfer == PVR_TXR_TRANSFER_SQ) {
         pvr_sq_load(destination, src, byte_size, PVR_DMA_VRAM64);
         return 0;

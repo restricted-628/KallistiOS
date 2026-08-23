@@ -59,6 +59,7 @@ static void submit_triangle(const pvr_poly_hdr_t *header, uint32_t color,
 }
 
 int main(int argc, char **argv) {
+    static const uint8_t full_block[32] __attribute__((aligned(32)));
     pvr_poly_cxt_t op_context;
     pvr_poly_cxt_t tr_context;
     pvr_poly_hdr_t op_header;
@@ -117,6 +118,20 @@ int main(int argc, char **argv) {
     assert(pvr_event_handler_remove(event_handle) == 0);
     assert(dma_completions == 120);
     assert(dma_faults == 0);
+
+    /* Fill the active RAM half completely. Finishing must reject the scene
+       before appending its required 32-byte EOL rather than overrunning the
+       caller-owned allocation. Shutdown below intentionally abandons this
+       rejected scene. */
+    pvr_scene_begin();
+    for(frame = 0; frame < TR_BUFFER_SIZE / 2 / sizeof(full_block); ++frame) {
+        assert(pvr_list_prim(PVR_LIST_TR_POLY, full_block,
+                             sizeof(full_block)) == 0);
+    }
+
+    errno = 0;
+    assert(pvr_scene_finish() == -1);
+    assert(errno == ENOSPC);
 
     puts("RESULT: PASS (buffered/direct list submission)");
     pvr_shutdown();

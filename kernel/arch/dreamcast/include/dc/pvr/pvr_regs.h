@@ -5,6 +5,7 @@
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023, 2025 Ruslan Rostovtsev
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file       dc/pvr/pvr_regs.h

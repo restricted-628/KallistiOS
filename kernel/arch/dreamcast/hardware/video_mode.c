@@ -17,6 +17,7 @@
 
 #define VID_KNOWN_FLAGS \
     (VID_INTERLACE | VID_LINEDOUBLE | VID_PIXELDOUBLE | VID_PAL)
+#define VID_TIMING_COUNTER_MAX UINT16_C(1023)
 
 static int valid_cable(int8_t cable_type) {
     return cable_type >= CT_ANY && cable_type <= CT_COMPOSITE;
@@ -72,9 +73,14 @@ int vid_mode_validate_for_vram(const vid_mode_t *mode, int8_t cable_type,
         return -1;
     }
 
-    if(cable_type == CT_VGA && (mode->flags & VID_LINEDOUBLE) &&
-       mode->scanlines > UINT16_MAX / 2u) {
-        errno = EOVERFLOW;
+    /* Both timing counters are ten-bit hardware fields. VGA line doubling is
+       applied by vid_apply_mode(), so validate the effective vertical value
+       rather than accepting a mode that would be silently truncated. */
+    if(mode->scanlines > VID_TIMING_COUNTER_MAX ||
+       mode->clocks > VID_TIMING_COUNTER_MAX ||
+       (cable_type == CT_VGA && (mode->flags & VID_LINEDOUBLE) &&
+        mode->scanlines > VID_TIMING_COUNTER_MAX / 2u)) {
+        errno = ERANGE;
         return -1;
     }
 

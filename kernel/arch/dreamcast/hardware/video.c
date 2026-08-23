@@ -478,6 +478,7 @@ int vid_get_display_filter(vid_display_filter_t *filter) {
 int vid_set_display_filter(const vid_display_filter_t *filter) {
     uint32_t fb_cfg;
     uint32_t scaler_cfg;
+    bool current_antialiasing;
 
     if(!filter) {
         errno = EFAULT;
@@ -495,15 +496,23 @@ int vid_set_display_filter(const vid_display_filter_t *filter) {
     fb_cfg = PVR_GET(PVR_FB_CFG_2);
     scaler_cfg = PVR_GET(PVR_SCALER_CFG);
 
+    /* Full-scene antialiasing changes the TA's horizontal tile geometry and
+       is therefore owned by pvr_init(). Updating only the scaler bit would
+       leave the live render buffers and register layout inconsistent. Keep
+       the field in this snapshot so callers can preserve/query it, but reject
+       attempts to change it through the display-only setter. */
+    current_antialiasing =
+        (scaler_cfg & PVR_SCALER_CFG_FSAA) != 0;
+
+    if(filter->antialiasing != current_antialiasing) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
     if(filter->dithering)
         fb_cfg |= PVR_FB_CFG_2_DITHER;
     else
         fb_cfg &= ~PVR_FB_CFG_2_DITHER;
-
-    if(filter->antialiasing)
-        scaler_cfg |= PVR_SCALER_CFG_FSAA;
-    else
-        scaler_cfg &= ~PVR_SCALER_CFG_FSAA;
 
     scaler_cfg &= ~PVR_SCALER_CFG_VSCALE_FACTOR;
     scaler_cfg |= FIELD_PREP(PVR_SCALER_CFG_VSCALE_FACTOR,

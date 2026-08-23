@@ -1,3 +1,4 @@
+# KallistiOS ##version##
 #
 # Checked PVR texture surface example
 # Copyright (C) 2026 Joseph Black

@@ -133,7 +133,8 @@ int vid_raster_set_scanline(uint16_t scanline) {
         return -1;
     }
 
-    if(scanline > vid_mode->scanlines) {
+    if(scanline > FIELD_GET(UINT32_MAX, PVR_HPOS_IRQ_SCANLINE) ||
+            scanline > vid_mode->scanlines) {
         errno = ERANGE;
         return -1;
     }

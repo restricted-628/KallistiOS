@@ -1,3 +1,4 @@
+# KallistiOS ##version##
 #
 # Buffered/direct PVR list submission example
 # Copyright (C) 2026 Joseph Black

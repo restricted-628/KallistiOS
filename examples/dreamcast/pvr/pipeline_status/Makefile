@@ -1,3 +1,4 @@
+# KallistiOS ##version##
 #
 # PVR pipeline status example
 # Copyright (C) 2026 Joseph Black

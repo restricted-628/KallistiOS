@@ -128,10 +128,14 @@ int main(void) {
 
     requested = original;
     requested.antialiasing = !original.antialiasing;
-    if(vid_set_display_filter(&requested) < 0 ||
+    errno = 0;
+    if(expect_errno(vid_set_display_filter(&requested), ENOTSUP,
+                    "PVR-owned antialiasing change") < 0 ||
        vid_get_display_filter(&observed) < 0 ||
-       !filters_equal(&observed, &requested)) {
-        puts("FAIL: antialiasing update did not preserve unrelated fields");
+       observed.antialiasing != original.antialiasing ||
+       observed.vertical_scale != original.vertical_scale ||
+       observed.dithering != !original.dithering) {
+        puts("FAIL: rejected antialiasing change modified filter state");
         (void)vid_set_display_filter(&original);
         return 1;
     }

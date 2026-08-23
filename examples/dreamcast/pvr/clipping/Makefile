@@ -1,3 +1,4 @@
+# KallistiOS ##version##
 #
 # PVR clipping example
 # Copyright (C) 2026 Joseph Black
