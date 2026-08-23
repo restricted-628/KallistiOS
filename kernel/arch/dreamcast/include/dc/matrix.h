@@ -4,6 +4,7 @@
    Copyright (C) 2000 Megan Potter
    Copyright (C) 2013, 2014 Josh "PH3NOM" Pearson
    Copyright (C) 2018 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -100,6 +101,25 @@ void mat_apply(const matrix_t *src);
     \param  src             A pointer to the matrix to multiply.
 */
 void mat_multiply(matrix_t *dst, const matrix_t *src);
+
+/** \brief Compose two memory-resident matrices without changing XMTRX.
+
+    The result is `lhs * rhs`, using the same column-major storage and
+    post-multiplication order as mat_apply(). The destination may alias either
+    input. All pointers must satisfy matrix_t's alignment requirement.
+
+    This baseline routine intentionally has no global state or allocation.
+    Applications may substitute an optimized math backend while retaining this
+    layout and multiplication contract.
+
+    \param out             Destination matrix.
+    \param lhs             Left-hand input matrix.
+    \param rhs             Right-hand input matrix.
+
+    \retval 0  Success.
+    \retval -1 Invalid pointer or alignment, with `errno` set to `EINVAL`.
+*/
+int mat_compose(matrix_t *out, const matrix_t *lhs, const matrix_t *rhs);
 
 /** \brief  Transform vectors by the internal matrix.
 

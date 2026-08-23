@@ -14,6 +14,8 @@ This page serves as an index for all KallistiOS examples.
   - fpu
   - gdb_breaking
   - independent-heap
+  - [**camera-matrices**](basic/camera-matrices/): Demonstrates checked,
+    caller-owned perspective and look-at matrix construction
   - [**matrix_stack**](basic/matrix_stack/): Demonstrates bounded caller-owned
     transform hierarchy state
   - memtest32

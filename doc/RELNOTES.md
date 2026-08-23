@@ -53,7 +53,11 @@ lifecycle and naming conventions.
   helpers and added a bounded caller-owned matrix stack with explicit
   overflow, underflow, and non-consuming restore operations. It allocates no
   memory and adds no initialization or per-frame cost to applications that do
-  not use it.
+  not use it. Added failure-atomic perspective and look-at builders with
+  explicit descriptors, plus a two-input memory matrix composition routine
+  whose order matches the established post-multiply API. The new stack,
+  composition, and camera operations are available to loadable modules through
+  the established Dreamcast architecture export table.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes

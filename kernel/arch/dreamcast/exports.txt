@@ -472,7 +472,13 @@ mat_store
 mat_load
 mat_identity
 mat_apply
+mat_compose
 mat_transform
+mat_stack_init
+mat_stack_clear
+mat_stack_push
+mat_stack_pop
+mat_stack_restore
 mat_translate
 mat_scale
 mat_rotate_x
@@ -481,6 +487,10 @@ mat_rotate_z
 mat_rotate
 mat_perspective
 mat_lookat
+mat_perspective_build
+mat_perspective_apply
+mat_lookat_build
+mat_lookat_apply
 # PVR
 pvr_txr_load_dma
 pvr_dma_ready

@@ -2,6 +2,7 @@
 
    matrix3d.h
    (c)2000 Megan Potter and Jordan DeLong
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -27,6 +28,77 @@ __BEGIN_DECLS
 /** \addtogroup math_matrices
     @{
 */
+
+/** \brief Explicit parameters for the established perspective transform.
+
+    This descriptor represents the same screen-space and finite-frustum
+    convention as mat_perspective(), but can be validated and built into a
+    caller-owned matrix without changing XMTRX.
+*/
+typedef struct mat_perspective_desc {
+    float x_center;    /**< Horizontal screen-space center. */
+    float y_center;    /**< Vertical center and screen-space scale. */
+    float cot_half_fov;/**< Cotangent of half the vertical field of view. */
+    float z_near;      /**< Positive near clipping distance. */
+    float z_far;       /**< Far clipping distance, greater than z_near. */
+} mat_perspective_desc_t;
+
+/** \brief Explicit look-at view description.
+
+    Only the XYZ components are used. The eye and center must differ, the up
+    vector must be nonzero, and up must not be parallel to the viewing
+    direction.
+*/
+typedef struct mat_lookat_desc {
+    point_t eye;       /**< Camera position. */
+    point_t center;    /**< Point observed by the camera. */
+    vector_t up;       /**< Approximate upward direction. */
+} mat_lookat_desc_t;
+
+/** \brief Build a checked perspective matrix in caller-owned storage.
+
+    The output is not modified on failure. The destination must satisfy
+    matrix_t's alignment requirement. This function does not change XMTRX.
+
+    \param out         Destination matrix.
+    \param desc        Perspective description.
+
+    \retval 0  Success.
+    \retval -1 Error, with `errno` set to `EINVAL`, `EDOM`, or `ERANGE`.
+*/
+int mat_perspective_build(matrix_t *out,
+                          const mat_perspective_desc_t *desc);
+
+/** \brief Validate and apply an explicit perspective transform to XMTRX.
+
+    XMTRX remains unchanged when validation fails.
+
+    \retval 0  Success.
+    \retval -1 Error, with `errno` set to `EINVAL`, `EDOM`, or `ERANGE`.
+*/
+int mat_perspective_apply(const mat_perspective_desc_t *desc);
+
+/** \brief Build a checked look-at view matrix in caller-owned storage.
+
+    The output is not modified on failure. The destination must satisfy
+    matrix_t's alignment requirement. This function does not change XMTRX.
+
+    \param out         Destination matrix.
+    \param desc        Look-at view description.
+
+    \retval 0  Success.
+    \retval -1 Error, with `errno` set to `EINVAL`, `EDOM`, or `ERANGE`.
+*/
+int mat_lookat_build(matrix_t *out, const mat_lookat_desc_t *desc);
+
+/** \brief Validate and apply an explicit look-at view transform to XMTRX.
+
+    XMTRX remains unchanged when validation fails.
+
+    \retval 0  Success.
+    \retval -1 Error, with `errno` set to `EINVAL`, `EDOM`, or `ERANGE`.
+*/
+int mat_lookat_apply(const mat_lookat_desc_t *desc);
 
 /** \brief  Rotate around the X-axis.
 
@@ -112,5 +184,4 @@ void mat_lookat(const point_t * eye, const point_t * center, const vector_t * up
 __END_DECLS
 
 #endif  /* __KOS_MATRIX3D_H */
-
 

@@ -24,7 +24,7 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
 | --- | --- | --- |
 | Matrix register operations | Fast load, store, multiply, transform, translation, rotation, scaling, perspective, and look-at helpers | Keep the register API small; eliminate shared scratch state and provide explicit caller-owned save/restore. |
 | Transform hierarchy | No bounded matrix stack | Add a caller-owned stack with reported overflow and underflow and no allocation. |
-| Camera state | Individual perspective and look-at operations | Add explicit, validated camera/projection descriptors only after transform ordering and clip conventions have host vectors. |
+| Camera state | Established immediate operations plus explicit, checked perspective and look-at builders | Keep application state caller-owned; add higher-level camera policy only outside the core math layer. |
 | Frustum and visibility | No reusable object/frustum tests | Add pure math tests independently of rendering; leave spatial partitioning to applications. |
 | Mesh submission | Applications hand-build PVR vertices and strips | Add an optional geometry sink that preserves direct and buffered PVR paths and accepts caller-owned output space. |
 | Materials | PVR contexts and compiled headers are complete at the hardware level | Add optional immutable material descriptions that compile to existing PVR headers; do not introduce another texture allocator. |
@@ -58,8 +58,8 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
 
 1. Make existing 3D helpers free of shared mutable scratch and add a bounded,
    caller-owned matrix stack.
-2. Add pure, explicit transform and camera descriptions with checked projection
-   construction and host-side golden vectors.
+2. ~~Add pure, explicit transform and camera descriptions with checked
+   projection construction and host-side golden vectors.~~
 3. Define an optional geometry input/output contract that can target direct
    store-queue or buffered PVR submission without owning the scene.
 4. Add immutable material compilation over existing PVR contexts and texture
@@ -86,6 +86,25 @@ The first tranche closes two concrete gaps:
   boundaries.
 
 The stack has no initializer hook, heap allocation, worker, or idle cost.
+
+## Second tranche
+
+The second tranche establishes the transform and camera contracts needed by a
+future geometry layer:
+
+- `mat_compose()` computes `lhs * rhs` in ordinary caller-owned storage using
+  the same column-major, post-multiply order as `mat_apply()`, permits either
+  input to alias the output, and leaves XMTRX untouched;
+- `mat_perspective_build()` and `mat_lookat_build()` validate finite,
+  nondegenerate descriptions and change no output on failure;
+- matching apply helpers build and validate first, so rejected input cannot
+  partially change XMTRX;
+- the finite perspective form deliberately matches the established KOS
+  screen/frustum convention. A later PVR geometry layer may offer a separately
+  named infinite-far projection when its clipping and depth contract is fixed.
+
+These functions retain no camera object, allocate no memory, create no thread,
+and add no work to applications that continue using the established helpers.
 
 ## Validation gates
 
