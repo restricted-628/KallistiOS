@@ -245,10 +245,13 @@ lists without introducing scene, texture, or model ownership:
   and emitted to a caller-selected memory, current-list, or buffered-list sink;
 - `pvr_chunk_model_emit_two_volume()` keeps outside/inside texture and material
   state distinct, expands both UV sets, and emits the matching complete
-  untextured or textured two-volume PVR layout through a format-bound sink; and
-- modifier volumes, bump materials, and cached-polygon controls fail with
-  `ENOTSUP` before side effects instead of being skipped or rendered under an
-  incompatible vertex contract.
+  untextured or textured two-volume PVR layout through a format-bound sink;
+- `pvr_chunk_model_emit_modifiers()` expands compact triangle, quad, and strip
+  topology into winding-correct modifier packets, applies explicit list,
+  culling, and include/exclude policy, and submits each header/triangle pair as
+  one operation; and
+- bump materials and cached-polygon controls fail with `ENOTSUP` before side
+  effects instead of being skipped or rendered under an incompatible contract.
 
 The renderer allocates nothing, creates no worker, retains no texture lookup or
 model index, and never begins or finishes a PVR scene. The caller supplies one

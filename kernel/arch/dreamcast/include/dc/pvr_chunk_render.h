@@ -93,6 +93,20 @@ typedef struct pvr_chunk_render_result {
     size_t emitted_vertices;
 } pvr_chunk_render_result_t;
 
+/** \brief Modifier-volume header policy for compact volume records. */
+typedef struct pvr_chunk_modifier_config {
+    pvr_list_t list;             /**< PVR_LIST_OP_MOD or PVR_LIST_TR_MOD. */
+    pvr_cull_mode_t culling;     /**< Culling encoded in every header. */
+    uint32_t final_mode;         /**< Include-last or exclude-last mode. */
+} pvr_chunk_modifier_config_t;
+
+/** \brief Progress from compact modifier-volume emission. */
+typedef struct pvr_chunk_modifier_result {
+    size_t consumed_records;
+    size_t emitted_volumes;
+    size_t emitted_triangles;
+} pvr_chunk_modifier_result_t;
+
 /** \brief Resolve state and prepare the active PVR material for one strip.
 
     A non-memory sink requires this callback. It normally resolves texture
@@ -136,6 +150,17 @@ typedef int (*pvr_chunk_render_prepare_two_volume_vertex_t)(
     const pvr_chunk_strip_attributes_t *strip_attributes,
     pvr_geometry_vertex_format_t format,
     pvr_chunk_two_volume_vertex_t *vertex, void *data);
+
+/** \brief Apply application policy to one expanded modifier triangle.
+
+    The three decoded source vertices and bounded per-triangle user words are
+    supplied before projection. The callback may replace coordinates or dummy
+    fields in \p triangle; its command is restored afterward.
+*/
+typedef int (*pvr_chunk_render_prepare_modifier_t)(
+    const pvr_chunk_vertex_attributes_t vertices[3],
+    const uint16_t *user_words, size_t user_word_count,
+    pvr_modifier_vol_t *triangle, void *data);
 
 /** \brief Project and emit an admitted compact model.
 
@@ -203,6 +228,28 @@ int pvr_chunk_model_emit_two_volume(
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
+
+/** \brief Project and emit compact modifier-volume geometry.
+
+    Triangle records emit directly, quads split into two winding-preserving
+    triangles, and strips expand into independent alternating-winding
+    triangles. Each source volume record is terminated with \p config's include
+    or exclude mode; preceding triangles use the other-polygon mode.
+
+    The sink must use `PVR_GEOMETRY_VERTEX_MODIFIER`. A non-memory sink also
+    receives one compiled modifier header before each triangle and must target
+    the modifier list named by \p config. Memory sinks receive projected
+    `pvr_modifier_vol_t` packets only. Complete topology, capacity, workspace,
+    configuration, and overlap validation precede callbacks or output.
+*/
+int pvr_chunk_model_emit_modifiers(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result);
 
 /** @} */
 

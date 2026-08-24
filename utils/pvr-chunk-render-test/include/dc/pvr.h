@@ -76,6 +76,37 @@ typedef struct pvr_vertex_tpcm {
     uint32_t d4;
 } pvr_vertex_tpcm_t;
 
+typedef struct pvr_modifier_vol {
+    alignas(32) uint32_t flags;
+    float ax, ay, az;
+    float bx, by, bz;
+    float cx, cy, cz;
+    uint32_t d1, d2, d3, d4, d5, d6;
+} pvr_modifier_vol_t;
+
+#define PVR_MODIFIER_OTHER_POLY         0u
+#define PVR_MODIFIER_INCLUDE_LAST_POLY  1u
+#define PVR_MODIFIER_EXCLUDE_LAST_POLY  2u
+
+typedef enum pvr_cull_mode {
+    PVR_CULLING_NONE,
+    PVR_CULLING_SMALL,
+    PVR_CULLING_CCW,
+    PVR_CULLING_CW
+} pvr_cull_mode_t;
+
+typedef struct pvr_poly_hdr {
+    alignas(32) uint32_t cmd;
+    uint32_t mode1;
+    uint32_t mode2;
+    uint32_t mode3;
+    uint32_t d1, d2, d3, d4;
+} pvr_poly_hdr_t;
+typedef pvr_poly_hdr_t pvr_mod_hdr_t;
+
+void pvr_mod_compile(pvr_mod_hdr_t *dst, pvr_list_t list, uint32_t mode,
+                     uint32_t cull);
+
 int pvr_prim(const void *data, size_t size);
 int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
 

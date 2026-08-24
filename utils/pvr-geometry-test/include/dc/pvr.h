@@ -65,6 +65,14 @@ typedef struct pvr_vertex_tpcm {
     uint32_t d4;
 } pvr_vertex_tpcm_t;
 
+typedef struct pvr_modifier_vol {
+    alignas(32) uint32_t flags;
+    float ax, ay, az;
+    float bx, by, bz;
+    float cx, cy, cz;
+    uint32_t d1, d2, d3, d4, d5, d6;
+} pvr_modifier_vol_t;
+
 int pvr_prim(const void *data, size_t size);
 int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
 

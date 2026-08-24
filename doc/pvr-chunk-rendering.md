@@ -106,8 +106,31 @@ These records are not skipped or approximated. Two-volume texture, material,
 and strip records instead use `pvr_chunk_model_emit_two_volume()`, which binds
 the entire call to either KOS's complete 32-byte untextured layout or 64-byte
 textured layout and rejects mixed layouts before output. Modifier geometry,
-bump material, and cached-polygon controls remain explicit unsupported
-boundaries in both compact emitters.
+bump material and cached-polygon controls remain explicit unsupported
+boundaries in both polygon emitters.
+
+## Modifier-volume topology
+
+`pvr_chunk_model_emit_modifiers()` is a separate pass over the same admitted
+model view. It consumes only modifier-volume records and therefore composes
+with either polygon emitter without duplicating model storage. Triangle records
+emit directly. Quads split into `(0,1,2)` and `(2,1,3)`. Strip expansion swaps
+the first two indices on alternating triangles, and also applies the record's
+reversal flag, so independent modifier packets preserve strip winding.
+
+Each nonempty volume record is one logical modifier volume. Every triangle but
+the last receives `PVR_MODIFIER_OTHER_POLY`; the last receives the caller's
+validated include or exclude mode. List, culling, and final-mode policy are
+explicit in `pvr_chunk_modifier_config_t` because the compact topology record
+does not own PVR list policy. For current or buffered output, each checked
+32-byte header and 64-byte triangle is published as one 96-byte operation.
+Memory sinks receive only projected `pvr_modifier_vol_t` packets.
+
+The optional callback receives decoded source vertices and bounded per-triangle
+user words. It can apply an application-specific position-W policy or fill
+dummy fields before all three positions are projected through the format-aware
+SH4ZAM geometry path. Complete triangle count, memory capacity, configuration,
+and overlap validation occur before callbacks or output.
 
 ## Concurrency and lifetime
 

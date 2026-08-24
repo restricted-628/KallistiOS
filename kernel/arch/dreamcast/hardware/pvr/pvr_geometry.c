@@ -26,10 +26,16 @@ _Static_assert(sizeof(pvr_vertex_pcm_t) == 32,
                "two-volume color vertices must occupy one TA block");
 _Static_assert(sizeof(pvr_vertex_tpcm_t) == 64,
                "textured two-volume vertices must occupy two TA blocks");
+_Static_assert(sizeof(pvr_modifier_vol_t) == 64,
+               "modifier triangles must occupy two TA blocks");
 
 static int polygon_list(pvr_list_t list) {
     return list == PVR_LIST_OP_POLY || list == PVR_LIST_TR_POLY ||
            list == PVR_LIST_PT_POLY;
+}
+
+static int modifier_list(pvr_list_t list) {
+    return list == PVR_LIST_OP_MOD || list == PVR_LIST_TR_MOD;
 }
 
 static int matrix_aligned(const matrix_t *matrix) {
@@ -63,6 +69,8 @@ static size_t vertex_format_size(pvr_geometry_vertex_format_t format) {
             return sizeof(pvr_vertex_pcm_t);
         case PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED:
             return sizeof(pvr_vertex_tpcm_t);
+        case PVR_GEOMETRY_VERTEX_MODIFIER:
+            return sizeof(pvr_modifier_vol_t);
         default:
             return 0;
     }
@@ -224,6 +232,56 @@ int pvr_geometry_project_vertices(
         memcpy(packet_bytes + 4u, &x, sizeof(x));
         memcpy(packet_bytes + 8u, &y, sizeof(y));
         memcpy(packet_bytes + 12u, &z, sizeof(z));
+
+        if(stream->format == PVR_GEOMETRY_VERTEX_MODIFIER) {
+            static const size_t offsets[] = { 16u, 28u };
+            size_t position;
+
+            for(position = 0; position < 2u; ++position) {
+                size_t offset = offsets[position];
+
+                memcpy(&x, packet_bytes + offset, sizeof(x));
+                memcpy(&y, packet_bytes + offset + 4u, sizeof(y));
+                memcpy(&z, packet_bytes + offset + 8u, sizeof(z));
+                if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
+                    errno = EDOM;
+                    goto fail;
+                }
+#ifdef __DREAMCAST__
+                transformed = shz_xmtrx_transform_vec4(
+                    shz_vec4_init(x, y, z, 1.0f));
+                tx = transformed.x;
+                ty = transformed.y;
+                tw = transformed.w;
+#else
+                tx = (*matrix)[0][0] * x + (*matrix)[1][0] * y +
+                     (*matrix)[2][0] * z + (*matrix)[3][0];
+                ty = (*matrix)[0][1] * x + (*matrix)[1][1] * y +
+                     (*matrix)[2][1] * z + (*matrix)[3][1];
+                tw = (*matrix)[0][3] * x + (*matrix)[1][3] * y +
+                     (*matrix)[2][3] * z + (*matrix)[3][3];
+#endif
+                if(!isfinite(tx) || !isfinite(ty) || !isfinite(tw)) {
+                    errno = ERANGE;
+                    goto fail;
+                }
+                if(tw <= FLT_MIN) {
+                    errno = EDOM;
+                    goto fail;
+                }
+                reciprocal_w = 1.0f / tw;
+                x = tx * reciprocal_w;
+                y = ty * reciprocal_w;
+                z = reciprocal_w;
+                if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
+                    errno = ERANGE;
+                    goto fail;
+                }
+                memcpy(packet_bytes + offset, &x, sizeof(x));
+                memcpy(packet_bytes + offset + 4u, &y, sizeof(y));
+                memcpy(packet_bytes + offset + 8u, &z, sizeof(z));
+            }
+        }
         memcpy((uint8_t *)output + i * vertex_size, packet_bytes, vertex_size);
         ++progress.consumed_vertices;
         ++progress.produced_vertices;
@@ -467,7 +525,9 @@ int pvr_geometry_vertex_sink_init_current(
 int pvr_geometry_vertex_sink_init_buffered(
     pvr_geometry_vertex_sink_t *sink,
     pvr_geometry_vertex_format_t format, pvr_list_t list) {
-    if(!sink || !vertex_format_size(format) || !polygon_list(list)) {
+    if(!sink || !vertex_format_size(format) ||
+       (format == PVR_GEOMETRY_VERTEX_MODIFIER ?
+        !modifier_list(list) : !polygon_list(list))) {
         errno = EINVAL;
         return -1;
     }
@@ -503,7 +563,9 @@ static int vertex_sink_valid(const pvr_geometry_vertex_sink_t *sink,
         case PVR_GEOMETRY_SINK_CURRENT_LIST:
             break;
         case PVR_GEOMETRY_SINK_BUFFERED_LIST:
-            if(!polygon_list(sink->destination.list)) {
+            if(sink->format == PVR_GEOMETRY_VERTEX_MODIFIER ?
+               !modifier_list(sink->destination.list) :
+               !polygon_list(sink->destination.list)) {
                 errno = EINVAL;
                 return -1;
             }
@@ -571,7 +633,9 @@ int pvr_geometry_vertex_sink_emit(
         case PVR_GEOMETRY_SINK_CURRENT_LIST:
 #ifdef __DREAMCAST__
             if(!pvr_state.scene_active ||
-               !polygon_list(pvr_state.list_reg_open)) {
+               (sink->format == PVR_GEOMETRY_VERTEX_MODIFIER ?
+                !modifier_list(pvr_state.list_reg_open) :
+                !polygon_list(pvr_state.list_reg_open))) {
                 errno = EPERM;
                 return -1;
             }

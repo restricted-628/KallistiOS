@@ -314,6 +314,14 @@ static void test_format_projection(void) {
         PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED
     };
     pvr_geometry_result_t result;
+    alignas(32) pvr_modifier_vol_t modifier = {
+        .flags = PVR_CMD_VERTEX_EOL,
+        .ax = 1.0f, .ay = 2.0f, .az = 3.0f,
+        .bx = 4.0f, .by = 5.0f, .bz = 6.0f,
+        .cx = 7.0f, .cy = 8.0f, .cz = 9.0f,
+        .d1 = 1, .d2 = 2, .d3 = 3, .d4 = 4, .d5 = 5, .d6 = 6
+    };
+    alignas(32) pvr_modifier_vol_t modifier_output;
 
     memset(output, 0x5a, sizeof(output));
     assert(pvr_geometry_project_vertices(output, 3, &stream, &transform,
@@ -379,6 +387,20 @@ static void test_format_projection(void) {
     assert(pvr_geometry_project_vertices((uint8_t *)textured + 32u, 2,
                                          &stream, &transform, &result) == -1);
     assert(errno == EINVAL && result.produced_vertices == 0);
+
+    stream.vertices = &modifier;
+    stream.vertex_count = 1;
+    stream.stride = sizeof(modifier);
+    stream.format = PVR_GEOMETRY_VERTEX_MODIFIER;
+    assert(pvr_geometry_project_vertices(&modifier_output, 1, &stream,
+                                         &transform, &result) == 0);
+    assert(modifier_output.ax == 12.0f && modifier_output.ay == 26.0f &&
+           modifier_output.az == 1.0f);
+    assert(modifier_output.bx == 18.0f && modifier_output.by == 35.0f &&
+           modifier_output.bz == 1.0f);
+    assert(modifier_output.cx == 24.0f && modifier_output.cy == 44.0f &&
+           modifier_output.cz == 1.0f);
+    assert(modifier_output.d1 == 1 && modifier_output.d6 == 6);
 }
 
 static void test_vertex_sinks(void) {
@@ -446,6 +468,18 @@ static void test_vertex_sinks(void) {
     errno = 0;
     assert(pvr_geometry_vertex_sink_init_current(
         &sink, (pvr_geometry_vertex_format_t)99) == -1);
+    assert(errno == EINVAL);
+    errno = 0;
+    assert(pvr_geometry_vertex_sink_init_buffered(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR,
+        PVR_LIST_OP_MOD) == -1);
+    assert(errno == EINVAL);
+
+    assert(pvr_geometry_vertex_sink_init_buffered(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, PVR_LIST_OP_MOD) == 0);
+    errno = 0;
+    assert(pvr_geometry_vertex_sink_init_buffered(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, PVR_LIST_OP_POLY) == -1);
     assert(errno == EINVAL);
     errno = 0;
     assert(pvr_geometry_vertex_sink_init_buffered(

@@ -48,7 +48,8 @@ typedef struct pvr_geometry_result {
 typedef enum pvr_geometry_vertex_format {
     PVR_GEOMETRY_VERTEX_CANONICAL = 0, /**< pvr_vertex_t. */
     PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR, /**< pvr_vertex_pcm_t. */
-    PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED /**< pvr_vertex_tpcm_t. */
+    PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, /**< pvr_vertex_tpcm_t. */
+    PVR_GEOMETRY_VERTEX_MODIFIER /**< pvr_modifier_vol_t. */
 } pvr_geometry_vertex_format_t;
 
 /** \brief Strided input over one declared complete PVR vertex layout. */
@@ -140,11 +141,11 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
 
 /** \brief Project a declared complete PVR vertex layout.
 
-    The first 16 bytes of every supported layout are the command and XYZ
-    position. Projection transforms those fields with W=1 and preserves every
-    later byte, including both UV/color sets of a textured two-volume vertex.
-    Output is tightly packed according to stream::format. Input may use a
-    larger four-byte-aligned stride.
+    Polygon layouts transform the command-adjacent XYZ position and preserve
+    every later attribute byte. Modifier packets transform all three XYZ
+    positions and preserve their dummy words. Output is tightly packed
+    according to stream::format. Input may use a larger four-byte-aligned
+    stride.
 
     Exact in-place operation is supported when stride equals the declared
     format size. Other overlapping ranges are rejected before output. On a

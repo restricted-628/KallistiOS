@@ -97,6 +97,13 @@ material state distinct, expands two UV sets, projects complete 32-byte or
 stream must use one output layout per call; mismatch, insufficient workspace,
 or insufficient memory capacity fails before callbacks or output.
 
+`pvr_chunk_model_emit_modifiers()` expands triangle, quad, and strip volume
+records into independent `pvr_modifier_vol_t` packets. It preserves winding,
+retains bounded per-triangle user words for an optional callback, projects all
+three positions, and terminates every nonempty volume record with an explicit
+include or exclude header policy. The application still owns scene and list
+lifetime.
+
 ## Failure contract
 
 Invalid arguments report `EINVAL`. Truncated, unknown, inconsistent, non-finite,

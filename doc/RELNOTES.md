@@ -106,8 +106,10 @@ lifecycle and naming conventions.
   state, explicit texture-ID resolution, reversed-winding correction,
   SH4ZAM-backed projection, and existing memory/current-list/buffered-list
   sinks. Two-volume output binds each call to the matching complete 32-byte or
-  64-byte TA vertex layout. Unsupported topology and state families fail before
-  callbacks or output.
+  64-byte TA vertex layout. Added a separate compact modifier-volume pass that
+  expands triangle, quad, and strip topology with preserved winding, projects
+  all three positions, and publishes each header/triangle pair atomically to a
+  modifier list. Unsupported state families fail before callbacks or output.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated

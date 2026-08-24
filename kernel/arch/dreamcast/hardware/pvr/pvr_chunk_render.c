@@ -11,6 +11,10 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef __DREAMCAST__
+#include "pvr_internal.h"
+#endif
+
 typedef struct render_requirements {
     size_t records;
     size_t strips;
@@ -1020,6 +1024,439 @@ int pvr_chunk_model_emit_two_volume(
         }
     }
 
+    if(rv < 0)
+        goto fail;
+    if(result)
+        *result = progress;
+    return 0;
+
+fail:
+    if(!errno)
+        errno = EIO;
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+static int modifier_sink_valid(const pvr_geometry_vertex_sink_t *sink) {
+    if(!sink || sink->format != PVR_GEOMETRY_VERTEX_MODIFIER) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    switch(sink->kind) {
+        case PVR_GEOMETRY_SINK_MEMORY:
+            if(!sink->destination.memory.vertices ||
+               !sink->destination.memory.capacity ||
+               ((uintptr_t)sink->destination.memory.vertices & 31u) ||
+               sink->emitted_vertices > sink->destination.memory.capacity ||
+               sink->destination.memory.capacity >
+               SIZE_MAX / sizeof(pvr_modifier_vol_t) ||
+               sink->destination.memory.capacity *
+               sizeof(pvr_modifier_vol_t) >
+               UINTPTR_MAX -
+               (uintptr_t)sink->destination.memory.vertices) {
+                errno = EINVAL;
+                return -1;
+            }
+            break;
+        case PVR_GEOMETRY_SINK_CURRENT_LIST:
+            break;
+        case PVR_GEOMETRY_SINK_BUFFERED_LIST:
+            if(sink->destination.list != PVR_LIST_OP_MOD &&
+               sink->destination.list != PVR_LIST_TR_MOD) {
+                errno = EINVAL;
+                return -1;
+            }
+            break;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+
+    return 0;
+}
+
+static int modifier_config_valid(
+    const pvr_chunk_modifier_config_t *config,
+    const pvr_geometry_vertex_sink_t *sink) {
+    if(!config ||
+       (config->list != PVR_LIST_OP_MOD &&
+        config->list != PVR_LIST_TR_MOD) ||
+       config->culling > PVR_CULLING_CW ||
+       (config->final_mode != PVR_MODIFIER_INCLUDE_LAST_POLY &&
+        config->final_mode != PVR_MODIFIER_EXCLUDE_LAST_POLY) ||
+       (sink->kind == PVR_GEOMETRY_SINK_BUFFERED_LIST &&
+        sink->destination.list != config->list)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return 0;
+}
+
+static int volume_triangle_count(const pvr_chunk_record_t *record,
+                                 size_t *count) {
+    const uint16_t *payload = record->payload;
+    size_t total = 0;
+
+    if(record->type == PVR_CHUNK_VOLUME_TRIANGLES)
+        total = payload[0] & UINT16_C(0x3fff);
+    else if(record->type == PVR_CHUNK_VOLUME_QUADS) {
+        size_t quads = payload[0] & UINT16_C(0x3fff);
+
+        if(quads > SIZE_MAX / 2u) {
+            errno = ERANGE;
+            return -1;
+        }
+        total = quads * 2u;
+    }
+    else {
+        pvr_chunk_record_t strip_record = *record;
+        pvr_chunk_strip_iterator_t iterator;
+        pvr_chunk_strip_view_t strip;
+        int rv;
+
+        strip_record.type = PVR_CHUNK_STRIP_INDEX;
+        strip_record.record_class = PVR_CHUNK_RECORD_STRIP;
+        if(pvr_chunk_strip_iterator_init(&iterator, &strip_record) < 0)
+            return -1;
+        while((rv = pvr_chunk_strip_iterator_next(&iterator, &strip)) > 0) {
+            if(checked_add(&total, strip.vertex_count - 2u) < 0)
+                return -1;
+        }
+        if(rv < 0)
+            return -1;
+    }
+
+    *count = total;
+    return 0;
+}
+
+static int modifier_preflight(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    const pvr_geometry_vertex_sink_t *sink,
+    const pvr_modifier_vol_t *workspace,
+    size_t *triangle_count) {
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    uintptr_t workspace_start;
+    uintptr_t vertex_start;
+    uintptr_t polygon_start;
+    uintptr_t matrix_start;
+    uintptr_t output_start = 0;
+    size_t workspace_bytes;
+    size_t vertex_bytes;
+    size_t polygon_bytes;
+    size_t matrix_bytes;
+    size_t output_bytes = 0;
+    int rv;
+
+    *triangle_count = 0;
+    if(!view || !workspace || ((uintptr_t)workspace & 31u) ||
+       matrix_valid(object_to_screen) < 0 || modifier_sink_valid(sink) < 0 ||
+       modifier_config_valid(config, sink) < 0)
+        return -1;
+    if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
+                                       view->model.polygon_word_count) < 0)
+        return -1;
+
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        size_t triangles;
+
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(record.record_class != PVR_CHUNK_RECORD_VOLUME)
+            continue;
+        if(volume_triangle_count(&record, &triangles) < 0 ||
+           checked_add(triangle_count, triangles) < 0)
+            return -1;
+    }
+    if(rv < 0)
+        return -1;
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       *triangle_count > sink->destination.memory.capacity -
+                         sink->emitted_vertices) {
+        errno = ENOSPC;
+        return -1;
+    }
+
+    if(range_get(workspace, 1u, sizeof(*workspace),
+                 &workspace_start, &workspace_bytes) < 0 ||
+       range_get(view->model.vertex_words, view->model.vertex_word_count,
+                 sizeof(*view->model.vertex_words), &vertex_start,
+                 &vertex_bytes) < 0 ||
+       range_get(view->model.polygon_words, view->model.polygon_word_count,
+                 sizeof(*view->model.polygon_words), &polygon_start,
+                 &polygon_bytes) < 0 ||
+       range_get(object_to_screen, 1u, sizeof(*object_to_screen),
+                 &matrix_start, &matrix_bytes) < 0)
+        return -1;
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       range_get(sink->destination.memory.vertices,
+                 sink->destination.memory.capacity,
+                 sizeof(pvr_modifier_vol_t), &output_start,
+                 &output_bytes) < 0)
+        return -1;
+    if(ranges_overlap(workspace_start, workspace_bytes,
+                      vertex_start, vertex_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      polygon_start, polygon_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      matrix_start, matrix_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      output_start, output_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      vertex_start, vertex_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      polygon_start, polygon_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      matrix_start, matrix_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return 0;
+}
+
+typedef struct modifier_packet {
+    alignas(32) pvr_mod_hdr_t header;
+    pvr_modifier_vol_t triangle;
+} modifier_packet_t;
+
+static int publish_modifier(
+    pvr_geometry_vertex_sink_t *sink,
+    const pvr_chunk_modifier_config_t *config,
+    const pvr_modifier_vol_t *triangle, uint32_t mode) {
+    modifier_packet_t packet;
+    int saved_errno;
+    int rv;
+
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY)
+        return pvr_geometry_vertex_sink_emit(sink, triangle, 1u);
+
+    pvr_mod_compile(&packet.header, config->list, mode, config->culling);
+    packet.triangle = *triangle;
+#ifdef __DREAMCAST__
+    if(!pvr_state.scene_active || pvr_state.list_reg_open != config->list) {
+        errno = EPERM;
+        return -1;
+    }
+#endif
+    saved_errno = errno;
+    errno = 0;
+    if(sink->kind == PVR_GEOMETRY_SINK_CURRENT_LIST)
+        rv = pvr_prim(&packet, sizeof(packet));
+    else
+        rv = pvr_list_prim(config->list, &packet, sizeof(packet));
+    if(rv < 0) {
+        if(!errno)
+            errno = sink->kind == PVR_GEOMETRY_SINK_CURRENT_LIST ?
+                    EPERM : EIO;
+        return -1;
+    }
+    errno = saved_errno;
+    ++sink->emitted_vertices;
+    return 0;
+}
+
+static int emit_modifier_triangle(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace, const uint16_t indices[3],
+    const uint16_t *user_words, size_t user_word_count,
+    uint32_t mode, pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data) {
+    pvr_chunk_vertex_attributes_t vertices[3];
+    pvr_geometry_vertex_stream_t stream;
+    size_t i;
+
+    for(i = 0; i < 3u; ++i) {
+        if(pvr_chunk_model_vertex_attributes_get(view, indices[i],
+                                                 &vertices[i]) < 0)
+            return -1;
+        if(vertices[i].position.w != 1.0f && !prepare_triangle) {
+            errno = ENOTSUP;
+            return -1;
+        }
+    }
+
+    memset(workspace, 0, sizeof(*workspace));
+    workspace->flags = PVR_CMD_VERTEX_EOL;
+    workspace->ax = vertices[0].position.x;
+    workspace->ay = vertices[0].position.y;
+    workspace->az = vertices[0].position.z;
+    workspace->bx = vertices[1].position.x;
+    workspace->by = vertices[1].position.y;
+    workspace->bz = vertices[1].position.z;
+    workspace->cx = vertices[2].position.x;
+    workspace->cy = vertices[2].position.y;
+    workspace->cz = vertices[2].position.z;
+    if(prepare_triangle) {
+        errno = 0;
+        if(prepare_triangle(vertices, user_words, user_word_count,
+                            workspace, data) < 0) {
+            if(!errno)
+                errno = EIO;
+            return -1;
+        }
+        workspace->flags = PVR_CMD_VERTEX_EOL;
+    }
+
+    stream.vertices = workspace;
+    stream.vertex_count = 1u;
+    stream.stride = sizeof(*workspace);
+    stream.format = PVR_GEOMETRY_VERTEX_MODIFIER;
+    if(pvr_geometry_project_vertices(workspace, 1u, &stream,
+                                     object_to_screen, NULL) < 0)
+        return -1;
+    return publish_modifier(sink, config, workspace, mode);
+}
+
+static int emit_modifier_record(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace, const pvr_chunk_record_t *record,
+    size_t triangle_count,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data) {
+    size_t emitted = 0;
+
+    if(record->type == PVR_CHUNK_VOLUME_TRIANGLES ||
+       record->type == PVR_CHUNK_VOLUME_QUADS) {
+        const uint16_t *payload = record->payload;
+        size_t user_count = payload[0] >> 14;
+        size_t primitive_count = payload[0] & UINT16_C(0x3fff);
+        size_t index_count = record->type == PVR_CHUNK_VOLUME_TRIANGLES ?
+                             3u : 4u;
+        size_t primitive;
+
+        ++payload;
+        for(primitive = 0; primitive < primitive_count; ++primitive) {
+            uint16_t first[3] = { payload[0], payload[1], payload[2] };
+            uint32_t mode = ++emitted == triangle_count ?
+                            config->final_mode : PVR_MODIFIER_OTHER_POLY;
+
+            if(emit_modifier_triangle(view, object_to_screen, config, sink,
+                                      workspace, first,
+                                      payload + index_count, user_count, mode,
+                                      prepare_triangle, data) < 0)
+                return -1;
+            if(index_count == 4u) {
+                uint16_t second[3] = { payload[2], payload[1], payload[3] };
+
+                mode = ++emitted == triangle_count ?
+                       config->final_mode : PVR_MODIFIER_OTHER_POLY;
+                if(emit_modifier_triangle(view, object_to_screen, config,
+                                          sink, workspace, second,
+                                          payload + index_count, user_count,
+                                          mode, prepare_triangle, data) < 0)
+                    return -1;
+            }
+            payload += index_count + user_count;
+        }
+    }
+    else {
+        pvr_chunk_record_t strip_record = *record;
+        pvr_chunk_strip_iterator_t iterator;
+        pvr_chunk_strip_view_t strip;
+        int rv;
+
+        strip_record.type = PVR_CHUNK_STRIP_INDEX;
+        strip_record.record_class = PVR_CHUNK_RECORD_STRIP;
+        if(pvr_chunk_strip_iterator_init(&iterator, &strip_record) < 0)
+            return -1;
+        while((rv = pvr_chunk_strip_iterator_next(&iterator, &strip)) > 0) {
+            size_t triangle;
+
+            for(triangle = 0; triangle + 2u < strip.vertex_count;
+                ++triangle) {
+                pvr_chunk_strip_vertex_view_t a;
+                pvr_chunk_strip_vertex_view_t b;
+                pvr_chunk_strip_vertex_view_t c;
+                uint16_t indices[3];
+                uint32_t mode;
+
+                if(pvr_chunk_strip_vertex_get(&strip, triangle, &a) < 0 ||
+                   pvr_chunk_strip_vertex_get(&strip, triangle + 1u, &b) < 0 ||
+                   pvr_chunk_strip_vertex_get(&strip, triangle + 2u, &c) < 0)
+                    return -1;
+                indices[0] = a.index;
+                indices[1] = b.index;
+                indices[2] = c.index;
+                if((triangle & 1u) != 0u)
+                    indices[0] = b.index, indices[1] = a.index;
+                if(strip.reversed) {
+                    uint16_t swap = indices[0];
+
+                    indices[0] = indices[1];
+                    indices[1] = swap;
+                }
+                mode = ++emitted == triangle_count ?
+                       config->final_mode : PVR_MODIFIER_OTHER_POLY;
+                if(emit_modifier_triangle(view, object_to_screen, config,
+                                          sink, workspace, indices,
+                                          c.triangle_user_words,
+                                          c.triangle_user_word_count, mode,
+                                          prepare_triangle, data) < 0)
+                    return -1;
+            }
+        }
+        if(rv < 0)
+            return -1;
+    }
+
+    return 0;
+}
+
+int pvr_chunk_model_emit_modifiers(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result) {
+    pvr_chunk_modifier_result_t progress = { 0, 0, 0 };
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    size_t triangle_count;
+    int rv;
+
+    if(result)
+        *result = progress;
+    if(modifier_preflight(view, object_to_screen, config, sink, workspace,
+                          &triangle_count) < 0)
+        return -1;
+
+    if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
+                                       view->model.polygon_word_count) < 0)
+        return -1;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        size_t record_triangles;
+
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        ++progress.consumed_records;
+        if(record.record_class != PVR_CHUNK_RECORD_VOLUME)
+            continue;
+        if(volume_triangle_count(&record, &record_triangles) < 0)
+            goto fail;
+        if(!record_triangles)
+            continue;
+        if(emit_modifier_record(view, object_to_screen, config, sink,
+                                workspace, &record, record_triangles,
+                                prepare_triangle, data) < 0)
+            goto fail;
+        ++progress.emitted_volumes;
+        progress.emitted_triangles += record_triangles;
+    }
     if(rv < 0)
         goto fail;
     if(result)
