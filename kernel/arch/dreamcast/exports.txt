@@ -527,6 +527,7 @@ pvr_chunk_strip_vertex_get
 pvr_chunk_strip_attributes_get
 pvr_chunk_hierarchy_traverse
 pvr_chunk_model_emit
+pvr_chunk_model_emit_two_volume
 pvr_morph_apply
 pvr_skin_apply
 pvr_normal_matrix_build

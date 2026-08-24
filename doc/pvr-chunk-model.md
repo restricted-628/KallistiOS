@@ -90,6 +90,13 @@ are resolved explicitly by a caller callback because the stream does not own
 the texture surface, layout, or VRAM address. See `pvr-chunk-rendering.md` for
 the state, callback, default-vertex, and failure contracts.
 
+`pvr_chunk_model_emit_two_volume()` provides the parallel bounded bridge for
+inside/outside parameter strips. It keeps primary and secondary texture and
+material state distinct, expands two UV sets, projects complete 32-byte or
+64-byte PVR vertices, and publishes through a format-bound sink. The complete
+stream must use one output layout per call; mismatch, insufficient workspace,
+or insufficient memory capacity fails before callbacks or output.
+
 ## Failure contract
 
 Invalid arguments report `EINVAL`. Truncated, unknown, inconsistent, non-finite,

@@ -57,7 +57,7 @@ typedef struct pvr_chunk_texture_state {
 
 /** \brief Render state in effect for one compact-model strip. */
 typedef struct pvr_chunk_render_state {
-    uint32_t present;
+    uint32_t present;             /**< Fields in the outside-volume state. */
     pvr_blend_mode_t blend_source;
     pvr_blend_mode_t blend_destination;
     uint8_t mipmap_adjust;
@@ -67,7 +67,24 @@ typedef struct pvr_chunk_render_state {
     uint32_t diffuse_argb;
     uint32_t ambient_argb;
     uint32_t specular_argb;
+    uint32_t secondary_present;   /**< Fields in the inside-volume state. */
+    uint8_t secondary_specular_exponent;
+    pvr_chunk_texture_state_t secondary_texture;
+    uint32_t secondary_diffuse_argb;
+    uint32_t secondary_ambient_argb;
+    uint32_t secondary_specular_argb;
 } pvr_chunk_render_state_t;
+
+/** \brief Maximum-sized workspace entry for two-volume emission.
+
+    Untextured strips use `color`; textured strips use `textured`. The emitter
+    packs entries according to the sink format, so callers allocate one union
+    per vertex in the largest strip without performing byte-size arithmetic.
+*/
+typedef union pvr_chunk_two_volume_vertex {
+    pvr_vertex_pcm_t color;
+    pvr_vertex_tpcm_t textured;
+} pvr_chunk_two_volume_vertex_t;
 
 /** \brief Progress from one compact-model emission. */
 typedef struct pvr_chunk_render_result {
@@ -78,10 +95,12 @@ typedef struct pvr_chunk_render_result {
 
 /** \brief Resolve state and prepare the active PVR material for one strip.
 
-    A non-memory sink requires this callback. It normally resolves
-    pvr_chunk_texture_state_t::identifier, compiles or selects a material, and
+    A non-memory sink requires this callback. It normally resolves texture
+    identifiers, compiles or selects an ordinary or two-volume material, and
     submits its polygon header to the same destination as the geometry sink.
-    Return zero to continue or negative to fail with errno set.
+    For two-volume emission, the unprefixed and `secondary_*` fields describe
+    the outside- and inside-volume parameter sets respectively. Return zero to
+    continue or negative to fail with errno set.
 */
 typedef int (*pvr_chunk_render_begin_strip_t)(
     const pvr_chunk_render_state_t *state,
@@ -102,6 +121,21 @@ typedef int (*pvr_chunk_render_prepare_vertex_t)(
     const pvr_chunk_vertex_attributes_t *vertex_attributes,
     const pvr_chunk_strip_attributes_t *strip_attributes,
     pvr_vertex_t *vertex, void *data);
+
+/** \brief Apply application policy to one complete two-volume vertex.
+
+    \p format selects the valid union member. Both outside- and inside-volume
+    attributes have already been decoded before the callback. The command word
+    is restored afterward, so callbacks may change only position, UV, color,
+    offset-color, and dummy fields. Return zero to continue or negative to fail
+    with errno set.
+*/
+typedef int (*pvr_chunk_render_prepare_two_volume_vertex_t)(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *vertex_attributes,
+    const pvr_chunk_strip_attributes_t *strip_attributes,
+    pvr_geometry_vertex_format_t format,
+    pvr_chunk_two_volume_vertex_t *vertex, void *data);
 
 /** \brief Project and emit an admitted compact model.
 
@@ -139,6 +173,35 @@ int pvr_chunk_model_emit(
     pvr_vertex_t *workspace, size_t workspace_count,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
+/** \brief Project and emit admitted two-volume compact-model strips.
+
+    Ordinary state records describe the outside-volume parameter set; their
+    two-volume variants describe the inside-volume set exposed through the
+    `secondary_*` state fields. Index-only two-volume strips require a
+    `PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR` sink. Two-UV strips require a
+    `PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED` sink. Mixing those layouts in one
+    call is rejected during preflight.
+
+    All records, indices, callback requirements, workspace, sink capacity, and
+    memory overlap are checked before the first callback or output. Modifier
+    geometry, ordinary strips, bump material, and cached-polygon controls are
+    not interpreted by this path. One aligned maximum-sized workspace entry is
+    required per vertex in the largest strip. The emitter allocates nothing
+    and does not own scene, list, texture, material, or model lifetime.
+
+    \retval 0  Every two-volume strip was emitted.
+    \retval -1 Invalid, unsupported, insufficient, or callback failure with
+               errno set.
+*/
+int pvr_chunk_model_emit_two_volume(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
 
 /** @} */

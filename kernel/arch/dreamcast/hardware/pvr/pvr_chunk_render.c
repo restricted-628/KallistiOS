@@ -18,6 +18,12 @@ typedef struct render_requirements {
     size_t maximum_strip_vertices;
 } render_requirements_t;
 
+_Static_assert(sizeof(pvr_chunk_two_volume_vertex_t) ==
+               sizeof(pvr_vertex_tpcm_t),
+               "two-volume workspace entries must hold the largest packet");
+_Static_assert(_Alignof(pvr_chunk_two_volume_vertex_t) == 32,
+               "two-volume workspace entries must retain TA alignment");
+
 static int checked_add(size_t *value, size_t addend) {
     if(addend > SIZE_MAX - *value) {
         errno = ERANGE;
@@ -131,10 +137,7 @@ static int unsupported_record(const pvr_chunk_record_t *record) {
     return 0;
 }
 
-static int validate_state_record(const pvr_chunk_record_t *record) {
-    if(unsupported_record(record) < 0)
-        return -1;
-
+static int validate_record_fields(const pvr_chunk_record_t *record) {
     if(record->record_class == PVR_CHUNK_RECORD_BITS) {
         if((record->type == PVR_CHUNK_CONTROL_BLEND &&
             (record->flags & UINT8_C(0xc0))) ||
@@ -149,13 +152,18 @@ static int validate_state_record(const pvr_chunk_record_t *record) {
     else if(record->record_class == PVR_CHUNK_RECORD_MATERIAL) {
         const uint16_t *payload = record->payload;
         size_t specular_offset = SIZE_MAX;
+        uint8_t type = record->type;
 
         if(record->flags & UINT8_C(0xc0)) {
             errno = EILSEQ;
             return -1;
         }
 
-        switch(record->type) {
+        if(type >= PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME)
+            type -= PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME -
+                    PVR_CHUNK_MATERIAL_DIFFUSE;
+
+        switch(type) {
             case PVR_CHUNK_MATERIAL_SPECULAR:
                 specular_offset = 0u;
                 break;
@@ -185,9 +193,39 @@ static int validate_state_record(const pvr_chunk_record_t *record) {
     return 0;
 }
 
+static int validate_state_record(const pvr_chunk_record_t *record) {
+    if(unsupported_record(record) < 0)
+        return -1;
+    return validate_record_fields(record);
+}
+
+static int unsupported_two_volume_record(
+    const pvr_chunk_record_t *record) {
+    if(record->record_class == PVR_CHUNK_RECORD_VOLUME ||
+       (record->record_class == PVR_CHUNK_RECORD_BITS &&
+        (record->type == PVR_CHUNK_CONTROL_CACHE_POLYGONS ||
+         record->type == PVR_CHUNK_CONTROL_DRAW_CACHED_POLYGONS)) ||
+       (record->record_class == PVR_CHUNK_RECORD_MATERIAL &&
+        record->type == PVR_CHUNK_MATERIAL_BUMP) ||
+       (record->record_class == PVR_CHUNK_RECORD_STRIP &&
+        record->type < PVR_CHUNK_STRIP_TWO_VOLUME)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    return 0;
+}
+
+static int validate_two_volume_state_record(
+    const pvr_chunk_record_t *record) {
+    if(unsupported_two_volume_record(record) < 0)
+        return -1;
+    return validate_record_fields(record);
+}
+
 static int preflight_strip(const pvr_chunk_model_view_t *view,
                            const pvr_chunk_strip_view_t *strip,
-                           pvr_chunk_render_prepare_vertex_t prepare_vertex,
+                           int has_prepare_vertex,
                            render_requirements_t *requirements) {
     size_t vertex_index;
 
@@ -209,7 +247,7 @@ static int preflight_strip(const pvr_chunk_model_view_t *view,
                                                   &vertex_attributes) < 0)
             return -1;
 
-        if(!prepare_vertex &&
+        if(!has_prepare_vertex &&
            ((vertex_attributes.present &
              (PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY |
               PVR_CHUNK_VERTEX_ATTR_SPECULAR_INTENSITY)) ||
@@ -274,7 +312,7 @@ static int preflight(const pvr_chunk_model_view_t *view,
                 return -1;
             while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
                                                              &strip)) > 0) {
-                if(preflight_strip(view, &strip, prepare_vertex,
+                if(preflight_strip(view, &strip, prepare_vertex != NULL,
                                    requirements) < 0)
                     return -1;
             }
@@ -356,43 +394,70 @@ static void update_material(pvr_chunk_render_state_t *state,
     size_t value_count = record->payload_word_count / 2u;
     size_t i;
     size_t value = 0;
-    int diffuse = record->type == PVR_CHUNK_MATERIAL_DIFFUSE ||
-                  record->type == PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT ||
-                  record->type == PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR ||
-                  record->type ==
-                      PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT_SPECULAR;
-    int ambient = record->type == PVR_CHUNK_MATERIAL_AMBIENT ||
-                  record->type == PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT ||
-                  record->type == PVR_CHUNK_MATERIAL_AMBIENT_SPECULAR ||
-                  record->type ==
-                      PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT_SPECULAR;
-    int specular = record->type == PVR_CHUNK_MATERIAL_SPECULAR ||
-                   record->type == PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR ||
-                   record->type == PVR_CHUNK_MATERIAL_AMBIENT_SPECULAR ||
-                   record->type ==
-                       PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT_SPECULAR;
+    uint8_t type = record->type;
+    int secondary = type >= PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME;
+    int diffuse;
+    int ambient;
+    int specular;
+    uint32_t *present;
+    uint8_t *exponent;
+    uint32_t *diffuse_argb;
+    uint32_t *ambient_argb;
+    uint32_t *specular_argb;
+
+    if(secondary)
+        type -= PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME -
+                PVR_CHUNK_MATERIAL_DIFFUSE;
+
+    diffuse = type == PVR_CHUNK_MATERIAL_DIFFUSE ||
+              type == PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT ||
+              type == PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR ||
+              type == PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT_SPECULAR;
+    ambient = type == PVR_CHUNK_MATERIAL_AMBIENT ||
+              type == PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT ||
+              type == PVR_CHUNK_MATERIAL_AMBIENT_SPECULAR ||
+              type == PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT_SPECULAR;
+    specular = type == PVR_CHUNK_MATERIAL_SPECULAR ||
+               type == PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR ||
+               type == PVR_CHUNK_MATERIAL_AMBIENT_SPECULAR ||
+               type == PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT_SPECULAR;
+
+    if(secondary) {
+        present = &state->secondary_present;
+        exponent = &state->secondary_specular_exponent;
+        diffuse_argb = &state->secondary_diffuse_argb;
+        ambient_argb = &state->secondary_ambient_argb;
+        specular_argb = &state->secondary_specular_argb;
+    }
+    else {
+        present = &state->present;
+        exponent = &state->specular_exponent;
+        diffuse_argb = &state->diffuse_argb;
+        ambient_argb = &state->ambient_argb;
+        specular_argb = &state->specular_argb;
+    }
 
     for(i = 0; i < value_count; ++i)
         values[i] = payload_u32(payload + i * 2u);
 
     update_blend(state, record->flags);
     if(diffuse) {
-        state->diffuse_argb = values[value++];
-        state->present |= PVR_CHUNK_RENDER_DIFFUSE;
+        *diffuse_argb = values[value++];
+        *present |= PVR_CHUNK_RENDER_DIFFUSE;
     }
     if(ambient) {
-        state->ambient_argb = UINT32_C(0xff000000) |
-                              (values[value++] & UINT32_C(0x00ffffff));
-        state->present |= PVR_CHUNK_RENDER_AMBIENT;
+        *ambient_argb = UINT32_C(0xff000000) |
+                        (values[value++] & UINT32_C(0x00ffffff));
+        *present |= PVR_CHUNK_RENDER_AMBIENT;
     }
     if(specular) {
         uint32_t encoded = values[value];
 
-        state->specular_exponent = (uint8_t)(encoded >> 24);
-        state->specular_argb = UINT32_C(0xff000000) |
-                               (encoded & UINT32_C(0x00ffffff));
-        state->present |= PVR_CHUNK_RENDER_SPECULAR |
-                          PVR_CHUNK_RENDER_SPECULAR_EXPONENT;
+        *exponent = (uint8_t)(encoded >> 24);
+        *specular_argb = UINT32_C(0xff000000) |
+                         (encoded & UINT32_C(0x00ffffff));
+        *present |= PVR_CHUNK_RENDER_SPECULAR |
+                    PVR_CHUNK_RENDER_SPECULAR_EXPONENT;
     }
 }
 
@@ -417,14 +482,25 @@ static void update_state(pvr_chunk_render_state_t *state,
     }
     else if(record->record_class == PVR_CHUNK_RECORD_TEXTURE) {
         uint16_t encoded = *(const uint16_t *)record->payload;
+        pvr_chunk_texture_state_t *texture;
+        uint32_t *present;
 
-        state->texture.identifier = encoded & UINT16_C(0x1fff);
-        state->texture.filter = (uint8_t)(encoded >> 14);
-        state->texture.supersample = (encoded & UINT16_C(0x2000)) != 0;
-        state->texture.uv_flip = record->flags >> 6;
-        state->texture.uv_clamp = (record->flags >> 4) & 3u;
-        state->texture.mipmap_adjust = record->flags & 15u;
-        state->present |= PVR_CHUNK_RENDER_TEXTURE;
+        if(record->type == PVR_CHUNK_TEXTURE_TWO_VOLUME) {
+            texture = &state->secondary_texture;
+            present = &state->secondary_present;
+        }
+        else {
+            texture = &state->texture;
+            present = &state->present;
+        }
+
+        texture->identifier = encoded & UINT16_C(0x1fff);
+        texture->filter = (uint8_t)(encoded >> 14);
+        texture->supersample = (encoded & UINT16_C(0x2000)) != 0;
+        texture->uv_flip = record->flags >> 6;
+        texture->uv_clamp = (record->flags >> 4) & 3u;
+        texture->mipmap_adjust = record->flags & 15u;
+        *present |= PVR_CHUNK_RENDER_TEXTURE;
     }
     else if(record->record_class == PVR_CHUNK_RECORD_MATERIAL)
         update_material(state, record);
@@ -561,6 +637,379 @@ int pvr_chunk_model_emit(
                 }
                 if(pvr_geometry_sink_emit(sink, workspace,
                                           strip.vertex_count) < 0)
+                    goto fail;
+
+                ++progress.emitted_strips;
+                progress.emitted_vertices += strip.vertex_count;
+            }
+            if(strip_rv < 0)
+                goto fail;
+        }
+    }
+
+    if(rv < 0)
+        goto fail;
+    if(result)
+        *result = progress;
+    return 0;
+
+fail:
+    if(!errno)
+        errno = EIO;
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+static size_t two_volume_format_size(
+    pvr_geometry_vertex_format_t format) {
+    switch(format) {
+        case PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR:
+            return sizeof(pvr_vertex_pcm_t);
+        case PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED:
+            return sizeof(pvr_vertex_tpcm_t);
+        default:
+            return 0;
+    }
+}
+
+static int two_volume_sink_valid(
+    const pvr_geometry_vertex_sink_t *sink, size_t vertex_size) {
+    if(!sink || !vertex_size) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    switch(sink->kind) {
+        case PVR_GEOMETRY_SINK_MEMORY:
+            if(!sink->destination.memory.vertices ||
+               !sink->destination.memory.capacity ||
+               ((uintptr_t)sink->destination.memory.vertices & 31u) ||
+               sink->emitted_vertices > sink->destination.memory.capacity ||
+               sink->destination.memory.capacity > SIZE_MAX / vertex_size ||
+               sink->destination.memory.capacity * vertex_size >
+               UINTPTR_MAX -
+               (uintptr_t)sink->destination.memory.vertices) {
+                errno = EINVAL;
+                return -1;
+            }
+            break;
+        case PVR_GEOMETRY_SINK_CURRENT_LIST:
+            break;
+        case PVR_GEOMETRY_SINK_BUFFERED_LIST:
+            if(sink->destination.list != PVR_LIST_OP_POLY &&
+               sink->destination.list != PVR_LIST_TR_POLY &&
+               sink->destination.list != PVR_LIST_PT_POLY) {
+                errno = EINVAL;
+                return -1;
+            }
+            break;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+
+    return 0;
+}
+
+static pvr_geometry_vertex_format_t two_volume_strip_format(uint8_t type) {
+    return type == PVR_CHUNK_STRIP_TWO_VOLUME ?
+           PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR :
+           PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED;
+}
+
+static int preflight_two_volume(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_geometry_vertex_sink_t *sink,
+    const pvr_chunk_two_volume_vertex_t *workspace,
+    size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    render_requirements_t *requirements) {
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    uintptr_t workspace_start;
+    uintptr_t vertex_start;
+    uintptr_t polygon_start;
+    uintptr_t matrix_start;
+    uintptr_t output_start = 0;
+    size_t workspace_bytes;
+    size_t vertex_bytes;
+    size_t polygon_bytes;
+    size_t matrix_bytes;
+    size_t output_bytes = 0;
+    size_t vertex_size = sink ? two_volume_format_size(sink->format) : 0;
+    int rv;
+
+    memset(requirements, 0, sizeof(*requirements));
+    if(!view || !workspace || ((uintptr_t)workspace & 31u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(matrix_valid(object_to_screen) < 0 ||
+       two_volume_sink_valid(sink, vertex_size) < 0)
+        return -1;
+    if(sink->kind != PVR_GEOMETRY_SINK_MEMORY && !begin_strip) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
+                                       view->model.polygon_word_count) < 0)
+        return -1;
+
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(checked_add(&requirements->records, 1u) < 0 ||
+           validate_two_volume_state_record(&record) < 0)
+            return -1;
+
+        if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
+            pvr_chunk_strip_iterator_t strip_iterator;
+            pvr_chunk_strip_view_t strip;
+            int strip_rv;
+
+            if(two_volume_strip_format(record.type) != sink->format) {
+                errno = EINVAL;
+                return -1;
+            }
+            if(pvr_chunk_strip_iterator_init(&strip_iterator, &record) < 0)
+                return -1;
+            while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
+                                                             &strip)) > 0) {
+                if(preflight_strip(view, &strip, prepare_vertex != NULL,
+                                   requirements) < 0)
+                    return -1;
+            }
+            if(strip_rv < 0)
+                return -1;
+        }
+    }
+
+    if(rv < 0)
+        return -1;
+    if(workspace_count < requirements->maximum_strip_vertices) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       requirements->vertices > sink->destination.memory.capacity -
+                                sink->emitted_vertices) {
+        errno = ENOSPC;
+        return -1;
+    }
+
+    if(range_get(workspace, requirements->maximum_strip_vertices,
+                 sizeof(*workspace), &workspace_start, &workspace_bytes) < 0 ||
+       range_get(view->model.vertex_words, view->model.vertex_word_count,
+                 sizeof(*view->model.vertex_words), &vertex_start,
+                 &vertex_bytes) < 0 ||
+       range_get(view->model.polygon_words, view->model.polygon_word_count,
+                 sizeof(*view->model.polygon_words), &polygon_start,
+                 &polygon_bytes) < 0 ||
+       range_get(object_to_screen, 1u, sizeof(*object_to_screen),
+                 &matrix_start, &matrix_bytes) < 0)
+        return -1;
+
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       range_get(sink->destination.memory.vertices,
+                 sink->destination.memory.capacity, vertex_size,
+                 &output_start, &output_bytes) < 0)
+        return -1;
+
+    if(ranges_overlap(workspace_start, workspace_bytes,
+                      vertex_start, vertex_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      polygon_start, polygon_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      matrix_start, matrix_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      output_start, output_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      vertex_start, vertex_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      polygon_start, polygon_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      matrix_start, matrix_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return 0;
+}
+
+static uint32_t vertex_diffuse(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *attributes, int secondary) {
+    if(attributes->present & PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR)
+        return attributes->diffuse_argb;
+    if(secondary &&
+       (state->secondary_present & PVR_CHUNK_RENDER_DIFFUSE))
+        return state->secondary_diffuse_argb;
+    if(!secondary && (state->present & PVR_CHUNK_RENDER_DIFFUSE))
+        return state->diffuse_argb;
+    return UINT32_C(0xffffffff);
+}
+
+static uint32_t vertex_specular(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *attributes, int secondary) {
+    if(attributes->present & PVR_CHUNK_VERTEX_ATTR_SPECULAR_COLOR)
+        return attributes->specular_argb;
+    if(secondary &&
+       (state->secondary_present & PVR_CHUNK_RENDER_SPECULAR))
+        return state->secondary_specular_argb;
+    if(!secondary && (state->present & PVR_CHUNK_RENDER_SPECULAR))
+        return state->specular_argb;
+    return 0;
+}
+
+static int assemble_two_volume_strip(
+    const pvr_chunk_model_view_t *view,
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip,
+    pvr_geometry_vertex_format_t format,
+    pvr_chunk_two_volume_vertex_t *workspace,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data) {
+    size_t vertex_size = two_volume_format_size(format);
+    size_t destination_index;
+
+    for(destination_index = 0; destination_index < strip->vertex_count;
+        ++destination_index) {
+        size_t source_index = destination_index;
+        pvr_chunk_strip_attributes_t strip_attributes;
+        pvr_chunk_vertex_attributes_t vertex_attributes;
+        pvr_chunk_two_volume_vertex_t vertex;
+        uint32_t command = destination_index + 1u == strip->vertex_count ?
+                           PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
+
+        if(strip->reversed && destination_index < 2u)
+            source_index = 1u - destination_index;
+        if(pvr_chunk_strip_attributes_get(strip, source_index,
+                                          &strip_attributes) < 0 ||
+           pvr_chunk_model_vertex_attributes_get(view,
+                                                  strip_attributes.index,
+                                                  &vertex_attributes) < 0)
+            return -1;
+
+        memset(&vertex, 0, sizeof(vertex));
+        if(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR) {
+            vertex.color.flags = command;
+            vertex.color.x = vertex_attributes.position.x;
+            vertex.color.y = vertex_attributes.position.y;
+            vertex.color.z = vertex_attributes.position.z;
+            vertex.color.argb0 = vertex_diffuse(state, &vertex_attributes, 0);
+            vertex.color.argb1 = vertex_diffuse(state, &vertex_attributes, 1);
+        }
+        else {
+            vertex.textured.flags = command;
+            vertex.textured.x = vertex_attributes.position.x;
+            vertex.textured.y = vertex_attributes.position.y;
+            vertex.textured.z = vertex_attributes.position.z;
+            vertex.textured.u0 = strip_attributes.uv[0][0];
+            vertex.textured.v0 = strip_attributes.uv[0][1];
+            vertex.textured.argb0 = vertex_diffuse(state, &vertex_attributes,
+                                                   0);
+            vertex.textured.oargb0 = vertex_specular(state,
+                                                     &vertex_attributes, 0);
+            vertex.textured.u1 = strip_attributes.uv[1][0];
+            vertex.textured.v1 = strip_attributes.uv[1][1];
+            vertex.textured.argb1 = vertex_diffuse(state, &vertex_attributes,
+                                                   1);
+            vertex.textured.oargb1 = vertex_specular(state,
+                                                     &vertex_attributes, 1);
+        }
+
+        if(prepare_vertex) {
+            errno = 0;
+            if(prepare_vertex(state, &vertex_attributes, &strip_attributes,
+                              format, &vertex, data) < 0) {
+                if(!errno)
+                    errno = EIO;
+                return -1;
+            }
+        }
+
+        memcpy(&vertex, &command, sizeof(command));
+        memcpy((uint8_t *)workspace + destination_index * vertex_size,
+               &vertex, vertex_size);
+    }
+
+    return 0;
+}
+
+int pvr_chunk_model_emit_two_volume(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    pvr_chunk_render_result_t progress = { 0, 0, 0 };
+    render_requirements_t requirements;
+    pvr_chunk_render_state_t state;
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    size_t vertex_size;
+    int rv;
+
+    if(result)
+        *result = progress;
+    if(preflight_two_volume(view, object_to_screen, sink, workspace,
+                            workspace_count, begin_strip, prepare_vertex,
+                            &requirements) < 0)
+        return -1;
+
+    vertex_size = two_volume_format_size(sink->format);
+    memset(&state, 0, sizeof(state));
+    if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
+                                       view->model.polygon_word_count) < 0)
+        return -1;
+
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        ++progress.consumed_records;
+        update_state(&state, &record);
+
+        if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
+            pvr_chunk_strip_iterator_t strip_iterator;
+            pvr_chunk_strip_view_t strip;
+            int strip_rv;
+
+            if(pvr_chunk_strip_iterator_init(&strip_iterator, &record) < 0)
+                goto fail;
+            while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
+                                                             &strip)) > 0) {
+                pvr_geometry_vertex_stream_t geometry;
+
+                state.strip_flags = strip.flags;
+                if(assemble_two_volume_strip(view, &state, &strip,
+                                             sink->format, workspace,
+                                             prepare_vertex, data) < 0)
+                    goto fail;
+
+                geometry.vertices = workspace;
+                geometry.vertex_count = strip.vertex_count;
+                geometry.stride = vertex_size;
+                geometry.format = sink->format;
+                if(pvr_geometry_project_vertices(workspace, workspace_count,
+                                                 &geometry,
+                                                 object_to_screen, NULL) < 0)
+                    goto fail;
+                if(begin_strip) {
+                    errno = 0;
+                    if(begin_strip(&state, &strip, data) < 0) {
+                        if(!errno)
+                            errno = EIO;
+                        goto fail;
+                    }
+                }
+                if(pvr_geometry_vertex_sink_emit(sink, workspace,
+                                                 strip.vertex_count) < 0)
                     goto fail;
 
                 ++progress.emitted_strips;

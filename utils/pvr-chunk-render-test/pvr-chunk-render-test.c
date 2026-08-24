@@ -49,6 +49,37 @@ static const uint16_t unsupported_polygons[] = {
     PVR_CHUNK_TEXTURE_TWO_VOLUME, UINT16_C(0), UINT16_C(0x00ff)
 };
 
+static const uint16_t two_volume_textured_polygons[] = {
+    POLYGON_HEADER(PVR_CHUNK_TEXTURE, 0x94), UINT16_C(0xa123),
+    POLYGON_HEADER(PVR_CHUNK_TEXTURE_TWO_VOLUME, 0x41), UINT16_C(0x4567),
+    POLYGON_HEADER(PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR, 0x25), UINT16_C(4),
+    UINT16_C(0x6699), UINT16_C(0xff33),
+    UINT16_C(0x0203), UINT16_C(0x0801),
+    POLYGON_HEADER(PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR_TWO_VOLUME, 0x25),
+    UINT16_C(4), UINT16_C(0xbbcc), UINT16_C(0xffaa),
+    UINT16_C(0x0506), UINT16_C(0x0404),
+    POLYGON_HEADER(PVR_CHUNK_STRIP_UV8_TWO_VOLUME,
+                   PVR_CHUNK_STRIP_USE_ALPHA),
+    UINT16_C(17), UINT16_C(1), UINT16_C(0x8003),
+    UINT16_C(0), UINT16_C(0), UINT16_C(0),
+    UINT16_C(255), UINT16_C(255),
+    UINT16_C(1), UINT16_C(128), UINT16_C(0),
+    UINT16_C(64), UINT16_C(128),
+    UINT16_C(2), UINT16_C(255), UINT16_C(128),
+    UINT16_C(0), UINT16_C(64),
+    UINT16_C(0x00ff)
+};
+
+static const uint16_t two_volume_color_polygons[] = {
+    POLYGON_HEADER(PVR_CHUNK_MATERIAL_DIFFUSE, 0x25), UINT16_C(2),
+    UINT16_C(0x2233), UINT16_C(0xff11),
+    POLYGON_HEADER(PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME, 0x25),
+    UINT16_C(2), UINT16_C(0x5566), UINT16_C(0xff44),
+    PVR_CHUNK_STRIP_TWO_VOLUME, UINT16_C(5), UINT16_C(1), UINT16_C(3),
+    UINT16_C(0), UINT16_C(1), UINT16_C(2),
+    UINT16_C(0x00ff)
+};
+
 static const uint32_t intensity_vertices[] = {
     VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ_INTENSITY, 13),
     UINT32_C(0x00030000),
@@ -141,6 +172,21 @@ static int prepare_vertex(
         vertex->z /= vertex_attributes->position.w;
     }
     vertex->oargb = UINT32_C(0xaa000000) | vertex_attributes->index;
+    return 0;
+}
+
+static int prepare_two_volume_vertex(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *vertex_attributes,
+    const pvr_chunk_strip_attributes_t *strip_attributes,
+    pvr_geometry_vertex_format_t format,
+    pvr_chunk_two_volume_vertex_t *vertex, void *data) {
+    callback_state_t *callback = data;
+
+    assert(state && strip_attributes->index == vertex_attributes->index);
+    assert(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED);
+    ++callback->prepares;
+    vertex->textured.oargb1 ^= vertex_attributes->index;
     return 0;
 }
 
@@ -368,11 +414,186 @@ static void test_intensity_policy_and_reserved_state(void) {
            callback.prepares == 0 && sink.emitted_vertices == 0);
 }
 
+static void test_two_volume_emit(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_chunk_model_t model = make_model(
+        two_volume_textured_polygons,
+        sizeof(two_volume_textured_polygons) /
+        sizeof(two_volume_textured_polygons[0]));
+    pvr_chunk_model_view_t view;
+    alignas(32) pvr_chunk_two_volume_vertex_t workspace[3];
+    alignas(32) pvr_vertex_tpcm_t output[3];
+    alignas(32) pvr_vertex_tpcm_t unchanged[3];
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_render_result_t result;
+    callback_state_t callback = { 0 };
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, output, 3) == 0);
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == 0);
+    assert(result.consumed_records == 5 && result.emitted_strips == 1 &&
+           result.emitted_vertices == 3 && sink.emitted_vertices == 3);
+    assert(callback.begins == 1 && callback.prepares == 3);
+    assert(callback.state.texture.identifier == UINT16_C(0x123));
+    assert(callback.state.secondary_texture.identifier == UINT16_C(0x567));
+    assert(callback.state.secondary_texture.filter == 1);
+    assert(callback.state.secondary_texture.uv_flip == 1);
+    assert(callback.state.secondary_texture.mipmap_adjust == 1);
+    assert(callback.state.diffuse_argb == UINT32_C(0xff336699));
+    assert(callback.state.secondary_diffuse_argb == UINT32_C(0xffaabbcc));
+    assert(callback.state.specular_argb == UINT32_C(0xff010203));
+    assert(callback.state.secondary_specular_argb == UINT32_C(0xff040506));
+    assert(callback.state.secondary_specular_exponent == 4);
+    assert(callback.state.secondary_present ==
+           (PVR_CHUNK_RENDER_TEXTURE | PVR_CHUNK_RENDER_DIFFUSE |
+            PVR_CHUNK_RENDER_SPECULAR |
+            PVR_CHUNK_RENDER_SPECULAR_EXPONENT));
+
+    /* Reversal exchanges complete references, including both UV sets. */
+    assert(output[0].x == 1.0f && output[1].x == -1.0f);
+    assert(close_enough(output[0].u0, 128.0f / 255.0f));
+    assert(close_enough(output[0].u1, 64.0f / 255.0f));
+    assert(close_enough(output[0].v1, 128.0f / 255.0f));
+    assert(output[0].argb0 == UINT32_C(0xff336699));
+    assert(output[0].argb1 == UINT32_C(0xffaabbcc));
+    assert(output[0].oargb0 == UINT32_C(0xff010203));
+    assert(output[0].oargb1 == (UINT32_C(0xff040506) ^ 1u));
+    assert(output[2].flags == PVR_CMD_VERTEX_EOL);
+
+    memset(output, 0x5a, sizeof(output));
+    memcpy(unchanged, output, sizeof(output));
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR, output, 3) == 0);
+    memset(&callback, 0, sizeof(callback));
+    errno = 0;
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == -1);
+    assert(errno == EINVAL && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+    assert(!memcmp(output, unchanged, sizeof(output)));
+}
+
+static void test_two_volume_color_emit(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_chunk_model_t model = make_model(
+        two_volume_color_polygons,
+        sizeof(two_volume_color_polygons) /
+        sizeof(two_volume_color_polygons[0]));
+    pvr_chunk_model_view_t view;
+    alignas(32) pvr_chunk_two_volume_vertex_t workspace[3];
+    alignas(32) pvr_vertex_pcm_t output[3];
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_render_result_t result;
+    callback_state_t callback = { 0 };
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR, output, 3) == 0);
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, begin_strip, NULL,
+        &callback, &result) == 0);
+    assert(callback.begins == 1 && result.emitted_vertices == 3);
+    assert(output[0].argb0 == UINT32_C(0xff112233));
+    assert(output[0].argb1 == UINT32_C(0xff445566));
+    assert(output[2].flags == PVR_CMD_VERTEX_EOL);
+
+    submitted_count = 0;
+    assert(pvr_geometry_vertex_sink_init_current(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR) == 0);
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, begin_strip, NULL,
+        &callback, &result) == 0);
+    assert(submitted_count == 3);
+}
+
+static void test_two_volume_preflight(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    uint16_t malformed[sizeof(two_volume_textured_polygons) /
+                       sizeof(two_volume_textured_polygons[0])];
+    pvr_chunk_model_t model = make_model(
+        two_volume_textured_polygons,
+        sizeof(two_volume_textured_polygons) /
+        sizeof(two_volume_textured_polygons[0]));
+    pvr_chunk_model_view_t view;
+    alignas(32) pvr_chunk_two_volume_vertex_t workspace[3];
+    alignas(32) pvr_vertex_tpcm_t output[3];
+    alignas(32) pvr_vertex_tpcm_t unchanged[3];
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_render_result_t result;
+    callback_state_t callback = { 0 };
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    memset(output, 0x5a, sizeof(output));
+    memcpy(unchanged, output, sizeof(output));
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, output, 3) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 2, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == -1);
+    assert(errno == ENOSPC && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+    assert(!memcmp(output, unchanged, sizeof(output)));
+
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, output, 2) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == -1);
+    assert(errno == ENOSPC && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+
+    memcpy(malformed, two_volume_textured_polygons, sizeof(malformed));
+    malformed[15] = UINT16_C(0x1104);
+    model = make_model(malformed, sizeof(malformed) / sizeof(malformed[0]));
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, output, 3) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == -1);
+    assert(errno == EILSEQ && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+
+    model = make_model(polygons, sizeof(polygons) / sizeof(polygons[0]));
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == -1);
+    assert(errno == ENOTSUP && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+}
+
 int main(void) {
     test_emit();
     test_preflight_and_prefix();
     test_unsupported();
     test_intensity_policy_and_reserved_state();
+    test_two_volume_emit();
+    test_two_volume_color_emit();
+    test_two_volume_preflight();
     puts("pvr chunk render tests passed");
     return 0;
 }

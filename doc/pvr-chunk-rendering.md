@@ -1,9 +1,10 @@
 # Compact-model rendering
 
-`pvr_chunk_model_emit()` is the bounded bridge between admitted compact model
-streams and KOS's canonical PVR geometry sinks. It is deliberately an emitter,
-not a retained renderer: the application still owns the scene, active list,
-materials, textures, model storage, animation state, and workspace.
+`pvr_chunk_model_emit()` and `pvr_chunk_model_emit_two_volume()` are bounded
+bridges between admitted compact model streams and KOS PVR geometry sinks.
+They are deliberately emitters, not a retained renderer: the application still
+owns the scene, active list, materials, textures, model storage, animation
+state, and workspace.
 
 ## Pipeline
 
@@ -14,12 +15,12 @@ One call performs these stages:
    sink capacity.
 2. Decode state records into `pvr_chunk_render_state_t`.
 3. Resolve each indexed strip reference through the admitted model view.
-4. Assemble one canonical `pvr_vertex_t` strip in caller-owned aligned
-   workspace, correcting reversed-strip winding by exchanging the first two
-   references.
+4. Assemble one canonical or format-bound two-volume strip in caller-owned
+   aligned workspace, correcting reversed-strip winding by exchanging the
+   first two complete references.
 5. Apply the explicit object-to-screen matrix through
-   `pvr_geometry_project()`. On Dreamcast this batch uses SH4ZAM while
-   preserving the caller's XMTRX state.
+   `pvr_geometry_project()` or `pvr_geometry_project_vertices()`. On Dreamcast
+   this batch uses SH4ZAM while preserving the caller's XMTRX state.
 6. Let the caller publish the strip's material, then emit the projected strip
    through the supplied memory, current-list, or explicit buffered-list sink.
 
@@ -38,10 +39,12 @@ The `pvr_chunk_render_begin_strip_t` callback therefore receives the complete
 decoded state immediately before each strip is emitted. For a PVR list sink,
 the callback is required and normally performs these application-owned steps:
 
-- resolve `state->texture.identifier` in an asset table;
-- build or select a `pvr_poly_cxt_t` for that texture and list;
+- resolve the outside and, when present, inside texture identifiers in an
+  asset table;
+- build or select the matching ordinary or two-volume polygon contexts;
 - apply the decoded blend, filter, clamp, flip, mipmap, color, and strip policy;
-- compile or select a checked `pvr_material_t`; and
+- compile or select a checked `pvr_material_t` with
+  `pvr_material_compile()` or `pvr_material_compile_two_volume()`; and
 - submit the material to the same current or buffered list as the geometry.
 
 Memory sinks may omit the callback because no polygon header is submitted.
@@ -70,6 +73,14 @@ It is also required for a position W other than one because canonical
 into the submitted position. The emitter restores the command field after the
 callback.
 
+The dedicated two-volume path follows the same position and callback policy.
+Ordinary texture and material records update the outside-volume fields;
+two-volume variants update `secondary_*`, the inside-volume fields. Textured
+two-volume strips carry independent UV0 and UV1. Vertex packed colors override
+the corresponding material color in both parameter sets; otherwise each set
+uses its own material diffuse/specular value, then opaque white/zero. The
+untextured 32-byte layout has two diffuse colors and no offset-color fields.
+
 ## Preflight and failure
 
 Built-in validation finishes before the first callback or sink write. A memory
@@ -82,20 +93,21 @@ prior strip was emitted. `pvr_chunk_render_result_t` and the sink's emitted
 counter then describe the complete valid prefix. A callback returning a
 negative value should set errno; the emitter uses `EIO` if it did not.
 
-The first compact-model renderer path intentionally fails with `ENOTSUP`
-during preflight for record families that need a different material or
-topology contract:
+The ordinary compact-model path intentionally fails with `ENOTSUP` during
+preflight for record families that need a different material or topology
+contract:
 
 - modifier-volume geometry;
 - two-volume texture, material, and strip records;
 - bump materials; and
 - cached-polygon control records.
 
-These records are not skipped or approximated. The lower geometry layer now
-provides checked projection and format-bound sinks for KOS's complete 32-byte
-untextured and 64-byte textured two-volume vertex layouts. A later compact
-two-volume path can therefore use the correct TA packet sizes without
-weakening the ordinary strip contract or duplicating publication logic.
+These records are not skipped or approximated. Two-volume texture, material,
+and strip records instead use `pvr_chunk_model_emit_two_volume()`, which binds
+the entire call to either KOS's complete 32-byte untextured layout or 64-byte
+textured layout and rejects mixed layouts before output. Modifier geometry,
+bump material, and cached-polygon controls remain explicit unsupported
+boundaries in both compact emitters.
 
 ## Concurrency and lifetime
 
