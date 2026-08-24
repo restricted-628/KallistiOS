@@ -58,6 +58,7 @@ __BEGIN_DECLS
 #include <dc/pvr.h>
 #include <dc/pvr_frustum.h>
 #include <dc/pvr_geometry.h>
+#include <dc/pvr_chunk_model.h>
 #include <dc/pvr_material.h>
 #include <dc/scif.h>
 #include <dc/sci.h>

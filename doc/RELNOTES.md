@@ -87,6 +87,11 @@ lifecycle and naming conventions.
   vertex streams, with prefix-safe error reporting and caller-owned memory,
   current-list, or explicit buffered-list sinks. The sinks preserve existing
   direct and vertex-DMA submission while leaving scene ownership unchanged.
+* Added bounded compact PVR model streams with allocation-free record
+  iteration and whole-model validation. Record framing, per-format vertex
+  sizes, finite data, strip and volume structure, counters, and every indexed
+  vertex reference are checked before later traversal or rendering consumes
+  the model.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes
