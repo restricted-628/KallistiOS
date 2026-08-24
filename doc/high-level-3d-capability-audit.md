@@ -34,7 +34,7 @@ workloads.
 | Object hierarchy | Parent-before-child compact-model traversal composes caller-owned transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
 | Lighting | Checked inverse-transpose normals, directional and point Lambert lights, and deterministic ARGB packing are available as allocation-free CPU kernels | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
 | Keyframe animation | Validated immutable scalar, vector, and quaternion tracks provide clamped logarithmic sampling plus blended TRS object transforms | Keep playback clocks, looping policy, clip ownership, and object binding outside the math core. |
-| Skinning and morphing | No generic deformers | Build bounded kernels over caller-supplied streams with SH4ZAM as the Dreamcast math backend. |
+| Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes | Keep skeleton ownership, pose evaluation, mesh binding, and blend policy outside the deformation kernels. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
 | Collision | General-purpose geometry concern | Keep collision independent of the renderer so headless and non-PVR users can consume it. |
 | Asset formats and resource names | Bounded compact chunk streams provide validated structure without an engine-owned namespace | Keep parsing and traversal in KOS-native, caller-owned APIs; reject malformed offsets and counts before rendering. |
@@ -72,8 +72,8 @@ workloads.
 6. ~~Add normal transformation, directional/point lighting, and color
    packing.~~
 7. ~~Add format-neutral keyframe sampling and blended object transforms.~~
-8. Add bounded skinning and morph-target kernels using SH4ZAM on Dreamcast and
-   portable scalar validation paths on the host.
+8. ~~Add bounded skinning and morph-target kernels using SH4ZAM on Dreamcast
+   and portable scalar validation paths on the host.~~
 9. Evaluate sprites, particles, collision, and asset helpers as independent
    optional libraries rather than prerequisites for 3D rendering.
 
@@ -197,6 +197,27 @@ Dreamcast vector, quaternion, trigonometric, reciprocal-square-root, and matrix
 construction paths use SH4ZAM. The scalar host path serves as a test oracle.
 Playback time, looping, events, hierarchy binding, and clip lifetime remain
 application policy.
+
+## Seventh tranche
+
+The seventh tranche closes reusable vertex deformation without introducing
+skeleton, pose, or model ownership:
+
+- `pvr_morph_apply()` blends finite additive position and normal deltas over
+  bounded, strided streams, normalizes the result, and reports the valid output
+  prefix if per-vertex arithmetic fails;
+- `pvr_skin_apply()` preflights every active joint index, weight, and palette
+  matrix before publishing output, then performs normalized four-influence
+  linear-blend skinning for positions and inverse-transpose normals;
+- both kernels support exact canonical in-place deformation, reject unsafe
+  overlap, allocate nothing, retain no state, and preserve point/vector W
+  conventions;
+- Dreamcast joint transforms and reciprocal-square-root normalization use
+  SH4ZAM without changing XMTRX, while the portable scalar path provides the
+  host-test oracle.
+
+The caller continues to own skeleton topology, palette construction, pose
+evaluation, animation clocks, model binding, and output storage.
 
 ## Validation gates
 

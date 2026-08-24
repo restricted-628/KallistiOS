@@ -106,6 +106,12 @@ lifecycle and naming conventions.
   object sampling, blended TRS transforms, and explicit local-matrix
   publication. Dreamcast interpolation and rotation paths use SH4ZAM without
   changing XMTRX.
+* Added bounded, allocation-free additive morph-target deformation and indexed
+  four-influence linear-blend skinning over caller-owned streams and joint
+  palettes. Complete structural, influence, and palette validation precedes
+  skin output; exact canonical in-place operation is supported; partial morph
+  failures report a valid prefix. Dreamcast transforms and normalization use
+  SH4ZAM without changing XMTRX.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes
