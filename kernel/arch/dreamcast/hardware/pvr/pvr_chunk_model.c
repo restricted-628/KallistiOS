@@ -709,3 +709,247 @@ int pvr_chunk_model_validate(const pvr_chunk_model_t *model,
         *info = result;
     return 0;
 }
+
+int pvr_chunk_model_open(const pvr_chunk_model_t *model,
+                         pvr_chunk_model_view_t *view) {
+    pvr_chunk_model_info_t info;
+
+    if(!view) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(view, 0, sizeof(*view));
+    if(pvr_chunk_model_validate(model, &info) < 0)
+        return -1;
+
+    view->model = *model;
+    view->info = info;
+    return 0;
+}
+
+int pvr_chunk_vertex_batch_decode(const pvr_chunk_record_t *record,
+                                  pvr_chunk_vertex_batch_t *batch) {
+    const uint32_t *payload;
+    size_t stride;
+    size_t count;
+    uint32_t first;
+
+    if(batch)
+        memset(batch, 0, sizeof(*batch));
+
+    if(!record || !batch || record->stream != PVR_CHUNK_STREAM_VERTEX ||
+       record->record_class != PVR_CHUNK_RECORD_VERTEX || !record->payload ||
+       !record->payload_word_count) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    stride = vertex_stride(record->type);
+    payload = record->payload;
+    first = payload[0] & UINT32_C(0xffff);
+    count = payload[0] >> 16;
+
+    if(!stride || count > (SIZE_MAX - 1u) / stride ||
+       record->payload_word_count != 1u + count * stride ||
+       count > UINT32_C(0x10000) - first) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    batch->type = record->type;
+    batch->flags = record->flags;
+    batch->first_index = (uint16_t)first;
+    batch->entries = payload + 1u;
+    batch->entry_count = count;
+    batch->entry_word_count = stride;
+    return 0;
+}
+
+int pvr_chunk_vertex_batch_get(const pvr_chunk_vertex_batch_t *batch,
+                               size_t entry,
+                               pvr_chunk_vertex_view_t *vertex) {
+    const uint32_t *words;
+    size_t expected_stride;
+    size_t components;
+    size_t component;
+
+    if(vertex)
+        memset(vertex, 0, sizeof(*vertex));
+
+    if(!batch || !vertex || !batch->entries || entry >= batch->entry_count) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    expected_stride = vertex_stride(batch->type);
+    if(!expected_stride || batch->entry_word_count != expected_stride ||
+       batch->entry_count > UINT32_C(0x10000) - batch->first_index ||
+       entry > SIZE_MAX / batch->entry_word_count) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    words = batch->entries + entry * batch->entry_word_count;
+    components = batch->type == PVR_CHUNK_VERTEX_XYZW ||
+                 batch->type == PVR_CHUNK_VERTEX_XYZW_NORMAL ? 4u : 3u;
+
+    for(component = 0; component < components; ++component) {
+        vertex->position[component] = word_float(words[component]);
+        if(!isfinite(vertex->position[component])) {
+            memset(vertex, 0, sizeof(*vertex));
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+
+    if(components == 3u)
+        vertex->position[3] = 1.0f;
+
+    vertex->index = (uint16_t)(batch->first_index + entry);
+    vertex->position_components = (uint8_t)components;
+    vertex->words = words;
+    vertex->word_count = batch->entry_word_count;
+    return 0;
+}
+
+int pvr_chunk_strip_iterator_init(pvr_chunk_strip_iterator_t *iterator,
+                                  const pvr_chunk_record_t *record) {
+    const uint16_t *payload;
+    size_t vertex_words;
+
+    if(!iterator || !record || record->stream != PVR_CHUNK_STREAM_POLYGON ||
+       record->record_class != PVR_CHUNK_RECORD_STRIP || !record->payload ||
+       !record->payload_word_count) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(iterator, 0, sizeof(*iterator));
+    vertex_words = strip_vertex_words(record->type);
+    if(!vertex_words) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    payload = record->payload;
+    iterator->type = record->type;
+    iterator->flags = record->flags;
+    iterator->cursor = payload + 1u;
+    iterator->remaining_words = record->payload_word_count - 1u;
+    iterator->remaining_strips = payload[0] & UINT16_C(0x3fff);
+    iterator->vertex_word_count = vertex_words;
+    iterator->user_word_count = payload[0] >> 14;
+    return 0;
+}
+
+int pvr_chunk_strip_iterator_next(pvr_chunk_strip_iterator_t *iterator,
+                                  pvr_chunk_strip_view_t *strip) {
+    const uint16_t *words;
+    uint16_t header;
+    size_t vertex_count;
+    size_t required;
+    size_t vertex_words;
+    size_t user_words;
+
+    if(strip)
+        memset(strip, 0, sizeof(*strip));
+
+    if(!iterator || !strip || !iterator->cursor ||
+       !iterator->vertex_word_count) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(!iterator->remaining_strips) {
+        if(iterator->remaining_words) {
+            errno = EILSEQ;
+            return -1;
+        }
+        return 0;
+    }
+
+    if(!iterator->remaining_words) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    header = *iterator->cursor;
+    vertex_count = header & UINT16_C(0x7fff);
+    vertex_words = iterator->vertex_word_count;
+    user_words = iterator->user_word_count;
+
+    if(vertex_count < 3u || vertex_count > SIZE_MAX / vertex_words ||
+       (user_words && vertex_count - 2u >
+        (SIZE_MAX - vertex_count * vertex_words) / user_words)) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    required = vertex_count * vertex_words +
+               (vertex_count - 2u) * user_words;
+    if(required > iterator->remaining_words - 1u ||
+       (iterator->remaining_strips == 1u &&
+        required != iterator->remaining_words - 1u)) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    words = iterator->cursor + 1u;
+    strip->type = iterator->type;
+    strip->flags = iterator->flags;
+    strip->reversed = (header & UINT16_C(0x8000)) != 0;
+    strip->words = words;
+    strip->word_count = required;
+    strip->vertex_count = vertex_count;
+    strip->vertex_word_count = vertex_words;
+    strip->user_word_count = user_words;
+
+    iterator->cursor = words + required;
+    iterator->remaining_words -= required + 1u;
+    --iterator->remaining_strips;
+    return 1;
+}
+
+int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
+                               size_t vertex_index,
+                               pvr_chunk_strip_vertex_view_t *vertex) {
+    size_t expected;
+    size_t prior_user_words;
+    size_t offset;
+
+    if(vertex)
+        memset(vertex, 0, sizeof(*vertex));
+
+    if(!strip || !vertex || !strip->words ||
+       vertex_index >= strip->vertex_count ||
+       !strip->vertex_word_count || strip->vertex_count < 3u ||
+       strip->vertex_count > SIZE_MAX / strip->vertex_word_count ||
+       (strip->user_word_count && strip->vertex_count - 2u >
+        (SIZE_MAX - strip->vertex_count * strip->vertex_word_count) /
+        strip->user_word_count)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    expected = strip->vertex_count * strip->vertex_word_count +
+               (strip->vertex_count - 2u) * strip->user_word_count;
+    if(strip->word_count != expected) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    prior_user_words = vertex_index > 2u ?
+                       (vertex_index - 2u) * strip->user_word_count : 0u;
+    offset = vertex_index * strip->vertex_word_count + prior_user_words;
+
+    vertex->index = strip->words[offset];
+    vertex->attribute_words = strip->words + offset + 1u;
+    vertex->attribute_word_count = strip->vertex_word_count - 1u;
+    if(vertex_index >= 2u) {
+        vertex->triangle_user_words =
+            strip->words + offset + strip->vertex_word_count;
+        vertex->triangle_user_word_count = strip->user_word_count;
+    }
+    return 0;
+}

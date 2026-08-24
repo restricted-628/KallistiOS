@@ -23,6 +23,8 @@ __BEGIN_DECLS
 #include <stddef.h>
 #include <stdint.h>
 
+#include <dc/matrix.h>
+
 /** \defgroup pvr_chunk_model Compact PVR models
     \brief                         Checked compact model streams
     \ingroup                       pvr_geometry
@@ -201,6 +203,102 @@ typedef struct pvr_chunk_model_info {
     uint32_t maximum_vertex_index;
 } pvr_chunk_model_info_t;
 
+/** \brief Validated, immutable view of one compact model.
+
+    Create this with pvr_chunk_model_open(). The source streams must remain
+    immutable and accessible for the lifetime of the view.
+*/
+typedef struct pvr_chunk_model_view {
+    pvr_chunk_model_t model;
+    pvr_chunk_model_info_t info;
+} pvr_chunk_model_view_t;
+
+/** \brief Typed view of one vertex record. */
+typedef struct pvr_chunk_vertex_batch {
+    uint8_t type;
+    uint8_t flags;
+    uint16_t first_index;
+    const uint32_t *entries;
+    size_t entry_count;
+    size_t entry_word_count;
+} pvr_chunk_vertex_batch_t;
+
+/** \brief Safely decoded position and raw words for one vertex entry. */
+typedef struct pvr_chunk_vertex_view {
+    uint16_t index;
+    uint8_t position_components;
+    const uint32_t *words;
+    size_t word_count;
+    float position[4];
+} pvr_chunk_vertex_view_t;
+
+/** \brief Caller-owned iterator over strips inside one strip record. */
+typedef struct pvr_chunk_strip_iterator {
+    uint8_t type;
+    uint8_t flags;
+    const uint16_t *cursor;
+    size_t remaining_words;
+    size_t remaining_strips;
+    size_t vertex_word_count;
+    size_t user_word_count;
+} pvr_chunk_strip_iterator_t;
+
+/** \brief One bounded strip returned by pvr_chunk_strip_iterator_next(). */
+typedef struct pvr_chunk_strip_view {
+    uint8_t type;
+    uint8_t flags;
+    uint8_t reversed;
+    const uint16_t *words;
+    size_t word_count;
+    size_t vertex_count;
+    size_t vertex_word_count;
+    size_t user_word_count;
+} pvr_chunk_strip_view_t;
+
+/** \brief One indexed vertex reference inside a strip. */
+typedef struct pvr_chunk_strip_vertex_view {
+    uint16_t index;
+    const uint16_t *attribute_words;
+    size_t attribute_word_count;
+    const uint16_t *triangle_user_words;
+    size_t triangle_user_word_count;
+} pvr_chunk_strip_vertex_view_t;
+
+/** \brief Sentinel identifying a root node in a compact-model hierarchy. */
+#define PVR_CHUNK_NODE_NONE SIZE_MAX
+
+/** \brief One caller-owned node in parent-before-child order.
+
+    A NULL model creates a transform-only grouping node. Non-NULL model views
+    and their source streams must remain immutable during traversal.
+*/
+typedef struct pvr_chunk_hierarchy_node {
+    const pvr_chunk_model_view_t *model;
+    matrix_t local_transform;
+    size_t parent_index;
+    const void *user_data;
+} pvr_chunk_hierarchy_node_t;
+
+/** \brief Bounded caller-owned hierarchy description. */
+typedef struct pvr_chunk_hierarchy {
+    const pvr_chunk_hierarchy_node_t *nodes;
+    size_t node_count;
+} pvr_chunk_hierarchy_t;
+
+/** \brief Traversal progress published on completion or callback stop. */
+typedef struct pvr_chunk_hierarchy_result {
+    size_t visited_nodes;
+} pvr_chunk_hierarchy_result_t;
+
+/** \brief Callback for a node with its composed world transform.
+
+    Return zero to continue, a positive value to stop successfully, or a
+    negative value to fail. A failing callback should set errno.
+*/
+typedef int (*pvr_chunk_hierarchy_visit_t)(
+    size_t node_index, const pvr_chunk_hierarchy_node_t *node,
+    const matrix_t *world_transform, void *data);
+
 /** \brief Initialize an iterator for a bounded vertex stream. */
 int pvr_chunk_vertex_iterator_init(pvr_chunk_iterator_t *iterator,
                                    const uint32_t *words,
@@ -233,6 +331,63 @@ int pvr_chunk_iterator_next(pvr_chunk_iterator_t *iterator,
 */
 int pvr_chunk_model_validate(const pvr_chunk_model_t *model,
                              pvr_chunk_model_info_t *info);
+
+/** \brief Validate a model and publish an immutable typed view. */
+int pvr_chunk_model_open(const pvr_chunk_model_t *model,
+                         pvr_chunk_model_view_t *view);
+
+/** \brief Decode one validated vertex record into a bounded batch view. */
+int pvr_chunk_vertex_batch_decode(const pvr_chunk_record_t *record,
+                                  pvr_chunk_vertex_batch_t *batch);
+
+/** \brief Return one vertex entry without reading beyond its batch. */
+int pvr_chunk_vertex_batch_get(const pvr_chunk_vertex_batch_t *batch,
+                               size_t entry,
+                               pvr_chunk_vertex_view_t *vertex);
+
+/** \brief Initialize an iterator over a validated polygon strip record. */
+int pvr_chunk_strip_iterator_init(pvr_chunk_strip_iterator_t *iterator,
+                                  const pvr_chunk_record_t *record);
+
+/** \brief Return the next complete strip.
+
+    \retval 1  A strip was returned.
+    \retval 0  All declared strips were already returned.
+    \retval -1 Invalid or inconsistent framing.
+*/
+int pvr_chunk_strip_iterator_next(pvr_chunk_strip_iterator_t *iterator,
+                                  pvr_chunk_strip_view_t *strip);
+
+/** \brief Return one indexed vertex reference from a bounded strip. */
+int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
+                               size_t vertex_index,
+                               pvr_chunk_strip_vertex_view_t *vertex);
+
+/** \brief Compose and visit a bounded parent-before-child hierarchy.
+
+    The complete hierarchy is checked before the first callback or workspace
+    write. Each parent index must be PVR_CHUNK_NODE_NONE or less than the
+    current node index, which rejects cycles and forward references without a
+    visited bitmap. The caller supplies one `matrix_t`-aligned matrix per node.
+
+    \param hierarchy       Nodes to traverse in array order.
+    \param root_transform  Optional transform applied above every root.
+    \param world_matrices  Caller-owned output/workspace for composed matrices.
+    \param world_capacity  Number of matrices available in the workspace.
+    \param visit           Optional callback invoked once per visited node.
+    \param data            Opaque callback data.
+    \param result          Optional traversal progress result.
+
+    \retval 0  Every node was visited.
+    \retval 1  A callback requested a successful early stop.
+    \retval -1 Invalid input, arithmetic failure, or callback failure.
+*/
+int pvr_chunk_hierarchy_traverse(
+    const pvr_chunk_hierarchy_t *hierarchy,
+    const matrix_t *root_transform,
+    matrix_t *world_matrices, size_t world_capacity,
+    pvr_chunk_hierarchy_visit_t visit, void *data,
+    pvr_chunk_hierarchy_result_t *result);
 
 /** @} */
 

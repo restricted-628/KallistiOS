@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
+#include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -53,10 +54,18 @@ static void test_valid_model(void) {
         valid_vertices, sizeof(valid_vertices) / sizeof(valid_vertices[0]),
         valid_polygons, sizeof(valid_polygons) / sizeof(valid_polygons[0]));
     pvr_chunk_model_info_t info;
+    pvr_chunk_model_view_t view;
     pvr_chunk_iterator_t iterator;
     pvr_chunk_record_t record;
+    pvr_chunk_vertex_batch_t batch;
+    pvr_chunk_vertex_view_t vertex;
+    pvr_chunk_strip_iterator_t strip_iterator;
+    pvr_chunk_strip_view_t strip;
+    pvr_chunk_strip_vertex_view_t strip_vertex;
 
     assert(pvr_chunk_model_validate(&model, &info) == 0);
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(memcmp(&view.info, &info, sizeof(info)) == 0);
     assert(info.vertex_records == 1);
     assert(info.vertex_entries == 3);
     assert(info.polygon_records == 2);
@@ -73,9 +82,40 @@ static void test_valid_model(void) {
     assert(record.record_class == PVR_CHUNK_RECORD_VERTEX);
     assert(record.type == PVR_CHUNK_VERTEX_XYZ);
     assert(record.word_count == 11 && record.payload_word_count == 10);
+    assert(pvr_chunk_vertex_batch_decode(&record, &batch) == 0);
+    assert(batch.first_index == 0 && batch.entry_count == 3);
+    assert(batch.entry_word_count == 3);
+    assert(pvr_chunk_vertex_batch_get(&batch, 0, &vertex) == 0);
+    assert(vertex.index == 0 && vertex.position_components == 3);
+    assert(vertex.position[0] == -1.0f && vertex.position[1] == -1.0f &&
+           vertex.position[2] == 0.0f && vertex.position[3] == 1.0f);
+    assert(pvr_chunk_vertex_batch_get(&batch, 2, &vertex) == 0);
+    assert(vertex.index == 2 && vertex.position[0] == 0.0f &&
+           vertex.position[1] == 1.0f);
+    errno = 0;
+    assert(pvr_chunk_vertex_batch_get(&batch, 3, &vertex) == -1 &&
+           errno == EINVAL && vertex.words == NULL);
     assert(pvr_chunk_iterator_next(&iterator, &record) == 1);
     assert(record.record_class == PVR_CHUNK_RECORD_END);
     assert(pvr_chunk_iterator_next(&iterator, &record) == 0);
+
+    assert(pvr_chunk_polygon_iterator_init(&iterator, valid_polygons,
+        sizeof(valid_polygons) / sizeof(valid_polygons[0])) == 0);
+    assert(pvr_chunk_iterator_next(&iterator, &record) == 1);
+    assert(record.record_class == PVR_CHUNK_RECORD_MATERIAL);
+    assert(pvr_chunk_iterator_next(&iterator, &record) == 1);
+    assert(record.record_class == PVR_CHUNK_RECORD_STRIP);
+    assert(pvr_chunk_strip_iterator_init(&strip_iterator, &record) == 0);
+    assert(pvr_chunk_strip_iterator_next(&strip_iterator, &strip) == 1);
+    assert(strip.vertex_count == 3 && strip.vertex_word_count == 1 &&
+           strip.user_word_count == 0 && !strip.reversed);
+    assert(pvr_chunk_strip_vertex_get(&strip, 0, &strip_vertex) == 0);
+    assert(strip_vertex.index == 0 &&
+           strip_vertex.attribute_word_count == 0);
+    assert(pvr_chunk_strip_vertex_get(&strip, 2, &strip_vertex) == 0);
+    assert(strip_vertex.index == 2 &&
+           strip_vertex.triangle_user_word_count == 0);
+    assert(pvr_chunk_strip_iterator_next(&strip_iterator, &strip) == 0);
 }
 
 static void expect_invalid(const pvr_chunk_model_t *model, int error) {
@@ -143,6 +183,11 @@ static void test_user_flags_and_reverse_strip(void) {
         valid_vertices, sizeof(valid_vertices) / sizeof(valid_vertices[0]),
         polygons, sizeof(polygons) / sizeof(polygons[0]));
     pvr_chunk_model_info_t info;
+    pvr_chunk_iterator_t record_iterator;
+    pvr_chunk_record_t record;
+    pvr_chunk_strip_iterator_t strip_iterator;
+    pvr_chunk_strip_view_t strip;
+    pvr_chunk_strip_vertex_view_t vertex;
 
     /* The declared payload is intentionally one word too long. */
     expect_invalid(&model, EILSEQ);
@@ -150,6 +195,140 @@ static void test_user_flags_and_reverse_strip(void) {
     polygons[1] = UINT16_C(12);
     assert(pvr_chunk_model_validate(&model, &info) == 0);
     assert(info.strips == 1 && info.triangles == 1);
+
+    assert(pvr_chunk_polygon_iterator_init(&record_iterator, polygons,
+        sizeof(polygons) / sizeof(polygons[0])) == 0);
+    assert(pvr_chunk_iterator_next(&record_iterator, &record) == 1);
+    assert(pvr_chunk_strip_iterator_init(&strip_iterator, &record) == 0);
+    assert(pvr_chunk_strip_iterator_next(&strip_iterator, &strip) == 1);
+    assert(strip.reversed && strip.vertex_count == 3 &&
+           strip.vertex_word_count == 3 && strip.user_word_count == 1);
+    assert(pvr_chunk_strip_vertex_get(&strip, 2, &vertex) == 0);
+    assert(vertex.index == 2 && vertex.attribute_word_count == 2);
+    assert(vertex.attribute_words[0] == 64 && vertex.attribute_words[1] == 255);
+    assert(vertex.triangle_user_word_count == 1 &&
+           vertex.triangle_user_words[0] == UINT16_C(0xbeef));
+}
+
+static void translation(matrix_t *matrix, float x, float y, float z) {
+    const matrix_t value = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { x, y, z, 1.0f }
+    };
+
+    memcpy(matrix, &value, sizeof(value));
+}
+
+typedef struct visit_log {
+    size_t count;
+    size_t stop_after;
+    size_t fail_after;
+    int fail_errno;
+    float translation[3][3];
+} visit_log_t;
+
+static int log_visit(size_t node_index,
+                     const pvr_chunk_hierarchy_node_t *node,
+                     const matrix_t *world, void *data) {
+    visit_log_t *log = data;
+
+    assert(node_index == log->count);
+    assert(node->user_data == (const void *)(uintptr_t)(node_index + 1u));
+    log->translation[log->count][0] = (*world)[3][0];
+    log->translation[log->count][1] = (*world)[3][1];
+    log->translation[log->count][2] = (*world)[3][2];
+    ++log->count;
+    if(log->fail_after && log->count == log->fail_after) {
+        errno = log->fail_errno;
+        return -1;
+    }
+    return log->stop_after && log->count == log->stop_after;
+}
+
+static void test_hierarchy(void) {
+    pvr_chunk_model_t model = model_with(
+        valid_vertices, sizeof(valid_vertices) / sizeof(valid_vertices[0]),
+        valid_polygons, sizeof(valid_polygons) / sizeof(valid_polygons[0]));
+    pvr_chunk_model_view_t view;
+    alignas(32) pvr_chunk_hierarchy_node_t nodes[3];
+    pvr_chunk_hierarchy_t hierarchy = { nodes, 3 };
+    alignas(32) matrix_t world[3];
+    alignas(32) matrix_t unchanged[3];
+    alignas(32) matrix_t root;
+    pvr_chunk_hierarchy_result_t result;
+    visit_log_t log = { 0 };
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    memset(nodes, 0, sizeof(nodes));
+    nodes[0].model = &view;
+    nodes[0].parent_index = PVR_CHUNK_NODE_NONE;
+    nodes[0].user_data = (const void *)(uintptr_t)1;
+    translation(&nodes[0].local_transform, 1.0f, 0.0f, 0.0f);
+    nodes[1].parent_index = 0;
+    nodes[1].user_data = (const void *)(uintptr_t)2;
+    translation(&nodes[1].local_transform, 2.0f, 0.0f, 0.0f);
+    nodes[2].model = &view;
+    nodes[2].parent_index = 0;
+    nodes[2].user_data = (const void *)(uintptr_t)3;
+    translation(&nodes[2].local_transform, 0.0f, 3.0f, 0.0f);
+    translation(&root, 0.0f, 0.0f, 4.0f);
+
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, &root, world, 3,
+                                        log_visit, &log, &result) == 0);
+    assert(result.visited_nodes == 3 && log.count == 3);
+    assert(log.translation[0][0] == 1.0f &&
+           log.translation[0][1] == 0.0f &&
+           log.translation[0][2] == 4.0f);
+    assert(log.translation[1][0] == 3.0f &&
+           log.translation[1][1] == 0.0f &&
+           log.translation[1][2] == 4.0f);
+    assert(log.translation[2][0] == 1.0f &&
+           log.translation[2][1] == 3.0f &&
+           log.translation[2][2] == 4.0f);
+
+    memset(&log, 0, sizeof(log));
+    log.stop_after = 2;
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 3,
+                                        log_visit, &log, &result) == 1);
+    assert(result.visited_nodes == 2 && log.count == 2);
+
+    memset(&log, 0, sizeof(log));
+    log.fail_after = 2;
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 3,
+                                        log_visit, &log, &result) == -1);
+    assert(errno == ECANCELED && result.visited_nodes == 2 && log.count == 2);
+
+    memset(&log, 0, sizeof(log));
+    log.fail_after = 1;
+    log.fail_errno = EIO;
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 3,
+                                        log_visit, &log, &result) == -1);
+    assert(errno == EIO && result.visited_nodes == 1 && log.count == 1);
+
+    memset(world, 0x5a, sizeof(world));
+    memcpy(unchanged, world, sizeof(world));
+    nodes[0].parent_index = 1;
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 3,
+                                        NULL, NULL, &result) == -1);
+    assert(errno == EILSEQ && result.visited_nodes == 0);
+    assert(memcmp(world, unchanged, sizeof(world)) == 0);
+    nodes[0].parent_index = PVR_CHUNK_NODE_NONE;
+
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 2,
+                                        NULL, NULL, &result) == -1);
+    assert(errno == ENOSPC && result.visited_nodes == 0);
+
+    nodes[1].local_transform[0][0] = NAN;
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 3,
+                                        NULL, NULL, &result) == -1);
+    assert(errno == EILSEQ && result.visited_nodes == 0);
 }
 
 static uint32_t random_state = UINT32_C(0x9e3779b9);
@@ -183,6 +362,56 @@ static void test_bounded_random_streams(void) {
                            1u + next_random() %
                            (sizeof(polygons) / sizeof(polygons[0])));
         (void)pvr_chunk_model_validate(&model, &info);
+
+        {
+            pvr_chunk_iterator_t iterator;
+            pvr_chunk_record_t record;
+            int rv;
+
+            if(pvr_chunk_vertex_iterator_init(&iterator, model.vertex_words,
+                                               model.vertex_word_count) == 0) {
+                while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+                    pvr_chunk_vertex_batch_t batch;
+                    size_t entry;
+
+                    if(pvr_chunk_vertex_batch_decode(&record, &batch) < 0)
+                        continue;
+                    for(entry = 0; entry < batch.entry_count; ++entry) {
+                        pvr_chunk_vertex_view_t vertex;
+
+                        (void)pvr_chunk_vertex_batch_get(&batch, entry,
+                                                         &vertex);
+                    }
+                }
+            }
+
+            if(pvr_chunk_polygon_iterator_init(&iterator,
+                                                model.polygon_words,
+                                                model.polygon_word_count) == 0) {
+                while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+                    pvr_chunk_strip_iterator_t strip_iterator;
+                    pvr_chunk_strip_view_t strip;
+                    int strip_rv;
+
+                    if(pvr_chunk_strip_iterator_init(&strip_iterator,
+                                                     &record) < 0)
+                        continue;
+                    while((strip_rv = pvr_chunk_strip_iterator_next(
+                               &strip_iterator, &strip)) > 0) {
+                        size_t vertex_index;
+
+                        for(vertex_index = 0;
+                            vertex_index < strip.vertex_count;
+                            ++vertex_index) {
+                            pvr_chunk_strip_vertex_view_t vertex;
+
+                            (void)pvr_chunk_strip_vertex_get(
+                                &strip, vertex_index, &vertex);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -190,6 +419,7 @@ int main(void) {
     test_valid_model();
     test_bad_streams();
     test_user_flags_and_reverse_strip();
+    test_hierarchy();
     test_bounded_random_streams();
     puts("pvr chunk model tests: PASS");
     return 0;

@@ -31,7 +31,7 @@ workloads.
 | Frustum and visibility | Caller-owned screen/W frusta provide bounded AABB classification and triangle clipping | Leave spatial partitioning, occlusion policy, and retained object state to applications. |
 | Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
-| Object hierarchy | No reusable traversal | Add bounded, callback-driven traversal over application-owned nodes after transform state is complete. |
+| Object hierarchy | Parent-before-child compact-model traversal composes caller-owned transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
 | Lighting | Hardware header fields exist, but vertex lighting is application work | Add optional CPU vertex-lighting kernels with explicit normal-transform and color-clamp contracts. |
 | Keyframe animation | No generic sampler | Add format-neutral scalar, vector, and rotation sampling before object-specific motion playback. |
 | Skinning and morphing | No generic deformers | Build bounded kernels over caller-supplied streams with SH4ZAM as the Dreamcast math backend. |
@@ -67,8 +67,8 @@ workloads.
    store-queue or buffered PVR submission without owning the scene.~~
 4. ~~Add immutable material compilation over existing PVR contexts and texture
    surfaces.~~
-5. Add bounded object hierarchy traversal using the caller-owned transform
-   stack.
+5. ~~Add bounded object hierarchy traversal using caller-owned transform
+   workspace.~~
 6. Add normal transformation, directional/point lighting, and color packing.
 7. Add format-neutral keyframe sampling and blended object transforms.
 8. Add bounded skinning and morph-target kernels using SH4ZAM on Dreamcast and

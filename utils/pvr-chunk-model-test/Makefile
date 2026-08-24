@@ -5,7 +5,9 @@ CPPFLAGS += -Iinclude -I../../kernel/arch/dreamcast/include
 
 TARGET = pvr-chunk-model-test
 SOURCES = pvr-chunk-model-test.c \
-          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_hierarchy.c \
+          ../../kernel/arch/dreamcast/math/matrix_compose.c
 
 .PHONY: all clean test
 

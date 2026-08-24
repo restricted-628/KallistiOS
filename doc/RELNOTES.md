@@ -91,7 +91,10 @@ lifecycle and naming conventions.
   iteration and whole-model validation. Record framing, per-format vertex
   sizes, finite data, strip and volume structure, counters, and every indexed
   vertex reference are checked before later traversal or rendering consumes
-  the model.
+  the model. Typed vertex-batch and strip views now expose bounded entries
+  without repeating wire-format arithmetic, while parent-before-child model
+  hierarchies compose through caller-owned matrix workspace with no recursion
+  or allocation.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes
