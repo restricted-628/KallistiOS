@@ -11,6 +11,7 @@
 #include <dc/biosfont.h>
 #include <dc/video.h>
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,18 @@
 KOS_INIT_FLAGS(INIT_DEFAULT | INIT_NO_DCLOAD);
 
 static uint8_t fiber_stack[2048] __attribute__((aligned(THD_STACK_ALIGNMENT)));
+static const pvr_vertex_t geometry_input[2] __attribute__((aligned(32))) = {
+    {
+        .flags = PVR_CMD_VERTEX,
+        .x = 2.0f, .y = 3.0f, .z = 4.0f,
+        .argb = UINT32_C(0xff102030)
+    },
+    {
+        .flags = PVR_CMD_VERTEX_EOL,
+        .x = -2.0f, .y = -3.0f, .z = -4.0f,
+        .argb = UINT32_C(0xff405060)
+    }
+};
 static kfiber_t *main_fiber;
 static shz_mat4x4_t fiber_matrix;
 static int fiber_result;
@@ -74,6 +87,12 @@ int main(int argc, char **argv) {
     vector_t established_vector = { 1.0f, 2.0f, 3.0f, 1.0f };
     vector_t round_trip_vector;
     shz_vec4_t vector;
+    pvr_vertex_t invalid_geometry[2] __attribute__((aligned(32)));
+    pvr_vertex_t projected[2] __attribute__((aligned(32)));
+    pvr_geometry_stream_t geometry_stream = {
+        geometry_input, 2, sizeof(*geometry_input)
+    };
+    pvr_geometry_result_t geometry_result;
     uint8_t major;
     uint16_t minor;
     uint8_t patch;
@@ -119,6 +138,40 @@ int main(int argc, char **argv) {
         FAIL("main XMTRX restoration");
     }
 
+    /* The target geometry path keeps a transform resident in XMTRX across the
+       batch, then restores the caller's matrix before publishing completion. */
+    shz_kos_matrix_export(&established, &identity);
+    if(pvr_geometry_project(projected, 2, &geometry_stream, &established,
+                            &geometry_result) < 0 ||
+       geometry_result.consumed_vertices != 2 ||
+       geometry_result.produced_vertices != 2 ||
+       projected[0].x != 2.0f || projected[0].y != 3.0f ||
+       projected[0].z != 1.0f ||
+       projected[1].x != -2.0f || projected[1].y != -3.0f ||
+       projected[1].z != 1.0f ||
+       projected[0].argb != geometry_input[0].argb) {
+        FAIL("SH4ZAM geometry projection");
+    }
+
+    shz_xmtrx_store_4x4(&observed);
+    if(memcmp(&observed, &source, sizeof(observed)))
+        FAIL("geometry XMTRX restoration");
+
+    memcpy(invalid_geometry, geometry_input, sizeof(invalid_geometry));
+    invalid_geometry[1].flags = 0;
+    geometry_stream.vertices = invalid_geometry;
+    errno = 0;
+    if(pvr_geometry_project(projected, 2, &geometry_stream, &established,
+                            &geometry_result) != -1 || errno != EILSEQ ||
+       geometry_result.consumed_vertices != 1 ||
+       geometry_result.produced_vertices != 1) {
+        FAIL("partial geometry rejection");
+    }
+
+    shz_xmtrx_store_4x4(&observed);
+    if(memcmp(&observed, &source, sizeof(observed)))
+        FAIL("rejected geometry XMTRX restoration");
+
     vector = shz_kos_vec4_import(&established_vector);
     if(vector.x != 1.0f || vector.y != 2.0f ||
        vector.z != 3.0f || vector.w != 1.0f) {
@@ -140,6 +193,6 @@ int main(int argc, char **argv) {
         FAIL("unexpected SH4ZAM version");
     }
 
-    show_result(true, "SH4ZAM 0.8 and opt-in XMTRX fibers");
+    show_result(true, "SH4ZAM 0.8, geometry, and opt-in XMTRX fibers");
     return 0;
 }

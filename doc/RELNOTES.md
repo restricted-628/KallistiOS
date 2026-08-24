@@ -17,6 +17,10 @@ lifecycle and naming conventions.
   retains normal section garbage collection, so unused routines occupy no
   application image space. Added compile-time layout checks and alias-safe
   bridges between established KOS matrices/vectors and SH4ZAM types.
+* Routed memory matrix composition through SH4ZAM's one-off FIPR transform
+  path without changing XMTRX. Batched checked PVR projection now keeps its
+  transform resident in XMTRX across the stream and restores the caller's
+  prior matrix on both success and partial failure.
 * Added opt-in fiber math contexts. A thread attaching with
   `KFIBER_ATTACH_MATH_CONTEXT` receives an independent XMTRX image for its main
   fiber and each child fiber. Lightweight attachment remains the default and

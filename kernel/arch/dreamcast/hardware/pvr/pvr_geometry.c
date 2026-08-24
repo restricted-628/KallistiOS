@@ -6,6 +6,10 @@
 
 #include <dc/pvr_geometry.h>
 
+#ifdef __DREAMCAST__
+#include <dc/sh4zam.h>
+#endif
+
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -57,6 +61,10 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
     size_t input_bytes;
     size_t output_bytes;
     size_t i;
+#ifdef __DREAMCAST__
+    shz_mat4x4_t saved_xmtrx;
+    shz_mat4x4_t transform;
+#endif
 
     if(result)
         *result = progress;
@@ -112,6 +120,15 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
         return -1;
     }
 
+#ifdef __DREAMCAST__
+    /* A geometry stream amortizes one XMTRX load across every vertex. Preserve
+       the caller's matrix so this checked memory-to-memory API remains free of
+       observable accelerator state even on a rejected vertex. */
+    shz_kos_matrix_import(&transform, matrix);
+    shz_xmtrx_store_4x4(&saved_xmtrx);
+    shz_xmtrx_load_4x4(&transform);
+#endif
+
     for(i = 0; i < stream->vertex_count; ++i) {
         const uint8_t *source = (const uint8_t *)stream->vertices +
                                 i * stream->stride;
@@ -120,6 +137,9 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
         float ty;
         float tw;
         float reciprocal_w;
+#ifdef __DREAMCAST__
+        shz_vec4_t transformed;
+#endif
 
         /* Work on a complete local TA block so a rejected vertex cannot leave
            partially updated coordinates or attributes in caller storage. */
@@ -137,6 +157,13 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
             goto fail;
         }
 
+#ifdef __DREAMCAST__
+        transformed = shz_xmtrx_transform_vec4(
+            shz_vec4_init(vertex.x, vertex.y, vertex.z, 1.0f));
+        tx = transformed.x;
+        ty = transformed.y;
+        tw = transformed.w;
+#else
         tx = (*matrix)[0][0] * vertex.x +
              (*matrix)[1][0] * vertex.y +
              (*matrix)[2][0] * vertex.z + (*matrix)[3][0];
@@ -146,6 +173,7 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
         tw = (*matrix)[0][3] * vertex.x +
              (*matrix)[1][3] * vertex.y +
              (*matrix)[2][3] * vertex.z + (*matrix)[3][3];
+#endif
 
         if(!isfinite(tx) || !isfinite(ty) || !isfinite(tw)) {
             errno = ERANGE;
@@ -176,12 +204,18 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
         ++progress.produced_vertices;
     }
 
+#ifdef __DREAMCAST__
+    shz_xmtrx_load_4x4(&saved_xmtrx);
+#endif
     if(result)
         *result = progress;
 
     return 0;
 
 fail:
+#ifdef __DREAMCAST__
+    shz_xmtrx_load_4x4(&saved_xmtrx);
+#endif
     if(result)
         *result = progress;
 

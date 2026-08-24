@@ -15,10 +15,14 @@ Finally, it attaches the current thread with
 retain independent XMTRX matrices across two cooperative transfers. Lightweight
 fibers remain the default for applications that do not need this preservation.
 
+The test also projects a small canonical vertex stream through the SH4ZAM
+XMTRX batch path used by KOS geometry and verifies that the caller's prior
+XMTRX matrix is restored after both complete projection and partial rejection.
+
 Successful completion prints:
 
 ```text
-RESULT: PASS (SH4ZAM 0.8 and opt-in XMTRX fibers)
+RESULT: PASS (SH4ZAM 0.8, geometry, and opt-in XMTRX fibers)
 ```
 
 The same result is shown on a green framebuffer for emulator or hardware
