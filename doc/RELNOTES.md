@@ -95,6 +95,11 @@ lifecycle and naming conventions.
   without repeating wire-format arithmetic, while parent-before-child model
   hierarchies compose through caller-owned matrix workspace with no recursion
   or allocation.
+* Added allocation-free CPU vertex-lighting kernels with checked
+  inverse-transpose normal matrices, bounded strided normal transforms,
+  directional and attenuated point Lambert lights, and deterministic saturated
+  ARGB packing. Dreamcast vector math uses SH4ZAM while host validation retains
+  a portable scalar path.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes

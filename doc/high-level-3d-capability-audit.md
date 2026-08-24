@@ -32,7 +32,7 @@ workloads.
 | Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
 | Object hierarchy | Parent-before-child compact-model traversal composes caller-owned transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
-| Lighting | Hardware header fields exist, but vertex lighting is application work | Add optional CPU vertex-lighting kernels with explicit normal-transform and color-clamp contracts. |
+| Lighting | Checked inverse-transpose normals, directional and point Lambert lights, and deterministic ARGB packing are available as allocation-free CPU kernels | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
 | Keyframe animation | No generic sampler | Add format-neutral scalar, vector, and rotation sampling before object-specific motion playback. |
 | Skinning and morphing | No generic deformers | Build bounded kernels over caller-supplied streams with SH4ZAM as the Dreamcast math backend. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
@@ -69,7 +69,8 @@ workloads.
    surfaces.~~
 5. ~~Add bounded object hierarchy traversal using caller-owned transform
    workspace.~~
-6. Add normal transformation, directional/point lighting, and color packing.
+6. ~~Add normal transformation, directional/point lighting, and color
+   packing.~~
 7. Add format-neutral keyframe sampling and blended object transforms.
 8. Add bounded skinning and morph-target kernels using SH4ZAM on Dreamcast and
    portable scalar validation paths on the host.
@@ -151,6 +152,27 @@ introducing a retained renderer:
 
 The tranche allocates no memory, creates no worker, owns no texture or scene,
 and retains no global transform or material state.
+
+## Fifth tranche
+
+The fifth tranche supplies the lighting primitives needed by compact-model and
+application-owned mesh renderers without adding a retained light manager:
+
+- `pvr_normal_matrix_build()` derives the inverse-transpose upper 3x3 from a
+  finite, nonsingular object transform, including nonuniform scale;
+- `pvr_normal_transform()` processes bounded, strided normals, normalizes each
+  result, supports exact in-place operation, and reports a valid output prefix
+  on malformed input;
+- `pvr_lighting_apply()` validates all ambient, directional, point, range, and
+  attenuation state before publication, then emits bounded diffuse Lambert
+  colors from world-space samples;
+- `pvr_color_pack_argb()` clamps and rounds finite linear RGBA values into the
+  established `0xAARRGGBB` representation.
+
+Dreamcast vector transforms, normalization, reciprocal square roots, and dot
+products use SH4ZAM without loading XMTRX. Portable scalar code supplies the
+same checked contract to host tests. The layer allocates nothing, creates no
+thread, retains no state, and performs no work unless called.
 
 ## Validation gates
 

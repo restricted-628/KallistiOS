@@ -511,6 +511,10 @@ pvr_chunk_strip_iterator_init
 pvr_chunk_strip_iterator_next
 pvr_chunk_strip_vertex_get
 pvr_chunk_hierarchy_traverse
+pvr_normal_matrix_build
+pvr_normal_transform
+pvr_color_pack_argb
+pvr_lighting_apply
 pvr_material_compile_polygon
 pvr_material_compile_sprite
 pvr_material_compile_two_volume
