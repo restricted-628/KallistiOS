@@ -99,15 +99,23 @@ contract:
 
 - modifier-volume geometry;
 - two-volume texture, material, and strip records;
-- bump materials; and
 - cached-polygon control records.
 
 These records are not skipped or approximated. Two-volume texture, material,
 and strip records instead use `pvr_chunk_model_emit_two_volume()`, which binds
 the entire call to either KOS's complete 32-byte untextured layout or 64-byte
 textured layout and rejects mixed layouts before output. Modifier geometry,
-bump material and cached-polygon controls remain explicit unsupported
-boundaries in both polygon emitters.
+and cached-polygon controls remain explicit unsupported boundaries in both
+polygon emitters.
+
+An ordinary bump-material record updates a persistent signed-normalized
+direction/up basis in `pvr_chunk_render_state_t`. The ordinary emitter requires
+a prepare callback for every later strip while that basis is active. That
+callback combines the basis with application-owned light direction and bump
+strength, then writes the PVR packed bump value to the vertex offset color.
+The renderer does not guess either missing input. Two-volume emission rejects
+bump material because the compact format defines no corresponding inside
+parameter record.
 
 ## Modifier-volume topology
 

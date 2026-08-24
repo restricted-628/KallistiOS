@@ -38,7 +38,8 @@ typedef enum pvr_chunk_render_state_field {
     PVR_CHUNK_RENDER_TEXTURE = 1u << 3,
     PVR_CHUNK_RENDER_DIFFUSE = 1u << 4,
     PVR_CHUNK_RENDER_AMBIENT = 1u << 5,
-    PVR_CHUNK_RENDER_SPECULAR = 1u << 6
+    PVR_CHUNK_RENDER_SPECULAR = 1u << 6,
+    PVR_CHUNK_RENDER_BUMP_BASIS = 1u << 7
 } pvr_chunk_render_state_field_t;
 
 /** \brief One decoded texture reference from a compact polygon stream.
@@ -67,6 +68,8 @@ typedef struct pvr_chunk_render_state {
     uint32_t diffuse_argb;
     uint32_t ambient_argb;
     uint32_t specular_argb;
+    vector_t bump_direction;      /**< Signed-normalized bump direction. */
+    vector_t bump_up;             /**< Signed-normalized bump up vector. */
     uint32_t secondary_present;   /**< Fields in the inside-volume state. */
     uint8_t secondary_specular_exponent;
     pvr_chunk_texture_state_t secondary_texture;
@@ -166,8 +169,11 @@ typedef int (*pvr_chunk_render_prepare_modifier_t)(
 
     The complete polygon stream and destination capacity are preflighted before
     the first callback or sink write. Ordinary one-volume strips are supported.
-    Modifier volumes, two-volume records, cached-polygon controls, and bump
-    materials fail with ENOTSUP before any output.
+    Modifier volumes, two-volume records, and cached-polygon controls fail with
+    ENOTSUP before any output. Bump-material records expose their decoded
+    signed-normalized direction and up vectors through the render state. A
+    prepare callback is required while that state is active because light
+    direction and bump strength remain application policy.
 
     One aligned workspace entry is required per vertex in the largest strip.
     It must not overlap the model streams, matrix, or a memory sink. A memory

@@ -104,6 +104,13 @@ three positions, and terminates every nonempty volume record with an explicit
 include or exclude header policy. The application still owns scene and list
 lifetime.
 
+The ordinary emitter also decodes compact bump-material records. Their two
+signed-normalized basis vectors remain in persistent render state and reach
+both strip callbacks. A vertex-policy callback is mandatory while the basis is
+active because the model does not own light direction or bump strength. KOS's
+existing bump texture and packed offset-color facilities remain the final
+application-controlled material step.
+
 ## Failure contract
 
 Invalid arguments report `EINVAL`. Truncated, unknown, inconsistent, non-finite,

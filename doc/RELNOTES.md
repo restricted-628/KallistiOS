@@ -109,7 +109,9 @@ lifecycle and naming conventions.
   64-byte TA vertex layout. Added a separate compact modifier-volume pass that
   expands triangle, quad, and strip topology with preserved winding, projects
   all three positions, and publishes each header/triangle pair atomically to a
-  modifier list. Unsupported state families fail before callbacks or output.
+  modifier list. Compact bump materials now expose their persistent
+  signed-normalized direction/up basis to explicit application vertex policy;
+  unsupported state families fail before callbacks or output.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated

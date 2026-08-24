@@ -250,8 +250,11 @@ lists without introducing scene, texture, or model ownership:
   topology into winding-correct modifier packets, applies explicit list,
   culling, and include/exclude policy, and submits each header/triangle pair as
   one operation; and
-- bump materials and cached-polygon controls fail with `ENOTSUP` before side
-  effects instead of being skipped or rendered under an incompatible contract.
+- bump-material records decode their persistent signed-normalized direction
+  and up basis into the ordinary render state, with an explicit vertex-policy
+  callback required to combine it with application light and strength; and
+- cached-polygon controls fail with `ENOTSUP` before side effects instead of
+  being skipped or rendered under an incompatible contract.
 
 The renderer allocates nothing, creates no worker, retains no texture lookup or
 model index, and never begins or finishes a PVR scene. The caller supplies one

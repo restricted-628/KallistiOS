@@ -131,7 +131,7 @@ static int unsupported_record(const pvr_chunk_record_t *record) {
        (record->record_class == PVR_CHUNK_RECORD_TEXTURE &&
         record->type == PVR_CHUNK_TEXTURE_TWO_VOLUME) ||
        (record->record_class == PVR_CHUNK_RECORD_MATERIAL &&
-        record->type >= PVR_CHUNK_MATERIAL_BUMP) ||
+        record->type >= PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME) ||
        (record->record_class == PVR_CHUNK_RECORD_STRIP &&
         record->type >= PVR_CHUNK_STRIP_TWO_VOLUME)) {
         errno = ENOTSUP;
@@ -283,6 +283,7 @@ static int preflight(const pvr_chunk_model_view_t *view,
     size_t polygon_bytes;
     size_t matrix_bytes;
     size_t output_bytes = 0;
+    int bump_basis_active = 0;
     int rv;
 
     memset(requirements, 0, sizeof(*requirements));
@@ -307,10 +308,19 @@ static int preflight(const pvr_chunk_model_view_t *view,
            validate_state_record(&record) < 0)
             return -1;
 
+        if(record.record_class == PVR_CHUNK_RECORD_MATERIAL &&
+           record.type == PVR_CHUNK_MATERIAL_BUMP)
+            bump_basis_active = 1;
+
         if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
             pvr_chunk_strip_iterator_t strip_iterator;
             pvr_chunk_strip_view_t strip;
             int strip_rv;
+
+            if(bump_basis_active && !prepare_vertex) {
+                errno = ENOTSUP;
+                return -1;
+            }
 
             if(pvr_chunk_strip_iterator_init(&strip_iterator, &record) < 0)
                 return -1;
@@ -385,6 +395,18 @@ static uint32_t payload_u32(const uint16_t *payload) {
     return (uint32_t)payload[0] | ((uint32_t)payload[1] << 16);
 }
 
+static float signed_normal16(uint16_t value) {
+    int32_t component = value & UINT16_C(0x8000) ?
+                        (int32_t)value - INT32_C(0x10000) :
+                        (int32_t)value;
+
+    /* Keep the extra negative two's-complement code inside the normalized
+       domain, matching the model vertex normal decoder. */
+    if(component == INT16_MIN)
+        return -1.0f;
+    return (float)component / (float)INT16_MAX;
+}
+
 static void update_blend(pvr_chunk_render_state_t *state, uint8_t flags) {
     state->blend_source = (pvr_blend_mode_t)((flags >> 3) & 7u);
     state->blend_destination = (pvr_blend_mode_t)(flags & 7u);
@@ -408,6 +430,20 @@ static void update_material(pvr_chunk_render_state_t *state,
     uint32_t *diffuse_argb;
     uint32_t *ambient_argb;
     uint32_t *specular_argb;
+
+    if(record->type == PVR_CHUNK_MATERIAL_BUMP) {
+        update_blend(state, record->flags);
+        state->bump_direction.x = signed_normal16(payload[0]);
+        state->bump_direction.y = signed_normal16(payload[1]);
+        state->bump_direction.z = signed_normal16(payload[2]);
+        state->bump_direction.w = 0.0f;
+        state->bump_up.x = signed_normal16(payload[3]);
+        state->bump_up.y = signed_normal16(payload[4]);
+        state->bump_up.z = signed_normal16(payload[5]);
+        state->bump_up.w = 0.0f;
+        state->present |= PVR_CHUNK_RENDER_BUMP_BASIS;
+        return;
+    }
 
     if(secondary)
         type -= PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME -
