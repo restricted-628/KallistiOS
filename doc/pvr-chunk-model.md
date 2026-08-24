@@ -11,6 +11,8 @@ model without allocating memory:
 - record classes, lengths, and exact terminal placement;
 - the word stride and entry count of every vertex and shape format;
 - finite position, normal, center, and radius values;
+- unique vertex-index ranges, reserved packed-normal bits, and encoded UV
+  ranges;
 - material payload lengths;
 - strip, triangle, quad, and modifier-volume framing;
 - overflow-safe aggregate counts; and
@@ -40,9 +42,22 @@ arithmetic:
   words, and the optional per-triangle user words that follow the vertex which
   completes that triangle.
 
-The views deliberately retain unclassified attribute words. Normal, color,
-weight, and texture decoding belongs to separately checked render policy, not
-to the structural parser.
+`pvr_chunk_vertex_attributes_get()` expands recognized vertex normals, packed
+colors, intensities, user data, and generic metadata into a format-neutral
+value. The generic metadata field is deliberately not treated as a complete
+skinning influence; applications that use it for model-specific deformation
+must supply an explicit interpretation. The corresponding strip decoder
+normalizes eight-bit or ten-bit UV coordinates, expands signed normals and
+ARGB color, and retains bounded per-triangle user words.
+
+`pvr_chunk_model_vertex_attributes_get()` resolves an index directly from an
+admitted model without allocating memory. Admission rejects overlapping
+vertex ranges, so the answer is deterministic. The lookup scans bounded
+records; a renderer that needs constant-time resolution can construct an
+index in caller-owned workspace.
+
+Both decoded forms retain access to the raw bounded views, allowing uncommon
+application policy without weakening the checked framing boundary.
 
 ## Hierarchies
 

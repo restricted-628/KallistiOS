@@ -283,7 +283,7 @@ static size_t vertex_stride(uint8_t type) {
             return 3;
         case PVR_CHUNK_VERTEX_XYZ_ARGB:
         case PVR_CHUNK_VERTEX_XYZ_USER:
-        case PVR_CHUNK_VERTEX_XYZ_WEIGHT:
+        case PVR_CHUNK_VERTEX_XYZ_METADATA:
         case PVR_CHUNK_VERTEX_XYZ_DIFFUSE_565:
         case PVR_CHUNK_VERTEX_XYZ_DIFFUSE_4444:
         case PVR_CHUNK_VERTEX_XYZ_INTENSITY:
@@ -293,7 +293,7 @@ static size_t vertex_stride(uint8_t type) {
             return 6;
         case PVR_CHUNK_VERTEX_XYZ_NORMAL_ARGB:
         case PVR_CHUNK_VERTEX_XYZ_NORMAL_USER:
-        case PVR_CHUNK_VERTEX_XYZ_NORMAL_WEIGHT:
+        case PVR_CHUNK_VERTEX_XYZ_NORMAL_METADATA:
         case PVR_CHUNK_VERTEX_XYZ_NORMAL_DIFFUSE_565:
         case PVR_CHUNK_VERTEX_XYZ_NORMAL_DIFFUSE_4444:
         case PVR_CHUNK_VERTEX_XYZ_NORMAL_INTENSITY:
@@ -301,7 +301,7 @@ static size_t vertex_stride(uint8_t type) {
         case PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_ARGB:
         case PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_USER:
         case PVR_CHUNK_VERTEX_XYZ_DIFFUSE_SPECULAR_ARGB:
-        case PVR_CHUNK_VERTEX_XYZ_WEIGHT_ARGB:
+        case PVR_CHUNK_VERTEX_XYZ_METADATA_ARGB:
             return 5;
         case PVR_CHUNK_SHAPE_NORMAL:
             return 3;
@@ -382,6 +382,19 @@ static int validate_vertex_record(const pvr_chunk_record_t *record,
             validate_floats(payload + 1u, count, stride, 3, 3) < 0))
             return -1;
 
+        if(record->type >= PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL &&
+           record->type <= PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_USER) {
+            size_t vertex;
+
+            for(vertex = 0; vertex < count; ++vertex) {
+                if(payload[1u + vertex * stride + 3u] &
+                   UINT32_C(0xc0000000)) {
+                    errno = EILSEQ;
+                    return -1;
+                }
+            }
+        }
+
         if(checked_add(&info->vertex_records, 1u) < 0 ||
            checked_add(&info->vertex_entries, count) < 0)
             return -1;
@@ -404,6 +417,63 @@ static int validate_vertex_record(const pvr_chunk_record_t *record,
     }
 
     return 0;
+}
+
+static int validate_unique_vertex_ranges(const pvr_chunk_model_t *model) {
+    pvr_chunk_iterator_t outer;
+    pvr_chunk_record_t outer_record;
+    int outer_rv;
+
+    if(pvr_chunk_vertex_iterator_init(&outer, model->vertex_words,
+                                      model->vertex_word_count) < 0)
+        return -1;
+
+    while((outer_rv = pvr_chunk_iterator_next(&outer, &outer_record)) > 0) {
+        const uint32_t *outer_payload;
+        uint32_t outer_first;
+        uint32_t outer_count;
+        pvr_chunk_iterator_t inner;
+        pvr_chunk_record_t inner_record;
+        int inner_rv;
+
+        if(outer_record.record_class != PVR_CHUNK_RECORD_VERTEX)
+            continue;
+
+        outer_payload = outer_record.payload;
+        outer_first = outer_payload[0] & UINT32_C(0xffff);
+        outer_count = outer_payload[0] >> 16;
+        if(!outer_count)
+            continue;
+        if(pvr_chunk_vertex_iterator_init(&inner, model->vertex_words,
+                                          model->vertex_word_count) < 0)
+            return -1;
+
+        while((inner_rv = pvr_chunk_iterator_next(&inner,
+                                                   &inner_record)) > 0) {
+            const uint32_t *inner_payload;
+            uint32_t inner_first;
+            uint32_t inner_count;
+
+            if(inner_record.stream_word_offset >=
+               outer_record.stream_word_offset)
+                break;
+            if(inner_record.record_class != PVR_CHUNK_RECORD_VERTEX)
+                continue;
+
+            inner_payload = inner_record.payload;
+            inner_first = inner_payload[0] & UINT32_C(0xffff);
+            inner_count = inner_payload[0] >> 16;
+            if(inner_count && outer_first < inner_first + inner_count &&
+               inner_first < outer_first + outer_count) {
+                errno = EILSEQ;
+                return -1;
+            }
+        }
+        if(inner_rv < 0)
+            return -1;
+    }
+
+    return outer_rv < 0 ? -1 : 0;
 }
 
 static int vertex_index_defined(const pvr_chunk_model_t *model,
@@ -461,6 +531,46 @@ static size_t strip_vertex_words(uint8_t type) {
         default:
             return 0;
     }
+}
+
+static int validate_strip_attributes(uint8_t type, const uint16_t *words) {
+    uint16_t maximum;
+    size_t uv_sets;
+    size_t set;
+
+    switch(type) {
+        case PVR_CHUNK_STRIP_UV8:
+        case PVR_CHUNK_STRIP_UV8_NORMAL:
+        case PVR_CHUNK_STRIP_UV8_ARGB:
+            maximum = 255u;
+            uv_sets = 1u;
+            break;
+        case PVR_CHUNK_STRIP_UV10:
+        case PVR_CHUNK_STRIP_UV10_NORMAL:
+        case PVR_CHUNK_STRIP_UV10_ARGB:
+            maximum = 1023u;
+            uv_sets = 1u;
+            break;
+        case PVR_CHUNK_STRIP_UV8_TWO_VOLUME:
+            maximum = 255u;
+            uv_sets = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV10_TWO_VOLUME:
+            maximum = 1023u;
+            uv_sets = 2u;
+            break;
+        default:
+            return 0;
+    }
+
+    for(set = 0; set < uv_sets; ++set) {
+        if(words[1u + set * 2u] > maximum ||
+           words[2u + set * 2u] > maximum) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int validate_index(const pvr_chunk_model_t *model, uint16_t index,
@@ -534,7 +644,9 @@ static int validate_strips(const pvr_chunk_model_t *model,
                                  (vertex - 2u) * user_words : 0u;
             size_t offset = vertex * vertex_words + prior_flags;
 
-            if(validate_index(model, payload[offset], info) < 0)
+            if(validate_index(model, payload[offset], info) < 0 ||
+               validate_strip_attributes(record->type,
+                                         payload + offset) < 0)
                 return -1;
         }
 
@@ -686,6 +798,8 @@ int pvr_chunk_model_validate(const pvr_chunk_model_t *model,
 
     if(rv < 0 || !saw_end)
         return -1;
+    if(validate_unique_vertex_ranges(model) < 0)
+        return -1;
 
     saw_end = 0;
     if(pvr_chunk_polygon_iterator_init(&iterator, model->polygon_words,
@@ -811,6 +925,251 @@ int pvr_chunk_vertex_batch_get(const pvr_chunk_vertex_batch_t *batch,
     vertex->words = words;
     vertex->word_count = batch->entry_word_count;
     return 0;
+}
+
+static uint8_t expand4(uint32_t value) {
+    return (uint8_t)((value << 4) | value);
+}
+
+static uint8_t expand5(uint32_t value) {
+    return (uint8_t)((value << 3) | (value >> 2));
+}
+
+static uint8_t expand6(uint32_t value) {
+    return (uint8_t)((value << 2) | (value >> 4));
+}
+
+static uint32_t color_rgb565(uint16_t value) {
+    uint32_t red = expand5((value >> 11) & 31u);
+    uint32_t green = expand6((value >> 5) & 63u);
+    uint32_t blue = expand5(value & 31u);
+
+    return UINT32_C(0xff000000) | (red << 16) | (green << 8) | blue;
+}
+
+static uint32_t color_argb4444(uint16_t value) {
+    uint32_t alpha = expand4((value >> 12) & 15u);
+    uint32_t red = expand4((value >> 8) & 15u);
+    uint32_t green = expand4((value >> 4) & 15u);
+    uint32_t blue = expand4(value & 15u);
+
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
+}
+
+static float signed_normal(uint32_t value, unsigned int bits) {
+    uint32_t sign = UINT32_C(1) << (bits - 1u);
+    int32_t component = (value & sign) ?
+                        (int32_t)(value - (UINT32_C(1) << bits)) :
+                        (int32_t)value;
+    int32_t maximum = (int32_t)sign - 1;
+
+    if(component == -(int32_t)sign)
+        return -1.0f;
+    return (float)component / (float)maximum;
+}
+
+int pvr_chunk_vertex_attributes_get(
+    const pvr_chunk_vertex_batch_t *batch, size_t entry,
+    pvr_chunk_vertex_attributes_t *attributes) {
+    pvr_chunk_vertex_attributes_t decoded;
+    pvr_chunk_vertex_view_t vertex;
+    const uint32_t *words;
+    size_t normal_offset = SIZE_MAX;
+    size_t color_offset = SIZE_MAX;
+
+    if(attributes)
+        memset(attributes, 0, sizeof(*attributes));
+    if(!attributes || pvr_chunk_vertex_batch_get(batch, entry, &vertex) < 0)
+        return -1;
+
+    memset(&decoded, 0, sizeof(decoded));
+    decoded.index = vertex.index;
+    decoded.position.x = vertex.position[0];
+    decoded.position.y = vertex.position[1];
+    decoded.position.z = vertex.position[2];
+    decoded.position.w = vertex.position[3];
+    words = vertex.words;
+
+    if(batch->type == PVR_CHUNK_VERTEX_XYZW_NORMAL)
+        normal_offset = 4u;
+    else if(batch->type >= PVR_CHUNK_VERTEX_XYZ_NORMAL &&
+            batch->type <= PVR_CHUNK_VERTEX_XYZ_NORMAL_INTENSITY)
+        normal_offset = 3u;
+
+    if(normal_offset != SIZE_MAX) {
+        decoded.normal.x = word_float(words[normal_offset]);
+        decoded.normal.y = word_float(words[normal_offset + 1u]);
+        decoded.normal.z = word_float(words[normal_offset + 2u]);
+        decoded.normal.w = 0.0f;
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_NORMAL;
+    }
+    else if(batch->type >= PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL &&
+            batch->type <= PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_USER) {
+        uint32_t packed = words[3];
+
+        if(packed & UINT32_C(0xc0000000)) {
+            errno = EILSEQ;
+            return -1;
+        }
+        decoded.normal.x = signed_normal((packed >> 20) & 1023u, 10);
+        decoded.normal.y = signed_normal((packed >> 10) & 1023u, 10);
+        decoded.normal.z = signed_normal(packed & 1023u, 10);
+        decoded.normal.w = 0.0f;
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_NORMAL;
+    }
+
+    switch(batch->type) {
+        case PVR_CHUNK_VERTEX_XYZ_ARGB:
+            color_offset = 3u;
+            break;
+        case PVR_CHUNK_VERTEX_XYZ_NORMAL_ARGB:
+            color_offset = 6u;
+            break;
+        case PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_ARGB:
+            color_offset = 4u;
+            break;
+        case PVR_CHUNK_VERTEX_XYZ_DIFFUSE_SPECULAR_ARGB:
+            decoded.diffuse_argb = words[3];
+            decoded.specular_argb = words[4];
+            decoded.present |= PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR |
+                               PVR_CHUNK_VERTEX_ATTR_SPECULAR_COLOR;
+            break;
+        case PVR_CHUNK_VERTEX_XYZ_METADATA_ARGB:
+            decoded.metadata = words[3];
+            decoded.diffuse_argb = words[4];
+            decoded.present |= PVR_CHUNK_VERTEX_ATTR_METADATA |
+                               PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR;
+            break;
+        default:
+            break;
+    }
+
+    if(color_offset != SIZE_MAX) {
+        decoded.diffuse_argb = words[color_offset];
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR;
+    }
+
+    switch(batch->type) {
+        case PVR_CHUNK_VERTEX_XYZ_DIFFUSE_565:
+            color_offset = 3u;
+            break;
+        case PVR_CHUNK_VERTEX_XYZ_NORMAL_DIFFUSE_565:
+            color_offset = 6u;
+            break;
+        default:
+            color_offset = SIZE_MAX;
+            break;
+    }
+    if(color_offset != SIZE_MAX) {
+        uint32_t packed = words[color_offset];
+
+        decoded.diffuse_argb = color_rgb565((uint16_t)(packed >> 16));
+        decoded.specular_argb = color_rgb565((uint16_t)packed);
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR |
+                           PVR_CHUNK_VERTEX_ATTR_SPECULAR_COLOR;
+    }
+
+    switch(batch->type) {
+        case PVR_CHUNK_VERTEX_XYZ_DIFFUSE_4444:
+            color_offset = 3u;
+            break;
+        case PVR_CHUNK_VERTEX_XYZ_NORMAL_DIFFUSE_4444:
+            color_offset = 6u;
+            break;
+        default:
+            color_offset = SIZE_MAX;
+            break;
+    }
+    if(color_offset != SIZE_MAX) {
+        uint32_t packed = words[color_offset];
+
+        decoded.diffuse_argb = color_argb4444((uint16_t)(packed >> 16));
+        decoded.specular_argb = color_rgb565((uint16_t)packed);
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR |
+                           PVR_CHUNK_VERTEX_ATTR_SPECULAR_COLOR;
+    }
+
+    switch(batch->type) {
+        case PVR_CHUNK_VERTEX_XYZ_INTENSITY:
+            color_offset = 3u;
+            break;
+        case PVR_CHUNK_VERTEX_XYZ_NORMAL_INTENSITY:
+            color_offset = 6u;
+            break;
+        default:
+            color_offset = SIZE_MAX;
+            break;
+    }
+    if(color_offset != SIZE_MAX) {
+        uint32_t packed = words[color_offset];
+
+        decoded.diffuse_intensity = (float)(packed >> 16) / 65535.0f;
+        decoded.specular_intensity = (float)(packed & 65535u) / 65535.0f;
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY |
+                           PVR_CHUNK_VERTEX_ATTR_SPECULAR_INTENSITY;
+    }
+
+    if(batch->type == PVR_CHUNK_VERTEX_XYZ_USER ||
+       batch->type == PVR_CHUNK_VERTEX_XYZ_NORMAL_USER ||
+       batch->type == PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_USER) {
+        size_t offset = batch->type == PVR_CHUNK_VERTEX_XYZ_USER ? 3u :
+                        (batch->type == PVR_CHUNK_VERTEX_XYZ_NORMAL_USER ?
+                         6u : 4u);
+
+        decoded.user_data = words[offset];
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_USER_DATA;
+    }
+    else if(batch->type == PVR_CHUNK_VERTEX_XYZ_METADATA ||
+            batch->type == PVR_CHUNK_VERTEX_XYZ_NORMAL_METADATA) {
+        size_t offset = batch->type == PVR_CHUNK_VERTEX_XYZ_METADATA ?
+                        3u : 6u;
+
+        decoded.metadata = words[offset];
+        decoded.present |= PVR_CHUNK_VERTEX_ATTR_METADATA;
+    }
+
+    memcpy(attributes, &decoded, sizeof(decoded));
+    return 0;
+}
+
+int pvr_chunk_model_vertex_attributes_get(
+    const pvr_chunk_model_view_t *view, uint16_t index,
+    pvr_chunk_vertex_attributes_t *attributes) {
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    int rv;
+
+    if(attributes)
+        memset(attributes, 0, sizeof(*attributes));
+    if(!view || !attributes || !view->model.vertex_words ||
+       !view->model.vertex_word_count || index > view->info.maximum_vertex_index) {
+        errno = !view || !attributes ? EINVAL : ENOENT;
+        return -1;
+    }
+
+    if(pvr_chunk_vertex_iterator_init(&iterator, view->model.vertex_words,
+                                      view->model.vertex_word_count) < 0)
+        return -1;
+
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        pvr_chunk_vertex_batch_t batch;
+        uint32_t relative;
+
+        if(record.record_class != PVR_CHUNK_RECORD_VERTEX)
+            continue;
+        if(pvr_chunk_vertex_batch_decode(&record, &batch) < 0)
+            return -1;
+
+        relative = (uint32_t)index - batch.first_index;
+        if(index >= batch.first_index && relative < batch.entry_count)
+            return pvr_chunk_vertex_attributes_get(&batch, relative,
+                                                    attributes);
+    }
+
+    if(rv < 0)
+        return -1;
+    errno = ENOENT;
+    return -1;
 }
 
 int pvr_chunk_strip_iterator_init(pvr_chunk_strip_iterator_t *iterator,
@@ -951,5 +1310,136 @@ int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
             strip->words + offset + strip->vertex_word_count;
         vertex->triangle_user_word_count = strip->user_word_count;
     }
+    return 0;
+}
+
+static int decode_uv(float uv[2], const uint16_t *words, uint16_t maximum) {
+    if(words[0] > maximum || words[1] > maximum) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    uv[0] = (float)words[0] / (float)maximum;
+    uv[1] = (float)words[1] / (float)maximum;
+    return 0;
+}
+
+static uint32_t strip_color(const uint16_t *words) {
+    uint32_t alpha = words[0] >> 8;
+    uint32_t red = words[0] & 255u;
+    uint32_t green = words[1] >> 8;
+    uint32_t blue = words[1] & 255u;
+
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
+}
+
+int pvr_chunk_strip_attributes_get(
+    const pvr_chunk_strip_view_t *strip, size_t vertex_index,
+    pvr_chunk_strip_attributes_t *attributes) {
+    pvr_chunk_strip_attributes_t decoded;
+    pvr_chunk_strip_vertex_view_t vertex;
+    const uint16_t *words;
+    uint16_t uv_maximum = 0;
+    size_t expected;
+    size_t normal_offset = SIZE_MAX;
+    size_t color_offset = SIZE_MAX;
+
+    if(attributes)
+        memset(attributes, 0, sizeof(*attributes));
+    if(!attributes ||
+       pvr_chunk_strip_vertex_get(strip, vertex_index, &vertex) < 0)
+        return -1;
+
+    memset(&decoded, 0, sizeof(decoded));
+    decoded.index = vertex.index;
+    decoded.triangle_user_words = vertex.triangle_user_words;
+    decoded.triangle_user_word_count = vertex.triangle_user_word_count;
+    words = vertex.attribute_words;
+
+    switch(strip->type) {
+        case PVR_CHUNK_STRIP_INDEX:
+        case PVR_CHUNK_STRIP_TWO_VOLUME:
+            expected = 0u;
+            break;
+        case PVR_CHUNK_STRIP_UV8:
+            expected = 2u;
+            uv_maximum = 255u;
+            break;
+        case PVR_CHUNK_STRIP_UV10:
+            expected = 2u;
+            uv_maximum = 1023u;
+            break;
+        case PVR_CHUNK_STRIP_NORMAL:
+            expected = 3u;
+            normal_offset = 0u;
+            break;
+        case PVR_CHUNK_STRIP_UV8_NORMAL:
+            expected = 5u;
+            uv_maximum = 255u;
+            normal_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV10_NORMAL:
+            expected = 5u;
+            uv_maximum = 1023u;
+            normal_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_ARGB:
+            expected = 2u;
+            color_offset = 0u;
+            break;
+        case PVR_CHUNK_STRIP_UV8_ARGB:
+            expected = 4u;
+            uv_maximum = 255u;
+            color_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV10_ARGB:
+            expected = 4u;
+            uv_maximum = 1023u;
+            color_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV8_TWO_VOLUME:
+            expected = 4u;
+            uv_maximum = 255u;
+            break;
+        case PVR_CHUNK_STRIP_UV10_TWO_VOLUME:
+            expected = 4u;
+            uv_maximum = 1023u;
+            break;
+        default:
+            errno = EILSEQ;
+            return -1;
+    }
+
+    if(vertex.attribute_word_count != expected) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    if(uv_maximum) {
+        if(decode_uv(decoded.uv[0], words, uv_maximum) < 0)
+            return -1;
+        decoded.present |= PVR_CHUNK_STRIP_ATTR_UV0;
+        if(strip->type == PVR_CHUNK_STRIP_UV8_TWO_VOLUME ||
+           strip->type == PVR_CHUNK_STRIP_UV10_TWO_VOLUME) {
+            if(decode_uv(decoded.uv[1], words + 2u, uv_maximum) < 0)
+                return -1;
+            decoded.present |= PVR_CHUNK_STRIP_ATTR_UV1;
+        }
+    }
+
+    if(normal_offset != SIZE_MAX) {
+        decoded.normal.x = signed_normal(words[normal_offset], 16);
+        decoded.normal.y = signed_normal(words[normal_offset + 1u], 16);
+        decoded.normal.z = signed_normal(words[normal_offset + 2u], 16);
+        decoded.normal.w = 0.0f;
+        decoded.present |= PVR_CHUNK_STRIP_ATTR_NORMAL;
+    }
+
+    if(color_offset != SIZE_MAX) {
+        decoded.argb = strip_color(words + color_offset);
+        decoded.present |= PVR_CHUNK_STRIP_ATTR_COLOR;
+    }
+
+    memcpy(attributes, &decoded, sizeof(decoded));
     return 0;
 }

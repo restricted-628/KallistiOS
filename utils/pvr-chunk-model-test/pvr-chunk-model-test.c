@@ -16,6 +16,10 @@
 
 #define VERTEX_HEADER(type, size) ((uint32_t)(type) | ((uint32_t)(size) << 16))
 
+static int close_enough(float actual, float expected) {
+    return isfinite(actual) && fabsf(actual - expected) <= 0.00002f;
+}
+
 static const uint32_t valid_vertices[] = {
     VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10),
     UINT32_C(0x00030000),
@@ -59,6 +63,7 @@ static void test_valid_model(void) {
     pvr_chunk_record_t record;
     pvr_chunk_vertex_batch_t batch;
     pvr_chunk_vertex_view_t vertex;
+    pvr_chunk_vertex_attributes_t attributes;
     pvr_chunk_strip_iterator_t strip_iterator;
     pvr_chunk_strip_view_t strip;
     pvr_chunk_strip_vertex_view_t strip_vertex;
@@ -75,6 +80,13 @@ static void test_valid_model(void) {
     assert(info.triangles == 1);
     assert(info.index_references == 3);
     assert(info.maximum_vertex_index == 2);
+    assert(pvr_chunk_model_vertex_attributes_get(&view, 1, &attributes) == 0);
+    assert(attributes.index == 1 && attributes.position.x == 1.0f &&
+           attributes.position.y == -1.0f);
+    errno = 0;
+    assert(pvr_chunk_model_vertex_attributes_get(&view, 3,
+                                                  &attributes) == -1);
+    assert(errno == ENOENT && attributes.present == 0);
 
     assert(pvr_chunk_vertex_iterator_init(&iterator, valid_vertices,
         sizeof(valid_vertices) / sizeof(valid_vertices[0])) == 0);
@@ -168,6 +180,24 @@ static void test_bad_streams(void) {
 
     model.radius = NAN;
     expect_invalid(&model, EILSEQ);
+
+    {
+        static const uint32_t duplicate_vertices[] = {
+            VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 4), UINT32_C(0x00010000),
+            UINT32_C(0), UINT32_C(0), UINT32_C(0),
+            VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 4), UINT32_C(0x00010000),
+            UINT32_C(0), UINT32_C(0), UINT32_C(0),
+            UINT32_C(0xff)
+        };
+        static const uint16_t empty_polygons[] = { UINT16_C(0xff) };
+        pvr_chunk_model_t duplicate = model_with(
+            duplicate_vertices,
+            sizeof(duplicate_vertices) / sizeof(duplicate_vertices[0]),
+            empty_polygons,
+            sizeof(empty_polygons) / sizeof(empty_polygons[0]));
+
+        expect_invalid(&duplicate, EILSEQ);
+    }
 }
 
 static void test_user_flags_and_reverse_strip(void) {
@@ -208,6 +238,175 @@ static void test_user_flags_and_reverse_strip(void) {
     assert(vertex.attribute_words[0] == 64 && vertex.attribute_words[1] == 255);
     assert(vertex.triangle_user_word_count == 1 &&
            vertex.triangle_user_words[0] == UINT16_C(0xbeef));
+
+    polygons[5] = 256;
+    expect_invalid(&model, EILSEQ);
+    polygons[5] = 0;
+}
+
+static void test_decoded_attributes(void) {
+    static const uint32_t normal_color_words[] = {
+        UINT32_C(0x3f800000), UINT32_C(0x40000000), UINT32_C(0x40400000),
+        UINT32_C(0x3f800000), UINT32_C(0), UINT32_C(0xbf800000),
+        UINT32_C(0x80402010)
+    };
+    static const uint32_t packed_user_words[] = {
+        UINT32_C(0), UINT32_C(0), UINT32_C(0),
+        (UINT32_C(0x1ff) << 20) | (UINT32_C(0x201) << 10) |
+            UINT32_C(0x200),
+        UINT32_C(0x12345678)
+    };
+    static const uint32_t rgb565_words[] = {
+        UINT32_C(0), UINT32_C(0), UINT32_C(0), UINT32_C(0xf80007e0)
+    };
+    static const uint32_t argb4444_words[] = {
+        UINT32_C(0), UINT32_C(0), UINT32_C(0), UINT32_C(0x8f10001f)
+    };
+    static const uint32_t intensity_words[] = {
+        UINT32_C(0), UINT32_C(0), UINT32_C(0), UINT32_C(0xffff8000)
+    };
+    static const uint32_t metadata_color_words[] = {
+        UINT32_C(0), UINT32_C(0), UINT32_C(0),
+        UINT32_C(0xa5a5a5a5), UINT32_C(0xff112233)
+    };
+    pvr_chunk_vertex_batch_t batch;
+    pvr_chunk_vertex_attributes_t vertex;
+    uint16_t uv_color_words[15] = {
+        4, 128, 255, UINT16_C(0x8040), UINT16_C(0x20ff),
+        5, 0, 0, 0, 0,
+        6, 0, 0, 0, 0
+    };
+    uint16_t uv_normal_words[18] = {
+        7, 512, 1023, UINT16_C(0x7fff), 0, UINT16_C(0x8000),
+        8, 0, 0, 0, 0, 0,
+        9, 0, 0, 0, 0, 0
+    };
+    uint16_t two_uv_words[15] = {
+        10, 0, 255, 64, 128,
+        11, 0, 0, 0, 0,
+        12, 0, 0, 0, 0
+    };
+    pvr_chunk_strip_view_t strip;
+    pvr_chunk_strip_attributes_t strip_attributes;
+
+    memset(&batch, 0, sizeof(batch));
+    batch.first_index = 7;
+    batch.entry_count = 1;
+
+    batch.type = PVR_CHUNK_VERTEX_XYZ_NORMAL_ARGB;
+    batch.entries = normal_color_words;
+    batch.entry_word_count = 7;
+    assert(pvr_chunk_vertex_attributes_get(&batch, 0, &vertex) == 0);
+    assert(vertex.index == 7 && vertex.position.x == 1.0f &&
+           vertex.position.y == 2.0f && vertex.position.z == 3.0f &&
+           vertex.position.w == 1.0f);
+    assert(vertex.present == (PVR_CHUNK_VERTEX_ATTR_NORMAL |
+                              PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR));
+    assert(vertex.normal.x == 1.0f && vertex.normal.y == 0.0f &&
+           vertex.normal.z == -1.0f && vertex.normal.w == 0.0f);
+    assert(vertex.diffuse_argb == UINT32_C(0x80402010));
+
+    batch.type = PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_USER;
+    batch.entries = packed_user_words;
+    batch.entry_word_count = 5;
+    assert(pvr_chunk_vertex_attributes_get(&batch, 0, &vertex) == 0);
+    assert(vertex.present == (PVR_CHUNK_VERTEX_ATTR_NORMAL |
+                              PVR_CHUNK_VERTEX_ATTR_USER_DATA));
+    assert(close_enough(vertex.normal.x, 1.0f));
+    assert(close_enough(vertex.normal.y, -1.0f));
+    assert(close_enough(vertex.normal.z, -1.0f));
+    assert(vertex.user_data == UINT32_C(0x12345678));
+
+    {
+        uint32_t malformed[5];
+
+        memcpy(malformed, packed_user_words, sizeof(malformed));
+        malformed[3] |= UINT32_C(0x40000000);
+        batch.entries = malformed;
+        memset(&vertex, 0x5a, sizeof(vertex));
+        errno = 0;
+        assert(pvr_chunk_vertex_attributes_get(&batch, 0, &vertex) == -1);
+        assert(errno == EILSEQ && vertex.present == 0);
+        batch.entries = packed_user_words;
+    }
+
+    batch.type = PVR_CHUNK_VERTEX_XYZ_DIFFUSE_565;
+    batch.entries = rgb565_words;
+    batch.entry_word_count = 4;
+    assert(pvr_chunk_vertex_attributes_get(&batch, 0, &vertex) == 0);
+    assert(vertex.diffuse_argb == UINT32_C(0xffff0000));
+    assert(vertex.specular_argb == UINT32_C(0xff00ff00));
+
+    batch.type = PVR_CHUNK_VERTEX_XYZ_DIFFUSE_4444;
+    batch.entries = argb4444_words;
+    assert(pvr_chunk_vertex_attributes_get(&batch, 0, &vertex) == 0);
+    assert(vertex.diffuse_argb == UINT32_C(0x88ff1100));
+    assert(vertex.specular_argb == UINT32_C(0xff0000ff));
+
+    batch.type = PVR_CHUNK_VERTEX_XYZ_INTENSITY;
+    batch.entries = intensity_words;
+    assert(pvr_chunk_vertex_attributes_get(&batch, 0, &vertex) == 0);
+    assert(close_enough(vertex.diffuse_intensity, 1.0f));
+    assert(close_enough(vertex.specular_intensity, 32768.0f / 65535.0f));
+
+    batch.type = PVR_CHUNK_VERTEX_XYZ_METADATA_ARGB;
+    batch.entries = metadata_color_words;
+    batch.entry_word_count = 5;
+    assert(pvr_chunk_vertex_attributes_get(&batch, 0, &vertex) == 0);
+    assert(vertex.metadata == UINT32_C(0xa5a5a5a5));
+    assert(vertex.diffuse_argb == UINT32_C(0xff112233));
+
+    memset(&strip, 0, sizeof(strip));
+    strip.vertex_count = 3;
+    strip.user_word_count = 0;
+
+    strip.type = PVR_CHUNK_STRIP_UV8_ARGB;
+    strip.words = uv_color_words;
+    strip.vertex_word_count = 5;
+    strip.word_count = 15;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == 0);
+    assert(strip_attributes.index == 4);
+    assert(strip_attributes.present == (PVR_CHUNK_STRIP_ATTR_UV0 |
+                                        PVR_CHUNK_STRIP_ATTR_COLOR));
+    assert(close_enough(strip_attributes.uv[0][0], 128.0f / 255.0f));
+    assert(close_enough(strip_attributes.uv[0][1], 1.0f));
+    assert(strip_attributes.argb == UINT32_C(0x804020ff));
+
+    strip.type = PVR_CHUNK_STRIP_UV10_NORMAL;
+    strip.words = uv_normal_words;
+    strip.vertex_word_count = 6;
+    strip.word_count = 18;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == 0);
+    assert(strip_attributes.present == (PVR_CHUNK_STRIP_ATTR_UV0 |
+                                        PVR_CHUNK_STRIP_ATTR_NORMAL));
+    assert(close_enough(strip_attributes.uv[0][0], 512.0f / 1023.0f));
+    assert(close_enough(strip_attributes.normal.x, 1.0f));
+    assert(close_enough(strip_attributes.normal.z, -1.0f));
+
+    strip.type = PVR_CHUNK_STRIP_UV8_TWO_VOLUME;
+    strip.words = two_uv_words;
+    strip.vertex_word_count = 5;
+    strip.word_count = 15;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == 0);
+    assert(strip_attributes.present == (PVR_CHUNK_STRIP_ATTR_UV0 |
+                                        PVR_CHUNK_STRIP_ATTR_UV1));
+    assert(close_enough(strip_attributes.uv[0][1], 1.0f));
+    assert(close_enough(strip_attributes.uv[1][0], 64.0f / 255.0f));
+    assert(close_enough(strip_attributes.uv[1][1], 128.0f / 255.0f));
+
+    strip.type = PVR_CHUNK_STRIP_UV8_ARGB;
+    strip.words = uv_color_words;
+    strip.vertex_word_count = 5;
+    strip.word_count = 15;
+    uv_color_words[1] = 256;
+    memset(&strip_attributes, 0x5a, sizeof(strip_attributes));
+    errno = 0;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == -1);
+    assert(errno == EILSEQ && strip_attributes.present == 0);
 }
 
 static void translation(matrix_t *matrix, float x, float y, float z) {
@@ -419,6 +618,7 @@ int main(void) {
     test_valid_model();
     test_bad_streams();
     test_user_flags_and_reverse_strip();
+    test_decoded_attributes();
     test_hierarchy();
     test_bounded_random_streams();
     puts("pvr chunk model tests: PASS");

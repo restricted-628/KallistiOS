@@ -93,14 +93,14 @@ typedef enum pvr_chunk_vertex_type {
     PVR_CHUNK_VERTEX_XYZ = 34,
     PVR_CHUNK_VERTEX_XYZ_ARGB = 35,
     PVR_CHUNK_VERTEX_XYZ_USER = 36,
-    PVR_CHUNK_VERTEX_XYZ_WEIGHT = 37,
+    PVR_CHUNK_VERTEX_XYZ_METADATA = 37,
     PVR_CHUNK_VERTEX_XYZ_DIFFUSE_565 = 38,
     PVR_CHUNK_VERTEX_XYZ_DIFFUSE_4444 = 39,
     PVR_CHUNK_VERTEX_XYZ_INTENSITY = 40,
     PVR_CHUNK_VERTEX_XYZ_NORMAL = 41,
     PVR_CHUNK_VERTEX_XYZ_NORMAL_ARGB = 42,
     PVR_CHUNK_VERTEX_XYZ_NORMAL_USER = 43,
-    PVR_CHUNK_VERTEX_XYZ_NORMAL_WEIGHT = 44,
+    PVR_CHUNK_VERTEX_XYZ_NORMAL_METADATA = 44,
     PVR_CHUNK_VERTEX_XYZ_NORMAL_DIFFUSE_565 = 45,
     PVR_CHUNK_VERTEX_XYZ_NORMAL_DIFFUSE_4444 = 46,
     PVR_CHUNK_VERTEX_XYZ_NORMAL_INTENSITY = 47,
@@ -108,7 +108,7 @@ typedef enum pvr_chunk_vertex_type {
     PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_ARGB = 49,
     PVR_CHUNK_VERTEX_XYZ_PACKED_NORMAL_USER = 50,
     PVR_CHUNK_VERTEX_XYZ_DIFFUSE_SPECULAR_ARGB = 51,
-    PVR_CHUNK_VERTEX_XYZ_WEIGHT_ARGB = 52,
+    PVR_CHUNK_VERTEX_XYZ_METADATA_ARGB = 52,
     PVR_CHUNK_SHAPE_NORMAL = 128,
     PVR_CHUNK_SHAPE_NORMAL_ARGB = 129,
     PVR_CHUNK_SHAPE_ARGB = 130
@@ -232,6 +232,36 @@ typedef struct pvr_chunk_vertex_view {
     float position[4];
 } pvr_chunk_vertex_view_t;
 
+/** \brief Decoded vertex attributes present in a compact vertex entry. */
+typedef enum pvr_chunk_vertex_attribute {
+    PVR_CHUNK_VERTEX_ATTR_NORMAL = 1u << 0,
+    PVR_CHUNK_VERTEX_ATTR_DIFFUSE_COLOR = 1u << 1,
+    PVR_CHUNK_VERTEX_ATTR_SPECULAR_COLOR = 1u << 2,
+    PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY = 1u << 3,
+    PVR_CHUNK_VERTEX_ATTR_SPECULAR_INTENSITY = 1u << 4,
+    PVR_CHUNK_VERTEX_ATTR_USER_DATA = 1u << 5,
+    PVR_CHUNK_VERTEX_ATTR_METADATA = 1u << 6
+} pvr_chunk_vertex_attribute_t;
+
+/** \brief Format-neutral attributes decoded from one vertex entry.
+
+    Colors use `0xAARRGGBB`. Intensities are normalized to `[0, 1]`.
+    Metadata remains an uninterpreted 32-bit application/model value; it is
+    not assumed to describe a complete skinning influence.
+*/
+typedef struct pvr_chunk_vertex_attributes {
+    uint16_t index;
+    uint32_t present;
+    point_t position;
+    vector_t normal;
+    uint32_t diffuse_argb;
+    uint32_t specular_argb;
+    float diffuse_intensity;
+    float specular_intensity;
+    uint32_t user_data;
+    uint32_t metadata;
+} pvr_chunk_vertex_attributes_t;
+
 /** \brief Caller-owned iterator over strips inside one strip record. */
 typedef struct pvr_chunk_strip_iterator {
     uint8_t type;
@@ -263,6 +293,25 @@ typedef struct pvr_chunk_strip_vertex_view {
     const uint16_t *triangle_user_words;
     size_t triangle_user_word_count;
 } pvr_chunk_strip_vertex_view_t;
+
+/** \brief Decoded attributes present on one strip vertex reference. */
+typedef enum pvr_chunk_strip_attribute {
+    PVR_CHUNK_STRIP_ATTR_UV0 = 1u << 0,
+    PVR_CHUNK_STRIP_ATTR_UV1 = 1u << 1,
+    PVR_CHUNK_STRIP_ATTR_NORMAL = 1u << 2,
+    PVR_CHUNK_STRIP_ATTR_COLOR = 1u << 3
+} pvr_chunk_strip_attribute_t;
+
+/** \brief Format-neutral attributes decoded from one strip reference. */
+typedef struct pvr_chunk_strip_attributes {
+    uint16_t index;
+    uint32_t present;
+    float uv[2][2];
+    vector_t normal;
+    uint32_t argb;
+    const uint16_t *triangle_user_words;
+    size_t triangle_user_word_count;
+} pvr_chunk_strip_attributes_t;
 
 /** \brief Sentinel identifying a root node in a compact-model hierarchy. */
 #define PVR_CHUNK_NODE_NONE SIZE_MAX
@@ -345,6 +394,30 @@ int pvr_chunk_vertex_batch_get(const pvr_chunk_vertex_batch_t *batch,
                                size_t entry,
                                pvr_chunk_vertex_view_t *vertex);
 
+/** \brief Decode all recognized attributes from one bounded vertex entry.
+
+    Packed normals and colors are expanded to floating vectors and ARGB8888.
+    Failure initializes \p attributes to zero.
+*/
+int pvr_chunk_vertex_attributes_get(
+    const pvr_chunk_vertex_batch_t *batch, size_t entry,
+    pvr_chunk_vertex_attributes_t *attributes);
+
+/** \brief Resolve and decode one indexed vertex from an admitted model.
+
+    Vertex ranges are unique after pvr_chunk_model_open(), so resolution is
+    deterministic. This allocation-free lookup scans the bounded vertex
+    records; renderers that need a persistent index should build one in
+    caller-owned memory.
+
+    \retval 0  Vertex found and decoded.
+    \retval -1 Invalid view or absent index, with errno set to EINVAL,
+               EILSEQ, or ENOENT.
+*/
+int pvr_chunk_model_vertex_attributes_get(
+    const pvr_chunk_model_view_t *view, uint16_t index,
+    pvr_chunk_vertex_attributes_t *attributes);
+
 /** \brief Initialize an iterator over a validated polygon strip record. */
 int pvr_chunk_strip_iterator_init(pvr_chunk_strip_iterator_t *iterator,
                                   const pvr_chunk_record_t *record);
@@ -362,6 +435,16 @@ int pvr_chunk_strip_iterator_next(pvr_chunk_strip_iterator_t *iterator,
 int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
                                size_t vertex_index,
                                pvr_chunk_strip_vertex_view_t *vertex);
+
+/** \brief Decode UV, normal, color, and triangle-user attributes.
+
+    Eight-bit and ten-bit UV encodings are normalized to `[0, 1]`. Signed
+    strip normals are expanded to `[-1, 1]`. Failure initializes
+    \p attributes to zero.
+*/
+int pvr_chunk_strip_attributes_get(
+    const pvr_chunk_strip_view_t *strip, size_t vertex_index,
+    pvr_chunk_strip_attributes_t *attributes);
 
 /** \brief Compose and visit a bounded parent-before-child hierarchy.
 

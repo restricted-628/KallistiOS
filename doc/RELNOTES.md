@@ -92,9 +92,12 @@ lifecycle and naming conventions.
   sizes, finite data, strip and volume structure, counters, and every indexed
   vertex reference are checked before later traversal or rendering consumes
   the model. Typed vertex-batch and strip views now expose bounded entries
-  without repeating wire-format arithmetic, while parent-before-child model
-  hierarchies compose through caller-owned matrix workspace with no recursion
-  or allocation.
+  without repeating format arithmetic. Format-neutral decoding expands
+  normals, colors, intensities, UV sets, user data, and generic metadata;
+  admitted models require unique vertex ranges and provide deterministic
+  allocation-free indexed lookup. Parent-before-child model hierarchies
+  compose through caller-owned matrix workspace with no recursion or
+  allocation.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated
