@@ -181,7 +181,8 @@ This page serves as an index for all KallistiOS examples.
 - sh4zam
   - bruces_balls
   - [**integration**](sh4zam/integration/): Verifies the bundled SH4ZAM 0.8
-    library, default link integration, and alias-safe KOS math bridges
+    library, default link integration, alias-safe KOS math bridges, and bounded
+    compact-model emission
 - sdl
   - sound
 - sound

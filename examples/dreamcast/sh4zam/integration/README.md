@@ -15,11 +15,11 @@ Finally, it attaches the current thread with
 retain independent XMTRX matrices across two cooperative transfers. Lightweight
 fibers remain the default for applications that do not need this preservation.
 
-The test also exercises the checked camera builders, frustum classification and
-clipping, and canonical vertex projection through their SH4ZAM target paths.
-It verifies that the caller's prior XMTRX matrix is restored after complete and
-rejected geometry projection and remains untouched by one-off camera/frustum
-operations.
+The test also exercises the checked camera builders, frustum classification,
+clipping, canonical vertex projection, and bounded compact-model emission
+through their SH4ZAM target paths. It verifies that the caller's prior XMTRX
+matrix is restored after complete and rejected geometry projection and remains
+untouched by compact-model and one-off camera/frustum operations.
 
 Successful completion prints:
 
@@ -30,5 +30,7 @@ RESULT: PASS (SH4ZAM 0.8 camera, frustum, geometry, and fibers)
 The same result is shown on a green framebuffer for emulator or hardware
 validation that does not provide a debug console.
 
-On 2026-08-23, the GCC 16.2.0 build produced the expected result in Flycast
-with both the SH-4 interpreter and dynarec.
+On 2026-08-23, the camera, frustum, geometry, and fiber paths produced the
+expected result in Flycast with both the SH-4 interpreter and dynarec. The
+compact-model extension has completed its GCC 16.2.0 target build and still
+requires an updated emulator run.

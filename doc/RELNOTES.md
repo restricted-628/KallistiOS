@@ -97,7 +97,11 @@ lifecycle and naming conventions.
   admitted models require unique vertex ranges and provide deterministic
   allocation-free indexed lookup. Parent-before-child model hierarchies
   compose through caller-owned matrix workspace with no recursion or
-  allocation.
+  allocation. Added bounded one-volume strip emission with complete support
+  and capacity preflight, decoded render-state callbacks, explicit texture-ID
+  resolution, reversed-winding correction, SH4ZAM-backed projection, and
+  existing memory/current-list/buffered-list sinks. Record families requiring
+  different TA vertex contracts fail before callbacks or output.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated

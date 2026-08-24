@@ -81,6 +81,15 @@ frustum, texture, and sink interfaces. This keeps asset lifetime separate from
 scene lifetime and permits the same validated model to target direct, buffered,
 or caller-owned geometry output.
 
+`pvr_chunk_model_emit()` provides the first bounded rendering bridge for
+ordinary one-volume strips. It performs a complete support and capacity
+preflight, decodes persistent polygon state, assembles canonical vertices in
+caller-owned workspace, projects them through the checked SH4ZAM-backed
+geometry path, and emits through an existing sink. Compact texture identifiers
+are resolved explicitly by a caller callback because the stream does not own
+the texture surface, layout, or VRAM address. See `pvr-chunk-rendering.md` for
+the state, callback, default-vertex, and failure contracts.
+
 ## Failure contract
 
 Invalid arguments report `EINVAL`. Truncated, unknown, inconsistent, non-finite,

@@ -219,6 +219,32 @@ skeleton, pose, or model ownership:
 The caller continues to own skeleton topology, palette construction, pose
 evaluation, animation clocks, model binding, and output storage.
 
+## Eighth tranche
+
+The eighth tranche connects admitted compact streams to ordinary PVR polygon
+lists without introducing scene, texture, or model ownership:
+
+- `pvr_chunk_model_emit()` preflights the complete polygon stream, support
+  boundary, state ranges, indexed vertices, largest-strip workspace, and total
+  memory-sink capacity before the first callback or output;
+- persistent blend, mipmap, exponent, texture, and material records become a
+  format-neutral draw state, while a synchronous strip callback resolves asset
+  texture identifiers into application-owned KOS texture surfaces and material
+  headers;
+- indexed references become canonical vertices with deterministic UV and color
+  precedence, reversed strips preserve winding, and an optional callback can
+  apply application lighting, intensity, metadata, or user-word policy;
+- every strip is projected through the established SH4ZAM-backed geometry path
+  and emitted to a caller-selected memory, current-list, or buffered-list sink;
+  and
+- modifier volumes, two-volume state, bump materials, and cached-polygon
+  controls fail with `ENOTSUP` before side effects instead of being skipped or
+  rendered under an incompatible vertex contract.
+
+The renderer allocates nothing, creates no worker, retains no texture lookup or
+model index, and never begins or finishes a PVR scene. The caller supplies one
+canonical vertex workspace sized to the largest strip.
+
 ## Validation gates
 
 Each tranche requires host tests for structure, bounds, interpolation, and

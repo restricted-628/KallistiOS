@@ -21,6 +21,26 @@
    result without depending on a loader-provided debug console. */
 KOS_INIT_FLAGS(INIT_DEFAULT | INIT_NO_DCLOAD);
 
+#define CHUNK_VERTEX_HEADER(type, size) \
+    ((uint32_t)(type) | ((uint32_t)(size) << 16))
+
+static const uint32_t compact_vertices[] = {
+    CHUNK_VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10),
+    UINT32_C(0x00030000),
+    UINT32_C(0xbf800000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0x3f800000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0x3f800000), UINT32_C(0),
+    UINT32_C(0x000000ff)
+};
+
+static const uint16_t compact_polygons[] = {
+    PVR_CHUNK_MATERIAL_DIFFUSE, UINT16_C(2),
+    UINT16_C(0x8040), UINT16_C(0xff20),
+    PVR_CHUNK_STRIP_INDEX, UINT16_C(5), UINT16_C(1),
+    UINT16_C(3), UINT16_C(0), UINT16_C(1), UINT16_C(2),
+    UINT16_C(0x00ff)
+};
+
 static uint8_t fiber_stack[2048] __attribute__((aligned(THD_STACK_ALIGNMENT)));
 static const pvr_vertex_t geometry_input[2] __attribute__((aligned(32))) = {
     {
@@ -37,6 +57,22 @@ static const pvr_vertex_t geometry_input[2] __attribute__((aligned(32))) = {
 static kfiber_t *main_fiber;
 static shz_mat4x4_t fiber_matrix;
 static int fiber_result;
+
+static int compact_begin_strip(const pvr_chunk_render_state_t *state,
+                               const pvr_chunk_strip_view_t *strip,
+                               void *data) {
+    size_t *calls = data;
+
+    if(!(state->present & PVR_CHUNK_RENDER_DIFFUSE) ||
+       state->diffuse_argb != UINT32_C(0xff208040) ||
+       strip->vertex_count != 3) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    ++*calls;
+    return 0;
+}
 
 static bool close_enough(float actual, float expected) {
     float scale = fmaxf(1.0f, fmaxf(fabsf(actual), fabsf(expected)));
@@ -101,6 +137,22 @@ int main(int argc, char **argv) {
         geometry_input, 2, sizeof(*geometry_input)
     };
     pvr_geometry_result_t geometry_result;
+    pvr_chunk_model_t compact_model = {
+        .vertex_words = compact_vertices,
+        .vertex_word_count = sizeof(compact_vertices) /
+                             sizeof(compact_vertices[0]),
+        .polygon_words = compact_polygons,
+        .polygon_word_count = sizeof(compact_polygons) /
+                              sizeof(compact_polygons[0]),
+        .center = { 0.0f, 0.0f, 0.0f },
+        .radius = 2.0f
+    };
+    pvr_chunk_model_view_t compact_view;
+    pvr_geometry_sink_t compact_sink;
+    pvr_chunk_render_result_t compact_result;
+    pvr_vertex_t compact_workspace[3] __attribute__((aligned(32)));
+    pvr_vertex_t compact_output[3] __attribute__((aligned(32)));
+    size_t compact_strip_calls = 0;
     mat_lookat_desc_t lookat = {
         .eye = { 1.0f, 2.0f, 3.0f, 1.0f },
         .center = { 1.0f, 2.0f, 2.0f, 1.0f },
@@ -207,6 +259,29 @@ int main(int argc, char **argv) {
     shz_xmtrx_store_4x4(&observed);
     if(memcmp(&observed, &source, sizeof(observed)))
         FAIL("rejected geometry XMTRX restoration");
+
+    /* Compact models remain caller-owned. The bounded bridge resolves their
+       strips into canonical geometry, uses the same SH4ZAM projection path,
+       and publishes only through an explicit sink. */
+    geometry_stream.vertices = geometry_input;
+    if(pvr_chunk_model_open(&compact_model, &compact_view) < 0 ||
+       pvr_geometry_sink_init_memory(&compact_sink, compact_output, 3) < 0 ||
+       pvr_chunk_model_emit(&compact_view, &established, &compact_sink,
+                            compact_workspace, 3, compact_begin_strip, NULL,
+                            &compact_strip_calls, &compact_result) < 0 ||
+       compact_strip_calls != 1 || compact_result.emitted_strips != 1 ||
+       compact_result.emitted_vertices != 3 ||
+       compact_output[0].x != -1.0f || compact_output[0].y != -1.0f ||
+       compact_output[1].x != 1.0f || compact_output[1].y != -1.0f ||
+       compact_output[2].x != 0.0f || compact_output[2].y != 1.0f ||
+       compact_output[0].argb != UINT32_C(0xff208040) ||
+       compact_output[2].flags != PVR_CMD_VERTEX_EOL) {
+        FAIL("compact model emission");
+    }
+
+    shz_xmtrx_store_4x4(&observed);
+    if(memcmp(&observed, &source, sizeof(observed)))
+        FAIL("compact model XMTRX restoration");
 
     /* Camera and frustum entry points retain their established checked
        contracts while their Dreamcast arithmetic runs through SH4ZAM. The
