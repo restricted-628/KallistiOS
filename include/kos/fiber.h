@@ -54,6 +54,22 @@ typedef enum kfiber_state {
     KFIBER_STATE_WAITING  = 4  /**< \brief Parked on cooperative state. */
 } kfiber_state_t;
 
+/** \brief Optional execution-context state preserved by a fiber runtime. */
+typedef enum kfiber_attach_flags {
+    /** Preserve only the normal C call-boundary continuation. */
+    KFIBER_ATTACH_DEFAULT = 0,
+
+    /** Preserve the architecture math-accelerator context.
+
+        On Dreamcast this saves and restores XMTRX for every cooperative
+        transfer. This is appropriate for fibers that retain SH4ZAM or KOS
+        matrix state across a yield. It adds one 64-byte, 32-byte-aligned
+        allocation per fiber and the corresponding matrix store/load work to
+        each switch. It does not create a thread or affect unattached threads.
+    */
+    KFIBER_ATTACH_MATH_CONTEXT = 1u << 0
+} kfiber_attach_flags_t;
+
 /** \brief Callback invoked immediately before a fiber transfer.
 
     The callback runs on the outgoing fiber with interrupts masked. It must be
@@ -70,6 +86,24 @@ typedef void (*kfiber_switch_cb_t)(kfiber_t *from, kfiber_t *to, void *data);
     \return The calling thread's main fiber, or `NULL` on error.
 */
 kfiber_t *fiber_attach(void);
+
+/** \brief Attach configurable cooperative-fiber state to the calling thread.
+
+    The flags apply to the complete fiber runtime owned by this thread. A later
+    call may request the same flags or a subset, but cannot upgrade an existing
+    runtime after attachment. Call this instead of fiber_attach() before
+    creating fibers when XMTRX must survive cooperative transfers.
+
+    \param flags Bitwise combination of kfiber_attach_flags_t values.
+    \return The calling thread's main fiber, or `NULL` on error.
+*/
+kfiber_t *fiber_attach_ex(unsigned int flags);
+
+/** \brief Return the calling thread's fiber-attachment flags.
+
+    \return Attachment flags, or zero on error with `errno` set.
+*/
+unsigned int fiber_get_attach_flags(void);
 
 /** \brief Create a fiber owned by the calling thread.
 

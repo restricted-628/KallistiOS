@@ -29,6 +29,7 @@ typedef struct fiber_runtime fiber_runtime_t;
 
 struct kfiber {
     arch_fiber_context_t context;
+    arch_fiber_math_context_t *math_context;
     fiber_runtime_t *runtime;
     void *stack;
     size_t stack_size;
@@ -54,6 +55,7 @@ struct fiber_runtime {
     struct kfiber_list fibers;
     kfiber_switch_cb_t switch_callback;
     void *switch_callback_data;
+    unsigned int attach_flags;
     bool switching;
 };
 
@@ -62,6 +64,24 @@ static _Atomic kthread_key_t fiber_key = -1;
 
 static bool fiber_stack_bounds(const kthread_t *owner, uintptr_t sp,
                                uintptr_t *base_out, size_t *size_out);
+
+static arch_fiber_math_context_t *fiber_math_context_create(
+        bool capture_current) {
+    arch_fiber_math_context_t *context =
+        aligned_alloc(_Alignof(*context), sizeof(*context));
+
+    if(!context)
+        return NULL;
+
+    if(capture_current) {
+        arch_fiber_math_context_capture(context);
+    }
+    else {
+        arch_fiber_math_context_init(context);
+    }
+
+    return context;
+}
 
 static void fiber_runtime_destroy(void *data) {
     fiber_runtime_t *runtime = data;
@@ -73,6 +93,7 @@ static void fiber_runtime_destroy(void *data) {
             dbglog(DBG_DEAD,
                    "fiber: thread exited while a fiber owned synchronization\n");
         TAILQ_REMOVE(&runtime->fibers, fiber, list);
+        free(fiber->math_context);
         free(fiber);
     }
 
@@ -80,6 +101,7 @@ static void fiber_runtime_destroy(void *data) {
         dbglog(DBG_DEAD,
                "fiber: thread exited while its main fiber owned synchronization\n");
 
+    free(runtime->main.math_context);
     free(runtime);
 }
 
@@ -155,6 +177,14 @@ static void fiber_select(fiber_runtime_t *runtime, kfiber_t *from,
     if(runtime->switch_callback)
         runtime->switch_callback(from, to, runtime->switch_callback_data);
 
+    if(runtime->attach_flags & KFIBER_ATTACH_MATH_CONTEXT) {
+        /* Save after the callback because it still executes as the outgoing
+           fiber. Interrupts are masked, so no third context can observe the
+           interval between storing the old XMTRX and loading the new one. */
+        arch_fiber_math_context_switch(from->math_context,
+                                       to->math_context);
+    }
+
     from->state = from_state;
     to->state = KFIBER_STATE_RUNNING;
     runtime->current = to;
@@ -192,7 +222,7 @@ static void fiber_entry_trampoline(void) {
     abort();
 }
 
-kfiber_t *fiber_attach(void) {
+kfiber_t *fiber_attach_ex(unsigned int flags) {
     fiber_runtime_t *runtime;
     kthread_t *owner;
 
@@ -201,9 +231,19 @@ kfiber_t *fiber_attach(void) {
         return NULL;
     }
 
+    if(flags & ~KFIBER_ATTACH_MATH_CONTEXT) {
+        errno = EINVAL;
+        return NULL;
+    }
+
     runtime = fiber_runtime_get();
-    if(runtime)
+    if(runtime) {
+        if(flags & ~runtime->attach_flags) {
+            errno = EBUSY;
+            return NULL;
+        }
         return &runtime->main;
+    }
     if(atomic_load(&fiber_key) < 0)
         return NULL;
 
@@ -220,6 +260,7 @@ kfiber_t *fiber_attach(void) {
     }
 
     runtime->owner = owner;
+    runtime->attach_flags = flags;
     runtime->main.runtime = runtime;
     runtime->main.stack = owner->stack;
     runtime->main.stack_size = owner->stack_size;
@@ -227,12 +268,52 @@ kfiber_t *fiber_attach(void) {
     runtime->current = &runtime->main;
     TAILQ_INIT(&runtime->fibers);
 
+    if(flags & KFIBER_ATTACH_MATH_CONTEXT) {
+        runtime->main.math_context = fiber_math_context_create(true);
+        if(!runtime->main.math_context) {
+            free(runtime);
+            errno = ENOMEM;
+            return NULL;
+        }
+    }
+
     if(kthread_setspecific(atomic_load(&fiber_key), runtime) < 0) {
+        free(runtime->main.math_context);
         free(runtime);
         return NULL;
     }
 
     return &runtime->main;
+}
+
+kfiber_t *fiber_attach(void) {
+    fiber_runtime_t *runtime;
+
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return NULL;
+    }
+
+    runtime = fiber_runtime_get();
+    return runtime ? &runtime->main
+                   : fiber_attach_ex(KFIBER_ATTACH_DEFAULT);
+}
+
+unsigned int fiber_get_attach_flags(void) {
+    fiber_runtime_t *runtime;
+
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return 0;
+    }
+
+    runtime = fiber_runtime_get();
+    if(!runtime) {
+        errno = EINVAL;
+        return 0;
+    }
+
+    return runtime->attach_flags;
 }
 
 kfiber_t *fiber_create(void *stack, size_t stack_size,
@@ -279,6 +360,15 @@ kfiber_t *fiber_create(void *stack, size_t stack_size,
         return NULL;
     }
 
+    if(runtime->attach_flags & KFIBER_ATTACH_MATH_CONTEXT) {
+        fiber->math_context = fiber_math_context_create(false);
+        if(!fiber->math_context) {
+            free(fiber);
+            errno = ENOMEM;
+            return NULL;
+        }
+    }
+
     stack_top = stack_base + stack_size;
     old_irq = irq_disable();
     arch_fiber_context_init(&fiber->context, stack_top,
@@ -289,6 +379,7 @@ kfiber_t *fiber_create(void *stack, size_t stack_size,
     fiber->entry = entry;
     fiber->data = data;
     fiber->state = KFIBER_STATE_READY;
+
     TAILQ_INSERT_TAIL(&runtime->fibers, fiber, list);
     irq_restore(old_irq);
 
@@ -320,6 +411,7 @@ int fiber_destroy(kfiber_t *fiber) {
     old_irq = irq_disable();
     TAILQ_REMOVE(&runtime->fibers, fiber, list);
     irq_restore(old_irq);
+    free(fiber->math_context);
     free(fiber);
     return 0;
 }

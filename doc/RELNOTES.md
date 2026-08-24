@@ -11,6 +11,10 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added opt-in fiber math contexts. A thread attaching with
+  `KFIBER_ATTACH_MATH_CONTEXT` receives an independent XMTRX image for its main
+  fiber and each child fiber. Lightweight attachment remains the default and
+  performs no matrix allocation or matrix save/load during a switch.
 * Added checked, caller-owned PVR material packets compiled from existing
   polygon, sprite, and two-volume contexts. Complete validation precedes
   publication, and submission continues through established PVR list paths.

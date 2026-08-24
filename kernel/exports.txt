@@ -181,6 +181,8 @@ thd_block_now
 
 # Cooperative fibers
 fiber_attach
+fiber_attach_ex
+fiber_get_attach_flags
 fiber_create
 fiber_destroy
 fiber_switch

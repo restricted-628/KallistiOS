@@ -17,6 +17,8 @@ __BEGIN_DECLS
 
 #include <kos/irq.h>
 
+#include <dc/vector.h>
+
 #include <stdint.h>
 
 /** \cond */
@@ -40,6 +42,12 @@ typedef struct __attribute__((aligned(8))) arch_fiber_context {
     uint32_t sr;
 } arch_fiber_context_t;
 
+/* Optional architecture-owned accelerator state. This remains separate from
+   arch_fiber_context_t so lightweight fibers keep the original footprint. */
+typedef struct __attribute__((aligned(32))) arch_fiber_math_context {
+    matrix_t matrix;
+} arch_fiber_math_context_t;
+
 /* SR.BL and SR.IMASK describe CPU-wide exclusion state. A cooperative
    transfer must not replace that state while the caller is inside a critical
    section. */
@@ -52,6 +60,11 @@ void arch_fiber_context_init(arch_fiber_context_t *context,
                              irq_mask_t sr);
 void arch_fiber_context_switch(arch_fiber_context_t *from,
                                const arch_fiber_context_t *to);
+
+void arch_fiber_math_context_capture(arch_fiber_math_context_t *context);
+void arch_fiber_math_context_init(arch_fiber_math_context_t *context);
+void arch_fiber_math_context_switch(arch_fiber_math_context_t *from,
+                                    const arch_fiber_math_context_t *to);
 
 /* Report whether architecture-owned, thread-scoped hardware state permits a
    cooperative continuation transfer. This is queried only by fiber paths. */
