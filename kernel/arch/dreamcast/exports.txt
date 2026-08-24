@@ -491,6 +491,13 @@ mat_perspective_build
 mat_perspective_apply
 mat_lookat_build
 mat_lookat_apply
+anim_track_open
+anim_track_sample_scalar
+anim_track_sample_vector
+anim_track_sample_quaternion
+anim_transform_sample
+anim_transform_blend
+anim_transform_matrix_build
 # PVR
 pvr_frustum_init
 pvr_frustum_classify_aabb

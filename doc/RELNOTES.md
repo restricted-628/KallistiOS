@@ -100,6 +100,12 @@ lifecycle and naming conventions.
   directional and attenuated point Lambert lights, and deterministic saturated
   ARGB packing. Dreamcast vector math uses SH4ZAM while host validation retains
   a portable scalar path.
+* Added format-neutral, allocation-free keyframe sampling with validated
+  immutable scalar, vector, and quaternion track views, logarithmic clamped
+  interval lookup, shortest-path rotation interpolation, fallback-channel
+  object sampling, blended TRS transforms, and explicit local-matrix
+  publication. Dreamcast interpolation and rotation paths use SH4ZAM without
+  changing XMTRX.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes

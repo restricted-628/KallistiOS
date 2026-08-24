@@ -33,7 +33,7 @@ workloads.
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
 | Object hierarchy | Parent-before-child compact-model traversal composes caller-owned transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
 | Lighting | Checked inverse-transpose normals, directional and point Lambert lights, and deterministic ARGB packing are available as allocation-free CPU kernels | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
-| Keyframe animation | No generic sampler | Add format-neutral scalar, vector, and rotation sampling before object-specific motion playback. |
+| Keyframe animation | Validated immutable scalar, vector, and quaternion tracks provide clamped logarithmic sampling plus blended TRS object transforms | Keep playback clocks, looping policy, clip ownership, and object binding outside the math core. |
 | Skinning and morphing | No generic deformers | Build bounded kernels over caller-supplied streams with SH4ZAM as the Dreamcast math backend. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
 | Collision | General-purpose geometry concern | Keep collision independent of the renderer so headless and non-PVR users can consume it. |
@@ -71,7 +71,7 @@ workloads.
    workspace.~~
 6. ~~Add normal transformation, directional/point lighting, and color
    packing.~~
-7. Add format-neutral keyframe sampling and blended object transforms.
+7. ~~Add format-neutral keyframe sampling and blended object transforms.~~
 8. Add bounded skinning and morph-target kernels using SH4ZAM on Dreamcast and
    portable scalar validation paths on the host.
 9. Evaluate sprites, particles, collision, and asset helpers as independent
@@ -173,6 +173,30 @@ Dreamcast vector transforms, normalization, reciprocal square roots, and dot
 products use SH4ZAM without loading XMTRX. Portable scalar code supplies the
 same checked contract to host tests. The layer allocates nothing, creates no
 thread, retains no state, and performs no work unless called.
+
+## Sixth tranche
+
+The sixth tranche adds format-neutral animation math without introducing an
+engine-owned clip or playback system:
+
+- `anim_track_open()` admits bounded strided scalar, vector, or quaternion
+  keys only after checking finite values, nonzero rotations, strictly
+  increasing time, complete address ranges, and supported interpolation;
+- admitted immutable views clamp outside times to their endpoints and use a
+  binary interval search, avoiding a full key scan on every frame;
+- scalar and vector tracks provide step or linear interpolation, while
+  quaternion tracks normalize inputs and use shortest-path spherical
+  interpolation;
+- `anim_transform_sample()` combines optional translation, rotation, and scale
+  channels with caller-owned fallback state; `anim_transform_blend()` blends
+  two complete object transforms;
+- `anim_transform_matrix_build()` publishes an explicit column-major
+  `translation * rotation * scale` matrix without changing XMTRX.
+
+Dreamcast vector, quaternion, trigonometric, reciprocal-square-root, and matrix
+construction paths use SH4ZAM. The scalar host path serves as a test oracle.
+Playback time, looping, events, hierarchy binding, and clip lifetime remain
+application policy.
 
 ## Validation gates
 

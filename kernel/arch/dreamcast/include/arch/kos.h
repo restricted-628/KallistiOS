@@ -47,6 +47,7 @@ __BEGIN_DECLS
 #include <dc/maple/purupuru.h>
 #include <dc/maple/sip.h>
 #include <dc/maple/vmu.h>
+#include <dc/animation.h>
 #include <dc/matrix3d.h>
 #include <dc/matrix.h>
 #include <dc/matrix_stack.h>
