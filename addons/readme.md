@@ -11,6 +11,8 @@ A few addons are supplied with KallistiOS. These include:
 - [**libkosutils**](libkosutils/): Utilities: Functions for B-spline curve generation, MD5 checksum handling, image handling, network configuration management, and PCX images
 - [**libnavi**](libnavi/): A flashROM driver and G2 ATA driver, historically used with Megan Potter's Navi Dreamcast hacking project
 - [**libppp**](libppp/): Point-to-Point Protocol support for modem devices
+- [**libsh4zam**](libsh4zam/): SH-4-optimized scalar, vector, matrix,
+  quaternion, and XMTRX math routines
 
 ## Creating addons
-Although KallistiOS currently only supports the Sega Dreamcast platform, the system is designed to support build quirks for various platforms. Each addon contains a `kos` directory, which would contain `$(KOS_ARCH).cnf` files (so, as of now, just `dreamcast.cnf`). The addon's `Makefile` contains build instructions to build the addon for KallistiOS, while the `dreamcast.cnf` contains quirks specific to building for the Dreamcast. If there are no platform-specific build quirks, an empty file named `dreamcast.cnf` still needs to exist for the build system to recognize that Dreamcast is a valid target platform for the addon. 
+Although KallistiOS currently only supports the Dreamcast platform, the system is designed to support build quirks for various platforms. Each addon contains a `kos` directory, which would contain `$(KOS_ARCH).cnf` files (so, as of now, just `dreamcast.cnf`). The addon's `Makefile` contains build instructions to build the addon for KallistiOS, while the `dreamcast.cnf` contains quirks specific to building for the Dreamcast. If there are no platform-specific build quirks, an empty file named `dreamcast.cnf` still needs to exist for the build system to recognize that Dreamcast is a valid target platform for the addon.

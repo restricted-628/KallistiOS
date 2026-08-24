@@ -178,6 +178,10 @@ This page serves as an index for all KallistiOS examples.
 - sd
   - ext2fs
   - mke2fs
+- sh4zam
+  - bruces_balls
+  - [**integration**](sh4zam/integration/): Verifies the bundled SH4ZAM 0.8
+    library, default link integration, and alias-safe KOS math bridges
 - sdl
   - sound
 - sound

@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Bundled SH4ZAM 0.8 as a first-class, automatically built Dreamcast math
+  component and added it to the standard grouped KOS link set. The optimized
+  target backend remains independently attributed under its MIT license and
+  retains normal section garbage collection, so unused routines occupy no
+  application image space. Added compile-time layout checks and alias-safe
+  bridges between established KOS matrices/vectors and SH4ZAM types.
 * Added opt-in fiber math contexts. A thread attaching with
   `KFIBER_ATTACH_MATH_CONTEXT` receives an independent XMTRX image for its main
   fiber and each child fiber. Lightweight attachment remains the default and
