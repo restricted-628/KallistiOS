@@ -6,6 +6,10 @@
 
 #include <dc/matrix3d.h>
 
+#ifdef __DREAMCAST__
+#include <dc/sh4zam.h>
+#endif
+
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -40,7 +44,9 @@ static int vec3_normalize(vec3_t *vector) {
     float length_squared = vector->x * vector->x +
                            vector->y * vector->y +
                            vector->z * vector->z;
+#ifndef __DREAMCAST__
     float reciprocal;
+#endif
 
     if(!isfinite(length_squared)) {
         errno = ERANGE;
@@ -52,6 +58,23 @@ static int vec3_normalize(vec3_t *vector) {
         return -1;
     }
 
+#ifdef __DREAMCAST__
+    {
+        shz_vec3_t normalized = shz_vec3_normalize(
+            shz_vec3_init(vector->x, vector->y, vector->z));
+
+        if(!isfinite(normalized.x) || !isfinite(normalized.y) ||
+           !isfinite(normalized.z)) {
+            errno = ERANGE;
+            return -1;
+        }
+
+        vector->x = normalized.x;
+        vector->y = normalized.y;
+        vector->z = normalized.z;
+        return 0;
+    }
+#else
     reciprocal = 1.0f / sqrtf(length_squared);
     if(!isfinite(reciprocal)) {
         errno = ERANGE;
@@ -62,9 +85,18 @@ static int vec3_normalize(vec3_t *vector) {
     vector->y *= reciprocal;
     vector->z *= reciprocal;
     return 0;
+#endif
 }
 
 static vec3_t vec3_cross(const vec3_t *lhs, const vec3_t *rhs) {
+#ifdef __DREAMCAST__
+    shz_vec3_t result = shz_vec3_cross(
+        shz_vec3_init(lhs->x, lhs->y, lhs->z),
+        shz_vec3_init(rhs->x, rhs->y, rhs->z));
+    vec3_t output = { result.x, result.y, result.z };
+
+    return output;
+#else
     vec3_t result = {
         lhs->y * rhs->z - lhs->z * rhs->y,
         lhs->z * rhs->x - lhs->x * rhs->z,
@@ -72,6 +104,15 @@ static vec3_t vec3_cross(const vec3_t *lhs, const vec3_t *rhs) {
     };
 
     return result;
+#endif
+}
+
+static float scalar_divide(float numerator, float denominator) {
+#ifdef __DREAMCAST__
+    return shz_divf(numerator, denominator);
+#else
+    return numerator / denominator;
+#endif
 }
 
 int mat_perspective_build(matrix_t *out,
@@ -123,11 +164,13 @@ int mat_perspective_build(matrix_t *out,
     frustum[1][3] = 0.0f;
     frustum[2][0] = 0.0f;
     frustum[2][1] = 0.0f;
-    frustum[2][2] = (desc->z_far + desc->z_near) / denominator;
+    frustum[2][2] = scalar_divide(desc->z_far + desc->z_near,
+                                  denominator);
     frustum[2][3] = -1.0f;
     frustum[3][0] = 0.0f;
     frustum[3][1] = 0.0f;
-    frustum[3][2] = 2.0f * desc->z_far * desc->z_near / denominator;
+    frustum[3][2] = scalar_divide(2.0f * desc->z_far * desc->z_near,
+                                  denominator);
     frustum[3][3] = 1.0f;
 
     if(!matrix_finite(&frustum) ||

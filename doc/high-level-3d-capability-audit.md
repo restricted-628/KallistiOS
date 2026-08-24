@@ -12,11 +12,14 @@ rendering, video memory, texture transfers, render targets, and hardware
 events. Higher-level code may compile materials and geometry for those APIs,
 but must not create a second scene lifecycle or hide PVR ownership.
 
-The KOS math layer owns small, generally useful SH-4 primitives. An optional
-3D library may own cameras, object traversal, mesh preparation, lighting, and
-animation. Content conversion and compression belong in host tools. Optimized
-third-party math libraries may accelerate the optional layer through explicit
-adapters, but neither the kernel nor the PVR driver may depend on them.
+The KOS math layer owns small, generally useful SH-4 primitives. SH4ZAM is the
+primary Dreamcast implementation for applicable vector, matrix, geometry,
+lighting, animation, and deformation work. Established KOS entry points retain
+their public names and contracts, with explicit representation bridges and
+portable fallbacks where host validation requires them. Content conversion and
+compression belong in host tools. PVR ownership, DMA, texture storage, TA
+layout, and render-state code remain independent because they are not math
+workloads.
 
 ## Capability inventory
 
@@ -31,10 +34,10 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
 | Object hierarchy | No reusable traversal | Add bounded, callback-driven traversal over application-owned nodes after transform state is complete. |
 | Lighting | Hardware header fields exist, but vertex lighting is application work | Add optional CPU vertex-lighting kernels with explicit normal-transform and color-clamp contracts. |
 | Keyframe animation | No generic sampler | Add format-neutral scalar, vector, and rotation sampling before object-specific motion playback. |
-| Skinning and morphing | No generic deformers | Build bounded kernels over caller-supplied streams; allow an optimized math backend without requiring it. |
+| Skinning and morphing | No generic deformers | Build bounded kernels over caller-supplied streams with SH4ZAM as the Dreamcast math backend. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
 | Collision | General-purpose geometry concern | Keep collision independent of the renderer so headless and non-PVR users can consume it. |
-| Asset formats and resource names | No engine-owned model namespace | Use open, documented formats or application adapters. Do not embed legacy binary formats or global-ID managers in KOS. |
+| Asset formats and resource names | Bounded compact chunk streams provide validated structure without an engine-owned namespace | Keep parsing and traversal in KOS-native, caller-owned APIs; reject malformed offsets and counts before rendering. |
 
 ## Resource and execution rules
 
@@ -68,8 +71,8 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
    stack.
 6. Add normal transformation, directional/point lighting, and color packing.
 7. Add format-neutral keyframe sampling and blended object transforms.
-8. Add bounded skinning and morph-target kernels with optional optimized math
-   adapters.
+8. Add bounded skinning and morph-target kernels using SH4ZAM on Dreamcast and
+   portable scalar validation paths on the host.
 9. Evaluate sprites, particles, collision, and asset helpers as independent
    optional libraries rather than prerequisites for 3D rendering.
 

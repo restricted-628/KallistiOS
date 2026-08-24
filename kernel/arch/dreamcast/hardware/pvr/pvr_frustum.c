@@ -6,6 +6,10 @@
 
 #include <dc/pvr_frustum.h>
 
+#ifdef __DREAMCAST__
+#include <dc/sh4zam.h>
+#endif
+
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -24,6 +28,14 @@ typedef struct clip_vertex {
     uint32_t argb;
     uint32_t oargb;
 } clip_vertex_t;
+
+typedef struct position_transform {
+#ifdef __DREAMCAST__
+    shz_mat4x4_t matrix;
+#else
+    const matrix_t *matrix;
+#endif
+} position_transform_t;
 
 _Static_assert(sizeof(pvr_vertex_t) == 32,
                "canonical PVR vertices must occupy one TA block");
@@ -89,14 +101,38 @@ int pvr_frustum_init(pvr_frustum_t *frustum, const matrix_t *object_to_screen,
     return 0;
 }
 
-static int transform_position(const matrix_t *matrix, float x, float y,
+static void position_transform_init(position_transform_t *transform,
+                                    const matrix_t *matrix) {
+#ifdef __DREAMCAST__
+    /* This memory-to-memory path uses FIPR rather than XMTRX. One imported
+       matrix can therefore serve the complete cull or clip operation without
+       disturbing application-owned accelerator state. */
+    shz_kos_matrix_import(&transform->matrix, matrix);
+#else
+    transform->matrix = matrix;
+#endif
+}
+
+static int transform_position(const position_transform_t *transform,
+                              float x, float y,
                               float z, clip_vertex_t *out) {
+#ifdef __DREAMCAST__
+    shz_vec4_t result = shz_mat4x4_transform_vec4(
+        &transform->matrix, shz_vec4_init(x, y, z, 1.0f));
+
+    out->x = result.x;
+    out->y = result.y;
+    out->w = result.w;
+#else
+    const matrix_t *matrix = transform->matrix;
+
     out->x = (*matrix)[0][0] * x + (*matrix)[1][0] * y +
              (*matrix)[2][0] * z + (*matrix)[3][0];
     out->y = (*matrix)[0][1] * x + (*matrix)[1][1] * y +
              (*matrix)[2][1] * z + (*matrix)[3][1];
     out->w = (*matrix)[0][3] * x + (*matrix)[1][3] * y +
              (*matrix)[2][3] * z + (*matrix)[3][3];
+#endif
 
     return isfinite(out->x) && isfinite(out->y) && isfinite(out->w);
 }
@@ -124,6 +160,7 @@ int pvr_frustum_classify_aabb(const pvr_frustum_t *frustum,
                               pvr_frustum_classification_t *result) {
     clip_vertex_t corners[8];
     pvr_frustum_classification_t classification = PVR_FRUSTUM_INSIDE;
+    position_transform_t transform;
     size_t i;
     size_t plane;
 
@@ -141,13 +178,14 @@ int pvr_frustum_classify_aabb(const pvr_frustum_t *frustum,
         return -1;
     }
 
+    position_transform_init(&transform, &frustum->object_to_screen);
+
     for(i = 0; i < 8; ++i) {
         float x = (i & 1u) ? maximum->x : minimum->x;
         float y = (i & 2u) ? maximum->y : minimum->y;
         float z = (i & 4u) ? maximum->z : minimum->z;
 
-        if(!transform_position(&frustum->object_to_screen, x, y, z,
-                               corners + i)) {
+        if(!transform_position(&transform, x, y, z, corners + i)) {
             errno = ERANGE;
             return -1;
         }
@@ -188,7 +226,13 @@ static uint32_t color_lerp(uint32_t lhs, uint32_t rhs, float amount) {
     for(shift = 0; shift < 32; shift += 8) {
         float a = (float)((lhs >> shift) & 0xffu);
         float b = (float)((rhs >> shift) & 0xffu);
-        uint32_t channel = (uint32_t)(a + (b - a) * amount + 0.5f);
+        uint32_t channel;
+
+#ifdef __DREAMCAST__
+        channel = (uint32_t)(shz_lerpf(a, b, amount) + 0.5f);
+#else
+        channel = (uint32_t)(a + (b - a) * amount + 0.5f);
+#endif
 
         if(channel > 255u)
             channel = 255u;
@@ -203,13 +247,24 @@ static clip_vertex_t vertex_lerp(const clip_vertex_t *lhs,
                                  uint32_t attributes) {
     clip_vertex_t output = *lhs;
 
+#ifdef __DREAMCAST__
+    output.x = shz_lerpf(lhs->x, rhs->x, amount);
+    output.y = shz_lerpf(lhs->y, rhs->y, amount);
+    output.w = shz_lerpf(lhs->w, rhs->w, amount);
+#else
     output.x = lhs->x + (rhs->x - lhs->x) * amount;
     output.y = lhs->y + (rhs->y - lhs->y) * amount;
     output.w = lhs->w + (rhs->w - lhs->w) * amount;
+#endif
 
     if(attributes & PVR_FRUSTUM_CLIP_UV) {
+#ifdef __DREAMCAST__
+        output.u = shz_lerpf(lhs->u, rhs->u, amount);
+        output.v = shz_lerpf(lhs->v, rhs->v, amount);
+#else
         output.u = lhs->u + (rhs->u - lhs->u) * amount;
         output.v = lhs->v + (rhs->v - lhs->v) * amount;
+#endif
     }
 
     if(attributes & PVR_FRUSTUM_CLIP_ARGB)
@@ -250,7 +305,11 @@ static int clip_plane(const pvr_frustum_t *frustum, size_t plane,
 
             if(!isfinite(denominator) || fabsf(denominator) <= FLT_MIN)
                 return -1;
+#ifdef __DREAMCAST__
+            amount = shz_divf(previous_distance, denominator);
+#else
             amount = previous_distance / denominator;
+#endif
             if(!isfinite(amount) || amount < 0.0f || amount > 1.0f ||
                count >= CLIPPED_POLYGON_MAX)
                 return -1;
@@ -281,6 +340,7 @@ int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
     alignas(32) pvr_vertex_t staged[PVR_FRUSTUM_CLIP_MAX_VERTICES];
     clip_vertex_t polygons[2][CLIPPED_POLYGON_MAX];
     pvr_frustum_clip_result_t progress = { 0, 0 };
+    position_transform_t transform;
     size_t count = 3;
     size_t plane;
     size_t triangle;
@@ -298,6 +358,8 @@ int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
         return -1;
     }
 
+    position_transform_init(&transform, &frustum->object_to_screen);
+
     for(i = 0; i < 3; ++i) {
         if(input[i].flags != PVR_CMD_VERTEX &&
            input[i].flags != PVR_CMD_VERTEX_EOL) {
@@ -313,8 +375,7 @@ int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
             return -1;
         }
 
-        if(!transform_position(&frustum->object_to_screen, input[i].x,
-                               input[i].y, input[i].z,
+        if(!transform_position(&transform, input[i].x, input[i].y, input[i].z,
                                &polygons[current][i])) {
             errno = ERANGE;
             return -1;
@@ -364,7 +425,11 @@ int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
                 return -1;
             }
 
+#ifdef __DREAMCAST__
+            reciprocal_w = shz_invf(source->w);
+#else
             reciprocal_w = 1.0f / source->w;
+#endif
             destination->flags = vertex == 2u ? PVR_CMD_VERTEX_EOL :
                                                 PVR_CMD_VERTEX;
             destination->x = source->x * reciprocal_w;

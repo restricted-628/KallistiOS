@@ -12,6 +12,7 @@
 #include <dc/video.h>
 
 #include <errno.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -36,6 +37,13 @@ static const pvr_vertex_t geometry_input[2] __attribute__((aligned(32))) = {
 static kfiber_t *main_fiber;
 static shz_mat4x4_t fiber_matrix;
 static int fiber_result;
+
+static bool close_enough(float actual, float expected) {
+    float scale = fmaxf(1.0f, fmaxf(fabsf(actual), fabsf(expected)));
+
+    return isfinite(actual) && isfinite(expected) &&
+           fabsf(actual - expected) <= 0.0001f * scale;
+}
 
 static void show_result(bool passed, const char *detail) {
     printf("RESULT: %s (%s)\n", passed ? "PASS" : "FAIL", detail);
@@ -93,6 +101,34 @@ int main(int argc, char **argv) {
         geometry_input, 2, sizeof(*geometry_input)
     };
     pvr_geometry_result_t geometry_result;
+    mat_lookat_desc_t lookat = {
+        .eye = { 1.0f, 2.0f, 3.0f, 1.0f },
+        .center = { 1.0f, 2.0f, 2.0f, 1.0f },
+        .up = { 0.0f, 1.0f, 0.0f, 0.0f }
+    };
+    mat_perspective_desc_t perspective = {
+        .x_center = 320.0f,
+        .y_center = 240.0f,
+        .cot_half_fov = 1.0f,
+        .z_near = 1.0f,
+        .z_far = 100.0f
+    };
+    matrix_t camera;
+    pvr_frustum_t frustum;
+    point_t bounds_minimum = { -0.5f, -0.5f, -0.5f, 1.0f };
+    point_t bounds_maximum = { 0.5f, 0.5f, 0.5f, 1.0f };
+    pvr_frustum_classification_t classification;
+    pvr_vertex_t clip_input[3] __attribute__((aligned(32))) = {
+        { .flags = PVR_CMD_VERTEX, .x = -2.0f, .y = -0.5f,
+          .argb = UINT32_C(0xff000000) },
+        { .flags = PVR_CMD_VERTEX, .x = 0.5f, .y = -0.5f,
+          .argb = UINT32_C(0xffffffff) },
+        { .flags = PVR_CMD_VERTEX_EOL, .x = 0.0f, .y = 0.5f,
+          .argb = UINT32_C(0xff808080) }
+    };
+    pvr_vertex_t clipped[PVR_FRUSTUM_CLIP_MAX_VERTICES]
+        __attribute__((aligned(32)));
+    pvr_frustum_clip_result_t clip_result;
     uint8_t major;
     uint16_t minor;
     uint8_t patch;
@@ -172,6 +208,40 @@ int main(int argc, char **argv) {
     if(memcmp(&observed, &source, sizeof(observed)))
         FAIL("rejected geometry XMTRX restoration");
 
+    /* Camera and frustum entry points retain their established checked
+       contracts while their Dreamcast arithmetic runs through SH4ZAM. The
+       one-off FIPR path must not disturb the fiber's resident XMTRX state. */
+    if(mat_lookat_build(&camera, &lookat) < 0 ||
+       !close_enough(camera[3][0], -1.0f) ||
+       !close_enough(camera[3][1], -2.0f) ||
+       !close_enough(camera[3][2], -3.0f) ||
+       mat_perspective_build(&camera, &perspective) < 0 ||
+       !close_enough(camera[2][2], -1.02020202f) ||
+       !close_enough(camera[3][2], -2.02020202f)) {
+        FAIL("SH4ZAM camera math");
+    }
+
+    shz_kos_matrix_export(&established, &identity);
+    if(pvr_frustum_init(&frustum, &established, -1.0f, -1.0f,
+                        1.0f, 1.0f, 0.5f, 2.0f) < 0 ||
+       pvr_frustum_classify_aabb(&frustum, &bounds_minimum, &bounds_maximum,
+                                 &classification) < 0 ||
+       classification != PVR_FRUSTUM_INSIDE ||
+       pvr_frustum_clip_triangle(clipped, PVR_FRUSTUM_CLIP_MAX_VERTICES,
+                                 clip_input, &frustum,
+                                 PVR_FRUSTUM_CLIP_ALL, &clip_result) < 0 ||
+       clip_result.polygon_vertices != 4 ||
+       clip_result.output_vertices != 6 ||
+       clipped[0].x < -1.0001f || clipped[1].x < -1.0001f ||
+       clipped[2].x < -1.0001f || clipped[3].x < -1.0001f ||
+       clipped[4].x < -1.0001f || clipped[5].x < -1.0001f) {
+        FAIL("SH4ZAM frustum math");
+    }
+
+    shz_xmtrx_store_4x4(&observed);
+    if(memcmp(&observed, &source, sizeof(observed)))
+        FAIL("camera/frustum XMTRX preservation");
+
     vector = shz_kos_vec4_import(&established_vector);
     if(vector.x != 1.0f || vector.y != 2.0f ||
        vector.z != 3.0f || vector.w != 1.0f) {
@@ -193,6 +263,6 @@ int main(int argc, char **argv) {
         FAIL("unexpected SH4ZAM version");
     }
 
-    show_result(true, "SH4ZAM 0.8, geometry, and opt-in XMTRX fibers");
+    show_result(true, "SH4ZAM 0.8 camera, frustum, geometry, and fibers");
     return 0;
 }
