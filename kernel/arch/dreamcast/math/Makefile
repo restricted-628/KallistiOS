@@ -7,7 +7,7 @@
 # Dreamcast-specific math functions
 
 OBJS = fmath.o math.o matrix.o matrix3d.o matrix_stack.o matrix_compose.o \
-       matrix_camera.o animation.o
+       matrix_camera.o animation.o collision.o
 SUBDIRS = 
 
 include $(KOS_BASE)/Makefile.prefab

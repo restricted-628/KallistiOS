@@ -36,7 +36,7 @@ workloads.
 | Keyframe animation | Validated immutable scalar, vector, and quaternion tracks provide clamped logarithmic sampling plus blended TRS object transforms | Keep playback clocks, looping policy, clip ownership, and object binding outside the math core. |
 | Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes | Keep skeleton ownership, pose evaluation, mesh binding, and blend policy outside the deformation kernels. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
-| Collision | General-purpose geometry concern | Keep collision independent of the renderer so headless and non-PVR users can consume it. |
+| Collision | Checked planes, segments, spheres, capsules, AABBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
 | Asset formats and resource names | Bounded compact chunk streams provide validated structure without an engine-owned namespace | Keep parsing and traversal in KOS-native, caller-owned APIs; reject malformed offsets and counts before rendering. |
 
 ## Resource and execution rules
@@ -74,8 +74,10 @@ workloads.
 7. ~~Add format-neutral keyframe sampling and blended object transforms.~~
 8. ~~Add bounded skinning and morph-target kernels using SH4ZAM on Dreamcast
    and portable scalar validation paths on the host.~~
-9. Evaluate sprites, particles, collision, and asset helpers as independent
-   optional libraries rather than prerequisites for 3D rendering.
+9. ~~Add renderer-independent collision primitives with no retained world or
+   rendering dependency.~~
+10. Evaluate sprites, particles, and asset helpers as independent optional
+    libraries rather than prerequisites for 3D rendering.
 
 ## First tranche
 
@@ -259,6 +261,28 @@ lists without introducing scene, texture, or model ownership:
 The renderer allocates nothing, creates no worker, retains no texture lookup or
 model index, and never begins or finishes a PVR scene. The caller supplies one
 canonical vertex workspace sized to the largest strip.
+
+## Ninth tranche
+
+The ninth tranche adds a renderer-independent collision geometry foundation:
+
+- unit planes are built from bounded finite point triples and provide signed
+  point projection without changing caller output on failure;
+- point/segment and segment/segment closest-point queries handle parallel and
+  zero-length segments, publish clamped parameters, and normalize point W;
+- inclusive sphere, capsule, and axis-aligned-box overlap tests share those
+  kernels rather than introducing a second collision world or object model;
+- sphere, capsule, and bounded strided point streams produce checked
+  caller-owned AABBs; and
+- Dreamcast dot products and magnitudes use SH-4 vector instructions while the
+  same source retains a strict portable host-validation path.
+
+The layer allocates nothing, creates no worker, retains no registration or
+global state, and has no relationship to PVR scene ownership. Applications
+remain responsible for broad-phase acceleration, collision filtering, object
+lifetime, response, and spatial partitioning. Ray and triangle queries,
+oriented volumes, sprites, particles, and asset conversion remain independent
+follow-up evaluations rather than hidden prerequisites of this ABI.
 
 ## Validation gates
 
