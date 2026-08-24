@@ -231,15 +231,24 @@ void pvr_vertbuf_written(pvr_list_t list, size_t amt) {
     buffer->ptr[list] = val;
 }
 
-static void pvr_start_ta_rendering(void) {
+static int pvr_start_ta_rendering(void) {
     // Make sure to wait until the TA is ready to start rendering a new scene
     if(!pvr_state.ta_checked_ready) {
-        pvr_wait_ready();
+        uint32_t fault_sequence = pvr_state.fault_status.sequence;
+
+        if(pvr_wait_ready() < 0) {
+            errno = fault_sequence != pvr_state.fault_status.sequence ?
+                EIO : ETIMEDOUT;
+            return -1;
+        }
 
         // If using a single vertex buffer, we have to wait until the PVR is
         // done rendering to use the TA again.
-        if(!pvr_state.vbuf_doublebuf)
-            pvr_wait_render_done();
+        if(!pvr_state.vbuf_doublebuf && pvr_wait_render_done() < 0) {
+            errno = fault_sequence != pvr_state.fault_status.sequence ?
+                EIO : ETIMEDOUT;
+            return -1;
+        }
 
         pvr_state.ta_checked_ready = 1;
         pvr_state.curr_to_texture = pvr_state.next_to_texture;
@@ -260,6 +269,8 @@ static void pvr_start_ta_rendering(void) {
         pvr_state.ta_busy = 1;
         pvr_status_advance();
     }
+
+    return 0;
 }
 
 /* Begin collecting data for a frame of 3D output to the off-screen
@@ -744,14 +755,18 @@ int pvr_list_begin(pvr_list_t list) {
     }
 
     /* If we already had a list open, close it first */
-    if(pvr_state.list_reg_open != PVR_LIST_NONE && pvr_state.list_reg_open != list)
-        pvr_list_finish();
+    if(pvr_state.list_reg_open != PVR_LIST_NONE &&
+            pvr_state.list_reg_open != list && pvr_list_finish() < 0)
+        return -1;
 
     pvr_list_dma = pvr_list_uses_dma(list);
 
     if(!pvr_list_dma) {
-        pvr_start_ta_rendering();
-        sq_lock((void *)PVR_TA_INPUT);
+        if(pvr_start_ta_rendering() < 0)
+            return -1;
+
+        if(!sq_lock((void *)PVR_TA_INPUT))
+            return -1;
     }
 
     /* Ok, set the flag */
@@ -941,7 +956,10 @@ int pvr_list_flush(pvr_list_t list) {
     transfer_size = b->ptr[list];
 
     pvr_state.list_reg_open = PVR_LIST_NONE;
-    pvr_start_ta_rendering();
+    if(pvr_start_ta_rendering() < 0) {
+        b->ptr[list] = old_ptr;
+        return -1;
+    }
 
     sem_wait((semaphore_t *)&pvr_state.dma_lock);
     rv = pvr_dma_load_ta(b->base[list], transfer_size, true, NULL, NULL);
@@ -1020,7 +1038,8 @@ static int flush_buffered_pass_to_ta(void) {
     volatile pvr_dma_buffers_t *buffer = current_build_buffer();
     int list;
 
-    pvr_start_ta_rendering();
+    if(pvr_start_ta_rendering() < 0)
+        return -1;
     sem_wait((semaphore_t *)&pvr_state.dma_lock);
 
     for(list = 0; list < PVR_OPB_COUNT; ++list) {
@@ -1074,7 +1093,8 @@ static int pvr_scene_finish_internal(pvr_render_ticket_t *ticket) {
             if(finish_buffered_pass() < 0)
                 return -1;
 
-            pvr_start_ta_rendering();
+            if(pvr_start_ta_rendering() < 0)
+                return -1;
 
             o = irq_disable();
             pvr_state.multipass->dma_frame = pvr_state.ram_target;
@@ -1132,9 +1152,11 @@ static int pvr_scene_finish_internal(pvr_render_ticket_t *ticket) {
                     continue;
 
                 if(!(pvr_state.lists_closed & BIT(i))) {
-                    pvr_list_begin(i);
+                    if(pvr_list_begin(i) < 0)
+                        return -1;
                     pvr_blank_polyhdr(i);
-                    pvr_list_finish();
+                    if(pvr_list_finish() < 0)
+                        return -1;
                 }
 
                 if(!b->base[i])
@@ -1151,7 +1173,8 @@ static int pvr_scene_finish_internal(pvr_render_ticket_t *ticket) {
                 assert(b->ptr[i] <= b->size[i]);
             }
 
-            pvr_start_ta_rendering();
+            if(pvr_start_ta_rendering() < 0)
+                return -1;
 
             o = irq_disable();
             pvr_state.dma_buffers[pvr_state.ram_target].ready = 1;

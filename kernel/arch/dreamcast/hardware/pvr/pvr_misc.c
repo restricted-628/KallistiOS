@@ -9,8 +9,9 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <string.h>
 #include <float.h>
+#include <math.h>
+#include <string.h>
 
 #include <arch/irq.h>
 #include <kos/timer.h>
@@ -56,6 +57,56 @@ void pvr_set_zclip(float zc) {
 
     if(pvr_state.scene_active && !pvr_state.ta_checked_ready)
         pvr_state.next_background.depth = zc;
+}
+
+int pvr_set_culling_threshold(float threshold) {
+    uint32_t encoded;
+    int old_irq;
+
+    if(!isfinite(threshold) || threshold < 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memcpy(&encoded, &threshold, sizeof(encoded));
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    /* PVR_OBJECT_CLIP consumes the IEEE-754 determinant threshold directly.
+       PVR_CULLING_SMALL, CW, and CCW all consult this global value. */
+    PVR_SET(PVR_OBJECT_CLIP, encoded);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_get_culling_threshold(float *threshold) {
+    uint32_t encoded;
+    int old_irq;
+
+    if(!threshold) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    encoded = PVR_GET(PVR_OBJECT_CLIP);
+    irq_restore(old_irq);
+
+    memcpy(threshold, &encoded, sizeof(encoded));
+    return 0;
 }
 
 static bool clamp_endpoints_valid(uint32_t minimum, uint32_t maximum) {

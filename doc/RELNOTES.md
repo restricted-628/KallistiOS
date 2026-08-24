@@ -11,6 +11,17 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added checked, caller-owned PVR material packets compiled from existing
+  polygon, sprite, and two-volume contexts. Complete validation precedes
+  publication, and submission continues through established PVR list paths.
+* Added caller-owned screen/W frusta with bounded AABB classification and
+  allocation-free homogeneous triangle clipping. Clipped polygons expand into
+  independent canonical PVR triangles with explicit output capacity.
+* Added checked global small-polygon culling-threshold control and a defined
+  1.0f initialization value for every PVR session.
+* PVR TA startup now propagates bounded readiness failures instead of
+  continuing into a busy or faulted accelerator, and AICA store-queue paths
+  acquire their real mapped destination under the checked SQ contract.
 * Added shared, fail-closed G1 controller arbitration for GD-ROM and ATA.
   Drivers now use the public G1 ownership API instead of the former private
   `_g1_ata_sem` symbol.

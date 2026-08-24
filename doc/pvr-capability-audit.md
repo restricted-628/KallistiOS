@@ -47,21 +47,21 @@ than place another renderer above them.
 | Display modes and scanout | Mode setting, blanking, border, coherent physical scanout, exact filter state, physical-line raster callbacks, and checked framebuffer-surface queries are covered by `video` | Preserve this ownership boundary; do not duplicate display surfaces in PVR. |
 | Timing and callbacks | VBlank, one-line raster, and PVR completion/fault events are covered | Keep callbacks bounded in IRQ context; defer multi-line scheduling until field and wrap behavior is physically validated. |
 | Direct list submission | Covered | Preserve the low-overhead store-queue path. |
-| Buffered list submission | Checked writes and hybrid flushing are covered | Finish checked buffer assignment and preserve per-RAM-frame ownership. |
-| Multi-pass scene control | No first-class pass sequence | Model each pass as a complete TA registration bank with per-pass list memory, sort policy, direct-list selection, and modifier-list mapping. A begin/end wrapper alone is insufficient. |
+| Buffered list submission | Checked assignment, writes, hybrid flushing, and per-RAM-frame ownership are covered | Preserve exact capacity preflight and established one-pass behavior. |
+| Multi-pass scene control | Direct, buffered, hybrid, and IRQ-chained pass progression are covered | Keep the one-pass path allocation-free and require complete pass geometry at initialization. |
 | User and pixel clipping | Covered per scene | Keep clip state attached to its scene across framebuffer and texture targets. |
 | Background plane | Covered for untextured color planes | Textured backgrounds remain optional because ordinary geometry expresses them without special scene state. |
-| Global material state | Fog and cheap-shadow controls are broad; clamp endpoints and punch-through threshold were missing | Provide checked packed-color clamp, threshold, bulk palette, and header supersampling controls. Audit culling threshold and vertical-filter coefficients separately. |
-| Context and header construction | Most polygon, sprite, modifier, two-volume, blend, depth, fog, UV, palette, and texture fields are covered | Preserve public context layout. Add extended compilation flags for missing packed-header controls; treat individual header mutation helpers as optional optimizations. |
+| Global material state | Fog, cheap shadow, checked clamp endpoints, punch-through threshold, palette updates, and the small-polygon determinant threshold are covered | Preserve checked register access and explicit frame-boundary synchronization. |
+| Context and header construction | Polygon, sprite, modifier, two-volume, blend, depth, fog, UV, palette, texture, and extended packed-header controls are covered | Preserve public context layout; treat individual header mutation helpers as optional optimizations. |
 | Render submission identity | Stable allocation-free tickets cover queued registration, completed registration, rendering, target completion, and display | Preserve identity-specific waits and expose counters in coherent pipeline diagnostics. |
-| Render targets | Sized 16-bit render-to-texture, checked surface binding, and explicit completion/no-flip contracts are covered | Audit additional output formats and checked framebuffer bindings. |
+| Render targets | Sized 16-bit render-to-texture, checked surface binding, and explicit completion/no-flip contracts are covered | Treat additional output encodings as hardware-gated extensions, not assumed formats. |
 | Texture allocation | General allocator and checked caller-owned surfaces are covered | Add contiguous multi-surface reservations for demonstrated streaming and batch-conversion needs. Do not move raw pointer allocations behind an unsafe collector. |
 | Texture formats | Linear, twiddled, mipmapped, paletted, full-codebook VQ, stride, rectangle, and YUV are represented | Validate reduced-codebook VQ and any VQ/palette combinations against hardware before extending the surface layout vocabulary. |
 | Texture upload and readback | Checked synchronous and immediate-admission asynchronous uploads plus encoded CPU readback are covered | Preserve explicit render/sampling hazard rules and add asynchronous readback only for a demonstrated need. |
 | Texture conversion | Checked 4/8/16-bpp twiddling is covered | Keep palette creation and VQ encoding in content tools rather than placing unbounded encoders in the kernel. |
 | YUV conversion | Checked single-destination synchronous and asynchronous conversion is covered | Add contiguous multi-destination conversion only with bounded geometry, progress, and ownership. |
-| Palette and fog | Palette format, single entries, fog colors, density, and table generation are covered | Complete checked bulk palette writes plus fog-mode documentation and packing tests. |
-| Diagnostics and recovery | Coherent status, fault latching, and events are covered | Replace remaining fixed waits only where a safe recovery sequence is known. |
+| Palette and fog | Palette format, checked bulk ranges, fog colors, density, and table generation are covered | Preserve range validation and packing tests. |
+| Diagnostics and recovery | Coherent status, fault latching, events, bounded waits, and fail-closed TA admission are covered | Add automatic reset only after a safe physical-hardware recovery sequence is known. |
 | Transform math | Existing KOS matrix API; optional optimized math can remain external | Keep transforms outside the PVR driver. A future scene library may consume both without making the driver depend on either. |
 
 ## Known concrete defects and incomplete paths
@@ -82,10 +82,11 @@ than place another renderer above them.
 4. ~~Render fault interrupts log text but do not preserve a queryable fault
    record or notify an application.~~ Closed: faults are latched with counters
    and TA register snapshots, and optional event handlers receive the fault.
-5. The scene pipeline still has fixed waits. Sparse terminal-state reporting
-   and per-render identity are closed by coherent pipeline snapshots and
-   allocation-free completion tickets; bounded recovery for established waits
-   remains separate work.
+5. ~~The scene pipeline had fixed waits whose timeout results were ignored by
+   TA startup.~~ Established waits remain bounded at 100 ms, now fail closed
+   with `ETIMEDOUT` or `EIO`, and never publish TA-busy state or touch SQ/TA
+   input after failure. Automatic hardware reset remains intentionally absent
+   until a safe recovery sequence is physically validated.
 6. ~~User clipping is representable in a polygon header, but KOS provides no
    checked command-construction or submission helper.~~ Closed for direct and
    buffered lists, including active-target tile validation.
@@ -96,6 +97,9 @@ than place another renderer above them.
    palette writes, and high-level texture supersampling were inaccessible or
    incomplete.~~ Closed with checked register APIs, bounded palette ranges, and
    extended compilers that preserve established context layouts.
+9. ~~Small-polygon culling selected a hardware mode whose determinant threshold
+   KOS neither initialized nor exposed.~~ Closed with a documented 1.0f
+   initialization value and checked read/write access to the global threshold.
 
 ## Dependency order
 
@@ -115,17 +119,34 @@ than place another renderer above them.
    contracts.~~ Closed with monotonic allocation-free tickets, five observable
    stages, identity-specific waits, exact texture-target geometry, and explicit
    separation between render completion and framebuffer display.
-8. Add only hardware-validated advanced texture layouts, contiguous
-   reservations, and batch YUV conversion. Checked encoded CPU readback and
-   compatible 16-bit surface render binding are closed; physical render-target
-   visibility remains a hardware validation gate.
+8. Add advanced texture layouts, contiguous reservations, or batch YUV
+   conversion only after a demonstrated application need and physical-hardware
+   validation. They are extensions rather than hardware-facing parity
+   blockers. Checked encoded CPU readback and compatible 16-bit surface render
+   binding are closed; physical render-target visibility remains a validation
+   gate.
 9. ~~Close remaining display timing and filter controls in `video`.~~ Coherent
    raw scanout status, exact checked filter state, and opt-in one-line raster
    scheduling are closed, together with checked configured/display/draw
    framebuffer-surface queries. Multi-line scheduling remains a hardware-gated
    extension rather than a parity requirement.
-10. Run the final API, examples, exports, documentation, and resource-cost
-    audit before defining an optional higher-level scene interface.
+10. ~~Run the final API, examples, exports, documentation, and resource-cost
+    audit before defining an optional higher-level scene interface.~~ Closed
+    for the hardware-facing tranche. Remaining recovery and advanced-layout
+    ideas below are explicitly hardware-gated or demand-driven extensions.
+
+## Hardware-facing closure
+
+The core PVR tranche is closed at the API and emulator-validation level. It
+retains one device owner and covers direct and buffered submission, multipass,
+clipping, materials, texture surfaces and transfers, YUV, render targets,
+display timing, identity-specific completion, and persistent diagnostics.
+
+Work intentionally left outside that closure is limited to physical-hardware
+validation, a proven reset sequence after terminal accelerator faults, and
+speculative formats or batch allocators with no demonstrated KOS consumer.
+Those gates must not be bypassed by copying an unverified register sequence or
+by adding a second scene runtime.
 
 ## Validation gates
 

@@ -23,7 +23,7 @@ OBJS += pvr_fog.o
 OBJS += pvr_palette.o
 
 # Primitives / scene management
-OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o
+OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o
 
 # Texture handling
 OBJS += pvr_texture.o pvr_texture_layout.o pvr_texture_request.o pvr_dma.o

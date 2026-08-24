@@ -116,6 +116,32 @@ void pvr_set_shadow_scale(bool enable, float scale_value);
 */
 void pvr_set_zclip(float zc);
 
+/** \brief Set the global small-polygon culling threshold.
+    \ingroup pvr_global
+
+    The threshold is compared with the polygon plane determinant whenever a
+    primitive uses PVR_CULLING_SMALL, PVR_CULLING_CCW, or PVR_CULLING_CW. The
+    default installed by pvr_init() is 1.0f. Callers should synchronize a
+    change with scene construction when it must take effect at a frame
+    boundary.
+
+    \param  threshold       Finite, non-negative determinant threshold.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_set_culling_threshold(float threshold);
+
+/** \brief Read the global small-polygon culling threshold.
+    \ingroup pvr_global
+
+    \param  threshold       Destination for the current threshold.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_get_culling_threshold(float *threshold);
+
 /** \brief Set global color-clamp endpoints.
     \ingroup pvr_global
 

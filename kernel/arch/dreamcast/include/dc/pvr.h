@@ -24,7 +24,9 @@
     \note
     This low-level header does \a not perform transformations. Applications
     that want checked, caller-owned projection into pvr_vertex_t streams can
-    use dc/pvr_geometry.h with the matrix APIs.
+    use dc/pvr_geometry.h with the matrix APIs. Checked material compilation
+    and bounded visibility/clipping are provided by dc/pvr_material.h and
+    dc/pvr_frustum.h without changing PVR scene ownership.
 
     \author Megan Potter
     \author Roger Cattermole
@@ -1205,7 +1207,8 @@ int pvr_user_clip_submit(pvr_list_t list, const pvr_user_clip_t *clip);
     \param  list            The list to open.
     \retval 0               On success.
     \retval -1              If the list is invalid, disabled for the active
-                            pass, or has already been closed.
+                            pass, has already been closed, or TA readiness
+                            fails with `ETIMEDOUT` or `EIO`.
 */
 int pvr_list_begin(pvr_list_t list);
 
@@ -1334,7 +1337,8 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
     \retval 0               On success.
     \retval -1              On error, with `errno` set to `EINVAL`, `EPERM`,
                             `ENOTSUP`, `ENODEV`, `EALREADY`, `EBUSY`, `ENOSPC`,
-                            or an error reported by the DMA layer.
+                            `ETIMEDOUT`, `EIO`, or an error reported by the DMA
+                            layer.
 */
 int pvr_list_flush(pvr_list_t list);
 
@@ -1345,8 +1349,9 @@ int pvr_list_flush(pvr_list_t list);
     pvr_scene_begin() or pvr_scene_begin_rtt() functions is called again.
 
     \retval 0               On success.
-    \retval -1              On error (no scene started, or a multipass scene
-                            has not reached its final pass).
+    \retval -1              On error (no scene started, a multipass scene has
+                            not reached its final pass, or TA readiness failed
+                            with `ETIMEDOUT` or `EIO`).
 */
 int pvr_scene_finish(void);
 

@@ -150,7 +150,8 @@ This page serves as an index for all KallistiOS examples.
   - clipping
   - fb_tex
   - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned
-    vertex streams and emits them to memory or established PVR list paths
+    geometry with bounded frustum clipping, checked material compilation, and
+    established PVR list sinks
   - hybrid_lists
   - material_state
   - multipass

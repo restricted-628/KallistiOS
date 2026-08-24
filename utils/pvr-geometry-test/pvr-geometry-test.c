@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_geometry.h>
+#include <dc/pvr_frustum.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -258,10 +259,162 @@ static void test_sinks(void) {
     assert(pvr_geometry_sink_emit(&sink, NULL, 0) == 0);
 }
 
+static const matrix_t identity = {
+    { 1.0f, 0.0f, 0.0f, 0.0f },
+    { 0.0f, 1.0f, 0.0f, 0.0f },
+    { 0.0f, 0.0f, 1.0f, 0.0f },
+    { 0.0f, 0.0f, 0.0f, 1.0f }
+};
+
+static void test_frustum_classification(void) {
+    pvr_frustum_t frustum;
+    point_t minimum;
+    point_t maximum;
+    pvr_frustum_classification_t result;
+    pvr_frustum_t unchanged;
+
+    assert(pvr_frustum_init(&frustum, &identity, -1.0f, -1.0f,
+                            1.0f, 1.0f, 0.5f, 2.0f) == 0);
+
+    minimum = (point_t){ -0.5f, -0.5f, -0.5f, 1.0f };
+    maximum = (point_t){ 0.5f, 0.5f, 0.5f, 1.0f };
+    assert(pvr_frustum_classify_aabb(&frustum, &minimum, &maximum,
+                                     &result) == 0);
+    assert(result == PVR_FRUSTUM_INSIDE);
+
+    minimum.x = 1.5f;
+    maximum.x = 2.5f;
+    assert(pvr_frustum_classify_aabb(&frustum, &minimum, &maximum,
+                                     &result) == 0);
+    assert(result == PVR_FRUSTUM_OUTSIDE);
+
+    minimum.x = 0.5f;
+    maximum.x = 1.5f;
+    assert(pvr_frustum_classify_aabb(&frustum, &minimum, &maximum,
+                                     &result) == 0);
+    assert(result == PVR_FRUSTUM_INTERSECT);
+
+    unchanged = frustum;
+    errno = 0;
+    assert(pvr_frustum_init(&frustum, &identity, 1.0f, -1.0f,
+                            -1.0f, 1.0f, 0.5f, 2.0f) == -1);
+    assert(errno == EDOM);
+    assert(memcmp(&frustum, &unchanged, sizeof(frustum)) == 0);
+
+    minimum.x = NAN;
+    result = PVR_FRUSTUM_OUTSIDE;
+    errno = 0;
+    assert(pvr_frustum_classify_aabb(&frustum, &minimum, &maximum,
+                                     &result) == -1);
+    assert(errno == EDOM && result == PVR_FRUSTUM_OUTSIDE);
+}
+
+static void test_frustum_clipping(void) {
+    pvr_frustum_t frustum;
+    alignas(32) pvr_vertex_t input[3];
+    alignas(32) pvr_vertex_t output[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    alignas(32) pvr_vertex_t unchanged[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    pvr_frustum_clip_result_t result;
+
+    assert(pvr_frustum_init(&frustum, &identity, -1.0f, -1.0f,
+                            1.0f, 1.0f, 0.5f, 2.0f) == 0);
+    input[0] = make_vertex(-0.5f, -0.5f, 0.0f, PVR_CMD_VERTEX,
+                           UINT32_C(0xff000000));
+    input[1] = make_vertex(0.5f, -0.5f, 0.0f, PVR_CMD_VERTEX,
+                           UINT32_C(0xffffffff));
+    input[2] = make_vertex(0.0f, 0.5f, 0.0f, PVR_CMD_VERTEX_EOL,
+                           UINT32_C(0xff808080));
+
+    assert(pvr_frustum_clip_triangle(output,
+                                     PVR_FRUSTUM_CLIP_MAX_VERTICES,
+                                     input, &frustum,
+                                     PVR_FRUSTUM_CLIP_ALL, &result) == 0);
+    assert(result.polygon_vertices == 3 && result.output_vertices == 3);
+    assert(output[0].flags == PVR_CMD_VERTEX);
+    assert(output[1].flags == PVR_CMD_VERTEX);
+    assert(output[2].flags == PVR_CMD_VERTEX_EOL);
+    assert(close_enough(output[0].x, -0.5f));
+    assert(close_enough(output[0].z, 1.0f));
+
+    /* Crossing one side produces a clipped quad and two independent
+       triangles, without requiring the caller to repair strip topology. */
+    input[0].x = -2.0f;
+    input[0].u = 0.0f;
+    input[1].u = 1.0f;
+    input[2].u = 1.0f;
+    assert(pvr_frustum_clip_triangle(output,
+                                     PVR_FRUSTUM_CLIP_MAX_VERTICES,
+                                     input, &frustum,
+                                     PVR_FRUSTUM_CLIP_ALL, &result) == 0);
+    assert(result.polygon_vertices == 4 && result.output_vertices == 6);
+    assert(output[2].flags == PVR_CMD_VERTEX_EOL);
+    assert(output[5].flags == PVR_CMD_VERTEX_EOL);
+    assert(output[0].x >= -1.0f && output[1].x >= -1.0f &&
+           output[2].x >= -1.0f && output[3].x >= -1.0f &&
+           output[4].x >= -1.0f && output[5].x >= -1.0f);
+
+    memset(output, 0x5a, sizeof(output));
+    memcpy(unchanged, output, sizeof(output));
+    errno = 0;
+    assert(pvr_frustum_clip_triangle(output, 5, input, &frustum,
+                                     PVR_FRUSTUM_CLIP_ALL, &result) == -1);
+    assert(errno == ENOSPC && result.output_vertices == 6);
+    assert(memcmp(output, unchanged, sizeof(output)) == 0);
+
+    input[0].x = -3.0f;
+    input[1].x = -2.0f;
+    input[2].x = -2.5f;
+    assert(pvr_frustum_clip_triangle(output,
+                                     PVR_FRUSTUM_CLIP_MAX_VERTICES,
+                                     input, &frustum, 0, &result) == 0);
+    assert(result.polygon_vertices == 0 && result.output_vertices == 0);
+    assert(memcmp(output, unchanged, sizeof(output)) == 0);
+
+    input[0].flags = UINT32_C(0xd0000000);
+    errno = 0;
+    assert(pvr_frustum_clip_triangle(output,
+                                     PVR_FRUSTUM_CLIP_MAX_VERTICES,
+                                     input, &frustum, 0, &result) == -1);
+    assert(errno == EILSEQ);
+}
+
+static void test_example_frustum(void) {
+    alignas(32) const matrix_t projection = {
+        { 240.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 240.0f, 0.0f, 0.0f },
+        { -320.0f, -240.0f, -1.02020202f, -1.0f },
+        { 320.0f, 240.0f, -2.02020202f, 1.0f }
+    };
+    alignas(32) pvr_vertex_t input[3] = {
+        { .flags = PVR_CMD_VERTEX, .x = -5.0f, .y = -0.6f, .z = -2.0f,
+          .argb = UINT32_C(0xffff4040) },
+        { .flags = PVR_CMD_VERTEX, .x = 0.0f, .y = 0.8f, .z = -2.0f,
+          .argb = UINT32_C(0xff40ff40) },
+        { .flags = PVR_CMD_VERTEX_EOL, .x = 0.8f, .y = -0.6f, .z = -2.0f,
+          .argb = UINT32_C(0xff4040ff) }
+    };
+    alignas(32) pvr_vertex_t output[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    pvr_frustum_t frustum;
+    pvr_frustum_clip_result_t result;
+
+    assert(pvr_frustum_init(&frustum, &projection, 0.0f, 0.0f,
+                            640.0f, 480.0f, 2.0f, 101.0f) == 0);
+    assert(pvr_frustum_clip_triangle(output,
+                                     PVR_FRUSTUM_CLIP_MAX_VERTICES,
+                                     input, &frustum,
+                                     PVR_FRUSTUM_CLIP_ALL, &result) == 0);
+    assert(result.polygon_vertices == 4 && result.output_vertices == 6);
+    assert(close_enough(output[0].x, 0.0f));
+    assert(close_enough(output[0].z, 1.0f / 3.0f));
+}
+
 int main(void) {
     test_projection();
     test_projection_failures();
     test_sinks();
+    test_frustum_classification();
+    test_frustum_clipping();
+    test_example_frustum();
     puts("PVR geometry tests passed");
     return 0;
 }

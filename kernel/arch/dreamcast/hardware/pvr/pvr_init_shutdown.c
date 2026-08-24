@@ -252,6 +252,7 @@ static int pvr_init_common(const pvr_init_params_t *params,
     PVR_SET(PVR_COLOR_CLAMP_MAX, PVR_PACK_COLOR(1, 1, 1, 1));   /* color clamp max */
     PVR_SET(PVR_UNK_0080, 0x00000007);          /* M */
     PVR_SET(PVR_CHEAP_SHADOW, 0x00000001);      /* cheap shadow */
+    PVR_SET(PVR_OBJECT_CLIP, 0x3f800000);       /* 1.0f culling threshold */
     PVR_SET(PVR_UNK_007C, 0x0027df77);          /* M */
     PVR_SET(PVR_TEXTURE_MODULO, 0x00000000);    /* stride width */
     PVR_SET(PVR_FOG_DENSITY, 0x0000ff07);       /* fog density */

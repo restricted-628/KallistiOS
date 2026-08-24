@@ -25,9 +25,9 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
 | Matrix register operations | Fast load, store, multiply, transform, translation, rotation, scaling, perspective, and look-at helpers | Keep the register API small; eliminate shared scratch state and provide explicit caller-owned save/restore. |
 | Transform hierarchy | No bounded matrix stack | Add a caller-owned stack with reported overflow and underflow and no allocation. |
 | Camera state | Established immediate operations plus explicit, checked perspective and look-at builders | Keep application state caller-owned; add higher-level camera policy only outside the core math layer. |
-| Frustum and visibility | No reusable object/frustum tests | Add pure math tests independently of rendering; leave spatial partitioning to applications. |
+| Frustum and visibility | Caller-owned screen/W frusta provide bounded AABB classification and triangle clipping | Leave spatial partitioning, occlusion policy, and retained object state to applications. |
 | Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
-| Materials | PVR contexts and compiled headers are complete at the hardware level | Add optional immutable material descriptions that compile to existing PVR headers; do not introduce another texture allocator. |
+| Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
 | Object hierarchy | No reusable traversal | Add bounded, callback-driven traversal over application-owned nodes after transform state is complete. |
 | Lighting | Hardware header fields exist, but vertex lighting is application work | Add optional CPU vertex-lighting kernels with explicit normal-transform and color-clamp contracts. |
 | Keyframe animation | No generic sampler | Add format-neutral scalar, vector, and rotation sampling before object-specific motion playback. |
@@ -62,8 +62,8 @@ adapters, but neither the kernel nor the PVR driver may depend on them.
    projection construction and host-side golden vectors.~~
 3. ~~Define an optional geometry input/output contract that can target direct
    store-queue or buffered PVR submission without owning the scene.~~
-4. Add immutable material compilation over existing PVR contexts and texture
-   surfaces.
+4. ~~Add immutable material compilation over existing PVR contexts and texture
+   surfaces.~~
 5. Add bounded object hierarchy traversal using the caller-owned transform
    stack.
 6. Add normal transformation, directional/point lighting, and color packing.
@@ -124,9 +124,30 @@ PVR vertex and list APIs:
 - sinks never begin, finish, flush, sort, retain, or otherwise own a scene.
 
 Projection and sinks retain no global state, allocate nothing, and add no cost
-to applications that use only the low-level PVR interface. Automatic clipping
-is intentionally outside this tranche; callers must provide geometry with
-positive transformed W or perform clipping before projection.
+to applications that use only the low-level PVR interface. The projector
+deliberately remains a one-input/one-output operation; callers that need
+topology-changing clipping use the separately bounded frustum operation.
+
+## Fourth tranche
+
+The fourth tranche closes material publication and bounded visibility without
+introducing a retained renderer:
+
+- checked compilers validate complete polygon, sprite, and two-volume contexts
+  before publishing an immutable, submission-ready material packet;
+- failed compilation leaves the old packet unchanged, and material submission
+  sends only the embedded TA block through existing current-list or explicit
+  buffered-list paths;
+- caller-owned frusta combine an explicit object-to-screen matrix with screen
+  and W bounds matching the established KOS perspective convention;
+- AABB classification transforms exactly eight corners, and triangle clipping
+  uses bounded homogeneous Sutherland-Hodgman stages followed by independent
+  triangle-fan output;
+- clipping stages its maximum 21 vertices before writing caller memory, so
+  malformed input and insufficient capacity cannot expose partial geometry.
+
+The tranche allocates no memory, creates no worker, owns no texture or scene,
+and retains no global transform or material state.
 
 ## Validation gates
 

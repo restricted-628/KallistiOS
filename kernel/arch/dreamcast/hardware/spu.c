@@ -13,6 +13,7 @@
 #include <dc/spu.h>
 #include <dc/g2bus.h>
 #include <dc/sq.h>
+#include <kos/dbglog.h>
 #include <kos/timer.h>
 #include <errno.h>
 #include <sys/cdefs.h>
@@ -102,8 +103,13 @@ void spu_memload_sq(uintptr_t dst, const void *src_void, size_t length) {
     /* Add in the SPU RAM base (cached area) */
     dst |= SPU_RAM_BASE;
 
-    /* Lock the SQs before disabling the interrupts. */
-    sq_lock(NULL);
+    /* Lock the SQs before disabling interrupts. Use the actual destination so
+       the checked SQ contract can preserve and restore this outer mapping
+       around sq_cpy()'s recursive acquisitions. */
+    if(!sq_lock((void *)dst)) {
+        dbglog(DBG_ERROR, "spu_memload_sq: cannot acquire store queues\n");
+        return;
+    }
 
     /* Lock G2 bus because we can't suspend SQs from
      * another thread with PIO access to G2 bus. */
@@ -260,8 +266,12 @@ void spu_memset_sq(uintptr_t dst, uint32_t what, size_t length) {
     /* Add in the SPU RAM base (cached area) */
     dst |= SPU_RAM_BASE;
 
-    /* Lock the SQs before disabling the interrupts. */
-    sq_lock(NULL);
+    /* Keep one mapped outer acquisition around sq_set32() so no other thread
+       can start an SQ burst before the G2 transaction is complete. */
+    if(!sq_lock((void *)dst)) {
+        dbglog(DBG_ERROR, "spu_memset_sq: cannot acquire store queues\n");
+        return;
+    }
 
     /* Lock G2 bus because we can't suspend SQs from
      * another thread with PIO access to G2 bus. */

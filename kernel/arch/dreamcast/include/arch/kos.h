@@ -56,7 +56,9 @@ __BEGIN_DECLS
 #include <dc/net/lan_adapter.h>
 #include <dc/perfctr.h>
 #include <dc/pvr.h>
+#include <dc/pvr_frustum.h>
 #include <dc/pvr_geometry.h>
+#include <dc/pvr_material.h>
 #include <dc/scif.h>
 #include <dc/sci.h>
 #include <dc/sd.h>

@@ -83,6 +83,7 @@ int main(int argc, char **argv) {
     pvr_ptr_t texture;
     uint32_t minimum;
     uint32_t maximum;
+    float culling_threshold;
     uint8_t threshold;
     unsigned int frame;
 
@@ -116,6 +117,13 @@ int main(int argc, char **argv) {
     assert(threshold == 0x80);
     errno = 0;
     assert(pvr_set_punch_through_alpha(256) == -1);
+    assert(errno == EINVAL);
+
+    assert(pvr_set_culling_threshold(1.0f) == 0);
+    assert(pvr_get_culling_threshold(&culling_threshold) == 0);
+    assert(culling_threshold == 1.0f);
+    errno = 0;
+    assert(pvr_set_culling_threshold(-1.0f) == -1);
     assert(errno == EINVAL);
 
     assert(pvr_set_pal_entries(64, palette,

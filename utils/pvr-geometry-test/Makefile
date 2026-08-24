@@ -6,7 +6,8 @@ LDLIBS += -lm
 
 TARGET = pvr-geometry-test
 SOURCES = pvr-geometry-test.c \
-          ../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum.c
 
 .PHONY: all clean test
 

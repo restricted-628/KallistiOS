@@ -492,11 +492,19 @@ mat_perspective_apply
 mat_lookat_build
 mat_lookat_apply
 # PVR
+pvr_frustum_init
+pvr_frustum_classify_aabb
+pvr_frustum_clip_triangle
 pvr_geometry_project
 pvr_geometry_sink_init_memory
 pvr_geometry_sink_init_current
 pvr_geometry_sink_init_buffered
 pvr_geometry_sink_emit
+pvr_material_compile_polygon
+pvr_material_compile_sprite
+pvr_material_compile_two_volume
+pvr_material_submit
+pvr_material_submit_list
 pvr_txr_load_dma
 pvr_dma_ready
 pvr_dma_load_ta
@@ -522,10 +530,12 @@ pvr_mem_reset
 pvr_mem_stats
 pvr_set_bg_color
 pvr_set_color_clamp
+pvr_set_culling_threshold
 pvr_set_punch_through_alpha
 pvr_get_vbl_count
 pvr_get_stats
 pvr_get_color_clamp
+pvr_get_culling_threshold
 pvr_get_punch_through_alpha
 pvr_scene_set_background_plane
 pvr_scene_get_background_plane
