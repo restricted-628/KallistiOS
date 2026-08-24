@@ -46,6 +46,36 @@ typedef struct pvr_vertex {
     uint32_t oargb;
 } pvr_vertex_t;
 
+typedef struct pvr_vertex_pcm {
+    alignas(32) uint32_t flags;
+    float x;
+    float y;
+    float z;
+    uint32_t argb0;
+    uint32_t argb1;
+    uint32_t d1;
+    uint32_t d2;
+} pvr_vertex_pcm_t;
+
+typedef struct pvr_vertex_tpcm {
+    alignas(32) uint32_t flags;
+    float x;
+    float y;
+    float z;
+    float u0;
+    float v0;
+    uint32_t argb0;
+    uint32_t oargb0;
+    float u1;
+    float v1;
+    uint32_t argb1;
+    uint32_t oargb1;
+    uint32_t d1;
+    uint32_t d2;
+    uint32_t d3;
+    uint32_t d4;
+} pvr_vertex_tpcm_t;
+
 int pvr_prim(const void *data, size_t size);
 int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
 

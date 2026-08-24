@@ -23,13 +23,13 @@
 
     \note
     This low-level header does \a not perform transformations. Applications
-    that want checked, caller-owned projection into pvr_vertex_t streams can
-    use dc/pvr_geometry.h with the matrix APIs. Checked material compilation
-    and bounded visibility/clipping are provided by dc/pvr_material.h and
-    dc/pvr_frustum.h, while dc/pvr_lighting.h provides optional caller-owned
-    CPU vertex lighting. Admitted compact models can use the bounded emitter in
-    dc/pvr_chunk_render.h. None of these interfaces changes PVR scene
-    ownership.
+    that want checked, caller-owned projection into canonical or two-volume
+    vertex streams can use dc/pvr_geometry.h with the matrix APIs. Checked
+    material compilation and bounded visibility/clipping are provided by
+    dc/pvr_material.h and dc/pvr_frustum.h, while dc/pvr_lighting.h provides
+    optional caller-owned CPU vertex lighting. Admitted compact models can use
+    the bounded emitter in dc/pvr_chunk_render.h. None of these interfaces
+    changes PVR scene ownership.
 
     \author Megan Potter
     \author Roger Cattermole

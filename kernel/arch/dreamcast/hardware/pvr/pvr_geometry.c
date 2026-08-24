@@ -22,6 +22,10 @@
 
 _Static_assert(sizeof(pvr_vertex_t) == 32,
                "canonical PVR vertices must occupy one TA block");
+_Static_assert(sizeof(pvr_vertex_pcm_t) == 32,
+               "two-volume color vertices must occupy one TA block");
+_Static_assert(sizeof(pvr_vertex_tpcm_t) == 64,
+               "textured two-volume vertices must occupy two TA blocks");
 
 static int polygon_list(pvr_list_t list) {
     return list == PVR_LIST_OP_POLY || list == PVR_LIST_TR_POLY ||
@@ -51,15 +55,29 @@ static int ranges_overlap(uintptr_t lhs, size_t lhs_size,
     return lhs < rhs + rhs_size && rhs < lhs + lhs_size;
 }
 
-int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
-                         const pvr_geometry_stream_t *stream,
-                         const matrix_t *matrix,
-                         pvr_geometry_result_t *result) {
+static size_t vertex_format_size(pvr_geometry_vertex_format_t format) {
+    switch(format) {
+        case PVR_GEOMETRY_VERTEX_CANONICAL:
+            return sizeof(pvr_vertex_t);
+        case PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR:
+            return sizeof(pvr_vertex_pcm_t);
+        case PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED:
+            return sizeof(pvr_vertex_tpcm_t);
+        default:
+            return 0;
+    }
+}
+
+int pvr_geometry_project_vertices(
+    void *output, size_t output_capacity,
+    const pvr_geometry_vertex_stream_t *stream,
+    const matrix_t *matrix, pvr_geometry_result_t *result) {
     pvr_geometry_result_t progress = { 0, 0 };
     uintptr_t input_start;
     uintptr_t output_start;
     size_t input_bytes;
     size_t output_bytes;
+    size_t vertex_size;
     size_t i;
 #ifdef __DREAMCAST__
     shz_mat4x4_t saved_xmtrx;
@@ -69,10 +87,11 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
     if(result)
         *result = progress;
 
-    if(!output || !stream || !matrix || !stream->vertices ||
+    vertex_size = stream ? vertex_format_size(stream->format) : 0;
+    if(!output || !stream || !matrix || !stream->vertices || !vertex_size ||
        ((uintptr_t)output & 31u) ||
        ((uintptr_t)stream->vertices & 3u) || !matrix_aligned(matrix) ||
-       stream->stride < sizeof(pvr_vertex_t) || (stream->stride & 3u)) {
+       stream->stride < vertex_size || (stream->stride & 3u)) {
         errno = EINVAL;
         return -1;
     }
@@ -93,15 +112,15 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
     /* Establish both complete byte ranges before doing pointer arithmetic or
        allowing the first output write. */
     if(stream->vertex_count - 1u >
-       (SIZE_MAX - sizeof(pvr_vertex_t)) / stream->stride ||
-       stream->vertex_count > SIZE_MAX / sizeof(pvr_vertex_t)) {
+       (SIZE_MAX - vertex_size) / stream->stride ||
+       stream->vertex_count > SIZE_MAX / vertex_size) {
         errno = ERANGE;
         return -1;
     }
 
     input_bytes = (stream->vertex_count - 1u) * stream->stride +
-                  sizeof(pvr_vertex_t);
-    output_bytes = stream->vertex_count * sizeof(pvr_vertex_t);
+                  vertex_size;
+    output_bytes = stream->vertex_count * vertex_size;
     input_start = (uintptr_t)stream->vertices;
     output_start = (uintptr_t)output;
 
@@ -111,10 +130,10 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
         return -1;
     }
 
-    /* Forward processing is safe only for exact canonical in-place data.
+    /* Forward processing is safe only for an exact packed in-place stream.
        Shifted overlap could overwrite an input vertex not yet consumed. */
     if(!(input_start == output_start &&
-         stream->stride == sizeof(pvr_vertex_t)) &&
+         stream->stride == vertex_size) &&
        ranges_overlap(input_start, input_bytes, output_start, output_bytes)) {
         errno = EINVAL;
         return -1;
@@ -132,7 +151,12 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
     for(i = 0; i < stream->vertex_count; ++i) {
         const uint8_t *source = (const uint8_t *)stream->vertices +
                                 i * stream->stride;
-        pvr_vertex_t vertex;
+        pvr_vertex_tpcm_t packet;
+        uint8_t *packet_bytes = (uint8_t *)&packet;
+        uint32_t flags;
+        float x;
+        float y;
+        float z;
         float tx;
         float ty;
         float tw;
@@ -141,38 +165,37 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
         shz_vec4_t transformed;
 #endif
 
-        /* Work on a complete local TA block so a rejected vertex cannot leave
-           partially updated coordinates or attributes in caller storage. */
-        memcpy(&vertex, source, sizeof(vertex));
+        /* Stage the complete one- or two-block packet so a rejected vertex
+           cannot expose partially transformed state. */
+        memcpy(packet_bytes, source, vertex_size);
+        memcpy(&flags, packet_bytes, sizeof(flags));
+        memcpy(&x, packet_bytes + 4u, sizeof(x));
+        memcpy(&y, packet_bytes + 8u, sizeof(y));
+        memcpy(&z, packet_bytes + 12u, sizeof(z));
 
-        if(vertex.flags != PVR_CMD_VERTEX &&
-           vertex.flags != PVR_CMD_VERTEX_EOL) {
+        if(flags != PVR_CMD_VERTEX && flags != PVR_CMD_VERTEX_EOL) {
             errno = EILSEQ;
             goto fail;
         }
 
-        if(!isfinite(vertex.x) || !isfinite(vertex.y) ||
-           !isfinite(vertex.z)) {
+        if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
             errno = EDOM;
             goto fail;
         }
 
 #ifdef __DREAMCAST__
         transformed = shz_xmtrx_transform_vec4(
-            shz_vec4_init(vertex.x, vertex.y, vertex.z, 1.0f));
+            shz_vec4_init(x, y, z, 1.0f));
         tx = transformed.x;
         ty = transformed.y;
         tw = transformed.w;
 #else
-        tx = (*matrix)[0][0] * vertex.x +
-             (*matrix)[1][0] * vertex.y +
-             (*matrix)[2][0] * vertex.z + (*matrix)[3][0];
-        ty = (*matrix)[0][1] * vertex.x +
-             (*matrix)[1][1] * vertex.y +
-             (*matrix)[2][1] * vertex.z + (*matrix)[3][1];
-        tw = (*matrix)[0][3] * vertex.x +
-             (*matrix)[1][3] * vertex.y +
-             (*matrix)[2][3] * vertex.z + (*matrix)[3][3];
+        tx = (*matrix)[0][0] * x + (*matrix)[1][0] * y +
+             (*matrix)[2][0] * z + (*matrix)[3][0];
+        ty = (*matrix)[0][1] * x + (*matrix)[1][1] * y +
+             (*matrix)[2][1] * z + (*matrix)[3][1];
+        tw = (*matrix)[0][3] * x + (*matrix)[1][3] * y +
+             (*matrix)[2][3] * z + (*matrix)[3][3];
 #endif
 
         if(!isfinite(tx) || !isfinite(ty) || !isfinite(tw)) {
@@ -187,19 +210,21 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
 
         /* Unlike a conventional retained-mode position, TA depth is 1/W.
            Keeping this conversion here makes every sink consume identical
-           canonical pvr_vertex_t data. */
+           screen/depth fields regardless of the declared vertex layout. */
         reciprocal_w = 1.0f / tw;
-        vertex.x = tx * reciprocal_w;
-        vertex.y = ty * reciprocal_w;
-        vertex.z = reciprocal_w;
+        x = tx * reciprocal_w;
+        y = ty * reciprocal_w;
+        z = reciprocal_w;
 
-        if(!isfinite(vertex.x) || !isfinite(vertex.y) ||
-           !isfinite(vertex.z)) {
+        if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
             errno = ERANGE;
             goto fail;
         }
 
-        memcpy(output + i, &vertex, sizeof(vertex));
+        memcpy(packet_bytes + 4u, &x, sizeof(x));
+        memcpy(packet_bytes + 8u, &y, sizeof(y));
+        memcpy(packet_bytes + 12u, &z, sizeof(z));
+        memcpy((uint8_t *)output + i * vertex_size, packet_bytes, vertex_size);
         ++progress.consumed_vertices;
         ++progress.produced_vertices;
     }
@@ -220,6 +245,24 @@ fail:
         *result = progress;
 
     return -1;
+}
+
+int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
+                         const pvr_geometry_stream_t *stream,
+                         const matrix_t *matrix,
+                         pvr_geometry_result_t *result) {
+    pvr_geometry_vertex_stream_t typed_stream;
+
+    if(!stream)
+        return pvr_geometry_project_vertices(output, output_capacity, NULL,
+                                             matrix, result);
+
+    typed_stream.vertices = stream->vertices;
+    typed_stream.vertex_count = stream->vertex_count;
+    typed_stream.stride = stream->stride;
+    typed_stream.format = PVR_GEOMETRY_VERTEX_CANONICAL;
+    return pvr_geometry_project_vertices(output, output_capacity,
+                                         &typed_stream, matrix, result);
 }
 
 int pvr_geometry_sink_init_memory(pvr_geometry_sink_t *sink,
@@ -375,6 +418,186 @@ int pvr_geometry_sink_emit(pvr_geometry_sink_t *sink,
 
         default:
             /* Validated before the zero-count fast path. */
+            __builtin_unreachable();
+    }
+
+    sink->emitted_vertices += count;
+    return 0;
+}
+
+int pvr_geometry_vertex_sink_init_memory(
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_geometry_vertex_format_t format,
+    void *vertices, size_t capacity) {
+    size_t vertex_size = vertex_format_size(format);
+
+    if(!sink || !vertices || !capacity || !vertex_size ||
+       ((uintptr_t)vertices & 31u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(capacity > SIZE_MAX / vertex_size ||
+       capacity * vertex_size > UINTPTR_MAX - (uintptr_t)vertices) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    memset(sink, 0, sizeof(*sink));
+    sink->kind = PVR_GEOMETRY_SINK_MEMORY;
+    sink->format = format;
+    sink->destination.memory.vertices = vertices;
+    sink->destination.memory.capacity = capacity;
+    return 0;
+}
+
+int pvr_geometry_vertex_sink_init_current(
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_geometry_vertex_format_t format) {
+    if(!sink || !vertex_format_size(format)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(sink, 0, sizeof(*sink));
+    sink->kind = PVR_GEOMETRY_SINK_CURRENT_LIST;
+    sink->format = format;
+    return 0;
+}
+
+int pvr_geometry_vertex_sink_init_buffered(
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_geometry_vertex_format_t format, pvr_list_t list) {
+    if(!sink || !vertex_format_size(format) || !polygon_list(list)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(sink, 0, sizeof(*sink));
+    sink->kind = PVR_GEOMETRY_SINK_BUFFERED_LIST;
+    sink->format = format;
+    sink->destination.list = list;
+    return 0;
+}
+
+static int vertex_sink_valid(const pvr_geometry_vertex_sink_t *sink,
+                             size_t vertex_size) {
+    if(!sink || !vertex_size) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    switch(sink->kind) {
+        case PVR_GEOMETRY_SINK_MEMORY:
+            if(!sink->destination.memory.vertices ||
+               !sink->destination.memory.capacity ||
+               ((uintptr_t)sink->destination.memory.vertices & 31u) ||
+               sink->destination.memory.capacity > SIZE_MAX / vertex_size ||
+               sink->destination.memory.capacity * vertex_size >
+               UINTPTR_MAX -
+               (uintptr_t)sink->destination.memory.vertices ||
+               sink->emitted_vertices > sink->destination.memory.capacity) {
+                errno = EINVAL;
+                return -1;
+            }
+            break;
+        case PVR_GEOMETRY_SINK_CURRENT_LIST:
+            break;
+        case PVR_GEOMETRY_SINK_BUFFERED_LIST:
+            if(!polygon_list(sink->destination.list)) {
+                errno = EINVAL;
+                return -1;
+            }
+            break;
+        default:
+            errno = EINVAL;
+            return -1;
+    }
+
+    return 0;
+}
+
+int pvr_geometry_vertex_sink_emit(
+    pvr_geometry_vertex_sink_t *sink,
+    const void *vertices, size_t count) {
+    size_t vertex_size = sink ? vertex_format_size(sink->format) : 0;
+    size_t bytes;
+    size_t i;
+    int saved_errno;
+    int rv;
+
+    if(vertex_sink_valid(sink, vertex_size) < 0)
+        return -1;
+    if(!count)
+        return 0;
+    if(!vertices || ((uintptr_t)vertices & 31u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(count > SIZE_MAX / vertex_size ||
+       count > SIZE_MAX - sink->emitted_vertices) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    bytes = count * vertex_size;
+    if(bytes > UINTPTR_MAX - (uintptr_t)vertices) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       count > sink->destination.memory.capacity - sink->emitted_vertices) {
+        errno = ENOSPC;
+        return -1;
+    }
+
+    /* Validate every packet before making a list call or memory write. A
+       two-block textured vertex still carries its command in the first word. */
+    for(i = 0; i < count; ++i) {
+        uint32_t command;
+
+        memcpy(&command, (const uint8_t *)vertices + i * vertex_size,
+               sizeof(command));
+        if(command != PVR_CMD_VERTEX && command != PVR_CMD_VERTEX_EOL) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+
+    switch(sink->kind) {
+        case PVR_GEOMETRY_SINK_MEMORY:
+            memmove((uint8_t *)sink->destination.memory.vertices +
+                    sink->emitted_vertices * vertex_size, vertices, bytes);
+            break;
+        case PVR_GEOMETRY_SINK_CURRENT_LIST:
+#ifdef __DREAMCAST__
+            if(!pvr_state.scene_active ||
+               !polygon_list(pvr_state.list_reg_open)) {
+                errno = EPERM;
+                return -1;
+            }
+#endif
+            saved_errno = errno;
+            errno = 0;
+            rv = pvr_prim(vertices, bytes);
+            if(rv < 0) {
+                if(!errno)
+                    errno = EPERM;
+                return -1;
+            }
+            errno = saved_errno;
+            break;
+        case PVR_GEOMETRY_SINK_BUFFERED_LIST:
+            saved_errno = errno;
+            errno = 0;
+            rv = pvr_list_prim(sink->destination.list, vertices, bytes);
+            if(rv < 0) {
+                if(!errno)
+                    errno = EIO;
+                return -1;
+            }
+            errno = saved_errno;
+            break;
+        default:
             __builtin_unreachable();
     }
 

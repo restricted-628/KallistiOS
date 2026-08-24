@@ -119,12 +119,19 @@ PVR vertex and list APIs:
   vertex may be embedded at the start of an application structure, applies an
   explicit matrix, emits PVR screen X/Y and reciprocal-W depth, and preserves
   the remaining vertex attributes;
+- `pvr_geometry_project_vertices()` extends that checked operation to declared
+  complete PVR layouts, including one-block untextured and two-block textured
+  two-volume vertices; the command and XYZ prefix is transformed while every
+  byte of both volume attribute sets is retained;
 - malformed commands, non-finite coordinates, non-positive W, range overflow,
   insufficient output, and unsafe overlap are reported without writing beyond
   the documented valid prefix;
 - memory sinks write to caller-owned capacity, current-list sinks inherit the
   active PVR direct or buffered path, and explicit-list sinks append through
   the established vertex-DMA path;
+- format-bound sinks count complete vertices but derive exact publication bytes
+  from the declared layout, keeping 32-byte and 64-byte capacity accounting
+  separate from the established canonical sink ABI;
 - sinks never begin, finish, flush, sort, retain, or otherwise own a scene.
 
 Projection and sinks retain no global state, allocate nothing, and add no cost

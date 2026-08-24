@@ -44,6 +44,21 @@ typedef struct pvr_geometry_result {
     size_t produced_vertices;   /**< Valid vertices written to output. */
 } pvr_geometry_result_t;
 
+/** \brief Complete PVR vertex layouts supported by format-aware geometry. */
+typedef enum pvr_geometry_vertex_format {
+    PVR_GEOMETRY_VERTEX_CANONICAL = 0, /**< pvr_vertex_t. */
+    PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR, /**< pvr_vertex_pcm_t. */
+    PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED /**< pvr_vertex_tpcm_t. */
+} pvr_geometry_vertex_format_t;
+
+/** \brief Strided input over one declared complete PVR vertex layout. */
+typedef struct pvr_geometry_vertex_stream {
+    const void *vertices;
+    size_t vertex_count;
+    size_t stride;
+    pvr_geometry_vertex_format_t format;
+} pvr_geometry_vertex_stream_t;
+
 /** \brief Geometry output destination. */
 typedef enum pvr_geometry_sink_kind {
     PVR_GEOMETRY_SINK_MEMORY = 0,       /**< Caller-owned memory. */
@@ -69,6 +84,25 @@ typedef struct pvr_geometry_sink {
         pvr_list_t list;
     } destination;
 } pvr_geometry_sink_t;
+
+/** \brief Format-bound output sink for complete 32-byte or 64-byte vertices.
+
+    Unlike pvr_geometry_sink_t, this sink records the complete vertex layout.
+    That makes memory capacity and TA byte counts unambiguous for two-volume
+    textured vertices while preserving the established canonical sink ABI.
+*/
+typedef struct pvr_geometry_vertex_sink {
+    pvr_geometry_sink_kind_t kind;
+    pvr_geometry_vertex_format_t format;
+    size_t emitted_vertices;
+    union {
+        struct {
+            void *vertices;
+            size_t capacity;
+        } memory;
+        pvr_list_t list;
+    } destination;
+} pvr_geometry_vertex_sink_t;
 
 /** \brief Project a strided vertex stream into caller-owned PVR vertices.
 
@@ -103,6 +137,28 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
                          const pvr_geometry_stream_t *stream,
                          const matrix_t *matrix,
                          pvr_geometry_result_t *result);
+
+/** \brief Project a declared complete PVR vertex layout.
+
+    The first 16 bytes of every supported layout are the command and XYZ
+    position. Projection transforms those fields with W=1 and preserves every
+    later byte, including both UV/color sets of a textured two-volume vertex.
+    Output is tightly packed according to stream::format. Input may use a
+    larger four-byte-aligned stride.
+
+    Exact in-place operation is supported when stride equals the declared
+    format size. Other overlapping ranges are rejected before output. On a
+    per-vertex failure, the result identifies the complete valid output prefix.
+    The output and matrix must satisfy their established alignment contracts.
+
+    \retval 0  All vertices projected.
+    \retval -1 Error, with errno set to EINVAL, EILSEQ, ENOSPC, EDOM, or
+               ERANGE.
+*/
+int pvr_geometry_project_vertices(
+    void *output, size_t output_capacity,
+    const pvr_geometry_vertex_stream_t *stream,
+    const matrix_t *matrix, pvr_geometry_result_t *result);
 
 /** \brief Initialize a caller-owned memory sink.
 
@@ -154,6 +210,36 @@ int pvr_geometry_sink_init_buffered(pvr_geometry_sink_t *sink,
 */
 int pvr_geometry_sink_emit(pvr_geometry_sink_t *sink,
                            const pvr_vertex_t *vertices, size_t count);
+
+/** \brief Initialize a format-bound caller-owned memory sink.
+
+    The destination must be 32-byte aligned and hold `capacity` complete
+    vertices of \p format. No memory is retained or allocated.
+*/
+int pvr_geometry_vertex_sink_init_memory(
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_geometry_vertex_format_t format,
+    void *vertices, size_t capacity);
+
+/** \brief Initialize a format-bound sink for the current polygon list. */
+int pvr_geometry_vertex_sink_init_current(
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_geometry_vertex_format_t format);
+
+/** \brief Initialize a format-bound explicit buffered polygon-list sink. */
+int pvr_geometry_vertex_sink_init_buffered(
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_geometry_vertex_format_t format, pvr_list_t list);
+
+/** \brief Emit complete vertices matching a format-bound sink.
+
+    Every command is checked before publication. Memory output is overlap-safe;
+    current and explicit buffered output retain the all-or-nothing behavior of
+    the established PVR primitive calls. The sink does not own scene lifetime.
+*/
+int pvr_geometry_vertex_sink_emit(
+    pvr_geometry_vertex_sink_t *sink,
+    const void *vertices, size_t count);
 
 /** @} */
 

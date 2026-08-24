@@ -82,17 +82,20 @@ prior strip was emitted. `pvr_chunk_render_result_t` and the sink's emitted
 counter then describe the complete valid prefix. A callback returning a
 negative value should set errno; the emitter uses `EIO` if it did not.
 
-The first renderer path intentionally fails with `ENOTSUP` during preflight for
-record families that need a different TA contract:
+The first compact-model renderer path intentionally fails with `ENOTSUP`
+during preflight for record families that need a different material or
+topology contract:
 
 - modifier-volume geometry;
 - two-volume texture, material, and strip records;
 - bump materials; and
 - cached-polygon control records.
 
-These records are not skipped or approximated. Later dedicated paths can add
-their required vertex formats and header state without weakening the ordinary
-strip contract.
+These records are not skipped or approximated. The lower geometry layer now
+provides checked projection and format-bound sinks for KOS's complete 32-byte
+untextured and 64-byte textured two-volume vertex layouts. A later compact
+two-volume path can therefore use the correct TA packet sizes without
+weakening the ordinary strip contract or duplicating publication logic.
 
 ## Concurrency and lifetime
 

@@ -87,6 +87,10 @@ lifecycle and naming conventions.
   vertex streams, with prefix-safe error reporting and caller-owned memory,
   current-list, or explicit buffered-list sinks. The sinks preserve existing
   direct and vertex-DMA submission while leaving scene ownership unchanged.
+  Format-aware projection and sinks also cover complete 32-byte untextured and
+  64-byte textured two-volume vertices without changing the canonical sink
+  ABI; command and XYZ fields are transformed while both volume attribute sets
+  are preserved exactly.
 * Added bounded compact PVR model streams with allocation-free record
   iteration and whole-model validation. Record framing, per-format vertex
   sizes, finite data, strip and volume structure, counters, and every indexed

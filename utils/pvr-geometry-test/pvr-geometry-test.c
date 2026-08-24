@@ -259,6 +259,201 @@ static void test_sinks(void) {
     assert(pvr_geometry_sink_emit(&sink, NULL, 0) == 0);
 }
 
+static void test_format_projection(void) {
+    alignas(32) const matrix_t transform = {
+        { 2.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 3.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 10.0f, 20.0f, 0.0f, 1.0f }
+    };
+    alignas(32) pvr_vertex_tpcm_t textured[3] = {
+        {
+            .flags = PVR_CMD_VERTEX,
+            .x = 1.0f, .y = 2.0f, .z = 3.0f,
+            .u0 = 0.25f, .v0 = 0.5f,
+            .argb0 = UINT32_C(0xff112233),
+            .oargb0 = UINT32_C(0xff445566),
+            .u1 = 0.75f, .v1 = 1.0f,
+            .argb1 = UINT32_C(0xff778899),
+            .oargb1 = UINT32_C(0xffaabbcc),
+            .d1 = 1, .d2 = 2, .d3 = 3, .d4 = 4
+        },
+        {
+            .flags = PVR_CMD_VERTEX_EOL,
+            .x = -1.0f, .y = -2.0f, .z = -3.0f,
+            .u0 = 0.125f, .v0 = 0.375f,
+            .argb0 = UINT32_C(0xff010203),
+            .oargb0 = UINT32_C(0xff040506),
+            .u1 = 0.625f, .v1 = 0.875f,
+            .argb1 = UINT32_C(0xff070809),
+            .oargb1 = UINT32_C(0xff0a0b0c),
+            .d1 = 5, .d2 = 6, .d3 = 7, .d4 = 8
+        }
+    };
+    alignas(32) pvr_vertex_tpcm_t output[3];
+    alignas(32) pvr_vertex_tpcm_t unchanged[3];
+    alignas(32) pvr_vertex_pcm_t colors[2] = {
+        {
+            .flags = PVR_CMD_VERTEX,
+            .x = 2.0f, .y = 4.0f, .z = 6.0f,
+            .argb0 = UINT32_C(0xff102030),
+            .argb1 = UINT32_C(0xff405060),
+            .d1 = 9, .d2 = 10
+        },
+        {
+            .flags = PVR_CMD_VERTEX_EOL,
+            .x = 3.0f, .y = 5.0f, .z = 7.0f,
+            .argb0 = UINT32_C(0xff708090),
+            .argb1 = UINT32_C(0xffa0b0c0),
+            .d1 = 11, .d2 = 12
+        }
+    };
+    alignas(32) pvr_vertex_pcm_t color_output[2];
+    pvr_geometry_vertex_stream_t stream = {
+        textured, 2, sizeof(textured[0]),
+        PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED
+    };
+    pvr_geometry_result_t result;
+
+    memset(output, 0x5a, sizeof(output));
+    assert(pvr_geometry_project_vertices(output, 3, &stream, &transform,
+                                         &result) == 0);
+    assert(result.consumed_vertices == 2 && result.produced_vertices == 2);
+    assert(output[0].x == 12.0f && output[0].y == 26.0f &&
+           output[0].z == 1.0f);
+    assert(output[1].x == 8.0f && output[1].y == 14.0f &&
+           output[1].z == 1.0f);
+    assert(!memcmp((const uint8_t *)&output[0] + 16u,
+                   (const uint8_t *)&textured[0] + 16u,
+                   sizeof(textured[0]) - 16u));
+    assert(!memcmp((const uint8_t *)&output[1] + 16u,
+                   (const uint8_t *)&textured[1] + 16u,
+                   sizeof(textured[1]) - 16u));
+
+    stream.vertices = colors;
+    stream.vertex_count = 2;
+    stream.stride = sizeof(colors[0]);
+    stream.format = PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR;
+    assert(pvr_geometry_project_vertices(color_output, 2, &stream, &transform,
+                                         NULL) == 0);
+    assert(color_output[0].x == 14.0f && color_output[0].y == 32.0f &&
+           color_output[0].argb0 == colors[0].argb0 &&
+           color_output[0].argb1 == colors[0].argb1 &&
+           color_output[0].d1 == colors[0].d1);
+
+    stream.vertices = textured;
+    stream.stride = sizeof(textured[0]);
+    stream.format = PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED;
+    memcpy(output, textured, 2u * sizeof(textured[0]));
+    stream.vertices = output;
+    assert(pvr_geometry_project_vertices(output, 2, &stream, &transform,
+                                         NULL) == 0);
+    assert(output[0].x == 12.0f && output[1].x == 8.0f);
+
+    stream.vertices = textured;
+    textured[1].flags = UINT32_C(0xd0000000);
+    memset(output, 0x5a, sizeof(output));
+    memcpy(unchanged, output, sizeof(output));
+    errno = 0;
+    assert(pvr_geometry_project_vertices(output, 3, &stream, &transform,
+                                         &result) == -1);
+    assert(errno == EILSEQ && result.produced_vertices == 1);
+    assert(!memcmp(output + 1, unchanged + 1,
+                   2u * sizeof(output[0])));
+    textured[1].flags = PVR_CMD_VERTEX_EOL;
+
+    errno = 0;
+    assert(pvr_geometry_project_vertices(output, 1, &stream, &transform,
+                                         &result) == -1);
+    assert(errno == ENOSPC && result.produced_vertices == 0);
+
+    stream.format = (pvr_geometry_vertex_format_t)99;
+    errno = 0;
+    assert(pvr_geometry_project_vertices(output, 3, &stream, &transform,
+                                         &result) == -1);
+    assert(errno == EINVAL && result.produced_vertices == 0);
+
+    stream.format = PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED;
+    stream.vertex_count = 2;
+    errno = 0;
+    assert(pvr_geometry_project_vertices((uint8_t *)textured + 32u, 2,
+                                         &stream, &transform, &result) == -1);
+    assert(errno == EINVAL && result.produced_vertices == 0);
+}
+
+static void test_vertex_sinks(void) {
+    alignas(32) pvr_vertex_tpcm_t textured[3] = {
+        { .flags = PVR_CMD_VERTEX, .argb0 = UINT32_C(0xff010203),
+          .argb1 = UINT32_C(0xff040506) },
+        { .flags = PVR_CMD_VERTEX, .argb0 = UINT32_C(0xff070809),
+          .argb1 = UINT32_C(0xff0a0b0c) },
+        { .flags = PVR_CMD_VERTEX_EOL, .argb0 = UINT32_C(0xff0d0e0f),
+          .argb1 = UINT32_C(0xff101112) }
+    };
+    alignas(32) pvr_vertex_tpcm_t memory[3];
+    alignas(32) pvr_vertex_tpcm_t unchanged[3];
+    alignas(32) pvr_vertex_pcm_t colors[2] = {
+        { .flags = PVR_CMD_VERTEX, .argb0 = UINT32_C(0xff112233),
+          .argb1 = UINT32_C(0xff445566) },
+        { .flags = PVR_CMD_VERTEX_EOL, .argb0 = UINT32_C(0xff778899),
+          .argb1 = UINT32_C(0xffaabbcc) }
+    };
+    alignas(32) pvr_vertex_pcm_t color_memory[2];
+    pvr_geometry_vertex_sink_t sink;
+
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, memory, 3) == 0);
+    assert(pvr_geometry_vertex_sink_emit(&sink, textured, 2) == 0);
+    assert(pvr_geometry_vertex_sink_emit(&sink, textured + 2, 1) == 0);
+    assert(sink.emitted_vertices == 3);
+    assert(!memcmp(memory, textured, sizeof(textured)));
+
+    errno = 0;
+    assert(pvr_geometry_vertex_sink_emit(&sink, textured, 1) == -1);
+    assert(errno == ENOSPC && sink.emitted_vertices == 3);
+
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR,
+        color_memory, 2) == 0);
+    assert(pvr_geometry_vertex_sink_emit(&sink, colors, 2) == 0);
+    assert(!memcmp(color_memory, colors, sizeof(colors)));
+
+    memset(memory, 0x5a, sizeof(memory));
+    memcpy(unchanged, memory, sizeof(memory));
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, memory, 3) == 0);
+    textured[1].flags = 0;
+    errno = 0;
+    assert(pvr_geometry_vertex_sink_emit(&sink, textured, 3) == -1);
+    assert(errno == EILSEQ && sink.emitted_vertices == 0);
+    assert(!memcmp(memory, unchanged, sizeof(memory)));
+    textured[1].flags = PVR_CMD_VERTEX;
+
+    submitted_count = 0;
+    assert(pvr_geometry_vertex_sink_init_current(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED) == 0);
+    assert(pvr_geometry_vertex_sink_emit(&sink, textured, 2) == 0);
+    assert(submitted_count == 4 && sink.emitted_vertices == 2);
+    assert(!memcmp(submitted, textured, 2u * sizeof(textured[0])));
+
+    submitted_count = 0;
+    assert(pvr_geometry_vertex_sink_init_buffered(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR,
+        PVR_LIST_TR_POLY) == 0);
+    assert(pvr_geometry_vertex_sink_emit(&sink, colors, 2) == 0);
+    assert(submitted_count == 2 && submitted_list == PVR_LIST_TR_POLY);
+
+    errno = 0;
+    assert(pvr_geometry_vertex_sink_init_current(
+        &sink, (pvr_geometry_vertex_format_t)99) == -1);
+    assert(errno == EINVAL);
+    errno = 0;
+    assert(pvr_geometry_vertex_sink_init_buffered(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR,
+        PVR_LIST_OP_MOD) == -1);
+    assert(errno == EINVAL);
+}
+
 static const matrix_t identity = {
     { 1.0f, 0.0f, 0.0f, 0.0f },
     { 0.0f, 1.0f, 0.0f, 0.0f },
@@ -412,6 +607,8 @@ int main(void) {
     test_projection();
     test_projection_failures();
     test_sinks();
+    test_format_projection();
+    test_vertex_sinks();
     test_frustum_classification();
     test_frustum_clipping();
     test_example_frustum();
