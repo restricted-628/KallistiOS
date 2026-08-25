@@ -65,6 +65,7 @@ __BEGIN_DECLS
 #include <dc/pvr_deform.h>
 #include <dc/pvr_lighting.h>
 #include <dc/pvr_material.h>
+#include <dc/pvr_particle.h>
 #include <dc/pvr_sprite_geometry.h>
 #include <dc/scif.h>
 #include <dc/sci.h>

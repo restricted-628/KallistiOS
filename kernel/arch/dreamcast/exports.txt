@@ -587,6 +587,12 @@ pvr_material_submit
 pvr_material_submit_list
 pvr_sprite_batch_compile_2d
 pvr_sprite_batch_compile_3d
+pvr_particle_pool_clear
+pvr_particle_spawn
+pvr_particle_step
+pvr_particle_emit_sprite_instances
+pvr_particle_compile_billboards
+pvr_particle_compile_trail
 pvr_txr_load_dma
 pvr_dma_ready
 pvr_dma_load_ta

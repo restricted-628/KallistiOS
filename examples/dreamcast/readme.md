@@ -166,6 +166,8 @@ This page serves as an index for all KallistiOS examples.
   - modifier_volume_zclip
   - palette
   - pipeline_status
+  - [**particles**](pvr/particles/): Simulates a caller-owned particle pool and
+    emits hardware sprite cells plus colored polygon trails
   - plasma
   - pvrline
   - pvrmark

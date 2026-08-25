@@ -97,6 +97,12 @@ lifecycle and naming conventions.
   UV flips, visibility compaction, screen-space output, and projected 3D
   billboards. Existing checked materials and geometry sinks retain texture,
   color, scene, list, and submission ownership.
+* Added bounded caller-owned particles with failure-atomic pool clearing,
+  spawning, and deterministic constant-acceleration stepping. Active particles
+  can compact into the sprite-cell path, expand into colored or textured
+  polygon billboards, or form ordered camera-facing trails through established
+  checked geometry sinks. The API creates no allocator, worker, timer, random
+  source, texture, material, scene, or list ownership.
 * Added bounded compact PVR model streams with allocation-free record
   iteration and whole-model validation. Record framing, per-format vertex
   sizes, finite data, strip and volume structure, counters, and every indexed
