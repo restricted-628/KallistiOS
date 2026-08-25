@@ -129,14 +129,15 @@ lifecycle and naming conventions.
   skin output; exact canonical in-place operation is supported; partial morph
   failures report a valid prefix. Dreamcast transforms and normalization use
   SH4ZAM without changing XMTRX.
-* Added renderer-independent, allocation-free collision geometry for unit
-  planes, finite segments, spheres, capsules, and axis-aligned boxes. Checked
-  closest-point, projection, inclusive overlap, and bounds operations retain
-  no world or object state, normalize published point/vector W components, and
-  leave caller output unchanged on failure. A bounded strided point stream can
-  produce AABBs without an intermediate mesh copy. Dreamcast dot products and
-  magnitudes use SH-4 vector instructions while host tests use the portable
-  path from the same source.
+* Added renderer-independent, allocation-free collision geometry for rays,
+  triangles, unit planes, finite segments, spheres, capsules, axis-aligned
+  boxes, and oriented boxes. Checked closest-point, projection, ray interval,
+  barycentric hit, inclusive overlap, separating-axis, and bounds operations
+  retain no world or object state, normalize published point/vector W
+  components, and leave caller output unchanged on failure. A bounded strided
+  point stream can produce AABBs without an intermediate mesh copy. Dreamcast
+  dot products and magnitudes use SH-4 vector instructions while host tests use
+  the portable path from the same source.
 * Added immediate-admission asynchronous PVR texture transfers with coherent
   progress, timed waits, and terminal request ownership. Added checked
   YUV420/YUV422 macroblock input sizing and conversion whose request completes

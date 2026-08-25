@@ -17,7 +17,7 @@ This page serves as an index for all KallistiOS examples.
   - [**camera-matrices**](basic/camera-matrices/): Demonstrates checked,
     caller-owned perspective and look-at matrix construction
   - [**collision**](basic/collision/): Demonstrates checked, allocation-free
-    sphere, capsule, segment, plane, and bounding-box geometry
+    ray, triangle, sphere, capsule, segment, plane, AABB, and OBB geometry
   - [**matrix_stack**](basic/matrix_stack/): Demonstrates bounded caller-owned
     transform hierarchy state
   - memtest32

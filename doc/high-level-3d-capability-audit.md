@@ -26,7 +26,7 @@ workloads.
 | Family | Current state | Native KOS direction |
 | --- | --- | --- |
 | Matrix register operations | Fast load, store, multiply, transform, translation, rotation, scaling, perspective, and look-at helpers | Keep the register API small; eliminate shared scratch state and provide explicit caller-owned save/restore. |
-| Transform hierarchy | No bounded matrix stack | Add a caller-owned stack with reported overflow and underflow and no allocation. |
+| Transform hierarchy | Bounded caller-owned matrix stack plus parent-before-child compact-model traversal | Preserve explicit overflow and underflow reporting, allocation-free storage, and caller-owned hierarchy policy. |
 | Camera state | Established immediate operations plus explicit, checked perspective and look-at builders | Keep application state caller-owned; add higher-level camera policy only outside the core math layer. |
 | Frustum and visibility | Caller-owned screen/W frusta provide bounded AABB classification and triangle clipping | Leave spatial partitioning, occlusion policy, and retained object state to applications. |
 | Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
@@ -36,7 +36,7 @@ workloads.
 | Keyframe animation | Validated immutable scalar, vector, and quaternion tracks provide clamped logarithmic sampling plus blended TRS object transforms | Keep playback clocks, looping policy, clip ownership, and object binding outside the math core. |
 | Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes | Keep skeleton ownership, pose evaluation, mesh binding, and blend policy outside the deformation kernels. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
-| Collision | Checked planes, segments, spheres, capsules, AABBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
+| Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
 | Asset formats and resource names | Bounded compact chunk streams provide validated structure without an engine-owned namespace | Keep parsing and traversal in KOS-native, caller-owned APIs; reject malformed offsets and counts before rendering. |
 
 ## Resource and execution rules
@@ -280,9 +280,32 @@ The ninth tranche adds a renderer-independent collision geometry foundation:
 The layer allocates nothing, creates no worker, retains no registration or
 global state, and has no relationship to PVR scene ownership. Applications
 remain responsible for broad-phase acceleration, collision filtering, object
-lifetime, response, and spatial partitioning. Ray and triangle queries,
-oriented volumes, sprites, particles, and asset conversion remain independent
+lifetime, response, and spatial partitioning. Sprites, particles, asset
+conversion, broad-phase acceleration, and collision response remain independent
 follow-up evaluations rather than hidden prerequisites of this ABI.
+
+## Tenth tranche
+
+The tenth tranche extends the same collision layer without introducing a
+second world, model, or renderer owner:
+
+- non-unit caller rays are normalized internally and publish world-space
+  distances, bounded hit points, winding-preserving normals, and barycentric
+  triangle weights;
+- point-to-triangle queries cover face, edge, and vertex Voronoi regions and
+  leave caller output unchanged when a triangle is malformed;
+- ray/AABB and ray/OBB slab queries publish entry and exit intervals, including
+  an entry distance of zero for origins already inside a volume;
+- oriented boxes require an explicit orthonormal basis and nonnegative half
+  extents, overlap spheres and AABBs, and use all fifteen separating axes for
+  OBB/OBB queries; and
+- OBB bounds and every boolean query scale intermediate coordinates before
+  arithmetic whose naive form could overflow on finite input.
+
+The implementation remains synchronous, allocation-free,
+renderer-independent, and optimized through the existing Dreamcast vector-dot
+path. The caller still owns collision filtering, response, object lifetime,
+spatial partitioning, and all persistent world state.
 
 ## Validation gates
 

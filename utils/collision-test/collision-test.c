@@ -256,6 +256,193 @@ static void test_point_stream(void) {
     assert(errno == EINVAL);
 }
 
+static void test_triangle_queries(void) {
+    const collision_triangle_t triangle = {
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 4.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 4.0f, 0.0f, 0.0f }
+    };
+    collision_triangle_t degenerate = triangle;
+    collision_triangle_closest_t closest;
+    collision_triangle_closest_t closest_sentinel;
+    collision_triangle_hit_t hit;
+    collision_triangle_hit_t hit_sentinel;
+    collision_ray_t ray = {
+        { 1.0f, 1.0f, 5.0f, 33.0f },
+        { 0.0f, 0.0f, -2.0f, 81.0f }
+    };
+    point_t point = { 1.0f, 1.0f, 3.0f, -8.0f };
+
+    assert(collision_point_triangle_closest(&point, &triangle, &closest) == 0);
+    check_point(closest.point, 1.0f, 1.0f, 0.0f);
+    assert(near(closest.first_weight, 0.5f));
+    assert(near(closest.second_weight, 0.25f));
+    assert(near(closest.third_weight, 0.25f));
+    assert(near(closest.squared_distance, 9.0f));
+
+    point = (point_t){ 3.0f, 3.0f, 0.0f, 0.0f };
+    assert(collision_point_triangle_closest(&point, &triangle, &closest) == 0);
+    check_point(closest.point, 2.0f, 2.0f, 0.0f);
+    assert(near(closest.first_weight, 0.0f));
+    assert(near(closest.second_weight, 0.5f));
+    assert(near(closest.third_weight, 0.5f));
+    assert(near(closest.squared_distance, 2.0f));
+
+    /* A distant but representable query must not make a small valid triangle
+       appear degenerate merely because their coordinate scales differ. */
+    point = (point_t){ 1.0e18f, 0.0f, 0.0f, 0.0f };
+    assert(collision_point_triangle_closest(&point, &triangle, &closest) == 0);
+    check_point(closest.point, 4.0f, 0.0f, 0.0f);
+    assert(isfinite(closest.squared_distance));
+
+    assert(collision_ray_intersects_triangle(&ray, &triangle, &hit) == 1);
+    assert(near(hit.distance, 5.0f));
+    check_point(hit.point, 1.0f, 1.0f, 0.0f);
+    assert(near(hit.normal.x, 0.0f));
+    assert(near(hit.normal.y, 0.0f));
+    assert(near(hit.normal.z, 1.0f));
+    assert(hit.normal.w == 0.0f);
+    assert(near(hit.first_weight, 0.5f));
+    assert(near(hit.second_weight, 0.25f));
+    assert(near(hit.third_weight, 0.25f));
+    assert(collision_ray_intersects_triangle(&ray, &triangle, NULL) == 1);
+
+    memset(&hit_sentinel, 0x6c, sizeof(hit_sentinel));
+    hit = hit_sentinel;
+    ray.origin.x = 5.0f;
+    assert(collision_ray_intersects_triangle(&ray, &triangle, &hit) == 0);
+    assert(memcmp(&hit, &hit_sentinel, sizeof(hit)) == 0);
+    ray.origin = (point_t){ 1.0f, 1.0f, -1.0f, 0.0f };
+    assert(collision_ray_intersects_triangle(&ray, &triangle, &hit) == 0);
+    assert(memcmp(&hit, &hit_sentinel, sizeof(hit)) == 0);
+    ray.origin = (point_t){ 1.0f, 1.0f, 5.0f, 0.0f };
+    ray.direction = (vector_t){ 1.0f, 0.0f, 0.0f, 0.0f };
+    assert(collision_ray_intersects_triangle(&ray, &triangle, &hit) == 0);
+
+    memset(&closest_sentinel, 0x91, sizeof(closest_sentinel));
+    closest = closest_sentinel;
+    degenerate.third = degenerate.second;
+    errno = 0;
+    assert(collision_point_triangle_closest(&point, &degenerate,
+                                            &closest) == -1);
+    assert(errno == EDOM);
+    assert(memcmp(&closest, &closest_sentinel, sizeof(closest)) == 0);
+    ray.direction = (vector_t){ 0.0f, 0.0f, 0.0f, 0.0f };
+    errno = 0;
+    assert(collision_ray_intersects_triangle(&ray, &triangle, &hit) == -1);
+    assert(errno == EDOM);
+}
+
+static collision_obb_t rotated_box(void) {
+    const float diagonal = 0.7071067811865475f;
+    collision_obb_t box = {
+        { 0.0f, 0.0f, 0.0f, 9.0f },
+        {
+            { diagonal, diagonal, 0.0f, 4.0f },
+            { -diagonal, diagonal, 0.0f, 5.0f },
+            { 0.0f, 0.0f, 1.0f, 6.0f }
+        },
+        { 2.0f, 1.0f, 1.0f, 7.0f }
+    };
+
+    return box;
+}
+
+static void test_ray_volumes(void) {
+    const collision_aabb_t aligned = {
+        { -1.0f, -1.0f, -1.0f, 0.0f },
+        { 1.0f, 1.0f, 1.0f, 0.0f }
+    };
+    collision_obb_t oriented = rotated_box();
+    collision_ray_interval_t interval;
+    collision_ray_interval_t sentinel;
+    collision_ray_t ray = {
+        { -3.0f, 0.0f, 0.0f, 0.0f },
+        { 2.0f, 0.0f, 0.0f, 0.0f }
+    };
+
+    assert(collision_ray_intersects_aabb(&ray, &aligned, &interval) == 1);
+    assert(near(interval.entry_distance, 2.0f));
+    assert(near(interval.exit_distance, 4.0f));
+    check_point(interval.entry_point, -1.0f, 0.0f, 0.0f);
+    check_point(interval.exit_point, 1.0f, 0.0f, 0.0f);
+
+    ray.origin = (point_t){ 0.0f, 0.0f, 0.0f, 0.0f };
+    assert(collision_ray_intersects_aabb(&ray, &aligned, &interval) == 1);
+    assert(interval.entry_distance == 0.0f);
+    assert(near(interval.exit_distance, 1.0f));
+    check_point(interval.entry_point, 0.0f, 0.0f, 0.0f);
+
+    ray.origin = (point_t){ -5.0f, 0.0f, 0.0f, 0.0f };
+    assert(collision_ray_intersects_obb(&ray, &oriented, &interval) == 1);
+    assert(near(interval.entry_distance, 5.0f - 2.0f * 0.7071067812f));
+    assert(near(interval.exit_distance, 5.0f + 2.0f * 0.7071067812f));
+
+    memset(&sentinel, 0xd3, sizeof(sentinel));
+    interval = sentinel;
+    ray.origin.y = 4.0f;
+    assert(collision_ray_intersects_obb(&ray, &oriented, &interval) == 0);
+    assert(memcmp(&interval, &sentinel, sizeof(interval)) == 0);
+
+    oriented.axes[1] = oriented.axes[0];
+    errno = 0;
+    assert(collision_ray_intersects_obb(&ray, &oriented, &interval) == -1);
+    assert(errno == EINVAL);
+    assert(memcmp(&interval, &sentinel, sizeof(interval)) == 0);
+}
+
+static void test_oriented_boxes(void) {
+    const float diagonal = 0.7071067811865475f;
+    collision_obb_t first = rotated_box();
+    collision_obb_t second = {
+        { 3.1212f, 0.0f, 0.0f, 0.0f },
+        {
+            { 1.0f, 0.0f, 0.0f, 0.0f },
+            { 0.0f, 1.0f, 0.0f, 0.0f },
+            { 0.0f, 0.0f, 1.0f, 0.0f }
+        },
+        { 1.0f, 1.0f, 1.0f, 0.0f }
+    };
+    collision_aabb_t aligned = {
+        { 3.0f * diagonal, diagonal, -0.5f, 0.0f },
+        { 3.0f * diagonal + 1.0f, diagonal + 0.5f, 0.5f, 0.0f }
+    };
+    collision_aabb_t bounds;
+    collision_aabb_t bounds_sentinel;
+    collision_sphere_t sphere = {
+        { 3.0f * diagonal, 3.0f * diagonal, 0.0f, 0.0f }, 1.0f
+    };
+
+    assert(collision_obb_intersects_sphere(&first, &sphere) == 1);
+    sphere.center.x += 0.001f;
+    sphere.center.y += 0.001f;
+    assert(collision_obb_intersects_sphere(&first, &sphere) == 0);
+
+    assert(collision_obb_intersects_obb(&first, &second) == 1);
+    second.center.x = 3.13f;
+    assert(collision_obb_intersects_obb(&first, &second) == 0);
+    assert(collision_obb_intersects_aabb(&first, &aligned) == 1);
+    aligned.minimum.x += 0.01f;
+    aligned.maximum.x += 0.01f;
+    assert(collision_obb_intersects_aabb(&first, &aligned) == 0);
+
+    assert(collision_obb_bounds(&first, &bounds) == 0);
+    assert(near(bounds.minimum.x, -3.0f * diagonal));
+    assert(near(bounds.minimum.y, -3.0f * diagonal));
+    assert(near(bounds.minimum.z, -1.0f));
+    assert(near(bounds.maximum.x, 3.0f * diagonal));
+    assert(near(bounds.maximum.y, 3.0f * diagonal));
+    assert(near(bounds.maximum.z, 1.0f));
+
+    memset(&bounds_sentinel, 0xef, sizeof(bounds_sentinel));
+    bounds = bounds_sentinel;
+    first.half_extents.y = -1.0f;
+    errno = 0;
+    assert(collision_obb_bounds(&first, &bounds) == -1);
+    assert(errno == EINVAL);
+    assert(memcmp(&bounds, &bounds_sentinel, sizeof(bounds)) == 0);
+}
+
 int main(void) {
     test_plane();
     test_point_segment();
@@ -264,6 +451,9 @@ int main(void) {
     test_large_coordinates();
     test_boxes_and_bounds();
     test_point_stream();
+    test_triangle_queries();
+    test_ray_volumes();
+    test_oriented_boxes();
     puts("collision-test: PASS");
     return 0;
 }

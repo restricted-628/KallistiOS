@@ -17,6 +17,7 @@ static int close_enough(float actual, float expected) {
 }
 
 int main(int argc, char **argv) {
+    const float diagonal = 0.7071067811865475f;
     const collision_capsule_t guard = {
         { -2.0f, 0.0f, 0.0f, 1.0f },
         { 2.0f, 0.0f, 0.0f, 1.0f },
@@ -36,6 +37,25 @@ int main(int argc, char **argv) {
     const point_t plane_b = { 1.0f, 0.0f, 0.0f, 1.0f };
     const point_t plane_c = { 0.0f, 1.0f, 1.0f, 1.0f };
     const point_t above_plane = { 0.0f, 0.0f, 2.0f, 1.0f };
+    const collision_triangle_t floor_triangle = {
+        { 0.0f, 0.0f, 0.0f, 1.0f },
+        { 4.0f, 0.0f, 0.0f, 1.0f },
+        { 0.0f, 4.0f, 0.0f, 1.0f }
+    };
+    const collision_ray_t pick_ray = {
+        { 1.0f, 1.0f, 3.0f, 1.0f },
+        { 0.0f, 0.0f, -4.0f, 0.0f }
+    };
+    collision_triangle_hit_t floor_hit;
+    collision_obb_t rotated = {
+        { 0.0f, 0.0f, 0.0f, 1.0f },
+        {
+            { diagonal, diagonal, 0.0f, 0.0f },
+            { -diagonal, diagonal, 0.0f, 0.0f },
+            { 0.0f, 0.0f, 1.0f, 0.0f }
+        },
+        { 2.0f, 1.0f, 1.0f, 0.0f }
+    };
 
     (void)argc;
     (void)argv;
@@ -63,6 +83,22 @@ int main(int argc, char **argv) {
                                          &projection) == 0);
     assert(close_enough(projection.point.y, 1.0f));
     assert(close_enough(projection.point.z, 1.0f));
+
+    /* The direction is deliberately non-unit; distance is still world-space. */
+    assert(collision_ray_intersects_triangle(&pick_ray, &floor_triangle,
+                                              &floor_hit) == 1);
+    assert(close_enough(floor_hit.distance, 3.0f));
+    assert(close_enough(floor_hit.first_weight, 0.5f));
+    assert(close_enough(floor_hit.second_weight, 0.25f));
+    assert(close_enough(floor_hit.third_weight, 0.25f));
+
+    actor.center = (point_t){ 3.0f * diagonal, 3.0f * diagonal,
+                              0.0f, 1.0f };
+    actor.radius = 1.0f;
+    assert(collision_obb_intersects_sphere(&rotated, &actor) == 1);
+    assert(collision_obb_bounds(&rotated, &bounds) == 0);
+    assert(close_enough(bounds.maximum.x, 3.0f * diagonal));
+    assert(close_enough(bounds.maximum.y, 3.0f * diagonal));
 
     vid_clear(0, 64, 0);
     bfont_draw_str(vram_s + vid_mode->width * BFONT_HEIGHT +
