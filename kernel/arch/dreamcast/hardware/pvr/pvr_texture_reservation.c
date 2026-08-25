@@ -125,6 +125,7 @@ int pvr_txr_surface_bind_reservation(
     pvr_txr_surface_t candidate;
     pvr_txr_level_info_t level;
     pvr_ptr_t slice;
+    pvr_ptr_t texture_address;
 
     if(!surface) {
         errno = EINVAL;
@@ -144,6 +145,9 @@ int pvr_txr_surface_bind_reservation(
     candidate.vram = slice;
     candidate.capacity = surface->byte_size;
     candidate.owns_vram = false;
+    if(pvr_txr_surface_get_texture_address(&candidate,
+                                            &texture_address) < 0)
+        return -1;
     *surface = candidate;
     return 0;
 }

@@ -78,6 +78,11 @@ lifecycle and naming conventions.
   textures to carry independent 16-bit color tables without consuming global
   palette banks. A focused example demonstrates the doubled-dimension VQ
   layout and validates 120 rendered frames.
+* Added compact-codebook VQ surfaces with exact encoded-size metadata, checked
+  high-range index bases, and distinct storage and texture-header addresses.
+  Allocated, externally bound, and reserved surfaces retain ordinary upload,
+  readback, release, and compact-model material behavior while storing only
+  the codebook entries actually used.
 * Removed shared mutable scratch matrices from the established 3D transform
   helpers and added a bounded caller-owned matrix stack with explicit
   overflow, underflow, and non-consuming restore operations. It allocates no

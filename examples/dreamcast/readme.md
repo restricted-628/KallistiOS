@@ -185,6 +185,8 @@ This page serves as an index for all KallistiOS examples.
   - texture_render
   - [**vq_palette**](pvr/vq_palette/): Uses a VQ codebook as an independent
     per-texture 16-bit palette for a byte-indexed image
+  - [**vq_compact**](pvr/vq_compact/): Stores only the high VQ codebook entries
+    used by a texture and compiles its adjusted sampling address
   - yuv_converter
 - raylib
   - raytris

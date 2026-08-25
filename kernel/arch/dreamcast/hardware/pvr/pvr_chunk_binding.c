@@ -234,7 +234,8 @@ static int resolve_texture(
         return -1;
     }
 
-    resolved->base = surface->vram;
+    if(pvr_txr_surface_get_texture_address(surface, &resolved->base) < 0)
+        return -1;
     resolved->format = (int)format;
     resolved->width = (int)surface->width;
     resolved->height = (int)surface->height;

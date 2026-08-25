@@ -74,9 +74,10 @@ static size_t mip_level_offset(uint32_t exponent,
     return offset;
 }
 
-int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
-                         uint32_t height, pvr_txr_surface_format_t format,
-                         pvr_txr_surface_layout_t layout, bool mipmapped) {
+static int surface_init(pvr_txr_surface_t *surface, uint32_t width,
+                        uint32_t height, pvr_txr_surface_format_t format,
+                        pvr_txr_surface_layout_t layout, bool mipmapped,
+                        size_t codebook_size) {
     uint32_t exponent;
     size_t top_size;
 
@@ -118,6 +119,18 @@ int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
         return -1;
     }
 
+    if(layout == PVR_TXR_SURFACE_VQ) {
+        if(codebook_size < 8u || codebook_size > PVR_TXR_VQ_CODEBOOK_BYTES
+           || (codebook_size & 7u)) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    else if(codebook_size) {
+        errno = EINVAL;
+        return -1;
+    }
+
     if(mipmapped && width != height) {
         errno = EINVAL;
         return -1;
@@ -136,8 +149,7 @@ int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
     surface->layout = layout;
     surface->mipmapped = mipmapped;
     surface->mip_levels = mipmapped ? integer_log2(width) + 1u : 1u;
-    surface->codebook_size = layout == PVR_TXR_SURFACE_VQ
-                           ? PVR_TXR_VQ_CODEBOOK_BYTES : 0;
+    surface->codebook_size = codebook_size;
 
     if(mipmapped) {
         exponent = integer_log2(width);
@@ -152,13 +164,42 @@ int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
     return 0;
 }
 
+int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
+                         uint32_t height, pvr_txr_surface_format_t format,
+                         pvr_txr_surface_layout_t layout, bool mipmapped) {
+    size_t codebook_size = layout == PVR_TXR_SURFACE_VQ
+                         ? PVR_TXR_VQ_CODEBOOK_BYTES : 0;
+
+    return surface_init(surface, width, height, format, layout, mipmapped,
+                        codebook_size);
+}
+
+int pvr_txr_surface_init_vq(pvr_txr_surface_t *surface, uint32_t width,
+                            uint32_t height,
+                            pvr_txr_surface_format_t format,
+                            uint16_t codebook_entries, bool mipmapped) {
+    if(!codebook_entries || codebook_entries > 256u) {
+        if(surface)
+            memset(surface, 0, sizeof(*surface));
+        errno = EINVAL;
+        return -1;
+    }
+
+    return surface_init(surface, width, height, format, PVR_TXR_SURFACE_VQ,
+                        mipmapped, (size_t)codebook_entries * 8u);
+}
+
 static bool surface_metadata_valid(const pvr_txr_surface_t *surface) {
     pvr_txr_surface_t expected;
 
-    if(!surface
-       || pvr_txr_surface_init(&expected, surface->width, surface->height,
-                               surface->format, surface->layout,
-                               surface->mipmapped) < 0)
+    if(!surface) {
+        errno = EINVAL;
+        return false;
+    }
+
+    if(surface_init(&expected, surface->width, surface->height,
+                    surface->format, surface->layout, surface->mipmapped,
+                    surface->codebook_size) < 0)
         return false;
 
     if(surface->byte_size != expected.byte_size
@@ -203,6 +244,59 @@ int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
     }
 
     return 0;
+}
+
+int pvr_txr_surface_get_texture_address(const pvr_txr_surface_t *surface,
+                                        pvr_ptr_t *address) {
+    uintptr_t storage;
+    size_t bias = 0;
+
+    if(address)
+        *address = NULL;
+    if(!address || !surface_metadata_valid(surface)) {
+        if(!address)
+            errno = EINVAL;
+        return -1;
+    }
+    if(!surface->vram) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    storage = (uintptr_t)surface->vram;
+    if(storage < PVR_RAM_INT_BASE || storage >= PVR_RAM_INT_TOP) {
+        errno = EFAULT;
+        return -1;
+    }
+    if(surface->capacity < surface->byte_size
+       || surface->capacity > PVR_RAM_INT_TOP - storage) {
+        errno = ENOSPC;
+        return -1;
+    }
+
+    if(surface->layout == PVR_TXR_SURFACE_VQ)
+        bias = PVR_TXR_VQ_CODEBOOK_BYTES - surface->codebook_size;
+    if(bias > storage - PVR_RAM_INT_BASE) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    /* The absent low entries occupy only an address window. Their bytes may
+       overlap preceding VRAM because biased indices select exclusively from
+       the physically stored high end of the codebook. */
+    *address = (pvr_ptr_t)(storage - bias);
+    return 0;
+}
+
+int pvr_txr_surface_get_vq_index_base(const pvr_txr_surface_t *surface) {
+    if(!surface_metadata_valid(surface))
+        return -1;
+    if(surface->layout != PVR_TXR_SURFACE_VQ) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    return 256 - (int)(surface->codebook_size / 8u);
 }
 
 int pvr_txr_vq_palette_build(void *codebook, size_t codebook_size,

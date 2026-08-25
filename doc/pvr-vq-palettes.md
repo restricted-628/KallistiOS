@@ -20,4 +20,5 @@ precision rather than the wider global palette modes.
 
 This layout uses all 256 hardware codebook entries. It is separate from compact
 codebook storage, which changes the physical codebook size and requires biased
-VQ indices and a correspondingly adjusted texture address.
+VQ indices and a correspondingly adjusted texture address. See the
+[compact VQ codebook guide](pvr-vq-compact.md) for that layout.

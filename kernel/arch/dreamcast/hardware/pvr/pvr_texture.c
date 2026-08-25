@@ -74,14 +74,9 @@ static bool surface_storage_valid(const pvr_txr_surface_t *surface) {
     return true;
 }
 
-int pvr_txr_surface_alloc(pvr_txr_surface_t *surface, uint32_t width,
-                          uint32_t height, pvr_txr_surface_format_t format,
-                          pvr_txr_surface_layout_t layout, bool mipmapped) {
+static int surface_allocate(pvr_txr_surface_t *surface) {
     pvr_ptr_t allocation;
-
-    if(pvr_txr_surface_init(surface, width, height, format, layout,
-                            mipmapped) < 0)
-        return -1;
+    pvr_ptr_t texture_address;
 
     allocation = pvr_mem_malloc(surface->byte_size);
     if(!allocation) {
@@ -93,17 +88,46 @@ int pvr_txr_surface_alloc(pvr_txr_surface_t *surface, uint32_t width,
     surface->vram = allocation;
     surface->capacity = surface->byte_size;
     surface->owns_vram = true;
+    if(pvr_txr_surface_get_texture_address(surface, &texture_address) < 0) {
+        int saved_errno = errno;
+
+        pvr_mem_free(allocation);
+        memset(surface, 0, sizeof(*surface));
+        errno = saved_errno;
+        return -1;
+    }
     return 0;
 }
 
-int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
-                         size_t capacity, uint32_t width, uint32_t height,
-                         pvr_txr_surface_format_t format,
-                         pvr_txr_surface_layout_t layout, bool mipmapped) {
+int pvr_txr_surface_alloc(pvr_txr_surface_t *surface, uint32_t width,
+                          uint32_t height, pvr_txr_surface_format_t format,
+                          pvr_txr_surface_layout_t layout, bool mipmapped) {
+    if(pvr_txr_surface_init(surface, width, height, format, layout,
+                            mipmapped) < 0)
+        return -1;
+
+    return surface_allocate(surface);
+}
+
+int pvr_txr_surface_alloc_vq(pvr_txr_surface_t *surface, uint32_t width,
+                             uint32_t height,
+                             pvr_txr_surface_format_t format,
+                             uint16_t codebook_entries, bool mipmapped) {
+    if(pvr_txr_surface_init_vq(surface, width, height, format,
+                               codebook_entries, mipmapped) < 0)
+        return -1;
+
+    return surface_allocate(surface);
+}
+
+static int surface_bind_storage(pvr_txr_surface_t *surface, pvr_ptr_t vram,
+                                size_t capacity) {
     uintptr_t address = (uintptr_t)vram;
     uintptr_t vram_top = PVR_RAM_INT_TOP;
+    pvr_ptr_t texture_address;
 
     if(!vram || (address & 7u)) {
+        memset(surface, 0, sizeof(*surface));
         errno = EINVAL;
         return -1;
     }
@@ -112,13 +136,10 @@ int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
        memory here prevents a later DMA upload from silently remapping it as a
        VRAM destination through its low address bits. */
     if(address < PVR_RAM_INT_BASE || address >= vram_top) {
+        memset(surface, 0, sizeof(*surface));
         errno = EFAULT;
         return -1;
     }
-
-    if(pvr_txr_surface_init(surface, width, height, format, layout,
-                            mipmapped) < 0)
-        return -1;
 
     if(capacity > vram_top - address || capacity < surface->byte_size) {
         memset(surface, 0, sizeof(*surface));
@@ -128,7 +149,36 @@ int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
 
     surface->vram = vram;
     surface->capacity = capacity;
+    if(pvr_txr_surface_get_texture_address(surface, &texture_address) < 0) {
+        int saved_errno = errno;
+
+        memset(surface, 0, sizeof(*surface));
+        errno = saved_errno;
+        return -1;
+    }
     return 0;
+}
+
+int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
+                         size_t capacity, uint32_t width, uint32_t height,
+                         pvr_txr_surface_format_t format,
+                         pvr_txr_surface_layout_t layout, bool mipmapped) {
+    if(pvr_txr_surface_init(surface, width, height, format, layout,
+                            mipmapped) < 0)
+        return -1;
+
+    return surface_bind_storage(surface, vram, capacity);
+}
+
+int pvr_txr_surface_bind_vq(pvr_txr_surface_t *surface, pvr_ptr_t vram,
+                            size_t capacity, uint32_t width, uint32_t height,
+                            pvr_txr_surface_format_t format,
+                            uint16_t codebook_entries, bool mipmapped) {
+    if(pvr_txr_surface_init_vq(surface, width, height, format,
+                               codebook_entries, mipmapped) < 0)
+        return -1;
+
+    return surface_bind_storage(surface, vram, capacity);
 }
 
 void pvr_txr_surface_release(pvr_txr_surface_t *surface) {

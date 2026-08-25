@@ -92,6 +92,8 @@ typedef struct pvr_txr_level_info {
 
 int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
                               uint32_t level, pvr_txr_level_info_t *info);
+int pvr_txr_surface_get_texture_address(const pvr_txr_surface_t *surface,
+                                        pvr_ptr_t *address);
 uint32_t pvr_txr_surface_pvr_format(const pvr_txr_surface_t *surface);
 
 #endif /* TEST_CHUNK_BINDING_DC_PVR_H */

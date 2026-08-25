@@ -27,6 +27,9 @@ controller behavior are documented in the
 [G1 bus ownership guide](g1-bus-ownership.md).
 Independent 16-bit color tables for byte-indexed textures are documented in
 the [per-texture VQ palette guide](pvr-vq-palettes.md).
+Reduced VQ storage, biased indices, and the distinction between owned storage
+and the texture-header address are documented in the
+[compact VQ codebook guide](pvr-vq-compact.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.

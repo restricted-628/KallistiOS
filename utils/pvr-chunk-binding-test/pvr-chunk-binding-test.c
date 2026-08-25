@@ -33,6 +33,27 @@ int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
     return 0;
 }
 
+int pvr_txr_surface_get_texture_address(const pvr_txr_surface_t *surface,
+                                        pvr_ptr_t *address) {
+    size_t bias = 0;
+
+    if(address)
+        *address = NULL;
+    if(!surface || !address || !surface->vram) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(surface->layout == PVR_TXR_SURFACE_VQ) {
+        if(!surface->codebook_size || surface->codebook_size > 2048u) {
+            errno = EINVAL;
+            return -1;
+        }
+        bias = 2048u - surface->codebook_size;
+    }
+    *address = (uint8_t *)surface->vram - bias;
+    return 0;
+}
+
 uint32_t pvr_txr_surface_pvr_format(const pvr_txr_surface_t *surface) {
     static const uint32_t formats[] = {
         0u, PVR_TXRFMT_RGB565, 2u << 27, 3u << 27, 4u << 27,
@@ -200,6 +221,10 @@ static void test_resolve(void) {
     pvr_material_t material;
     pvr_material_t unchanged;
 
+    color.layout = PVR_TXR_SURFACE_VQ;
+    color.codebook_size = 1024;
+    color.data_size = color.byte_size - color.codebook_size;
+
     assert(pvr_chunk_texture_table_open(&table, &view) == 0);
     memset(&state, 0, sizeof(state));
     memset(&strip, 0, sizeof(strip));
@@ -226,8 +251,9 @@ static void test_resolve(void) {
     assert(compile_calls == 1 && compiled_kind == PVR_MATERIAL_POLYGON);
     assert(compiled_flags == PVR_COMPILE_SUPERSAMPLE);
     assert(compiled_context.txr.enable &&
-           compiled_context.txr.base == color.vram);
-    assert(compiled_context.txr.format == (int)PVR_TXRFMT_RGB565);
+           compiled_context.txr.base == (uint8_t *)color.vram - 1024u);
+    assert(compiled_context.txr.format ==
+           (int)(PVR_TXRFMT_RGB565 | PVR_TXRFMT_VQ_ENABLE));
     assert(compiled_context.txr.mipmap &&
            compiled_context.txr.mipmap_bias == PVR_MIPBIAS_1_50);
     assert(compiled_context.txr.filter == PVR_FILTER_BILINEAR);

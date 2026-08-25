@@ -71,6 +71,7 @@ static void test_mipmap_layouts(void) {
 
 static void test_vq_layouts(void) {
     pvr_txr_surface_t surface;
+    pvr_ptr_t texture_address;
     uint16_t colors[3] = { 0x001fu, 0x07e0u, 0xf800u };
     uint16_t codebook[1024];
     size_t i;
@@ -96,12 +97,35 @@ static void test_vq_layouts(void) {
     expect_level(&surface, 0, 8, 8, 2054, 16);
     expect_level(&surface, 3, 1, 1, 2048, 1);
 
+    assert(pvr_txr_surface_init_vq(&surface, 64, 64,
+                                   PVR_TXR_SURFACE_RGB565,
+                                   128, false) == 0);
+    assert(surface.codebook_size == 1024);
+    assert(surface.data_size == 1024);
+    assert(surface.byte_size == 2048);
+    expect_level(&surface, 0, 64, 64, 1024, 1024);
+    assert(pvr_txr_surface_get_vq_index_base(&surface) == 128);
+
+    surface.vram = (pvr_ptr_t)(uintptr_t)(PVR_RAM_INT_BASE + 0x4000u);
+    surface.capacity = surface.byte_size;
+    assert(pvr_txr_surface_get_texture_address(&surface,
+                                                &texture_address) == 0);
+    assert(texture_address ==
+           (pvr_ptr_t)(uintptr_t)(PVR_RAM_INT_BASE + 0x3c00u));
+
+    surface.vram = (pvr_ptr_t)(uintptr_t)(PVR_RAM_INT_BASE + 0x200u);
+    errno = 0;
+    assert(pvr_txr_surface_get_texture_address(&surface,
+                                                &texture_address) == -1);
+    assert(errno == ERANGE && !texture_address);
+
     assert(pvr_txr_surface_init(&surface, 512, 512,
                                 PVR_TXR_SURFACE_RGB565,
                                 PVR_TXR_SURFACE_VQ, false) == 0);
     assert(surface.codebook_size == 2048);
     assert(surface.data_size == 256u * 256u);
     assert(surface.byte_size == 2048u + 256u * 256u);
+    assert(pvr_txr_surface_get_vq_index_base(&surface) == 0);
 
     memset(codebook, 0xff, sizeof(codebook));
     assert(pvr_txr_vq_palette_build(codebook, sizeof(codebook), colors,
@@ -215,6 +239,18 @@ static void test_rejections(void) {
     assert(errno == ENOTSUP);
 
     errno = 0;
+    assert(pvr_txr_surface_init_vq(&surface, 64, 64,
+                                   PVR_TXR_SURFACE_RGB565,
+                                   0, false) == -1);
+    assert(errno == EINVAL);
+
+    errno = 0;
+    assert(pvr_txr_surface_init_vq(&surface, 64, 64,
+                                   PVR_TXR_SURFACE_RGB565,
+                                   257, false) == -1);
+    assert(errno == EINVAL);
+
+    errno = 0;
     assert(pvr_txr_surface_init(&surface, 64, 64,
                                 PVR_TXR_SURFACE_PAL4BPP,
                                 PVR_TXR_SURFACE_VQ, false) == -1);
@@ -229,6 +265,9 @@ static void test_rejections(void) {
     assert(pvr_txr_surface_init(&surface, 64, 64,
                                 PVR_TXR_SURFACE_RGB565,
                                 PVR_TXR_SURFACE_TWIDDLED, false) == 0);
+    errno = 0;
+    assert(pvr_txr_surface_get_vq_index_base(&surface) == -1);
+    assert(errno == ENOTSUP);
     errno = 0;
     assert(pvr_txr_surface_get_level(&surface, 1, &info) == -1);
     assert(errno == ERANGE);

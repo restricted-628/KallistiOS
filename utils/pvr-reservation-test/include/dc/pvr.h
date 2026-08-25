@@ -19,6 +19,12 @@ int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
                          uint32_t height,
                          pvr_txr_surface_format_t format,
                          pvr_txr_surface_layout_t layout, bool mipmapped);
+int pvr_txr_surface_init_vq(pvr_txr_surface_t *surface, uint32_t width,
+                            uint32_t height,
+                            pvr_txr_surface_format_t format,
+                            uint16_t codebook_entries, bool mipmapped);
+int pvr_txr_surface_get_texture_address(const pvr_txr_surface_t *surface,
+                                        pvr_ptr_t *address);
 int pvr_txr_surface_plan_reservation(const pvr_txr_surface_t *surfaces,
                                      size_t surface_count, size_t alignment,
                                      size_t *offsets, size_t *total_bytes);

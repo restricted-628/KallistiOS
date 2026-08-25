@@ -81,9 +81,9 @@ static void init_surfaces(pvr_txr_surface_t surfaces[3]) {
     assert(pvr_txr_surface_init(&surfaces[1], 32, 32,
                                 PVR_TXR_SURFACE_ARGB4444,
                                 PVR_TXR_SURFACE_TWIDDLED, false) == 0);
-    assert(pvr_txr_surface_init(&surfaces[2], 64, 64,
-                                PVR_TXR_SURFACE_RGB565,
-                                PVR_TXR_SURFACE_VQ, false) == 0);
+    assert(pvr_txr_surface_init_vq(&surfaces[2], 64, 64,
+                                   PVR_TXR_SURFACE_RGB565,
+                                   128, false) == 0);
 }
 
 static void test_surface_plan_and_binding(void) {
@@ -113,6 +113,13 @@ static void test_surface_plan_and_binding(void) {
                (uint8_t *)reservation.base + offsets[i]);
         assert(surfaces[i].capacity == surfaces[i].byte_size);
         assert(!surfaces[i].owns_vram);
+    }
+    {
+        pvr_ptr_t texture_address;
+
+        assert(pvr_txr_surface_get_texture_address(
+            &surfaces[2], &texture_address) == 0);
+        assert(texture_address == (uint8_t *)surfaces[2].vram - 1024u);
     }
 
     unchanged = surfaces[0];

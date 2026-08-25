@@ -56,7 +56,7 @@ than place another renderer above them.
 | Render submission identity | Stable allocation-free tickets cover queued registration, completed registration, rendering, target completion, and display | Preserve identity-specific waits and expose counters in coherent pipeline diagnostics. |
 | Render targets | Sized 16-bit render-to-texture, checked surface binding, and explicit completion/no-flip contracts are covered | Treat additional output encodings as hardware-gated extensions, not assumed formats. |
 | Texture allocation | General allocation, checked caller-owned surfaces, and contiguous multi-surface reservations are covered | Preserve one allocator, explicit lifetimes, failure-atomic planning, and exact non-owning slice bounds. |
-| Texture formats | Linear, twiddled, mipmapped, paletted, full-codebook VQ, stride, rectangle, and YUV are represented | Validate reduced-codebook VQ and any VQ/palette combinations against hardware before extending the surface layout vocabulary. |
+| Texture formats | Linear, twiddled, mipmapped, paletted, full- and compact-codebook VQ, stride, rectangle, and YUV are represented | Validate compact VQ combinations and performance on physical hardware before broadening the surface vocabulary further. |
 | Texture upload and readback | Checked synchronous and immediate-admission asynchronous uploads plus encoded CPU readback are covered | Preserve explicit render/sampling hazard rules and add asynchronous readback only for a demonstrated need. |
 | Texture conversion | Checked 4/8/16-bpp twiddling is covered | Keep palette creation and VQ encoding in content tools rather than placing unbounded encoders in the kernel. |
 | YUV conversion | Checked single-destination synchronous and asynchronous conversion is covered | Add contiguous multi-destination conversion only with bounded geometry, progress, and ownership. |
@@ -268,6 +268,12 @@ Physical completion visibility and page-flip timing remain hardware-day items.
   the hardware's smallest-first storage order;
 - full VQ surfaces reserve a 2048-byte codebook and expose separate checked
   codebook and index-level uploads;
+- compact VQ surfaces store 1 through 256 high-numbered codebook entries,
+  expose their required index base, and keep their owned storage address
+  distinct from the earlier address encoded in a texture header;
+- allocated, caller-bound, and reserved compact surfaces validate both their
+  exact stored range and the adjusted sampling address, while compact-model
+  material binding resolves the latter automatically;
 - a checked codebook builder repeats each 16-bit color across one complete VQ
   entry, allowing a two-times-larger hardware surface to consume a logical
   byte-index image with an independent per-texture palette;
@@ -283,9 +289,10 @@ Physical completion visibility and page-flip timing remain hardware-day items.
 - a nonmipmapped linear or X32-stride surface whose format matches the active
   16-bit render mode can begin a checked texture-target scene, with dimensions,
   stride, and target identity preserved by its render ticket;
-- the host regression test passes exact plain, strided, mipmapped, palette, and
-  VQ size and offset vectors, per-texture VQ palette expansion, invalid layout
-  combinations, and descriptor corruption;
+- the host regression test passes exact plain, strided, mipmapped, palette,
+  full- and compact-codebook VQ size and offset vectors, per-texture VQ palette
+  expansion, sampling-address bias, invalid layout combinations, and
+  descriptor corruption;
 - the focused example completes 120 frames in interpreter-mode emulation after
   exercising checked twiddling, an asynchronous DMA upload, exact upload
   readback, a checked render target and ticket, live rectangle updates,

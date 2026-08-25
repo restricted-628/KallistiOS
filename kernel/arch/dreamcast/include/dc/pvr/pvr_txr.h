@@ -289,14 +289,29 @@ typedef struct pvr_txr_surface {
     Width and height must be powers of two from 8 through 1024, except that an
     X32-stride surface accepts widths from 32 through 992 in multiples of 32.
     Mipmapped surfaces must be square. Palette formats are twiddled and cannot
-    be combined with linear or X32-stride storage. VQ currently uses the
-    hardware's full 2048-byte codebook and 16-bit texel formats.
+    be combined with linear or X32-stride storage. This generic constructor
+    uses the hardware's full 2048-byte VQ codebook and 16-bit texel formats;
+    use pvr_txr_surface_init_vq() for compact VQ storage.
 
     \return 0 on success, or -1 with errno set.
 */
 int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
                          uint32_t height, pvr_txr_surface_format_t format,
                          pvr_txr_surface_layout_t layout, bool mipmapped);
+
+/** \brief Calculate compact-codebook VQ metadata without allocating VRAM.
+
+    \a codebook_entries may contain 1 through 256 eight-byte entries. Encoded
+    VQ indices must address the upper end of the hardware's 256-entry range;
+    query the first legal value with pvr_txr_surface_get_vq_index_base(). The
+    compact codebook is immediately followed by the ordinary VQ index data.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_init_vq(pvr_txr_surface_t *surface, uint32_t width,
+                            uint32_t height,
+                            pvr_txr_surface_format_t format,
+                            uint16_t codebook_entries, bool mipmapped);
 
 /** \brief Initialize a surface and allocate its storage with pvr_mem_malloc().
     \warning Release an existing owned surface before reinitializing it, and do
@@ -307,6 +322,19 @@ int pvr_txr_surface_init(pvr_txr_surface_t *surface, uint32_t width,
 int pvr_txr_surface_alloc(pvr_txr_surface_t *surface, uint32_t width,
                           uint32_t height, pvr_txr_surface_format_t format,
                           pvr_txr_surface_layout_t layout, bool mipmapped);
+
+/** \brief Initialize and allocate a compact-codebook VQ surface.
+
+    Release the allocation through pvr_txr_surface_release(). Use
+    pvr_txr_surface_get_texture_address(), rather than \c surface->vram, when
+    compiling a texture header.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_alloc_vq(pvr_txr_surface_t *surface, uint32_t width,
+                             uint32_t height,
+                             pvr_txr_surface_format_t format,
+                             uint16_t codebook_entries, bool mipmapped);
 
 /** \brief Initialize a surface over caller-provided VRAM.
 
@@ -321,6 +349,19 @@ int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
                          size_t capacity, uint32_t width, uint32_t height,
                          pvr_txr_surface_format_t format,
                          pvr_txr_surface_layout_t layout, bool mipmapped);
+
+/** \brief Initialize compact-codebook VQ metadata over caller-owned VRAM.
+
+    \a vram identifies the physically stored codebook, not the earlier biased
+    address placed in a texture header. The complete stored range and adjusted
+    sampling address must both remain inside PVR RAM.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_bind_vq(pvr_txr_surface_t *surface, pvr_ptr_t vram,
+                            size_t capacity, uint32_t width, uint32_t height,
+                            pvr_txr_surface_format_t format,
+                            uint16_t codebook_entries, bool mipmapped);
 
 /** \brief Plan aligned non-overlapping offsets for initialized surfaces.
 
@@ -381,6 +422,24 @@ int pvr_txr_surface_begin_render(const pvr_txr_surface_t *surface,
 */
 int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
                               uint32_t level, pvr_txr_level_info_t *info);
+
+/** \brief Query the address encoded in a polygon or sprite texture header.
+
+    Ordinary surfaces and full-codebook VQ return \c surface->vram. Compact VQ
+    returns an earlier address which preserves the hardware's fixed 2048-byte
+    displacement between texture base and index data. Upload, readback,
+    reservation ownership, and release continue to use the unadjusted
+    \c surface->vram storage address.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_get_texture_address(const pvr_txr_surface_t *surface,
+                                        pvr_ptr_t *address);
+
+/** \brief Query the first legal VQ index for the stored codebook.
+    \return A value from 0 through 255, or -1 with errno set.
+*/
+int pvr_txr_surface_get_vq_index_base(const pvr_txr_surface_t *surface);
 
 /** \brief Build a VQ codebook which acts as a per-texture 16-bit palette.
 
