@@ -35,6 +35,11 @@
 #define MAX_VERTEX_BATCH ((UINT16_MAX - 1u) / 3u)
 #define MAX_STRIP_COUNT UINT16_C(0x3fff)
 
+#define MATERIAL_DIFFUSE  (1u << 0)
+#define MATERIAL_AMBIENT  (1u << 1)
+#define MATERIAL_SPECULAR (1u << 2)
+#define MATERIAL_EXPONENT (1u << 3)
+
 typedef struct source_position {
     float value[3];
 } source_position_t;
@@ -57,6 +62,7 @@ typedef struct source_triangle {
     source_corner_t corner[3];
     uint8_t strip_type;
     int texture_identifier;
+    size_t material_definition;
 } source_triangle_t;
 
 typedef struct material_binding {
@@ -69,6 +75,24 @@ typedef struct material_table {
     size_t count;
     size_t capacity;
 } material_table_t;
+
+typedef struct material_definition {
+    char *name;
+    float diffuse[3];
+    float ambient[3];
+    float specular[3];
+    float exponent;
+    unsigned int present;
+} material_definition_t;
+
+typedef struct material_library {
+    material_definition_t *definitions;
+    size_t count;
+    size_t capacity;
+    char **paths;
+    size_t file_count;
+    size_t path_capacity;
+} material_library_t;
 
 typedef struct source_model {
     source_position_t *positions;
@@ -91,6 +115,7 @@ typedef struct source_strip {
     size_t vertex_count;
     uint8_t strip_type;
     int texture_identifier;
+    size_t material_definition;
 } source_strip_t;
 
 typedef struct strip_plan {
@@ -108,6 +133,7 @@ typedef struct output_streams {
     float radius;
     size_t strip_record_count;
     size_t texture_record_count;
+    size_t material_record_count;
     size_t source_strip_count;
     size_t output_strip_count;
 } output_streams_t;
@@ -119,7 +145,8 @@ typedef struct temporary_output {
 static void usage(FILE *stream, const char *program) {
     fprintf(stream,
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
-            "--material NAME=ID ...] [--join-strips] [--] "
+            "--material NAME=ID ...] [--material-library FILE ...] "
+            "[--join-strips] [--] "
             "INPUT.obj VERTICES.bin POLYGONS.bin\n",
             program);
 }
@@ -150,6 +177,19 @@ static void material_table_free(material_table_t *table) {
         free(table->bindings[binding].name);
     free(table->bindings);
     memset(table, 0, sizeof(*table));
+}
+
+static void material_library_free(material_library_t *library) {
+    size_t definition;
+    size_t file;
+
+    for(definition = 0; definition < library->count; ++definition)
+        free(library->definitions[definition].name);
+    for(file = 0; file < library->file_count; ++file)
+        free(library->paths[file]);
+    free(library->definitions);
+    free(library->paths);
+    memset(library, 0, sizeof(*library));
 }
 
 static int reserve_array(void **array, size_t *capacity, size_t required,
@@ -355,6 +395,228 @@ static int material_table_find(const material_table_t *table,
     return -1;
 }
 
+static int material_definition_find(const material_library_t *library,
+                                    const char *name, size_t *result) {
+    size_t definition;
+
+    for(definition = 0; definition < library->count; ++definition) {
+        if(!strcmp(name, library->definitions[definition].name)) {
+            *result = definition;
+            return 0;
+        }
+    }
+    errno = ENOENT;
+    return -1;
+}
+
+static int material_definition_add(material_library_t *library,
+                                   const char *name,
+                                   material_definition_t **result) {
+    material_definition_t definition = { 0 };
+    void *allocation = library->definitions;
+    size_t ignored;
+
+    if(material_definition_find(library, name, &ignored) == 0) {
+        errno = EILSEQ;
+        return -1;
+    }
+    errno = 0;
+    definition.name = strdup(name);
+    if(!definition.name) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if(reserve_array(&allocation, &library->capacity, library->count + 1u,
+                     sizeof(*library->definitions)) < 0) {
+        free(definition.name);
+        return -1;
+    }
+    library->definitions = allocation;
+    library->definitions[library->count] = definition;
+    *result = &library->definitions[library->count++];
+    return 0;
+}
+
+static int parse_material_color(char *cursor, float color[3]) {
+    size_t component;
+
+    for(component = 0; component < 3u; ++component) {
+        char *token = next_token(&cursor);
+
+        if(!token || parse_float_token(token, &color[component]) < 0)
+            return -1;
+        if(color[component] < 0.0f || color[component] > 1.0f) {
+            errno = ERANGE;
+            return -1;
+        }
+    }
+    if(next_token(&cursor)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return 0;
+}
+
+static int parse_material_exponent(char *cursor, float *exponent) {
+    char *token = next_token(&cursor);
+
+    if(!token || parse_float_token(token, exponent) < 0)
+        return -1;
+    if(*exponent < 0.0f || *exponent > 1000.0f) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(next_token(&cursor)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return 0;
+}
+
+static int load_material_library(const char *path,
+                                 material_library_t *library,
+                                 size_t *error_line) {
+    FILE *file = fopen(path, "r");
+    material_definition_t *active = NULL;
+    char *line = NULL;
+    size_t line_capacity = 0;
+    size_t line_length;
+    size_t line_number = 0;
+    size_t initial_count = library->count;
+    int rv;
+    int saved_errno;
+
+    if(!file)
+        return -1;
+    errno = 0;
+    while((rv = read_line(file, &line, &line_capacity, &line_length)) > 0) {
+        char *cursor = line;
+        char *directive;
+        unsigned int property = 0;
+        float *color = NULL;
+
+        (void)line_length;
+        ++line_number;
+        directive = next_token(&cursor);
+        if(!directive)
+            continue;
+        if(!strcmp(directive, "newmtl")) {
+            char *name = next_token(&cursor);
+
+            if(!name || next_token(&cursor)) {
+                errno = EILSEQ;
+                rv = -1;
+            }
+            else if(material_definition_add(library, name, &active) < 0)
+                rv = -1;
+            else
+                rv = 0;
+        }
+        else {
+            if(!active) {
+                errno = EILSEQ;
+                rv = -1;
+            }
+            else if(!strcmp(directive, "Kd")) {
+                property = MATERIAL_DIFFUSE;
+                color = active->diffuse;
+            }
+            else if(!strcmp(directive, "Ka")) {
+                property = MATERIAL_AMBIENT;
+                color = active->ambient;
+            }
+            else if(!strcmp(directive, "Ks")) {
+                property = MATERIAL_SPECULAR;
+                color = active->specular;
+            }
+            else if(!strcmp(directive, "Ns")) {
+                property = MATERIAL_EXPONENT;
+                if(active->present & property) {
+                    errno = EILSEQ;
+                    rv = -1;
+                }
+                else {
+                    rv = parse_material_exponent(cursor, &active->exponent);
+                    if(!rv)
+                        active->present |= property;
+                }
+            }
+            else {
+                errno = ENOTSUP;
+                rv = -1;
+            }
+
+            if(color) {
+                if(active->present & property) {
+                    errno = EILSEQ;
+                    rv = -1;
+                }
+                else {
+                    rv = parse_material_color(cursor, color);
+                    if(!rv)
+                        active->present |= property;
+                }
+            }
+        }
+        if(rv < 0) {
+            *error_line = line_number;
+            goto fail;
+        }
+    }
+    if(rv < 0) {
+        if(!errno)
+            errno = EIO;
+        *error_line = line_number + 1u;
+        goto fail;
+    }
+    if(library->count == initial_count) {
+        errno = EILSEQ;
+        *error_line = line_number ? line_number : 1u;
+        goto fail;
+    }
+    if(fclose(file) < 0) {
+        file = NULL;
+        goto fail;
+    }
+    file = NULL;
+    {
+        void *allocation = library->paths;
+        char *path_copy = strdup(path);
+
+        if(!path_copy) {
+            errno = ENOMEM;
+            goto fail;
+        }
+        if(reserve_array(&allocation, &library->path_capacity,
+                         library->file_count + 1u,
+                         sizeof(*library->paths)) < 0) {
+            free(path_copy);
+            goto fail;
+        }
+        library->paths = allocation;
+        library->paths[library->file_count++] = path_copy;
+    }
+    free(line);
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    if(file)
+        fclose(file);
+    free(line);
+    errno = saved_errno;
+    return -1;
+}
+
+static int material_definition_complete(
+    const material_definition_t *definition) {
+    unsigned int specular = definition->present & MATERIAL_SPECULAR;
+    unsigned int exponent = definition->present & MATERIAL_EXPONENT;
+
+    return (definition->present & MATERIAL_DIFFUSE) &&
+           !!specular == !!exponent;
+}
+
 static int parse_index(const char *text, size_t current_count,
                        size_t *result) {
     char *end;
@@ -555,7 +817,8 @@ static int triangle_type(source_triangle_t *triangle) {
 }
 
 static int append_triangle(source_model_t *model, char *cursor,
-                           int flip_winding, int texture_identifier) {
+                           int flip_winding, int texture_identifier,
+                           size_t material_definition) {
     source_triangle_t triangle;
     void *allocation = model->triangles;
     size_t corner;
@@ -577,6 +840,7 @@ static int append_triangle(source_model_t *model, char *cursor,
         return -1;
     }
     triangle.texture_identifier = texture_identifier;
+    triangle.material_definition = material_definition;
     if(flip_winding) {
         source_corner_t temporary = triangle.corner[1];
 
@@ -593,10 +857,12 @@ static int append_triangle(source_model_t *model, char *cursor,
 }
 
 static int select_material(char *cursor, const material_table_t *materials,
-                           int *texture_identifier) {
+                           const material_library_t *library,
+                           int *texture_identifier,
+                           size_t *material_definition) {
     char *name = next_token(&cursor);
 
-    if(!materials->count) {
+    if(!materials->count && !library->file_count) {
         errno = ENOTSUP;
         return -1;
     }
@@ -604,10 +870,22 @@ static int select_material(char *cursor, const material_table_t *materials,
         errno = EILSEQ;
         return -1;
     }
-    if(material_table_find(materials, name, texture_identifier) < 0) {
+    if(materials->count &&
+       material_table_find(materials, name, texture_identifier) < 0) {
         errno = EILSEQ;
         return -1;
     }
+    if(library->file_count) {
+        if(material_definition_find(library, name,
+                                    material_definition) < 0 ||
+           !material_definition_complete(
+               &library->definitions[*material_definition])) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    else
+        *material_definition = SIZE_MAX;
     return 0;
 }
 
@@ -667,9 +945,28 @@ static int validate_texture_policy(const source_model_t *model) {
     return 0;
 }
 
+static int validate_material_policy(const source_model_t *model,
+                                    const material_library_t *library) {
+    size_t triangle;
+
+    if(!library->file_count)
+        return 0;
+    for(triangle = 0; triangle < model->triangle_count; ++triangle) {
+        size_t definition = model->triangles[triangle].material_definition;
+
+        if(definition >= library->count ||
+           !material_definition_complete(&library->definitions[definition])) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int load_source(const char *path, source_model_t *model,
                        int flip_winding, int flip_v, int texture_identifier,
                        const material_table_t *materials,
+                       const material_library_t *library,
                        size_t *error_line) {
     FILE *file = fopen(path, "r");
     char *line = NULL;
@@ -677,6 +974,7 @@ static int load_source(const char *path, source_model_t *model,
     size_t line_length;
     size_t line_number = 0;
     int active_texture = materials->count ? -2 : texture_identifier;
+    size_t active_material = SIZE_MAX;
     int rv;
     int saved_errno;
 
@@ -701,9 +999,10 @@ static int load_source(const char *path, source_model_t *model,
             rv = append_normal(model, cursor);
         else if(!strcmp(directive, "f"))
             rv = append_triangle(model, cursor, flip_winding,
-                                 active_texture);
+                                 active_texture, active_material);
         else if(!strcmp(directive, "usemtl"))
-            rv = select_material(cursor, materials, &active_texture);
+            rv = select_material(cursor, materials, library,
+                                 &active_texture, &active_material);
         else if(!strcmp(directive, "mtllib"))
             rv = 0;
         else if(!strcmp(directive, "o") || !strcmp(directive, "g") ||
@@ -802,7 +1101,8 @@ static int build_strip_plan(const source_model_t *model, int join_strips,
             .triangle_count = 1u,
             .vertex_count = 3u,
             .strip_type = initial->strip_type,
-            .texture_identifier = initial->texture_identifier
+            .texture_identifier = initial->texture_identifier,
+            .material_definition = initial->material_definition
         };
         size_t maximum = maximum_strip_vertices(initial->strip_type);
 
@@ -820,7 +1120,8 @@ static int build_strip_plan(const source_model_t *model, int join_strips,
             size_t triangle_ordinal = strip.vertex_count - 2u;
 
             if(next->strip_type != strip.strip_type ||
-               next->texture_identifier != strip.texture_identifier)
+               next->texture_identifier != strip.texture_identifier ||
+               next->material_definition != strip.material_definition)
                 break;
 
             /* PVR triangle strips alternate winding. Preserve OBJ face order
@@ -861,7 +1162,9 @@ static size_t strip_batch(const strip_plan_t *plan, size_t first) {
           plan->strips[first + count].strip_type ==
               plan->strips[first].strip_type &&
           plan->strips[first + count].texture_identifier ==
-              plan->strips[first].texture_identifier) {
+              plan->strips[first].texture_identifier &&
+          plan->strips[first + count].material_definition ==
+              plan->strips[first].material_definition) {
         size_t addition =
             1u + plan->strips[first + count].vertex_count * stride;
 
@@ -873,21 +1176,48 @@ static size_t strip_batch(const strip_plan_t *plan, size_t first) {
     return count;
 }
 
+static size_t material_value_count(
+    const material_definition_t *definition) {
+    return 1u + !!(definition->present & MATERIAL_AMBIENT) +
+           !!(definition->present & MATERIAL_SPECULAR);
+}
+
+static uint8_t material_record_type(
+    const material_definition_t *definition) {
+    int ambient = !!(definition->present & MATERIAL_AMBIENT);
+    int specular = !!(definition->present & MATERIAL_SPECULAR);
+
+    if(ambient && specular)
+        return PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT_SPECULAR;
+    if(ambient)
+        return PVR_CHUNK_MATERIAL_DIFFUSE_AMBIENT;
+    if(specular)
+        return PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR;
+    return PVR_CHUNK_MATERIAL_DIFFUSE;
+}
+
 static int calculate_sizes(const source_model_t *model,
                            const strip_plan_t *plan,
+                           const material_library_t *library,
                            output_streams_t *streams) {
     size_t vertex_batches =
         (model->position_count + MAX_VERTEX_BATCH - 1u) / MAX_VERTEX_BATCH;
     size_t vertex_words;
-    size_t polygon_words = 5u;
+    size_t polygon_words = 1u;
     size_t first = 0;
     int active_texture = -1;
+    size_t active_material = SIZE_MAX;
 
     if(model->position_count > (SIZE_MAX - 1u - 2u * vertex_batches) / 3u) {
         errno = EOVERFLOW;
         return -1;
     }
     vertex_words = 1u + 2u * vertex_batches + 3u * model->position_count;
+
+    if(!library->file_count) {
+        polygon_words += 4u;
+        ++streams->material_record_count;
+    }
 
     while(first < plan->count) {
         size_t count = strip_batch(plan, first);
@@ -896,11 +1226,26 @@ static int calculate_sizes(const source_model_t *model,
         size_t strip;
         size_t addition;
         int texture_identifier = plan->strips[first].texture_identifier;
+        size_t material_definition =
+            plan->strips[first].material_definition;
 
         for(strip = 0; strip < count; ++strip)
             payload_words += 1u +
                 plan->strips[first + strip].vertex_count * stride;
         addition = 2u + payload_words;
+
+        if(library->file_count && material_definition != active_material) {
+            size_t material_words = 2u + 2u * material_value_count(
+                &library->definitions[material_definition]);
+
+            if(material_words > SIZE_MAX - polygon_words) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            polygon_words += material_words;
+            ++streams->material_record_count;
+            active_material = material_definition;
+        }
 
         if(texture_identifier >= 0 && texture_identifier != active_texture) {
             if(polygon_words > SIZE_MAX - 2u) {
@@ -950,6 +1295,38 @@ static uint16_t quantize_normal(float value) {
         return UINT16_C(0x7fff);
     encoded = lroundf(value * 32767.0f);
     return (uint16_t)(int16_t)encoded;
+}
+
+static uint32_t quantize_color(const float color[3]) {
+    uint32_t red = (uint32_t)lroundf(color[0] * 255.0f);
+    uint32_t green = (uint32_t)lroundf(color[1] * 255.0f);
+    uint32_t blue = (uint32_t)lroundf(color[2] * 255.0f);
+
+    return UINT32_C(0xff000000) | (red << 16) | (green << 8) | blue;
+}
+
+static void emit_u32(uint16_t **output, uint32_t value) {
+    *(*output)++ = (uint16_t)value;
+    *(*output)++ = (uint16_t)(value >> 16);
+}
+
+static void emit_material(uint16_t **output,
+                          const material_definition_t *definition) {
+    size_t value_count = material_value_count(definition);
+
+    *(*output)++ = material_record_type(definition);
+    *(*output)++ = (uint16_t)(value_count * 2u);
+    emit_u32(output, quantize_color(definition->diffuse));
+    if(definition->present & MATERIAL_AMBIENT)
+        emit_u32(output, quantize_color(definition->ambient));
+    if(definition->present & MATERIAL_SPECULAR) {
+        uint32_t specular = quantize_color(definition->specular) &
+                            UINT32_C(0x00ffffff);
+        uint32_t exponent = (uint32_t)lroundf(
+            definition->exponent * (16.0f / 1000.0f));
+
+        emit_u32(output, specular | (exponent << 24));
+    }
 }
 
 static int calculate_bounds(const source_model_t *model,
@@ -1026,15 +1403,17 @@ static void emit_corner(uint16_t **output, const source_model_t *model,
 }
 
 static int generate_streams(const source_model_t *model,
+                            const material_library_t *library,
                             int join_strips, output_streams_t *streams) {
     strip_plan_t plan = { 0 };
     uint32_t *vertex_output;
     uint16_t *polygon_output;
     size_t first;
     int active_texture = -1;
+    size_t active_material = SIZE_MAX;
 
     if(build_strip_plan(model, join_strips, &plan) < 0 ||
-       calculate_sizes(model, &plan, streams) < 0 ||
+       calculate_sizes(model, &plan, library, streams) < 0 ||
        calculate_bounds(model, streams) < 0)
         goto fail;
     streams->source_strip_count = model->triangle_count;
@@ -1074,13 +1453,15 @@ static int generate_streams(const source_model_t *model,
     }
     *vertex_output++ = PVR_CHUNK_CONTROL_END;
 
-    /* A white diffuse material establishes the common material state. Texture
-       records below change only when the host binding resolves a new ID. */
+    /* Without explicit material properties, preserve the original white
+       diffuse state. Explicit definitions replace it at source transitions. */
     polygon_output = streams->polygon_words;
-    *polygon_output++ = PVR_CHUNK_MATERIAL_DIFFUSE;
-    *polygon_output++ = 2u;
-    *polygon_output++ = UINT16_MAX;
-    *polygon_output++ = UINT16_MAX;
+    if(!library->file_count) {
+        *polygon_output++ = PVR_CHUNK_MATERIAL_DIFFUSE;
+        *polygon_output++ = 2u;
+        *polygon_output++ = UINT16_MAX;
+        *polygon_output++ = UINT16_MAX;
+    }
     first = 0;
     while(first < plan.count) {
         size_t count = strip_batch(&plan, first);
@@ -1089,10 +1470,18 @@ static int generate_streams(const source_model_t *model,
         size_t payload_words = 1u;
         size_t strip;
         int texture_identifier = plan.strips[first].texture_identifier;
+        size_t material_definition =
+            plan.strips[first].material_definition;
 
         for(strip = 0; strip < count; ++strip)
             payload_words += 1u +
                 plan.strips[first + strip].vertex_count * stride;
+
+        if(library->file_count && material_definition != active_material) {
+            emit_material(&polygon_output,
+                          &library->definitions[material_definition]);
+            active_material = material_definition;
+        }
 
         if(texture_identifier >= 0 && texture_identifier != active_texture) {
             *polygon_output++ = PVR_CHUNK_TEXTURE;
@@ -1160,7 +1549,8 @@ static int validate_generated(const source_model_t *source,
        info->triangles != source->triangle_count ||
        info->index_references != source->triangle_count +
                                   2u * streams->output_strip_count ||
-       info->strip_records != streams->strip_record_count) {
+       info->strip_records != streams->strip_record_count ||
+       info->material_records != streams->material_record_count) {
         errno = EPROTO;
         return -1;
     }
@@ -1266,7 +1656,8 @@ static int publish_output(temporary_output_t *temporary,
 static void print_report(const source_model_t *source,
                          const output_streams_t *streams,
                          const pvr_chunk_model_info_t *info,
-                         const material_table_t *materials) {
+                         const material_table_t *materials,
+                         const material_library_t *library) {
     printf("converted=1\n");
     printf("positions=%zu\n", source->position_count);
     printf("texcoords=%zu\n", source->texcoord_count);
@@ -1278,7 +1669,10 @@ static void print_report(const source_model_t *source,
            streams->source_strip_count - streams->output_strip_count);
     printf("strip_records=%zu\n", info->strip_records);
     printf("texture_records=%zu\n", streams->texture_record_count);
+    printf("material_records=%zu\n", streams->material_record_count);
     printf("material_bindings=%zu\n", materials->count);
+    printf("material_libraries=%zu\n", library->file_count);
+    printf("material_definitions=%zu\n", library->count);
     printf("vertex_words=%zu\n", streams->vertex_word_count);
     printf("polygon_words=%zu\n", streams->polygon_word_count);
     printf("center_x=%.9g\n", streams->center[0]);
@@ -1325,6 +1719,7 @@ static int output_target_admissible(const char *path) {
 int main(int argc, char **argv) {
     source_model_t source = { 0 };
     material_table_t materials = { 0 };
+    material_library_t library = { 0 };
     output_streams_t streams = { 0 };
     pvr_chunk_model_info_t info;
     temporary_output_t vertex_temporary = { 0 };
@@ -1348,6 +1743,7 @@ int main(int argc, char **argv) {
         if(!strcmp(argv[argument], "--help")) {
             usage(stdout, argv[0]);
             material_table_free(&materials);
+            material_library_free(&library);
             return 0;
         }
         if(!strcmp(argv[argument], "--flip-winding"))
@@ -1363,6 +1759,7 @@ int main(int argc, char **argv) {
                                         &texture_identifier) < 0) {
                 usage(stderr, argv[0]);
                 material_table_free(&materials);
+                material_library_free(&library);
                 return 2;
             }
             argument += 2;
@@ -1373,7 +1770,32 @@ int main(int argc, char **argv) {
                material_table_add(&materials, argv[argument + 1]) < 0) {
                 usage(stderr, argv[0]);
                 material_table_free(&materials);
+                material_library_free(&library);
                 return 2;
+            }
+            argument += 2;
+            continue;
+        }
+        else if(!strcmp(argv[argument], "--material-library")) {
+            size_t material_error_line = 0;
+
+            if(argument + 1 >= argc ||
+               load_material_library(argv[argument + 1], &library,
+                                     &material_error_line) < 0) {
+                int load_errno = errno ? errno : EINVAL;
+
+                if(argument + 1 < argc && material_error_line)
+                    fprintf(stderr, "%s:%zu: %s\n", argv[argument + 1],
+                            material_error_line, strerror(load_errno));
+                else if(argument + 1 < argc)
+                    fprintf(stderr, "%s: %s\n", argv[argument + 1],
+                            strerror(load_errno));
+                else
+                    usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return argument + 1 < argc &&
+                       load_errno != ENOENT && load_errno != EACCES ? 1 : 2;
             }
             argument += 2;
             continue;
@@ -1381,6 +1803,7 @@ int main(int argc, char **argv) {
         else {
             usage(stderr, argv[0]);
             material_table_free(&materials);
+            material_library_free(&library);
             return 2;
         }
         ++argument;
@@ -1388,6 +1811,7 @@ int main(int argc, char **argv) {
     if(argc - argument != 3) {
         usage(stderr, argv[0]);
         material_table_free(&materials);
+        material_library_free(&library);
         return 2;
     }
 
@@ -1398,16 +1822,40 @@ int main(int argc, char **argv) {
         int input_vertex = same_existing_file(input, vertex_output);
         int input_polygon = same_existing_file(input, polygon_output);
         int output_pair = same_existing_file(vertex_output, polygon_output);
+        size_t material_file;
 
         if(input_vertex < 0 || input_polygon < 0 || output_pair < 0) {
             fprintf(stderr, "path check failed: %s\n", strerror(errno));
             material_table_free(&materials);
+            material_library_free(&library);
             return 2;
         }
         if(input_vertex || input_polygon || output_pair) {
             fprintf(stderr, "input and output paths must be distinct\n");
             material_table_free(&materials);
+            material_library_free(&library);
             return 2;
+        }
+        for(material_file = 0; material_file < library.file_count;
+            ++material_file) {
+            int material_vertex = same_existing_file(
+                library.paths[material_file], vertex_output);
+            int material_polygon = same_existing_file(
+                library.paths[material_file], polygon_output);
+
+            if(material_vertex < 0 || material_polygon < 0) {
+                fprintf(stderr, "path check failed: %s\n", strerror(errno));
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            if(material_vertex || material_polygon) {
+                fprintf(stderr,
+                        "material library and output paths must be distinct\n");
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
         }
     }
     if(output_target_admissible(vertex_output) < 0 ||
@@ -1415,11 +1863,13 @@ int main(int argc, char **argv) {
         fprintf(stderr, "output target is not a regular file: %s\n",
                 strerror(errno));
         material_table_free(&materials);
+        material_library_free(&library);
         return 2;
     }
 
     if(load_source(input, &source, flip_winding, flip_v,
-                   texture_identifier, &materials, &error_line) < 0) {
+                   texture_identifier, &materials, &library,
+                   &error_line) < 0) {
         int load_errno = errno;
 
         if(error_line)
@@ -1438,7 +1888,14 @@ int main(int argc, char **argv) {
         result = 1;
         goto out;
     }
-    if(generate_streams(&source, join_strips, &streams) < 0 ||
+    if(validate_material_policy(&source, &library) < 0) {
+        fprintf(stderr,
+                "every face requires one complete selected material when "
+                "a material library is supplied\n");
+        result = 1;
+        goto out;
+    }
+    if(generate_streams(&source, &library, join_strips, &streams) < 0 ||
        validate_generated(&source, &streams, &info) < 0) {
         fprintf(stderr, "conversion failed: %s\n", strerror(errno));
         goto out;
@@ -1461,7 +1918,7 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    print_report(&source, &streams, &info, &materials);
+    print_report(&source, &streams, &info, &materials, &library);
     result = 0;
 
 out:
@@ -1470,5 +1927,6 @@ out:
     output_streams_free(&streams);
     source_model_free(&source);
     material_table_free(&materials);
+    material_library_free(&library);
     return result;
 }

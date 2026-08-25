@@ -22,7 +22,10 @@ strips_after=1
 triangles_joined=0
 strip_records=1
 texture_records=1
+material_records=1
 material_bindings=0
+material_libraries=0
+material_definitions=0
 vertex_words=12
 polygon_words=29
 center_x=0
@@ -471,6 +474,211 @@ f 1/1 2/2 3/3
         assert "distinct_textures=2\n" in result.stdout
         assert "strip_records=3\n" in result.stdout
         assert "strips=4\n" in result.stdout
+
+        property_library = root / "properties.mtl"
+        property_source = root / "properties.obj"
+        property_vertices = root / "properties-vertices.bin"
+        property_polygons = root / "properties-polygons.bin"
+        write_text(
+            property_library,
+            """newmtl lit
+Kd 1 0.5 0
+Ka 0.25 0.125 0
+Ks 0.1 0.2 0.3
+Ns 500
+newmtl green
+Kd 0 1 0
+""",
+        )
+        write_text(
+            property_source,
+            """mtllib deliberately-not-loaded.mtl
+v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+usemtl lit
+f 1 2 3
+usemtl green
+f 3 2 4
+""",
+        )
+        result = invoke(
+            converter,
+            "--join-strips",
+            "--material-library", property_library,
+            property_source,
+            property_vertices,
+            property_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips_before=2\n" in result.stdout
+        assert "strips_after=2\n" in result.stdout
+        assert "material_records=2\n" in result.stdout
+        assert "material_libraries=1\n" in result.stdout
+        assert "material_definitions=2\n" in result.stdout
+        assert "polygon_words=27\n" in result.stdout
+        assert property_polygons.read_bytes() == struct.pack(
+            "<27H",
+            23, 6,
+            0x8000, 0xFFFF,
+            0x2000, 0xFF40,
+            0x334D, 0x081A,
+            64, 5, 1, 3, 0, 1, 2,
+            17, 2, 0xFF00, 0xFF00,
+            64, 5, 1, 3, 2, 1, 3,
+            0xFF,
+        )
+        result = invoke(inspector, property_vertices, property_polygons)
+        assert result.returncode == 0, result.stderr
+        assert "material_records=2\n" in result.stdout
+        assert "strips=2\n" in result.stdout
+        assert "triangles=2\n" in result.stdout
+
+        property_textured_source = root / "properties-textured.obj"
+        property_textured_vertices = root / "properties-textured-vertices.bin"
+        property_textured_polygons = root / "properties-textured-polygons.bin"
+        write_text(
+            property_textured_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+usemtl lit
+f 1/1 2/2 3/3
+""",
+        )
+        result = invoke(
+            converter,
+            "--material", "lit=7",
+            "--material-library", property_library,
+            property_textured_source,
+            property_textured_vertices,
+            property_textured_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "texture_records=1\n" in result.stdout
+        assert "material_records=1\n" in result.stdout
+        assert "material_bindings=1\n" in result.stdout
+        assert "material_libraries=1\n" in result.stdout
+        result = invoke(
+            inspector, property_textured_vertices, property_textured_polygons
+        )
+        assert result.returncode == 0, result.stderr
+        assert "texture_references=1\n" in result.stdout
+        assert "material_records=1\n" in result.stdout
+
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--material-library", property_library,
+            property_textured_source,
+            property_textured_vertices,
+            property_textured_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "texture_records=1\n" in result.stdout
+        assert "material_records=1\n" in result.stdout
+        assert "material_bindings=0\n" in result.stdout
+
+        additional_library = root / "additional.mtl"
+        write_text(additional_library, "newmtl blue\nKd 0 0 1\n")
+        result = invoke(
+            converter,
+            "--material-library", property_library,
+            "--material-library", additional_library,
+            property_source,
+            property_vertices,
+            property_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "material_libraries=2\n" in result.stdout
+        assert "material_definitions=3\n" in result.stdout
+
+        duplicate_name_library = root / "duplicate-name.mtl"
+        write_text(duplicate_name_library, "newmtl lit\nKd 1 1 1\n")
+        result = invoke(
+            converter,
+            "--material-library", property_library,
+            "--material-library", duplicate_name_library,
+            property_source,
+            property_vertices,
+            property_polygons,
+        )
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert result.stderr.startswith(f"{duplicate_name_library}:1:")
+
+        incomplete_library = root / "incomplete.mtl"
+        write_text(incomplete_library, "newmtl lit\nKa 0 0 0\n")
+        previous_vertices = property_vertices.read_bytes()
+        previous_polygons = property_polygons.read_bytes()
+        result = invoke(
+            converter,
+            "--material-library", incomplete_library,
+            property_source,
+            property_vertices,
+            property_polygons,
+        )
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert result.stderr.startswith(f"{property_source}:6:")
+        assert property_vertices.read_bytes() == previous_vertices
+        assert property_polygons.read_bytes() == previous_polygons
+
+        result = invoke(
+            converter,
+            "--material-library", property_library,
+            property_source,
+            property_library,
+            property_polygons,
+        )
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert result.stderr == (
+            "material library and output paths must be distinct\n"
+        )
+        assert property_library.read_text(encoding="ascii").startswith(
+            "newmtl lit\n"
+        )
+
+        unsupported_library = root / "unsupported.mtl"
+        write_text(
+            unsupported_library,
+            "newmtl lit\nKd 1 1 1\nillum 2\n",
+        )
+        result = invoke(
+            converter,
+            "--material-library", unsupported_library,
+            property_source,
+            property_vertices,
+            property_polygons,
+        )
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert result.stderr.startswith(f"{unsupported_library}:3:")
+        assert property_vertices.read_bytes() == previous_vertices
+        assert property_polygons.read_bytes() == previous_polygons
+
+        duplicate_library = root / "duplicate.mtl"
+        write_text(
+            duplicate_library,
+            "newmtl lit\nKd 1 1 1\nKd 0 0 0\n",
+        )
+        result = invoke(
+            converter,
+            "--material-library", duplicate_library,
+            property_source,
+            property_vertices,
+            property_polygons,
+        )
+        assert result.returncode == 1
+        assert result.stdout == ""
+        assert result.stderr.startswith(f"{duplicate_library}:3:")
+        assert property_vertices.read_bytes() == previous_vertices
+        assert property_polygons.read_bytes() == previous_polygons
 
         material_boundary_source = root / "material-boundary.obj"
         material_boundary_vertices = root / "material-boundary-vertices.bin"

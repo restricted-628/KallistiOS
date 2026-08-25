@@ -169,9 +169,12 @@ lifecycle and naming conventions.
   before publishing little-endian output streams. An opt-in strip optimizer
   joins only order-adjacent faces with exact position/UV/normal edge identity,
   honors alternating strip winding and resolved texture boundaries, reports
-  the reduction, and splits at both strip and record encoding limits. Library
-  material properties, source triangulation, and global topology reordering
-  remain explicit rather than being guessed.
+  the reduction, and splits at both strip and record encoding limits. Explicit
+  host-selected material libraries now convert a strict diffuse, ambient,
+  specular, and exponent subset into persistent compact render state, with
+  deterministic quantization and no implicit file access. Opacity, texture-map
+  paths, source triangulation, and global topology reordering remain explicit
+  rather than being guessed.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated

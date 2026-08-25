@@ -7,7 +7,8 @@ temporary output is published.
 
 ```text
 pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
-    [--texture-id ID | --material NAME=ID ...] [--] \
+    [--texture-id ID | --material NAME=ID ...] \
+    [--material-library FILE ...] [--] \
     INPUT.obj VERTICES.bin POLYGONS.bin
 ```
 
@@ -32,10 +33,32 @@ coordinate-system transform is implicit. Models with UV-bearing faces require
 resolved 13-bit texture identifiers, and every face must then carry UVs. A
 single-texture model uses `--texture-id ID`. Multi-material input instead uses
 one `--material NAME=ID` for every `usemtl NAME` selected by a face. Names are
-single OBJ tokens; library material properties are deliberately not inferred.
-Bindings that resolve different names to the same identifier are coalesced,
-and the polygon stream emits a texture record only when the resolved identifier
-actually changes. `--texture-id` and `--material` are mutually exclusive.
+single OBJ tokens. Bindings that resolve different names to the same identifier
+are coalesced, and the polygon stream emits a texture record only when the
+resolved identifier actually changes. `--texture-id` and `--material` are
+mutually exclusive.
+
+One or more explicit `--material-library FILE` options add persistent color and
+specular state. Files use a strict material-library subset:
+
+- `newmtl NAME` begins one uniquely named definition;
+- required `Kd R G B` supplies diffuse color;
+- optional `Ka R G B` supplies ambient color; and
+- `Ks R G B` and `Ns VALUE` must either both be present or both be absent.
+
+Color components must be finite values in `[0, 1]` and are rounded to 8-bit
+channels. `Ns` must be in `[0, 1000]` and is rounded linearly into the compact
+runtime's `[0, 16]` specular-exponent field. Duplicate properties, duplicate
+names across supplied files, and every unsupported directive are rejected.
+Opacity, illumination-model selection, texture-map paths, blending, and render
+list choice therefore remain explicit application/content-pipeline policy.
+
+Supplying a material library requires every face to follow a `usemtl` selecting
+a complete loaded definition. Untextured models need no `--material` bindings;
+textured models compose the library with the existing name-to-ID bindings.
+Material records are emitted only when the selected definition changes. OBJ
+`mtllib` declarations are never opened implicitly: the command line is the
+sole authority over host file access and library ordering.
 
 By default, arbitrary triangle topology is represented as three-vertex strips,
 preserving the converter's original byte stream. `--join-strips` performs a
