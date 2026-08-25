@@ -35,6 +35,7 @@
 __BEGIN_DECLS
 
 #include <kos/img.h>
+#include <dc/pvr/pvr_mem.h>
 
 /** \defgroup pvr_txr_mgmt      Texturing
     \brief                      API for managing PowerVR textures
@@ -320,6 +321,36 @@ int pvr_txr_surface_bind(pvr_txr_surface_t *surface, pvr_ptr_t vram,
                          size_t capacity, uint32_t width, uint32_t height,
                          pvr_txr_surface_format_t format,
                          pvr_txr_surface_layout_t layout, bool mipmapped);
+
+/** \brief Plan aligned non-overlapping offsets for initialized surfaces.
+
+    Every descriptor must contain valid metadata from pvr_txr_surface_init()
+    and must not already be bound or own VRAM. `alignment` must be 8, 16, or 32
+    bytes, preserving absolute alignment from the allocator's 32-byte base.
+    The complete plan must fit in physical PVR RAM.
+
+    The caller supplies one offset per surface. Both the offsets and total byte
+    count change only after complete validation succeeds. An empty plan is
+    valid and reports zero bytes.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_plan_reservation(const pvr_txr_surface_t *surfaces,
+                                     size_t surface_count, size_t alignment,
+                                     size_t *offsets, size_t *total_bytes);
+
+/** \brief Bind one initialized surface to an exact reservation subrange.
+
+    The surface must be unbound and contain valid checked metadata. Its encoded
+    byte size is resolved at `offset` with eight-byte alignment. On success the
+    descriptor borrows exactly that subrange and therefore must be cleared with
+    pvr_txr_surface_release() before the reservation is released.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_surface_bind_reservation(
+    pvr_txr_surface_t *surface,
+    const pvr_mem_reservation_t *reservation, size_t offset);
 
 /** \brief Release owned VRAM and clear a surface descriptor. */
 void pvr_txr_surface_release(pvr_txr_surface_t *surface);

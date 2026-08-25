@@ -55,7 +55,7 @@ than place another renderer above them.
 | Context and header construction | Polygon, sprite, modifier, two-volume, blend, depth, fog, UV, palette, texture, and extended packed-header controls are covered | Preserve public context layout; treat individual header mutation helpers as optional optimizations. |
 | Render submission identity | Stable allocation-free tickets cover queued registration, completed registration, rendering, target completion, and display | Preserve identity-specific waits and expose counters in coherent pipeline diagnostics. |
 | Render targets | Sized 16-bit render-to-texture, checked surface binding, and explicit completion/no-flip contracts are covered | Treat additional output encodings as hardware-gated extensions, not assumed formats. |
-| Texture allocation | General allocator and checked caller-owned surfaces are covered | Add contiguous multi-surface reservations for demonstrated streaming and batch-conversion needs. Do not move raw pointer allocations behind an unsafe collector. |
+| Texture allocation | General allocation, checked caller-owned surfaces, and contiguous multi-surface reservations are covered | Preserve one allocator, explicit lifetimes, failure-atomic planning, and exact non-owning slice bounds. |
 | Texture formats | Linear, twiddled, mipmapped, paletted, full-codebook VQ, stride, rectangle, and YUV are represented | Validate reduced-codebook VQ and any VQ/palette combinations against hardware before extending the surface layout vocabulary. |
 | Texture upload and readback | Checked synchronous and immediate-admission asynchronous uploads plus encoded CPU readback are covered | Preserve explicit render/sampling hazard rules and add asynchronous readback only for a demonstrated need. |
 | Texture conversion | Checked 4/8/16-bpp twiddling is covered | Keep palette creation and VQ encoding in content tools rather than placing unbounded encoders in the kernel. |
@@ -121,7 +121,10 @@ than place another renderer above them.
    separation between render completion and framebuffer display.
 8. Add advanced texture layouts, contiguous reservations, or batch YUV
    conversion only after a demonstrated application need and physical-hardware
-   validation. They are extensions rather than hardware-facing parity
+   validation. Contiguous reservations are now closed with one established
+   allocator allocation, failure-atomic multi-surface planning, checked slice
+   resolution, and explicit borrowed-surface lifetimes. Advanced layouts and
+   batch conversion remain extensions rather than hardware-facing parity
    blockers. Checked encoded CPU readback and compatible 16-bit surface render
    binding are closed; physical render-target visibility remains a validation
    gate.
@@ -287,6 +290,23 @@ Physical completion visibility and page-flip timing remain hardware-day items.
 
 Physical DMA timing, CPU visibility after hardware render completion, and
 updates concurrent with texture sampling remain hardware validation items.
+
+### Contiguous texture reservations
+
+- one caller-owned reservation owns exactly one 32-byte-aligned allocation
+  from the established PVR memory allocator;
+- initialized surface arrays are validated and assigned aligned,
+  non-overlapping offsets without allocating a second metadata structure;
+- planning rejects output aliasing, overflow, bound descriptors, corrupt
+  metadata, and plans larger than physical PVR RAM before publishing offsets;
+- bound surfaces borrow exact encoded-size slices, so ordinary surface
+  operations cannot spill into an adjacent texture; and
+- the focused host suite covers failure-atomic allocation and planning,
+  alignment, range errors, oversized batches, binding, and explicit teardown.
+
+The reservation owns no scene, list, renderer, transfer queue, texture name,
+or background service. Physical transfer and sampling hazards remain governed
+by the established texture-surface contract.
 
 ### Asynchronous texture and YUV requests
 

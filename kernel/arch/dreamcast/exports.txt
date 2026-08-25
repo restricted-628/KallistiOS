@@ -616,6 +616,9 @@ pvr_init
 pvr_init_multipass
 pvr_shutdown
 pvr_mem_malloc
+pvr_mem_reservation_alloc
+pvr_mem_reservation_get
+pvr_mem_reservation_release
 pvr_mem_free
 pvr_mem_print_list
 pvr_mem_available
@@ -673,6 +676,8 @@ pvr_txr_load_kimg
 pvr_txr_surface_init
 pvr_txr_surface_alloc
 pvr_txr_surface_bind
+pvr_txr_surface_plan_reservation
+pvr_txr_surface_bind_reservation
 pvr_txr_surface_release
 pvr_txr_surface_begin_render
 pvr_txr_surface_get_level

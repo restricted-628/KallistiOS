@@ -109,6 +109,11 @@ lifecycle and naming conventions.
   compact draw state into existing one- or two-volume KOS materials and submits
   them through established current or buffered list paths without owning a
   texture namespace, asset lifetime, scene, list, allocator, or worker.
+* Added contiguous caller-owned PVR memory reservations and failure-atomic
+  multi-surface layout planning. Checked slices bind existing texture-surface
+  descriptors to exact non-owning ranges inside one established allocator
+  allocation without introducing a second allocator, global registry, worker,
+  or permanent workspace.
 * Added bounded compact PVR model streams with allocation-free record
   iteration and whole-model validation. Record framing, per-format vertex
   sizes, finite data, strip and volume structure, counters, and every indexed

@@ -179,6 +179,8 @@ This page serves as an index for all KallistiOS examples.
   - [**sprite_cells**](pvr/sprite_cells/): Compiles reusable atlas cells and
     caller-owned instances into existing textured PVR sprite packets
   - strided_texture
+  - [**texture_reservation**](pvr/texture_reservation/): Packs multiple checked
+    surfaces into one caller-owned contiguous VRAM reservation
   - texture_surface
   - texture_render
   - yuv_converter

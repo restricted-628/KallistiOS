@@ -5,6 +5,7 @@
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file       dc/pvr/pvr_mem.h
@@ -19,11 +20,13 @@
     \author Benoit Miller
     \author Ruslan Rostovtsev
     \author Falco Girgis
+    \author Joseph Black
 */
 
 #ifndef __DC_PVR_PVR_MEM_H
 #define __DC_PVR_PVR_MEM_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <kos/cdefs.h>
@@ -43,6 +46,59 @@ __BEGIN_DECLS
     Not that anyone probably even remembers the old TA system anymore...
 */
 typedef void *pvr_ptr_t;
+
+/** \defgroup pvr_mem_reservations Contiguous reservations
+    \brief                            Checked caller-owned VRAM ranges
+    \ingroup                          pvr_mem_mgmt
+    @{
+*/
+
+/** \brief One caller-owned contiguous allocation from the PVR memory pool.
+
+    The object owns exactly one pvr_mem_malloc() allocation. It may be divided
+    into checked non-owning slices, but does not retain slice metadata or track
+    renderer use. Do not copy a live reservation because its allocation must
+    have exactly one owner.
+*/
+typedef struct pvr_mem_reservation {
+    pvr_ptr_t base;  /**< First byte of the 32-byte-aligned allocation. */
+    size_t capacity; /**< Bytes owned beginning at \a base. */
+} pvr_mem_reservation_t;
+
+/** \brief Allocate one contiguous range from the established VRAM allocator.
+
+    The destination changes only on success. Release an existing live
+    reservation before reusing its object.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_mem_reservation_alloc(pvr_mem_reservation_t *reservation,
+                              size_t byte_size);
+
+/** \brief Resolve one aligned subrange without recording suballocation state.
+
+    `alignment` must be a power of two of at least eight. Alignments above the
+    allocator's 32-byte guarantee succeed only when the resolved absolute
+    address happens to meet them. The complete nonzero range must fit in the
+    reservation. Overlap policy remains caller-owned, so applications should
+    normally obtain offsets from a bounded layout planner. The destination
+    pointer is cleared on failure.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_mem_reservation_get(const pvr_mem_reservation_t *reservation,
+                            size_t offset, size_t byte_size,
+                            size_t alignment, pvr_ptr_t *slice);
+
+/** \brief Free the reservation's single allocation and clear the object.
+
+    Clear every non-owning surface descriptor bound into this range before
+    release. As with pvr_mem_free(), the reservation must still describe the
+    allocation returned by its allocator.
+*/
+void pvr_mem_reservation_release(pvr_mem_reservation_t *reservation);
+
+/** @} */
 
 /** \defgroup pvr_mem_mgmt   Allocator
     \brief                   Memory management API for VRAM

@@ -5,7 +5,7 @@
 #
 
 # Memory management
-OBJS := pvr_mem_core.o pvr_mem.o
+OBJS := pvr_mem_core.o pvr_mem.o pvr_mem_reservation.o
 
 # Internal functions
 OBJS += pvr_buffers.o pvr_irq.o pvr_multipass_layout.o
@@ -29,6 +29,7 @@ OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
 	pvr_particle.o
 
 # Texture handling
-OBJS += pvr_texture.o pvr_texture_layout.o pvr_texture_request.o pvr_dma.o
+OBJS += pvr_texture.o pvr_texture_layout.o pvr_texture_reservation.o \
+	pvr_texture_request.o pvr_dma.o
 
 include $(KOS_BASE)/Makefile.prefab
