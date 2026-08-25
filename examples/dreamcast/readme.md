@@ -183,6 +183,8 @@ This page serves as an index for all KallistiOS examples.
     surfaces into one caller-owned contiguous VRAM reservation
   - texture_surface
   - texture_render
+  - [**vq_palette**](pvr/vq_palette/): Uses a VQ codebook as an independent
+    per-texture 16-bit palette for a byte-indexed image
   - yuv_converter
 - raylib
   - raytris

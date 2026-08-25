@@ -25,6 +25,8 @@ address handling are documented in the
 Shared optical-drive and ATA ownership, DMA-event routing, and fail-closed
 controller behavior are documented in the
 [G1 bus ownership guide](g1-bus-ownership.md).
+Independent 16-bit color tables for byte-indexed textures are documented in
+the [per-texture VQ palette guide](pvr-vq-palettes.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.

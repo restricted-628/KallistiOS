@@ -205,6 +205,46 @@ int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
     return 0;
 }
 
+int pvr_txr_vq_palette_build(void *codebook, size_t codebook_size,
+                             const uint16_t *colors, size_t color_count) {
+    uint8_t *entries = codebook;
+    uintptr_t output_start = (uintptr_t)codebook;
+    uintptr_t input_start = (uintptr_t)colors;
+    size_t input_size;
+    size_t color;
+    size_t texel;
+
+    if(!codebook || !colors || !color_count || color_count > 256u) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(codebook_size < PVR_TXR_VQ_CODEBOOK_BYTES) {
+        errno = ENOSPC;
+        return -1;
+    }
+    input_size = color_count * sizeof(*colors);
+    if(output_start > UINTPTR_MAX - PVR_TXR_VQ_CODEBOOK_BYTES
+       || input_start > UINTPTR_MAX - input_size
+       || (output_start < input_start + input_size
+           && input_start < output_start + PVR_TXR_VQ_CODEBOOK_BYTES)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* A VQ index normally selects one 2x2 block. Repeating the color makes a
+       two-times-larger hardware texture behave as one logical indexed texel
+       per byte while retaining an independent codebook for this texture. */
+    for(color = 0; color < color_count; ++color) {
+        for(texel = 0; texel < 4u; ++texel) {
+            memcpy(entries + color * 8u + texel * sizeof(*colors),
+                   &colors[color], sizeof(*colors));
+        }
+    }
+    memset(entries + color_count * 8u, 0,
+           PVR_TXR_VQ_CODEBOOK_BYTES - color_count * 8u);
+    return 0;
+}
+
 int pvr_txr_surface_yuv_input_size(const pvr_txr_surface_t *surface,
                                    pvr_txr_yuv_format_t format,
                                    size_t *byte_size) {

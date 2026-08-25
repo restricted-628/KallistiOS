@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <dc/pvr.h>
 
@@ -70,6 +71,9 @@ static void test_mipmap_layouts(void) {
 
 static void test_vq_layouts(void) {
     pvr_txr_surface_t surface;
+    uint16_t colors[3] = { 0x001fu, 0x07e0u, 0xf800u };
+    uint16_t codebook[1024];
+    size_t i;
 
     assert(pvr_txr_surface_init(&surface, 64, 64,
                                 PVR_TXR_SURFACE_RGB565,
@@ -91,6 +95,36 @@ static void test_vq_layouts(void) {
     assert(surface.byte_size == 2070);
     expect_level(&surface, 0, 8, 8, 2054, 16);
     expect_level(&surface, 3, 1, 1, 2048, 1);
+
+    assert(pvr_txr_surface_init(&surface, 512, 512,
+                                PVR_TXR_SURFACE_RGB565,
+                                PVR_TXR_SURFACE_VQ, false) == 0);
+    assert(surface.codebook_size == 2048);
+    assert(surface.data_size == 256u * 256u);
+    assert(surface.byte_size == 2048u + 256u * 256u);
+
+    memset(codebook, 0xff, sizeof(codebook));
+    assert(pvr_txr_vq_palette_build(codebook, sizeof(codebook), colors,
+                                     3) == 0);
+    for(i = 0; i < 4u; ++i) {
+        assert(codebook[i] == colors[0]);
+        assert(codebook[4u + i] == colors[1]);
+        assert(codebook[8u + i] == colors[2]);
+    }
+    for(i = 12u; i < 1024u; ++i)
+        assert(codebook[i] == 0);
+
+    errno = 0;
+    assert(pvr_txr_vq_palette_build(codebook, 2040, colors, 3) == -1);
+    assert(errno == ENOSPC);
+    errno = 0;
+    assert(pvr_txr_vq_palette_build(codebook, sizeof(codebook), colors,
+                                     0) == -1);
+    assert(errno == EINVAL);
+    errno = 0;
+    assert(pvr_txr_vq_palette_build(codebook, sizeof(codebook), codebook,
+                                     3) == -1);
+    assert(errno == EINVAL);
 }
 
 static void test_yuv_input_layouts(void) {

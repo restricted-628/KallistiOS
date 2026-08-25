@@ -681,6 +681,7 @@ pvr_txr_surface_bind_reservation
 pvr_txr_surface_release
 pvr_txr_surface_begin_render
 pvr_txr_surface_get_level
+pvr_txr_vq_palette_build
 pvr_txr_surface_pvr_format
 pvr_txr_surface_upload
 pvr_txr_surface_upload_part

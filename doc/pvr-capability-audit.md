@@ -268,6 +268,9 @@ Physical completion visibility and page-flip timing remain hardware-day items.
   the hardware's smallest-first storage order;
 - full VQ surfaces reserve a 2048-byte codebook and expose separate checked
   codebook and index-level uploads;
+- a checked codebook builder repeats each 16-bit color across one complete VQ
+  entry, allowing a two-times-larger hardware surface to consume a logical
+  byte-index image with an independent per-texture palette;
 - CPU, store-queue, and blocking DMA byte-range uploads enforce their actual
   alignment and capacity contracts;
 - rectangular source data updates linear storage directly and converts 4-, 8-,
@@ -281,8 +284,8 @@ Physical completion visibility and page-flip timing remain hardware-day items.
   16-bit render mode can begin a checked texture-target scene, with dimensions,
   stride, and target identity preserved by its render ticket;
 - the host regression test passes exact plain, strided, mipmapped, palette, and
-  VQ size and offset vectors, plus invalid layout combinations and descriptor
-  corruption;
+  VQ size and offset vectors, per-texture VQ palette expansion, invalid layout
+  combinations, and descriptor corruption;
 - the focused example completes 120 frames in interpreter-mode emulation after
   exercising checked twiddling, an asynchronous DMA upload, exact upload
   readback, a checked render target and ticket, live rectangle updates,

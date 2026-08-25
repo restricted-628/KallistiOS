@@ -74,6 +74,10 @@ lifecycle and naming conventions.
   mip-level CPU readback is bounded by the same metadata, while a checked
   render-target entry point accepts only compatible 16-bit linear surfaces and
   records exact target geometry through render tickets.
+* Added a checked full-codebook VQ palette builder, allowing byte-indexed
+  textures to carry independent 16-bit color tables without consuming global
+  palette banks. A focused example demonstrates the doubled-dimension VQ
+  layout and validates 120 rendered frames.
 * Removed shared mutable scratch matrices from the established 3D transform
   helpers and added a bounded caller-owned matrix stack with explicit
   overflow, underflow, and non-consuming restore operations. It allocates no

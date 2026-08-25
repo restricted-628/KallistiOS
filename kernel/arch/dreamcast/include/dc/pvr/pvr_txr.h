@@ -382,6 +382,32 @@ int pvr_txr_surface_begin_render(const pvr_txr_surface_t *surface,
 int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
                               uint32_t level, pvr_txr_level_info_t *info);
 
+/** \brief Build a VQ codebook which acts as a per-texture 16-bit palette.
+
+    Each supplied color is repeated across all four texels of one eight-byte VQ
+    entry. Remaining entries through 255 are cleared. A byte-valued index image
+    can then be stored as the VQ data for a surface whose hardware width and
+    height are twice the logical image dimensions. For example, a 256x256
+    index image occupies the data portion of a 512x512 VQ surface.
+
+    This provides independent per-texture colors without consuming a global
+    PVR palette bank. It trades the global palette's wider entries for a full
+    16-bit texture format selected by the surface. The output buffer must hold
+    the complete 2048-byte hardware codebook.
+
+    \param codebook      Output codebook.
+    \param codebook_size Size of \a codebook in bytes; must be at least 2048.
+    \param colors        Encoded 16-bit color values.
+    \param color_count   Number of colors, from 1 through 256.
+
+    The output and input ranges must not overlap. Bytes beyond the complete
+    codebook in a larger output buffer are left unchanged.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_vq_palette_build(void *codebook, size_t codebook_size,
+                             const uint16_t *colors, size_t color_count);
+
 /** \brief Build the PVR_TXRFMT_* word for a surface.
 
     Palette-bank selection is intentionally not included and can be ORed into
