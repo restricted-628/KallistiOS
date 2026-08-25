@@ -153,6 +153,11 @@ lifecycle and naming conventions.
   modifier list. Compact bump materials now expose their persistent
   signed-normalized direction/up basis to explicit application vertex policy;
   unsupported state families fail before callbacks or output.
+* Added a host-side compact-model inspector that decodes explicit
+  little-endian vertex and polygon streams, applies the exact target runtime
+  validator, and reports deterministic topology, indexing, strip, and texture
+  statistics. It defines no additional container format, and malformed assets
+  can now be rejected during a host build before being linked or packaged.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated
