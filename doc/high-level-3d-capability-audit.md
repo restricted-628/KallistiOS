@@ -33,7 +33,7 @@ workloads.
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
 | Object hierarchy | Parent-before-child compact-model traversal composes static or sampled caller-owned local transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
 | Lighting | Checked inverse-transpose normals, directional and point Lambert lights, deterministic ARGB packing, and caller-owned animated light sampling are available | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
-| Keyframe animation | Validated immutable tracks, clips, blended TRS poses, and explicit one-shot/loop/ping-pong cursors bind to object hierarchies, cameras, and existing PVR lights | Keep system clocks, storage, events, and scene ownership in the application. |
+| Keyframe animation | Validated immutable tracks, clips, blended TRS poses, and explicit one-shot/loop/ping-pong cursors bind to object hierarchies, cameras, lights, visibility, events, and morph targets | Keep system clocks, storage, event meaning, and scene ownership in the application. |
 | Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes | Keep skeleton ownership, pose evaluation, mesh binding, and blend policy outside the deformation kernels. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
 | Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
@@ -209,12 +209,15 @@ engine-owned runtime:
   motion linking;
 - camera and light tracks publish established KOS camera matrices and
   `pvr_light_t` state rather than creating a parallel scene representation.
+- step visibility channels publish bounded per-transform state, event tracks
+  collect crossed markers with arithmetic large-loop counting, and scalar
+  morph channels publish existing `pvr_morph_target_t` bindings.
 
 Dreamcast vector, quaternion, trigonometric, reciprocal-square-root, and matrix
 construction paths use SH4ZAM. The scalar host path serves as a test oracle.
-System-clock choice, events, storage, clip lifetime, and scene ownership remain
-application policy. The playback cursor is opt-in caller storage and creates no
-thread or fiber.
+System-clock choice, event meaning and dispatch, storage, clip lifetime, and
+scene ownership remain application policy. The playback cursor is opt-in caller
+storage and creates no thread or fiber.
 
 ## Seventh tranche
 

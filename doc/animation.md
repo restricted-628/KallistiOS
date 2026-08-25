@@ -8,9 +8,9 @@ Nothing runs until an application explicitly calls it.
 ## Track admission and sampling
 
 An `anim_track_t` is a bounded strided view over scalar, four-component vector,
-or WXYZ quaternion keys. `anim_track_open()` validates the complete address
-range, supported value and interpolation kinds, finite key data, nonzero
-quaternions, and strictly increasing finite times before publishing an
+WXYZ quaternion, or step-only Boolean keys. `anim_track_open()` validates the
+complete address range, supported value and interpolation kinds, finite key
+data, nonzero quaternions, and strictly increasing finite times before publishing an
 immutable view. The source must not change while the view is in use.
 
 Sampling clamps time before the first key and after the last key. Times inside
@@ -33,6 +33,21 @@ or a conventional frame loop.
 
 The cursor owns no clip. Its referenced clip view, track descriptions, and key
 storage must remain accessible and immutable while it is in use.
+
+## Visibility and events
+
+An optional visibility array associates one step-only Boolean channel and
+fallback with each clip transform. `anim_clip_sample_visibility()` publishes a
+bounded caller-owned Boolean array; clips without visibility state publish
+`true` for every transform. Rendering or subtree suppression remains explicit
+application policy.
+
+Event tracks contain strictly ordered, application-defined identifiers and
+values. `anim_playback_collect_events()` consumes one playback-advance result
+and publishes crossed markers in traversal order across forward, backward,
+looping, and reflected motion. A zero-capacity call counts without publishing.
+Large loop counts are handled arithmetically, and insufficient output reports
+truncation rather than performing unbounded callback work.
 
 ## Object transforms and hierarchy binding
 
@@ -63,6 +78,11 @@ Light tracks sample source, color, intensity, and range into the existing
 policy, and the resulting lights feed the established bounded CPU-lighting
 kernel directly. Applications retain the camera and light arrays; no duplicate
 scene manager is introduced.
+
+Scalar morph-weight channels copy caller-owned target bindings into the
+existing `pvr_morph_target_t` representation. The sampled array passes directly
+to `pvr_morph_apply()`; delta streams and deformed vertex storage retain their
+existing ownership and validation rules.
 
 On Dreamcast, vector interpolation, quaternion normalization and slerp,
 trigonometry, reciprocal square roots, and quaternion matrix construction use

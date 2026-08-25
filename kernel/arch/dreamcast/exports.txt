@@ -495,12 +495,15 @@ anim_track_open
 anim_track_sample_scalar
 anim_track_sample_vector
 anim_track_sample_quaternion
+anim_track_sample_boolean
+anim_event_track_open
 anim_transform_sample
 anim_transform_blend
 anim_transform_matrix_build
 anim_clip_open
 anim_clip_sample
 anim_clip_sample_matrices
+anim_clip_sample_visibility
 anim_clip_sample_blend
 anim_playback_init
 anim_playback_play
@@ -510,6 +513,7 @@ anim_playback_seek
 anim_playback_set_rate
 anim_playback_set_direction
 anim_playback_advance
+anim_playback_collect_events
 anim_playback_sample
 anim_camera_sample
 anim_camera_view_matrix_build
@@ -517,6 +521,7 @@ anim_camera_projection_matrix_build
 anim_playback_sample_camera
 anim_light_sample
 anim_playback_sample_light
+anim_morph_targets_sample
 collision_plane_from_points
 collision_point_segment_closest
 collision_segment_closest_points

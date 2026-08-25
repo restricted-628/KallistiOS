@@ -129,6 +129,11 @@ lifecycle and naming conventions.
   in-place composition, while camera and light tracks publish through the
   established checked matrix and `pvr_light_t` contracts. The facility creates
   no clock, worker, fiber, scene manager, or hidden pose allocation.
+* Added step-only visibility tracks, strictly ordered application event markers,
+  and scalar morph-weight bindings. Event collection follows forward, backward,
+  loop, and ping-pong traversal, supports zero-capacity counting, and bounds
+  publication by caller capacity even across very large loop counts. Morph
+  output uses the existing `pvr_morph_target_t` and deformation kernel directly.
 * Added bounded, allocation-free additive morph-target deformation and indexed
   four-influence linear-blend skinning over caller-owned streams and joint
   palettes. Complete structural, influence, and palette validation precedes

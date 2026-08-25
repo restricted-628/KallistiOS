@@ -19,11 +19,13 @@
 __BEGIN_DECLS
 
 #include <stddef.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include <dc/vector.h>
 #include <dc/matrix3d.h>
 #include <dc/pvr_lighting.h>
+#include <dc/pvr_deform.h>
 
 /** \defgroup animation Keyframe animation
     \brief                 Checked caller-owned animation sampling
@@ -34,7 +36,8 @@ __BEGIN_DECLS
 typedef enum anim_value_kind {
     ANIM_VALUE_SCALAR = 0,
     ANIM_VALUE_VECTOR,
-    ANIM_VALUE_QUATERNION
+    ANIM_VALUE_QUATERNION,
+    ANIM_VALUE_BOOLEAN
 } anim_value_kind_t;
 
 /** \brief Interpolation applied between adjacent keys. */
@@ -68,6 +71,32 @@ typedef struct anim_quaternion_key {
     float time;
     anim_quaternion_t value;
 } anim_quaternion_key_t;
+
+/** \brief Step-only Boolean keyframe. Value must be zero or one. */
+typedef struct anim_boolean_key {
+    float time;
+    uint32_t value;
+} anim_boolean_key_t;
+
+/** \brief One application-defined event marker. */
+typedef struct anim_event_key {
+    float time;
+    uint32_t identifier;
+    uint32_t value;
+} anim_event_key_t;
+
+/** \brief Bounded event marker source. */
+typedef struct anim_event_track {
+    const anim_event_key_t *events;
+    size_t event_count;
+} anim_event_track_t;
+
+/** \brief Validated immutable event marker view. */
+typedef struct anim_event_track_view {
+    anim_event_track_t track;
+    float start_time;
+    float end_time;
+} anim_event_track_view_t;
 
 /** \brief Bounded source track description.
 
@@ -119,6 +148,23 @@ typedef struct anim_transform_tracks {
     anim_transform_t fallback;
 } anim_transform_tracks_t;
 
+/** \brief Optional step visibility channel and its fallback. */
+typedef struct anim_visibility_tracks {
+    const anim_track_view_t *visible;
+    bool fallback;
+} anim_visibility_tracks_t;
+
+/** \brief Optional weight channel and existing PVR morph-target binding. */
+typedef struct anim_morph_target_tracks {
+    const anim_track_view_t *weight;
+    pvr_morph_target_t fallback;
+} anim_morph_target_tracks_t;
+
+/** \brief Progress from bounded morph-target weight sampling. */
+typedef struct anim_morph_result {
+    size_t sampled_targets;
+} anim_morph_result_t;
+
 /** \brief Bounded collection of object-transform tracks and a play interval.
 
     Track arrays, admitted track views, and their source keys are borrowed and
@@ -130,6 +176,7 @@ typedef struct anim_clip {
     size_t transform_count;
     float start_time;
     float end_time;
+    const anim_visibility_tracks_t *visibility;
 } anim_clip_t;
 
 /** \brief Validated immutable clip view. */
@@ -192,6 +239,19 @@ typedef struct anim_playback_result {
     anim_playback_state_t state;
 } anim_playback_result_t;
 
+/** \brief One event occurrence in playback traversal order. */
+typedef struct anim_event_occurrence {
+    anim_event_key_t event;
+    anim_playback_direction_t direction;
+} anim_event_occurrence_t;
+
+/** \brief Bounded event collection result. */
+typedef struct anim_event_result {
+    uint64_t matching_events;
+    size_t published_events;
+    bool truncated;
+} anim_event_result_t;
+
 /** \brief Sampled camera state independent of a retained camera object.
 
     Vertical field of view and roll are in radians. Roll rotates the supplied
@@ -253,6 +313,14 @@ int anim_track_sample_quaternion(const anim_track_view_t *track, float time,
                                  anim_quaternion_t *output,
                                  anim_sample_info_t *info);
 
+/** \brief Sample a step-only Boolean track, clamping to its endpoints. */
+int anim_track_sample_boolean(const anim_track_view_t *track, float time,
+                              bool *output, anim_sample_info_t *info);
+
+/** \brief Validate strictly ordered, application-defined event markers. */
+int anim_event_track_open(const anim_event_track_t *track,
+                          anim_event_track_view_t *output);
+
 /** \brief Sample the available tracks of one object.
 
     Missing channels retain their fallback values. Translation and scale tracks
@@ -304,6 +372,16 @@ int anim_clip_sample_matrices(const anim_clip_view_t *clip, float time,
                               matrix_t *output, size_t output_capacity,
                               anim_pose_result_t *result);
 
+/** \brief Sample one visibility value per transform in a clip.
+
+    A clip without a visibility array publishes `true` for every transform.
+    Missing channels use their caller-provided fallback. Failure reports the
+    valid output prefix through \p result.
+*/
+int anim_clip_sample_visibility(const anim_clip_view_t *clip, float time,
+                                bool *output, size_t output_capacity,
+                                anim_pose_result_t *result);
+
 /** \brief Sample and blend corresponding transforms from two clips.
 
     Clips must contain the same number of transforms in the same application-
@@ -352,6 +430,23 @@ int anim_playback_set_direction(anim_playback_t *playback,
 */
 int anim_playback_advance(anim_playback_t *playback, float elapsed,
                           anim_playback_result_t *result);
+
+/** \brief Collect event markers crossed by one playback advance.
+
+    \p playback must contain the post-advance cursor and \p advance must be the
+    corresponding result from anim_playback_advance(). Events are published in
+    traversal order, including direction changes and loop discontinuities.
+    Work and writes never exceed \p output_capacity; a NULL output is valid
+    when capacity is zero. The result always reports the full event count and
+    whether the caller-owned output truncated it. Large loop counts are counted
+    arithmetically rather than iterated.
+*/
+int anim_playback_collect_events(const anim_playback_t *playback,
+                                 const anim_playback_result_t *advance,
+                                 const anim_event_track_view_t *events,
+                                 anim_event_occurrence_t *output,
+                                 size_t output_capacity,
+                                 anim_event_result_t *result);
 
 /** \brief Sample the current pose of a valid playback cursor. */
 int anim_playback_sample(const anim_playback_t *playback,
@@ -402,6 +497,18 @@ int anim_light_sample(const anim_light_tracks_t *tracks, float time,
 int anim_playback_sample_light(const anim_playback_t *playback,
                                const anim_light_tracks_t *tracks,
                                pvr_light_t *output);
+
+/** \brief Sample caller-owned morph bindings into existing PVR targets.
+
+    Each output copies the corresponding fallback target and replaces only its
+    finite weight when a scalar channel is present. The result can be passed
+    directly to pvr_morph_apply().
+*/
+int anim_morph_targets_sample(const anim_morph_target_tracks_t *tracks,
+                              size_t target_count, float time,
+                              pvr_morph_target_t *output,
+                              size_t output_capacity,
+                              anim_morph_result_t *result);
 
 /** @} */
 

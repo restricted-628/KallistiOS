@@ -3,7 +3,9 @@
 This example admits two vector tracks, builds a two-node transform clip, and
 advances an explicit looping playback cursor. Each sampled local-matrix array
 feeds the compact-model hierarchy directly. The same cursor time also samples
-a camera and an existing PVR point-light representation.
+a camera and an existing PVR point-light representation. Step visibility,
+bounded event collection, and a sampled morph weight feeding
+`pvr_morph_apply()` demonstrate the remaining binding paths.
 
 The example deliberately advances by a supplied `1/60` second step. The
 animation layer creates no clock, thread, fiber, worker, or pose allocation;
