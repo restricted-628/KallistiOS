@@ -44,6 +44,8 @@ static int model_view_present(const pvr_chunk_model_view_t *view) {
 }
 
 static int hierarchy_validate(const pvr_chunk_hierarchy_t *hierarchy,
+                              const matrix_t *local_transforms,
+                              size_t local_capacity,
                               const matrix_t *root_transform,
                               matrix_t *world_matrices,
                               size_t world_capacity) {
@@ -70,6 +72,46 @@ static int hierarchy_validate(const pvr_chunk_hierarchy_t *hierarchy,
         return -1;
     }
 
+    if(local_transforms) {
+        uintptr_t local_begin;
+        uintptr_t local_end;
+        uintptr_t world_begin;
+        uintptr_t world_end;
+        size_t bytes;
+
+        if(!matrix_aligned(local_transforms)) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        if(local_capacity < hierarchy->node_count) {
+            errno = ENOSPC;
+            return -1;
+        }
+
+        if(hierarchy->node_count > SIZE_MAX / sizeof(matrix_t)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+
+        bytes = hierarchy->node_count * sizeof(matrix_t);
+        local_begin = (uintptr_t)local_transforms;
+        world_begin = (uintptr_t)world_matrices;
+        if(local_begin > UINTPTR_MAX - bytes ||
+           world_begin > UINTPTR_MAX - bytes) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+
+        local_end = local_begin + bytes;
+        world_end = world_begin + bytes;
+        if(local_begin != world_begin && local_begin < world_end &&
+           world_begin < local_end) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+
     if(root_transform &&
        (!matrix_aligned(root_transform) || !matrix_finite(root_transform))) {
         errno = EDOM;
@@ -84,7 +126,8 @@ static int hierarchy_validate(const pvr_chunk_hierarchy_t *hierarchy,
 
         if((node->parent_index != PVR_CHUNK_NODE_NONE &&
             node->parent_index >= i) ||
-           !matrix_finite(&node->local_transform) ||
+           !matrix_finite(local_transforms ? local_transforms + i :
+                                             &node->local_transform) ||
            !model_view_present(node->model)) {
             errno = EILSEQ;
             return -1;
@@ -94,8 +137,9 @@ static int hierarchy_validate(const pvr_chunk_hierarchy_t *hierarchy,
     return 0;
 }
 
-int pvr_chunk_hierarchy_traverse(
+static int hierarchy_traverse(
         const pvr_chunk_hierarchy_t *hierarchy,
+        const matrix_t *local_transforms, size_t local_capacity,
         const matrix_t *root_transform,
         matrix_t *world_matrices, size_t world_capacity,
         pvr_chunk_hierarchy_visit_t visit, void *data,
@@ -112,8 +156,8 @@ int pvr_chunk_hierarchy_traverse(
     if(result)
         *result = progress;
 
-    if(hierarchy_validate(hierarchy, root_transform, world_matrices,
-                          world_capacity) < 0)
+    if(hierarchy_validate(hierarchy, local_transforms, local_capacity,
+                          root_transform, world_matrices, world_capacity) < 0)
         return -1;
 
     if(!hierarchy->node_count)
@@ -121,13 +165,15 @@ int pvr_chunk_hierarchy_traverse(
 
     for(i = 0; i < hierarchy->node_count; ++i) {
         const pvr_chunk_hierarchy_node_t *node = hierarchy->nodes + i;
+        const matrix_t *local = local_transforms ? local_transforms + i :
+                                                  &node->local_transform;
         const matrix_t *parent = node->parent_index == PVR_CHUNK_NODE_NONE ?
                                  (root_transform ? root_transform : &identity) :
                                  world_matrices + node->parent_index;
         matrix_t composed;
         int rv;
 
-        if(mat_compose(&composed, parent, &node->local_transform) < 0 ||
+        if(mat_compose(&composed, parent, local) < 0 ||
            !matrix_finite(&composed)) {
             errno = ERANGE;
             return -1;
@@ -153,4 +199,34 @@ int pvr_chunk_hierarchy_traverse(
     }
 
     return 0;
+}
+
+int pvr_chunk_hierarchy_traverse(
+        const pvr_chunk_hierarchy_t *hierarchy,
+        const matrix_t *root_transform,
+        matrix_t *world_matrices, size_t world_capacity,
+        pvr_chunk_hierarchy_visit_t visit, void *data,
+        pvr_chunk_hierarchy_result_t *result) {
+    return hierarchy_traverse(hierarchy, NULL, 0, root_transform,
+                              world_matrices, world_capacity, visit, data,
+                              result);
+}
+
+int pvr_chunk_hierarchy_traverse_transforms(
+        const pvr_chunk_hierarchy_t *hierarchy,
+        const matrix_t *local_transforms, size_t local_capacity,
+        const matrix_t *root_transform,
+        matrix_t *world_matrices, size_t world_capacity,
+        pvr_chunk_hierarchy_visit_t visit, void *data,
+        pvr_chunk_hierarchy_result_t *result) {
+    if(!local_transforms && hierarchy && hierarchy->node_count) {
+        if(result)
+            result->visited_nodes = 0;
+        errno = EINVAL;
+        return -1;
+    }
+
+    return hierarchy_traverse(hierarchy, local_transforms, local_capacity,
+                              root_transform, world_matrices, world_capacity,
+                              visit, data, result);
 }

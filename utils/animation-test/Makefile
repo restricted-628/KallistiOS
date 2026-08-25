@@ -5,7 +5,9 @@ CPPFLAGS += -Iinclude -I../../kernel/arch/dreamcast/include
 LDLIBS += -lm
 
 TARGET = animation-test
-SOURCES = animation-test.c ../../kernel/arch/dreamcast/math/animation.c
+MATH_DIR = ../../kernel/arch/dreamcast/math
+SOURCES = animation-test.c $(MATH_DIR)/animation.c \
+          $(MATH_DIR)/matrix_compose.c $(MATH_DIR)/matrix_camera.c
 
 .PHONY: all clean test
 

@@ -454,6 +454,7 @@ static void test_hierarchy(void) {
     alignas(32) pvr_chunk_hierarchy_node_t nodes[3];
     pvr_chunk_hierarchy_t hierarchy = { nodes, 3 };
     alignas(32) matrix_t world[3];
+    alignas(32) matrix_t animated[3];
     alignas(32) matrix_t unchanged[3];
     alignas(32) matrix_t root;
     pvr_chunk_hierarchy_result_t result;
@@ -486,6 +487,47 @@ static void test_hierarchy(void) {
     assert(log.translation[2][0] == 1.0f &&
            log.translation[2][1] == 3.0f &&
            log.translation[2][2] == 4.0f);
+
+    translation(&animated[0], 10.0f, 0.0f, 0.0f);
+    translation(&animated[1], 0.0f, 20.0f, 0.0f);
+    translation(&animated[2], 0.0f, 0.0f, 30.0f);
+    memset(&log, 0, sizeof(log));
+    assert(pvr_chunk_hierarchy_traverse_transforms(
+               &hierarchy, animated, 3, &root, world, 3,
+               log_visit, &log, &result) == 0);
+    assert(result.visited_nodes == 3 && log.count == 3);
+    assert(log.translation[0][0] == 10.0f &&
+           log.translation[0][1] == 0.0f &&
+           log.translation[0][2] == 4.0f);
+    assert(log.translation[1][0] == 10.0f &&
+           log.translation[1][1] == 20.0f &&
+           log.translation[1][2] == 4.0f);
+    assert(log.translation[2][0] == 10.0f &&
+           log.translation[2][1] == 0.0f &&
+           log.translation[2][2] == 34.0f);
+
+    /* Exact in-place composition is useful when the sampled local pose no
+       longer needs to be retained after hierarchy evaluation. */
+    assert(pvr_chunk_hierarchy_traverse_transforms(
+               &hierarchy, animated, 3, NULL, animated, 3,
+               NULL, NULL, &result) == 0);
+    assert(animated[0][3][0] == 10.0f &&
+           animated[1][3][0] == 10.0f &&
+           animated[1][3][1] == 20.0f &&
+           animated[2][3][0] == 10.0f &&
+           animated[2][3][2] == 30.0f);
+
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse_transforms(
+               &hierarchy, NULL, 0, NULL, world, 3,
+               NULL, NULL, &result) == -1);
+    assert(errno == EINVAL && result.visited_nodes == 0);
+
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse_transforms(
+               &hierarchy, animated, 2, NULL, world, 3,
+               NULL, NULL, &result) == -1);
+    assert(errno == ENOSPC && result.visited_nodes == 0);
 
     memset(&log, 0, sizeof(log));
     log.stop_after = 2;

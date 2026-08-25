@@ -27,13 +27,13 @@ workloads.
 | --- | --- | --- |
 | Matrix register operations | Fast load, store, multiply, transform, translation, rotation, scaling, perspective, and look-at helpers | Keep the register API small; eliminate shared scratch state and provide explicit caller-owned save/restore. |
 | Transform hierarchy | Bounded caller-owned matrix stack plus parent-before-child compact-model traversal | Preserve explicit overflow and underflow reporting, allocation-free storage, and caller-owned hierarchy policy. |
-| Camera state | Established immediate operations plus explicit, checked perspective and look-at builders | Keep application state caller-owned; add higher-level camera policy only outside the core math layer. |
+| Camera state | Established immediate operations, checked perspective/look-at builders, and caller-owned animated camera poses | Keep camera and clock ownership in the application while sharing the established matrix contract. |
 | Frustum and visibility | Caller-owned screen/W frusta provide bounded AABB classification and triangle clipping | Leave spatial partitioning, occlusion policy, and retained object state to applications. |
 | Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
-| Object hierarchy | Parent-before-child compact-model traversal composes caller-owned transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
-| Lighting | Checked inverse-transpose normals, directional and point Lambert lights, and deterministic ARGB packing are available as allocation-free CPU kernels | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
-| Keyframe animation | Validated immutable scalar, vector, and quaternion tracks provide clamped logarithmic sampling plus blended TRS object transforms | Keep playback clocks, looping policy, clip ownership, and object binding outside the math core. |
+| Object hierarchy | Parent-before-child compact-model traversal composes static or sampled caller-owned local transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
+| Lighting | Checked inverse-transpose normals, directional and point Lambert lights, deterministic ARGB packing, and caller-owned animated light sampling are available | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
+| Keyframe animation | Validated immutable tracks, clips, blended TRS poses, and explicit one-shot/loop/ping-pong cursors bind to object hierarchies, cameras, and existing PVR lights | Keep system clocks, storage, events, and scene ownership in the application. |
 | Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes | Keep skeleton ownership, pose evaluation, mesh binding, and blend policy outside the deformation kernels. |
 | Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
 | Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
@@ -186,7 +186,7 @@ thread, retains no state, and performs no work unless called.
 ## Sixth tranche
 
 The sixth tranche adds format-neutral animation math without introducing an
-engine-owned clip or playback system:
+engine-owned runtime:
 
 - `anim_track_open()` admits bounded strided scalar, vector, or quaternion
   keys only after checking finite values, nonzero rotations, strictly
@@ -201,11 +201,20 @@ engine-owned clip or playback system:
   two complete object transforms;
 - `anim_transform_matrix_build()` publishes an explicit column-major
   `translation * rotation * scale` matrix without changing XMTRX.
+- admitted clips group corresponding transform tracks under an explicit play
+  interval, and caller-owned playback cursors provide one-shot, loop, and
+  ping-pong policy with constant-time large-delta advance;
+- clips sample complete local-matrix arrays that feed compact-model hierarchy
+  traversal directly, while cross-clip sampling supplies allocation-free
+  motion linking;
+- camera and light tracks publish established KOS camera matrices and
+  `pvr_light_t` state rather than creating a parallel scene representation.
 
 Dreamcast vector, quaternion, trigonometric, reciprocal-square-root, and matrix
 construction paths use SH4ZAM. The scalar host path serves as a test oracle.
-Playback time, looping, events, hierarchy binding, and clip lifetime remain
-application policy.
+System-clock choice, events, storage, clip lifetime, and scene ownership remain
+application policy. The playback cursor is opt-in caller storage and creates no
+thread or fiber.
 
 ## Seventh tranche
 

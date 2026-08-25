@@ -123,6 +123,12 @@ lifecycle and naming conventions.
   object sampling, blended TRS transforms, and explicit local-matrix
   publication. Dreamcast interpolation and rotation paths use SH4ZAM without
   changing XMTRX.
+* Added admitted transform clips and caller-owned one-shot, loop, and ping-pong
+  playback cursors with constant-time boundary traversal. Sampled local
+  matrices bind directly to compact-model hierarchies, including exact
+  in-place composition, while camera and light tracks publish through the
+  established checked matrix and `pvr_light_t` contracts. The facility creates
+  no clock, worker, fiber, scene manager, or hidden pose allocation.
 * Added bounded, allocation-free additive morph-target deformation and indexed
   four-influence linear-blend skinning over caller-owned streams and joint
   palettes. Complete structural, influence, and palette validation precedes

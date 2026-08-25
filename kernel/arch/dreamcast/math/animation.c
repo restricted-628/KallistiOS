@@ -607,3 +607,729 @@ int anim_transform_matrix_build(const anim_transform_t *transform,
     memcpy(output, &matrix, sizeof(matrix));
     return 0;
 }
+
+static int clip_shallow_valid(const anim_clip_view_t *view) {
+    const anim_clip_t *clip;
+
+    if(!view)
+        return 0;
+    clip = &view->clip;
+    if(!clip->transforms || !clip->transform_count ||
+       ((uintptr_t)clip->transforms &
+        (_Alignof(anim_transform_tracks_t) - 1u)) ||
+       !isfinite(clip->start_time) || !isfinite(clip->end_time) ||
+       clip->start_time >= clip->end_time ||
+       clip->transform_count > SIZE_MAX / sizeof(*clip->transforms) ||
+       clip->transform_count * sizeof(*clip->transforms) >
+       UINTPTR_MAX - (uintptr_t)clip->transforms)
+        return 0;
+    return 1;
+}
+
+static int transform_tracks_valid(const anim_transform_tracks_t *tracks) {
+    return tracks && transform_valid(&tracks->fallback) &&
+           (!tracks->translation ||
+            view_valid(tracks->translation, ANIM_VALUE_VECTOR)) &&
+           (!tracks->rotation ||
+            view_valid(tracks->rotation, ANIM_VALUE_QUATERNION)) &&
+           (!tracks->scale ||
+            view_valid(tracks->scale, ANIM_VALUE_VECTOR));
+}
+
+int anim_clip_open(const anim_clip_t *clip, anim_clip_view_t *output) {
+    anim_clip_view_t view;
+    size_t i;
+
+    if(!clip || !output) {
+        errno = EINVAL;
+        return -1;
+    }
+    view.clip = *clip;
+    if(!clip_shallow_valid(&view)) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(i = 0; i < clip->transform_count; ++i) {
+        if(!transform_tracks_valid(&clip->transforms[i])) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+
+    memcpy(output, &view, sizeof(view));
+    return 0;
+}
+
+static float clip_time_clamp(const anim_clip_view_t *clip, float time) {
+    if(time < clip->clip.start_time)
+        return clip->clip.start_time;
+    if(time > clip->clip.end_time)
+        return clip->clip.end_time;
+    return time;
+}
+
+int anim_clip_sample(const anim_clip_view_t *clip, float time,
+                     anim_transform_t *output, size_t output_capacity,
+                     anim_pose_result_t *result) {
+    anim_pose_result_t progress = { 0 };
+    float sample_time;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(!clip_shallow_valid(clip) || !output ||
+       ((uintptr_t)output & (_Alignof(anim_transform_t) - 1u)) ||
+       !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < clip->clip.transform_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(clip->clip.transform_count >
+       (UINTPTR_MAX - (uintptr_t)output) / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    sample_time = clip_time_clamp(clip, time);
+    for(i = 0; i < clip->clip.transform_count; ++i) {
+        if(anim_transform_sample(&clip->clip.transforms[i], sample_time,
+                                 &output[i]) < 0)
+            return -1;
+        progress.sampled_transforms = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}
+
+int anim_clip_sample_matrices(const anim_clip_view_t *clip, float time,
+                              matrix_t *output, size_t output_capacity,
+                              anim_pose_result_t *result) {
+    anim_pose_result_t progress = { 0 };
+    float sample_time;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(!clip_shallow_valid(clip) || !output ||
+       ((uintptr_t)output & (_Alignof(matrix_t) - 1u)) ||
+       !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < clip->clip.transform_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(clip->clip.transform_count >
+       (UINTPTR_MAX - (uintptr_t)output) / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    sample_time = clip_time_clamp(clip, time);
+    for(i = 0; i < clip->clip.transform_count; ++i) {
+        anim_transform_t transform;
+
+        if(anim_transform_sample(&clip->clip.transforms[i], sample_time,
+                                 &transform) < 0 ||
+           anim_transform_matrix_build(&transform, &output[i]) < 0)
+            return -1;
+        progress.sampled_transforms = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}
+
+int anim_clip_sample_blend(const anim_clip_view_t *from, float from_time,
+                           const anim_clip_view_t *to, float to_time,
+                           float weight, anim_transform_t *output,
+                           size_t output_capacity,
+                           anim_pose_result_t *result) {
+    anim_pose_result_t progress = { 0 };
+    float first_time;
+    float second_time;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(!clip_shallow_valid(from) || !clip_shallow_valid(to) || !output ||
+       ((uintptr_t)output & (_Alignof(anim_transform_t) - 1u)) ||
+       from->clip.transform_count != to->clip.transform_count ||
+       !isfinite(from_time) || !isfinite(to_time) || !isfinite(weight) ||
+       weight < 0.0f || weight > 1.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < from->clip.transform_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(from->clip.transform_count >
+       (UINTPTR_MAX - (uintptr_t)output) / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    first_time = clip_time_clamp(from, from_time);
+    second_time = clip_time_clamp(to, to_time);
+    for(i = 0; i < from->clip.transform_count; ++i) {
+        anim_transform_t first;
+        anim_transform_t second;
+
+        if(anim_transform_sample(&from->clip.transforms[i], first_time,
+                                 &first) < 0 ||
+           anim_transform_sample(&to->clip.transforms[i], second_time,
+                                 &second) < 0 ||
+           anim_transform_blend(&first, &second, weight, &output[i]) < 0)
+            return -1;
+        progress.sampled_transforms = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}
+
+static int playback_valid(const anim_playback_t *playback) {
+    if(!playback || !clip_shallow_valid(playback->clip) ||
+       !isfinite(playback->time) || !isfinite(playback->rate) ||
+       playback->rate <= 0.0f ||
+       playback->time < playback->clip->clip.start_time ||
+       playback->time > playback->clip->clip.end_time ||
+       (playback->mode != ANIM_PLAYBACK_ONCE &&
+        playback->mode != ANIM_PLAYBACK_LOOP &&
+        playback->mode != ANIM_PLAYBACK_PING_PONG) ||
+       (playback->direction != ANIM_PLAYBACK_FORWARD &&
+        playback->direction != ANIM_PLAYBACK_BACKWARD) ||
+       (playback->state != ANIM_PLAYBACK_STOPPED &&
+        playback->state != ANIM_PLAYBACK_PLAYING &&
+        playback->state != ANIM_PLAYBACK_PAUSED &&
+        playback->state != ANIM_PLAYBACK_COMPLETE))
+        return 0;
+    return 1;
+}
+
+int anim_playback_init(anim_playback_t *playback,
+                       const anim_clip_view_t *clip,
+                       anim_playback_mode_t mode) {
+    anim_playback_t initialized;
+
+    if(!playback || !clip_shallow_valid(clip) ||
+       (mode != ANIM_PLAYBACK_ONCE && mode != ANIM_PLAYBACK_LOOP &&
+        mode != ANIM_PLAYBACK_PING_PONG)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    initialized.clip = clip;
+    initialized.time = clip->clip.start_time;
+    initialized.rate = 1.0f;
+    initialized.boundary_count = 0;
+    initialized.mode = mode;
+    initialized.direction = ANIM_PLAYBACK_FORWARD;
+    initialized.state = ANIM_PLAYBACK_STOPPED;
+    *playback = initialized;
+    return 0;
+}
+
+int anim_playback_play(anim_playback_t *playback) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(playback->state == ANIM_PLAYBACK_COMPLETE) {
+        playback->time = playback->direction == ANIM_PLAYBACK_FORWARD ?
+            playback->clip->clip.start_time : playback->clip->clip.end_time;
+    }
+    playback->state = ANIM_PLAYBACK_PLAYING;
+    return 0;
+}
+
+int anim_playback_pause(anim_playback_t *playback) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(playback->state == ANIM_PLAYBACK_PLAYING)
+        playback->state = ANIM_PLAYBACK_PAUSED;
+    return 0;
+}
+
+int anim_playback_stop(anim_playback_t *playback) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->time = playback->clip->clip.start_time;
+    playback->boundary_count = 0;
+    playback->direction = ANIM_PLAYBACK_FORWARD;
+    playback->state = ANIM_PLAYBACK_STOPPED;
+    return 0;
+}
+
+int anim_playback_seek(anim_playback_t *playback, float time) {
+    if(!playback_valid(playback) || !isfinite(time) ||
+       time < playback->clip->clip.start_time ||
+       time > playback->clip->clip.end_time) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->time = time;
+    if(playback->state == ANIM_PLAYBACK_COMPLETE)
+        playback->state = ANIM_PLAYBACK_PAUSED;
+    return 0;
+}
+
+int anim_playback_set_rate(anim_playback_t *playback, float rate) {
+    if(!playback_valid(playback) || !isfinite(rate) || rate <= 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->rate = rate;
+    return 0;
+}
+
+int anim_playback_set_direction(anim_playback_t *playback,
+                                anim_playback_direction_t direction) {
+    if(!playback_valid(playback) ||
+       (direction != ANIM_PLAYBACK_FORWARD &&
+        direction != ANIM_PLAYBACK_BACKWARD)) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->direction = direction;
+    return 0;
+}
+
+static int boundary_count_from_double(double value, uint64_t *output) {
+    double integral;
+
+    /* UINT64_MAX rounds upward to 2^64 in binary64, so compare against the
+       first unrepresentable count rather than a converted UINT64_MAX. */
+    if(!isfinite(value) || value < 0.0 ||
+       value >= 18446744073709551616.0) {
+        errno = ERANGE;
+        return -1;
+    }
+    integral = floor(value);
+    *output = (uint64_t)integral;
+    return 0;
+}
+
+int anim_playback_advance(anim_playback_t *playback, float elapsed,
+                          anim_playback_result_t *result) {
+    anim_playback_result_t advanced;
+    anim_playback_t next;
+    double start;
+    double end;
+    double duration;
+    double travel;
+    uint64_t crossed = 0;
+
+    if(!playback_valid(playback) || !isfinite(elapsed) || elapsed < 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    start = playback->clip->clip.start_time;
+    end = playback->clip->clip.end_time;
+    next = *playback;
+    advanced.previous_time = playback->time;
+    advanced.current_time = playback->time;
+    advanced.crossed_boundaries = 0;
+    advanced.previous_direction = playback->direction;
+    advanced.current_direction = playback->direction;
+    advanced.state = playback->state;
+
+    if(playback->state != ANIM_PLAYBACK_PLAYING || elapsed == 0.0f) {
+        if(result)
+            *result = advanced;
+        return 0;
+    }
+
+    duration = end - start;
+    travel = (double)elapsed * playback->rate;
+    if(!isfinite(travel)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    if(playback->mode == ANIM_PLAYBACK_ONCE) {
+        double remaining = playback->direction == ANIM_PLAYBACK_FORWARD ?
+            end - playback->time : playback->time - start;
+
+        if(travel >= remaining) {
+            next.time = playback->direction == ANIM_PLAYBACK_FORWARD ?
+                (float)end : (float)start;
+            next.state = ANIM_PLAYBACK_COMPLETE;
+            crossed = remaining > 0.0 ? 1u : 0u;
+        }
+        else if(playback->direction == ANIM_PLAYBACK_FORWARD) {
+            next.time = (float)(playback->time + travel);
+        }
+        else {
+            next.time = (float)(playback->time - travel);
+        }
+    }
+    else if(playback->mode == ANIM_PLAYBACK_LOOP) {
+        double phase;
+        double total;
+        double remainder;
+
+        if(playback->direction == ANIM_PLAYBACK_FORWARD)
+            phase = playback->time - start;
+        else
+            phase = end - playback->time;
+        total = phase + travel;
+        if(boundary_count_from_double(total / duration, &crossed) < 0)
+            return -1;
+        remainder = fmod(total, duration);
+        if(playback->direction == ANIM_PLAYBACK_FORWARD)
+            next.time = (float)(start + remainder);
+        else
+            next.time = (float)(end - remainder);
+    }
+    else {
+        double phase;
+        double total;
+        double period = duration * 2.0;
+        double remainder;
+        uint64_t initial_boundaries;
+        uint64_t final_boundaries;
+
+        if(playback->time <= start &&
+           playback->direction == ANIM_PLAYBACK_BACKWARD)
+            next.direction = ANIM_PLAYBACK_FORWARD;
+        else if(playback->time >= end &&
+                playback->direction == ANIM_PLAYBACK_FORWARD)
+            next.direction = ANIM_PLAYBACK_BACKWARD;
+
+        phase = next.direction == ANIM_PLAYBACK_FORWARD ?
+            playback->time - start : period - (playback->time - start);
+        total = phase + travel;
+        if(boundary_count_from_double(phase / duration,
+                                      &initial_boundaries) < 0 ||
+           boundary_count_from_double(total / duration,
+                                      &final_boundaries) < 0)
+            return -1;
+        crossed = final_boundaries - initial_boundaries;
+        remainder = fmod(total, period);
+        if(remainder < duration) {
+            next.time = (float)(start + remainder);
+            next.direction = ANIM_PLAYBACK_FORWARD;
+        }
+        else {
+            next.time = (float)(end - (remainder - duration));
+            next.direction = ANIM_PLAYBACK_BACKWARD;
+        }
+    }
+
+    if(UINT64_MAX - next.boundary_count < crossed) {
+        errno = ERANGE;
+        return -1;
+    }
+    next.boundary_count += crossed;
+    advanced.current_time = next.time;
+    advanced.crossed_boundaries = crossed;
+    advanced.current_direction = next.direction;
+    advanced.state = next.state;
+    *playback = next;
+    if(result)
+        *result = advanced;
+    return 0;
+}
+
+int anim_playback_sample(const anim_playback_t *playback,
+                         anim_transform_t *output, size_t output_capacity,
+                         anim_pose_result_t *result) {
+    if(!playback_valid(playback)) {
+        if(result)
+            result->sampled_transforms = 0;
+        errno = EINVAL;
+        return -1;
+    }
+    return anim_clip_sample(playback->clip, playback->time, output,
+                            output_capacity, result);
+}
+
+static int camera_pose_valid(const anim_camera_pose_t *camera) {
+    float forward_x;
+    float forward_y;
+    float forward_z;
+    float forward_length;
+    float up_length;
+
+    if(!camera ||
+       !finite4(camera->eye.x, camera->eye.y, camera->eye.z, 0.0f) ||
+       !finite4(camera->target.x, camera->target.y, camera->target.z, 0.0f) ||
+       !finite4(camera->up.x, camera->up.y, camera->up.z, 0.0f) ||
+       !isfinite(camera->roll) || !isfinite(camera->vertical_fov) ||
+       camera->vertical_fov <= 0.0f ||
+       camera->vertical_fov >= 3.14159265358979323846f)
+        return 0;
+
+    forward_x = camera->target.x - camera->eye.x;
+    forward_y = camera->target.y - camera->eye.y;
+    forward_z = camera->target.z - camera->eye.z;
+    forward_length = forward_x * forward_x + forward_y * forward_y +
+                     forward_z * forward_z;
+    up_length = camera->up.x * camera->up.x +
+                camera->up.y * camera->up.y +
+                camera->up.z * camera->up.z;
+    return isfinite(forward_length) && forward_length > FLT_MIN &&
+           isfinite(up_length) && up_length > FLT_MIN;
+}
+
+static int camera_tracks_valid(const anim_camera_tracks_t *tracks) {
+    return tracks && camera_pose_valid(&tracks->fallback) &&
+           (!tracks->eye || view_valid(tracks->eye, ANIM_VALUE_VECTOR)) &&
+           (!tracks->target ||
+            view_valid(tracks->target, ANIM_VALUE_VECTOR)) &&
+           (!tracks->up || view_valid(tracks->up, ANIM_VALUE_VECTOR)) &&
+           (!tracks->roll || view_valid(tracks->roll, ANIM_VALUE_SCALAR)) &&
+           (!tracks->vertical_fov ||
+            view_valid(tracks->vertical_fov, ANIM_VALUE_SCALAR));
+}
+
+int anim_camera_sample(const anim_camera_tracks_t *tracks, float time,
+                       anim_camera_pose_t *output) {
+    anim_camera_pose_t sampled;
+
+    if(!camera_tracks_valid(tracks) || !output || !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    sampled = tracks->fallback;
+    if(tracks->eye && anim_track_sample_vector(
+           tracks->eye, time, &sampled.eye, NULL) < 0)
+        return -1;
+    if(tracks->target && anim_track_sample_vector(
+           tracks->target, time, &sampled.target, NULL) < 0)
+        return -1;
+    if(tracks->up && anim_track_sample_vector(
+           tracks->up, time, &sampled.up, NULL) < 0)
+        return -1;
+    if(tracks->roll && anim_track_sample_scalar(
+           tracks->roll, time, &sampled.roll, NULL) < 0)
+        return -1;
+    if(tracks->vertical_fov && anim_track_sample_scalar(
+           tracks->vertical_fov, time, &sampled.vertical_fov, NULL) < 0)
+        return -1;
+
+    sampled.eye.w = 1.0f;
+    sampled.target.w = 1.0f;
+    sampled.up.w = 0.0f;
+    if(!camera_pose_valid(&sampled)) {
+        errno = EDOM;
+        return -1;
+    }
+    *output = sampled;
+    return 0;
+}
+
+int anim_camera_view_matrix_build(const anim_camera_pose_t *camera,
+                                  matrix_t *output) {
+    anim_camera_pose_t rolled;
+    mat_lookat_desc_t look_at;
+    float axis_x;
+    float axis_y;
+    float axis_z;
+    float length_squared;
+    float reciprocal_length;
+    float sine;
+    float cosine;
+    float cross_x;
+    float cross_y;
+    float cross_z;
+    float dot;
+
+    if(!camera_pose_valid(camera) || !output ||
+       ((uintptr_t)output & (_Alignof(matrix_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    rolled = *camera;
+    axis_x = camera->target.x - camera->eye.x;
+    axis_y = camera->target.y - camera->eye.y;
+    axis_z = camera->target.z - camera->eye.z;
+    length_squared = axis_x * axis_x + axis_y * axis_y + axis_z * axis_z;
+#ifdef __DREAMCAST__
+    reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
+    {
+        shz_sincos_t rotation = shz_sincosf(camera->roll);
+
+        sine = rotation.sin;
+        cosine = rotation.cos;
+    }
+#else
+    reciprocal_length = 1.0f / sqrtf(length_squared);
+    sine = sinf(camera->roll);
+    cosine = cosf(camera->roll);
+#endif
+    axis_x *= reciprocal_length;
+    axis_y *= reciprocal_length;
+    axis_z *= reciprocal_length;
+    cross_x = axis_y * camera->up.z - axis_z * camera->up.y;
+    cross_y = axis_z * camera->up.x - axis_x * camera->up.z;
+    cross_z = axis_x * camera->up.y - axis_y * camera->up.x;
+    dot = axis_x * camera->up.x + axis_y * camera->up.y +
+          axis_z * camera->up.z;
+    rolled.up.x = camera->up.x * cosine + cross_x * sine +
+                  axis_x * dot * (1.0f - cosine);
+    rolled.up.y = camera->up.y * cosine + cross_y * sine +
+                  axis_y * dot * (1.0f - cosine);
+    rolled.up.z = camera->up.z * cosine + cross_z * sine +
+                  axis_z * dot * (1.0f - cosine);
+    rolled.up.w = 0.0f;
+    if(!camera_pose_valid(&rolled) ||
+       !finite4(reciprocal_length, sine, cosine, dot)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    look_at.eye = rolled.eye;
+    look_at.center = rolled.target;
+    look_at.up = rolled.up;
+    return mat_lookat_build(output, &look_at);
+}
+
+int anim_camera_projection_matrix_build(const anim_camera_pose_t *camera,
+                                        float x_center, float y_center,
+                                        float z_near, float z_far,
+                                        matrix_t *output) {
+    mat_perspective_desc_t perspective;
+    float tangent;
+
+    if(!camera_pose_valid(camera) || !output ||
+       ((uintptr_t)output & (_Alignof(matrix_t) - 1u)) ||
+       !finite4(x_center, y_center, z_near, z_far)) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef __DREAMCAST__
+    tangent = shz_tanf(camera->vertical_fov * 0.5f);
+    perspective.cot_half_fov = shz_invf(tangent);
+#else
+    tangent = tanf(camera->vertical_fov * 0.5f);
+    perspective.cot_half_fov = 1.0f / tangent;
+#endif
+    if(!isfinite(tangent) || tangent <= FLT_MIN ||
+       !isfinite(perspective.cot_half_fov)) {
+        errno = ERANGE;
+        return -1;
+    }
+    perspective.x_center = x_center;
+    perspective.y_center = y_center;
+    perspective.z_near = z_near;
+    perspective.z_far = z_far;
+    return mat_perspective_build(output, &perspective);
+}
+
+int anim_playback_sample_camera(const anim_playback_t *playback,
+                                const anim_camera_tracks_t *tracks,
+                                anim_camera_pose_t *output) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return anim_camera_sample(tracks, playback->time, output);
+}
+
+static int light_pose_valid(const pvr_light_t *light) {
+    float length_squared;
+
+    if(!light || (light->kind != PVR_LIGHT_DIRECTIONAL &&
+                  light->kind != PVR_LIGHT_POINT) ||
+       !finite4(light->color.x, light->color.y, light->color.z, 0.0f) ||
+       light->color.x < 0.0f || light->color.y < 0.0f ||
+       light->color.z < 0.0f || !isfinite(light->intensity) ||
+       light->intensity < 0.0f ||
+       !isfinite(light->attenuation_constant) ||
+       !isfinite(light->attenuation_linear) ||
+       !isfinite(light->attenuation_quadratic) ||
+       !isfinite(light->range) || light->range < 0.0f)
+        return 0;
+
+    if(light->kind == PVR_LIGHT_POINT)
+        return finite4(light->source.position.x, light->source.position.y,
+                       light->source.position.z, 0.0f) &&
+               light->attenuation_constant > 0.0f &&
+               light->attenuation_linear >= 0.0f &&
+               light->attenuation_quadratic >= 0.0f;
+
+    if(!finite4(light->source.direction.x, light->source.direction.y,
+                light->source.direction.z, 0.0f))
+        return 0;
+    length_squared = light->source.direction.x * light->source.direction.x +
+                     light->source.direction.y * light->source.direction.y +
+                     light->source.direction.z * light->source.direction.z;
+    return isfinite(length_squared) && length_squared > FLT_MIN;
+}
+
+static int light_tracks_valid(const anim_light_tracks_t *tracks) {
+    return tracks && light_pose_valid(&tracks->fallback) &&
+           (!tracks->source ||
+            view_valid(tracks->source, ANIM_VALUE_VECTOR)) &&
+           (!tracks->color || view_valid(tracks->color, ANIM_VALUE_VECTOR)) &&
+           (!tracks->intensity ||
+            view_valid(tracks->intensity, ANIM_VALUE_SCALAR)) &&
+           (!tracks->range || view_valid(tracks->range, ANIM_VALUE_SCALAR));
+}
+
+int anim_light_sample(const anim_light_tracks_t *tracks, float time,
+                      pvr_light_t *output) {
+    pvr_light_t sampled;
+    vector_t source;
+
+    if(!light_tracks_valid(tracks) || !output || !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    sampled = tracks->fallback;
+    source = sampled.kind == PVR_LIGHT_POINT ?
+        sampled.source.position : sampled.source.direction;
+    if(tracks->source && anim_track_sample_vector(
+           tracks->source, time, &source, NULL) < 0)
+        return -1;
+    if(sampled.kind == PVR_LIGHT_POINT) {
+        source.w = 1.0f;
+        sampled.source.position = source;
+    }
+    else {
+        source.w = 0.0f;
+        sampled.source.direction = source;
+    }
+    if(tracks->color && anim_track_sample_vector(
+           tracks->color, time, &sampled.color, NULL) < 0)
+        return -1;
+    if(tracks->intensity && anim_track_sample_scalar(
+           tracks->intensity, time, &sampled.intensity, NULL) < 0)
+        return -1;
+    if(tracks->range && anim_track_sample_scalar(
+           tracks->range, time, &sampled.range, NULL) < 0)
+        return -1;
+    sampled.color.w = 0.0f;
+    if(!light_pose_valid(&sampled)) {
+        errno = EDOM;
+        return -1;
+    }
+    *output = sampled;
+    return 0;
+}
+
+int anim_playback_sample_light(const anim_playback_t *playback,
+                               const anim_light_tracks_t *tracks,
+                               pvr_light_t *output) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return anim_light_sample(tracks, playback->time, output);
+}

@@ -472,6 +472,41 @@ int pvr_chunk_hierarchy_traverse(
     pvr_chunk_hierarchy_visit_t visit, void *data,
     pvr_chunk_hierarchy_result_t *result);
 
+/** \brief Compose a hierarchy using caller-supplied local transforms.
+
+    This is the animation-binding form of pvr_chunk_hierarchy_traverse(). The
+    node array continues to provide topology, model, and user data, while one
+    caller-owned local matrix per node replaces the static local matrices in
+    the hierarchy. This permits output from anim_clip_sample_matrices() to feed
+    traversal directly without copying or mutating the model hierarchy.
+
+    The complete topology and every selected local matrix are validated before
+    the first callback or workspace write. Local and world arrays may be the
+    same exact array for canonical in-place composition; any other overlap is
+    rejected.
+
+    \param hierarchy        Nodes whose topology and bindings are traversed.
+    \param local_transforms One local matrix per node.
+    \param local_capacity   Number of matrices in \p local_transforms.
+    \param root_transform   Optional transform applied above every root.
+    \param world_matrices   Caller-owned output/workspace.
+    \param world_capacity   Number of matrices in the workspace.
+    \param visit            Optional callback invoked once per visited node.
+    \param data             Opaque callback data.
+    \param result           Optional traversal progress result.
+
+    \retval 0  Every node was visited.
+    \retval 1  A callback requested a successful early stop.
+    \retval -1 Invalid input, arithmetic failure, or callback failure.
+*/
+int pvr_chunk_hierarchy_traverse_transforms(
+    const pvr_chunk_hierarchy_t *hierarchy,
+    const matrix_t *local_transforms, size_t local_capacity,
+    const matrix_t *root_transform,
+    matrix_t *world_matrices, size_t world_capacity,
+    pvr_chunk_hierarchy_visit_t visit, void *data,
+    pvr_chunk_hierarchy_result_t *result);
+
 /** @} */
 
 __END_DECLS

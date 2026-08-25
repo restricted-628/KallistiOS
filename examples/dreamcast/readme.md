@@ -14,6 +14,8 @@ This page serves as an index for all KallistiOS examples.
   - fpu
   - gdb_breaking
   - independent-heap
+  - [**animation-playback**](basic/animation-playback/): Demonstrates opt-in,
+    caller-owned clip playback and object/camera/light binding
   - [**camera-matrices**](basic/camera-matrices/): Demonstrates checked,
     caller-owned perspective and look-at matrix construction
   - [**collision**](basic/collision/): Demonstrates checked, allocation-free
