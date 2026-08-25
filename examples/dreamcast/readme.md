@@ -151,6 +151,8 @@ This page serves as an index for all KallistiOS examples.
   - background_plane
   - bumpmap
   - cheap_shadow
+  - [**chunk_resources**](pvr/chunk_resources/): Resolves compact-model texture
+    identifiers through a validated caller-owned table and checked materials
   - clipping
   - fb_tex
   - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned

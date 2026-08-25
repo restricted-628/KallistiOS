@@ -38,7 +38,7 @@ workloads.
 | Sprite cells | Checked caller-owned 2D/3D cell compilation, UV regions, pivot, scale, rotation, flip, visibility compaction, projection, and existing sprite sinks/materials | Complete; texture, material, instance, scene, list, animation, and clock ownership remain explicit. |
 | Particles | Deterministic caller-owned pools, spawn/step, sprite-cell extraction, colored/textured billboards, and camera-facing trails | Complete; no allocator, worker, clock, random source, material, scene, or list ownership. |
 | Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
-| Asset formats and resource names | Bounded compact chunk streams provide validated structure without an engine-owned namespace | Keep parsing and traversal in KOS-native, caller-owned APIs; reject malformed offsets and counts before rendering. |
+| Asset formats and resource binding | Bounded compact streams plus admitted caller-owned texture tables resolve model identifiers into checked PVR surfaces and materials | Runtime binding is complete without a global namespace; host conversion and content authoring remain separate tools. |
 
 ## Resource and execution rules
 
@@ -77,8 +77,8 @@ workloads.
    and portable scalar validation paths on the host.~~
 9. ~~Add renderer-independent collision primitives with no retained world or
    rendering dependency.~~
-10. Evaluate sprites, particles, and asset helpers as independent optional
-    libraries rather than prerequisites for 3D rendering.
+10. ~~Evaluate sprites, particles, and asset helpers as independent optional
+    facilities rather than prerequisites for 3D rendering.~~
 
 ## First tranche
 
@@ -319,6 +319,31 @@ The implementation remains synchronous, allocation-free,
 renderer-independent, and optimized through the existing Dreamcast vector-dot
 path. The caller still owns collision filtering, response, object lifetime,
 spatial partitioning, and all persistent world state.
+
+## Eleventh tranche
+
+The eleventh tranche closes runtime model/texture binding without introducing
+a global resource manager:
+
+- bounded sorted tables map compact 13-bit identifiers to application-owned
+  checked texture surfaces with allocation-free binary lookup;
+- table admission validates strict identifier ordering, complete array and
+  VRAM ranges, surface metadata, capacity, and 4-bit/8-bit palette selectors;
+- `pvr_chunk_material_resolve()` combines one application-owned base context
+  with decoded compact blend, texture, mipmap, UV, supersampling, alpha,
+  shading, culling, and specular state, then publishes an established checked
+  one- or two-volume material;
+- `pvr_chunk_material_binding_begin_strip()` is a direct renderer callback
+  that submits the resolved header through the established current-list or
+  explicit buffered-list path; and
+- missing resources, mutated surfaces, incompatible contexts, and malformed
+  state fail before changing the destination material or submitting a header.
+
+The application retains texture allocation, upload, palette contents, model
+storage, resource names, scene and list ownership, and lifetime policy. The
+adapter allocates nothing, retains no global state, and creates no
+initialization or idle cost for applications that do not use compact-model
+resources.
 
 ## Validation gates
 

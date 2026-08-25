@@ -103,6 +103,12 @@ lifecycle and naming conventions.
   polygon billboards, or form ordered camera-facing trails through established
   checked geometry sinks. The API creates no allocator, worker, timer, random
   source, texture, material, scene, or list ownership.
+* Added validated caller-owned compact-model texture tables with sorted
+  13-bit identifiers, palette selection, checked surface/VRAM admission, and
+  allocation-free binary lookup. A material adapter now resolves persistent
+  compact draw state into existing one- or two-volume KOS materials and submits
+  them through established current or buffered list paths without owning a
+  texture namespace, asset lifetime, scene, list, allocator, or worker.
 * Added bounded compact PVR model streams with allocation-free record
   iteration and whole-model validation. Record framing, per-format vertex
   sizes, finite data, strip and volume structure, counters, and every indexed

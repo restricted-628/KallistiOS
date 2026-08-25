@@ -84,6 +84,16 @@ typedef struct pvr_modifier_vol {
     uint32_t d1, d2, d3, d4, d5, d6;
 } pvr_modifier_vol_t;
 
+typedef struct pvr_sprite_txr {
+    alignas(32) uint32_t flags;
+    float ax, ay, az;
+    float bx, by, bz;
+    float cx, cy, cz;
+    float dx, dy;
+    uint32_t dummy;
+    uint32_t auv, buv, cuv;
+} pvr_sprite_txr_t;
+
 #define PVR_MODIFIER_OTHER_POLY         0u
 #define PVR_MODIFIER_INCLUDE_LAST_POLY  1u
 #define PVR_MODIFIER_EXCLUDE_LAST_POLY  2u
