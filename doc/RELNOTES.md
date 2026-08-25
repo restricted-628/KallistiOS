@@ -158,6 +158,14 @@ lifecycle and naming conventions.
   validator, and reports deterministic topology, indexing, strip, and texture
   statistics. It defines no additional container format, and malformed assets
   can now be rejected during a host build before being linked or packaged.
+* Added a deterministic host-side OBJ converter for finite indexed positions,
+  per-corner 10-bit UVs, normalized signed-16-bit normals, and explicitly
+  triangulated faces. It preserves independent OBJ attribute indices without
+  duplicating positions, accepts positive and relative-negative references,
+  splits vertex and strip records before their 16-bit fields overflow, applies
+  explicit winding/V flips and one 13-bit texture identifier, and runs the
+  target validator before publishing little-endian output streams. Unsupported
+  material and triangulation policy fails visibly instead of being discarded.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated

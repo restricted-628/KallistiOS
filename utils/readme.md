@@ -21,6 +21,7 @@ This directory contains a number of PC-side tools used for a variety of purposes
 - [**makejitter**](makejitter/): Creates jitter tables
 - [**naomibintool**](naomibintool/): Builds a NAOMI ROM from ELF or BIN files
 - [**naominetboot**](naominetboot/): Uploads a program to a NAOMI NetDIMM
+- [**pvr-model-convert**](pvr-model-convert/): Converts an explicit triangulated OBJ subset into bounded compact PVR model streams
 - [**pvr-model-inspect**](pvr-model-inspect/): Validates bounded compact PVR model streams and reports their structure
 - [**rdtest**](rdtest/): A PC-based romdisk driver for testing KOS romdisk filesystem code
 - [**scramble**](scramble/): Scrambles Dreamcast binaries to prepare for loading from disc
