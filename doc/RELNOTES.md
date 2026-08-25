@@ -163,9 +163,11 @@ lifecycle and naming conventions.
   triangulated faces. It preserves independent OBJ attribute indices without
   duplicating positions, accepts positive and relative-negative references,
   splits vertex and strip records before their 16-bit fields overflow, applies
-  explicit winding/V flips and one 13-bit texture identifier, and runs the
-  target validator before publishing little-endian output streams. Unsupported
-  material and triangulation policy fails visibly instead of being discarded.
+  explicit winding/V flips and either one global texture identifier or repeated
+  material-name-to-identifier bindings, coalesces aliases, emits persistent
+  texture state only on actual transitions, and runs the target validator
+  before publishing little-endian output streams. Library material properties
+  and triangulation policy remain explicit rather than being guessed.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated

@@ -18,7 +18,8 @@ texcoords=3
 normals=1
 triangles=1
 strip_records=1
-texture_identifier=7
+texture_records=1
+material_bindings=0
 vertex_words=12
 polygon_words=29
 center_x=0
@@ -37,8 +38,8 @@ VERTICES = [
 ]
 
 POLYGONS = [
-    8, 7,
     17, 2, 0xFFFF, 0xFFFF,
+    8, 7,
     69, 20, 1, 3,
     0, 0, 0, 0, 0, 0x7FFF,
     1, 1023, 0, 0, 0, 0x7FFF,
@@ -112,9 +113,11 @@ f 1/1/1 2/2/1 3/3/1# trailing comment
         original_vertices = vertices.read_bytes()
         original_polygons = polygons.read_bytes()
         result = invoke(converter, source, vertices, polygons)
-        assert result.returncode == 1
+        assert result.returncode == 1, (
+            result.returncode, result.stdout, result.stderr
+        )
         assert result.stdout == ""
-        assert result.stderr.startswith("textured faces require one ")
+        assert result.stderr.startswith("textured faces require a resolved ")
         assert vertices.read_bytes() == original_vertices
         assert polygons.read_bytes() == original_polygons
 
@@ -220,6 +223,101 @@ vn 0 0 1
         assert result.returncode == 0, result.stderr
         assert "strip_records=2\n" in result.stdout
         assert "triangles=3450\n" in result.stdout
+
+        materials_source = root / "materials.obj"
+        materials_vertices = root / "materials-vertices.bin"
+        materials_polygons = root / "materials-polygons.bin"
+        write_text(
+            materials_source,
+            """mtllib source-materials.mtl
+v 0 0 0
+v 1 0 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+usemtl red
+f 1/1 2/2 3/3
+usemtl red_alias
+f 1/1 2/2 3/3
+usemtl blue
+f 1/1 2/2 3/3
+usemtl red
+f 1/1 2/2 3/3
+""",
+        )
+        result = invoke(
+            converter,
+            "--material", "red=2",
+            "--material", "red_alias=2",
+            "--material", "blue=9",
+            materials_source,
+            materials_vertices,
+            materials_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "triangles=4\n" in result.stdout
+        assert "strip_records=3\n" in result.stdout
+        assert "texture_records=3\n" in result.stdout
+        assert "material_bindings=3\n" in result.stdout
+        assert "polygon_words=60\n" in result.stdout
+        material_words = struct.unpack(
+            "<60H", materials_polygons.read_bytes()
+        )
+        assert material_words[:9] == (
+            17, 2, 0xFFFF, 0xFFFF, 8, 2, 66, 21, 2
+        )
+        assert material_words[29:32] == (8, 9, 66)
+        assert material_words[44:47] == (8, 2, 66)
+        assert material_words[59] == 0xFF
+        result = invoke(inspector, materials_vertices, materials_polygons)
+        assert result.returncode == 0, result.stderr
+        assert "texture_references=3\n" in result.stdout
+        assert "distinct_textures=2\n" in result.stdout
+        assert "strip_records=3\n" in result.stdout
+        assert "strips=4\n" in result.stdout
+
+        unresolved = root / "unresolved.obj"
+        write_text(
+            unresolved,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+usemtl absent
+f 1/1 2/2 3/3
+""",
+        )
+        previous_vertices = materials_vertices.read_bytes()
+        previous_polygons = materials_polygons.read_bytes()
+        result = invoke(
+            converter,
+            "--material", "present=1",
+            unresolved,
+            materials_vertices,
+            materials_polygons,
+        )
+        assert result.returncode == 1, (
+            result.returncode, result.stdout, result.stderr
+        )
+        assert result.stdout == ""
+        assert result.stderr.startswith(f"{unresolved}:7:")
+        assert materials_vertices.read_bytes() == previous_vertices
+        assert materials_polygons.read_bytes() == previous_polygons
+
+        result = invoke(
+            converter,
+            "--material", "red=1",
+            "--material", "red=2",
+            materials_source,
+            materials_vertices,
+            materials_polygons,
+        )
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert result.stderr.startswith("usage: ")
 
         rejected_vertices = root / "rejected-vertices.bin"
         rejected_polygons = root / "rejected-polygons.bin"

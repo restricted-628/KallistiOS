@@ -56,7 +56,19 @@ typedef struct source_corner {
 typedef struct source_triangle {
     source_corner_t corner[3];
     uint8_t strip_type;
+    int texture_identifier;
 } source_triangle_t;
+
+typedef struct material_binding {
+    char *name;
+    int texture_identifier;
+} material_binding_t;
+
+typedef struct material_table {
+    material_binding_t *bindings;
+    size_t count;
+    size_t capacity;
+} material_table_t;
 
 typedef struct source_model {
     source_position_t *positions;
@@ -81,7 +93,7 @@ typedef struct output_streams {
     float center[3];
     float radius;
     size_t strip_record_count;
-    int texture_identifier;
+    size_t texture_record_count;
 } output_streams_t;
 
 typedef struct temporary_output {
@@ -90,7 +102,8 @@ typedef struct temporary_output {
 
 static void usage(FILE *stream, const char *program) {
     fprintf(stream,
-            "usage: %s [--flip-winding] [--flip-v] [--texture-id ID] [--] "
+            "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
+            "--material NAME=ID ...] [--] "
             "INPUT.obj VERTICES.bin POLYGONS.bin\n",
             program);
 }
@@ -107,6 +120,15 @@ static void output_streams_free(output_streams_t *streams) {
     free(streams->vertex_words);
     free(streams->polygon_words);
     memset(streams, 0, sizeof(*streams));
+}
+
+static void material_table_free(material_table_t *table) {
+    size_t binding;
+
+    for(binding = 0; binding < table->count; ++binding)
+        free(table->bindings[binding].name);
+    free(table->bindings);
+    memset(table, 0, sizeof(*table));
 }
 
 static int reserve_array(void **array, size_t *capacity, size_t required,
@@ -248,6 +270,68 @@ static int parse_texture_identifier(const char *text, int *result) {
     }
     *result = (int)value;
     return 0;
+}
+
+static int material_table_add(material_table_t *table, const char *text) {
+    const char *equals = strrchr(text, '=');
+    material_binding_t binding;
+    void *allocation = table->bindings;
+    size_t name_length;
+    size_t existing;
+
+    if(!equals || equals == text || !equals[1] || strchr(text, '=') != equals) {
+        errno = EINVAL;
+        return -1;
+    }
+    name_length = (size_t)(equals - text);
+    for(existing = 0; existing < name_length; ++existing) {
+        if(isspace((unsigned char)text[existing]) || text[existing] == '#') {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    binding.name = malloc(name_length + 1u);
+    if(!binding.name) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memcpy(binding.name, text, name_length);
+    binding.name[name_length] = '\0';
+    if(parse_texture_identifier(equals + 1u,
+                                &binding.texture_identifier) < 0) {
+        free(binding.name);
+        return -1;
+    }
+    for(existing = 0; existing < table->count; ++existing) {
+        if(!strcmp(binding.name, table->bindings[existing].name)) {
+            free(binding.name);
+            errno = EEXIST;
+            return -1;
+        }
+    }
+    if(reserve_array(&allocation, &table->capacity, table->count + 1u,
+                     sizeof(*table->bindings)) < 0) {
+        free(binding.name);
+        return -1;
+    }
+    table->bindings = allocation;
+    table->bindings[table->count++] = binding;
+    return 0;
+}
+
+static int material_table_find(const material_table_t *table,
+                               const char *name, int *texture_identifier) {
+    size_t binding;
+
+    for(binding = 0; binding < table->count; ++binding) {
+        if(!strcmp(name, table->bindings[binding].name)) {
+            *texture_identifier =
+                table->bindings[binding].texture_identifier;
+            return 0;
+        }
+    }
+    errno = ENOENT;
+    return -1;
 }
 
 static int parse_index(const char *text, size_t current_count,
@@ -450,7 +534,7 @@ static int triangle_type(source_triangle_t *triangle) {
 }
 
 static int append_triangle(source_model_t *model, char *cursor,
-                           int flip_winding) {
+                           int flip_winding, int texture_identifier) {
     source_triangle_t triangle;
     void *allocation = model->triangles;
     size_t corner;
@@ -467,6 +551,11 @@ static int append_triangle(source_model_t *model, char *cursor,
     }
     if(triangle_type(&triangle) < 0)
         return -1;
+    if(texture_identifier < -1) {
+        errno = ENOENT;
+        return -1;
+    }
+    triangle.texture_identifier = texture_identifier;
     if(flip_winding) {
         source_corner_t temporary = triangle.corner[1];
 
@@ -479,6 +568,25 @@ static int append_triangle(source_model_t *model, char *cursor,
         return -1;
     model->triangles = allocation;
     model->triangles[model->triangle_count++] = triangle;
+    return 0;
+}
+
+static int select_material(char *cursor, const material_table_t *materials,
+                           int *texture_identifier) {
+    char *name = next_token(&cursor);
+
+    if(!materials->count) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if(!name || next_token(&cursor)) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if(material_table_find(materials, name, texture_identifier) < 0) {
+        errno = EILSEQ;
+        return -1;
+    }
     return 0;
 }
 
@@ -509,20 +617,29 @@ static int validate_references(const source_model_t *model) {
     return 0;
 }
 
-static int validate_texture_policy(const source_model_t *model,
-                                   int texture_identifier) {
+static int validate_texture_policy(const source_model_t *model) {
     int saw_textured = 0;
     int saw_untextured = 0;
     size_t triangle;
 
     for(triangle = 0; triangle < model->triangle_count; ++triangle) {
-        if(model->triangles[triangle].corner[0].texcoord == SIZE_MAX)
+        int has_texcoord =
+            model->triangles[triangle].corner[0].texcoord != SIZE_MAX;
+        int has_texture =
+            model->triangles[triangle].texture_identifier >= 0;
+
+        if(has_texcoord != has_texture) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if(!has_texcoord)
             saw_untextured = 1;
         else
             saw_textured = 1;
     }
-    if((saw_textured && texture_identifier < 0) ||
-       (texture_identifier >= 0 && saw_untextured)) {
+    /* Compact texture state persists, so there is no implicit transition back
+       to untextured rendering after the first texture record. */
+    if(saw_textured && saw_untextured) {
         errno = EILSEQ;
         return -1;
     }
@@ -530,12 +647,15 @@ static int validate_texture_policy(const source_model_t *model,
 }
 
 static int load_source(const char *path, source_model_t *model,
-                       int flip_winding, int flip_v, size_t *error_line) {
+                       int flip_winding, int flip_v, int texture_identifier,
+                       const material_table_t *materials,
+                       size_t *error_line) {
     FILE *file = fopen(path, "r");
     char *line = NULL;
     size_t line_capacity = 0;
     size_t line_length;
     size_t line_number = 0;
+    int active_texture = materials->count ? -2 : texture_identifier;
     int rv;
     int saved_errno;
 
@@ -559,7 +679,12 @@ static int load_source(const char *path, source_model_t *model,
         else if(!strcmp(directive, "vn"))
             rv = append_normal(model, cursor);
         else if(!strcmp(directive, "f"))
-            rv = append_triangle(model, cursor, flip_winding);
+            rv = append_triangle(model, cursor, flip_winding,
+                                 active_texture);
+        else if(!strcmp(directive, "usemtl"))
+            rv = select_material(cursor, materials, &active_texture);
+        else if(!strcmp(directive, "mtllib"))
+            rv = 0;
         else if(!strcmp(directive, "o") || !strcmp(directive, "g") ||
                 !strcmp(directive, "s"))
             rv = 0;
@@ -627,7 +752,9 @@ static size_t triangle_batch(const source_model_t *model, size_t first) {
         maximum = MAX_STRIP_COUNT;
     while(count < maximum && first + count < model->triangle_count &&
           model->triangles[first + count].strip_type ==
-              model->triangles[first].strip_type)
+              model->triangles[first].strip_type &&
+          model->triangles[first + count].texture_identifier ==
+              model->triangles[first].texture_identifier)
         ++count;
     return count;
 }
@@ -637,8 +764,9 @@ static int calculate_sizes(const source_model_t *model,
     size_t vertex_batches =
         (model->position_count + MAX_VERTEX_BATCH - 1u) / MAX_VERTEX_BATCH;
     size_t vertex_words;
-    size_t polygon_words = streams->texture_identifier >= 0 ? 7u : 5u;
+    size_t polygon_words = 5u;
     size_t first = 0;
+    int active_texture = -1;
 
     if(model->position_count > (SIZE_MAX - 1u - 2u * vertex_batches) / 3u) {
         errno = EOVERFLOW;
@@ -651,6 +779,18 @@ static int calculate_sizes(const source_model_t *model,
         size_t stride = strip_vertex_words(model->triangles[first].strip_type);
         size_t per_triangle = 1u + 3u * stride;
         size_t addition = 3u + count * per_triangle;
+        int texture_identifier =
+            model->triangles[first].texture_identifier;
+
+        if(texture_identifier >= 0 && texture_identifier != active_texture) {
+            if(polygon_words > SIZE_MAX - 2u) {
+                errno = EOVERFLOW;
+                return -1;
+            }
+            polygon_words += 2u;
+            ++streams->texture_record_count;
+            active_texture = texture_identifier;
+        }
 
         if(addition > SIZE_MAX - polygon_words) {
             errno = EOVERFLOW;
@@ -766,13 +906,12 @@ static void emit_corner(uint16_t **output, const source_model_t *model,
 }
 
 static int generate_streams(const source_model_t *model,
-                            output_streams_t *streams,
-                            int texture_identifier) {
+                            output_streams_t *streams) {
     uint32_t *vertex_output;
     uint16_t *polygon_output;
     size_t first;
+    int active_texture = -1;
 
-    streams->texture_identifier = texture_identifier;
     if(calculate_sizes(model, streams) < 0 ||
        calculate_bounds(model, streams) < 0)
         return -1;
@@ -811,13 +950,9 @@ static int generate_streams(const source_model_t *model,
     }
     *vertex_output++ = PVR_CHUNK_CONTROL_END;
 
-    /* One explicit texture ID and a white diffuse material establish the
-       complete persistent state used by every following triangle strip. */
+    /* A white diffuse material establishes the common material state. Texture
+       records below change only when the host binding resolves a new ID. */
     polygon_output = streams->polygon_words;
-    if(streams->texture_identifier >= 0) {
-        *polygon_output++ = PVR_CHUNK_TEXTURE;
-        *polygon_output++ = (uint16_t)streams->texture_identifier;
-    }
     *polygon_output++ = PVR_CHUNK_MATERIAL_DIFFUSE;
     *polygon_output++ = 2u;
     *polygon_output++ = UINT16_MAX;
@@ -829,6 +964,14 @@ static int generate_streams(const source_model_t *model,
         size_t stride = strip_vertex_words(type);
         size_t payload_words = 1u + count * (1u + 3u * stride);
         size_t triangle;
+        int texture_identifier =
+            model->triangles[first].texture_identifier;
+
+        if(texture_identifier >= 0 && texture_identifier != active_texture) {
+            *polygon_output++ = PVR_CHUNK_TEXTURE;
+            *polygon_output++ = (uint16_t)texture_identifier;
+            active_texture = texture_identifier;
+        }
 
         *polygon_output++ = type;
         *polygon_output++ = (uint16_t)payload_words;
@@ -980,17 +1123,16 @@ static int publish_output(temporary_output_t *temporary,
 
 static void print_report(const source_model_t *source,
                          const output_streams_t *streams,
-                         const pvr_chunk_model_info_t *info) {
+                         const pvr_chunk_model_info_t *info,
+                         const material_table_t *materials) {
     printf("converted=1\n");
     printf("positions=%zu\n", source->position_count);
     printf("texcoords=%zu\n", source->texcoord_count);
     printf("normals=%zu\n", source->normal_count);
     printf("triangles=%zu\n", source->triangle_count);
     printf("strip_records=%zu\n", info->strip_records);
-    if(streams->texture_identifier >= 0)
-        printf("texture_identifier=%d\n", streams->texture_identifier);
-    else
-        printf("texture_identifier=none\n");
+    printf("texture_records=%zu\n", streams->texture_record_count);
+    printf("material_bindings=%zu\n", materials->count);
     printf("vertex_words=%zu\n", streams->vertex_word_count);
     printf("polygon_words=%zu\n", streams->polygon_word_count);
     printf("center_x=%.9g\n", streams->center[0]);
@@ -1036,6 +1178,7 @@ static int output_target_admissible(const char *path) {
 
 int main(int argc, char **argv) {
     source_model_t source = { 0 };
+    material_table_t materials = { 0 };
     output_streams_t streams = { 0 };
     pvr_chunk_model_info_t info;
     temporary_output_t vertex_temporary = { 0 };
@@ -1057,6 +1200,7 @@ int main(int argc, char **argv) {
         }
         if(!strcmp(argv[argument], "--help")) {
             usage(stdout, argv[0]);
+            material_table_free(&materials);
             return 0;
         }
         if(!strcmp(argv[argument], "--flip-winding"))
@@ -1065,9 +1209,21 @@ int main(int argc, char **argv) {
             flip_v = 1;
         else if(!strcmp(argv[argument], "--texture-id")) {
             if(argument + 1 >= argc || texture_identifier >= 0 ||
+               materials.count ||
                parse_texture_identifier(argv[argument + 1],
                                         &texture_identifier) < 0) {
                 usage(stderr, argv[0]);
+                material_table_free(&materials);
+                return 2;
+            }
+            argument += 2;
+            continue;
+        }
+        else if(!strcmp(argv[argument], "--material")) {
+            if(argument + 1 >= argc || texture_identifier >= 0 ||
+               material_table_add(&materials, argv[argument + 1]) < 0) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
                 return 2;
             }
             argument += 2;
@@ -1075,12 +1231,14 @@ int main(int argc, char **argv) {
         }
         else {
             usage(stderr, argv[0]);
+            material_table_free(&materials);
             return 2;
         }
         ++argument;
     }
     if(argc - argument != 3) {
         usage(stderr, argv[0]);
+        material_table_free(&materials);
         return 2;
     }
 
@@ -1094,10 +1252,12 @@ int main(int argc, char **argv) {
 
         if(input_vertex < 0 || input_polygon < 0 || output_pair < 0) {
             fprintf(stderr, "path check failed: %s\n", strerror(errno));
+            material_table_free(&materials);
             return 2;
         }
         if(input_vertex || input_polygon || output_pair) {
             fprintf(stderr, "input and output paths must be distinct\n");
+            material_table_free(&materials);
             return 2;
         }
     }
@@ -1105,10 +1265,12 @@ int main(int argc, char **argv) {
        output_target_admissible(polygon_output) < 0) {
         fprintf(stderr, "output target is not a regular file: %s\n",
                 strerror(errno));
+        material_table_free(&materials);
         return 2;
     }
 
-    if(load_source(input, &source, flip_winding, flip_v, &error_line) < 0) {
+    if(load_source(input, &source, flip_winding, flip_v,
+                   texture_identifier, &materials, &error_line) < 0) {
         int load_errno = errno;
 
         if(error_line)
@@ -1116,17 +1278,18 @@ int main(int argc, char **argv) {
                     strerror(load_errno));
         else
             fprintf(stderr, "%s: %s\n", input, strerror(load_errno));
-        result = load_errno == ENOENT || load_errno == EACCES ? 2 : 1;
+        result = !error_line &&
+                 (load_errno == ENOENT || load_errno == EACCES) ? 2 : 1;
         goto out;
     }
-    if(validate_texture_policy(&source, texture_identifier) < 0) {
+    if(validate_texture_policy(&source) < 0) {
         fprintf(stderr,
-                "textured faces require one --texture-id and all faces "
-                "must use UVs\n");
+                "textured faces require a resolved texture ID and cannot "
+                "be mixed with untextured faces\n");
         result = 1;
         goto out;
     }
-    if(generate_streams(&source, &streams, texture_identifier) < 0 ||
+    if(generate_streams(&source, &streams) < 0 ||
        validate_generated(&source, &streams, &info) < 0) {
         fprintf(stderr, "conversion failed: %s\n", strerror(errno));
         goto out;
@@ -1149,7 +1312,7 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    print_report(&source, &streams, &info);
+    print_report(&source, &streams, &info, &materials);
     result = 0;
 
 out:
@@ -1157,5 +1320,6 @@ out:
     discard_output(&polygon_temporary);
     output_streams_free(&streams);
     source_model_free(&source);
+    material_table_free(&materials);
     return result;
 }
