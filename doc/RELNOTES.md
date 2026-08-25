@@ -88,6 +88,10 @@ lifecycle and naming conventions.
   replacement, explicit render-safe pins, generation-checked stale-handle
   rejection, two-phase asynchronous upload publication, and coherent cache
   statistics without a worker, queue, decompressor, or hidden main-RAM pool.
+* Integrated fixed-slot residency with compact-model material binding through
+  caller-owned preflight arrays. Referenced identifiers are pinned before list
+  emission, strip callbacks perform no cache admission, and pins remain held
+  until the application releases them after render completion.
 * Removed shared mutable scratch matrices from the established 3D transform
   helpers and added a bounded caller-owned matrix stack with explicit
   overflow, underflow, and non-consuming restore operations. It allocates no

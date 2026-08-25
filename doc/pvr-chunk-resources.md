@@ -59,3 +59,29 @@ The adapter never begins or finishes a scene or list. It owns no texture,
 model, namespace, material cache, allocator, thread, fiber, clock, or callback
 dispatcher. Applications that need persistent material caching or a different
 asset lookup policy can continue supplying their own begin-strip callback.
+
+## Fixed-slot residency integration
+
+`pvr_chunk_residency_binding_t` connects the same material resolver to an
+opt-in `pvr_txr_residency_t` without making the model renderer own texture
+streaming. The caller provides parallel arrays for sorted texture bindings and
+generation-checked residency handles.
+
+Before opening the destination PVR list,
+`pvr_chunk_residency_binding_prepare_model()` scans the admitted polygon stream
+and pins every distinct texture identifier it references. Several models can
+accumulate into one binding for a render. Missing, still-loading, or excess
+textures therefore fail before geometry emission rather than from a later
+strip callback after part of a list is already visible.
+
+The matching begin-strip adapter resolves only from that pre-acquired set and
+submits through the existing current-list or buffered-list material path. It
+does not perform cache acquisition, eviction, upload, or waiting. After the PVR
+render which can sample those materials is complete,
+`pvr_chunk_residency_binding_release()` releases every held pin.
+
+All slots in one residency cache have the same surface layout. An optional
+preparation-time callback supplies the global palette-bank selector for each
+identifier when that layout is 4-bit or 8-bit paletted. Embedded VQ codebooks
+do not consume the global selector. The bridge allocates no memory and creates
+no thread, transfer request, model copy, or scene owner.

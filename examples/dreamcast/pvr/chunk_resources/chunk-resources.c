@@ -77,16 +77,21 @@ int main(int argc, char **argv) {
         .radius = 200.0f
     };
     pvr_chunk_model_view_t model_view;
-    pvr_txr_surface_t surface;
-    pvr_chunk_texture_binding_t texture_binding;
-    pvr_chunk_texture_table_t texture_table;
-    pvr_chunk_texture_table_view_t texture_view;
+    pvr_txr_residency_t residency;
+    pvr_txr_residency_slot_t residency_slot[1];
+    pvr_txr_surface_t residency_surface[1];
+    pvr_txr_surface_t prototype;
+    pvr_txr_surface_t *surface;
+    pvr_txr_residency_handle_t upload_handle;
+    pvr_chunk_texture_binding_t texture_binding[1];
+    pvr_txr_residency_handle_t render_handle[1];
     pvr_poly_cxt_t context;
-    pvr_chunk_material_binding_t material_binding;
+    pvr_chunk_residency_binding_t material_binding;
     pvr_geometry_sink_t sink;
     alignas(32) pvr_vertex_t workspace[4];
     pvr_chunk_render_result_t render_result;
     pvr_pipeline_status_t status;
+    pvr_txr_residency_status_t residency_status;
     unsigned int frame;
 
     (void)argc;
@@ -97,23 +102,27 @@ int main(int argc, char **argv) {
     pvr_set_bg_color(0.02f, 0.02f, 0.08f);
 
     build_texture();
-    assert(pvr_txr_surface_alloc(&surface, TEXTURE_SIZE, TEXTURE_SIZE,
-                                 PVR_TXR_SURFACE_RGB565,
-                                 PVR_TXR_SURFACE_LINEAR, false) == 0);
-    assert(pvr_txr_surface_upload(&surface, texture_pixels,
+    assert(pvr_txr_surface_init(&prototype, TEXTURE_SIZE, TEXTURE_SIZE,
+                                PVR_TXR_SURFACE_RGB565,
+                                PVR_TXR_SURFACE_LINEAR, false) == 0);
+    assert(pvr_txr_residency_init(&residency, residency_slot,
+                                  residency_surface, 1, &prototype) == 0);
+    assert(pvr_txr_residency_reserve(&residency, 7, &upload_handle,
+                                     &surface) == 0);
+    assert(pvr_txr_surface_upload(surface, texture_pixels,
                                   sizeof(texture_pixels),
                                   PVR_TXR_TRANSFER_CPU) == 0);
-
-    texture_binding = (pvr_chunk_texture_binding_t){ 7, 0, &surface };
-    texture_table = (pvr_chunk_texture_table_t){ &texture_binding, 1 };
-    assert(pvr_chunk_texture_table_open(&texture_table, &texture_view) == 0);
+    assert(pvr_txr_residency_publish(&residency, upload_handle) == 0);
+    assert(pvr_txr_residency_unpin(&residency, upload_handle) == 0);
     assert(pvr_chunk_model_open(&model, &model_view) == 0);
 
     pvr_poly_cxt_col(&context, PVR_LIST_OP_POLY);
     context.gen.culling = PVR_CULLING_NONE;
-    assert(pvr_chunk_material_binding_init(
-        &material_binding, &context, &texture_view,
-        PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+    assert(pvr_chunk_residency_binding_init(
+        &material_binding, &residency, texture_binding, render_handle, 1,
+        NULL, NULL, &context, PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+    assert(pvr_chunk_residency_binding_prepare_model(&material_binding,
+                                                     &model_view) == 0);
     assert(pvr_geometry_sink_init_current(&sink) == 0);
 
     for(frame = 0; frame < 120u; ++frame) {
@@ -122,7 +131,7 @@ int main(int argc, char **argv) {
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
         assert(pvr_chunk_model_emit(
             &model_view, &screen_identity, &sink, workspace, 4,
-            pvr_chunk_material_binding_begin_strip, NULL,
+            pvr_chunk_residency_binding_begin_strip, NULL,
             &material_binding, &render_result) == 0);
         assert(render_result.emitted_strips == 1 &&
                render_result.emitted_vertices == 4);
@@ -131,9 +140,17 @@ int main(int argc, char **argv) {
     }
 
     assert(pvr_wait_render_done() == 0);
+    assert(pvr_chunk_residency_binding_release(&material_binding) == 0);
+    assert(pvr_txr_residency_get_status(&residency,
+                                        &residency_status) == 0);
+    assert(residency_status.ready_slots == 1
+           && residency_status.pin_count == 0
+           && residency_status.hits == 1
+           && residency_status.misses == 0
+           && residency_status.evictions == 0);
     assert(pvr_get_pipeline_status(&status) == 0);
     assert(status.faults.mask == PVR_FAULT_NONE);
-    pvr_txr_surface_release(&surface);
+    assert(pvr_txr_residency_destroy(&residency) == 0);
     assert(pvr_shutdown() == 0);
 
     vid_clear(0, 64, 0);

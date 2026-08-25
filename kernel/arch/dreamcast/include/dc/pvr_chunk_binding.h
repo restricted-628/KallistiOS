@@ -73,6 +73,42 @@ typedef struct pvr_chunk_material_binding {
     pvr_geometry_sink_kind_t destination;
 } pvr_chunk_material_binding_t;
 
+/** \brief Resolve one model identifier's global palette-bank selector.
+
+    The callback runs only during model preparation, before PVR list emission.
+    Return zero after writing the selector, or negative with errno set. A null
+    callback selects palette zero for every texture. It must not mutate or
+    reenter the binding or its residency cache.
+*/
+typedef int (*pvr_chunk_residency_palette_resolver_t)(
+    uint16_t identifier, uint8_t *palette, void *data);
+
+/** \brief Render-lifetime compact-model binding over texture residency.
+
+    The caller provides parallel texture-binding and residency-handle arrays.
+    Model preparation pins every distinct referenced texture before geometry
+    emission begins. The pins remain held until the caller releases them after
+    the corresponding PVR render has completed.
+
+    Every residency slot has one surface layout. An optional preparation-time
+    callback supplies per-identifier global palette-bank selectors when that
+    layout is paletted. Embedded VQ codebooks do not use this selector.
+
+    Do not copy or modify a configured object or its arrays. Operations require
+    external serialization in ordinary thread context.
+*/
+typedef struct pvr_chunk_residency_binding {
+    pvr_txr_residency_t *residency;       /**< Borrowed residency cache. */
+    pvr_chunk_texture_binding_t *textures; /**< Caller-provided sorted set. */
+    pvr_txr_residency_handle_t *handles;  /**< Parallel acquired handles. */
+    size_t capacity;                      /**< Elements in both arrays. */
+    size_t count;                         /**< Distinct pinned identifiers. */
+    pvr_poly_cxt_t context;               /**< Copied base material policy. */
+    pvr_geometry_sink_kind_t destination; /**< Material submission sink. */
+    pvr_chunk_residency_palette_resolver_t palette_resolver; /**< Optional. */
+    void *palette_data;                   /**< Opaque palette callback data. */
+} pvr_chunk_residency_binding_t;
+
 /** \brief Validate and admit a sorted caller-owned texture-binding table.
 
     Identifiers must be strictly increasing, unique, and within the compact
@@ -132,6 +168,67 @@ int pvr_chunk_material_binding_init(
 int pvr_chunk_material_binding_begin_strip(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Configure a compact-model adapter over one residency cache.
+
+    \a textures and \a handles are parallel caller-owned arrays of \a capacity
+    elements and must not overlap each other, \a binding, or \a residency. No
+    texture is acquired during initialization. `destination` must be a current
+    or explicit buffered-list sink.
+
+    The configured adapter creates no allocation, worker, request, transfer,
+    or model state. Release every acquired pin before reinitializing it.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_chunk_residency_binding_init(
+    pvr_chunk_residency_binding_t *binding,
+    pvr_txr_residency_t *residency,
+    pvr_chunk_texture_binding_t *textures,
+    pvr_txr_residency_handle_t *handles, size_t capacity,
+    pvr_chunk_residency_palette_resolver_t palette_resolver,
+    void *palette_data,
+    const pvr_poly_cxt_t *base_context,
+    pvr_geometry_sink_kind_t destination);
+
+/** \brief Pin every distinct texture referenced by one admitted model.
+
+    Existing pins in \a binding are retained, allowing several models in one
+    render to build a shared set. A missing or still-loading resident texture
+    reports ENOENT or EAGAIN before geometry emission. Insufficient caller
+    array capacity reports ENOSPC. Successfully acquired pins remain recorded
+    if a later reference fails and must still be released by the caller.
+
+    Call this before beginning the PVR list which will receive the model.
+
+    \return 0 when every referenced texture is pinned, or -1 with errno set.
+*/
+int pvr_chunk_residency_binding_prepare_model(
+    pvr_chunk_residency_binding_t *binding,
+    const pvr_chunk_model_view_t *view);
+
+/** \brief Resolve and submit one strip using pre-acquired resident textures.
+
+    This function has the exact pvr_chunk_render_begin_strip_t signature and
+    performs no residency acquisition. It therefore cannot expose partially
+    emitted geometry merely because a later strip references an unavailable
+    texture when prepare_model() was completed first.
+*/
+int pvr_chunk_residency_binding_begin_strip(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Release all resident texture pins held by an adapter.
+
+    The caller must wait until every render which can sample the submitted
+    model geometry has completed. Successful releases are removed even if a
+    corrupted or stale handle makes another release fail; failed handles remain
+    recorded for diagnosis.
+
+    \return 0 when every pin was released, or -1 with the first errno retained.
+*/
+int pvr_chunk_residency_binding_release(
+    pvr_chunk_residency_binding_t *binding);
 
 /** @} */
 

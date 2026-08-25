@@ -38,7 +38,7 @@ workloads.
 | Sprite cells | Checked caller-owned 2D/3D cell compilation, UV regions, pivot, scale, rotation, flip, visibility compaction, projection, and existing sprite sinks/materials | Complete; texture, material, instance, scene, list, animation, and clock ownership remain explicit. |
 | Particles | Deterministic caller-owned pools, spawn/step, sprite-cell extraction, colored/textured billboards, and camera-facing trails | Complete; no allocator, worker, clock, random source, material, scene, or list ownership. |
 | Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
-| Asset formats and resource binding | Bounded compact streams plus admitted caller-owned texture tables resolve model identifiers into checked PVR surfaces and materials | Runtime binding is complete without a global namespace; host conversion and content authoring remain separate tools. |
+| Asset formats and resource binding | Bounded compact streams plus admitted caller-owned texture tables or pre-acquired fixed-slot residency sets resolve model identifiers into checked PVR surfaces and materials | Runtime binding is complete without a global namespace; host conversion and content authoring remain separate tools. |
 
 ## Resource and execution rules
 
@@ -344,6 +344,21 @@ storage, resource names, scene and list ownership, and lifetime policy. The
 adapter allocates nothing, retains no global state, and creates no
 initialization or idle cost for applications that do not use compact-model
 resources.
+
+The optional fixed-slot adapter extends this boundary without moving ownership:
+
+- one caller-owned pin set scans one or more admitted models before list
+  emission and acquires every distinct resident identifier;
+- missing, loading, or over-capacity resources fail before the corresponding
+  model writes geometry;
+- the material callback resolves only the sorted pre-acquired set and never
+  performs cache admission from inside an active list; and
+- the caller releases the generation-checked pins after the render ticket or
+  equivalent completion boundary proves sampling has ended.
+
+This connects compact-model rendering to bounded texture replacement while
+leaving decompression, upload, frame prediction, and scene lifetime outside the
+renderer.
 
 ## Validation gates
 

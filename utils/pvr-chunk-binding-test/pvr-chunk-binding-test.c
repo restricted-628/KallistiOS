@@ -19,6 +19,52 @@ static size_t compile_calls;
 static size_t current_submits;
 static size_t buffered_submits;
 
+int pvr_chunk_polygon_iterator_init(pvr_chunk_iterator_t *iterator,
+                                    const uint16_t *words,
+                                    size_t word_count) {
+    if(!iterator || !words || !word_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(iterator, 0, sizeof(*iterator));
+    iterator->kind = PVR_CHUNK_STREAM_POLYGON;
+    iterator->words = words;
+    iterator->word_count = word_count;
+    return 0;
+}
+
+int pvr_chunk_iterator_next(pvr_chunk_iterator_t *iterator,
+                            pvr_chunk_record_t *record) {
+    const uint16_t *words;
+
+    if(!iterator || !record || iterator->kind != PVR_CHUNK_STREAM_POLYGON) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(iterator->ended || iterator->offset >= iterator->word_count)
+        return 0;
+
+    words = iterator->words;
+    memset(record, 0, sizeof(*record));
+    record->stream = PVR_CHUNK_STREAM_POLYGON;
+    record->stream_word_offset = iterator->offset;
+    record->words = &words[iterator->offset];
+    record->word_count = 1;
+    if(words[iterator->offset] == UINT16_C(0xffff)) {
+        record->record_class = PVR_CHUNK_RECORD_END;
+        record->type = PVR_CHUNK_CONTROL_END;
+        iterator->ended = 1;
+    }
+    else {
+        record->record_class = PVR_CHUNK_RECORD_TEXTURE;
+        record->type = PVR_CHUNK_TEXTURE;
+        record->payload = &words[iterator->offset];
+        record->payload_word_count = 1;
+    }
+    ++iterator->offset;
+    return 1;
+}
+
 int pvr_txr_surface_get_level(const pvr_txr_surface_t *surface,
                               uint32_t level, pvr_txr_level_info_t *info) {
     if(!surface || !info || level || !surface->width || !surface->height ||
@@ -73,6 +119,83 @@ uint32_t pvr_txr_surface_pvr_format(const pvr_txr_surface_t *surface) {
     else if(surface->layout == PVR_TXR_SURFACE_VQ)
         format |= PVR_TXRFMT_VQ_ENABLE;
     return format;
+}
+
+int pvr_txr_residency_get_status(const pvr_txr_residency_t *cache,
+                                 pvr_txr_residency_status_t *status) {
+    size_t i;
+
+    if(status)
+        memset(status, 0, sizeof(*status));
+    if(!cache || !status || !cache->slots || !cache->surfaces
+       || !cache->slot_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    status->slot_count = cache->slot_count;
+    for(i = 0; i < cache->slot_count; ++i) {
+        if(cache->slots[i].state == PVR_TXR_RESIDENCY_READY)
+            ++status->ready_slots;
+        else if(cache->slots[i].state == PVR_TXR_RESIDENCY_LOADING)
+            ++status->loading_slots;
+        if(cache->slots[i].pin_count)
+            ++status->pinned_slots;
+        status->pin_count += cache->slots[i].pin_count;
+    }
+    return 0;
+}
+
+int pvr_txr_residency_acquire(pvr_txr_residency_t *cache,
+                              uint32_t identifier,
+                              pvr_txr_residency_handle_t *handle,
+                              pvr_txr_surface_t **surface) {
+    size_t i;
+
+    if(handle)
+        memset(handle, 0, sizeof(*handle));
+    if(surface)
+        *surface = NULL;
+    if(!cache || !handle || !surface) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(i = 0; i < cache->slot_count; ++i) {
+        if(cache->slots[i].state == PVR_TXR_RESIDENCY_EMPTY
+           || cache->slots[i].identifier != identifier)
+            continue;
+        if(cache->slots[i].state == PVR_TXR_RESIDENCY_LOADING) {
+            errno = EAGAIN;
+            return -1;
+        }
+        ++cache->slots[i].pin_count;
+        handle->slot = i;
+        handle->generation = cache->slots[i].generation;
+        *surface = &cache->surfaces[i];
+        return 0;
+    }
+    errno = ENOENT;
+    return -1;
+}
+
+int pvr_txr_residency_unpin(pvr_txr_residency_t *cache,
+                            pvr_txr_residency_handle_t handle) {
+    pvr_txr_residency_slot_t *slot;
+
+    if(!cache || handle.slot >= cache->slot_count) {
+        errno = ERANGE;
+        return -1;
+    }
+    slot = &cache->slots[handle.slot];
+    if(!handle.generation || slot->generation != handle.generation) {
+        errno = ESTALE;
+        return -1;
+    }
+    if(slot->state != PVR_TXR_RESIDENCY_READY || !slot->pin_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    --slot->pin_count;
+    return 0;
 }
 
 static int compile_material(pvr_material_t *material,
@@ -345,10 +468,125 @@ static void test_two_volume_and_submission(void) {
     assert(errno == EINVAL);
 }
 
+static void init_residency(pvr_txr_residency_t *cache,
+                           pvr_txr_residency_slot_t slots[3],
+                           pvr_txr_surface_t surfaces[3]) {
+    size_t i;
+
+    memset(cache, 0, sizeof(*cache));
+    memset(slots, 0, 3u * sizeof(*slots));
+    for(i = 0; i < 3; ++i) {
+        surfaces[i] = make_surface(0x1000u + i * 0x9000u,
+                                   PVR_TXR_SURFACE_RGB565, 0);
+        slots[i].generation = i + 1u;
+        slots[i].state = PVR_TXR_RESIDENCY_READY;
+    }
+    slots[0].identifier = 5;
+    slots[1].identifier = 1;
+    slots[2].identifier = 3;
+    slots[2].state = PVR_TXR_RESIDENCY_LOADING;
+    slots[2].pin_count = 1;
+    cache->slots = slots;
+    cache->surfaces = surfaces;
+    cache->slot_count = 3;
+}
+
+static int palette_one(uint16_t identifier, uint8_t *palette, void *data) {
+    assert(identifier <= PVR_CHUNK_TEXTURE_IDENTIFIER_MAX);
+    assert(palette && !data);
+    *palette = 1;
+    return 0;
+}
+
+static void test_residency_binding(void) {
+    static const uint16_t model_textures[] = { 5, 1, 5, UINT16_C(0xffff) };
+    static const uint16_t absent_texture[] = { 2, UINT16_C(0xffff) };
+    static const uint16_t loading_texture[] = { 3, UINT16_C(0xffff) };
+    pvr_txr_residency_t cache;
+    pvr_txr_residency_slot_t slots[3];
+    pvr_txr_surface_t surfaces[3];
+    pvr_chunk_texture_binding_t textures[2];
+    pvr_txr_residency_handle_t handles[2];
+    pvr_chunk_residency_binding_t binding;
+    pvr_chunk_model_view_t model;
+    pvr_poly_cxt_t context = make_context(0);
+    pvr_chunk_render_state_t state;
+    pvr_chunk_strip_view_t strip;
+
+    init_residency(&cache, slots, surfaces);
+    memset(&model, 0, sizeof(model));
+    model.model.polygon_words = model_textures;
+    model.model.polygon_word_count = 4;
+    assert(pvr_chunk_residency_binding_init(
+        &binding, &cache, textures, handles, 2, NULL, NULL, &context,
+        PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+    assert(binding.count == 0);
+    assert(pvr_chunk_residency_binding_prepare_model(&binding, &model) == 0);
+    assert(binding.count == 2 && textures[0].identifier == 1
+           && textures[1].identifier == 5);
+    assert(slots[0].pin_count == 1 && slots[1].pin_count == 1);
+
+    memset(&state, 0, sizeof(state));
+    memset(&strip, 0, sizeof(strip));
+    state.present = PVR_CHUNK_RENDER_TEXTURE;
+    state.texture.identifier = 5;
+    state.texture.filter = PVR_FILTER_NEAREST;
+    strip.type = PVR_CHUNK_STRIP_UV8;
+    current_submits = 0;
+    assert(pvr_chunk_residency_binding_begin_strip(
+        &state, &strip, &binding) == 0);
+    assert(current_submits == 1);
+
+    model.model.polygon_words = absent_texture;
+    model.model.polygon_word_count = 2;
+    errno = 0;
+    assert(pvr_chunk_residency_binding_prepare_model(&binding, &model) == -1);
+    assert(errno == ENOSPC && binding.count == 2);
+
+    assert(pvr_chunk_residency_binding_release(&binding) == 0);
+    assert(binding.count == 0 && slots[0].pin_count == 0
+           && slots[1].pin_count == 0);
+    errno = 0;
+    assert(pvr_chunk_residency_binding_prepare_model(&binding, &model) == -1);
+    assert(errno == ENOENT && binding.count == 0);
+
+    model.model.polygon_words = loading_texture;
+    errno = 0;
+    assert(pvr_chunk_residency_binding_prepare_model(&binding, &model) == -1);
+    assert(errno == EAGAIN && binding.count == 0);
+
+    model.model.polygon_words = model_textures;
+    model.model.polygon_word_count = 4;
+    assert(pvr_chunk_residency_binding_prepare_model(&binding, &model) == 0);
+    ++slots[handles[0].slot].generation;
+    errno = 0;
+    assert(pvr_chunk_residency_binding_release(&binding) == -1);
+    assert(errno == ESTALE && binding.count == 1);
+    --slots[binding.handles[0].slot].generation;
+    assert(pvr_chunk_residency_binding_release(&binding) == 0);
+    assert(binding.count == 0);
+
+    errno = 0;
+    assert(pvr_chunk_residency_binding_init(
+        &binding, &cache, textures, (pvr_txr_residency_handle_t *)textures,
+        1, NULL, NULL, &context,
+        PVR_GEOMETRY_SINK_CURRENT_LIST) == -1);
+    assert(errno == EINVAL);
+
+    assert(pvr_chunk_residency_binding_init(
+        &binding, &cache, textures, handles, 2, palette_one, NULL, &context,
+        PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+    errno = 0;
+    assert(pvr_chunk_residency_binding_prepare_model(&binding, &model) == -1);
+    assert(errno == EINVAL && binding.count == 0);
+    assert(slots[0].pin_count == 0 && slots[1].pin_count == 0);
+}
+
 int main(void) {
     test_table();
     test_resolve();
     test_two_volume_and_submission();
+    test_residency_binding();
     puts("PVR compact resource-binding tests passed");
     return 0;
 }
