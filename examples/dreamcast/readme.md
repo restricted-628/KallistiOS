@@ -172,6 +172,8 @@ This page serves as an index for all KallistiOS examples.
   - pvrmark_strips
   - pvrmark_strips_direct
   - render_ticket
+  - [**sprite_cells**](pvr/sprite_cells/): Compiles reusable atlas cells and
+    caller-owned instances into existing textured PVR sprite packets
   - strided_texture
   - texture_surface
   - texture_render

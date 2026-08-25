@@ -28,6 +28,8 @@ _Static_assert(sizeof(pvr_vertex_tpcm_t) == 64,
                "textured two-volume vertices must occupy two TA blocks");
 _Static_assert(sizeof(pvr_modifier_vol_t) == 64,
                "modifier triangles must occupy two TA blocks");
+_Static_assert(sizeof(pvr_sprite_txr_t) == 64,
+               "textured sprites must occupy two TA blocks");
 
 static int polygon_list(pvr_list_t list) {
     return list == PVR_LIST_OP_POLY || list == PVR_LIST_TR_POLY ||
@@ -71,9 +73,59 @@ static size_t vertex_format_size(pvr_geometry_vertex_format_t format) {
             return sizeof(pvr_vertex_tpcm_t);
         case PVR_GEOMETRY_VERTEX_MODIFIER:
             return sizeof(pvr_modifier_vol_t);
+        case PVR_GEOMETRY_VERTEX_SPRITE_TEXTURED:
+            return sizeof(pvr_sprite_txr_t);
         default:
             return 0;
     }
+}
+
+static int project_position(const matrix_t *matrix, float x, float y, float z,
+                            float *screen_x, float *screen_y, float *depth) {
+    float tx;
+    float ty;
+    float tw;
+    float reciprocal_w;
+
+    if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
+        errno = EDOM;
+        return -1;
+    }
+#ifdef __DREAMCAST__
+    (void)matrix;
+    {
+        shz_vec4_t transformed = shz_xmtrx_transform_vec4(
+            shz_vec4_init(x, y, z, 1.0f));
+
+        tx = transformed.x;
+        ty = transformed.y;
+        tw = transformed.w;
+    }
+#else
+    tx = (*matrix)[0][0] * x + (*matrix)[1][0] * y +
+         (*matrix)[2][0] * z + (*matrix)[3][0];
+    ty = (*matrix)[0][1] * x + (*matrix)[1][1] * y +
+         (*matrix)[2][1] * z + (*matrix)[3][1];
+    tw = (*matrix)[0][3] * x + (*matrix)[1][3] * y +
+         (*matrix)[2][3] * z + (*matrix)[3][3];
+#endif
+    if(!isfinite(tx) || !isfinite(ty) || !isfinite(tw)) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(tw <= FLT_MIN) {
+        errno = EDOM;
+        return -1;
+    }
+    reciprocal_w = 1.0f / tw;
+    *screen_x = tx * reciprocal_w;
+    *screen_y = ty * reciprocal_w;
+    *depth = reciprocal_w;
+    if(!isfinite(*screen_x) || !isfinite(*screen_y) || !isfinite(*depth)) {
+        errno = ERANGE;
+        return -1;
+    }
+    return 0;
 }
 
 int pvr_geometry_project_vertices(
@@ -165,13 +217,6 @@ int pvr_geometry_project_vertices(
         float x;
         float y;
         float z;
-        float tx;
-        float ty;
-        float tw;
-        float reciprocal_w;
-#ifdef __DREAMCAST__
-        shz_vec4_t transformed;
-#endif
 
         /* Stage the complete one- or two-block packet so a rejected vertex
            cannot expose partially transformed state. */
@@ -186,52 +231,59 @@ int pvr_geometry_project_vertices(
             goto fail;
         }
 
-        if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
-            errno = EDOM;
-            goto fail;
+        if(stream->format == PVR_GEOMETRY_VERTEX_SPRITE_TEXTURED) {
+            static const size_t offsets[] = { 4u, 16u, 28u };
+            float source_x[3];
+            float source_y[3];
+            float source_z[3];
+            float fourth_x;
+            float fourth_y;
+            float fourth_z;
+            size_t position;
+
+            for(position = 0; position < 3u; ++position) {
+                size_t offset = offsets[position];
+
+                memcpy(&source_x[position], packet_bytes + offset,
+                       sizeof(float));
+                memcpy(&source_y[position], packet_bytes + offset + 4u,
+                       sizeof(float));
+                memcpy(&source_z[position], packet_bytes + offset + 8u,
+                       sizeof(float));
+            }
+            memcpy(&fourth_x, packet_bytes + 40u, sizeof(fourth_x));
+            memcpy(&fourth_y, packet_bytes + 44u, sizeof(fourth_y));
+            fourth_z = source_z[0] + source_z[2] - source_z[1];
+            if(!isfinite(fourth_x) || !isfinite(fourth_y) ||
+               !isfinite(fourth_z)) {
+                errno = EDOM;
+                goto fail;
+            }
+
+            for(position = 0; position < 3u; ++position) {
+                size_t offset = offsets[position];
+
+                if(project_position(matrix, source_x[position],
+                                    source_y[position], source_z[position],
+                                    &x, &y, &z) < 0)
+                    goto fail;
+                memcpy(packet_bytes + offset, &x, sizeof(x));
+                memcpy(packet_bytes + offset + 4u, &y, sizeof(y));
+                memcpy(packet_bytes + offset + 8u, &z, sizeof(z));
+            }
+            if(project_position(matrix, fourth_x, fourth_y, fourth_z,
+                                &x, &y, &z) < 0)
+                goto fail;
+            memcpy(packet_bytes + 40u, &x, sizeof(x));
+            memcpy(packet_bytes + 44u, &y, sizeof(y));
         }
-
-#ifdef __DREAMCAST__
-        transformed = shz_xmtrx_transform_vec4(
-            shz_vec4_init(x, y, z, 1.0f));
-        tx = transformed.x;
-        ty = transformed.y;
-        tw = transformed.w;
-#else
-        tx = (*matrix)[0][0] * x + (*matrix)[1][0] * y +
-             (*matrix)[2][0] * z + (*matrix)[3][0];
-        ty = (*matrix)[0][1] * x + (*matrix)[1][1] * y +
-             (*matrix)[2][1] * z + (*matrix)[3][1];
-        tw = (*matrix)[0][3] * x + (*matrix)[1][3] * y +
-             (*matrix)[2][3] * z + (*matrix)[3][3];
-#endif
-
-        if(!isfinite(tx) || !isfinite(ty) || !isfinite(tw)) {
-            errno = ERANGE;
-            goto fail;
+        else {
+            if(project_position(matrix, x, y, z, &x, &y, &z) < 0)
+                goto fail;
+            memcpy(packet_bytes + 4u, &x, sizeof(x));
+            memcpy(packet_bytes + 8u, &y, sizeof(y));
+            memcpy(packet_bytes + 12u, &z, sizeof(z));
         }
-
-        if(tw <= FLT_MIN) {
-            errno = EDOM;
-            goto fail;
-        }
-
-        /* Unlike a conventional retained-mode position, TA depth is 1/W.
-           Keeping this conversion here makes every sink consume identical
-           screen/depth fields regardless of the declared vertex layout. */
-        reciprocal_w = 1.0f / tw;
-        x = tx * reciprocal_w;
-        y = ty * reciprocal_w;
-        z = reciprocal_w;
-
-        if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
-            errno = ERANGE;
-            goto fail;
-        }
-
-        memcpy(packet_bytes + 4u, &x, sizeof(x));
-        memcpy(packet_bytes + 8u, &y, sizeof(y));
-        memcpy(packet_bytes + 12u, &z, sizeof(z));
 
         if(stream->format == PVR_GEOMETRY_VERTEX_MODIFIER) {
             static const size_t offsets[] = { 16u, 28u };
@@ -243,40 +295,8 @@ int pvr_geometry_project_vertices(
                 memcpy(&x, packet_bytes + offset, sizeof(x));
                 memcpy(&y, packet_bytes + offset + 4u, sizeof(y));
                 memcpy(&z, packet_bytes + offset + 8u, sizeof(z));
-                if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
-                    errno = EDOM;
+                if(project_position(matrix, x, y, z, &x, &y, &z) < 0)
                     goto fail;
-                }
-#ifdef __DREAMCAST__
-                transformed = shz_xmtrx_transform_vec4(
-                    shz_vec4_init(x, y, z, 1.0f));
-                tx = transformed.x;
-                ty = transformed.y;
-                tw = transformed.w;
-#else
-                tx = (*matrix)[0][0] * x + (*matrix)[1][0] * y +
-                     (*matrix)[2][0] * z + (*matrix)[3][0];
-                ty = (*matrix)[0][1] * x + (*matrix)[1][1] * y +
-                     (*matrix)[2][1] * z + (*matrix)[3][1];
-                tw = (*matrix)[0][3] * x + (*matrix)[1][3] * y +
-                     (*matrix)[2][3] * z + (*matrix)[3][3];
-#endif
-                if(!isfinite(tx) || !isfinite(ty) || !isfinite(tw)) {
-                    errno = ERANGE;
-                    goto fail;
-                }
-                if(tw <= FLT_MIN) {
-                    errno = EDOM;
-                    goto fail;
-                }
-                reciprocal_w = 1.0f / tw;
-                x = tx * reciprocal_w;
-                y = ty * reciprocal_w;
-                z = reciprocal_w;
-                if(!isfinite(x) || !isfinite(y) || !isfinite(z)) {
-                    errno = ERANGE;
-                    goto fail;
-                }
                 memcpy(packet_bytes + offset, &x, sizeof(x));
                 memcpy(packet_bytes + offset + 4u, &y, sizeof(y));
                 memcpy(packet_bytes + offset + 8u, &z, sizeof(z));

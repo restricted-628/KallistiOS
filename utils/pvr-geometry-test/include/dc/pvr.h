@@ -73,6 +73,25 @@ typedef struct pvr_modifier_vol {
     uint32_t d1, d2, d3, d4, d5, d6;
 } pvr_modifier_vol_t;
 
+typedef struct pvr_sprite_txr {
+    alignas(32) uint32_t flags;
+    float ax, ay, az;
+    float bx, by, bz;
+    float cx, cy, cz;
+    float dx, dy;
+    uint32_t dummy;
+    uint32_t auv, buv, cuv;
+} pvr_sprite_txr_t;
+
+static inline uint32_t PVR_PACK_16BIT_UV(float u, float v) {
+    union {
+        float f;
+        uint32_t i;
+    } packed_u = { u }, packed_v = { v };
+
+    return (packed_u.i & UINT32_C(0xffff0000)) | (packed_v.i >> 16);
+}
+
 int pvr_prim(const void *data, size_t size);
 int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
 

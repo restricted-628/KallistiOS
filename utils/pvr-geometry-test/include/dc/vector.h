@@ -8,6 +8,8 @@ typedef struct point {
     float y;
     float z;
     float w;
-} point_t;
+} vector_t;
+
+typedef vector_t point_t;
 
 #endif

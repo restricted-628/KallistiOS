@@ -6,9 +6,11 @@
 
 #include <dc/pvr_geometry.h>
 #include <dc/pvr_frustum.h>
+#include <dc/pvr_sprite_geometry.h>
 
 #include <assert.h>
 #include <errno.h>
+#include <float.h>
 #include <math.h>
 #include <stdalign.h>
 #include <stdint.h>
@@ -322,6 +324,18 @@ static void test_format_projection(void) {
         .d1 = 1, .d2 = 2, .d3 = 3, .d4 = 4, .d5 = 5, .d6 = 6
     };
     alignas(32) pvr_modifier_vol_t modifier_output;
+    alignas(32) pvr_sprite_txr_t sprite = {
+        .flags = PVR_CMD_VERTEX_EOL,
+        .ax = 1.0f, .ay = 2.0f, .az = 3.0f,
+        .bx = 1.0f, .by = 4.0f, .bz = 3.0f,
+        .cx = 5.0f, .cy = 4.0f, .cz = 3.0f,
+        .dx = 5.0f, .dy = 2.0f,
+        .dummy = UINT32_C(0x11223344),
+        .auv = UINT32_C(0x01020304),
+        .buv = UINT32_C(0x05060708),
+        .cuv = UINT32_C(0x090a0b0c)
+    };
+    alignas(32) pvr_sprite_txr_t sprite_output;
 
     memset(output, 0x5a, sizeof(output));
     assert(pvr_geometry_project_vertices(output, 3, &stream, &transform,
@@ -401,6 +415,162 @@ static void test_format_projection(void) {
     assert(modifier_output.cx == 24.0f && modifier_output.cy == 44.0f &&
            modifier_output.cz == 1.0f);
     assert(modifier_output.d1 == 1 && modifier_output.d6 == 6);
+
+    stream.vertices = &sprite;
+    stream.vertex_count = 1;
+    stream.stride = sizeof(sprite);
+    stream.format = PVR_GEOMETRY_VERTEX_SPRITE_TEXTURED;
+    assert(pvr_geometry_project_vertices(&sprite_output, 1, &stream,
+                                         &transform, &result) == 0);
+    assert(result.consumed_vertices == 1 && result.produced_vertices == 1);
+    assert(sprite_output.ax == 12.0f && sprite_output.ay == 26.0f &&
+           sprite_output.az == 1.0f);
+    assert(sprite_output.bx == 12.0f && sprite_output.by == 32.0f &&
+           sprite_output.bz == 1.0f);
+    assert(sprite_output.cx == 20.0f && sprite_output.cy == 32.0f &&
+           sprite_output.cz == 1.0f);
+    assert(sprite_output.dx == 20.0f && sprite_output.dy == 26.0f);
+    assert(sprite_output.dummy == sprite.dummy &&
+           sprite_output.auv == sprite.auv &&
+           sprite_output.buv == sprite.buv &&
+           sprite_output.cuv == sprite.cuv);
+
+    memcpy(&sprite_output, &sprite, sizeof(sprite));
+    stream.vertices = &sprite_output;
+    assert(pvr_geometry_project_vertices(&sprite_output, 1, &stream,
+                                         &transform, NULL) == 0);
+    assert(sprite_output.ax == 12.0f && sprite_output.dx == 20.0f);
+}
+
+static void test_sprite_cells(void) {
+    alignas(32) pvr_sprite_cell_t cells[2] = {
+        { 20.0f, 10.0f, 0.5f, 0.5f, 0.0f, 0.0f, 0.5f, 0.5f },
+        { 8.0f, 12.0f, 0.0f, 0.0f, 0.5f, 0.25f, 1.0f, 1.0f }
+    };
+    const pvr_sprite_atlas_t atlas = { cells, 2 };
+    pvr_sprite_instance_t instances[3] = {
+        {
+            .cell_index = 0,
+            .position = { 100.0f, 80.0f, 0.5f, 1.0f },
+            .rotation = 0.0f,
+            .scale_x = 2.0f,
+            .scale_y = 1.0f,
+            .flags = PVR_SPRITE_INSTANCE_NONE
+        },
+        {
+            .cell_index = 1,
+            .position = { 0.0f, 0.0f, 0.5f, 1.0f },
+            .rotation = 0.0f,
+            .scale_x = 1.0f,
+            .scale_y = 1.0f,
+            .flags = PVR_SPRITE_INSTANCE_HIDDEN
+        },
+        {
+            .cell_index = 1,
+            .position = { 200.0f, 100.0f, 0.25f, 1.0f },
+            .rotation = 1.57079632679489661923f,
+            .scale_x = 1.0f,
+            .scale_y = 0.5f,
+            .flags = PVR_SPRITE_INSTANCE_FLIP_U |
+                     PVR_SPRITE_INSTANCE_FLIP_V
+        }
+    };
+    pvr_sprite_instance_stream_t stream = {
+        instances, 3, sizeof(instances[0])
+    };
+    alignas(32) pvr_sprite_txr_t output[3];
+    alignas(32) pvr_sprite_txr_t unchanged[3];
+    pvr_sprite_batch_result_t result;
+    const pvr_sprite_billboard_basis_t basis = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f }
+    };
+    alignas(32) const matrix_t projection = {
+        { 2.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 3.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 10.0f, 20.0f, 0.0f, 1.0f }
+    };
+
+    memset(output, 0x5a, sizeof(output));
+    assert(pvr_sprite_batch_compile_2d(output, 3, &atlas, &stream,
+                                       &result) == 0);
+    assert(result.examined_instances == 3 && result.produced_sprites == 2);
+    assert(output[0].flags == PVR_CMD_VERTEX_EOL);
+    assert(output[0].ax == 80.0f && output[0].ay == 85.0f &&
+           output[0].az == 0.5f);
+    assert(output[0].bx == 80.0f && output[0].by == 75.0f &&
+           output[0].bz == 0.5f);
+    assert(output[0].cx == 120.0f && output[0].cy == 75.0f &&
+           output[0].cz == 0.5f);
+    assert(output[0].dx == 120.0f && output[0].dy == 85.0f);
+    assert(output[0].auv == PVR_PACK_16BIT_UV(0.0f, 0.5f));
+    assert(output[0].buv == PVR_PACK_16BIT_UV(0.0f, 0.0f));
+    assert(output[0].cuv == PVR_PACK_16BIT_UV(0.5f, 0.0f));
+
+    assert(close_enough(output[1].ax, 194.0f));
+    assert(close_enough(output[1].ay, 100.0f));
+    assert(close_enough(output[1].bx, 200.0f));
+    assert(close_enough(output[1].by, 100.0f));
+    assert(close_enough(output[1].cx, 200.0f));
+    assert(close_enough(output[1].cy, 108.0f));
+    assert(close_enough(output[1].dx, 194.0f));
+    assert(close_enough(output[1].dy, 108.0f));
+    assert(output[1].auv == PVR_PACK_16BIT_UV(1.0f, 0.25f));
+    assert(output[1].buv == PVR_PACK_16BIT_UV(1.0f, 1.0f));
+    assert(output[1].cuv == PVR_PACK_16BIT_UV(0.5f, 1.0f));
+
+    /* A fully hidden batch needs no destination storage and publishes
+       nothing, even if the aligned placeholder aliases read-only inputs. */
+    assert(pvr_sprite_batch_compile_2d((pvr_sprite_txr_t *)(void *)cells, 0,
+        &atlas,
+        &(pvr_sprite_instance_stream_t){ instances + 1, 1,
+                                         sizeof(instances[0]) },
+        &result) == 0);
+    assert(result.examined_instances == 1 && result.produced_sprites == 0);
+
+    memcpy(unchanged, output, sizeof(output));
+    errno = 0;
+    assert(pvr_sprite_batch_compile_2d(output, 1, &atlas, &stream,
+                                       &result) == -1);
+    assert(errno == ENOSPC && result.examined_instances == 0 &&
+           result.produced_sprites == 0);
+    assert(!memcmp(output, unchanged, sizeof(output)));
+
+    instances[2].cell_index = 2;
+    errno = 0;
+    assert(pvr_sprite_batch_compile_2d(output, 3, &atlas, &stream,
+                                       &result) == -1);
+    assert(errno == EINVAL && !memcmp(output, unchanged, sizeof(output)));
+    instances[2].cell_index = 1;
+
+    instances[2].scale_x = FLT_MAX;
+    errno = 0;
+    assert(pvr_sprite_batch_compile_2d(output, 3, &atlas, &stream,
+                                       &result) == -1);
+    assert(errno == ERANGE && !memcmp(output, unchanged, sizeof(output)));
+    instances[2].scale_x = 1.0f;
+
+    /* Pivots outside a cell are useful for orbiting attached sprites. */
+    cells[0].origin_x = 1.5f;
+    assert(pvr_sprite_batch_compile_2d(output, 3, &atlas, &stream,
+                                       &result) == 0);
+    cells[0].origin_x = 0.5f;
+
+    assert(pvr_sprite_batch_compile_3d(output, 3, &atlas, &stream, &basis,
+                                       &projection, &result) == 0);
+    assert(result.examined_instances == 3 && result.produced_sprites == 2);
+    assert(output[0].ax == 170.0f && output[0].ay == 275.0f &&
+           output[0].az == 1.0f);
+    assert(output[0].dx == 250.0f && output[0].dy == 275.0f);
+    assert(close_enough(output[1].ax, 398.0f));
+    assert(close_enough(output[1].dy, 344.0f));
+
+    errno = 0;
+    assert(pvr_sprite_batch_compile_2d(output, 3, &atlas,
+        &(pvr_sprite_instance_stream_t){ output, 1, sizeof(output[0]) },
+        &result) == -1);
+    assert(errno == EINVAL);
 }
 
 static void test_vertex_sinks(void) {
@@ -421,6 +591,11 @@ static void test_vertex_sinks(void) {
           .argb1 = UINT32_C(0xffaabbcc) }
     };
     alignas(32) pvr_vertex_pcm_t color_memory[2];
+    alignas(32) pvr_sprite_txr_t sprites[2] = {
+        { .flags = PVR_CMD_VERTEX_EOL, .ax = 1.0f, .auv = 1 },
+        { .flags = PVR_CMD_VERTEX_EOL, .ax = 2.0f, .auv = 2 }
+    };
+    alignas(32) pvr_sprite_txr_t sprite_memory[2];
     pvr_geometry_vertex_sink_t sink;
 
     assert(pvr_geometry_vertex_sink_init_memory(
@@ -439,6 +614,12 @@ static void test_vertex_sinks(void) {
         color_memory, 2) == 0);
     assert(pvr_geometry_vertex_sink_emit(&sink, colors, 2) == 0);
     assert(!memcmp(color_memory, colors, sizeof(colors)));
+
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_SPRITE_TEXTURED,
+        sprite_memory, 2) == 0);
+    assert(pvr_geometry_vertex_sink_emit(&sink, sprites, 2) == 0);
+    assert(!memcmp(sprite_memory, sprites, sizeof(sprites)));
 
     memset(memory, 0x5a, sizeof(memory));
     memcpy(unchanged, memory, sizeof(memory));
@@ -464,6 +645,13 @@ static void test_vertex_sinks(void) {
         PVR_LIST_TR_POLY) == 0);
     assert(pvr_geometry_vertex_sink_emit(&sink, colors, 2) == 0);
     assert(submitted_count == 2 && submitted_list == PVR_LIST_TR_POLY);
+
+    submitted_count = 0;
+    assert(pvr_geometry_vertex_sink_init_current(
+        &sink, PVR_GEOMETRY_VERTEX_SPRITE_TEXTURED) == 0);
+    assert(pvr_geometry_vertex_sink_emit(&sink, sprites, 2) == 0);
+    assert(submitted_count == 4 && sink.emitted_vertices == 2);
+    assert(!memcmp(submitted, sprites, sizeof(sprites)));
 
     errno = 0;
     assert(pvr_geometry_vertex_sink_init_current(
@@ -642,6 +830,7 @@ int main(void) {
     test_projection_failures();
     test_sinks();
     test_format_projection();
+    test_sprite_cells();
     test_vertex_sinks();
     test_frustum_classification();
     test_frustum_clipping();

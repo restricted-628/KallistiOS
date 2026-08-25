@@ -35,7 +35,8 @@ workloads.
 | Lighting | Checked inverse-transpose normals, directional and point Lambert lights, deterministic ARGB packing, and caller-owned animated light sampling are available | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
 | Keyframe animation | Validated immutable tracks, clips, blended TRS poses, and explicit one-shot/loop/ping-pong cursors bind to object hierarchies, cameras, lights, visibility, events, and morph targets | Keep system clocks, storage, event meaning, and scene ownership in the application. |
 | Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes | Keep skeleton ownership, pose evaluation, mesh binding, and blend policy outside the deformation kernels. |
-| Sprites and particles | PVR sprite primitives exist | Keep emitters and lifetime policy in an optional utility library, not the driver. |
+| Sprite cells | Checked caller-owned 2D/3D cell compilation, UV regions, pivot, scale, rotation, flip, visibility compaction, projection, and existing sprite sinks/materials | Complete; texture, material, instance, scene, list, animation, and clock ownership remain explicit. |
+| Particles | PVR polygon and sprite primitives exist | Add bounded caller-owned simulation/emission helpers without moving lifetime policy into the driver. |
 | Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
 | Asset formats and resource names | Bounded compact chunk streams provide validated structure without an engine-owned namespace | Keep parsing and traversal in KOS-native, caller-owned APIs; reject malformed offsets and counts before rendering. |
 

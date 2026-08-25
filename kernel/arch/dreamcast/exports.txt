@@ -585,6 +585,8 @@ pvr_material_compile_sprite
 pvr_material_compile_two_volume
 pvr_material_submit
 pvr_material_submit_list
+pvr_sprite_batch_compile_2d
+pvr_sprite_batch_compile_3d
 pvr_txr_load_dma
 pvr_dma_ready
 pvr_dma_load_ta

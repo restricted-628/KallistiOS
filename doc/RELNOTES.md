@@ -91,6 +91,12 @@ lifecycle and naming conventions.
   64-byte textured two-volume vertices without changing the canonical sink
   ABI; command and XYZ fields are transformed while both volume attribute sets
   are preserved exactly.
+* Added checked, allocation-free sprite-cell geometry over the established
+  textured PVR sprite packet. Caller-owned atlas cells and strided instances
+  support normalized pivots and UV regions, independent scale and rotation,
+  UV flips, visibility compaction, screen-space output, and projected 3D
+  billboards. Existing checked materials and geometry sinks retain texture,
+  color, scene, list, and submission ownership.
 * Added bounded compact PVR model streams with allocation-free record
   iteration and whole-model validation. Record framing, per-format vertex
   sizes, finite data, strip and volume structure, counters, and every indexed

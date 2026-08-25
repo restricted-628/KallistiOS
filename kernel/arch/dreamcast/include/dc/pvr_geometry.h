@@ -8,7 +8,7 @@
     \brief   Checked, caller-owned PVR geometry preparation and output.
     \ingroup pvr_geometry
 
-    This interface prepares canonical pvr_vertex_t streams without taking
+    This interface prepares complete PVR vertex streams without taking
     ownership of PVR scenes, polygon headers, materials, textures, or memory.
 */
 
@@ -49,7 +49,8 @@ typedef enum pvr_geometry_vertex_format {
     PVR_GEOMETRY_VERTEX_CANONICAL = 0, /**< pvr_vertex_t. */
     PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR, /**< pvr_vertex_pcm_t. */
     PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, /**< pvr_vertex_tpcm_t. */
-    PVR_GEOMETRY_VERTEX_MODIFIER /**< pvr_modifier_vol_t. */
+    PVR_GEOMETRY_VERTEX_MODIFIER, /**< pvr_modifier_vol_t. */
+    PVR_GEOMETRY_VERTEX_SPRITE_TEXTURED /**< pvr_sprite_txr_t. */
 } pvr_geometry_vertex_format_t;
 
 /** \brief Strided input over one declared complete PVR vertex layout. */
@@ -143,9 +144,11 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
 
     Polygon layouts transform the command-adjacent XYZ position and preserve
     every later attribute byte. Modifier packets transform all three XYZ
-    positions and preserve their dummy words. Output is tightly packed
-    according to stream::format. Input may use a larger four-byte-aligned
-    stride.
+    positions and preserve their dummy words. Textured sprite packets transform
+    A, B, and C; the omitted D depth is inferred from the planar parallelogram
+    relation `A + C - B`, matching the hardware packet. Output is tightly
+    packed according to stream::format. Input may use a larger four-byte-
+    aligned stride.
 
     Exact in-place operation is supported when stride equals the declared
     format size. Other overlapping ranges are rejected before output. On a
