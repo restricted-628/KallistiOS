@@ -8,8 +8,8 @@ temporary output is published.
 ```text
 pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
     [--texture-id ID | --material NAME=ID ...] \
-    [--material-library FILE ...] [--] \
-    INPUT.obj VERTICES.bin POLYGONS.bin
+    [--material-library FILE ...] [--emit-c SYMBOL] [--] \
+    INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c}
 ```
 
 The admitted source subset is:
@@ -65,15 +65,34 @@ preserving the converter's original byte stream. `--join-strips` performs a
 bounded, order-preserving optimization over adjacent source faces. A face joins
 only when its complete position/UV/normal corner identities match the next edge
 required by alternating triangle-strip winding. The optimizer never reorders
-faces and never crosses an attribute form or resolved texture-state boundary,
-so transparent draw order remains source order. This deliberately excludes
-global graph stripification and topology guessing.
+faces and never crosses an attribute form, selected material, or resolved
+texture-state boundary, so transparent draw order remains source order. This
+deliberately excludes global graph stripification and topology guessing.
 
 Joined strips split before either the 15-bit vertex count or the enclosing
 16-bit record payload would overflow. Consecutive strips with compatible state
 then share bounded strip records. The report includes `strips_before`,
 `strips_after`, and `triangles_joined` so a build can measure the actual
 reduction. Calculated center/radius metadata and stream sizes are also emitted
-as deterministic `key=value` records. Each output is replaced by an atomic
-rename after complete write and validation; the two separate files cannot form
-one filesystem-atomic transaction.
+as deterministic `key=value` records.
+
+Without `--emit-c`, the two positional outputs remain raw little-endian streams.
+`--emit-c SYMBOL` instead accepts one output path and writes a C11 translation
+unit containing naturally aligned private stream arrays plus one externally
+visible immutable `pvr_chunk_model_t SYMBOL`. The symbol must begin with a
+letter, contain only letters, digits, and underscores, avoid C keywords, and be
+at most 31 characters. The generated source contains no input paths and uses
+exact hexadecimal floating constants for center/radius metadata. Declare it in
+consumer code with, for example:
+
+```c
+#include <dc/pvr_chunk_model.h>
+
+extern const pvr_chunk_model_t ship_model;
+```
+
+Compile the generated file normally in the application build to produce the
+target object; the converter does not invoke or choose a compiler. Each output
+is replaced by an atomic rename after complete write and validation. A C output
+is one atomic artifact, while the two raw files cannot form one
+filesystem-atomic transaction.

@@ -24,6 +24,7 @@
 #include <float.h>
 #include <inttypes.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +35,7 @@
 #define MAX_POSITION_COUNT 65536u
 #define MAX_VERTEX_BATCH ((UINT16_MAX - 1u) / 3u)
 #define MAX_STRIP_COUNT UINT16_C(0x3fff)
+#define MAX_C_SYMBOL_LENGTH 31u
 
 #define MATERIAL_DIFFUSE  (1u << 0)
 #define MATERIAL_AMBIENT  (1u << 1)
@@ -146,8 +148,8 @@ static void usage(FILE *stream, const char *program) {
     fprintf(stream,
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
             "--material NAME=ID ...] [--material-library FILE ...] "
-            "[--join-strips] [--] "
-            "INPUT.obj VERTICES.bin POLYGONS.bin\n",
+            "[--join-strips] [--emit-c SYMBOL] [--] "
+            "INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c}\n",
             program);
 }
 
@@ -331,6 +333,35 @@ static int parse_texture_identifier(const char *text, int *result) {
     }
     *result = (int)value;
     return 0;
+}
+
+static int valid_c_symbol(const char *symbol) {
+    static const char *const keywords[] = {
+        "auto", "break", "case", "char", "const", "continue", "default",
+        "do", "double", "else", "enum", "extern", "float", "for", "goto",
+        "if", "inline", "int", "long", "register", "restrict", "return",
+        "short", "signed", "sizeof", "static", "struct", "switch",
+        "typedef", "union", "unsigned", "void", "volatile", "while",
+        "alignas", "alignof", "thread_local"
+    };
+    size_t length = strlen(symbol);
+    size_t character;
+    size_t keyword;
+
+    if(!length || length > MAX_C_SYMBOL_LENGTH ||
+       !isalpha((unsigned char)symbol[0]))
+        return 0;
+    for(character = 1; character < length; ++character) {
+        if(!isalnum((unsigned char)symbol[character]) &&
+           symbol[character] != '_')
+            return 0;
+    }
+    for(keyword = 0; keyword < sizeof(keywords) / sizeof(keywords[0]);
+        ++keyword) {
+        if(!strcmp(symbol, keywords[keyword]))
+            return 0;
+    }
+    return 1;
 }
 
 static int material_table_add(material_table_t *table, const char *text) {
@@ -1637,6 +1668,165 @@ fail:
     return -1;
 }
 
+static int checked_fprintf(FILE *file, const char *format, ...) {
+    va_list arguments;
+    int rv;
+
+    va_start(arguments, format);
+    rv = vfprintf(file, format, arguments);
+    va_end(arguments);
+    if(rv < 0) {
+        if(!errno)
+            errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
+static int write_c_array(FILE *file, const char *symbol, const char *suffix,
+                         const void *words, size_t word_count,
+                         size_t word_size) {
+    const char *type = word_size == sizeof(uint32_t) ? "uint32_t" :
+                                                       "uint16_t";
+    const char *macro = word_size == sizeof(uint32_t) ? "UINT32_C" :
+                                                        "UINT16_C";
+    size_t per_line = word_size == sizeof(uint32_t) ? 4u : 8u;
+    size_t word;
+
+    if(checked_fprintf(file,
+                       "static alignas(%s) const %s %s_%s[] = {\n",
+                       type, type, symbol, suffix) < 0)
+        return -1;
+    for(word = 0; word < word_count; ++word) {
+        uint32_t value = word_size == sizeof(uint32_t) ?
+            ((const uint32_t *)words)[word] :
+            ((const uint16_t *)words)[word];
+        int line_end = word + 1u == word_count ||
+                       (word + 1u) % per_line == 0;
+
+        if(word % per_line == 0 && checked_fprintf(file, "    ") < 0)
+            return -1;
+        if(checked_fprintf(file, "%s(0x%0*x)%s", macro,
+                           word_size == sizeof(uint32_t) ? 8 : 4,
+                           (unsigned int)value,
+                           word + 1u == word_count ? "" : ",") < 0)
+            return -1;
+        if(checked_fprintf(file, line_end ? "\n" : " ") < 0)
+            return -1;
+    }
+    return checked_fprintf(file, "};\n\n");
+}
+
+static int write_c_float(FILE *file, float value) {
+    uint32_t word = float_word(value);
+    uint32_t exponent = (word >> 23) & UINT32_C(0xff);
+    uint32_t fraction = word & UINT32_C(0x007fffff);
+    const char *sign = word & UINT32_C(0x80000000) ? "-" : "";
+
+    if(exponent == UINT32_C(0xff)) {
+        errno = EDOM;
+        return -1;
+    }
+    if(!exponent && !fraction)
+        return checked_fprintf(file, "%s0x0p+0F", sign);
+    if(!exponent)
+        return checked_fprintf(file, "%s0x0.%06xp-126F", sign,
+                               (unsigned int)(fraction << 1));
+    return checked_fprintf(file, "%s0x1.%06xp%+dF", sign,
+                           (unsigned int)(fraction << 1),
+                           (int)exponent - 127);
+}
+
+static int write_c_model(FILE *file, const char *symbol,
+                         const output_streams_t *streams) {
+    if(checked_fprintf(
+           file,
+           "/* Generated by pvr-model-convert. */\n\n"
+           "#include <dc/pvr_chunk_model.h>\n"
+           "#include <stdalign.h>\n"
+           "#include <stdint.h>\n\n"
+           "_Static_assert(sizeof(uint32_t) == 4, "
+           "\"compact vertex words require 32 bits\");\n"
+           "_Static_assert(sizeof(uint16_t) == 2, "
+           "\"compact polygon words require 16 bits\");\n\n") < 0 ||
+       write_c_array(file, symbol, "vertex_words", streams->vertex_words,
+                     streams->vertex_word_count, sizeof(uint32_t)) < 0 ||
+       write_c_array(file, symbol, "polygon_words", streams->polygon_words,
+                     streams->polygon_word_count, sizeof(uint16_t)) < 0 ||
+       checked_fprintf(
+           file,
+           "const pvr_chunk_model_t %s = {\n"
+           "    .vertex_words = %s_vertex_words,\n"
+           "    .vertex_word_count = sizeof(%s_vertex_words) /\n"
+           "                         sizeof(%s_vertex_words[0]),\n"
+           "    .polygon_words = %s_polygon_words,\n"
+           "    .polygon_word_count = sizeof(%s_polygon_words) /\n"
+           "                          sizeof(%s_polygon_words[0]),\n"
+           "    .center = { ",
+           symbol, symbol, symbol, symbol, symbol, symbol, symbol) < 0 ||
+       write_c_float(file, streams->center[0]) < 0 ||
+       checked_fprintf(file, ", ") < 0 ||
+       write_c_float(file, streams->center[1]) < 0 ||
+       checked_fprintf(file, ", ") < 0 ||
+       write_c_float(file, streams->center[2]) < 0 ||
+       checked_fprintf(file, " },\n    .radius = ") < 0 ||
+       write_c_float(file, streams->radius) < 0 ||
+       checked_fprintf(file, "\n};\n") < 0)
+        return -1;
+    return 0;
+}
+
+static int prepare_c_output(const char *target, const char *symbol,
+                            const output_streams_t *streams,
+                            temporary_output_t *temporary) {
+    static const char suffix[] = ".tmp.XXXXXX";
+    size_t target_length = strlen(target);
+    FILE *file = NULL;
+    int descriptor = -1;
+    int saved_errno;
+
+    memset(temporary, 0, sizeof(*temporary));
+    if(target_length > SIZE_MAX - sizeof(suffix)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    temporary->path = malloc(target_length + sizeof(suffix));
+    if(!temporary->path) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memcpy(temporary->path, target, target_length);
+    memcpy(temporary->path + target_length, suffix, sizeof(suffix));
+
+    descriptor = mkstemp(temporary->path);
+    if(descriptor < 0)
+        goto fail;
+    file = fdopen(descriptor, "w");
+    if(!file)
+        goto fail;
+    descriptor = -1;
+    if(write_c_model(file, symbol, streams) < 0 || fflush(file) < 0)
+        goto fail;
+    if(fclose(file) < 0) {
+        file = NULL;
+        goto fail;
+    }
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    if(file)
+        fclose(file);
+    else if(descriptor >= 0)
+        close(descriptor);
+    if(temporary->path)
+        unlink(temporary->path);
+    free(temporary->path);
+    temporary->path = NULL;
+    errno = saved_errno;
+    return -1;
+}
+
 static void discard_output(temporary_output_t *temporary) {
     if(temporary->path)
         unlink(temporary->path);
@@ -1725,8 +1915,10 @@ int main(int argc, char **argv) {
     temporary_output_t vertex_temporary = { 0 };
     temporary_output_t polygon_temporary = { 0 };
     const char *input;
-    const char *vertex_output;
-    const char *polygon_output;
+    const char *vertex_output = NULL;
+    const char *polygon_output = NULL;
+    const char *c_output = NULL;
+    const char *c_symbol = NULL;
     size_t error_line = 0;
     int flip_winding = 0;
     int flip_v = 0;
@@ -1800,6 +1992,18 @@ int main(int argc, char **argv) {
             argument += 2;
             continue;
         }
+        else if(!strcmp(argv[argument], "--emit-c")) {
+            if(argument + 1 >= argc || c_symbol ||
+               !valid_c_symbol(argv[argument + 1])) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            c_symbol = argv[argument + 1];
+            argument += 2;
+            continue;
+        }
         else {
             usage(stderr, argv[0]);
             material_table_free(&materials);
@@ -1808,7 +2012,7 @@ int main(int argc, char **argv) {
         }
         ++argument;
     }
-    if(argc - argument != 3) {
+    if(argc - argument != (c_symbol ? 2 : 3)) {
         usage(stderr, argv[0]);
         material_table_free(&materials);
         material_library_free(&library);
@@ -1816,21 +2020,28 @@ int main(int argc, char **argv) {
     }
 
     input = argv[argument];
-    vertex_output = argv[argument + 1];
-    polygon_output = argv[argument + 2];
+    if(c_symbol)
+        c_output = argv[argument + 1];
+    else {
+        vertex_output = argv[argument + 1];
+        polygon_output = argv[argument + 2];
+    }
     {
-        int input_vertex = same_existing_file(input, vertex_output);
-        int input_polygon = same_existing_file(input, polygon_output);
-        int output_pair = same_existing_file(vertex_output, polygon_output);
+        const char *first_output = c_symbol ? c_output : vertex_output;
+        int input_first = same_existing_file(input, first_output);
+        int input_polygon = c_symbol ? 0 :
+            same_existing_file(input, polygon_output);
+        int output_pair = c_symbol ? 0 :
+            same_existing_file(vertex_output, polygon_output);
         size_t material_file;
 
-        if(input_vertex < 0 || input_polygon < 0 || output_pair < 0) {
+        if(input_first < 0 || input_polygon < 0 || output_pair < 0) {
             fprintf(stderr, "path check failed: %s\n", strerror(errno));
             material_table_free(&materials);
             material_library_free(&library);
             return 2;
         }
-        if(input_vertex || input_polygon || output_pair) {
+        if(input_first || input_polygon || output_pair) {
             fprintf(stderr, "input and output paths must be distinct\n");
             material_table_free(&materials);
             material_library_free(&library);
@@ -1838,18 +2049,18 @@ int main(int argc, char **argv) {
         }
         for(material_file = 0; material_file < library.file_count;
             ++material_file) {
-            int material_vertex = same_existing_file(
-                library.paths[material_file], vertex_output);
-            int material_polygon = same_existing_file(
+            int material_first = same_existing_file(
+                library.paths[material_file], first_output);
+            int material_polygon = c_symbol ? 0 : same_existing_file(
                 library.paths[material_file], polygon_output);
 
-            if(material_vertex < 0 || material_polygon < 0) {
+            if(material_first < 0 || material_polygon < 0) {
                 fprintf(stderr, "path check failed: %s\n", strerror(errno));
                 material_table_free(&materials);
                 material_library_free(&library);
                 return 2;
             }
-            if(material_vertex || material_polygon) {
+            if(material_first || material_polygon) {
                 fprintf(stderr,
                         "material library and output paths must be distinct\n");
                 material_table_free(&materials);
@@ -1858,8 +2069,8 @@ int main(int argc, char **argv) {
             }
         }
     }
-    if(output_target_admissible(vertex_output) < 0 ||
-       output_target_admissible(polygon_output) < 0) {
+    if(output_target_admissible(c_symbol ? c_output : vertex_output) < 0 ||
+       (!c_symbol && output_target_admissible(polygon_output) < 0)) {
         fprintf(stderr, "output target is not a regular file: %s\n",
                 strerror(errno));
         material_table_free(&materials);
@@ -1900,25 +2111,42 @@ int main(int argc, char **argv) {
         fprintf(stderr, "conversion failed: %s\n", strerror(errno));
         goto out;
     }
-    if(prepare_output(vertex_output, streams.vertex_words,
-                      streams.vertex_word_count, sizeof(uint32_t),
-                      &vertex_temporary) < 0 ||
-       prepare_output(polygon_output, streams.polygon_words,
-                      streams.polygon_word_count, sizeof(uint16_t),
-                      &polygon_temporary) < 0) {
-        fprintf(stderr, "output preparation failed: %s\n", strerror(errno));
-        goto out;
+    if(c_symbol) {
+        if(prepare_c_output(c_output, c_symbol, &streams,
+                            &vertex_temporary) < 0) {
+            fprintf(stderr, "output preparation failed: %s\n",
+                    strerror(errno));
+            goto out;
+        }
+        if(publish_output(&vertex_temporary, c_output) < 0) {
+            fprintf(stderr, "%s: %s\n", c_output, strerror(errno));
+            goto out;
+        }
     }
-    if(publish_output(&vertex_temporary, vertex_output) < 0) {
-        fprintf(stderr, "%s: %s\n", vertex_output, strerror(errno));
-        goto out;
-    }
-    if(publish_output(&polygon_temporary, polygon_output) < 0) {
-        fprintf(stderr, "%s: %s\n", polygon_output, strerror(errno));
-        goto out;
+    else {
+        if(prepare_output(vertex_output, streams.vertex_words,
+                          streams.vertex_word_count, sizeof(uint32_t),
+                          &vertex_temporary) < 0 ||
+           prepare_output(polygon_output, streams.polygon_words,
+                          streams.polygon_word_count, sizeof(uint16_t),
+                          &polygon_temporary) < 0) {
+            fprintf(stderr, "output preparation failed: %s\n",
+                    strerror(errno));
+            goto out;
+        }
+        if(publish_output(&vertex_temporary, vertex_output) < 0) {
+            fprintf(stderr, "%s: %s\n", vertex_output, strerror(errno));
+            goto out;
+        }
+        if(publish_output(&polygon_temporary, polygon_output) < 0) {
+            fprintf(stderr, "%s: %s\n", polygon_output, strerror(errno));
+            goto out;
+        }
     }
 
     print_report(&source, &streams, &info, &materials, &library);
+    if(c_symbol)
+        printf("c_symbol=%s\n", c_symbol);
     result = 0;
 
 out:

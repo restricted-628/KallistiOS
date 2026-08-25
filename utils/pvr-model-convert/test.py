@@ -6,6 +6,7 @@ Copyright (C) 2026 Joseph Black
 
 import os
 import pathlib
+import shlex
 import struct
 import subprocess
 import sys
@@ -68,6 +69,56 @@ def write_text(path, text):
     path.write_text(text, encoding="ascii")
 
 
+def compile_embedded(generated, root):
+    repository = pathlib.Path(__file__).resolve().parents[2]
+    verifier_source = root / "embedded-verifier.c"
+    verifier = root / "embedded-verifier"
+    write_text(
+        verifier_source,
+        """#include <dc/pvr_chunk_model.h>
+#include <math.h>
+
+extern const pvr_chunk_model_t test_model;
+
+int main(void) {
+    if(test_model.vertex_word_count != 12u ||
+       test_model.polygon_word_count != 29u ||
+       test_model.vertex_words[0] != (34u | (10u << 16)) ||
+       test_model.vertex_words[11] != 0xffu ||
+       test_model.polygon_words[0] != 17u ||
+       test_model.polygon_words[28] != 0xffu ||
+       fabsf(test_model.radius - 1.41421354f) > 0.000001f)
+        return 1;
+    return 0;
+}
+""",
+    )
+    command = [
+        *shlex.split(os.environ.get("CC", "cc")),
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-pedantic",
+        "-I", str(repository / "utils/pvr-model-convert/include"),
+        "-I", str(repository / "kernel/arch/dreamcast/include"),
+        str(generated),
+        str(verifier_source),
+        "-lm",
+        "-o", str(verifier),
+    ]
+    result = subprocess.run(
+        command,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    result = invoke(verifier)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
 def main():
     if len(sys.argv) != 3:
         raise SystemExit("usage: test.py CONVERTER INSPECTOR")
@@ -102,6 +153,63 @@ f 1/1/1 2/2/1 3/3/1# trailing comment
         assert not result.stderr, result.stderr
         assert vertices.read_bytes() == struct.pack("<12I", *VERTICES)
         assert polygons.read_bytes() == struct.pack("<29H", *POLYGONS)
+
+        generated = root / "test-model.c"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-c", "test_model",
+            source,
+            generated,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == REPORT + "c_symbol=test_model\n"
+        generated_text = generated.read_text(encoding="ascii")
+        assert "const pvr_chunk_model_t test_model = {" in generated_text
+        assert "static alignas(uint32_t) const uint32_t " in generated_text
+        assert "static alignas(uint16_t) const uint16_t " in generated_text
+        assert ".center = { 0x0p+0F, 0x0p+0F, 0x0p+0F }," in generated_text
+        assert ".radius = 0x1.6a09e6p+0F" in generated_text
+        assert str(source) not in generated_text
+        compile_embedded(generated, root)
+
+        generated_again = root / "test-model-again.c"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-c", "test_model",
+            source,
+            generated_again,
+        )
+        assert result.returncode == 0, result.stderr
+        assert generated_again.read_bytes() == generated.read_bytes()
+
+        generated.write_bytes(b"generated sentinel")
+        for invalid_symbol in (
+            "9model", "_model", "static", "model-name", "m" * 32
+        ):
+            result = invoke(
+                converter,
+                "--texture-id", "7",
+                "--emit-c", invalid_symbol,
+                source,
+                generated,
+            )
+            assert result.returncode == 2, invalid_symbol
+            assert result.stdout == ""
+            assert result.stderr.startswith("usage: ")
+            assert generated.read_bytes() == b"generated sentinel"
+
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-c", "test_model",
+            source,
+            source,
+        )
+        assert result.returncode == 2
+        assert result.stdout == ""
+        assert result.stderr == "input and output paths must be distinct\n"
 
         result = invoke(
             inspector,

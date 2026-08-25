@@ -172,9 +172,12 @@ lifecycle and naming conventions.
   the reduction, and splits at both strip and record encoding limits. Explicit
   host-selected material libraries now convert a strict diffuse, ambient,
   specular, and exponent subset into persistent compact render state, with
-  deterministic quantization and no implicit file access. Opacity, texture-map
-  paths, source triangulation, and global topology reordering remain explicit
-  rather than being guessed.
+  deterministic quantization and no implicit file access. A generated-C mode
+  embeds both naturally aligned streams and exact calculated bounds behind one
+  immutable `pvr_chunk_model_t`, ready for the normal target compiler without
+  invoking a compiler from the converter. Opacity, texture-map paths, source
+  triangulation, and global topology reordering remain explicit rather than
+  being guessed.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated
