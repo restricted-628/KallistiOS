@@ -765,9 +765,13 @@ static const pvr_init_params_t pvr_default_params = {
     already using the vid_* API.
 
     \param  params          The set of parameters to initialize with
-    \retval 0               On success
-    \retval -1              If the PVR has already been initialized or the video
-                            mode active is not suitable for 3D
+    \retval 0               On success.
+    \retval -1              On error, with errno set appropriately. `EALREADY`
+                            reports an initialized PVR; `EINVAL`, `ENOTSUP`,
+                            `EOVERFLOW`, and `ENOSPC` report invalid or
+                            unavailable layout; handler allocation can report
+                            `ENOMEM`; interrupt context is rejected with
+                            `EPERM`.
 */
 int pvr_init(const pvr_init_params_t *params);
 
@@ -802,8 +806,9 @@ int pvr_init(const pvr_init_params_t *params);
                             PVR_MULTIPASS_MAX_PASSES.
 
     \retval 0               On success.
-    \retval -1              On error, with errno set to `EINVAL`, `ENOMEM`,
-                            `EOVERFLOW`, or `ENOSPC` as appropriate.
+    \retval -1              On error, with errno set to `EALREADY`, `EINVAL`,
+                            `ENOTSUP`, `ENOMEM`, `EOVERFLOW`, `ENOSPC`, or
+                            `EPERM` as appropriate.
 */
 int pvr_init_multipass(const pvr_init_params_t *params,
                        const pvr_pass_config_t *passes, size_t pass_count);
@@ -814,9 +819,8 @@ int pvr_init_multipass(const pvr_init_params_t *params,
     This simpler function initializes the PVR using the default parameters defined in
     pvr_default_params.
 
-    \retval 0               On success
-    \retval -1              If the PVR has already been initialized or the video
-                            mode active is not suitable for 3D
+    \retval 0               On success.
+    \retval -1              On error, with errno matching pvr_init().
 
     \sa pvr_default_params
 */
@@ -828,8 +832,10 @@ int pvr_init_defaults(void);
     This essentially leaves the video system in 2D mode as it was before the
     init.
 
-    \retval 0               On success
-    \retval -1              If the PVR has not been initialized
+    \retval 0               On success.
+    \retval -1              If the PVR is not initialized or shutdown is
+                            attempted from interrupt context, with errno set
+                            to `ENODEV` or `EPERM`.
 */
 int pvr_shutdown(void);
 
@@ -1080,7 +1086,11 @@ void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry)
     render_w and render_h describe the area to draw. stride_px describes the
     number of pixels between rows in memory and must be greater than or equal
     to render_w. For the initial 16-bit render target implementation,
-    stride_px must also be a multiple of 4 pixels.
+    stride_px must also be a multiple of 4 pixels. The complete pitched target
+    must fit in the 64-bit CPU-visible VRAM range beginning at an eight-byte
+    aligned txr address. The render extent cannot exceed the tile matrix
+    dimensions established at PVR initialization, and the pitch must fit the
+    hardware render-modulo field.
 
     \note Initial support is intended for 16-bit render targets, matching the
     deprecated pvr_scene_begin_txr() compatibility wrapper behavior.
@@ -1091,7 +1101,8 @@ void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry)
     \param  stride_px       Backing texture pitch (in pixels).
 
     \retval 0               On success.
-    \retval -1              If the specified arguments are invalid.
+    \retval -1              On error, with errno set to `EINVAL`, `ENODEV`,
+                            `EBUSY`, `EFAULT`, `EOVERFLOW`, or `ENOSPC`.
 */
 int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
                         uint32_t render_h, uint32_t stride_px);

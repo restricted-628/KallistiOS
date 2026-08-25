@@ -189,6 +189,9 @@ int pvr_txr_load_ex_checked(const void *src, pvr_ptr_t dst,
     \note                   DMA and Store Queue based loading is not available
                             from this function if it twiddles the texture while
                             loading.
+    \note                   A nonblocking DMA load retains the shared PVR DMA
+                            channel until its completion interrupt. Other PVR
+                            DMA users wait for that ownership to be released.
 */
 void pvr_txr_load_kimg(const kos_img_t *img, pvr_ptr_t dst, uint32_t flags);
 

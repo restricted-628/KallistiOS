@@ -45,6 +45,14 @@ size_t pvr_txr_get_stride(void) {
     return FIELD_GET(reg, PVR_TXR_STRIDE_MULT) * 32;
 }
 
+/* A nonblocking legacy image load must retain the same channel-2 ownership as
+   a blocking surface upload. Releasing at submission would let scene-list DMA
+   acquire the semaphore while the texture transfer is still in progress. */
+static void legacy_texture_dma_unlock(void *data) {
+    (void)data;
+    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+}
+
 static bool surface_storage_valid(const pvr_txr_surface_t *surface) {
     pvr_txr_level_info_t level;
     uintptr_t address;
@@ -775,10 +783,22 @@ void pvr_txr_load_kimg(const kos_img_t *img, pvr_ptr_t dst, uint32_t flags) {
             /* We only enable DMA here for now since it sort of changes things
                to have to allocate an intermediary buffer. */
             if(flags & PVR_TXRLOAD_DMA) {
+                int result;
+
                 sem_wait((semaphore_t *)&pvr_state.dma_lock);
-                pvr_txr_load_dma(img->data, dst, img->byte_count,
-                                 !(flags & PVR_TXRLOAD_NONBLOCK), NULL, 0);
-                sem_signal((semaphore_t *)&pvr_state.dma_lock);
+                if(flags & PVR_TXRLOAD_NONBLOCK) {
+                    result = pvr_txr_load_dma(img->data, dst,
+                                              img->byte_count, false,
+                                              legacy_texture_dma_unlock,
+                                              NULL);
+                    if(result < 0)
+                        sem_signal((semaphore_t *)&pvr_state.dma_lock);
+                }
+                else {
+                    pvr_txr_load_dma(img->data, dst, img->byte_count,
+                                     true, NULL, NULL);
+                    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+                }
             }
             else if(flags & PVR_TXRLOAD_SQ) {
                 pvr_txr_load(img->data, dst, img->byte_count);

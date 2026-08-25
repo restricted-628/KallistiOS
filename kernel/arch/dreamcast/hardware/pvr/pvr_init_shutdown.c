@@ -17,6 +17,7 @@
 #include <dc/vblank.h>
 #include <kos/dbglog.h>
 #include <kos/genwait.h>
+#include <kos/irq.h>
 #include "pvr_internal.h"
 
 /*
@@ -48,6 +49,11 @@ int pvr_init_multipass(const pvr_init_params_t *params,
     if(!params || !passes || !pass_count ||
             pass_count > PVR_MULTIPASS_MAX_PASSES) {
         errno = EINVAL;
+        return -1;
+    }
+
+    if(irq_inside_int()) {
+        errno = EPERM;
         return -1;
     }
 
@@ -113,17 +119,24 @@ int pvr_init_multipass(const pvr_init_params_t *params,
    initialized already using the vid_* API. */
 static int pvr_init_common(const pvr_init_params_t *params,
                            pvr_multipass_state_t *multipass) {
+    int saved_errno;
     uint16_t vscale = 1024;
 
     /* If we're already initialized, fail */
     if(pvr_state.valid == 1) {
         dbglog(DBG_WARNING, "pvr: pvr_init called twice!\n");
+        errno = EALREADY;
         return -1;
     }
 
     if(!params || !vid_mode || vid_mode->width <= 0 ||
             vid_mode->height <= 0) {
         errno = EINVAL;
+        return -1;
+    }
+
+    if(irq_inside_int()) {
+        errno = EPERM;
         return -1;
     }
 
@@ -207,6 +220,18 @@ static int pvr_init_common(const pvr_init_params_t *params,
 
     /* Hook the PVR interrupt events on G2 */
     pvr_state.vbl_handle = vblank_handler_add(pvr_vblank_handler, NULL);
+    if(pvr_state.vbl_handle < 0) {
+        /* Page flipping and render-queue advancement depend on the VBlank
+           callback. Do not publish a half-initialized PVR when its handler
+           cannot be registered. No ASIC handlers or DMA state exist yet. */
+        saved_errno = errno;
+        PVR_SET(PVR_RESET, PVR_RESET_ALL);
+        PVR_SET(PVR_RESET, PVR_RESET_NONE);
+        pvr_event_shutdown();
+        memset((void *)&pvr_state, 0, sizeof(pvr_state));
+        errno = saved_errno;
+        return -1;
+    }
 
     asic_evt_set_handler(ASIC_EVT_PVR_OPAQUEDONE, pvr_int_handler, NULL);
     asic_evt_enable(ASIC_EVT_PVR_OPAQUEDONE, ASIC_IRQ_DEFAULT);
@@ -278,8 +303,15 @@ static int pvr_init_common(const pvr_init_params_t *params,
 int pvr_shutdown(void) {
     pvr_multipass_state_t *multipass;
 
-    if(!pvr_state.valid)
+    if(irq_inside_int()) {
+        errno = EPERM;
         return -1;
+    }
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
 
     multipass = pvr_state.multipass;
 

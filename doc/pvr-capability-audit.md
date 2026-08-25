@@ -165,6 +165,40 @@ Physical timing, overflow recovery, scanout transitions, and cache-visible DMA
 remain hardware validation gates. Emulator success must not be described as
 physical-hardware validation.
 
+### Post-closure integration audit
+
+The final graphics-wide pass rebuilt KOS and its addons with SH-4 GCC 16.2,
+compiled 28 focused graphics examples end to end, and compiled the modified
+translation unit in the one older example whose complete build requires an
+optional image-library port. All 18 host suites covering compact models,
+conversion, geometry, materials, deformation, texture layout and residency,
+animation, matrices, and collision also passed with address and undefined-
+behavior sanitizers enabled.
+
+The public graphics headers compile independently as GNU C23 and GNU C++20.
+The bundled optimized-math C and C++ umbrella headers pass the same target
+compiler check. All 191 added KOS graphics functions with compiled definitions
+are present in the Dreamcast module export set, and the generated API reference
+reports no warnings in the graphics headers.
+
+This pass also closed four integration defects: host-test stubs now layer their
+PVR types without duplicate definitions; legacy nonblocking texture DMA keeps
+the shared channel lock until completion; checked render-to-texture admission
+validates lifecycle, address, alignment, overflow, and complete target extent;
+and PVR initialization fails cleanly when its required VBlank callback cannot
+be registered. Initialization and shutdown now reject interrupt context and
+publish stable errno values for duplicate initialization and inactive teardown.
+
+Optional graphics facilities remain proportional to use. The core adds no
+worker thread or eager large main-memory buffer. Multipass state, event-handler
+records, asynchronous texture requests, texture reservations, and residency
+storage are allocated only by the corresponding opt-in operation.
+
+The attempted direct-ELF emulator smoke run was not a valid graphics result:
+the same launch path remained at a black firmware screen for the unchanged
+hello example. It is therefore recorded as an emulator-launch configuration
+gate, not as either a graphics pass or failure.
+
 ## Completed tranches
 
 ### Hybrid buffered/direct list submission

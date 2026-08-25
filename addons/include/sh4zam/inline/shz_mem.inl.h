@@ -1,7 +1,7 @@
 //! \cond INTERNAL
 /*! \file
  *  \brief   Memory API Implementation
- *  \ingroup memory
+ *  \ingroup sh4zam_memory
  *
  *  Implementation of inlined memory API routines,
  *  simply delegating to each back-end to implement

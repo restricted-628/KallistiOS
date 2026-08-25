@@ -469,17 +469,72 @@ void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry) {
 
 int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
                         uint32_t render_h, uint32_t stride_px) {
+    static const size_t render_modulo_max = UINT32_C(0x1ff);
+    uintptr_t address = (uintptr_t)txr;
+    size_t row_bytes;
+    size_t target_bytes;
+
     if(!txr || render_w == 0 || render_h == 0 || stride_px < render_w ||
-            (stride_px & 3))
+            (stride_px & 3) || render_w > UINT16_MAX + 1u ||
+            render_h > UINT16_MAX + 1u) {
+        errno = EINVAL;
         return -1;
+    }
+
+    if(!pvr_state.valid) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(pvr_state.scene_active) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    /* The tile matrix is sized once during initialization. A smaller render
+       target can clip that matrix, but a larger one has no backing tiles. */
+    if(render_w > (uint32_t)pvr_state.w ||
+            render_h > (uint32_t)pvr_state.h) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if((address & 7u) || address < PVR_RAM_INT_BASE ||
+            address >= PVR_RAM_INT_TOP) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(stride_px > SIZE_MAX / 2u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    row_bytes = (size_t)stride_px * 2u;
+    /* PVR_RENDER_MODULO stores the byte pitch divided by eight in nine bits. */
+    if(row_bytes / 8u > render_modulo_max) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    if(render_h > SIZE_MAX / row_bytes) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    target_bytes = row_bytes * render_h;
+    if(target_bytes > PVR_RAM_INT_TOP - address) {
+        errno = ENOSPC;
+        return -1;
+    }
 
     /* The existing render-to-texture path programs a 16-bit render pitch in
        64-bit units. Keep that behavior explicit for the sized RTT API. */
-    pvr_state.next_to_txr_rp = stride_px * 2 / 8;
+    pvr_state.next_to_txr_rp = (int)(row_bytes / 8u);
     pvr_state.next_to_txr_w = render_w;
     pvr_state.next_to_txr_h = render_h;
     pvr_state.next_to_txr_stride_px = stride_px;
-    pvr_state.next_to_txr_addr = (uint32_t)(txr) - PVR_RAM_INT_BASE;
+    pvr_state.next_to_txr_addr = (uint32_t)(address - PVR_RAM_INT_BASE);
 
     pvr_scene_begin();
 

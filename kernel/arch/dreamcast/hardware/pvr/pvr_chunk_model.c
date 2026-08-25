@@ -907,10 +907,10 @@ int pvr_chunk_vertex_batch_get(const pvr_chunk_vertex_batch_t *batch,
     }
 
     words = batch->entries + entry * batch->entry_word_count;
-    components = batch->type == PVR_CHUNK_VERTEX_XYZW ||
-                 batch->type == PVR_CHUNK_VERTEX_XYZW_NORMAL ? 4u : 3u;
-
-    for(component = 0; component < components; ++component) {
+    /* Every supported entry begins with XYZ. Decode that fixed prefix first
+       so the four-element destination bound does not depend on a type-derived
+       loop limit. */
+    for(component = 0; component < 3u; ++component) {
         vertex->position[component] = word_float(words[component]);
         if(!isfinite(vertex->position[component])) {
             memset(vertex, 0, sizeof(*vertex));
@@ -919,8 +919,20 @@ int pvr_chunk_vertex_batch_get(const pvr_chunk_vertex_batch_t *batch,
         }
     }
 
-    if(components == 3u)
+    if(batch->type == PVR_CHUNK_VERTEX_XYZW ||
+            batch->type == PVR_CHUNK_VERTEX_XYZW_NORMAL) {
+        vertex->position[3] = word_float(words[3]);
+        if(!isfinite(vertex->position[3])) {
+            memset(vertex, 0, sizeof(*vertex));
+            errno = EILSEQ;
+            return -1;
+        }
+        components = 4u;
+    }
+    else {
         vertex->position[3] = 1.0f;
+        components = 3u;
+    }
 
     vertex->index = (uint16_t)(batch->first_index + entry);
     vertex->position_components = (uint8_t)components;

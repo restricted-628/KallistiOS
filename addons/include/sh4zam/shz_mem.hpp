@@ -1,6 +1,6 @@
 /*! \file
  *  \brief   C++ Memory API
- *  \ingroup memory
+ *  \ingroup sh4zam_memory
  *
  *  C++ wrapper API for copying, assigning, and working with memory.
  *

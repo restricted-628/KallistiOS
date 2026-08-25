@@ -224,6 +224,8 @@ lifecycle and naming conventions.
   YUV420/YUV422 macroblock input sizing and conversion whose request completes
   only after both channel-2 DMA and converter completion interrupts. These
   opt-in operations create no worker, queue, permanent buffer, or idle thread.
+  Legacy nonblocking image DMA now retains shared channel ownership until its
+  completion interrupt instead of admitting scene-list DMA prematurely.
 * Added checked PVR color-clamp endpoints, punch-through alpha threshold,
   bounded bulk palette writes, and vertex-buffer assignment. Extended polygon,
   sprite, and two-volume header compilation exposes texture supersampling
@@ -231,7 +233,10 @@ lifecycle and naming conventions.
   the legacy compiler path.
 * PVR initialization now validates the complete vertex, object-list, region,
   and frame-buffer layout before clearing VRAM or changing hardware state.
-  Invalid bin sizes, overflow, and frame-bank exhaustion fail cleanly.
+  Invalid bin sizes, overflow, frame-bank exhaustion, and failure to register
+  the required VBlank callback fail cleanly. Checked render-to-texture entry
+  now rejects active scenes, invalid VRAM aliases, misalignment, arithmetic
+  overflow, and pitched targets that extend beyond PVR RAM.
 * Added opt-in direct and buffered PVR multipass registration for one through
   eight passes. Each pass has independent bins, translucent sorting, and DMA
   staging, while hardware continuation preserves shared parameters, depth, and

@@ -1,6 +1,6 @@
 /*! \file
  *  \brief   Memory API
- *  \ingroup memory
+ *  \ingroup sh4zam_memory
  *
  *  API built around copying, assigning, and working with memory.
  *
@@ -26,7 +26,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-/*! \defgroup memory Memory
+/*! \defgroup sh4zam_memory SH4ZAM Memory
     \brief    Routines for managing memory.
 
     This API provides the following types of memory routines:

@@ -1,7 +1,7 @@
 //! \cond INTERNAL
 /*! \file
     \brief Software implementation of Quaternion API
-    \ingroup memory
+    \ingroup sh4zam_memory
 
     This file contains the generic implementation routines for
     the memory API, which are platform-independent, shared,

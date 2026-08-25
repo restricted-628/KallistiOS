@@ -121,6 +121,9 @@ int main(int argc, char **argv) {
     (void)argv;
 
     assert(pvr_init_defaults() == 0);
+    errno = 0;
+    assert(pvr_init_defaults() == -1);
+    assert(errno == EALREADY);
     fill_checkerboard();
 
     assert(pvr_txr_surface_alloc(&surface, TEXTURE_WIDTH, TEXTURE_HEIGHT,
@@ -240,6 +243,25 @@ int main(int argc, char **argv) {
     assert(pvr_txr_surface_begin_render(&temporary, TEXTURE_WIDTH + 1u,
                                         TEXTURE_HEIGHT) == -1);
     assert(errno == EINVAL);
+    errno = 0;
+    assert(pvr_scene_begin_rtt(pixels, TEXTURE_WIDTH, TEXTURE_HEIGHT,
+                               TEXTURE_WIDTH) == -1);
+    assert(errno == EFAULT);
+    errno = 0;
+    assert(pvr_scene_begin_rtt((pvr_ptr_t)(PVR_RAM_INT_TOP - 32u),
+                               TEXTURE_WIDTH, TEXTURE_HEIGHT,
+                               TEXTURE_WIDTH) == -1);
+    assert(errno == ENOSPC);
+    errno = 0;
+    assert(pvr_scene_begin_rtt(surface.vram, TEXTURE_WIDTH,
+                               TEXTURE_HEIGHT, 2048u) == -1);
+    assert(errno == EOVERFLOW);
+    errno = 0;
+    assert(pvr_scene_begin_rtt(surface.vram,
+                               (uint32_t)vid_mode->width + 1u,
+                               TEXTURE_HEIGHT,
+                               (uint32_t)vid_mode->width + 4u) == -1);
+    assert(errno == EINVAL);
 
     assert(pvr_wait_ready() == 0);
     pvr_set_bg_color(1.0f, 0.0f, 0.0f);
@@ -277,6 +299,9 @@ int main(int argc, char **argv) {
 
     pvr_txr_surface_release(&surface);
     puts("RESULT: PASS (PVR texture surface)");
-    pvr_shutdown();
+    assert(pvr_shutdown() == 0);
+    errno = 0;
+    assert(pvr_shutdown() == -1);
+    assert(errno == ENODEV);
     return 0;
 }
