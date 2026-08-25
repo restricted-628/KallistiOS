@@ -200,6 +200,7 @@ typedef struct pvr_chunk_model_info {
     size_t strips;
     size_t triangles;
     size_t index_references;
+    size_t maximum_strip_vertices; /**< Minimum strip workspace capacity. */
     uint32_t maximum_vertex_index;
 } pvr_chunk_model_info_t;
 

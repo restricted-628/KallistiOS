@@ -175,7 +175,11 @@ lifecycle and naming conventions.
   deterministic quantization and no implicit file access. A generated-C mode
   embeds both naturally aligned streams and exact calculated bounds behind one
   immutable `pvr_chunk_model_t`, ready for the normal target compiler without
-  invoking a compiler from the converter. Opacity, texture-map paths, source
+  invoking a compiler from the converter. Validated model metadata now exposes
+  the largest strip vertex count so callers can size renderer workspace without
+  rescanning the polygon stream. The compact-resource example builds its model
+  through this complete conversion, optimization, embedding, residency,
+  material, and rendering path. Opacity, texture-map paths, source
   triangulation, and global topology reordering remain explicit rather than
   being guessed.
 * Added allocation-free CPU vertex-lighting kernels with checked

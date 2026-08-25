@@ -79,6 +79,7 @@ static void test_valid_model(void) {
     assert(info.strips == 1);
     assert(info.triangles == 1);
     assert(info.index_references == 3);
+    assert(info.maximum_strip_vertices == 3);
     assert(info.maximum_vertex_index == 2);
     assert(pvr_chunk_model_vertex_attributes_get(&view, 1, &attributes) == 0);
     assert(attributes.index == 1 && attributes.position.x == 1.0f &&

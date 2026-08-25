@@ -207,7 +207,7 @@ static void print_report(const pvr_chunk_model_t *model,
     printf("texture_references=%zu\n", stats->texture_references);
     printf("distinct_textures=%zu\n", stats->distinct_textures);
     printf("maximum_strip_vertices=%zu\n",
-           stats->maximum_strip_vertices);
+           info->maximum_strip_vertices);
 }
 
 int main(int argc, char **argv) {
@@ -281,6 +281,11 @@ int main(int argc, char **argv) {
     }
     if(collect_stats(&model, &stats) < 0) {
         fprintf(stderr, "inspection failed: %s\n", strerror(errno));
+        result = 1;
+        goto out;
+    }
+    if(stats.maximum_strip_vertices != info.maximum_strip_vertices) {
+        fprintf(stderr, "inspection failed: inconsistent strip summary\n");
         result = 1;
         goto out;
     }

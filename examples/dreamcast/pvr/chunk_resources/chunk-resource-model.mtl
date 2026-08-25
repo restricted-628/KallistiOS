@@ -1,0 +1,6 @@
+# Compact-model pipeline example material.
+newmtl checker
+Kd 1 0.75 0.5
+Ka 0.1 0.1 0.1
+Ks 0.25 0.25 0.25
+Ns 250

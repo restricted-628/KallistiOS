@@ -187,7 +187,8 @@ typedef int (*pvr_chunk_render_prepare_modifier_t)(
     \param object_to_screen Complete matrix consumed by pvr_geometry_project().
     \param sink             Prepared geometry destination.
     \param workspace        32-byte-aligned canonical vertex workspace.
-    \param workspace_count  Workspace capacity in vertices.
+    \param workspace_count  Workspace capacity in vertices; at least
+                            view->info.maximum_strip_vertices.
     \param begin_strip      Material/state callback; required for PVR sinks.
     \param prepare_vertex   Optional application vertex policy callback.
     \param data             Opaque callback data.

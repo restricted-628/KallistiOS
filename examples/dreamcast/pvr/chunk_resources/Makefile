@@ -1,20 +1,35 @@
 # KallistiOS ##version##
 #
-# Caller-owned compact-model resource-binding example
+# Build-generated compact-model resource-binding example
 # Copyright (C) 2026 Joseph Black
 
 TARGET = chunk-resources.elf
-OBJS = chunk-resources.o
+MODEL_SOURCE = chunk-resource-model.obj
+MODEL_MATERIALS = chunk-resource-model.mtl
+GENERATED_MODEL = chunk-resource-model.c
+MODEL_CONVERTER = $(KOS_BASE)/utils/pvr-model-convert/pvr-model-convert
+HOST_CC ?= cc
+OBJS = chunk-resources.o chunk-resource-model.o
 
 all: rm-elf $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
 clean: rm-elf
-	-rm -f $(OBJS)
+	-rm -f $(OBJS) $(GENERATED_MODEL)
 
 rm-elf:
 	-rm -f $(TARGET)
+
+$(MODEL_CONVERTER):
+	$(MAKE) -C $(KOS_BASE)/utils/pvr-model-convert CC="$(HOST_CC)"
+
+$(GENERATED_MODEL): $(MODEL_SOURCE) $(MODEL_MATERIALS) $(MODEL_CONVERTER)
+	$(MODEL_CONVERTER) --join-strips --material checker=7 \
+		--material-library $(MODEL_MATERIALS) \
+		--emit-c chunk_resource_model $(MODEL_SOURCE) $@
+
+chunk-resource-model.o: $(GENERATED_MODEL)
 
 $(TARGET): $(OBJS)
 	kos-cc -o $(TARGET) $(OBJS)

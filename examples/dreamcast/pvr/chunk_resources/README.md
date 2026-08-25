@@ -1,13 +1,21 @@
 # Compact-model texture resources
 
-This example binds the texture identifier stored in a compact model to one
-fixed VRAM residency slot without creating a global asset registry. The
-application reserves identifier 7, uploads and publishes its surface, then
-prepares a caller-owned compact-model residency adapter before list emission.
+This example exercises the complete compact-model content and rendering path.
+Its Makefile converts a triangulated OBJ plus an explicitly selected material
+library into one generated C translation unit. Conversion resolves material
+name `checker` to texture identifier 7, emits persistent color/specular state,
+joins the two compatible faces into one strip, validates the model, and embeds
+both streams with calculated bounds behind `chunk_resource_model`.
+
+At runtime, the application opens that immutable generated model and binds its
+texture identifier to one fixed VRAM residency slot without creating a global
+asset registry. It reserves identifier 7, uploads and publishes its surface,
+then prepares a caller-owned compact-model residency adapter before list
+emission.
 
 For every strip, the established compact renderer:
 
-1. decodes persistent model state;
+1. decodes the generated persistent model state;
 2. resolves texture identifier 7 through the pre-acquired resident set;
 3. compiles and submits an ordinary checked KOS polygon material; and
 4. projects and emits the strip through the current PVR list sink.

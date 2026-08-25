@@ -40,6 +40,13 @@ workloads.
 | Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
 | Asset formats and resource binding | Bounded compact streams plus admitted caller-owned texture tables or pre-acquired fixed-slot residency sets resolve model identifiers into checked PVR surfaces and materials; host tools convert an explicit triangulated OBJ subset, resolve repeated material names into persistent texture-state transitions, convert an explicit diffuse/ambient/specular material-library subset, optionally join compatible order-adjacent triangles into bounded strips, apply the target validator, and emit either raw little-endian streams or one compiler-ready model translation unit with exact bounds | Core conversion, deterministic material-color conversion, order-preserving strip joining, multi-material texture partitioning, runtime binding, build-time admission, and source/object embedding are complete without a global namespace or second container format; texture-map loading, opacity/list policy, global topology reordering, and content authoring remain separate policy. |
 
+The `chunk_resources` example is the integration gate for this row: its normal
+build converts source geometry and material data, joins compatible faces,
+generates the immutable model translation unit, opens the validated runtime
+view, checks caller-owned strip workspace against validated metadata, pins every
+referenced fixed-slot texture, resolves persistent material state, and emits
+through the established geometry sink before releasing residency pins.
+
 ## Resource and execution rules
 
 - Ordinary PVR users must pay no new initialization, thread, stack, heap, or

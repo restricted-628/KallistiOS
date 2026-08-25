@@ -151,9 +151,9 @@ This page serves as an index for all KallistiOS examples.
   - background_plane
   - bumpmap
   - cheap_shadow
-  - [**chunk_resources**](pvr/chunk_resources/): Resolves compact-model texture
-    identifiers through a pre-acquired fixed-slot residency set and checked
-    materials
+  - [**chunk_resources**](pvr/chunk_resources/): Converts and embeds a compact
+    model, then resolves its texture identifiers through a pre-acquired
+    fixed-slot residency set and checked materials
   - clipping
   - fb_tex
   - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned

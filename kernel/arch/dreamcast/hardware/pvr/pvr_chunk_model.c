@@ -635,6 +635,8 @@ static int validate_strips(const pvr_chunk_model_t *model,
             errno = EILSEQ;
             return -1;
         }
+        if(vertex_count > info->maximum_strip_vertices)
+            info->maximum_strip_vertices = vertex_count;
 
         /* Per-triangle user words follow the vertex which completes that
            triangle. Therefore no user words precede vertices zero through two,

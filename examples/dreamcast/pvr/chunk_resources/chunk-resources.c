@@ -1,6 +1,6 @@
 /* KallistiOS ##version##
 
-   Caller-owned compact-model resource-binding example.
+   Build-generated compact-model resource-binding example.
    Copyright (C) 2026 Joseph Black
 */
 
@@ -14,33 +14,9 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
-#define CHUNK_VERTEX_HEADER(type, size) \
-    ((uint32_t)(type) | ((uint32_t)(size) << 16))
-#define CHUNK_POLYGON_HEADER(type, flags) \
-    ((uint16_t)(type) | ((uint16_t)(flags) << 8))
-
 #define TEXTURE_SIZE 64u
 
-static const uint32_t model_vertices[] = {
-    CHUNK_VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 13),
-    UINT32_C(0x00040000),
-    UINT32_C(0x43200000), UINT32_C(0x42f00000), UINT32_C(0),
-    UINT32_C(0x43f00000), UINT32_C(0x42f00000), UINT32_C(0),
-    UINT32_C(0x43200000), UINT32_C(0x43b40000), UINT32_C(0),
-    UINT32_C(0x43f00000), UINT32_C(0x43b40000), UINT32_C(0),
-    UINT32_C(0x000000ff)
-};
-
-static const uint16_t model_polygons[] = {
-    CHUNK_POLYGON_HEADER(PVR_CHUNK_TEXTURE, PVR_MIPBIAS_NORMAL),
-    UINT16_C(0x4007),
-    PVR_CHUNK_STRIP_UV8, UINT16_C(14), UINT16_C(1), UINT16_C(4),
-    UINT16_C(0), UINT16_C(0), UINT16_C(0),
-    UINT16_C(1), UINT16_C(255), UINT16_C(0),
-    UINT16_C(2), UINT16_C(0), UINT16_C(255),
-    UINT16_C(3), UINT16_C(255), UINT16_C(255),
-    UINT16_C(0x00ff)
-};
+extern const pvr_chunk_model_t chunk_resource_model;
 
 static alignas(32) const matrix_t screen_identity = {
     { 1.0f, 0.0f, 0.0f, 0.0f },
@@ -66,16 +42,6 @@ static void build_texture(void) {
 }
 
 int main(int argc, char **argv) {
-    pvr_chunk_model_t model = {
-        .vertex_words = model_vertices,
-        .vertex_word_count = sizeof(model_vertices) /
-                             sizeof(model_vertices[0]),
-        .polygon_words = model_polygons,
-        .polygon_word_count = sizeof(model_polygons) /
-                              sizeof(model_polygons[0]),
-        .center = { 320.0f, 240.0f, 0.0f },
-        .radius = 200.0f
-    };
     pvr_chunk_model_view_t model_view;
     pvr_txr_residency_t residency;
     pvr_txr_residency_slot_t residency_slot[1];
@@ -114,7 +80,9 @@ int main(int argc, char **argv) {
                                   PVR_TXR_TRANSFER_CPU) == 0);
     assert(pvr_txr_residency_publish(&residency, upload_handle) == 0);
     assert(pvr_txr_residency_unpin(&residency, upload_handle) == 0);
-    assert(pvr_chunk_model_open(&model, &model_view) == 0);
+    assert(pvr_chunk_model_open(&chunk_resource_model, &model_view) == 0);
+    assert(model_view.info.maximum_strip_vertices <=
+           sizeof(workspace) / sizeof(workspace[0]));
 
     pvr_poly_cxt_col(&context, PVR_LIST_OP_POLY);
     context.gen.culling = PVR_CULLING_NONE;

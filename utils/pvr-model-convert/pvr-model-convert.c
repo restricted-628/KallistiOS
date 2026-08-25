@@ -1858,6 +1858,8 @@ static void print_report(const source_model_t *source,
     printf("triangles_joined=%zu\n",
            streams->source_strip_count - streams->output_strip_count);
     printf("strip_records=%zu\n", info->strip_records);
+    printf("maximum_strip_vertices=%zu\n",
+           info->maximum_strip_vertices);
     printf("texture_records=%zu\n", streams->texture_record_count);
     printf("material_records=%zu\n", streams->material_record_count);
     printf("material_bindings=%zu\n", materials->count);

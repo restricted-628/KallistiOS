@@ -22,6 +22,7 @@ strips_before=1
 strips_after=1
 triangles_joined=0
 strip_records=1
+maximum_strip_vertices=3
 texture_records=1
 material_records=1
 material_bindings=0
@@ -521,6 +522,7 @@ vn 0 0 1
         assert "strips_after=2\n" in result.stdout
         assert "triangles_joined=10919\n" in result.stdout
         assert "strip_records=2\n" in result.stdout
+        assert "maximum_strip_vertices=10922\n" in result.stdout
         assert "polygon_words=65565\n" in result.stdout
         result = invoke(
             inspector, joined_limit_vertices, joined_limit_polygons
