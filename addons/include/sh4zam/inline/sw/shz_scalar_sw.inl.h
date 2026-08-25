@@ -56,6 +56,6 @@ SHZ_FORCE_INLINE float shz_cbrt_magic_sw(float x) SHZ_NOEXCEPT {
     return *(shz_alias_float_t*)&eax; // z as float
 }
 
-//! \endcond
-
 #endif
+
+//! \endcond

@@ -470,3 +470,5 @@ SHZ_FORCE_INLINE shz_vec3_t shz_mat4x4_get_scale_sh4(const shz_mat4x4_t* mat) SH
 }
 
 #endif
+
+//! \endcond

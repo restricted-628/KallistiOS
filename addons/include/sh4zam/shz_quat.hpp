@@ -137,12 +137,14 @@ namespace shz {
             const_cast<std::remove_cvref_t<T>&>(self) = quat(const_cast<shz_quat_t&>(other));
             return std::forward<T>(self);
         }
+#endif
 
         /*! \name  Relational Operators
             \brief Overloaded comparison operators
             @{
         */
 
+#ifdef SHZ_CPP23
         //! Overloaded space-ship operator for auto-generating lexicographical comparison operators.
         friend auto operator<=>(const quat& lhs, const quat& rhs) noexcept {
             return std::lexicographical_compare_three_way(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());

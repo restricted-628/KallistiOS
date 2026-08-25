@@ -1068,3 +1068,5 @@ SHZ_FORCE_INLINE void shz_xmtrx_init_perspective(float fov, float aspect, float 
     shz_xmtrx_init_identity();
     shz_xmtrx_apply_perspective(fov, aspect, znear);
 }
+
+//! \endcond

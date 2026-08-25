@@ -40,6 +40,6 @@ SHZ_INLINE shz_vec3_t shz_quat_transform_vec3_sw(shz_quat_t q, shz_vec3_t v) SHZ
                          shz_vec3_init(q.z, v.z, cross_qv.z));
 }
 
-//! \endcond
-
 #endif
+
+//! \endcond

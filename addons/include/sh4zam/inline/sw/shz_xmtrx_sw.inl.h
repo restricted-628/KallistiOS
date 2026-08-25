@@ -1132,6 +1132,6 @@ SHZ_FORCE_INLINE shz_vec4_t shz_xmtrx_transform_vec4_sw(shz_vec4_t vec) SHZ_NOEX
 #undef SHZ_XMTRX_MV3S_
 #undef SHZ_XMTRX_MV2S_
 
-//! \endcond
-
 #endif
+
+//! \endcond

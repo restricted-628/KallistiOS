@@ -3578,3 +3578,5 @@ SHZ_FORCE_INLINE shz_vec4_t shz_xmtrx_transform_vec4_sh4(shz_vec4_t vec) SHZ_NOE
 #endif
 
 //! @}
+
+//! \endcond

@@ -76,6 +76,7 @@ SHZ_FORCE_INLINE shz_sincos_t shz_sincosf_deg_sh4(float degrees) SHZ_NOEXCEPT {
     return SHZ_INIT(shz_sincos_t, rsin, rcos);
 #endif
 }
-//! \endcond
 
 #endif
+
+//! \endcond

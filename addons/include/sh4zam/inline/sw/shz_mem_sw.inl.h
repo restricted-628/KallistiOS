@@ -156,5 +156,7 @@ SHZ_FORCE_INLINE void* shz_sq_memcpy32_1_xmtrx_sw(      void* SHZ_RESTRICT dst,
                                                   const void* SHZ_RESTRICT src) SHZ_NOEXCEPT {
     return memcpy(dst, src, 32);
 }
-//! \endcond
+
 #endif
+
+//! \endcond

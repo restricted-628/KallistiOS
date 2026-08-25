@@ -179,6 +179,7 @@ SHZ_FORCE_INLINE shz_vec3_t shz_quat_transform_vec3_sh4(shz_quat_t q, shz_vec3_t
                 shz_vec3_init(qz, vz, qx * vy - qy * vx)
            );
 }
-//! \endcond
 
 #endif
+
+//! \endcond

@@ -77,3 +77,5 @@ SHZ_INLINE shz_vec3_t shz_mat3x3_transform_vec3_transpose_sw(const shz_mat3x3_t*
 }
 
 #endif
+
+//! \endcond

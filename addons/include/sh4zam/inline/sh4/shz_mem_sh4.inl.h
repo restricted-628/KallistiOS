@@ -813,3 +813,5 @@ SHZ_INLINE void* shz_sq_memcpy32_1_xmtrx_sh4(      void* SHZ_RESTRICT dst,
 }
 
 #endif
+
+//! \endcond

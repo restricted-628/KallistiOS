@@ -154,7 +154,7 @@ the file */
 #define SHF_EXECINSTR   BIT(2)      /**< \brief Executable instructions */
 #define SHF_MERGE       BIT(4)      /**< \brief Might be merged */
 #define SHF_STRINGS     BIT(5)      /**< \brief Contains nul-terminated strings */
-#define SHF_INFO_LINK   BIT(6)      /**< \brief `sh_info' contains SHT index */
+#define SHF_INFO_LINK   BIT(6)      /**< \brief \c sh_info contains an SHT index */
 #define SHF_LINK_ORDER  BIT(7)      /**< \brief Preserve order after combining */
 #define SHF_GROUP       BIT(9)      /**< \brief Section is member of a group.  */
 #define SHF_TLS         BIT(10)     /**< \brief Section hold thread-local data.  */

@@ -455,6 +455,6 @@ SHZ_FORCE_INLINE shz_vec3_t shz_vec4_dot3_sh4(shz_vec4_t l, shz_vec4_t r1, shz_v
 #endif
 }
 
-//! \endcond
-
 #endif
+
+//! \endcond

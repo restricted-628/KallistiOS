@@ -30,6 +30,7 @@ SHZ_FORCE_INLINE shz_sincos_t shz_sincosf_sw(float radians) SHZ_NOEXCEPT {
 SHZ_FORCE_INLINE shz_sincos_t shz_sincosf_deg_sw(float degrees) SHZ_NOEXCEPT {
     return SHZ_INIT(shz_sincos_t, sinf(SHZ_DEG_TO_RAD(degrees)), cosf(SHZ_DEG_TO_RAD(degrees)));
 }
-//! \endcond
 
 #endif
+
+//! \endcond

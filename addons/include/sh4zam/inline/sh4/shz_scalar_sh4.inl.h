@@ -128,6 +128,6 @@ SHZ_FORCE_INLINE float shz_cbrt_magic_sh4_broken(float x) SHZ_NOEXCEPT {
 }
 #endif
 
-//! \endcond
-
 #endif
+
+//! \endcond
