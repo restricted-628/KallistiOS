@@ -6,7 +6,7 @@ generated model is admitted by the exact runtime validator before either
 temporary output is published.
 
 ```text
-pvr-model-convert [--flip-winding] [--flip-v] \
+pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
     [--texture-id ID | --material NAME=ID ...] [--] \
     INPUT.obj VERTICES.bin POLYGONS.bin
 ```
@@ -37,10 +37,20 @@ Bindings that resolve different names to the same identifier are coalesced,
 and the polygon stream emits a texture record only when the resolved identifier
 actually changes. `--texture-id` and `--material` are mutually exclusive.
 
-Arbitrary triangle topology is represented as three-vertex strips. Consecutive
-triangles with the same attribute form share bounded strip records, and large
-models are split across records before any 16-bit count can overflow. The tool
-prints calculated center/radius metadata and stream sizes as deterministic
-`key=value` records. Each output is replaced by an atomic rename after complete
-write and validation; the two separate files cannot form one filesystem-atomic
-transaction.
+By default, arbitrary triangle topology is represented as three-vertex strips,
+preserving the converter's original byte stream. `--join-strips` performs a
+bounded, order-preserving optimization over adjacent source faces. A face joins
+only when its complete position/UV/normal corner identities match the next edge
+required by alternating triangle-strip winding. The optimizer never reorders
+faces and never crosses an attribute form or resolved texture-state boundary,
+so transparent draw order remains source order. This deliberately excludes
+global graph stripification and topology guessing.
+
+Joined strips split before either the 15-bit vertex count or the enclosing
+16-bit record payload would overflow. Consecutive strips with compatible state
+then share bounded strip records. The report includes `strips_before`,
+`strips_after`, and `triangles_joined` so a build can measure the actual
+reduction. Calculated center/radius metadata and stream sizes are also emitted
+as deterministic `key=value` records. Each output is replaced by an atomic
+rename after complete write and validation; the two separate files cannot form
+one filesystem-atomic transaction.

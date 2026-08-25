@@ -17,6 +17,9 @@ positions=3
 texcoords=3
 normals=1
 triangles=1
+strips_before=1
+strips_after=1
+triangles_joined=0
 strip_records=1
 texture_records=1
 material_bindings=0
@@ -109,6 +112,152 @@ f 1/1/1 2/2/1 3/3/1# trailing comment
         assert "maximum_strip_vertices=3\n" in result.stdout
         assert "texture_references=1\n" in result.stdout
         assert "distinct_textures=1\n" in result.stdout
+
+        joined_source = root / "joined.obj"
+        joined_vertices = root / "joined-vertices.bin"
+        joined_polygons = root / "joined-polygons.bin"
+        write_text(
+            joined_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+v 0 2 0
+v 1 2 0
+f 1 2 3
+f 3 2 4
+f 3 4 5
+f 5 4 6
+""",
+        )
+        result = invoke(
+            converter,
+            "--join-strips",
+            joined_source,
+            joined_vertices,
+            joined_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "triangles=4\n" in result.stdout
+        assert "strips_before=4\n" in result.stdout
+        assert "strips_after=1\n" in result.stdout
+        assert "triangles_joined=3\n" in result.stdout
+        assert "polygon_words=15\n" in result.stdout
+        assert joined_polygons.read_bytes() == struct.pack(
+            "<15H",
+            17, 2, 0xFFFF, 0xFFFF,
+            64, 8, 1, 6, 0, 1, 2, 3, 4, 5,
+            0xFF,
+        )
+        result = invoke(inspector, joined_vertices, joined_polygons)
+        assert result.returncode == 0, result.stderr
+        assert "strips=1\n" in result.stdout
+        assert "triangles=4\n" in result.stdout
+        assert "index_references=6\n" in result.stdout
+        assert "maximum_strip_vertices=6\n" in result.stdout
+
+        default_joined_vertices = root / "default-joined-vertices.bin"
+        default_joined_polygons = root / "default-joined-polygons.bin"
+        result = invoke(
+            converter,
+            joined_source,
+            default_joined_vertices,
+            default_joined_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips_after=4\n" in result.stdout
+        assert "triangles_joined=0\n" in result.stdout
+        result = invoke(
+            inspector, default_joined_vertices, default_joined_polygons
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips=4\n" in result.stdout
+        assert "triangles=4\n" in result.stdout
+
+        joined_flipped_source = root / "joined-flipped.obj"
+        joined_flipped_vertices = root / "joined-flipped-vertices.bin"
+        joined_flipped_polygons = root / "joined-flipped-polygons.bin"
+        write_text(
+            joined_flipped_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+f 1 2 3
+f 2 4 3
+""",
+        )
+        result = invoke(
+            converter,
+            "--join-strips",
+            "--flip-winding",
+            joined_flipped_source,
+            joined_flipped_vertices,
+            joined_flipped_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips_after=1\n" in result.stdout
+        assert joined_flipped_polygons.read_bytes() == struct.pack(
+            "<13H",
+            17, 2, 0xFFFF, 0xFFFF,
+            64, 6, 1, 4, 0, 2, 1, 3,
+            0xFF,
+        )
+
+        attribute_boundary_source = root / "attribute-boundary.obj"
+        attribute_boundary_vertices = root / "attribute-boundary-vertices.bin"
+        attribute_boundary_polygons = root / "attribute-boundary-polygons.bin"
+        write_text(
+            attribute_boundary_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+vt 1 1
+f 1/1 2/2 3/3
+f 3/4 2/2 4/4
+""",
+        )
+        result = invoke(
+            converter,
+            "--join-strips",
+            "--texture-id", "4",
+            attribute_boundary_source,
+            attribute_boundary_vertices,
+            attribute_boundary_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips_after=2\n" in result.stdout
+        assert "triangles_joined=0\n" in result.stdout
+
+        normal_boundary_source = root / "normal-boundary.obj"
+        normal_boundary_vertices = root / "normal-boundary-vertices.bin"
+        normal_boundary_polygons = root / "normal-boundary-polygons.bin"
+        write_text(
+            normal_boundary_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+vn 0 0 1
+vn 0 1 0
+f 1//1 2//1 3//1
+f 3//2 2//1 4//1
+""",
+        )
+        result = invoke(
+            converter,
+            "--join-strips",
+            normal_boundary_source,
+            normal_boundary_vertices,
+            normal_boundary_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips_after=2\n" in result.stdout
+        assert "triangles_joined=0\n" in result.stdout
 
         original_vertices = vertices.read_bytes()
         original_polygons = polygons.read_bytes()
@@ -224,6 +373,52 @@ vn 0 0 1
         assert "strip_records=2\n" in result.stdout
         assert "triangles=3450\n" in result.stdout
 
+        joined_limit_source = root / "joined-limit.obj"
+        joined_limit_vertices = root / "joined-limit-vertices.bin"
+        joined_limit_polygons = root / "joined-limit-polygons.bin"
+        joined_limit_triangles = 10921
+        joined_limit_positions = joined_limit_triangles + 2
+        source_parts = []
+        source_parts.extend(
+            f"v {index} 0 0\n" for index in range(joined_limit_positions)
+        )
+        source_parts.extend(
+            f"vt {index / (joined_limit_positions - 1):.9f} 0\n"
+            for index in range(joined_limit_positions)
+        )
+        source_parts.append("vn 0 0 1\n")
+        for triangle in range(joined_limit_triangles):
+            if triangle & 1:
+                corners = (triangle + 2, triangle + 1, triangle + 3)
+            else:
+                corners = (triangle + 1, triangle + 2, triangle + 3)
+            source_parts.append(
+                "f " + " ".join(f"{corner}/{corner}/1" for corner in corners)
+                + "\n"
+            )
+        write_text(joined_limit_source, "".join(source_parts))
+        result = invoke(
+            converter,
+            "--join-strips",
+            "--texture-id", "7",
+            joined_limit_source,
+            joined_limit_vertices,
+            joined_limit_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert f"triangles={joined_limit_triangles}\n" in result.stdout
+        assert "strips_after=2\n" in result.stdout
+        assert "triangles_joined=10919\n" in result.stdout
+        assert "strip_records=2\n" in result.stdout
+        assert "polygon_words=65565\n" in result.stdout
+        result = invoke(
+            inspector, joined_limit_vertices, joined_limit_polygons
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips=2\n" in result.stdout
+        assert f"triangles={joined_limit_triangles}\n" in result.stdout
+        assert "maximum_strip_vertices=10922\n" in result.stdout
+
         materials_source = root / "materials.obj"
         materials_vertices = root / "materials-vertices.bin"
         materials_polygons = root / "materials-polygons.bin"
@@ -276,6 +471,39 @@ f 1/1 2/2 3/3
         assert "distinct_textures=2\n" in result.stdout
         assert "strip_records=3\n" in result.stdout
         assert "strips=4\n" in result.stdout
+
+        material_boundary_source = root / "material-boundary.obj"
+        material_boundary_vertices = root / "material-boundary-vertices.bin"
+        material_boundary_polygons = root / "material-boundary-polygons.bin"
+        write_text(
+            material_boundary_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+v 1 1 0
+vt 0 0
+vt 1 0
+vt 0 1
+vt 1 1
+usemtl first
+f 1/1 2/2 3/3
+usemtl second
+f 3/3 2/2 4/4
+""",
+        )
+        result = invoke(
+            converter,
+            "--join-strips",
+            "--material", "first=1",
+            "--material", "second=2",
+            material_boundary_source,
+            material_boundary_vertices,
+            material_boundary_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "strips_after=2\n" in result.stdout
+        assert "triangles_joined=0\n" in result.stdout
+        assert "texture_records=2\n" in result.stdout
 
         unresolved = root / "unresolved.obj"
         write_text(

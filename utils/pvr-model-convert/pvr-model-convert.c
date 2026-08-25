@@ -85,6 +85,20 @@ typedef struct source_model {
     size_t triangle_capacity;
 } source_model_t;
 
+typedef struct source_strip {
+    size_t first_triangle;
+    size_t triangle_count;
+    size_t vertex_count;
+    uint8_t strip_type;
+    int texture_identifier;
+} source_strip_t;
+
+typedef struct strip_plan {
+    source_strip_t *strips;
+    size_t count;
+    size_t capacity;
+} strip_plan_t;
+
 typedef struct output_streams {
     uint32_t *vertex_words;
     size_t vertex_word_count;
@@ -94,6 +108,8 @@ typedef struct output_streams {
     float radius;
     size_t strip_record_count;
     size_t texture_record_count;
+    size_t source_strip_count;
+    size_t output_strip_count;
 } output_streams_t;
 
 typedef struct temporary_output {
@@ -103,7 +119,7 @@ typedef struct temporary_output {
 static void usage(FILE *stream, const char *program) {
     fprintf(stream,
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
-            "--material NAME=ID ...] [--] "
+            "--material NAME=ID ...] [--join-strips] [--] "
             "INPUT.obj VERTICES.bin POLYGONS.bin\n",
             program);
 }
@@ -120,6 +136,11 @@ static void output_streams_free(output_streams_t *streams) {
     free(streams->vertex_words);
     free(streams->polygon_words);
     memset(streams, 0, sizeof(*streams));
+}
+
+static void strip_plan_free(strip_plan_t *plan) {
+    free(plan->strips);
+    memset(plan, 0, sizeof(*plan));
 }
 
 static void material_table_free(material_table_t *table) {
@@ -740,26 +761,120 @@ static size_t strip_vertex_words(uint8_t type) {
     }
 }
 
-static size_t triangle_batch(const source_model_t *model, size_t first) {
-    size_t stride = strip_vertex_words(model->triangles[first].strip_type);
-    size_t per_triangle = 1u + 3u * stride;
-    size_t maximum = (UINT16_MAX - 1u) / per_triangle;
+static int corners_equal(const source_corner_t *left,
+                         const source_corner_t *right) {
+    return left->position == right->position &&
+           left->texcoord == right->texcoord &&
+           left->normal == right->normal;
+}
+
+static size_t maximum_strip_vertices(uint8_t type) {
+    size_t stride = strip_vertex_words(type);
+    size_t maximum;
+
+    if(!stride)
+        return 0;
+    maximum = (UINT16_MAX - 2u) / stride;
+
+    if(maximum > UINT16_C(0x7fff))
+        maximum = UINT16_C(0x7fff);
+    return maximum;
+}
+
+static int append_strip(strip_plan_t *plan, const source_strip_t *strip) {
+    if(reserve_array((void **)&plan->strips, &plan->capacity,
+                     plan->count + 1u, sizeof(*plan->strips)) < 0)
+        return -1;
+    plan->strips[plan->count++] = *strip;
+    return 0;
+}
+
+static int build_strip_plan(const source_model_t *model, int join_strips,
+                            strip_plan_t *plan) {
+    size_t first = 0;
+
+    while(first < model->triangle_count) {
+        const source_triangle_t *initial = &model->triangles[first];
+        source_corner_t second_last = initial->corner[1];
+        source_corner_t last = initial->corner[2];
+        source_strip_t strip = {
+            .first_triangle = first,
+            .triangle_count = 1u,
+            .vertex_count = 3u,
+            .strip_type = initial->strip_type,
+            .texture_identifier = initial->texture_identifier
+        };
+        size_t maximum = maximum_strip_vertices(initial->strip_type);
+
+        if(maximum < 3u) {
+            errno = EPROTO;
+            return -1;
+        }
+
+        while(join_strips && first + strip.triangle_count <
+              model->triangle_count && strip.vertex_count < maximum) {
+            const source_triangle_t *next =
+                &model->triangles[first + strip.triangle_count];
+            const source_corner_t *expected_first;
+            const source_corner_t *expected_second;
+            size_t triangle_ordinal = strip.vertex_count - 2u;
+
+            if(next->strip_type != strip.strip_type ||
+               next->texture_identifier != strip.texture_identifier)
+                break;
+
+            /* PVR triangle strips alternate winding. Preserve OBJ face order
+               by accepting only the exact next edge orientation required by
+               that alternation; per-corner attributes are part of identity. */
+            if(triangle_ordinal & 1u) {
+                expected_first = &last;
+                expected_second = &second_last;
+            }
+            else {
+                expected_first = &second_last;
+                expected_second = &last;
+            }
+            if(!corners_equal(&next->corner[0], expected_first) ||
+               !corners_equal(&next->corner[1], expected_second))
+                break;
+
+            second_last = last;
+            last = next->corner[2];
+            ++strip.triangle_count;
+            ++strip.vertex_count;
+        }
+
+        if(append_strip(plan, &strip) < 0)
+            return -1;
+        first += strip.triangle_count;
+    }
+    return 0;
+}
+
+static size_t strip_batch(const strip_plan_t *plan, size_t first) {
+    size_t stride = strip_vertex_words(plan->strips[first].strip_type);
+    size_t payload_words = 1u;
     size_t count = 1u;
 
-    /* Both the payload word count and declared strip count are 16-bit
-       fields. */
-    if(maximum > MAX_STRIP_COUNT)
-        maximum = MAX_STRIP_COUNT;
-    while(count < maximum && first + count < model->triangle_count &&
-          model->triangles[first + count].strip_type ==
-              model->triangles[first].strip_type &&
-          model->triangles[first + count].texture_identifier ==
-              model->triangles[first].texture_identifier)
+    payload_words += 1u + plan->strips[first].vertex_count * stride;
+    while(count < MAX_STRIP_COUNT && first + count < plan->count &&
+          plan->strips[first + count].strip_type ==
+              plan->strips[first].strip_type &&
+          plan->strips[first + count].texture_identifier ==
+              plan->strips[first].texture_identifier) {
+        size_t addition =
+            1u + plan->strips[first + count].vertex_count * stride;
+
+        if(addition > UINT16_MAX - payload_words)
+            break;
+        payload_words += addition;
         ++count;
+    }
     return count;
 }
 
 static int calculate_sizes(const source_model_t *model,
+                           const strip_plan_t *plan,
                            output_streams_t *streams) {
     size_t vertex_batches =
         (model->position_count + MAX_VERTEX_BATCH - 1u) / MAX_VERTEX_BATCH;
@@ -774,13 +889,18 @@ static int calculate_sizes(const source_model_t *model,
     }
     vertex_words = 1u + 2u * vertex_batches + 3u * model->position_count;
 
-    while(first < model->triangle_count) {
-        size_t count = triangle_batch(model, first);
-        size_t stride = strip_vertex_words(model->triangles[first].strip_type);
-        size_t per_triangle = 1u + 3u * stride;
-        size_t addition = 3u + count * per_triangle;
-        int texture_identifier =
-            model->triangles[first].texture_identifier;
+    while(first < plan->count) {
+        size_t count = strip_batch(plan, first);
+        size_t stride = strip_vertex_words(plan->strips[first].strip_type);
+        size_t payload_words = 1u;
+        size_t strip;
+        size_t addition;
+        int texture_identifier = plan->strips[first].texture_identifier;
+
+        for(strip = 0; strip < count; ++strip)
+            payload_words += 1u +
+                plan->strips[first + strip].vertex_count * stride;
+        addition = 2u + payload_words;
 
         if(texture_identifier >= 0 && texture_identifier != active_texture) {
             if(polygon_words > SIZE_MAX - 2u) {
@@ -906,22 +1026,26 @@ static void emit_corner(uint16_t **output, const source_model_t *model,
 }
 
 static int generate_streams(const source_model_t *model,
-                            output_streams_t *streams) {
+                            int join_strips, output_streams_t *streams) {
+    strip_plan_t plan = { 0 };
     uint32_t *vertex_output;
     uint16_t *polygon_output;
     size_t first;
     int active_texture = -1;
 
-    if(calculate_sizes(model, streams) < 0 ||
+    if(build_strip_plan(model, join_strips, &plan) < 0 ||
+       calculate_sizes(model, &plan, streams) < 0 ||
        calculate_bounds(model, streams) < 0)
-        return -1;
+        goto fail;
+    streams->source_strip_count = model->triangle_count;
+    streams->output_strip_count = plan.count;
     streams->vertex_words =
         malloc(streams->vertex_word_count * sizeof(*streams->vertex_words));
     streams->polygon_words =
         malloc(streams->polygon_word_count * sizeof(*streams->polygon_words));
     if(!streams->vertex_words || !streams->polygon_words) {
         errno = ENOMEM;
-        return -1;
+        goto fail;
     }
 
     /* Position batches cover one unique, contiguous 16-bit index namespace. */
@@ -958,14 +1082,17 @@ static int generate_streams(const source_model_t *model,
     *polygon_output++ = UINT16_MAX;
     *polygon_output++ = UINT16_MAX;
     first = 0;
-    while(first < model->triangle_count) {
-        size_t count = triangle_batch(model, first);
-        uint8_t type = model->triangles[first].strip_type;
+    while(first < plan.count) {
+        size_t count = strip_batch(&plan, first);
+        uint8_t type = plan.strips[first].strip_type;
         size_t stride = strip_vertex_words(type);
-        size_t payload_words = 1u + count * (1u + 3u * stride);
-        size_t triangle;
-        int texture_identifier =
-            model->triangles[first].texture_identifier;
+        size_t payload_words = 1u;
+        size_t strip;
+        int texture_identifier = plan.strips[first].texture_identifier;
+
+        for(strip = 0; strip < count; ++strip)
+            payload_words += 1u +
+                plan.strips[first + strip].vertex_count * stride;
 
         if(texture_identifier >= 0 && texture_identifier != active_texture) {
             *polygon_output++ = PVR_CHUNK_TEXTURE;
@@ -976,15 +1103,24 @@ static int generate_streams(const source_model_t *model,
         *polygon_output++ = type;
         *polygon_output++ = (uint16_t)payload_words;
         *polygon_output++ = (uint16_t)count;
-        for(triangle = 0; triangle < count; ++triangle) {
-            const source_triangle_t *source =
-                &model->triangles[first + triangle];
+        for(strip = 0; strip < count; ++strip) {
+            const source_strip_t *source_strip = &plan.strips[first + strip];
+            const source_triangle_t *initial =
+                &model->triangles[source_strip->first_triangle];
+            size_t triangle;
             size_t corner;
 
-            *polygon_output++ = 3u;
+            *polygon_output++ = (uint16_t)source_strip->vertex_count;
             for(corner = 0; corner < 3u; ++corner)
-                emit_corner(&polygon_output, model, &source->corner[corner],
+                emit_corner(&polygon_output, model, &initial->corner[corner],
                             type);
+            for(triangle = 1; triangle < source_strip->triangle_count;
+                ++triangle) {
+                const source_triangle_t *source = &model->triangles[
+                    source_strip->first_triangle + triangle];
+
+                emit_corner(&polygon_output, model, &source->corner[2], type);
+            }
         }
         first += count;
     }
@@ -995,9 +1131,14 @@ static int generate_streams(const source_model_t *model,
        (size_t)(polygon_output - streams->polygon_words) !=
            streams->polygon_word_count) {
         errno = EPROTO;
-        return -1;
+        goto fail;
     }
+    strip_plan_free(&plan);
     return 0;
+
+fail:
+    strip_plan_free(&plan);
+    return -1;
 }
 
 static int validate_generated(const source_model_t *source,
@@ -1017,7 +1158,8 @@ static int validate_generated(const source_model_t *source,
         return -1;
     if(info->vertex_entries != source->position_count ||
        info->triangles != source->triangle_count ||
-       info->index_references != source->triangle_count * 3u ||
+       info->index_references != source->triangle_count +
+                                  2u * streams->output_strip_count ||
        info->strip_records != streams->strip_record_count) {
         errno = EPROTO;
         return -1;
@@ -1130,6 +1272,10 @@ static void print_report(const source_model_t *source,
     printf("texcoords=%zu\n", source->texcoord_count);
     printf("normals=%zu\n", source->normal_count);
     printf("triangles=%zu\n", source->triangle_count);
+    printf("strips_before=%zu\n", streams->source_strip_count);
+    printf("strips_after=%zu\n", streams->output_strip_count);
+    printf("triangles_joined=%zu\n",
+           streams->source_strip_count - streams->output_strip_count);
     printf("strip_records=%zu\n", info->strip_records);
     printf("texture_records=%zu\n", streams->texture_record_count);
     printf("material_bindings=%zu\n", materials->count);
@@ -1189,6 +1335,7 @@ int main(int argc, char **argv) {
     size_t error_line = 0;
     int flip_winding = 0;
     int flip_v = 0;
+    int join_strips = 0;
     int texture_identifier = -1;
     int argument = 1;
     int result = 2;
@@ -1207,6 +1354,8 @@ int main(int argc, char **argv) {
             flip_winding = 1;
         else if(!strcmp(argv[argument], "--flip-v"))
             flip_v = 1;
+        else if(!strcmp(argv[argument], "--join-strips"))
+            join_strips = 1;
         else if(!strcmp(argv[argument], "--texture-id")) {
             if(argument + 1 >= argc || texture_identifier >= 0 ||
                materials.count ||
@@ -1289,7 +1438,7 @@ int main(int argc, char **argv) {
         result = 1;
         goto out;
     }
-    if(generate_streams(&source, &streams) < 0 ||
+    if(generate_streams(&source, join_strips, &streams) < 0 ||
        validate_generated(&source, &streams, &info) < 0) {
         fprintf(stderr, "conversion failed: %s\n", strerror(errno));
         goto out;

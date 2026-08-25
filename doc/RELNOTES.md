@@ -166,8 +166,12 @@ lifecycle and naming conventions.
   explicit winding/V flips and either one global texture identifier or repeated
   material-name-to-identifier bindings, coalesces aliases, emits persistent
   texture state only on actual transitions, and runs the target validator
-  before publishing little-endian output streams. Library material properties
-  and triangulation policy remain explicit rather than being guessed.
+  before publishing little-endian output streams. An opt-in strip optimizer
+  joins only order-adjacent faces with exact position/UV/normal edge identity,
+  honors alternating strip winding and resolved texture boundaries, reports
+  the reduction, and splits at both strip and record encoding limits. Library
+  material properties, source triangulation, and global topology reordering
+  remain explicit rather than being guessed.
 * Added allocation-free CPU vertex-lighting kernels with checked
   inverse-transpose normal matrices, bounded strided normal transforms,
   directional and attenuated point Lambert lights, and deterministic saturated
