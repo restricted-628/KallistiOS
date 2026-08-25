@@ -55,7 +55,7 @@ than place another renderer above them.
 | Context and header construction | Polygon, sprite, modifier, two-volume, blend, depth, fog, UV, palette, texture, and extended packed-header controls are covered | Preserve public context layout; treat individual header mutation helpers as optional optimizations. |
 | Render submission identity | Stable allocation-free tickets cover queued registration, completed registration, rendering, target completion, and display | Preserve identity-specific waits and expose counters in coherent pipeline diagnostics. |
 | Render targets | Sized 16-bit render-to-texture, checked surface binding, and explicit completion/no-flip contracts are covered | Treat additional output encodings as hardware-gated extensions, not assumed formats. |
-| Texture allocation | General allocation, checked caller-owned surfaces, and contiguous multi-surface reservations are covered | Preserve one allocator, explicit lifetimes, failure-atomic planning, and exact non-owning slice bounds. |
+| Texture allocation | General allocation, checked caller-owned surfaces, contiguous multi-surface reservations, and opt-in fixed-slot LRU residency are covered | Preserve one allocator, explicit lifetimes, failure-atomic planning, and exact non-owning slice bounds. |
 | Texture formats | Linear, twiddled, mipmapped, paletted, full- and compact-codebook VQ, stride, rectangle, and YUV are represented | Validate compact VQ combinations and performance on physical hardware before broadening the surface vocabulary further. |
 | Texture upload and readback | Checked synchronous and immediate-admission asynchronous uploads plus encoded CPU readback are covered | Preserve explicit render/sampling hazard rules and add asynchronous readback only for a demonstrated need. |
 | Texture conversion | Checked 4/8/16-bpp twiddling is covered | Keep palette creation and VQ encoding in content tools rather than placing unbounded encoders in the kernel. |
@@ -317,6 +317,30 @@ updates concurrent with texture sampling remain hardware validation items.
 The reservation owns no scene, list, renderer, transfer queue, texture name,
 or background service. Physical transfer and sampling hazards remain governed
 by the established texture-surface contract.
+
+### Fixed-slot texture residency
+
+- one opt-in cache owns one contiguous reservation while its main-RAM slot and
+  surface arrays remain caller-provided;
+- every slot uses one checked prototype layout, avoiding runtime fragmentation
+  and making replacement cost deterministic;
+- acquisition and publication update bounded LRU state, while loading and
+  explicitly pinned slots cannot be evicted;
+- generation-checked handles prevent a delayed release from unpinning a later
+  texture which reused the same slot;
+- two-phase reserve/publish/abort state composes with existing synchronous and
+  interrupt-driven asynchronous uploads without taking ownership of their
+  source memory or request objects; and
+- coherent statistics expose ready, loading, pinned, hit, miss, and eviction
+  counts.
+
+The layer creates no thread, queue, decompressor, source-data cache, hidden
+main-RAM allocation, or periodic work. Asset compression, prefetch prediction,
+and grouping mixed texture sizes into separate caches remain application
+policy. The focused host suite covers LRU ordering, all-pinned exhaustion,
+loading visibility, abort, stale handles, metadata corruption, and busy
+teardown. The Dreamcast example cycles three textures through two slots using
+the existing asynchronous PVR DMA request path.
 
 ### Asynchronous texture and YUV requests
 

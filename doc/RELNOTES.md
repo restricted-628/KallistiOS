@@ -83,6 +83,11 @@ lifecycle and naming conventions.
   Allocated, externally bound, and reserved surfaces retain ordinary upload,
   readback, release, and compact-model material behavior while storing only
   the codebook entries actually used.
+* Added opt-in fixed-slot texture residency over one contiguous VRAM
+  reservation. Caller-owned slot and surface arrays provide deterministic LRU
+  replacement, explicit render-safe pins, generation-checked stale-handle
+  rejection, two-phase asynchronous upload publication, and coherent cache
+  statistics without a worker, queue, decompressor, or hidden main-RAM pool.
 * Removed shared mutable scratch matrices from the established 3D transform
   helpers and added a bounded caller-owned matrix stack with explicit
   overflow, underflow, and non-consuming restore operations. It allocates no

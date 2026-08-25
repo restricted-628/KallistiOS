@@ -30,6 +30,9 @@ the [per-texture VQ palette guide](pvr-vq-palettes.md).
 Reduced VQ storage, biased indices, and the distinction between owned storage
 and the texture-header address are documented in the
 [compact VQ codebook guide](pvr-vq-compact.md).
+Opt-in fixed-slot LRU replacement, generation-checked handles, and render-safe
+pinning are documented in the
+[texture residency guide](pvr-texture-residency.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.

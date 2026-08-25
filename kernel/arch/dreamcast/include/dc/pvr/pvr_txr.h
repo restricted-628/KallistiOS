@@ -284,6 +284,64 @@ typedef struct pvr_txr_surface {
     bool owns_vram;                   /**< Whether release frees \a vram. */
 } pvr_txr_surface_t;
 
+/** \brief State of one fixed texture-residency slot. */
+typedef enum pvr_txr_residency_state {
+    PVR_TXR_RESIDENCY_EMPTY = 0, /**< Slot has no associated identifier. */
+    PVR_TXR_RESIDENCY_LOADING,   /**< Caller owns an unpublished upload. */
+    PVR_TXR_RESIDENCY_READY      /**< Slot is complete and may be acquired. */
+} pvr_txr_residency_state_t;
+
+/** \brief Caller-provided state for one texture-residency slot.
+
+    Applications allocate the array but must not modify a live slot directly.
+*/
+typedef struct pvr_txr_residency_slot {
+    uint32_t identifier;             /**< Application-defined asset key. */
+    uint32_t pin_count;              /**< Active acquired references. */
+    uint64_t generation;             /**< Stale-handle discriminator. */
+    uint64_t last_use;               /**< Internal LRU ordering stamp. */
+    pvr_txr_residency_state_t state; /**< Current slot state. */
+} pvr_txr_residency_slot_t;
+
+/** \brief Generation-checked reference to one residency slot. */
+typedef struct pvr_txr_residency_handle {
+    size_t slot;         /**< Slot index. */
+    uint64_t generation; /**< Generation captured when acquired. */
+} pvr_txr_residency_handle_t;
+
+/** \brief Coherent caller-thread snapshot of texture residency. */
+typedef struct pvr_txr_residency_status {
+    size_t slot_count;    /**< Total fixed slots. */
+    size_t ready_slots;   /**< Published slots. */
+    size_t loading_slots; /**< Reserved uploads not yet published. */
+    size_t pinned_slots;  /**< Slots with one or more active references. */
+    uint64_t pin_count;   /**< Sum of all active references. */
+    uint64_t hits;        /**< Successful identifier acquisitions. */
+    uint64_t misses;      /**< Unavailable identifier acquisitions. */
+    uint64_t evictions;   /**< Published identifiers replaced by reserve. */
+} pvr_txr_residency_status_t;
+
+/** \brief Caller-owned fixed-slot texture residency cache.
+
+    Main-RAM arrays are supplied by the caller. Initialization owns one
+    contiguous PVR allocation and binds one checked surface per slot. Do not
+    copy or modify a live object. Public operations are allocation-free after
+    initialization and require external serialization in ordinary thread
+    context.
+*/
+typedef struct pvr_txr_residency {
+    pvr_mem_reservation_t reservation; /**< One owned VRAM allocation. */
+    pvr_txr_residency_slot_t *slots;   /**< Caller-provided slot array. */
+    pvr_txr_surface_t *surfaces;        /**< Caller-provided surface array. */
+    size_t slot_count;                  /**< Elements in both arrays. */
+    size_t slot_stride;                 /**< Aligned VRAM distance per slot. */
+    uint64_t clock;                     /**< Internal LRU clock. */
+    uint64_t hits;                      /**< Successful acquisitions. */
+    uint64_t misses;                    /**< Unavailable acquisitions. */
+    uint64_t evictions;                 /**< Completed replacements. */
+    uint32_t _magic;                    /**< Internal validity marker. */
+} pvr_txr_residency_t;
+
 /** \brief Calculate checked texture metadata without allocating VRAM.
 
     Width and height must be powers of two from 8 through 1024, except that an
@@ -395,6 +453,94 @@ int pvr_txr_surface_bind_reservation(
 
 /** \brief Release owned VRAM and clear a surface descriptor. */
 void pvr_txr_surface_release(pvr_txr_surface_t *surface);
+
+/** \brief Initialize a fixed-slot residency cache from one surface prototype.
+
+    \a prototype must contain valid unbound metadata. Every slot has the same
+    encoded layout and occupies one 32-byte-aligned slice of a single VRAM
+    reservation. The caller supplies writable arrays of \a slot_count slots and
+    surfaces; the arrays and prototype must not overlap one another or \a cache.
+
+    No main-RAM allocation, thread, queue, decompressor, or upload is created.
+    Destroy an existing cache before reinitializing it.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_init(pvr_txr_residency_t *cache,
+                           pvr_txr_residency_slot_t *slots,
+                           pvr_txr_surface_t *surfaces, size_t slot_count,
+                           const pvr_txr_surface_t *prototype);
+
+/** \brief Pin one published identifier and return its checked surface.
+
+    A loading identifier reports EAGAIN and an absent identifier reports
+    ENOENT. The returned handle must eventually be passed to
+    pvr_txr_residency_unpin() after every render which may sample the surface is
+    complete.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_acquire(pvr_txr_residency_t *cache,
+                              uint32_t identifier,
+                              pvr_txr_residency_handle_t *handle,
+                              pvr_txr_surface_t **surface);
+
+/** \brief Reserve an empty or least-recently-used unpinned slot for upload.
+
+    The returned loading slot carries one pin owned by the caller. Fill it with
+    a synchronous or asynchronous checked surface upload, then call
+    pvr_txr_residency_publish() after successful terminal completion or
+    pvr_txr_residency_abort() after failed or cancelled terminal completion.
+    Existing ready or loading identifiers report EEXIST or EALREADY. A cache
+    with no evictable slot reports EBUSY.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_reserve(pvr_txr_residency_t *cache,
+                              uint32_t identifier,
+                              pvr_txr_residency_handle_t *handle,
+                              pvr_txr_surface_t **surface);
+
+/** \brief Publish a completely uploaded loading slot.
+
+    The reservation's original pin is retained so the caller can immediately
+    submit work using the surface without an eviction window.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_publish(pvr_txr_residency_t *cache,
+                              pvr_txr_residency_handle_t handle);
+
+/** \brief Abandon one loading slot after a failed or cancelled upload.
+
+    The associated asynchronous request, if any, must already be terminal. Any
+    partially written bytes remain inaccessible until a later reservation
+    replaces them. The loading pin is released.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_abort(pvr_txr_residency_t *cache,
+                            pvr_txr_residency_handle_t handle);
+
+/** \brief Release one ready-slot pin after sampling has completed.
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_unpin(pvr_txr_residency_t *cache,
+                            pvr_txr_residency_handle_t handle);
+
+/** \brief Copy residency counts and cumulative hit/miss/eviction statistics.
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_get_status(const pvr_txr_residency_t *cache,
+                                 pvr_txr_residency_status_t *status);
+
+/** \brief Release an idle residency cache and clear its caller-owned arrays.
+
+    Loading or pinned slots report EBUSY and leave the cache unchanged.
+
+    \return 0 on success, or -1 with errno set.
+*/
+int pvr_txr_residency_destroy(pvr_txr_residency_t *cache);
 
 /** \brief Begin a render-to-texture scene on a checked surface.
 

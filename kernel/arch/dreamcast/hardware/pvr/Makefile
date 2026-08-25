@@ -30,6 +30,6 @@ OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
 
 # Texture handling
 OBJS += pvr_texture.o pvr_texture_layout.o pvr_texture_reservation.o \
-	pvr_texture_request.o pvr_dma.o
+	pvr_texture_residency.o pvr_texture_request.o pvr_dma.o
 
 include $(KOS_BASE)/Makefile.prefab
