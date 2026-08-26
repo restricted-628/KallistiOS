@@ -18,6 +18,8 @@
 #include <errno.h>
 #include <sys/cdefs.h>
 
+#include "spu_internal.h"
+
 /*
 
 This module handles the sound processor unit (SPU) of the Dreamcast system.
@@ -399,6 +401,8 @@ void spu_master_mixer(int volume, int stereo) {
 int spu_init(void) {
     bool is_retail = hardware_sys_mode(NULL) == HW_TYPE_RETAIL;
 
+    spu_transfer_system_init();
+
     /* Set the RAM mode (2MB or 8MB) and default to stereo/min volume */
     g2_write_32(SNDREGADDR(0x2800), is_retail ? 0 : BIT(9));
 
@@ -427,6 +431,8 @@ int spu_init(void) {
 
 /* Shutdown SPU */
 int spu_shutdown(void) {
+    if(spu_transfer_system_shutdown() < 0)
+        return -1;
     spu_disable();
     spu_memset_sq(0, 0, 0x200000);
     return 0;

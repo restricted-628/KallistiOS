@@ -67,6 +67,21 @@ to use bulk, store-queue, or DMA transfers; unaligned heads and byte tails use
 bounded G2 accesses. No primitive reads past a caller buffer or overwrites a
 neighboring sound-RAM byte merely to round a request to a word.
 
+### Asynchronous sound-RAM requests
+
+The same exact-range behavior is now available through caller-owned queued
+requests for both uploads and readbacks. Compatible endpoints use G2 DMA in
+either direction; other transfers use bounded 4 KiB PIO chunks. Status reports
+the requested and active transport, valid completed prefix, terminal errno,
+and callback disposition. Requests support execution deadlines, independent
+wait deadlines, cancellation, and terminal callbacks outside interrupt and
+transfer-worker context.
+
+The request worker uses a 16 KiB stack and the callback dispatcher retains the
+conservative default stack for arbitrary application code. Both are created
+only on the first asynchronous submission. No buffer, thread, periodic poll,
+or request pool is reserved by `spu_init()`.
+
 ### Observation
 
 `snd_channel_get_status()` samples firmware position and the hardware playback
@@ -77,6 +92,8 @@ bit while holding the G2 lock. Existing `snd_get_pos()` and
 
 These facilities preserve KOS's link-time, pay-for-use model. They add no
 startup thread, periodic poller, permanent stream buffer, or service fiber.
+The optional asynchronous transfer workers are lazy and sleep when their
+queues are empty.
 Stream separation memory is still allocated only by `snd_stream_init_ex()`,
 and per-effect or per-stream sound RAM is allocated only on request.
 
@@ -88,9 +105,9 @@ service may be considered separately, with measured stack use and explicit
 lifecycle, rather than imposing a thread on applications that do not request
 one.
 
-Driver responses and diagnostics, complete channel controls, checked stream
-status, DSP routing, and optional content playback remain staged work. Their
-ownership and order are recorded in `audio-capability-audit.md`.
+Complete channel controls, checked stream status, DSP routing, and optional
+content playback remain staged work. Their ownership and order are recorded in
+`audio-capability-audit.md`.
 
 ## Validation
 

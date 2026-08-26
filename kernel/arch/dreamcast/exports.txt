@@ -148,6 +148,14 @@ spu_memread
 spu_memset
 spu_memset_sq
 spu_dma_transfer
+spu_transfer_submit
+spu_memload_async
+spu_memread_async
+spu_transfer_get_status
+spu_transfer_wait
+spu_transfer_wait_callback
+spu_transfer_cancel
+spu_transfer_destroy
 spu_reset_chans
 spu_enable
 spu_disable

@@ -20,7 +20,7 @@ OBJS += syscalls.o syscall_font.o dcload.o dcload_syscalls.o dcload_syscalls_net
 OBJS += g2dma.o rtc.o rtc_calendar.o
 
 # Sound
-OBJS += spu.o
+OBJS += spu.o spu_request.o
 
 # Bus support
 OBJS += asic.o g2bus.o

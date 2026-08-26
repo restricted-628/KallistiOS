@@ -216,6 +216,8 @@ This page serves as an index for all KallistiOS examples.
   - multi-stream
   - sfx
   - sfxbuf
+  - [**spu-transfer**](sound/spu-transfer/): Validates queued DMA and exact-byte
+    PIO sound-RAM upload and readback requests
 - tsunami
   - banner
   - font

@@ -149,11 +149,34 @@ feature before publishing the driver as usable. A mismatched or silent
 firmware therefore fails explicitly instead of accepting commands it cannot
 execute.
 
+## Second closure tranche
+
+Sound-RAM transfers now have a caller-owned asynchronous request vocabulary.
+Uploads and readbacks share one serialized worker, expose coherent byte
+progress, support queue and active cancellation, enforce optional whole-request
+deadlines, and dispatch terminal callbacks from a separate thread-context
+worker. The execution deadline includes time spent waiting in the queue.
+
+Aligned requests can require bidirectional G2 DMA. Automatic requests use DMA
+when every endpoint and the exact length are compatible, then fall back to
+bounded PIO if DMA is unavailable or already owned. Unaligned or odd-length
+requests remain exact: no source over-read, destination over-write, padding, or
+rounding is part of the contract. Cancellation reports only the prefix observed
+as transferred before the operation was stopped.
+
+Both workers are created lazily on the first asynchronous submission. The
+bounded transport worker uses a 16 KiB stack; the dispatcher retains KOS's
+conservative default stack because application callbacks are not controlled by
+the driver. The synchronous SPU primitives, high-level sound manager, and
+ordinary hardware initialization create neither worker. Request objects and
+their main-RAM endpoints remain caller-owned.
+
 ## Resource model
 
 The first tranche adds no thread, fiber, periodic callback, permanent buffer,
-or dynamic allocation. Applications that never call the new synchronized
-start routine pay only for reachable code retained by their link.
+or dynamic allocation. The second tranche allocates request objects and starts
+its two bounded workers only after the first asynchronous transfer submission.
+Applications using only synchronous sound retain the earlier resource profile.
 
 Future optional services must be lazy. The default stream path remains driven
 by the application, while service-thread or service-fiber operation is an
@@ -161,14 +184,12 @@ explicit lifecycle choice.
 
 ## Remaining order
 
-1. Add queued asynchronous sound-RAM transfer requests over the exact-range
-   CPU and DMA primitives.
-2. Complete checked channel envelope, filter, routing, and coherent status.
-3. Complete checked stream lifecycle, progress, underrun reporting, and live
+1. Complete checked channel envelope, filter, routing, and coherent status.
+2. Complete checked stream lifecycle, progress, underrun reporting, and live
    controls; then add an optional service adapter.
-4. Add checked DSP program, routing, and output control.
-5. Build optional bank and sequence libraries plus host-side content tools.
-6. Add optional spatial helpers integrated with the established math stack.
+3. Add checked DSP program, routing, and output control.
+4. Build optional bank and sequence libraries plus host-side content tools.
+5. Add optional spatial helpers integrated with the established math stack.
 
 ## Validation boundary
 
