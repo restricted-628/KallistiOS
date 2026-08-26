@@ -7,4 +7,5 @@ of the 32-bit boundary verifies both halves of the public channel mask.
 
 The generated tone is panned hard left and right. It plays for two seconds,
 then the example stops the channels and releases all sound-RAM and channel
-resources. No external audio asset is required.
+resources. It also prints the negotiated firmware version and feature mask.
+No external audio asset is required.

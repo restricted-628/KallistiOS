@@ -14,6 +14,7 @@
 #include <errno.h>
 
 #include <kos/dbglog.h>
+#include <kos/irq.h>
 #include <kos/thread.h>
 #include <kos/mutex.h>
 #include <kos/timer.h>
@@ -33,6 +34,18 @@ static int initted = 0;
    There are some cases like stereo stream control + stereo sfx control
    at the same time in separate threads. */
 static mutex_t queue_proc_mutex = RECURSIVE_MUTEX_INITIALIZER;
+static mutex_t response_mutex = RECURSIVE_MUTEX_INITIALIZER;
+static uint32_t next_command_id = 1;
+static uint32_t driver_features;
+
+_Static_assert(SND_DRIVER_FEATURE_SYNC_CHANNELS ==
+               AICA_DRIVER_FEATURE_SYNC_CHANNELS,
+               "synchronized-channel capability ABI");
+_Static_assert(SND_DRIVER_FEATURE_VALIDATION ==
+               AICA_DRIVER_FEATURE_VALIDATION,
+               "command-validation capability ABI");
+_Static_assert(SND_DRIVER_FEATURE_POSITION == AICA_DRIVER_FEATURE_POSITION,
+               "channel-position capability ABI");
 
 /* Validate a shared queue before using offsets supplied by the ARM firmware.
    The data region must stay between its queue header and the next reserved
@@ -71,10 +84,68 @@ static int queue_geometry(uint32_t queue_address, uint32_t region_end,
     return 0;
 }
 
+static int shared_queue_state(uint32_t queue_address, uint32_t region_end,
+                              bool *empty, bool *processing) {
+    uint32_t data_address;
+    uint32_t queue_size;
+    uint32_t head;
+    uint32_t tail;
+
+    g2_lock_scoped();
+
+    if(queue_geometry(queue_address, region_end, &data_address, &queue_size,
+                      &head, &tail) < 0)
+        return -1;
+
+    *empty = head == tail;
+    if(processing) {
+        *processing = g2_read_32_raw(
+            queue_address + offsetof(aica_queue_t, process_ok)) != 0;
+    }
+
+    return 0;
+}
+
+static int response_queue_peek_type(uint32_t *type) {
+    uint32_t data_address;
+    uint32_t queue_size;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t command_offset;
+
+    g2_lock_scoped();
+
+    if(queue_geometry(SPU_RAM_UNCACHED_BASE + AICA_MEM_RESP_QUEUE,
+                      AICA_MEM_CHANNELS, &data_address, &queue_size,
+                      &head, &tail) < 0)
+        return -1;
+
+    if(head == tail)
+        return 0;
+
+    command_offset = tail + offsetof(aica_cmd_t, cmd);
+    if(command_offset >= queue_size)
+        command_offset -= queue_size;
+
+    *type = g2_read_32_raw(data_address + command_offset);
+    return 1;
+}
+
+static uint32_t remaining_timeout(uint64_t deadline) {
+    uint64_t now = timer_ms_gettime64();
+
+    if(now >= deadline)
+        return 0;
+
+    return (uint32_t)(deadline - now);
+}
+
 /* Initialize driver; note that this replaces the AICA program so that
    if you had anything else going on, it's gone now! */
 int snd_init(void) {
     size_t amt;
+    snd_driver_status_t status;
+    int status_result;
 
     /* Finish loading the stream driver */
     if(!initted) {
@@ -98,6 +169,18 @@ int snd_init(void) {
             spu_disable();
             return -1;
         }
+
+        initted = 1;
+        driver_features = 0;
+        status_result = snd_driver_get_status(&status, 100);
+        if(status_result < 0 ||
+           !(status.features & SND_DRIVER_FEATURE_SYNC_CHANNELS)) {
+            int saved_errno = status_result < 0 ? errno : EPROTO;
+
+            snd_shutdown();
+            errno = saved_errno;
+            return -1;
+        }
     }
 
     initted = 1;
@@ -111,6 +194,7 @@ void snd_shutdown(void) {
         spu_disable();
         snd_mem_shutdown();
         initted = 0;
+        driver_features = 0;
     }
 }
 
@@ -199,6 +283,16 @@ void snd_sh4_to_aica_stop(void) {
 int snd_channels_start_sync(uint64_t channels) {
     AICA_CMDSTR_CHANNEL_MASK(tmp, cmd, mask);
 
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(!(driver_features & SND_DRIVER_FEATURE_SYNC_CHANNELS)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
     if(!channels) {
         errno = EINVAL;
         return -1;
@@ -225,13 +319,18 @@ int snd_aica_to_sh4(void *packetout) {
         return -1;
     }
 
+    if(mutex_lock_irqsafe(&response_mutex) < 0)
+        return -1;
+
     g2_lock_scoped();
 
     qa = SPU_RAM_UNCACHED_BASE + AICA_MEM_RESP_QUEUE;
 
     if(queue_geometry(qa, AICA_MEM_CHANNELS, &bot, &queue_size,
-                      &head, &tail) < 0)
+                      &head, &tail) < 0) {
+        mutex_unlock(&response_mutex);
         return -1;
+    }
 
     top = bot + queue_size;
     start = bot + tail;
@@ -241,6 +340,7 @@ int snd_aica_to_sh4(void *packetout) {
 
     /* Is there anything? */
     if(start == stop) {
+        mutex_unlock(&response_mutex);
         return 0;
     }
 
@@ -251,6 +351,7 @@ int snd_aica_to_sh4(void *packetout) {
        size >= AICA_CMD_MAX_SIZE) {
         dbglog(DBG_ERROR, "snd_aica_to_sh4(): packet larger than %d dwords\n", AICA_CMD_MAX_SIZE);
         errno = EPROTO;
+        mutex_unlock(&response_mutex);
         return -1;
     }
 
@@ -258,13 +359,16 @@ int snd_aica_to_sh4(void *packetout) {
 
     if(size > available / sizeof(uint32_t)) {
         errno = EPROTO;
+        mutex_unlock(&response_mutex);
         return -1;
     }
 
     /* Find stop point for this packet */
     stop = start + size * 4;
 
-    if(stop > top)
+    /* A packet ending exactly at the physical queue end wraps to offset zero.
+       Leaving stop at top would make the wrapped reader loop forever. */
+    if(stop >= top)
         stop -= queue_size;
 
     while(start != stop) {
@@ -288,7 +392,168 @@ int snd_aica_to_sh4(void *packetout) {
 
     g2_write_32_raw(qa + offsetof(aica_queue_t, tail), start - bot);
 
+    mutex_unlock(&response_mutex);
     return 1;
+}
+
+int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
+    uint32_t request_words[sizeof(aica_cmd_t) / sizeof(uint32_t)] = {0};
+    uint32_t response_words[AICA_CMD_MAX_SIZE];
+    aica_cmd_t *request = (aica_cmd_t *)request_words;
+    aica_cmd_t *response = (aica_cmd_t *)response_words;
+    uint64_t deadline;
+    uint32_t command_id;
+    uint32_t response_type;
+    uint32_t remaining;
+    bool queue_empty;
+    bool queue_processing;
+    int result = -1;
+
+    if(!status || !timeout_ms) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(status, 0, sizeof(*status));
+
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    deadline = timer_ms_gettime64() + timeout_ms;
+
+    if(mutex_lock_timed(&queue_proc_mutex, timeout_ms) < 0)
+        return -1;
+
+    remaining = remaining_timeout(deadline);
+    if(!remaining) {
+        errno = ETIMEDOUT;
+        goto unlock_command_queue;
+    }
+
+    if(mutex_lock_timed(&response_mutex, remaining) < 0)
+        goto unlock_command_queue;
+
+    /* With both host-side queue locks held, wait for prior commands to drain.
+       An empty response queue then guarantees the next reply belongs to this
+       query; low-level response consumers cannot have packets stolen. */
+    for(;;) {
+        if(shared_queue_state(SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE,
+                              AICA_MEM_RESP_QUEUE, &queue_empty,
+                              &queue_processing) < 0)
+            goto unlock_response_queue;
+
+        if(!queue_processing) {
+            errno = EBUSY;
+            goto unlock_response_queue;
+        }
+
+        if(queue_empty)
+            break;
+
+        if(!remaining_timeout(deadline)) {
+            errno = ETIMEDOUT;
+            goto unlock_response_queue;
+        }
+
+        thd_pass();
+    }
+
+    /* A timed-out status query can leave its late reply in the ring. Retire
+       only those private replies. Any other response belongs to a low-level
+       consumer and makes this query fail without consuming that packet. */
+    for(;;) {
+        int peek_result = response_queue_peek_type(&response_type);
+        int drain_result;
+
+        if(peek_result < 0)
+            goto unlock_response_queue;
+        if(!peek_result)
+            break;
+        if(response_type != AICA_RESP_DRIVER_INFO) {
+            errno = EBUSY;
+            goto unlock_response_queue;
+        }
+        drain_result = snd_aica_to_sh4(response_words);
+        if(drain_result != 1) {
+            if(!drain_result)
+                errno = EPROTO;
+            goto unlock_response_queue;
+        }
+    }
+
+    command_id = next_command_id++;
+    if(!next_command_id)
+        next_command_id = 1;
+
+    request->size = sizeof(request_words) / sizeof(request_words[0]);
+    request->cmd = AICA_CMD_QUERY_DRIVER;
+    request->cmd_id = command_id;
+
+    if(snd_sh4_to_aica(request, request->size) < 0) {
+        goto unlock_response_queue;
+    }
+
+    do {
+        int receive_result = snd_aica_to_sh4(response_words);
+
+        if(receive_result < 0)
+            goto unlock_response_queue;
+
+        if(receive_result > 0) {
+            if(response->cmd == AICA_RESP_DRIVER_INFO &&
+               response->cmd_id == command_id) {
+                const aica_driver_info_t *info;
+
+                if(response->size != AICA_CMDSTR_DRIVER_INFO_SIZE) {
+                    errno = EPROTO;
+                    goto unlock_response_queue;
+                }
+
+                info = (const aica_driver_info_t *)response->cmd_data;
+                if(info->protocol_version != AICA_DRIVER_PROTOCOL_VERSION) {
+                    errno = EPROTO;
+                    goto unlock_response_queue;
+                }
+
+                status->protocol_version = info->protocol_version;
+                status->firmware_version = info->firmware_version;
+                status->features = info->features;
+                status->uptime_ms = info->uptime_ms;
+                status->commands_processed = info->commands_processed;
+                status->commands_rejected = info->commands_rejected;
+                status->malformed_packets = info->malformed_packets;
+                status->responses_dropped = info->responses_dropped;
+                status->command_queue_size = info->command_queue_size;
+                status->command_queue_used = info->command_queue_used;
+                status->response_queue_size = info->response_queue_size;
+                status->response_queue_used = info->response_queue_used;
+                driver_features = status->features;
+                result = 0;
+                goto unlock_response_queue;
+            }
+
+            errno = EPROTO;
+            goto unlock_response_queue;
+        }
+        else {
+            thd_pass();
+        }
+    } while(timer_ms_gettime64() < deadline);
+
+    errno = ETIMEDOUT;
+
+unlock_response_queue:
+    mutex_unlock(&response_mutex);
+unlock_command_queue:
+    mutex_unlock(&queue_proc_mutex);
+    return result;
 }
 
 /* Poll for responses from the AICA. We assume here that we're not

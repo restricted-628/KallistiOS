@@ -114,6 +114,47 @@ typedef struct aica_channel_mask {
 #define AICA_CMDSTR_CHANNEL_MASK_SIZE \
     ((sizeof(aica_cmd_t) + sizeof(aica_channel_mask_t)) / 4)
 
+/** \brief Versioned AICA firmware capability and health response. */
+typedef struct aica_driver_info {
+    uint32 protocol_version;       /**< Shared command protocol version. */
+    uint32 firmware_version;       /**< Encoded firmware implementation version. */
+    uint32 features;               /**< AICA_DRIVER_FEATURE_* bit mask. */
+    uint32 uptime_ms;              /**< Firmware clock in milliseconds. */
+    uint32 commands_processed;     /**< Commands with a recoverable packet boundary. */
+    uint32 commands_rejected;      /**< Structurally complete commands rejected. */
+    uint32 malformed_packets;      /**< Queue snapshots dropped for invalid size. */
+    uint32 responses_dropped;      /**< Responses lost to insufficient queue space. */
+    uint32 command_queue_size;     /**< Command queue data capacity in bytes. */
+    uint32 command_queue_used;     /**< Command bytes pending at snapshot time. */
+    uint32 response_queue_size;    /**< Response queue data capacity in bytes. */
+    uint32 response_queue_used;    /**< Response bytes pending before this reply. */
+} aica_driver_info_t;
+
+/** \brief Macro for declaring a driver-information response packet. */
+#define AICA_CMDSTR_DRIVER_INFO(T, CMDR, INFOR) \
+    uint32 T[(sizeof(aica_cmd_t) + sizeof(aica_driver_info_t)) / 4]; \
+    aica_cmd_t *CMDR = (aica_cmd_t *)T; \
+    aica_driver_info_t *INFOR = (aica_driver_info_t *)(CMDR->cmd_data)
+
+/** \brief Size of a driver-information response in words. */
+#define AICA_CMDSTR_DRIVER_INFO_SIZE \
+    ((sizeof(aica_cmd_t) + sizeof(aica_driver_info_t)) / 4)
+
+/** \brief Shared protocol version implemented by this firmware. */
+#define AICA_DRIVER_PROTOCOL_VERSION 0x00000001
+
+/** \brief Firmware implementation version encoded as major.minor.patch. */
+#define AICA_DRIVER_FIRMWARE_VERSION 0x00010000
+
+/** \defgroup audio_aica_features Firmware Features
+    \brief                               Negotiated firmware feature flags
+    @{
+*/
+#define AICA_DRIVER_FEATURE_SYNC_CHANNELS 0x00000001
+#define AICA_DRIVER_FEATURE_VALIDATION    0x00000002
+#define AICA_DRIVER_FEATURE_POSITION      0x00000004
+/** @} */
+
 /** \defgroup audio_aica_cmd Commands
     \brief                   Values of commands for aica_cmd_t
     @{
@@ -123,6 +164,7 @@ typedef struct aica_channel_mask {
 #define AICA_CMD_CHAN       0x00000002  /**< \brief Perform a wavetable action   */
 #define AICA_CMD_SYNC_CLOCK 0x00000003  /**< \brief Reset the millisecond clock  */
 #define AICA_CMD_SYNC_CHANNELS 0x00000004 /**< \brief Key on a 64-channel mask */
+#define AICA_CMD_QUERY_DRIVER 0x00000005 /**< \brief Query firmware capabilities */
 /** @} */
 
 /** \defgroup audio_aica_resp Responses
@@ -132,6 +174,7 @@ typedef struct aica_channel_mask {
 #define AICA_RESP_NONE      0x00000000  /**< \brief No response */
 #define AICA_RESP_PONG      0x00000001  /**< \brief Response to CMD_PING */
 #define AICA_RESP_DBGPRINT  0x00000002  /**< \brief Payload is a C string */
+#define AICA_RESP_DRIVER_INFO 0x00000003 /**< \brief Firmware status response */
 /** @} */
 
 /** \defgroup audio_aica_ch_cmd Channel Commands

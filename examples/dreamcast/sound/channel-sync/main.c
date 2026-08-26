@@ -7,6 +7,7 @@
 */
 
 #include <errno.h>
+#include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,7 @@ static int queue_delayed_start(int channel, uint32_t base, uint32_t pan) {
 
 int main(int argc, char **argv) {
     uint32_t sample_address = 0;
+    snd_driver_status_t driver_status;
     int channels[CHANNEL_COUNT];
     int allocated = 0;
     int result = EXIT_FAILURE;
@@ -73,6 +75,14 @@ int main(int argc, char **argv) {
         perror("snd_init");
         return EXIT_FAILURE;
     }
+
+    if(snd_driver_get_status(&driver_status, 100) < 0) {
+        perror("snd_driver_get_status");
+        goto cleanup;
+    }
+
+    printf("AICA firmware %08" PRIx32 ", features %08" PRIx32 "\n",
+           driver_status.firmware_version, driver_status.features);
 
     for(i = 0; i < CHANNEL_COUNT; ++i) {
         channels[i] = snd_sfx_chn_alloc();

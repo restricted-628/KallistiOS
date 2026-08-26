@@ -128,6 +128,46 @@ int snd_init(void);
 */
 void snd_shutdown(void);
 
+/** \defgroup audio_driver_features Driver Feature Flags
+    \brief                                Negotiated AICA firmware features
+    @{
+*/
+#define SND_DRIVER_FEATURE_SYNC_CHANNELS 0x00000001u
+#define SND_DRIVER_FEATURE_VALIDATION    0x00000002u
+#define SND_DRIVER_FEATURE_POSITION      0x00000004u
+/** @} */
+
+/** \brief Coherent AICA firmware capability and health snapshot. */
+typedef struct snd_driver_status {
+    uint32_t protocol_version;       /**< Shared command protocol version. */
+    uint32_t firmware_version;       /**< Major.minor.patch as 0x00MMmmpp. */
+    uint32_t features;               /**< SND_DRIVER_FEATURE_* bit mask. */
+    uint32_t uptime_ms;              /**< Firmware clock in milliseconds. */
+    uint32_t commands_processed;     /**< Commands with a valid packet boundary. */
+    uint32_t commands_rejected;      /**< Complete but invalid commands. */
+    uint32_t malformed_packets;      /**< Queue snapshots dropped for invalid size. */
+    uint32_t responses_dropped;      /**< Replies lost to response-queue pressure. */
+    uint32_t command_queue_size;     /**< Command queue capacity in bytes. */
+    uint32_t command_queue_used;     /**< Pending command bytes at snapshot time. */
+    uint32_t response_queue_size;    /**< Response queue capacity in bytes. */
+    uint32_t response_queue_used;    /**< Pending response bytes before this reply. */
+} snd_driver_status_t;
+
+/** \brief Query the running AICA firmware's capabilities and health.
+
+    This is a bounded command/response operation and must be called from thread
+    context. Counters are monotonic modulo 32-bit wrap and describe the current
+    firmware instance since snd_init() loaded it. The query preserves pending
+    low-level responses and returns EBUSY until their owner consumes them.
+
+    \param status          Receives a coherent firmware snapshot.
+    \param timeout_ms      Nonzero overall response deadline in milliseconds.
+    \retval 0              On success.
+    \retval -1             On error, with errno set to EINVAL, EPERM, ENODEV,
+                           EBUSY, EPROTO, EAGAIN, or ETIMEDOUT as appropriate.
+*/
+int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms);
+
 /** \brief  Copy a request packet to the AICA queue.
 
     This function is to put in a low-level request using the built-in streaming

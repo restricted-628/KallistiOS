@@ -141,6 +141,14 @@ The original low-32-channel synchronized-start packet remains accepted by the
 firmware for existing raw command clients. New KOS code uses the explicit
 64-channel command.
 
+The SH-4 can now issue a bounded status query and receive a versioned firmware
+response containing negotiated features, uptime, queue occupancy, processed
+and rejected command counts, malformed-packet count, and dropped-response
+count. Sound initialization verifies the protocol and the synchronized-channel
+feature before publishing the driver as usable. A mismatched or silent
+firmware therefore fails explicitly instead of accepting commands it cannot
+execute.
+
 ## Resource model
 
 The first tranche adds no thread, fiber, periodic callback, permanent buffer,
@@ -153,15 +161,14 @@ explicit lifecycle choice.
 
 ## Remaining order
 
-1. Add versioned firmware capabilities, responses, state, and error counters.
-2. Add queued asynchronous sound-RAM transfer requests over the exact-range
+1. Add queued asynchronous sound-RAM transfer requests over the exact-range
    CPU and DMA primitives.
-3. Complete checked channel envelope, filter, routing, and coherent status.
-4. Complete checked stream lifecycle, progress, underrun reporting, and live
+2. Complete checked channel envelope, filter, routing, and coherent status.
+3. Complete checked stream lifecycle, progress, underrun reporting, and live
    controls; then add an optional service adapter.
-5. Add checked DSP program, routing, and output control.
-6. Build optional bank and sequence libraries plus host-side content tools.
-7. Add optional spatial helpers integrated with the established math stack.
+4. Add checked DSP program, routing, and output control.
+5. Build optional bank and sequence libraries plus host-side content tools.
+6. Add optional spatial helpers integrated with the established math stack.
 
 ## Validation boundary
 

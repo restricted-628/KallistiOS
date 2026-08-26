@@ -25,6 +25,10 @@ _Static_assert(AICA_CMDSTR_CHANNEL_SIZE == 24,
                "AICA channel command word count");
 _Static_assert(AICA_CMDSTR_CHANNEL_MASK_SIZE == 10,
                "AICA mask command word count");
+_Static_assert(sizeof(aica_driver_info_t) == 48,
+               "AICA driver information wire size");
+_Static_assert(AICA_CMDSTR_DRIVER_INFO_SIZE == 20,
+               "AICA driver information word count");
 
 int main(void) {
     const uint64_t channels = UINT64_C(0x8000000180000001);

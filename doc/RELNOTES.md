@@ -17,6 +17,10 @@ lifecycle and naming conventions.
   malformed queue records cannot trap its command loop. PCM stream maxima now
   fit the 16-bit hardware loop endpoint after alignment. These changes add no
   service thread, allocation, or periodic work.
+* The bundled AICA firmware now reports a versioned capability and health
+  snapshot. Sound initialization rejects silent or incompatible firmware, and
+  applications can inspect queue pressure and rejected or malformed commands
+  through a bounded public status query.
 * Bundled SH4ZAM 0.8 as a first-class, automatically built Dreamcast math
   component and added it to the standard grouped KOS link set. The optimized
   target backend remains independently attributed under its MIT license and
