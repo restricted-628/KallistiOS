@@ -1,10 +1,10 @@
 # Compact-model rendering
 
-`pvr_chunk_model_emit()` and `pvr_chunk_model_emit_two_volume()` are bounded
-bridges between admitted compact model streams and KOS PVR geometry sinks.
-They are deliberately emitters, not a retained renderer: the application still
-owns the scene, active list, materials, textures, model storage, animation
-state, and workspace.
+The immediate and prepared compact-model emitters are bounded bridges between
+admitted model streams and KOS PVR geometry sinks. They are deliberately
+emitters, not a retained renderer: the application still owns the scene,
+active list, materials, textures, model storage, animation state, preparation
+memory, and workspace.
 
 ## Pipeline
 
@@ -27,6 +27,13 @@ One call performs these stages:
 No heap allocation, worker thread, hidden model index, or global render state
 is introduced. The workspace only needs one vertex per entry in the largest
 strip and can be reused as soon as the call returns.
+
+The immediate functions scan bounded vertex records for every indexed
+reference and require no preparation storage. Their `_prepared` counterparts
+use `pvr_chunk_model_plan_t` to resolve the same references through a sparse
+page table in constant time. Both forms preserve identical state, callback,
+projection, sink, progress, and error behavior. Workspace and memory output
+must not overlap either the prepared plan or its borrowed index entries.
 
 ## Material and texture boundary
 

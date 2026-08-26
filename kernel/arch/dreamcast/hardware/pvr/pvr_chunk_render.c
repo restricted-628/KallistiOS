@@ -227,7 +227,36 @@ static int validate_two_volume_state_record(
     return validate_record_fields(record);
 }
 
+static int model_vertex_attributes_get(
+    const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan, uint16_t index,
+    pvr_chunk_vertex_attributes_t *attributes) {
+    if(plan)
+        return pvr_chunk_model_plan_vertex_attributes_get(plan, index,
+                                                          attributes);
+    return pvr_chunk_model_vertex_attributes_get(view, index, attributes);
+}
+
+static int model_plan_ranges_get(
+    const pvr_chunk_model_plan_t *plan,
+    uintptr_t *plan_start, size_t *plan_bytes,
+    uintptr_t *index_start, size_t *index_bytes) {
+    *plan_start = 0;
+    *plan_bytes = 0;
+    *index_start = 0;
+    *index_bytes = 0;
+    if(!plan)
+        return 0;
+
+    if(range_get(plan, 1u, sizeof(*plan), plan_start, plan_bytes) < 0 ||
+       range_get(plan->vertex_index, plan->vertex_index_count,
+                 sizeof(*plan->vertex_index), index_start, index_bytes) < 0)
+        return -1;
+    return 0;
+}
+
 static int preflight_strip(const pvr_chunk_model_view_t *view,
+                           const pvr_chunk_model_plan_t *plan,
                            const pvr_chunk_strip_view_t *strip,
                            int has_prepare_vertex,
                            render_requirements_t *requirements) {
@@ -246,9 +275,8 @@ static int preflight_strip(const pvr_chunk_model_view_t *view,
 
         if(pvr_chunk_strip_attributes_get(strip, vertex_index,
                                           &strip_attributes) < 0 ||
-           pvr_chunk_model_vertex_attributes_get(view,
-                                                  strip_attributes.index,
-                                                  &vertex_attributes) < 0)
+           model_vertex_attributes_get(view, plan, strip_attributes.index,
+                                       &vertex_attributes) < 0)
             return -1;
 
         if(!has_prepare_vertex &&
@@ -265,6 +293,7 @@ static int preflight_strip(const pvr_chunk_model_view_t *view,
 }
 
 static int preflight(const pvr_chunk_model_view_t *view,
+                     const pvr_chunk_model_plan_t *plan,
                      const matrix_t *object_to_screen,
                      const pvr_geometry_sink_t *sink,
                      const pvr_vertex_t *workspace, size_t workspace_count,
@@ -278,11 +307,15 @@ static int preflight(const pvr_chunk_model_view_t *view,
     uintptr_t polygon_start;
     uintptr_t matrix_start;
     uintptr_t output_start = 0;
+    uintptr_t plan_start;
+    uintptr_t index_start;
     size_t workspace_bytes;
     size_t vertex_bytes;
     size_t polygon_bytes;
     size_t matrix_bytes;
     size_t output_bytes = 0;
+    size_t plan_bytes;
+    size_t index_bytes;
     int bump_basis_active = 0;
     int rv;
 
@@ -326,7 +359,8 @@ static int preflight(const pvr_chunk_model_view_t *view,
                 return -1;
             while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
                                                              &strip)) > 0) {
-                if(preflight_strip(view, &strip, prepare_vertex != NULL,
+                if(preflight_strip(view, plan, &strip,
+                                   prepare_vertex != NULL,
                                    requirements) < 0)
                     return -1;
             }
@@ -360,7 +394,9 @@ static int preflight(const pvr_chunk_model_view_t *view,
                  sizeof(*view->model.polygon_words), &polygon_start,
                  &polygon_bytes) < 0 ||
        range_get(object_to_screen, 1u, sizeof(*object_to_screen),
-                 &matrix_start, &matrix_bytes) < 0)
+                 &matrix_start, &matrix_bytes) < 0 ||
+       model_plan_ranges_get(plan, &plan_start, &plan_bytes,
+                             &index_start, &index_bytes) < 0)
         return -1;
 
     if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
@@ -378,12 +414,20 @@ static int preflight(const pvr_chunk_model_view_t *view,
                       matrix_start, matrix_bytes) ||
        ranges_overlap(workspace_start, workspace_bytes,
                       output_start, output_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      plan_start, plan_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      index_start, index_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       vertex_start, vertex_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       polygon_start, polygon_bytes) ||
        ranges_overlap(output_start, output_bytes,
-                      matrix_start, matrix_bytes)) {
+                      matrix_start, matrix_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      plan_start, plan_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      index_start, index_bytes)) {
         errno = EINVAL;
         return -1;
     }
@@ -547,6 +591,7 @@ static void update_state(pvr_chunk_render_state_t *state,
 }
 
 static int assemble_strip(const pvr_chunk_model_view_t *view,
+                          const pvr_chunk_model_plan_t *plan,
                           const pvr_chunk_render_state_t *state,
                           const pvr_chunk_strip_view_t *strip,
                           pvr_vertex_t *workspace,
@@ -565,9 +610,8 @@ static int assemble_strip(const pvr_chunk_model_view_t *view,
             source_index = 1u - destination_index;
         if(pvr_chunk_strip_attributes_get(strip, source_index,
                                           &strip_attributes) < 0 ||
-           pvr_chunk_model_vertex_attributes_get(view,
-                                                  strip_attributes.index,
-                                                  &vertex_attributes) < 0)
+           model_vertex_attributes_get(view, plan, strip_attributes.index,
+                                       &vertex_attributes) < 0)
             return -1;
 
         memset(&vertex, 0, sizeof(vertex));
@@ -613,8 +657,9 @@ static int assemble_strip(const pvr_chunk_model_view_t *view,
     return 0;
 }
 
-int pvr_chunk_model_emit(
+static int model_emit(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     pvr_geometry_sink_t *sink,
     pvr_vertex_t *workspace, size_t workspace_count,
@@ -630,7 +675,8 @@ int pvr_chunk_model_emit(
 
     if(result)
         *result = progress;
-    if(preflight(view, object_to_screen, sink, workspace, workspace_count,
+    if(preflight(view, plan, object_to_screen, sink, workspace,
+                 workspace_count,
                  begin_strip, prepare_vertex, &requirements) < 0)
         return -1;
 
@@ -657,7 +703,7 @@ int pvr_chunk_model_emit(
                 pvr_geometry_stream_t geometry;
 
                 state.strip_flags = strip.flags;
-                if(assemble_strip(view, &state, &strip, workspace,
+                if(assemble_strip(view, plan, &state, &strip, workspace,
                                   prepare_vertex, data) < 0)
                     goto fail;
 
@@ -699,6 +745,36 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_emit(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    return model_emit(view, NULL, object_to_screen, sink, workspace,
+                      workspace_count, begin_strip, prepare_vertex, data,
+                      result);
+}
+
+int pvr_chunk_model_emit_prepared(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    if(!plan) {
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit(&plan->view, plan, object_to_screen, sink, workspace,
+                      workspace_count, begin_strip, prepare_vertex, data,
+                      result);
 }
 
 static size_t two_volume_format_size(
@@ -760,6 +836,7 @@ static pvr_geometry_vertex_format_t two_volume_strip_format(uint8_t type) {
 
 static int preflight_two_volume(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     const pvr_geometry_vertex_sink_t *sink,
     const pvr_chunk_two_volume_vertex_t *workspace,
@@ -774,11 +851,15 @@ static int preflight_two_volume(
     uintptr_t polygon_start;
     uintptr_t matrix_start;
     uintptr_t output_start = 0;
+    uintptr_t plan_start;
+    uintptr_t index_start;
     size_t workspace_bytes;
     size_t vertex_bytes;
     size_t polygon_bytes;
     size_t matrix_bytes;
     size_t output_bytes = 0;
+    size_t plan_bytes;
+    size_t index_bytes;
     size_t vertex_size = sink ? two_volume_format_size(sink->format) : 0;
     int rv;
 
@@ -818,7 +899,8 @@ static int preflight_two_volume(
                 return -1;
             while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
                                                              &strip)) > 0) {
-                if(preflight_strip(view, &strip, prepare_vertex != NULL,
+                if(preflight_strip(view, plan, &strip,
+                                   prepare_vertex != NULL,
                                    requirements) < 0)
                     return -1;
             }
@@ -849,7 +931,9 @@ static int preflight_two_volume(
                  sizeof(*view->model.polygon_words), &polygon_start,
                  &polygon_bytes) < 0 ||
        range_get(object_to_screen, 1u, sizeof(*object_to_screen),
-                 &matrix_start, &matrix_bytes) < 0)
+                 &matrix_start, &matrix_bytes) < 0 ||
+       model_plan_ranges_get(plan, &plan_start, &plan_bytes,
+                             &index_start, &index_bytes) < 0)
         return -1;
 
     if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
@@ -866,12 +950,20 @@ static int preflight_two_volume(
                       matrix_start, matrix_bytes) ||
        ranges_overlap(workspace_start, workspace_bytes,
                       output_start, output_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      plan_start, plan_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      index_start, index_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       vertex_start, vertex_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       polygon_start, polygon_bytes) ||
        ranges_overlap(output_start, output_bytes,
-                      matrix_start, matrix_bytes)) {
+                      matrix_start, matrix_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      plan_start, plan_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      index_start, index_bytes)) {
         errno = EINVAL;
         return -1;
     }
@@ -907,6 +999,7 @@ static uint32_t vertex_specular(
 
 static int assemble_two_volume_strip(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip,
     pvr_geometry_vertex_format_t format,
@@ -929,9 +1022,8 @@ static int assemble_two_volume_strip(
             source_index = 1u - destination_index;
         if(pvr_chunk_strip_attributes_get(strip, source_index,
                                           &strip_attributes) < 0 ||
-           pvr_chunk_model_vertex_attributes_get(view,
-                                                  strip_attributes.index,
-                                                  &vertex_attributes) < 0)
+           model_vertex_attributes_get(view, plan, strip_attributes.index,
+                                       &vertex_attributes) < 0)
             return -1;
 
         memset(&vertex, 0, sizeof(vertex));
@@ -980,8 +1072,9 @@ static int assemble_two_volume_strip(
     return 0;
 }
 
-int pvr_chunk_model_emit_two_volume(
+static int model_emit_two_volume(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     pvr_geometry_vertex_sink_t *sink,
     pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
@@ -998,7 +1091,7 @@ int pvr_chunk_model_emit_two_volume(
 
     if(result)
         *result = progress;
-    if(preflight_two_volume(view, object_to_screen, sink, workspace,
+    if(preflight_two_volume(view, plan, object_to_screen, sink, workspace,
                             workspace_count, begin_strip, prepare_vertex,
                             &requirements) < 0)
         return -1;
@@ -1027,7 +1120,7 @@ int pvr_chunk_model_emit_two_volume(
                 pvr_geometry_vertex_stream_t geometry;
 
                 state.strip_flags = strip.flags;
-                if(assemble_two_volume_strip(view, &state, &strip,
+                if(assemble_two_volume_strip(view, plan, &state, &strip,
                                              sink->format, workspace,
                                              prepare_vertex, data) < 0)
                     goto fail;
@@ -1072,6 +1165,36 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_emit_two_volume(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    return model_emit_two_volume(view, NULL, object_to_screen, sink,
+                                 workspace, workspace_count, begin_strip,
+                                 prepare_vertex, data, result);
+}
+
+int pvr_chunk_model_emit_two_volume_prepared(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    if(!plan) {
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit_two_volume(&plan->view, plan, object_to_screen, sink,
+                                 workspace, workspace_count, begin_strip,
+                                 prepare_vertex, data, result);
 }
 
 static int modifier_sink_valid(const pvr_geometry_vertex_sink_t *sink) {
@@ -1171,6 +1294,7 @@ static int volume_triangle_count(const pvr_chunk_record_t *record,
 
 static int modifier_preflight(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     const pvr_chunk_modifier_config_t *config,
     const pvr_geometry_vertex_sink_t *sink,
@@ -1183,11 +1307,15 @@ static int modifier_preflight(
     uintptr_t polygon_start;
     uintptr_t matrix_start;
     uintptr_t output_start = 0;
+    uintptr_t plan_start;
+    uintptr_t index_start;
     size_t workspace_bytes;
     size_t vertex_bytes;
     size_t polygon_bytes;
     size_t matrix_bytes;
     size_t output_bytes = 0;
+    size_t plan_bytes;
+    size_t index_bytes;
     int rv;
 
     *triangle_count = 0;
@@ -1228,7 +1356,9 @@ static int modifier_preflight(
                  sizeof(*view->model.polygon_words), &polygon_start,
                  &polygon_bytes) < 0 ||
        range_get(object_to_screen, 1u, sizeof(*object_to_screen),
-                 &matrix_start, &matrix_bytes) < 0)
+                 &matrix_start, &matrix_bytes) < 0 ||
+       model_plan_ranges_get(plan, &plan_start, &plan_bytes,
+                             &index_start, &index_bytes) < 0)
         return -1;
     if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
        range_get(sink->destination.memory.vertices,
@@ -1244,12 +1374,20 @@ static int modifier_preflight(
                       matrix_start, matrix_bytes) ||
        ranges_overlap(workspace_start, workspace_bytes,
                       output_start, output_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      plan_start, plan_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
+                      index_start, index_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       vertex_start, vertex_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       polygon_start, polygon_bytes) ||
        ranges_overlap(output_start, output_bytes,
-                      matrix_start, matrix_bytes)) {
+                      matrix_start, matrix_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      plan_start, plan_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      index_start, index_bytes)) {
         errno = EINVAL;
         return -1;
     }
@@ -1300,6 +1438,7 @@ static int publish_modifier(
 
 static int emit_modifier_triangle(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink,
@@ -1312,8 +1451,8 @@ static int emit_modifier_triangle(
     size_t i;
 
     for(i = 0; i < 3u; ++i) {
-        if(pvr_chunk_model_vertex_attributes_get(view, indices[i],
-                                                 &vertices[i]) < 0)
+        if(model_vertex_attributes_get(view, plan, indices[i],
+                                       &vertices[i]) < 0)
             return -1;
         if(vertices[i].position.w != 1.0f && !prepare_triangle) {
             errno = ENOTSUP;
@@ -1355,6 +1494,7 @@ static int emit_modifier_triangle(
 
 static int emit_modifier_record(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink,
@@ -1379,7 +1519,8 @@ static int emit_modifier_record(
             uint32_t mode = ++emitted == triangle_count ?
                             config->final_mode : PVR_MODIFIER_OTHER_POLY;
 
-            if(emit_modifier_triangle(view, object_to_screen, config, sink,
+            if(emit_modifier_triangle(view, plan, object_to_screen, config,
+                                      sink,
                                       workspace, first,
                                       payload + index_count, user_count, mode,
                                       prepare_triangle, data) < 0)
@@ -1389,8 +1530,8 @@ static int emit_modifier_record(
 
                 mode = ++emitted == triangle_count ?
                        config->final_mode : PVR_MODIFIER_OTHER_POLY;
-                if(emit_modifier_triangle(view, object_to_screen, config,
-                                          sink, workspace, second,
+                if(emit_modifier_triangle(view, plan, object_to_screen,
+                                          config, sink, workspace, second,
                                           payload + index_count, user_count,
                                           mode, prepare_triangle, data) < 0)
                     return -1;
@@ -1436,8 +1577,8 @@ static int emit_modifier_record(
                 }
                 mode = ++emitted == triangle_count ?
                        config->final_mode : PVR_MODIFIER_OTHER_POLY;
-                if(emit_modifier_triangle(view, object_to_screen, config,
-                                          sink, workspace, indices,
+                if(emit_modifier_triangle(view, plan, object_to_screen,
+                                          config, sink, workspace, indices,
                                           c.triangle_user_words,
                                           c.triangle_user_word_count, mode,
                                           prepare_triangle, data) < 0)
@@ -1451,8 +1592,9 @@ static int emit_modifier_record(
     return 0;
 }
 
-int pvr_chunk_model_emit_modifiers(
+static int model_emit_modifiers(
     const pvr_chunk_model_view_t *view,
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink,
@@ -1467,7 +1609,7 @@ int pvr_chunk_model_emit_modifiers(
 
     if(result)
         *result = progress;
-    if(modifier_preflight(view, object_to_screen, config, sink, workspace,
+    if(modifier_preflight(view, plan, object_to_screen, config, sink, workspace,
                           &triangle_count) < 0)
         return -1;
 
@@ -1486,7 +1628,7 @@ int pvr_chunk_model_emit_modifiers(
             goto fail;
         if(!record_triangles)
             continue;
-        if(emit_modifier_record(view, object_to_screen, config, sink,
+        if(emit_modifier_record(view, plan, object_to_screen, config, sink,
                                 workspace, &record, record_triangles,
                                 prepare_triangle, data) < 0)
             goto fail;
@@ -1505,4 +1647,33 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_emit_modifiers(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result) {
+    return model_emit_modifiers(view, NULL, object_to_screen, config, sink,
+                                workspace, prepare_triangle, data, result);
+}
+
+int pvr_chunk_model_emit_modifiers_prepared(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result) {
+    if(!plan) {
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit_modifiers(&plan->view, plan, object_to_screen, config,
+                                sink, workspace, prepare_triangle, data,
+                                result);
 }

@@ -277,6 +277,10 @@ lists without introducing scene, texture, or model ownership:
   callback required to combine it with application light and strength; and
 - cached-polygon controls fail with `ENOTSUP` before side effects instead of
   being skipped or rendered under an incompatible contract.
+- optional caller-owned model plans divide the 16-bit vertex namespace into
+  sparse 256-entry pages, replacing every repeated vertex-record scan in
+  ordinary, two-volume, and modifier emission with constant-time lookup while
+  leaving the zero-preparation immediate path intact.
 
 The renderer allocates nothing, creates no worker, retains no texture lookup or
 model index, and never begins or finishes a PVR scene. The caller supplies one

@@ -207,6 +207,22 @@ int pvr_chunk_model_emit(
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
 
+/** \brief Project and emit through a prepared constant-time vertex plan.
+
+    Rendering, callback, workspace, sink, and failure semantics match
+    pvr_chunk_model_emit(). The plan replaces repeated vertex-stream searches
+    with direct page-indexed resolution and must remain immutable during the
+    call.
+*/
+int pvr_chunk_model_emit_prepared(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
 /** \brief Project and emit admitted two-volume compact-model strips.
 
     Ordinary state records describe the outside-volume parameter set; their
@@ -236,6 +252,16 @@ int pvr_chunk_model_emit_two_volume(
     pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
 
+/** \brief Emit two-volume strips through a prepared vertex plan. */
+int pvr_chunk_model_emit_two_volume_prepared(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
 /** \brief Project and emit compact modifier-volume geometry.
 
     Triangle records emit directly, quads split into two winding-preserving
@@ -251,6 +277,16 @@ int pvr_chunk_model_emit_two_volume(
 */
 int pvr_chunk_model_emit_modifiers(
     const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result);
+
+/** \brief Emit modifier volumes through a prepared vertex plan. */
+int pvr_chunk_model_emit_modifiers_prepared(
+    const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink,

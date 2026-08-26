@@ -43,6 +43,10 @@ static void build_texture(void) {
 
 int main(int argc, char **argv) {
     pvr_chunk_model_view_t model_view;
+    pvr_chunk_model_plan_t model_plan;
+    pvr_chunk_model_plan_requirements_t plan_requirements;
+    pvr_chunk_vertex_index_entry_t
+        vertex_index[PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE];
     pvr_txr_residency_t residency;
     pvr_txr_residency_slot_t residency_slot[1];
     pvr_txr_surface_t residency_surface[1];
@@ -81,6 +85,12 @@ int main(int argc, char **argv) {
     assert(pvr_txr_residency_publish(&residency, upload_handle) == 0);
     assert(pvr_txr_residency_unpin(&residency, upload_handle) == 0);
     assert(pvr_chunk_model_open(&chunk_resource_model, &model_view) == 0);
+    assert(pvr_chunk_model_plan_query(&model_view, &plan_requirements) == 0);
+    assert(plan_requirements.vertex_index_entries <=
+           sizeof(vertex_index) / sizeof(vertex_index[0]));
+    assert(pvr_chunk_model_plan_build(
+        &model_view, vertex_index,
+        sizeof(vertex_index) / sizeof(vertex_index[0]), &model_plan) == 0);
     assert(model_view.info.maximum_strip_vertices <=
            sizeof(workspace) / sizeof(workspace[0]));
 
@@ -97,8 +107,8 @@ int main(int argc, char **argv) {
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
-        assert(pvr_chunk_model_emit(
-            &model_view, &screen_identity, &sink, workspace, 4,
+        assert(pvr_chunk_model_emit_prepared(
+            &model_plan, &screen_identity, &sink, workspace, 4,
             pvr_chunk_residency_binding_begin_strip, NULL,
             &material_binding, &render_result) == 0);
         assert(render_result.emitted_strips == 1 &&

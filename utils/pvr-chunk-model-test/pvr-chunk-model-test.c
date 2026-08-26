@@ -37,6 +37,22 @@ static const uint16_t valid_polygons[] = {
     UINT16_C(0x00ff)
 };
 
+static const uint32_t sparse_vertices[] = {
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 4),
+    UINT32_C(0x00010001),
+    UINT32_C(0x3f800000), UINT32_C(0x40000000), UINT32_C(0x40400000),
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 4),
+    UINT32_C(0x0001ffff),
+    UINT32_C(0x40800000), UINT32_C(0x40a00000), UINT32_C(0x40c00000),
+    UINT32_C(0x000000ff)
+};
+
+static const uint16_t sparse_polygons[] = {
+    PVR_CHUNK_STRIP_INDEX, UINT16_C(5), UINT16_C(1),
+    UINT16_C(3), UINT16_C(1), UINT16_C(0xffff), UINT16_C(1),
+    UINT16_C(0x00ff)
+};
+
 static pvr_chunk_model_t model_with(const uint32_t *vertices,
                                     size_t vertex_words,
                                     const uint16_t *polygons,
@@ -129,6 +145,91 @@ static void test_valid_model(void) {
     assert(strip_vertex.index == 2 &&
            strip_vertex.triangle_user_word_count == 0);
     assert(pvr_chunk_strip_iterator_next(&strip_iterator, &strip) == 0);
+}
+
+static void test_prepared_plan(void) {
+    pvr_chunk_model_t model = model_with(
+        valid_vertices, sizeof(valid_vertices) / sizeof(valid_vertices[0]),
+        valid_polygons, sizeof(valid_polygons) / sizeof(valid_polygons[0]));
+    pvr_chunk_model_t sparse = model_with(
+        sparse_vertices, sizeof(sparse_vertices) / sizeof(sparse_vertices[0]),
+        sparse_polygons, sizeof(sparse_polygons) / sizeof(sparse_polygons[0]));
+    pvr_chunk_model_view_t view;
+    pvr_chunk_model_view_t sparse_view;
+    pvr_chunk_model_plan_requirements_t requirements;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_vertex_index_entry_t entries[512];
+    pvr_chunk_vertex_attributes_t immediate;
+    pvr_chunk_vertex_attributes_t prepared;
+    uint16_t saved_page;
+    uint16_t saved_reserved;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_query(&view, &requirements) == 0);
+    assert(requirements.indexed_pages == 1);
+    assert(requirements.vertex_index_entries ==
+           PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE);
+    assert(requirements.vertex_index_bytes ==
+           requirements.vertex_index_entries * sizeof(entries[0]));
+
+    errno = 0;
+    assert(pvr_chunk_model_plan_build(
+               &view, entries, requirements.vertex_index_entries - 1u,
+               &plan) == -1);
+    assert(errno == ENOSPC);
+
+    assert(pvr_chunk_model_plan_build(
+               &view, entries, requirements.vertex_index_entries,
+               &plan) == 0);
+    assert(plan.indexed_page_count == 1);
+    assert(plan.vertex_index_count == requirements.vertex_index_entries);
+    assert(plan.vertex_page_slots[0] == 1);
+    assert(plan.vertex_page_slots[1] == 0);
+    assert(pvr_chunk_model_vertex_attributes_get(&view, 2, &immediate) == 0);
+    assert(pvr_chunk_model_plan_vertex_attributes_get(
+               &plan, 2, &prepared) == 0);
+    assert(prepared.index == immediate.index);
+    assert(prepared.position.x == immediate.position.x);
+    assert(prepared.position.y == immediate.position.y);
+    assert(prepared.position.z == immediate.position.z);
+    errno = 0;
+    assert(pvr_chunk_model_plan_vertex_attributes_get(
+               &plan, 3, &prepared) == -1);
+    assert(errno == ENOENT && prepared.present == 0);
+
+    saved_page = plan.vertex_page_slots[0];
+    plan.vertex_page_slots[0] = 2;
+    errno = 0;
+    assert(pvr_chunk_model_plan_vertex_attributes_get(
+               &plan, 0, &prepared) == -1);
+    assert(errno == EILSEQ);
+    plan.vertex_page_slots[0] = saved_page;
+
+    saved_reserved = entries[0].reserved;
+    entries[0].reserved = 1;
+    errno = 0;
+    assert(pvr_chunk_model_plan_vertex_attributes_get(
+               &plan, 0, &prepared) == -1);
+    assert(errno == EILSEQ);
+    entries[0].reserved = saved_reserved;
+
+    assert(pvr_chunk_model_open(&sparse, &sparse_view) == 0);
+    assert(pvr_chunk_model_plan_query(&sparse_view, &requirements) == 0);
+    assert(requirements.indexed_pages == 2);
+    assert(requirements.vertex_index_entries == 512);
+    assert(pvr_chunk_model_plan_build(&sparse_view, entries, 512,
+                                      &plan) == 0);
+    assert(plan.vertex_page_slots[0] == 1);
+    assert(plan.vertex_page_slots[1] == 0);
+    assert(plan.vertex_page_slots[255] == 2);
+    assert(pvr_chunk_model_plan_vertex_attributes_get(
+               &plan, UINT16_C(0xffff), &prepared) == 0);
+    assert(prepared.position.x == 4.0f && prepared.position.y == 5.0f &&
+           prepared.position.z == 6.0f);
+    errno = 0;
+    assert(pvr_chunk_model_plan_vertex_attributes_get(
+               &plan, UINT16_C(0x0101), &prepared) == -1);
+    assert(errno == ENOENT);
 }
 
 static void expect_invalid(const pvr_chunk_model_t *model, int error) {
@@ -659,6 +760,7 @@ static void test_bounded_random_streams(void) {
 
 int main(void) {
     test_valid_model();
+    test_prepared_plan();
     test_bad_streams();
     test_user_flags_and_reverse_strip();
     test_decoded_attributes();

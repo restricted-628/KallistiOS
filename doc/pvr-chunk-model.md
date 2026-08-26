@@ -53,8 +53,28 @@ ARGB color, and retains bounded per-triangle user words.
 `pvr_chunk_model_vertex_attributes_get()` resolves an index directly from an
 admitted model without allocating memory. Admission rejects overlapping
 vertex ranges, so the answer is deterministic. The lookup scans bounded
-records; a renderer that needs constant-time resolution can construct an
-index in caller-owned workspace.
+records and remains the zero-preparation path.
+
+## Prepared vertex plans
+
+Frequently rendered models can replace repeated record scans with an optional
+caller-owned `pvr_chunk_model_plan_t`. `pvr_chunk_model_plan_query()` reports
+the exact index storage before any caller buffer is modified, and
+`pvr_chunk_model_plan_build()` admits the complete model again before
+publishing the plan.
+
+The direct index divides the 16-bit vertex namespace into 256 pages of 256
+indices. Only pages containing defined vertices consume caller storage. Lookup
+therefore remains constant-time without imposing a flat 65,536-entry table on
+a sparse model. Each page entry records the bounded source-word offset and
+vertex format needed to decode that one index. Missing pages and holes report
+`ENOENT`; malformed or modified plan metadata reports `EILSEQ`.
+
+The plan allocates nothing and retains no hidden state. It borrows its compact
+entry array and copies the admitted model view. The source streams, index
+entries, and plan must remain immutable and at their original addresses while
+the plan is used. Applications that draw a model rarely can continue using the
+immediate view and pay no index-storage cost.
 
 Both decoded forms retain access to the raw bounded views, allowing uncommon
 application policy without weakening the checked framing boundary.
@@ -89,6 +109,11 @@ geometry path, and emits through an existing sink. Compact texture identifiers
 are resolved explicitly by a caller callback because the stream does not own
 the texture surface, layout, or VRAM address. See `pvr-chunk-rendering.md` for
 the state, callback, default-vertex, and failure contracts.
+
+`pvr_chunk_model_emit_prepared()` has the same rendering and failure contract,
+but resolves both preflight and emission references through the constant-time
+plan. Prepared variants cover ordinary, two-volume, and modifier-volume
+emission; they neither change model bytes nor introduce a second render path.
 
 `pvr_chunk_model_emit_two_volume()` provides the parallel bounded bridge for
 inside/outside parameter strips. It keeps primary and secondary texture and

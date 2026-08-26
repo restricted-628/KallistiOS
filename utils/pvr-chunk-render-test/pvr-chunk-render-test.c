@@ -270,8 +270,12 @@ static void test_emit(void) {
     pvr_chunk_model_t model = make_model(
         polygons, sizeof(polygons) / sizeof(polygons[0]));
     pvr_chunk_model_view_t view;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_model_plan_requirements_t plan_requirements;
+    pvr_chunk_vertex_index_entry_t index[256];
     alignas(32) pvr_vertex_t workspace[3];
     alignas(32) pvr_vertex_t output[3];
+    alignas(32) pvr_vertex_t immediate_output[3];
     pvr_geometry_sink_t sink;
     pvr_chunk_render_result_t result;
     callback_state_t callback = { 0 };
@@ -314,6 +318,21 @@ static void test_emit(void) {
     assert(output[0].oargb == UINT32_C(0xaa000001));
     assert(output[1].oargb == UINT32_C(0xaa000000));
     assert(output[2].flags == PVR_CMD_VERTEX_EOL);
+
+    memcpy(immediate_output, output, sizeof(output));
+    assert(pvr_chunk_model_plan_query(&view, &plan_requirements) == 0);
+    assert(plan_requirements.vertex_index_entries == 256);
+    assert(pvr_chunk_model_plan_build(&view, index, 256, &plan) == 0);
+    memset(output, 0, sizeof(output));
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_emit_prepared(
+               &plan, &identity, &sink, workspace, 3, begin_strip,
+               prepare_vertex, &callback, &result) == 0);
+    assert(!memcmp(output, immediate_output, sizeof(output)));
+    assert(result.consumed_records == 4 && result.emitted_strips == 1 &&
+           result.emitted_vertices == 3);
+    assert(callback.begins == 1 && callback.prepares == 3);
 }
 
 static void test_preflight_and_prefix(void) {
@@ -544,8 +563,11 @@ static void test_two_volume_emit(void) {
         sizeof(two_volume_textured_polygons) /
         sizeof(two_volume_textured_polygons[0]));
     pvr_chunk_model_view_t view;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_vertex_index_entry_t index[256];
     alignas(32) pvr_chunk_two_volume_vertex_t workspace[3];
     alignas(32) pvr_vertex_tpcm_t output[3];
+    alignas(32) pvr_vertex_tpcm_t immediate_output[3];
     alignas(32) pvr_vertex_tpcm_t unchanged[3];
     pvr_geometry_vertex_sink_t sink;
     pvr_chunk_render_result_t result;
@@ -585,6 +607,18 @@ static void test_two_volume_emit(void) {
     assert(output[0].oargb0 == UINT32_C(0xff010203));
     assert(output[0].oargb1 == (UINT32_C(0xff040506) ^ 1u));
     assert(output[2].flags == PVR_CMD_VERTEX_EOL);
+
+    memcpy(immediate_output, output, sizeof(output));
+    assert(pvr_chunk_model_plan_build(&view, index, 256, &plan) == 0);
+    memset(output, 0, sizeof(output));
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, output, 3) == 0);
+    assert(pvr_chunk_model_emit_two_volume_prepared(
+        &plan, &identity, &sink, workspace, 3, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == 0);
+    assert(!memcmp(output, immediate_output, sizeof(output)));
+    assert(callback.begins == 1 && callback.prepares == 3);
 
     memset(output, 0x5a, sizeof(output));
     memcpy(unchanged, output, sizeof(output));
@@ -722,12 +756,15 @@ static void test_modifier_emit(void) {
         .radius = 1.0f
     };
     pvr_chunk_model_view_t view;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_vertex_index_entry_t index[256];
     pvr_chunk_modifier_config_t config = {
         PVR_LIST_OP_MOD, PVR_CULLING_NONE,
         PVR_MODIFIER_INCLUDE_LAST_POLY
     };
     alignas(32) pvr_modifier_vol_t workspace;
     alignas(32) pvr_modifier_vol_t output[6];
+    alignas(32) pvr_modifier_vol_t immediate_output[6];
     alignas(32) pvr_modifier_vol_t unchanged[6];
     pvr_geometry_vertex_sink_t sink;
     pvr_chunk_modifier_result_t result;
@@ -756,6 +793,18 @@ static void test_modifier_emit(void) {
     assert(output[5].ax == 0.0f && output[5].ay == 1.0f &&
            output[5].bx == 1.0f && output[5].by == 0.0f);
     assert(output[5].flags == PVR_CMD_VERTEX_EOL && output[5].d1 == 5u);
+
+    memcpy(immediate_output, output, sizeof(output));
+    assert(pvr_chunk_model_plan_build(&view, index, 256, &plan) == 0);
+    memset(output, 0, sizeof(output));
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 6) == 0);
+    assert(pvr_chunk_model_emit_modifiers_prepared(
+        &plan, &identity, &config, &sink, &workspace, prepare_modifier,
+        &callback, &result) == 0);
+    assert(!memcmp(output, immediate_output, sizeof(output)));
+    assert(callback.calls == 6 && result.emitted_triangles == 6);
 
     memset(output, 0x5a, sizeof(output));
     memcpy(unchanged, output, sizeof(output));

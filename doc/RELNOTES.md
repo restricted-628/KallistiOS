@@ -48,6 +48,10 @@ lifecycle and naming conventions.
   independent canonical PVR triangles with explicit output capacity.
 * Added checked global small-polygon culling-threshold control and a defined
   1.0f initialization value for every PVR session.
+* Added optional caller-owned compact-model plans with sparse page-backed,
+  constant-time vertex resolution. Prepared ordinary, two-volume, and modifier
+  emitters retain the immediate path's validation, callbacks, progress, and
+  sinks while applications that do not prepare a model allocate no index.
 * PVR TA startup now propagates bounded readiness failures instead of
   continuing into a busy or faulted accelerator, and AICA store-queue paths
   acquire their real mapped destination under the checked SQ contract.

@@ -882,6 +882,260 @@ int pvr_chunk_vertex_batch_decode(const pvr_chunk_record_t *record,
     return 0;
 }
 
+static int plan_range_get(const void *pointer, size_t count,
+                          size_t element_size, uintptr_t *start,
+                          size_t *bytes) {
+    uintptr_t address = (uintptr_t)pointer;
+
+    if((count && !pointer) || count > SIZE_MAX / element_size) {
+        errno = count && !pointer ? EINVAL : ERANGE;
+        return -1;
+    }
+
+    *start = address;
+    *bytes = count * element_size;
+    if(*bytes > UINTPTR_MAX - address) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    return 0;
+}
+
+static int plan_ranges_overlap(uintptr_t lhs, size_t lhs_size,
+                               uintptr_t rhs, size_t rhs_size) {
+    return lhs_size && rhs_size && lhs < rhs + rhs_size &&
+           rhs < lhs + lhs_size;
+}
+
+static int collect_vertex_pages(const pvr_chunk_model_view_t *view,
+                                uint8_t pages[
+                                    PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT],
+                                size_t *page_count) {
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    size_t total = 0;
+    int rv;
+
+    memset(pages, 0, PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT);
+    if(pvr_chunk_vertex_iterator_init(&iterator, view->model.vertex_words,
+                                      view->model.vertex_word_count) < 0)
+        return -1;
+
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        pvr_chunk_vertex_batch_t batch;
+        uint32_t first_page;
+        uint32_t last_page;
+        uint32_t page;
+
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(record.record_class != PVR_CHUNK_RECORD_VERTEX)
+            continue;
+        if(pvr_chunk_vertex_batch_decode(&record, &batch) < 0)
+            return -1;
+        if(!batch.entry_count)
+            continue;
+
+        first_page = batch.first_index / PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE;
+        last_page = (batch.first_index + (uint32_t)batch.entry_count - 1u) /
+                    PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE;
+        for(page = first_page; page <= last_page; ++page) {
+            if(!pages[page]) {
+                pages[page] = 1;
+                ++total;
+            }
+        }
+    }
+
+    if(rv < 0)
+        return -1;
+    *page_count = total;
+    return 0;
+}
+
+int pvr_chunk_model_plan_query(
+    const pvr_chunk_model_view_t *view,
+    pvr_chunk_model_plan_requirements_t *requirements) {
+    pvr_chunk_model_plan_requirements_t result = { 0, 0, 0 };
+    pvr_chunk_model_view_t admitted;
+    uint8_t pages[PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT];
+
+    if(requirements)
+        *requirements = result;
+    if(!view || !requirements) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(pvr_chunk_model_open(&view->model, &admitted) < 0 ||
+       collect_vertex_pages(&admitted, pages, &result.indexed_pages) < 0)
+        return -1;
+
+    if(result.indexed_pages >
+       SIZE_MAX / PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE) {
+        errno = ERANGE;
+        return -1;
+    }
+    result.vertex_index_entries =
+        result.indexed_pages * PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE;
+    if(result.vertex_index_entries >
+       SIZE_MAX / sizeof(pvr_chunk_vertex_index_entry_t)) {
+        errno = ERANGE;
+        return -1;
+    }
+    result.vertex_index_bytes = result.vertex_index_entries *
+                                sizeof(pvr_chunk_vertex_index_entry_t);
+    *requirements = result;
+    return 0;
+}
+
+int pvr_chunk_model_plan_build(
+    const pvr_chunk_model_view_t *view,
+    pvr_chunk_vertex_index_entry_t *vertex_index,
+    size_t vertex_index_capacity,
+    pvr_chunk_model_plan_t *plan) {
+    pvr_chunk_model_plan_t prepared;
+    pvr_chunk_model_view_t admitted;
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    uint8_t pages[PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT];
+    uintptr_t index_start = 0;
+    uintptr_t plan_start;
+    uintptr_t view_start;
+    uintptr_t vertex_start;
+    uintptr_t polygon_start;
+    size_t index_bytes = 0;
+    size_t plan_bytes;
+    size_t view_bytes;
+    size_t vertex_bytes;
+    size_t polygon_bytes;
+    size_t page_count;
+    size_t required_entries;
+    size_t page_slot = 0;
+    size_t filled = 0;
+    size_t page;
+    int rv;
+
+    if(!view || !plan) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_model_open(&view->model, &admitted) < 0 ||
+       collect_vertex_pages(&admitted, pages, &page_count) < 0)
+        return -1;
+
+    required_entries = page_count * PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE;
+    if(vertex_index_capacity < required_entries) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(required_entries && !vertex_index) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(plan_range_get(vertex_index, required_entries,
+                      sizeof(*vertex_index), &index_start, &index_bytes) < 0 ||
+       plan_range_get(plan, 1u, sizeof(*plan), &plan_start, &plan_bytes) < 0 ||
+       plan_range_get(view, 1u, sizeof(*view), &view_start, &view_bytes) < 0 ||
+       plan_range_get(admitted.model.vertex_words,
+                      admitted.model.vertex_word_count,
+                      sizeof(*admitted.model.vertex_words), &vertex_start,
+                      &vertex_bytes) < 0 ||
+       plan_range_get(admitted.model.polygon_words,
+                      admitted.model.polygon_word_count,
+                      sizeof(*admitted.model.polygon_words), &polygon_start,
+                      &polygon_bytes) < 0)
+        return -1;
+
+    if(plan_ranges_overlap(index_start, index_bytes, plan_start, plan_bytes) ||
+       plan_ranges_overlap(index_start, index_bytes, view_start, view_bytes) ||
+       plan_ranges_overlap(index_start, index_bytes,
+                           vertex_start, vertex_bytes) ||
+       plan_ranges_overlap(index_start, index_bytes,
+                           polygon_start, polygon_bytes) ||
+       plan_ranges_overlap(plan_start, plan_bytes, view_start, view_bytes) ||
+       plan_ranges_overlap(plan_start, plan_bytes,
+                           vertex_start, vertex_bytes) ||
+       plan_ranges_overlap(plan_start, plan_bytes,
+                           polygon_start, polygon_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(&prepared, 0, sizeof(prepared));
+    if(required_entries)
+        memset(vertex_index, 0, index_bytes);
+    prepared.view = admitted;
+    prepared.vertex_index = vertex_index;
+    prepared.vertex_index_count = required_entries;
+    prepared.indexed_page_count = page_count;
+    for(page = 0; page < PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT; ++page) {
+        if(pages[page])
+            prepared.vertex_page_slots[page] = (uint16_t)(++page_slot);
+    }
+
+    if(pvr_chunk_vertex_iterator_init(&iterator,
+                                      admitted.model.vertex_words,
+                                      admitted.model.vertex_word_count) < 0)
+        return -1;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        pvr_chunk_vertex_batch_t batch;
+        size_t entry;
+
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(record.record_class != PVR_CHUNK_RECORD_VERTEX)
+            continue;
+        if(pvr_chunk_vertex_batch_decode(&record, &batch) < 0)
+            return -1;
+
+        for(entry = 0; entry < batch.entry_count; ++entry) {
+            uint32_t index = batch.first_index + (uint32_t)entry;
+            size_t mapped_page =
+                prepared.vertex_page_slots[index /
+                    PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE];
+            size_t destination;
+            pvr_chunk_vertex_index_entry_t *indexed;
+
+            if(!mapped_page) {
+                errno = EILSEQ;
+                return -1;
+            }
+            destination = (mapped_page - 1u) *
+                          PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE +
+                          index % PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE;
+            if(destination >= required_entries) {
+                errno = EILSEQ;
+                return -1;
+            }
+
+            indexed = &vertex_index[destination];
+            if(indexed->type) {
+                errno = EILSEQ;
+                return -1;
+            }
+            indexed->word_offset =
+                (size_t)(batch.entries + entry * batch.entry_word_count -
+                         admitted.model.vertex_words);
+            indexed->type = batch.type;
+            indexed->flags = batch.flags;
+            ++filled;
+        }
+    }
+
+    if(rv < 0)
+        return -1;
+    if(page_slot != page_count || filled != admitted.info.vertex_entries) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    *plan = prepared;
+    return 0;
+}
+
 int pvr_chunk_vertex_batch_get(const pvr_chunk_vertex_batch_t *batch,
                                size_t entry,
                                pvr_chunk_vertex_view_t *vertex) {
@@ -1184,6 +1438,65 @@ int pvr_chunk_model_vertex_attributes_get(
         return -1;
     errno = ENOENT;
     return -1;
+}
+
+int pvr_chunk_model_plan_vertex_attributes_get(
+    const pvr_chunk_model_plan_t *plan, uint16_t index,
+    pvr_chunk_vertex_attributes_t *attributes) {
+    pvr_chunk_vertex_batch_t batch;
+    const pvr_chunk_vertex_index_entry_t *indexed;
+    size_t mapped_page;
+    size_t entry;
+    size_t stride;
+
+    if(attributes)
+        memset(attributes, 0, sizeof(*attributes));
+    if(!plan || !attributes || !plan->view.model.vertex_words ||
+       !plan->view.model.vertex_word_count ||
+       plan->indexed_page_count > PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    mapped_page = plan->vertex_page_slots[
+        index / PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE];
+    if(!mapped_page) {
+        errno = ENOENT;
+        return -1;
+    }
+    if(mapped_page > plan->indexed_page_count || !plan->vertex_index) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    entry = (mapped_page - 1u) * PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE +
+            index % PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE;
+    if(entry >= plan->vertex_index_count) {
+        errno = EILSEQ;
+        return -1;
+    }
+    indexed = &plan->vertex_index[entry];
+    if(!indexed->type) {
+        errno = ENOENT;
+        return -1;
+    }
+
+    stride = vertex_stride(indexed->type);
+    if(!stride || indexed->reserved ||
+       indexed->word_offset > plan->view.model.vertex_word_count ||
+       stride > plan->view.model.vertex_word_count - indexed->word_offset) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    memset(&batch, 0, sizeof(batch));
+    batch.type = indexed->type;
+    batch.flags = indexed->flags;
+    batch.first_index = index;
+    batch.entries = plan->view.model.vertex_words + indexed->word_offset;
+    batch.entry_count = 1u;
+    batch.entry_word_count = stride;
+    return pvr_chunk_vertex_attributes_get(&batch, 0, attributes);
 }
 
 int pvr_chunk_strip_iterator_init(pvr_chunk_strip_iterator_t *iterator,

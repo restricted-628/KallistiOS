@@ -214,6 +214,47 @@ typedef struct pvr_chunk_model_view {
     pvr_chunk_model_info_t info;
 } pvr_chunk_model_view_t;
 
+/** \brief Number of vertex indices covered by one prepared index page. */
+#define PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE 256u
+
+/** \brief Number of pages spanning the compact model's 16-bit index space. */
+#define PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT 256u
+
+/** \brief One direct vertex lookup entry in caller-owned preparation memory.
+
+    A zero type marks an unused index. The word offset is relative to the
+    prepared model's vertex stream, so moving either source stream invalidates
+    the plan even when its contents remain unchanged.
+*/
+typedef struct pvr_chunk_vertex_index_entry {
+    size_t word_offset;
+    uint8_t type;
+    uint8_t flags;
+    uint16_t reserved;
+} pvr_chunk_vertex_index_entry_t;
+
+/** \brief Exact caller-owned storage required by a prepared model plan. */
+typedef struct pvr_chunk_model_plan_requirements {
+    size_t indexed_pages;
+    size_t vertex_index_entries;
+    size_t vertex_index_bytes;
+} pvr_chunk_model_plan_requirements_t;
+
+/** \brief Prepared immutable model view with constant-time vertex lookup.
+
+    The plan owns no memory. Its model streams and \a vertex_index array remain
+    caller-owned and must stay immutable and accessible while the plan is in
+    use. Page slots contain one plus the corresponding page number in the
+    compact caller array; zero denotes an absent 256-index page.
+*/
+typedef struct pvr_chunk_model_plan {
+    pvr_chunk_model_view_t view;
+    const pvr_chunk_vertex_index_entry_t *vertex_index;
+    size_t vertex_index_count;
+    size_t indexed_page_count;
+    uint16_t vertex_page_slots[PVR_CHUNK_VERTEX_INDEX_PAGE_COUNT];
+} pvr_chunk_model_plan_t;
+
 /** \brief Typed view of one vertex record. */
 typedef struct pvr_chunk_vertex_batch {
     uint8_t type;
@@ -386,6 +427,33 @@ int pvr_chunk_model_validate(const pvr_chunk_model_t *model,
 int pvr_chunk_model_open(const pvr_chunk_model_t *model,
                          pvr_chunk_model_view_t *view);
 
+/** \brief Query exact preparation storage for an admitted model.
+
+    Only pages containing at least one defined vertex consume index entries.
+    Every present page requires PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE entries.
+    Failure initializes \p requirements to zero.
+*/
+int pvr_chunk_model_plan_query(
+    const pvr_chunk_model_view_t *view,
+    pvr_chunk_model_plan_requirements_t *requirements);
+
+/** \brief Build a constant-time vertex plan in caller-owned memory.
+
+    The complete model is admitted again before \p vertex_index is modified.
+    The source streams, \p vertex_index, and \p plan must not overlap. The
+    required entry count is returned by pvr_chunk_model_plan_query(). Extra
+    caller capacity is neither retained nor modified.
+
+    \retval 0  Plan built successfully.
+    \retval -1 Invalid, malformed, overlapping, or insufficient storage with
+               errno set to EINVAL, EILSEQ, ERANGE, or ENOSPC.
+*/
+int pvr_chunk_model_plan_build(
+    const pvr_chunk_model_view_t *view,
+    pvr_chunk_vertex_index_entry_t *vertex_index,
+    size_t vertex_index_capacity,
+    pvr_chunk_model_plan_t *plan);
+
 /** \brief Decode one validated vertex record into a bounded batch view. */
 int pvr_chunk_vertex_batch_decode(const pvr_chunk_record_t *record,
                                   pvr_chunk_vertex_batch_t *batch);
@@ -417,6 +485,11 @@ int pvr_chunk_vertex_attributes_get(
 */
 int pvr_chunk_model_vertex_attributes_get(
     const pvr_chunk_model_view_t *view, uint16_t index,
+    pvr_chunk_vertex_attributes_t *attributes);
+
+/** \brief Resolve one indexed vertex through a prepared constant-time plan. */
+int pvr_chunk_model_plan_vertex_attributes_get(
+    const pvr_chunk_model_plan_t *plan, uint16_t index,
     pvr_chunk_vertex_attributes_t *attributes);
 
 /** \brief Initialize an iterator over a validated polygon strip record. */
