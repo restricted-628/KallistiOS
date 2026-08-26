@@ -3,6 +3,7 @@
    dc/sound/sound.h
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2023, 2024 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -152,6 +153,23 @@ void snd_sh4_to_aica_start(void);
     This function stops the processing of any queued requests in the AICA queue.
 */
 void snd_sh4_to_aica_stop(void);
+
+/** \brief Atomically start any selected AICA channels.
+
+    The selected channels must first have been configured with delayed key-on.
+    The ARM driver stages the key-on state for the complete 64-channel mask and
+    then issues one global key-on execute operation.
+
+    This function only submits the command. A batch bracketed by
+    snd_sh4_to_aica_stop() and snd_sh4_to_aica_start() remains stopped until
+    the caller explicitly resumes queue processing.
+
+    \param  channels        Bit N selects AICA channel N, from 0 through 63.
+    \retval 0               On successful command submission.
+    \retval -1              On invalid input or command-queue failure, with
+                            errno set appropriately.
+*/
+int snd_channels_start_sync(uint64_t channels);
 
 /** \brief  Transfer a packet of data from the AICA's SH4 queue.
 

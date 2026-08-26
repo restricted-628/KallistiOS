@@ -206,6 +206,8 @@ This page serves as an index for all KallistiOS examples.
   - sound
 - sound
   - cdda
+  - [**channel-sync**](sound/channel-sync/): Starts AICA channels 31 and 32
+    together with one synchronized 64-channel key-on
   - ghettoplay-vorbis
   - hello-adx
   - hello-mp3

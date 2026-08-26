@@ -873,7 +873,7 @@ int snd_sfx_play_ex(sfx_play_data_t *data) {
 
     if(!data || !(t = find_snd_effect(data->idx)) || data->vol < 0 ||
        data->vol > 255 || data->pan < 0 || data->pan > 255 ||
-       data->freq < 0 ||
+       data->freq < 0 || (uint32_t)data->freq > (UINT32_MAX >> 10) ||
        (data->loop &&
         (data->loopstart >= t->len ||
          (data->loopend &&
@@ -896,6 +896,7 @@ int snd_sfx_play_ex(sfx_play_data_t *data) {
     uint32_t size;
     AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
 
+    memset(tmp, 0, sizeof(tmp));
     size = t->len;
 
     if(size >= 65535) size = 65534;
@@ -904,7 +905,8 @@ int snd_sfx_play_ex(sfx_play_data_t *data) {
     cmd->timestamp = 0;
     cmd->size = AICA_CMDSTR_CHANNEL_SIZE;
     cmd->cmd_id = data->chn;
-    chan->cmd = AICA_CH_CMD_START;
+    chan->cmd = AICA_CH_CMD_START |
+                (t->stereo ? AICA_CH_START_DELAY : 0);
     chan->base = t->locl;
     chan->type = t->fmt;
     chan->length = size;
@@ -929,6 +931,10 @@ int snd_sfx_play_ex(sfx_play_data_t *data) {
         chan->pan = 255;
         if(!result)
             result = snd_sh4_to_aica(tmp, cmd->size);
+        if(!result)
+            result = snd_channels_start_sync(
+                (UINT64_C(1) << data->chn) |
+                (UINT64_C(1) << (data->chn + 1)));
         snd_sh4_to_aica_start();
     }
 

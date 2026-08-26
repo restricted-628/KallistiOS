@@ -3,6 +3,7 @@
    aica_comm.h
    Copyright (C) 2000-2002 Megan Potter
    Copyright (C) 2023 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file    aica_comm.h
@@ -97,6 +98,22 @@ typedef struct aica_channel {
 /** \brief Size of an AICA channel command in words */
 #define AICA_CMDSTR_CHANNEL_SIZE    ((sizeof(aica_cmd_t) + sizeof(aica_channel_t))/4)
 
+/** \brief Payload for a synchronized 64-channel key-on command. */
+typedef struct aica_channel_mask {
+    uint32      low;        /**< Channels 0 through 31. */
+    uint32      high;       /**< Channels 32 through 63. */
+} aica_channel_mask_t;
+
+/** \brief Macro for declaring a synchronized channel-mask command. */
+#define AICA_CMDSTR_CHANNEL_MASK(T, CMDR, MASKR) \
+    uint32 T[(sizeof(aica_cmd_t) + sizeof(aica_channel_mask_t)) / 4]; \
+    aica_cmd_t *CMDR = (aica_cmd_t *)T; \
+    aica_channel_mask_t *MASKR = (aica_channel_mask_t *)(CMDR->cmd_data)
+
+/** \brief Size of a synchronized channel-mask command in words. */
+#define AICA_CMDSTR_CHANNEL_MASK_SIZE \
+    ((sizeof(aica_cmd_t) + sizeof(aica_channel_mask_t)) / 4)
+
 /** \defgroup audio_aica_cmd Commands
     \brief                   Values of commands for aica_cmd_t
     @{
@@ -105,6 +122,7 @@ typedef struct aica_channel {
 #define AICA_CMD_PING       0x00000001  /**< \brief Check for signs of life  */
 #define AICA_CMD_CHAN       0x00000002  /**< \brief Perform a wavetable action   */
 #define AICA_CMD_SYNC_CLOCK 0x00000003  /**< \brief Reset the millisecond clock  */
+#define AICA_CMD_SYNC_CHANNELS 0x00000004 /**< \brief Key on a 64-channel mask */
 /** @} */
 
 /** \defgroup audio_aica_resp Responses

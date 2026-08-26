@@ -40,11 +40,15 @@ __BEGIN_DECLS
 /** \brief  The maximum number of streams that can be allocated at once. */
 #define SND_STREAM_MAX 4
 
-/** \brief  The maximum buffer size for each channel of PCM 16-bit stream. */
-#define SND_STREAM_BUFFER_MAX_PCM16 (128 << 10)
+/** \brief  Maximum 64-byte-aligned buffer for a 16-bit PCM channel.
 
-/** \brief  The maximum buffer size for each channel of PCM 8-bit stream. */
-#define SND_STREAM_BUFFER_MAX_PCM8  (64 << 10)
+    This is the largest aligned buffer whose sample count fits the AICA's
+    16-bit loop-end register.
+*/
+#define SND_STREAM_BUFFER_MAX_PCM16 131008
+
+/** \brief  Maximum 64-byte-aligned buffer for an 8-bit PCM channel. */
+#define SND_STREAM_BUFFER_MAX_PCM8  65472
 
 /** \brief  The maximum buffer size for each channel of ADPCM stream. */
 #define SND_STREAM_BUFFER_MAX_ADPCM ((32 << 10) - 64)

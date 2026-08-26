@@ -54,6 +54,11 @@ caller's allocation. Stereo separation handles non-32-byte tails. Playback
 rejects stale handles, invalid volume or pan, invalid loop ranges, unavailable
 channels, and stereo playback beginning on channel 63.
 
+Synchronized key-on now accepts a 64-channel mask. The firmware stages every
+selected channel before issuing one global key-on execute, and stereo effects
+and streams use this path. The advertised PCM stream-buffer maxima also fit
+the AICA's 16-bit loop-end field after alignment.
+
 ### Exact SPU memory ranges
 
 `spu_memload()`, `spu_memload_sq()`, `spu_memread()`, `spu_memset()`, and
@@ -77,23 +82,26 @@ and per-effect or per-stream sound RAM is allocated only on request.
 
 ## Explicitly deferred
 
-Synchronized key-on currently carries a 32-bit channel bitmap in the embedded
-AICA firmware protocol. Channels 32 through 63 therefore cannot participate in
-one synchronized start command. Correcting that requires a coordinated firmware
-ABI change and regeneration of the embedded firmware image; changing only the
-SH-4 source would make the checked-in source and shipped firmware disagree.
-
 Automatic stream polling is also not part of the base driver. The existing
 explicit poll API remains deterministic and allocation-free. A future opt-in
 service may be considered separately, with measured stack use and explicit
 lifecycle, rather than imposing a thread on applications that do not request
 one.
 
+Driver responses and diagnostics, complete channel controls, checked stream
+status, DSP routing, and optional content playback remain staged work. Their
+ownership and order are recorded in `audio-capability-audit.md`.
+
 ## Validation
 
 The modified allocator, command transport, stream manager, effect manager, and
-SPU transfer code compile with the project SH-4 compiler. The C sources pass
-`-Wall -Wextra -Werror -fanalyzer`. The bounded memory-loading example builds
-against the new public API. Real hardware remains necessary to validate AICA
-timing, DMA fallback behavior, channel synchronization, and byte-tail accesses
-under concurrent playback.
+SPU transfer code compile with the project SH-4 compiler. The shared command
+layout also has a host-side test, and the embedded firmware is rebuilt from its
+ARM source before publication. The ARM sources pass
+`-Wall -Wextra -Werror`. SH-4 analysis also passes after suppressing GCC 16.2's
+false double-free diagnostic on an existing NULL-initialized cleanup path;
+manual inspection confirms that each allocation is released at most once. The
+bounded memory-loading example builds against the new public API. Real
+hardware remains necessary to validate AICA timing, DMA fallback behavior,
+channel synchronization, maximum-buffer looping, and byte-tail accesses under
+concurrent playback.

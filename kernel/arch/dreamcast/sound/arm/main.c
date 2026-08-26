@@ -2,6 +2,7 @@
 
    main.c
    (c)2000-2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
    Generic sound driver with streaming capabilities
 
@@ -65,6 +66,28 @@ volatile aica_queue_t   *q_cmd = (volatile aica_queue_t *)AICA_MEM_CMD_QUEUE;
 volatile aica_queue_t   *q_resp = (volatile aica_queue_t *)AICA_MEM_RESP_QUEUE;
 volatile aica_channel_t *chans = (volatile aica_channel_t *)AICA_MEM_CHANNELS;
 
+static int channel_start_valid(const aica_channel_t *channel) {
+    uint32 sample_bytes;
+
+    if(channel->type > AICA_SM_ADPCM_LS || !channel->freq ||
+            channel->freq > ((uint32)0xffffffff >> 10) ||
+            channel->vol > 255 || channel->pan > 255 ||
+            channel->base >= AICA_RAM_END || !channel->length ||
+            channel->length > 65534 ||
+            channel->loopstart > channel->loopend ||
+            channel->loopend > channel->length)
+        return 0;
+
+    if(channel->type == AICA_SM_16BIT)
+        sample_bytes = channel->length * 2;
+    else if(channel->type == AICA_SM_8BIT)
+        sample_bytes = channel->length;
+    else
+        sample_bytes = (channel->length + 1) / 2;
+
+    return sample_bytes <= AICA_RAM_END - channel->base;
+}
+
 /* Process a CHAN command */
 void process_chn(uint32 chn, aica_channel_t *chndat) {
     switch(chndat->cmd & AICA_CH_CMD_MASK) {
@@ -73,9 +96,11 @@ void process_chn(uint32 chn, aica_channel_t *chndat) {
         case AICA_CH_CMD_START:
 
             if(chndat->cmd & AICA_CH_START_SYNC) {
-                aica_sync_play(chn);
+                /* Retain the original low-channel packet interpretation for
+                   raw clients while the dedicated command covers all 64. */
+                aica_sync_play(chn, 0);
             }
-            else {
+            else if(channel_start_valid(chndat)) {
                 memcpy((void*)(chans + chn), chndat, sizeof(aica_channel_t));
                 chans[chn].pos = 0;
                 aica_play(chn, chndat->cmd & AICA_CH_START_DELAY);
@@ -87,17 +112,18 @@ void process_chn(uint32 chn, aica_channel_t *chndat) {
             break;
         case AICA_CH_CMD_UPDATE:
 
-            if(chndat->cmd & AICA_CH_UPDATE_SET_FREQ) {
+            if((chndat->cmd & AICA_CH_UPDATE_SET_FREQ) && chndat->freq &&
+                    chndat->freq <= ((uint32)0xffffffff >> 10)) {
                 chans[chn].freq = chndat->freq;
                 aica_freq(chn);
             }
 
-            if(chndat->cmd & AICA_CH_UPDATE_SET_VOL) {
+            if((chndat->cmd & AICA_CH_UPDATE_SET_VOL) && chndat->vol <= 255) {
                 chans[chn].vol = chndat->vol;
                 aica_vol(chn);
             }
 
-            if(chndat->cmd & AICA_CH_UPDATE_SET_PAN) {
+            if((chndat->cmd & AICA_CH_UPDATE_SET_PAN) && chndat->pan <= 255) {
                 chans[chn].pan = chndat->pan;
                 aica_pan(chn);
             }
@@ -122,8 +148,12 @@ uint32 process_one(uint32 tail) {
     /* Get the size field */
     size = *src;
 
-    if(size > AICA_CMD_MAX_SIZE)
-        size = AICA_CMD_MAX_SIZE;
+    /* A zero, undersized, or oversized record has no trustworthy next packet
+       boundary. The caller drops the remaining queue rather than spinning on
+       the same malformed record forever. */
+    if(size < sizeof(aica_cmd_t) / sizeof(uint32) ||
+            size > AICA_CMD_MAX_SIZE)
+        return 0;
 
     /* Copy out the packet data */
     for(i = 0; i < size; i++) {
@@ -141,11 +171,24 @@ uint32 process_one(uint32 tail) {
             /* Not implemented yet */
             break;
         case AICA_CMD_CHAN:
-            process_chn(pkt->cmd_id, (aica_channel_t *)pkt->cmd_data);
+            if(size == AICA_CMDSTR_CHANNEL_SIZE) {
+                aica_channel_t *channel =
+                    (aica_channel_t *)pkt->cmd_data;
+
+                if((channel->cmd & AICA_CH_START_SYNC) || pkt->cmd_id < 64)
+                    process_chn(pkt->cmd_id, channel);
+            }
             break;
         case AICA_CMD_SYNC_CLOCK:
-            /* Reset our timer clock to zero */
-            timer = 0;
+            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
+                timer = 0;
+            break;
+        case AICA_CMD_SYNC_CHANNELS:
+            if(size == AICA_CMDSTR_CHANNEL_MASK_SIZE) {
+                aica_channel_mask_t *mask =
+                    (aica_channel_mask_t *)pkt->cmd_data;
+                aica_sync_play(mask->low, mask->high);
+            }
             break;
         default:
             /* error */
@@ -180,6 +223,13 @@ void process_cmd_queue(void) {
 
         /* Process it */
         ts = process_one(tail);
+
+        if(!ts) {
+            /* The record did not contain a usable size, so no later packet
+               boundary can be recovered safely. Drop this queue snapshot. */
+            q_cmd->tail = head;
+            return;
+        }
 
         /* Ok, skip over the packet */
         tail += ts * 4;

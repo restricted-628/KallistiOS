@@ -196,6 +196,22 @@ void snd_sh4_to_aica_stop(void) {
     g2_write_32(SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE + offsetof(aica_queue_t, process_ok), 0);
 }
 
+int snd_channels_start_sync(uint64_t channels) {
+    AICA_CMDSTR_CHANNEL_MASK(tmp, cmd, mask);
+
+    if(!channels) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(tmp, 0, sizeof(tmp));
+    cmd->size = AICA_CMDSTR_CHANNEL_MASK_SIZE;
+    cmd->cmd = AICA_CMD_SYNC_CHANNELS;
+    mask->low = (uint32_t)channels;
+    mask->high = (uint32_t)(channels >> 32);
+    return snd_sh4_to_aica(tmp, cmd->size);
+}
+
 /* Transfer one packet of data from the AICA->SH4 queue. Expects to
    find AICA_CMD_MAX_SIZE dwords of space available. Returns -1
    if failure, 0 for no packets available, 1 otherwise. Failure

@@ -4,6 +4,7 @@
    (c)2000-2002 Megan Potter
    (c)2024 Stefanos Kornilios Mitsis Poiitidis
    (c)2026 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
    ARM support routines for using the wavetable channels
 */
@@ -187,17 +188,29 @@ void aica_play(int ch, int delay) {
     }
 }
 
-/* Start sound on all channels specified by chmap bitmap */
-void aica_sync_play(uint32 chmap) {
-    int i = 0;
+/* Stage every selected channel's key-on bit before issuing one global key-on
+   execute. Writing the execute bit per channel would start early channels
+   before the complete group had been armed. */
+void aica_sync_play(uint32 low, uint32 high) {
+    int channel;
+    int trigger = -1;
 
-    while(chmap) {
-        if(chmap & 0x1)
-            CHNREG32(i, 0) = CHNREG32(i, 0) | 0xc000;
+    for(channel = 0; channel < 64; ++channel) {
+        uint32 selected = channel < 32 ?
+            (low & ((uint32)1 << channel)) :
+            (high & ((uint32)1 << (channel - 32)));
 
-        i++;
-        chmap >>= 1;
+        if(selected) {
+            CHNREG32(channel, 0) =
+                (CHNREG32(channel, 0) & ~AICA_CHANNEL_KEYONEX) |
+                AICA_CHANNEL_KEYONB;
+            if(trigger < 0)
+                trigger = channel;
+        }
     }
+
+    if(trigger >= 0)
+        CHNREG32(trigger, 0) |= AICA_CHANNEL_KEYONEX;
 }
 
 /* Stop the sound on a given channel */

@@ -552,8 +552,14 @@ void snd_stream_queue_disable(snd_stream_hnd_t hnd) {
 /* Start streaming (or if queueing is enabled, just get ready) */
 static void snd_stream_start_type(snd_stream_hnd_t hnd, uint32_t type, uint32_t freq, int st) {
     AICA_CMDSTR_CHANNEL(tmp, cmd, chan);
+    uint64_t sync_channels;
 
     CHECK_HND(hnd);
+
+    if(!freq || freq > (UINT32_MAX >> 10)) {
+        errno = EINVAL;
+        return;
+    }
 
     if(!streams[hnd].get_data && !streams[hnd].req_data) {
         return;
@@ -599,6 +605,7 @@ static void snd_stream_start_type(snd_stream_hnd_t hnd, uint32_t type, uint32_t 
 
     /* Make sure these are sync'd (and/or delayed) */
     snd_sh4_to_aica_stop();
+    memset(tmp, 0, sizeof(tmp));
 
     /* Channel 0 */
     cmd->cmd = AICA_CMD_CHAN;
@@ -624,17 +631,14 @@ static void snd_stream_start_type(snd_stream_hnd_t hnd, uint32_t type, uint32_t 
         chan->pan = 255;
         snd_sh4_to_aica(tmp, cmd->size);
 
-        /* Start both channels simultaneously */
-        cmd->cmd_id = (1ULL << streams[hnd].ch[0]) |
-                      (1ULL << streams[hnd].ch[1]);
+        sync_channels = (UINT64_C(1) << streams[hnd].ch[0]) |
+                        (UINT64_C(1) << streams[hnd].ch[1]);
     }
     else {
-        /* Start one channel */
-        cmd->cmd_id = (1ULL << streams[hnd].ch[0]);
+        sync_channels = UINT64_C(1) << streams[hnd].ch[0];
     }
 
-    chan->cmd = AICA_CH_CMD_START | AICA_CH_START_SYNC;
-    snd_sh4_to_aica(tmp, cmd->size);
+    snd_channels_start_sync(sync_channels);
 
     /* Process the changes */
     if(!streams[hnd].queueing)

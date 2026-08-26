@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added true 64-channel synchronized AICA key-on and routed stereo effects and
+  streams through it. The ARM firmware now validates command sizes, channel
+  parameters, loop geometry, and sound-RAM ranges before programming hardware;
+  malformed queue records cannot trap its command loop. PCM stream maxima now
+  fit the 16-bit hardware loop endpoint after alignment. These changes add no
+  service thread, allocation, or periodic work.
 * Bundled SH4ZAM 0.8 as a first-class, automatically built Dreamcast math
   component and added it to the standard grouped KOS link set. The optimized
   target backend remains independently attributed under its MIT license and
