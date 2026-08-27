@@ -36,10 +36,11 @@ entry state.
 The legacy DMA submission documented a 32-byte length requirement but rounded
 an invalid length upward. That could transfer beyond the caller's allocation.
 Submissions now reject zero, misaligned, oversized, invalid-direction, and
-blocking-from-interrupt requests. SH-4 endpoints must resolve to the available
-main-RAM range instead of being silently masked into an unrelated address.
-Cacheable sources are written back before DMA, and cacheable destinations are
-invalidated both before submission and after the engine becomes terminal.
+blocking-from-interrupt requests. Root-bus endpoints must resolve to available
+system RAM or one PVR-RAM aperture instead of being silently masked into an
+unrelated address. Cacheable system-RAM sources are written back before DMA,
+and cacheable system-RAM destinations are invalidated both before submission
+and after the engine becomes terminal. PVR RAM bypasses SH-4 cache operations.
 With the MMU enabled, only direct P1/P2 aliases are accepted; translated P0/P3
 mappings are rejected instead of being mistaken for contiguous physical RAM.
 
@@ -92,11 +93,27 @@ maximum line rate, active ownership, completeness, and whether a reset was
 performed. Unrecognized active PCI or 8-bit owners remain visible without
 being mislabeled as a known device.
 
+## Bridge SRAM ownership
+
+Bridge setup and its 32 KiB SRAM window are now managed independently of the
+Ethernet driver. A fixed-state, 32-byte-granularity allocator returns
+generation-checked leases and supports both first-fit allocation and exact
+device reservations. The BBA acquires its established 16 KiB receive ring,
+8 KiB wrap guard, and 8 KiB transmit area as leases during hardware startup,
+then releases them after its G2 DMA channel is inactive at shutdown. No SRAM is
+reserved merely because the network driver was registered.
+
+DMA engines claim a lease while it is active. A lease cannot be freed during
+G1 or G2 DMA, and the other engine cannot claim it concurrently. This is a
+software serialization guarantee over one flat SRAM window; the allocator
+does not describe the memory as independent hardware banks.
+
 ## Resource proportionality
 
-All new state is fixed bookkeeping attached to four DMA channels and the ASIC
-event table. Expansion probes execute only when called. No worker, polling
-thread, cache, or persistent probe buffer is added.
+All new state is fixed bookkeeping attached to four DMA channels, the ASIC
+event table, and at most 32 bridge-SRAM leases. Expansion probes execute only
+when called. Bridge setup and SRAM clearing occur only on first use. No worker,
+polling thread, cache, or persistent transfer buffer is added.
 
 ## Validation
 

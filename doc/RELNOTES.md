@@ -11,6 +11,15 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added an independently managed expansion-bridge lifecycle and a fixed-state,
+  generation-checked allocator for its complete 32 KiB SRAM window. The BBA
+  now leases and releases its established receive, wrap-guard, and transmit
+  ranges instead of owning hard-coded global addresses. G1 and G2 DMA claims
+  exclude one another on each lease.
+* Extended G2 DMA root-bus endpoints to both PVR-RAM apertures with explicit
+  region status and cache behavior. Direct optical DMA likewise accepts
+  system or PVR RAM, and adds synchronous/asynchronous reads into leased
+  bridge SRAM for a serialized disc-to-SRAM-to-RAM or VRAM pipeline.
 * Added true 64-channel synchronized AICA key-on and routed stereo effects and
   streams through it. The ARM firmware now validates command sizes, channel
   parameters, loop geometry, and sound-RAM ranges before programming hardware;

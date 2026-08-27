@@ -10,6 +10,13 @@ include kos.h
 # Expansion port
 expansion_probe
 bba_probe
+gaps_init
+gaps_probe
+gaps_shutdown
+gaps_sram_alloc
+gaps_sram_free
+gaps_sram_get_info
+gaps_sram_reserve
 la_probe
 la_is_initialized
 modem_probe
@@ -65,6 +72,8 @@ gdrom_direct_get_session
 gdrom_direct_read_sectors
 gdrom_direct_read_sectors_dma
 gdrom_direct_read_sectors_dma_async
+gdrom_direct_read_sectors_dma_gaps
+gdrom_direct_read_sectors_dma_gaps_async
 gdrom_direct_stream_session_start
 gdrom_direct_dma_diagnose
 

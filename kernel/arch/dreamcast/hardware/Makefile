@@ -10,7 +10,7 @@ OBJS = hardware.o
 # BIOS services
 ifneq ($(KOS_SUBARCH), naomi)
 	OBJS += biosfont.o cdrom.o cdrom_request.o cdrom_range.o expansion.o \
-		g1_bus.o gdrom_spi.o gdrom_direct.o flashrom.o flashrom_layout.o
+		g1_bus.o gaps.o gdrom_spi.o gdrom_direct.o flashrom.o flashrom_layout.o
 endif
 
 # System Calls

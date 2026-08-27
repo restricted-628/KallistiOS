@@ -48,6 +48,7 @@ This page serves as an index for all KallistiOS examples.
   - direct-async
   - direct-cdda
   - direct-geometry
+  - direct-gaps-stage
   - direct-lifecycle
   - direct-read
   - direct-recovery

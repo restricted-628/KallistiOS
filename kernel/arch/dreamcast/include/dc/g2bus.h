@@ -99,6 +99,14 @@ typedef enum g2_dma_state {
     G2_DMA_STATE_CANCELLED   /**< Most recent transfer was cancelled. */
 } g2_dma_state_t;
 
+/** \brief Root-bus memory region used by a G2 DMA operation. */
+typedef enum g2_dma_root_region {
+    G2_DMA_ROOT_INVALID = 0,  /**< No valid root-bus endpoint. */
+    G2_DMA_ROOT_SYSTEM_RAM,  /**< SH-4 system RAM. */
+    G2_DMA_ROOT_VRAM_64,     /**< PVR RAM through its 64-bit aperture. */
+    G2_DMA_ROOT_VRAM_32      /**< PVR RAM through its 32-bit aperture. */
+} g2_dma_root_region_t;
+
 /** \brief Coherent status snapshot for one G2 DMA channel. */
 typedef struct g2_dma_status {
     uint32_t channel;          /**< G2 DMA channel number. */
@@ -110,11 +118,13 @@ typedef struct g2_dma_status {
     uint64_t cancellations;    /**< Cancelled operations. */
     int result;                /**< Zero or the errno value for the result. */
     bool callback_pending;     /**< Completion callback has not run yet. */
+    g2_dma_root_region_t root_region; /**< Classified root-bus endpoint. */
 } g2_dma_status_t;
 
-/** \brief  Perform a DMA transfer between SH-4 RAM and G2 Bus
+/** \brief  Perform a DMA transfer between root-bus memory and G2 Bus
 
-    This function copies a block of data between SH-4 RAM and G2 Bus via DMA.
+    This function copies a block of data between system RAM or PVR RAM and a
+    G2 Bus endpoint via DMA.
     You specify the direction of the copy (SH4TOG2BUS/G2BUSTOSH4). There are all
     kinds of constraints that must be fulfilled to actually do this, so
     make sure to read all the fine print with the parameter list.
@@ -122,17 +132,27 @@ typedef struct g2_dma_status {
     If a callback is specified, it will be called in an interrupt context, so
     keep that in mind in writing the callback.
 
-    Cacheable SH-4 source ranges are written back before DMA. Cacheable
-    destination ranges are invalidated before submission and again after the
-    engine reaches a terminal state. When the MMU is enabled, the SH-4 range
+    Cacheable system-RAM source ranges are written back before DMA. Cacheable
+    system-RAM destination ranges are invalidated before submission and again
+    after the engine reaches a terminal state. PVR RAM is not passed through
+    the SH-4 data cache. When the MMU is enabled, the root-bus range
     must use a direct P1 or P2 alias; translated P0/P3 mappings are rejected
     because a single G2 DMA operation cannot represent a non-contiguous span.
     The G2 endpoint is a bus address rather than an SH-4 virtual mapping, so a
     physical G2 address or its ordinary P1/P2/P3 alias remains valid with the
     MMU enabled.
 
-    \param  sh4             Main-RAM source/destination. Must be 32-byte
-                            aligned and large enough for \p length.
+    An endpoint inside bridge SRAM must be wholly contained in a live lease
+    obtained from the \ref system_gaps API. The DMA channel claims that lease
+    until completion or cancellation, excluding a simultaneous direct disc
+    DMA to the same storage.
+
+    \warning The caller must exclude simultaneous PVR rendering or other DMA
+             that touches the selected PVR RAM range. G2 DMA channels share
+             bus bandwidth and do not establish ownership of PVR resources.
+
+    \param  sh4             System-RAM or PVR-RAM source/destination. Must be
+                            32-byte aligned and large enough for \p length.
     \param  g2bus           Where to copy from/to. Must be 32-byte aligned.
     \param  length          Nonzero number of bytes to copy. Must be a multiple
                             of 32; invalid sizes are rejected, not rounded.

@@ -15,6 +15,7 @@ __BEGIN_DECLS
 #include <stdint.h>
 
 #include <dc/cdrom.h>
+#include <dc/gaps.h>
 
 /** \brief Byte size of one cooked data sector returned by direct reads. */
 #define GDROM_DIRECT_SECTOR_SIZE     2048u
@@ -566,18 +567,24 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
 /** \brief Read cooked sectors through the direct Holly GD-DMA transport.
 
     This experimental operation does not use the BIOS command server. The
-    destination must be 32-byte aligned system RAM. Success requires both the
-    drive command INTRQ and the Holly DMA-complete event; neither interrupt by
-    itself publishes the buffer.
+    destination must be 32-byte aligned system RAM or PVR RAM. Success requires
+    both the drive command INTRQ and the Holly DMA-complete event; neither
+    interrupt by itself publishes the buffer.
 
-    Cacheable destinations are invalidated immediately before DMA and again
-    after the engine becomes inactive. The transport explicitly selects
+    Cacheable system-RAM destinations are invalidated immediately before DMA
+    and again after the engine becomes inactive. PVR RAM does not receive data
+    cache maintenance. With the MMU enabled, destinations must use a direct
+    P1 or P2 alias; translated P0/P3 mappings are rejected. The transport
+    explicitly selects
     multiword-DMA mode 2 in both the drive and Holly. A timeout disables DMA,
     waits for it to stop, and performs a bounded SPI soft-reset recovery before
     G1 ownership is released. If either engine cannot be made reusable, shared
     G1 access fails closed until reboot.
 
-    \param  buffer       Destination aligned to 32 bytes in system RAM.
+    \warning The caller must exclude rendering, texture upload, or another DMA
+             operation that touches the selected PVR RAM range.
+
+    \param  buffer       Destination aligned to 32 bytes in system or PVR RAM.
     \param  fad          First absolute frame address; must be at least 150.
     \param  sectors      Required count from 1 through 16.
     \param  sector_type  Exact 2048-byte sector format expected from the disc.
@@ -605,7 +612,7 @@ int gdrom_direct_read_sectors_dma(
     Cancellation wakes the sleeping direct-DMA owner and runs the same bounded
     Holly stop and SPI soft-reset recovery as the synchronous operation.
 
-    \param  buffer        Destination aligned to 32 bytes in system RAM.
+    \param  buffer        Destination aligned to 32 bytes in system or PVR RAM.
     \param  fad           First absolute frame address; must be at least 150.
     \param  sectors       Required count from 1 through 16.
     \param  sector_type   Exact 2048-byte sector format expected from the disc.
@@ -618,6 +625,41 @@ int gdrom_direct_read_sectors_dma(
 */
 cdrom_request_t *gdrom_direct_read_sectors_dma_async(
     void *buffer, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+    gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Read cooked sectors directly into leased GAPS SRAM.
+
+    The lease is pinned for the complete GD-DMA operation, so it cannot be
+    released or reused while Holly writes it. The destination is the byte
+    range beginning at `offset` within the lease. This operation is intended
+    as the first, serialized leg of a staging pipeline; start a G2-DMA read
+    from the SRAM only after this call has completed.
+
+    The bridge must be initialized and the lease must cover the complete
+    transfer. BBA initialization leases its complete established SRAM layout,
+    so staging allocation naturally fails while that driver owns the window.
+
+    \retval 0 Every sector reached the leased SRAM range.
+    \retval -1 Validation, ownership, transport, or hardware failure.
+*/
+int gdrom_direct_read_sectors_dma_gaps(
+    gaps_sram_lease_t lease, size_t offset, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+    gdrom_direct_result_t *result);
+
+/** \brief Queue a direct cooked-sector read into leased GAPS SRAM.
+
+    The caller must retain the lease until the returned request reaches a
+    terminal state. Execution pins the lease before programming GD-DMA and
+    unpins it before terminal publication. The normal request progress,
+    cancellation, wait, callback, and destruction rules apply.
+
+    \return A queued request, or `NULL` with errno set.
+*/
+cdrom_request_t *gdrom_direct_read_sectors_dma_gaps_async(
+    gaps_sram_lease_t lease, size_t offset, uint32_t fad, size_t sectors,
     gdrom_direct_sector_type_t sector_type, uint32_t timeout,
     gdrom_direct_result_t *result,
     cdrom_request_callback_t callback, void *callback_data);

@@ -21,6 +21,10 @@
 #include <kos/sem.h>
 #include <kos/thread.h>
 
+#if !defined(__NAOMI__) && !defined(G2DMA_NO_GAPS)
+#include "gaps_internal.h"
+#endif
+
 typedef struct {
     uint32_t      g2_addr;        /* G2 Bus start address */
     uint32_t      sh4_addr;       /* SH-4 start address */
@@ -63,9 +67,13 @@ static int dma_result[4];
 static int dma_terminal_result[4];
 static bool dma_callback_pending[4];
 static asic_evt_claim_t dma_irq_claim[4];
-static uintptr_t dma_sh4_address[4];
-static bool dma_sh4_cacheable[4];
+static uintptr_t dma_root_address[4];
+static bool dma_root_cacheable[4];
+static g2_dma_root_region_t dma_root_region[4];
 static uint32_t dma_direction[4];
+#if !defined(__NAOMI__) && !defined(G2DMA_NO_GAPS)
+static gaps_sram_lease_t dma_gaps_lease[4];
+#endif
 
 static bool dma_init;
 static bool dma_lifecycle_busy;
@@ -80,8 +88,12 @@ static volatile g2_dma_reg_t * const g2_dma = (g2_dma_reg_t *)G2_DMA_REG_BASE;
 #define SH4_RAM_PHYSICAL_BASE 0x0c000000u
 #define SH4_RAM_RETAIL_SIZE   0x01000000u
 #define SH4_RAM_DEVELOP_SIZE  0x02000000u
+#define VRAM_64_PHYSICAL_BASE 0x04000000u
+#define VRAM_32_PHYSICAL_BASE 0x05000000u
+#define VRAM_RETAIL_SIZE      0x00800000u
+#define VRAM_DEVELOP_SIZE     0x01000000u
 
-static bool dma_sh4_alias_valid(uintptr_t address) {
+static bool dma_root_alias_valid(uintptr_t address) {
     uintptr_t area = address & ~MEM_AREA_CACHE_MASK;
 
     switch(area) {
@@ -106,16 +118,30 @@ static bool dma_range_valid(uintptr_t address, size_t length,
     return address >= lower && address < upper && length <= upper - address;
 }
 
-static bool dma_sh4_range_valid(const void *address, size_t length) {
+static g2_dma_root_region_t dma_root_range_classify(const void *address,
+                                                     size_t length) {
     uintptr_t virtual_address = (uintptr_t)address;
     uintptr_t physical_address = virtual_address & MEM_AREA_CACHE_MASK;
     uintptr_t ram_top = SH4_RAM_PHYSICAL_BASE
         + (hardware_sys_mode(NULL) == HW_TYPE_RETAIL
            ? SH4_RAM_RETAIL_SIZE : SH4_RAM_DEVELOP_SIZE);
+    uintptr_t vram_size = hardware_sys_mode(NULL) == HW_TYPE_RETAIL
+        ? VRAM_RETAIL_SIZE : VRAM_DEVELOP_SIZE;
 
-    return dma_sh4_alias_valid(virtual_address)
-        && dma_range_valid(physical_address, length,
-                           SH4_RAM_PHYSICAL_BASE, ram_top);
+    if(!dma_root_alias_valid(virtual_address))
+        return G2_DMA_ROOT_INVALID;
+    if(dma_range_valid(physical_address, length,
+                       SH4_RAM_PHYSICAL_BASE, ram_top))
+        return G2_DMA_ROOT_SYSTEM_RAM;
+    if(dma_range_valid(physical_address, length,
+                       VRAM_64_PHYSICAL_BASE,
+                       VRAM_64_PHYSICAL_BASE + vram_size))
+        return G2_DMA_ROOT_VRAM_64;
+    if(dma_range_valid(physical_address, length,
+                       VRAM_32_PHYSICAL_BASE,
+                       VRAM_32_PHYSICAL_BASE + vram_size))
+        return G2_DMA_ROOT_VRAM_32;
+    return G2_DMA_ROOT_INVALID;
 }
 
 static bool dma_g2_range_valid(const void *address, size_t length) {
@@ -130,6 +156,55 @@ static bool dma_g2_range_valid(const void *address, size_t length) {
             || area == MEM_AREA_P2_BASE || area == MEM_AREA_P3_BASE)
         && length <= (uintptr_t)MEM_AREA_CACHE_MASK - physical_address + 1u;
 }
+
+#if !defined(__NAOMI__) && !defined(G2DMA_NO_GAPS)
+static int dma_gaps_claim(uint32_t channel, const void *address,
+                          size_t length) {
+    uintptr_t physical = (uintptr_t)address & MEM_AREA_CACHE_MASK;
+    uintptr_t transfer_end = physical + length;
+    uintptr_t gaps_end = GAPS_SRAM_PHYS_BASE + GAPS_SRAM_SIZE;
+
+    if(transfer_end <= GAPS_SRAM_PHYS_BASE || physical >= gaps_end)
+        return 0;
+    if(!dma_range_valid(physical, length, GAPS_SRAM_PHYS_BASE, gaps_end)) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    return gaps_sram_dma_claim_address(
+        (uint32_t)physical, length,
+        GAPS_SRAM_DMA_OWNER_G2, &dma_gaps_lease[channel]);
+}
+
+static void dma_gaps_release(uint32_t channel) {
+    if(dma_gaps_lease[channel] == GAPS_SRAM_LEASE_INVALID)
+        return;
+
+    gaps_sram_dma_release(dma_gaps_lease[channel],
+                           GAPS_SRAM_DMA_OWNER_G2);
+    dma_gaps_lease[channel] = GAPS_SRAM_LEASE_INVALID;
+}
+
+static void dma_gaps_reset(uint32_t channel) {
+    dma_gaps_lease[channel] = GAPS_SRAM_LEASE_INVALID;
+}
+#else
+static int dma_gaps_claim(uint32_t channel, const void *address,
+                          size_t length) {
+    (void)channel;
+    (void)address;
+    (void)length;
+    return 0;
+}
+
+static void dma_gaps_release(uint32_t channel) {
+    (void)channel;
+}
+
+static void dma_gaps_reset(uint32_t channel) {
+    (void)channel;
+}
+#endif
 
 /*
     List of possible initiation triggers values to assign to trigger_select:
@@ -235,8 +310,8 @@ static void g2_dma_irq_hnd(uint32_t code, void *data) {
 
         /* Publish device-to-memory writes only after the engine is terminal. */
         if(dma_direction[chn] == G2_DMA_TO_SH4
-                && dma_sh4_cacheable[chn]) {
-            dcache_inval_range(dma_sh4_address[chn], dma_requested[chn]);
+                && dma_root_cacheable[chn]) {
+            dcache_inval_range(dma_root_address[chn], dma_requested[chn]);
         }
 
         dma_progress[chn] = 0;
@@ -248,6 +323,8 @@ static void g2_dma_irq_hnd(uint32_t code, void *data) {
         dma_terminal_sequence[chn] = sequence;
         dma_terminal_result[chn] = 0;
         ++dma_completions[chn];
+
+        dma_gaps_release(chn);
 
         /* Both legacy blocking callers and g2_dma_wait() use this event. */
         sem_signal(&dma_done[chn]);
@@ -269,6 +346,7 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
                     g2_dma_callback_t callback, void *cbdata,
                     uint32_t dir, uint32_t mode, uint32_t g2chn, uint32_t sh4chn) {
     uint64_t sequence;
+    g2_dma_root_region_t root_region;
 
     /* No longer used but we keep then around for compatibility */
     (void)mode;
@@ -307,7 +385,8 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
         return -1;
     }
 
-    if(!dma_sh4_range_valid(sh4, length)
+    root_region = dma_root_range_classify(sh4, length);
+    if(root_region == G2_DMA_ROOT_INVALID
             || !dma_g2_range_valid(g2bus, length)) {
         errno = EFAULT;
         return -1;
@@ -326,6 +405,9 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
         errno = EINPROGRESS;
         return -1;
     }
+
+    if(dma_gaps_claim(g2chn, g2bus, length) < 0)
+        return -1;
     dma_progress[g2chn] = 1;
 
     /* Discard a completion token left by a prior asynchronous transfer. */
@@ -339,20 +421,21 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
     dma_state[g2chn] = G2_DMA_STATE_RUNNING;
     dma_result[g2chn] = EINPROGRESS;
     dma_callback_pending[g2chn] = callback != NULL;
-    dma_sh4_address[g2chn] = (uintptr_t)sh4;
-    dma_sh4_cacheable[g2chn] =
-        (((uintptr_t)sh4 & ~MEM_AREA_CACHE_MASK) != MEM_AREA_P2_BASE);
+    dma_root_address[g2chn] = (uintptr_t)sh4;
+    dma_root_region[g2chn] = root_region;
+    dma_root_cacheable[g2chn] = root_region == G2_DMA_ROOT_SYSTEM_RAM
+        && (((uintptr_t)sh4 & ~MEM_AREA_CACHE_MASK) != MEM_AREA_P2_BASE);
     dma_direction[g2chn] = dir;
     sequence = ++dma_sequence[g2chn];
 
     if(!sequence)
         sequence = ++dma_sequence[g2chn];
 
-    if(dma_sh4_cacheable[g2chn]) {
+    if(dma_root_cacheable[g2chn]) {
         if(dir == G2_DMA_TO_G2)
-            dcache_wback_range(dma_sh4_address[g2chn], length);
+            dcache_wback_range(dma_root_address[g2chn], length);
         else
-            dcache_inval_range(dma_sh4_address[g2chn], length);
+            dcache_inval_range(dma_root_address[g2chn], length);
     }
 
     /* Set needed registers */
@@ -431,7 +514,8 @@ int g2_dma_get_status(uint32_t channel, g2_dma_status_t *status) {
         .completions = dma_completions[channel],
         .cancellations = dma_cancellations[channel],
         .result = dma_result[channel],
-        .callback_pending = dma_callback_pending[channel]
+        .callback_pending = dma_callback_pending[channel],
+        .root_region = dma_root_region[channel]
     };
     irq_restore(irq_state);
     return 0;
@@ -615,8 +699,8 @@ int g2_dma_cancel(uint32_t channel) {
     dma_disable(channel);
 
     if(dma_direction[channel] == G2_DMA_TO_SH4
-            && dma_sh4_cacheable[channel]) {
-        dcache_inval_range(dma_sh4_address[channel], dma_requested[channel]);
+            && dma_root_cacheable[channel]) {
+        dcache_inval_range(dma_root_address[channel], dma_requested[channel]);
     }
 
     dma_progress[channel] = 0;
@@ -629,6 +713,7 @@ int g2_dma_cancel(uint32_t channel) {
     dma_terminal_sequence[channel] = dma_sequence[channel];
     dma_terminal_result[channel] = ECANCELED;
     ++dma_cancellations[channel];
+    dma_gaps_release(channel);
     sem_signal(&dma_done[channel]);
     irq_restore(irq_state);
 
@@ -684,9 +769,11 @@ int g2_dma_init(void) {
         dma_terminal_result[i] = 0;
         dma_callback_pending[i] = false;
         dma_irq_claim[i] = ASIC_EVT_CLAIM_INVALID;
-        dma_sh4_address[i] = 0;
-        dma_sh4_cacheable[i] = false;
+        dma_root_address[i] = 0;
+        dma_root_cacheable[i] = false;
+        dma_root_region[i] = G2_DMA_ROOT_INVALID;
         dma_direction[i] = G2_DMA_TO_G2;
+        dma_gaps_reset(i);
 
         /* Each channel owns its completion source for the DMA lifetime. */
         if(asic_evt_claim(ASIC_EVT_G2_DMA0 + i, ASIC_IRQB,
@@ -759,8 +846,8 @@ void g2_dma_shutdown(void) {
             dma_disable(i);
 
             if(dma_direction[i] == G2_DMA_TO_SH4
-                    && dma_sh4_cacheable[i]) {
-                dcache_inval_range(dma_sh4_address[i], dma_requested[i]);
+                    && dma_root_cacheable[i]) {
+                dcache_inval_range(dma_root_address[i], dma_requested[i]);
             }
 
             dma_progress[i] = 0;
@@ -774,6 +861,7 @@ void g2_dma_shutdown(void) {
             dma_cbdata[i] = NULL;
             dma_callback_pending[i] = false;
             ++dma_cancellations[i];
+            dma_gaps_release(i);
             sem_signal(&dma_done[i]);
         }
 

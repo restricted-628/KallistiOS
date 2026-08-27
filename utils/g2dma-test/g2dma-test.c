@@ -8,6 +8,7 @@
 #include <dc/asic.h>
 #include <arch/arch.h>
 #include <kos/sem.h>
+#include "gaps_internal.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -53,6 +54,9 @@ static uint32_t irq_depth;
 static bool inside_irq;
 static bool test_mmu_enabled;
 static unsigned int failures;
+static unsigned int gaps_claims;
+static unsigned int gaps_releases;
+static gaps_sram_lease_t gaps_claimed_lease = GAPS_SRAM_LEASE_INVALID;
 static unsigned int cache_wbacks;
 static unsigned int cache_invalidations;
 static uintptr_t last_cache_address;
@@ -75,6 +79,26 @@ static unsigned int release_count;
         ++failures; \
     } \
 } while(0)
+
+int gaps_sram_dma_claim_address(uint32_t physical_address, size_t size,
+                                gaps_sram_dma_owner_t owner,
+                                gaps_sram_lease_t *lease) {
+    CHECK(physical_address >= GAPS_SRAM_PHYS_BASE);
+    CHECK(size <= GAPS_SRAM_PHYS_BASE + GAPS_SRAM_SIZE - physical_address);
+    CHECK(owner == GAPS_SRAM_DMA_OWNER_G2);
+    ++gaps_claims;
+    gaps_claimed_lease = 0x1234;
+    *lease = gaps_claimed_lease;
+    return 0;
+}
+
+void gaps_sram_dma_release(gaps_sram_lease_t lease,
+                           gaps_sram_dma_owner_t owner) {
+    CHECK(lease == gaps_claimed_lease);
+    CHECK(owner == GAPS_SRAM_DMA_OWNER_G2);
+    ++gaps_releases;
+    gaps_claimed_lease = GAPS_SRAM_LEASE_INVALID;
+}
 
 static test_dma_regs_t *registers(void) {
     return (test_dma_regs_t *)g2_test_dma_registers;
@@ -281,6 +305,8 @@ static void count_callback(void *data) {
 static void test_validation_and_status(void) {
     g2_dma_status_t status;
     g2_dma_status_t zero = { 0 };
+    unsigned int wbacks_before;
+    unsigned int invalidations_before;
 
     memset(&status, 0xaa, sizeof(status));
     errno = 0;
@@ -319,6 +345,62 @@ static void test_validation_and_status(void) {
                           (void *)(uintptr_t)UINT32_C(0x00800000), 32, 1, NULL, NULL,
                           G2_DMA_TO_G2, 0, 0, 0) < 0 && errno == EPERM);
     inside_irq = false;
+
+    /* PVR RAM is a root-bus endpoint, but unlike system RAM it never receives
+       SH-4 data-cache maintenance. Both hardware apertures remain distinct. */
+    wbacks_before = cache_wbacks;
+    invalidations_before = cache_invalidations;
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0xa4000000),
+                          (void *)(uintptr_t)UINT32_C(0x00800000), 32, 0,
+                          NULL, NULL, G2_DMA_TO_SH4, 0,
+                          G2_DMA_CHAN_SPU, 0) == 0);
+    CHECK(g2_dma_get_status(G2_DMA_CHAN_SPU, &status) == 0);
+    CHECK(status.root_region == G2_DMA_ROOT_VRAM_64);
+    CHECK(cache_wbacks == wbacks_before);
+    CHECK(cache_invalidations == invalidations_before);
+    CHECK(g2_dma_cancel(G2_DMA_CHAN_SPU) == 0);
+
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0xa5000000),
+                          (void *)(uintptr_t)UINT32_C(0x00800000), 32, 0,
+                          NULL, NULL, G2_DMA_TO_G2, 0,
+                          G2_DMA_CHAN_SPU, 0) == 0);
+    CHECK(g2_dma_get_status(G2_DMA_CHAN_SPU, &status) == 0);
+    CHECK(status.root_region == G2_DMA_ROOT_VRAM_32);
+    CHECK(cache_wbacks == wbacks_before);
+    CHECK(cache_invalidations == invalidations_before);
+    CHECK(g2_dma_cancel(G2_DMA_CHAN_SPU) == 0);
+
+    errno = 0;
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0xa47fffe0),
+                          (void *)(uintptr_t)UINT32_C(0x00800000), 64, 0,
+                          NULL, NULL, G2_DMA_TO_G2, 0,
+                          G2_DMA_CHAN_SPU, 0) < 0 && errno == EFAULT);
+
+    /* Bridge SRAM is not an unowned generic G2 endpoint. A contained range
+       claims its lease until terminal state; any partial overlap is rejected
+       before hardware programming. */
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0xac000000),
+                          (void *)(uintptr_t)GAPS_SRAM_PHYS_BASE, 32, 0,
+                          NULL, NULL, G2_DMA_TO_SH4, 0,
+                          G2_DMA_CHAN_SPU, 0) == 0);
+    CHECK(gaps_claims == 1 && gaps_releases == 0);
+    CHECK(g2_dma_cancel(G2_DMA_CHAN_SPU) == 0);
+    CHECK(gaps_releases == 1);
+
+    errno = 0;
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0xac000000),
+                          (void *)(uintptr_t)(GAPS_SRAM_PHYS_BASE - 32u),
+                          64, 0, NULL, NULL, G2_DMA_TO_SH4, 0,
+                          G2_DMA_CHAN_SPU, 0) < 0 && errno == EFAULT);
+    CHECK(gaps_claims == 1);
+
+    errno = 0;
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0xac000000),
+                          (void *)(uintptr_t)(GAPS_SRAM_PHYS_BASE
+                            + GAPS_SRAM_SIZE - 32u),
+                          64, 0, NULL, NULL, G2_DMA_TO_SH4, 0,
+                          G2_DMA_CHAN_SPU, 0) < 0 && errno == EFAULT);
+    CHECK(gaps_claims == 1);
 }
 
 static void test_transfer_completion(void) {

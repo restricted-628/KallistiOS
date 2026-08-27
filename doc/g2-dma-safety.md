@@ -20,10 +20,11 @@ invalid-direction, and out-of-range transfers. It no longer rounds an invalid
 length upward beyond the caller's buffer. A blocking transfer is rejected from
 interrupt context.
 
-The SH-4 endpoint must cover contiguous main RAM. With the MMU disabled, P0,
-P1, P2, and P3 aliases are accepted; with the MMU enabled, only direct P1/P2
-aliases are accepted. Translated P0/P3 mappings cannot be represented by one
-physical DMA span.
+The root-bus endpoint must cover contiguous system RAM or one PVR-RAM
+aperture. With the MMU disabled, P0, P1, P2, and P3 aliases are accepted; with
+the MMU enabled, only direct P1/P2 aliases are accepted. Translated P0/P3
+mappings cannot be represented by one physical DMA span. Status snapshots
+identify system RAM, the 64-bit PVR aperture, or the 32-bit PVR aperture.
 
 The G2 endpoint follows different rules: it is a bus address, not a virtual
 SH-4 mapping. Physical addresses such as the AICA RAM window, along with their
@@ -32,9 +33,18 @@ field even when the MMU is enabled.
 
 ## Cache and terminal state
 
-Cacheable SH-4 sources are written back before a transfer to G2. Cacheable
-destinations are invalidated before a transfer from G2 and again only after the
-engine reaches a terminal state. P2 destinations bypass cache maintenance.
+Cacheable system-RAM sources are written back before a transfer to G2.
+Cacheable system-RAM destinations are invalidated before a transfer from G2
+and again only after the engine reaches a terminal state. P2 system RAM and
+both PVR-RAM apertures bypass cache maintenance. The caller remains responsible
+for excluding rendering, texture upload, or another DMA user of the same PVR
+range.
+
+The bridge SRAM window has an additional ownership rule. Every G2 transfer
+whose external endpoint falls in that window must be fully contained in a live
+SRAM lease. The transfer claims that lease until completion or cancellation.
+A simultaneous G1 disc DMA to the same lease therefore fails with `EBUSY`
+instead of relying on undocumented DMA ordering.
 
 Every channel exposes a coherent status snapshot containing state, requested
 and remaining bytes, sequence, completion/cancellation totals, result, and
@@ -72,7 +82,7 @@ ASIC, semaphore, cache, MMU, and IRQ boundaries. It covers:
 
 - four-channel and nested PIO lock restoration;
 - validation and MMU-aware address handling, including low physical AICA
-  addresses;
+  addresses and both PVR-RAM apertures;
 - cache maintenance in both directions;
 - progress, suspend/resume, cancellation, and timed waits;
 - blocking completion and same-channel callback chaining;
@@ -81,6 +91,8 @@ ASIC, semaphore, cache, MMU, and IRQ boundaries. It covers:
 
 `examples/dreamcast/basic/dma/g2-state` performs a target-side AICA RAM
 round-trip with the existing sound-memory allocator and verifies the terminal
-status snapshots. Physical hardware validation remains required for suspend
-latency, cancellation during bus latency, cache alias behavior, and every
-external G2 device variant.
+status snapshots. `examples/dreamcast/cdrom/direct-gaps-stage` performs a
+serialized disc-to-SRAM-to-system-RAM pipeline when the bridge is available.
+Physical hardware validation remains required for suspend latency,
+cancellation during bus latency, PVR aperture behavior, cache aliases, and
+every external G2 device variant.

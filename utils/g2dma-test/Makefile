@@ -7,7 +7,8 @@ CC ?= cc
 CFLAGS ?= -O2
 CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
 ROOT := ../..
-INCLUDES := -Iinclude -I$(ROOT)/kernel/arch/dreamcast/include
+INCLUDES := -Iinclude -I$(ROOT)/kernel/arch/dreamcast/include \
+	-I$(ROOT)/kernel/arch/dreamcast/hardware
 TARGET := g2dma-test
 OBJS := g2dma-test.o g2dma.o
 
@@ -15,10 +16,12 @@ OBJS := g2dma-test.o g2dma.o
 
 all: test
 
-g2dma.o: $(ROOT)/kernel/arch/dreamcast/hardware/g2dma.c g2dma-test-shim.h
+g2dma.o: $(ROOT)/kernel/arch/dreamcast/hardware/g2dma.c \
+	$(ROOT)/kernel/arch/dreamcast/hardware/gaps_internal.h g2dma-test-shim.h
 	$(CC) $(CFLAGS) $(INCLUDES) -include g2dma-test-shim.h -c -o $@ $<
 
-g2dma-test.o: g2dma-test.c g2dma-test-shim.h
+g2dma-test.o: g2dma-test.c \
+	$(ROOT)/kernel/arch/dreamcast/hardware/gaps_internal.h g2dma-test-shim.h
 	$(CC) $(CFLAGS) $(INCLUDES) -include g2dma-test-shim.h -c -o $@ $<
 
 $(TARGET): $(OBJS)
