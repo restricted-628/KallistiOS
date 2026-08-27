@@ -161,6 +161,9 @@ This page serves as an index for all KallistiOS examples.
   - [**chunk_resources**](pvr/chunk_resources/): Converts and embeds a compact
     model, then resolves its texture identifiers through a pre-acquired
     fixed-slot residency set and checked materials
+  - [**chunk_skin**](pvr/chunk_skin/): Binds explicit normalized joint
+    influences, builds a reusable canonical source, and renders a moving
+    deformed pose through constant-time model-index lookup
   - clipping
   - fb_tex
   - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned
