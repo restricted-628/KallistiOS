@@ -221,6 +221,16 @@ size instead of charging every model for a maximum-sized union. Both layouts
 retain the same canonical deformation/index sidecar and callback ownership as
 the ordinary cache.
 
+Every cached ordinary or two-volume strip also retains the exact object-space
+AABB of its admitted reference-pose vertices. The filtered emission variants
+invoke caller policy before resolving deformation, preparing a material,
+projecting vertices, or publishing output. Static models can classify the
+retained box directly with `pvr_chunk_cached_strip_classify()`. A skin, morph,
+or other resolver may move vertices beyond the retained reference bound, so
+dynamic callers must use a conservative current-pose decision or emit the
+strip. This adds useful sub-model culling without hiding a scene, frustum, pose,
+or traversal owner inside the cache.
+
 Modifier-volume models use `pvr_chunk_model_modifier_cache_query()`,
 `pvr_chunk_model_modifier_cache_build()`, and
 `pvr_chunk_model_modifier_cache_emit()`. Admission expands triangles, quads,

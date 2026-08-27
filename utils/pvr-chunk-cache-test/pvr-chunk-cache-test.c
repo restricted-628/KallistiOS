@@ -103,11 +103,13 @@ static const uint16_t modifier_polygons[] = {
 
 typedef struct callback_state {
     size_t begins;
+    size_t filters;
     size_t resolves;
     size_t prepares;
     size_t modifier_calls;
     uint16_t modifier_user_words[8];
     uint16_t fail_index;
+    int filter_result;
 } callback_state_t;
 
 #ifndef __DREAMCAST__
@@ -156,6 +158,16 @@ static int begin_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
     assert(strip->state.diffuse_argb == UINT32_C(0xff223344));
     ++state->begins;
     return 0;
+}
+
+static int filter_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
+    callback_state_t *state = data;
+
+    assert(strip->minimum.x == 0.0f && strip->maximum.x == 2.0f);
+    ++state->filters;
+    if(state->filter_result < 0)
+        errno = ECANCELED;
+    return state->filter_result;
 }
 
 static int resolve_vertex(uint16_t source_index,
@@ -303,10 +315,25 @@ static void test_two_volume_cache(void) {
         &callbacks, &cache) == 0);
     assert(callbacks.prepares == 3);
     assert(cache.vertex_size == sizeof(pvr_vertex_tpcm_t));
+    assert(cache.strips[0].minimum.x == 0.0f &&
+           cache.strips[0].maximum.x == 2.0f);
     assert(cache.source_indices[0] == 1 && cache.source_indices[1] == 0 &&
            cache.source_indices[2] == 2);
 
     identity(&matrix);
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.fail_index = UINT16_MAX;
+    callbacks.filter_result = 0;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, cache.format, output, 3) == 0);
+    assert(pvr_chunk_model_two_volume_cache_emit_filtered(
+        &cache, &matrix, &sink, workspace, 3, filter_strip,
+        begin_two_volume, resolve_vertex,
+        prepare_cached_two_volume_vertex, &callbacks, &result) == 0);
+    assert(result.emitted_vertices == 0 && result.skipped_vertices == 3);
+    assert(callbacks.filters == 1 && callbacks.begins == 0 &&
+           callbacks.resolves == 0 && callbacks.prepares == 0);
+
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.fail_index = UINT16_MAX;
     assert(pvr_geometry_vertex_sink_init_memory(
@@ -501,6 +528,8 @@ int main(void) {
     pvr_chunk_cache_result_t result;
     callback_state_t callbacks;
     pvr_chunk_model_cache_t malformed;
+    pvr_frustum_t frustum;
+    pvr_frustum_classification_t classification;
 
     assert(pvr_chunk_model_open(&model, &view) == 0);
     assert(pvr_chunk_model_plan_query(&view, &plan_requirements) == 0);
@@ -534,8 +563,50 @@ int main(void) {
     assert(cache.source_indices[0] == 0);
     assert(cache.source_indices[1] == 1);
     assert(cache.source_indices[2] == 2);
+    assert(cache.strips[0].minimum.x == 0.0f);
+    assert(cache.strips[0].minimum.y == 0.0f);
+    assert(cache.strips[0].minimum.z == 0.0f);
+    assert(cache.strips[0].maximum.x == 2.0f);
+    assert(cache.strips[0].maximum.y == 0.0f);
+    assert(cache.strips[0].maximum.z == 0.0f);
 
     identity(&matrix);
+    assert(pvr_frustum_init(&frustum, &matrix, -1.0f, -1.0f,
+                            3.0f, 1.0f, 0.5f, 2.0f) == 0);
+    assert(pvr_chunk_cached_strip_classify(
+        cache.strips, &frustum, &classification) == 0);
+    assert(classification == PVR_FRUSTUM_INSIDE);
+    assert(pvr_frustum_init(&frustum, &matrix, 3.0f, -1.0f,
+                            5.0f, 1.0f, 0.5f, 2.0f) == 0);
+    assert(pvr_chunk_cached_strip_classify(
+        cache.strips, &frustum, &classification) == 0);
+    assert(classification == PVR_FRUSTUM_OUTSIDE);
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.fail_index = UINT16_MAX;
+    callbacks.filter_result = 0;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_cache_emit_filtered(
+        &cache, &matrix, &sink, workspace, 3, filter_strip, begin_strip,
+        resolve_vertex, prepare_vertex, &callbacks, &result) == 0);
+    assert(result.emitted_strips == 0 && result.emitted_vertices == 0);
+    assert(result.skipped_strips == 1 && result.skipped_vertices == 3);
+    assert(sink.emitted_vertices == 0);
+    assert(callbacks.filters == 1 && callbacks.begins == 0 &&
+           callbacks.resolves == 0 && callbacks.prepares == 0);
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.fail_index = UINT16_MAX;
+    callbacks.filter_result = -1;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_cache_emit_filtered(
+        &cache, &matrix, &sink, workspace, 3, filter_strip, NULL,
+        resolve_vertex, NULL, &callbacks, &result) == -1);
+    assert(errno == ECANCELED && result.emitted_vertices == 0 &&
+           result.skipped_vertices == 0 && callbacks.filters == 1 &&
+           callbacks.resolves == 0 && sink.emitted_vertices == 0);
+
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.fail_index = UINT16_MAX;
     assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
@@ -573,6 +644,15 @@ int main(void) {
                                       NULL, &result) == -1);
     assert(errno == EILSEQ && result.emitted_vertices == 0);
     ((pvr_chunk_cached_strip_t *)malformed.strips)->reserved = 0;
+
+    ((pvr_chunk_cached_strip_t *)malformed.strips)->minimum.x = 3.0f;
+    errno = 0;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_cache_emit(&malformed, &matrix, &sink,
+                                      workspace, 3, NULL, NULL, NULL,
+                                      NULL, &result) == -1);
+    assert(errno == EILSEQ && result.emitted_vertices == 0);
+    ((pvr_chunk_cached_strip_t *)malformed.strips)->minimum.x = 0.0f;
 
     model = make_model(unsupported_polygons,
                        sizeof(unsupported_polygons) /

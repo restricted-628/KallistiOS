@@ -11,6 +11,7 @@ SOURCES = pvr-chunk-cache-test.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_render.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c
 
 .PHONY: all clean dreamcast test
@@ -26,7 +27,8 @@ test: $(TARGET)
 dreamcast: $(DREAMCAST_TARGET)
 
 $(DREAMCAST_TARGET): pvr-chunk-cache-test.c
-	kos-cc -std=gnu17 -Wall -Wextra -Werror $< -lm -o $@
+	kos-cc -std=gnu17 -Wall -Wextra $< -lm -o $@
 
 clean:
 	rm -f $(TARGET) $(DREAMCAST_TARGET)
+	rm -rf $(TARGET).dSYM

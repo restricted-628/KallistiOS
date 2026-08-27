@@ -68,7 +68,10 @@ lifecycle and naming conventions.
   words in exact queried footprints. Repeated emission reads neither compact
   stream and can bind caller-owned skin or morph results plus per-frame policy
   without creating a scene owner, worker, allocator, or hidden resource
-  namespace.
+  namespace. Ordinary and two-volume strips retain exact reference-pose AABBs;
+  filtered emitters can skip a strip before deformation, material setup,
+  projection, callbacks, or sink publication, while dynamically deformed
+  models retain explicit responsibility for conservative current-pose policy.
 * Added explicit compact-model skin bindings with four normalized influences
   per vertex, complete model and joint coverage validation, caller-owned
   constant-time pose lookup, and one-time canonical source construction for

@@ -253,6 +253,33 @@ static void base_vertex(const pvr_chunk_render_state_t *state,
         vertex->oargb = state->specular_argb;
 }
 
+static void cached_strip_bound_include(
+    pvr_chunk_cached_strip_t *strip, const point_t *position,
+    size_t vertex_index) {
+    if(!vertex_index) {
+        strip->minimum = *position;
+        strip->maximum = *position;
+        strip->minimum.w = 1.0f;
+        strip->maximum.w = 1.0f;
+        return;
+    }
+
+    if(position->x < strip->minimum.x)
+        strip->minimum.x = position->x;
+    if(position->y < strip->minimum.y)
+        strip->minimum.y = position->y;
+    if(position->z < strip->minimum.z)
+        strip->minimum.z = position->z;
+    if(position->x > strip->maximum.x)
+        strip->maximum.x = position->x;
+    if(position->y > strip->maximum.y)
+        strip->maximum.y = position->y;
+    if(position->z > strip->maximum.z)
+        strip->maximum.z = position->z;
+}
+
+static int finite_deformation(const pvr_deform_vertex_t *vertex);
+
 int pvr_chunk_model_cache_build(
     const pvr_chunk_model_plan_t *plan, void *storage, size_t storage_bytes,
     pvr_chunk_render_prepare_vertex_t prepare_vertex, void *data,
@@ -383,6 +410,12 @@ int pvr_chunk_model_cache_build(
                         deform_vertices[vertex_index].position.z =
                             vertices[vertex_index].z;
                     }
+                    if(finite_deformation(
+                           deform_vertices + vertex_index) < 0)
+                        return -1;
+                    cached_strip_bound_include(
+                        cached, &deform_vertices[vertex_index].position,
+                        destination_index);
                 }
                 ++strip_index;
             }
@@ -485,6 +518,45 @@ static int sink_valid(const pvr_geometry_sink_t *sink,
     return 0;
 }
 
+static int cached_strip_bound_values_valid(
+    const pvr_chunk_cached_strip_t *strip) {
+    const float *minimum = (const float *)&strip->minimum;
+    const float *maximum = (const float *)&strip->maximum;
+    size_t component;
+
+    /* Build includes every retained reference vertex before publishing the
+       immutable cache. Rechecking extrema here keeps emission O(strips)
+       instead of defeating the culling path with an O(vertices) scan. */
+    for(component = 0; component < 4u; ++component) {
+        if(!isfinite(minimum[component]) ||
+           !isfinite(maximum[component])) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    if(strip->minimum.w != 1.0f || strip->maximum.w != 1.0f ||
+       strip->minimum.x > strip->maximum.x ||
+       strip->minimum.y > strip->maximum.y ||
+       strip->minimum.z > strip->maximum.z) {
+        errno = EILSEQ;
+        return -1;
+    }
+    return 0;
+}
+
+int pvr_chunk_cached_strip_classify(
+    const pvr_chunk_cached_strip_t *strip, const pvr_frustum_t *frustum,
+    pvr_frustum_classification_t *result) {
+    if(!strip || !frustum || !result) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(cached_strip_bound_values_valid(strip) < 0)
+        return -1;
+    return pvr_frustum_classify_aabb(frustum, &strip->minimum,
+                                     &strip->maximum, result);
+}
+
 static int cache_valid(const pvr_chunk_model_cache_t *cache) {
     pvr_chunk_cache_requirements_t layout = { 0 };
     uintptr_t storage_start;
@@ -571,6 +643,8 @@ static int cache_valid(const pvr_chunk_model_cache_t *cache) {
                 errno = EILSEQ;
             return -1;
         }
+        if(cached_strip_bound_values_valid(strip) < 0)
+            return -1;
         if(strip->vertex_count > maximum)
             maximum = strip->vertex_count;
     }
@@ -658,10 +732,11 @@ static int emit_preflight(const pvr_chunk_model_cache_t *cache,
     return 0;
 }
 
-int pvr_chunk_model_cache_emit(
+int pvr_chunk_model_cache_emit_filtered(
     const pvr_chunk_model_cache_t *cache,
     const matrix_t *object_to_screen, pvr_geometry_sink_t *sink,
     pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_filter_strip_t filter_strip,
     pvr_chunk_cache_begin_strip_t begin_strip,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_vertex_t prepare_vertex,
@@ -679,6 +754,23 @@ int pvr_chunk_model_cache_emit(
         const pvr_chunk_cached_strip_t *strip = cache->strips + strip_index;
         pvr_geometry_stream_t stream;
         size_t index;
+
+        if(filter_strip) {
+            int filter_result;
+
+            errno = 0;
+            filter_result = filter_strip(strip, data);
+            if(filter_result < 0) {
+                if(!errno)
+                    errno = EIO;
+                goto fail;
+            }
+            if(!filter_result) {
+                ++progress.skipped_strips;
+                progress.skipped_vertices += strip->vertex_count;
+                continue;
+            }
+        }
 
         for(index = 0; index < strip->vertex_count; ++index) {
             size_t cached_index = strip->first_vertex + index;
@@ -748,6 +840,19 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_cache_emit(
+    const pvr_chunk_model_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result) {
+    return pvr_chunk_model_cache_emit_filtered(
+        cache, object_to_screen, sink, workspace, workspace_count, NULL,
+        begin_strip, resolve_vertex, prepare_vertex, data, result);
 }
 
 static int two_volume_cache_layout_finish(
@@ -1049,6 +1154,12 @@ int pvr_chunk_model_two_volume_cache_build(
                         deform_vertices[vertex_index].position.z =
                             vertex.color.z;
                     }
+                    if(finite_deformation(
+                           deform_vertices + vertex_index) < 0)
+                        return -1;
+                    cached_strip_bound_include(
+                        cached, &deform_vertices[vertex_index].position,
+                        destination_index);
                     memcpy(vertices + vertex_index * requirements.vertex_size,
                            &vertex, requirements.vertex_size);
                 }
@@ -1141,6 +1252,8 @@ static int two_volume_cache_valid(
                 errno = EILSEQ;
             return -1;
         }
+        if(cached_strip_bound_values_valid(strip) < 0)
+            return -1;
         if(strip->vertex_count > maximum)
             maximum = strip->vertex_count;
     }
@@ -1262,10 +1375,11 @@ static int two_volume_emit_preflight(
     return 0;
 }
 
-int pvr_chunk_model_two_volume_cache_emit(
+int pvr_chunk_model_two_volume_cache_emit_filtered(
     const pvr_chunk_two_volume_cache_t *cache,
     const matrix_t *object_to_screen, pvr_geometry_vertex_sink_t *sink,
     pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_filter_strip_t filter_strip,
     pvr_chunk_cache_begin_strip_t begin_strip,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
@@ -1283,6 +1397,23 @@ int pvr_chunk_model_two_volume_cache_emit(
         const pvr_chunk_cached_strip_t *strip = cache->strips + strip_index;
         pvr_geometry_vertex_stream_t stream;
         size_t index;
+
+        if(filter_strip) {
+            int filter_result;
+
+            errno = 0;
+            filter_result = filter_strip(strip, data);
+            if(filter_result < 0) {
+                if(!errno)
+                    errno = EIO;
+                goto fail;
+            }
+            if(!filter_result) {
+                ++progress.skipped_strips;
+                progress.skipped_vertices += strip->vertex_count;
+                continue;
+            }
+        }
 
         for(index = 0; index < strip->vertex_count; ++index) {
             size_t cached_index = strip->first_vertex + index;
@@ -1360,6 +1491,19 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_two_volume_cache_emit(
+    const pvr_chunk_two_volume_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result) {
+    return pvr_chunk_model_two_volume_cache_emit_filtered(
+        cache, object_to_screen, sink, workspace, workspace_count, NULL,
+        begin_strip, resolve_vertex, prepare_vertex, data, result);
 }
 
 static int modifier_cache_layout_finish(

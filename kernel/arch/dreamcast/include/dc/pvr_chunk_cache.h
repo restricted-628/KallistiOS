@@ -26,6 +26,7 @@ __BEGIN_DECLS
 
 #include <dc/pvr_chunk_render.h>
 #include <dc/pvr_deform.h>
+#include <dc/pvr_frustum.h>
 
 /** \addtogroup pvr_chunk_render
     @{
@@ -35,13 +36,15 @@ __BEGIN_DECLS
 #define PVR_CHUNK_CACHE_ALIGNMENT 32u
 
 /** \brief Current in-memory draw-cache representation version. */
-#define PVR_CHUNK_CACHE_VERSION 1u
+#define PVR_CHUNK_CACHE_VERSION 2u
 
 /** \brief One immutable, decoded strip in a compact-model draw cache. */
 typedef struct pvr_chunk_cached_strip {
     pvr_chunk_render_state_t state; /**< Complete state at strip admission. */
     size_t first_vertex;            /**< First entry in the vertex arrays. */
     size_t vertex_count;            /**< Complete strip vertex count. */
+    point_t minimum;                /**< Reference-pose AABB minimum. */
+    point_t maximum;                /**< Reference-pose AABB maximum. */
     uint8_t source_type;            /**< Original pvr_chunk_strip_type_t. */
     uint8_t source_flags;           /**< Original strip flags. */
     uint16_t reserved;              /**< Must remain zero. */
@@ -169,6 +172,8 @@ typedef struct pvr_chunk_modifier_cache {
 typedef struct pvr_chunk_cache_result {
     size_t emitted_strips;
     size_t emitted_vertices;
+    size_t skipped_strips;
+    size_t skipped_vertices;
 } pvr_chunk_cache_result_t;
 
 /** \brief Progress from one cached modifier-volume emission. */
@@ -184,6 +189,19 @@ typedef struct pvr_chunk_modifier_cache_result {
     caller context immediately before the complete strip is submitted.
 */
 typedef int (*pvr_chunk_cache_begin_strip_t)(
+    const pvr_chunk_cached_strip_t *strip, void *data);
+
+/** \brief Decide whether one cached strip should be emitted.
+
+    Return a positive value to emit, zero to skip, or a negative value to
+    fail. The callback runs before deformation resolution, per-frame vertex
+    policy, material setup, projection, or sink publication.
+
+    The cached bounds describe the reference pose. A resolver may move
+    vertices beyond them, so dynamically deformed models must either provide
+    a conservative current-pose decision or elect to emit.
+*/
+typedef int (*pvr_chunk_cache_filter_strip_t)(
     const pvr_chunk_cached_strip_t *strip, void *data);
 
 /** \brief Resolve an optional deformed vertex by original model index.
@@ -274,6 +292,23 @@ int pvr_chunk_model_cache_emit(
     pvr_chunk_cache_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_cache_result_t *result);
 
+/** \brief Filter, project, and emit a completed compact-model draw cache.
+
+    This has the same validation, ownership, and callback contract as
+    pvr_chunk_model_cache_emit(). A skipped strip performs no subsequent
+    callback or output work. Memory sinks retain the ordinary all-strips
+    capacity preflight so callback decisions cannot create partial output.
+*/
+int pvr_chunk_model_cache_emit_filtered(
+    const pvr_chunk_model_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result);
+
 /** \brief Query the exact two-volume cache footprint for a prepared model.
 
     Every strip must use one consistent two-volume output layout. Ordinary,
@@ -310,6 +345,30 @@ int pvr_chunk_model_two_volume_cache_emit(
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_cache_result_t *result);
+
+/** \brief Filter, project, and emit a completed two-volume draw cache.
+
+    Filtering occurs at the same side-effect-free boundary as the ordinary
+    cached path and uses the reference-pose bounds retained in each strip.
+*/
+int pvr_chunk_model_two_volume_cache_emit_filtered(
+    const pvr_chunk_two_volume_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result);
+
+/** \brief Classify one cached reference-pose strip bound.
+
+    This helper performs no deformation. The frustum must contain the same
+    object-to-screen transform intended for the draw.
+*/
+int pvr_chunk_cached_strip_classify(
+    const pvr_chunk_cached_strip_t *strip, const pvr_frustum_t *frustum,
+    pvr_frustum_classification_t *result);
 
 /** \brief Query the exact modifier-volume cache footprint.
 
