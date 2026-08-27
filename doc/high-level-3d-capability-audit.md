@@ -34,7 +34,7 @@ workloads.
 | Object hierarchy | Parent-before-child compact-model traversal composes static or sampled caller-owned local transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
 | Lighting | Checked inverse-transpose normals, directional and point Lambert lights, deterministic ARGB packing, and caller-owned animated light sampling are available | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
 | Keyframe animation | Validated immutable tracks, clips, blended TRS poses, and explicit one-shot/loop/ping-pong cursors bind to object hierarchies, cameras, lights, visibility, events, and morph targets | Keep system clocks, storage, event meaning, and scene ownership in the application. |
-| Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes | Keep skeleton ownership, pose evaluation, mesh binding, and blend policy outside the deformation kernels. |
+| Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes; explicit compact-model skin and sparse shape bindings build reusable dense sources, bind scalar weight tracks, and expose indexed completed poses | Keep skeleton ownership, pose evaluation, playback clocks, output storage, and blend policy outside the deformation kernels. |
 | Sprite cells | Checked caller-owned 2D/3D cell compilation, UV regions, pivot, scale, rotation, flip, visibility compaction, projection, and existing sprite sinks/materials | Complete; texture, material, instance, scene, list, animation, and clock ownership remain explicit. |
 | Particles | Deterministic caller-owned pools, spawn/step, sprite-cell extraction, colored/textured billboards, and camera-facing trails | Complete; no allocator, worker, clock, random source, material, scene, or list ownership. |
 | Collision | Checked rays, triangles, planes, segments, spheres, capsules, AABBs, OBBs, closest-point queries, overlap tests, and bounds are available | Keep broad-phase policy, retained worlds, object ownership, and response outside the math layer. |
@@ -370,6 +370,29 @@ The optional fixed-slot adapter extends this boundary without moving ownership:
 This connects compact-model rendering to bounded texture replacement while
 leaving decompression, upload, frame prediction, and scene lifetime outside the
 renderer.
+
+## Twelfth tranche
+
+The twelfth tranche closes compact-model shape motion without introducing a
+second animation system or renderer:
+
+- sparse target records identify canonical finite position and normal deltas
+  by original 16-bit model vertex index;
+- binding re-admits the model, validates the caller-owned sparse plan, and
+  rejects duplicate, unordered, or absent target indices before publishing a
+  constant-time dense lookup;
+- one exact caller workspace retains base vertices and target-major dense
+  deltas, so neither compact vertices nor sparse targets are decoded per frame;
+- each target binds to an optional established scalar animation track plus a
+  finite fallback weight, and the sampled result feeds the existing bounded
+  morph kernel; and
+- completed poses resolve original model indices directly for immediate or
+  cached model emission, with sampled target order and identity checked before
+  output is modified.
+
+The layer allocates nothing, owns no clip, cursor, clock, scene, or model, and
+creates no worker, fiber, or idle cost. Applications that do not bind shape
+data retain the established compact-model path unchanged.
 
 ## Validation gates
 

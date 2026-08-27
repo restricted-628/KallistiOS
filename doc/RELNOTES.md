@@ -76,6 +76,10 @@ lifecycle and naming conventions.
   per vertex, complete model and joint coverage validation, caller-owned
   constant-time pose lookup, and one-time canonical source construction for
   repeated use by the existing checked deformation kernel.
+* Added explicit compact-model shape bindings with sparse canonical morph
+  deltas, complete target-to-base validation, caller-owned constant-time pose
+  lookup, one-time dense source construction, and direct scalar animation-
+  channel binding into the existing checked morph kernel.
 * Added versioned compact-model asset containers with independently stored
   vertex and polygon sections, bounded workspace queries, header and decoded-
   stream CRCs, raw zero-copy loading, and optional codec callbacks. The model

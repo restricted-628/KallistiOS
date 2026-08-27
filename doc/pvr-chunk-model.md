@@ -104,6 +104,34 @@ position and consume the deformed normal without creating a global vertex
 buffer. Applications that do not bind a skin link no additional state and
 allocate no lookup, source, or pose storage.
 
+## Explicit shape motion
+
+`pvr_chunk_shape_bind()` associates one or more sparse morph targets with a
+prepared model. Each target is a strictly ordered set of canonical position
+and normal deltas keyed by the original 16-bit model vertex index. Binding
+re-admits the model, validates the caller-owned plan, rejects duplicate or
+absent indices and non-finite deltas, and proves every target-to-base
+relationship before modifying the caller's sparse-page lookup.
+
+`pvr_chunk_shape_source_build()` decodes the base vertices once in ascending
+index order and expands each sparse target into a target-major dense array in
+one exact, 32-byte-aligned caller workspace. Missing records become zero
+deltas. `pvr_chunk_shape_motion_bind()` then pairs each dense target with an
+optional scalar animation track and fallback weight. Its output feeds
+`anim_morph_targets_sample()`, followed by `pvr_chunk_shape_apply()` and the
+existing bounded morph kernel. The complete per-frame path is:
+
+```
+sample scalar channels -> apply dense morph targets -> resolve pose -> emit
+```
+
+`pvr_chunk_shape_apply()` checks that sampled targets retain their original
+dense pointer and ordering before publishing output. A completed
+`pvr_chunk_shape_pose_t` resolves original model indices in constant time for
+the immediate or cached deformation callback. The shape layer allocates
+nothing, owns no playback clock, and is completely absent from applications
+that do not bind shape data.
+
 ## Versioned asset containers and optional compression
 
 `pvr_chunk_asset_open()` admits a bounded, versioned container whose vertex
