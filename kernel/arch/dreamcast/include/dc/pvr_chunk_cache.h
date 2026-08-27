@@ -1,0 +1,162 @@
+/* KallistiOS ##version##
+
+   dc/pvr_chunk_cache.h
+   Copyright (C) 2026 Joseph Black
+*/
+
+/** \file    dc/pvr_chunk_cache.h
+    \brief   Caller-owned draw caches for admitted compact PVR models.
+    \ingroup pvr_chunk_render
+
+    A compact-model draw cache performs stream traversal, state decoding, and
+    indexed vertex assembly once. Repeated draws then project and submit
+    bounded PVR-native vertex runs without reparsing either compact stream.
+    Storage, deformation policy, materials, textures, scenes, and lists remain
+    application-owned.
+*/
+
+#ifndef __DC_PVR_CHUNK_CACHE_H
+#define __DC_PVR_CHUNK_CACHE_H
+
+#include <kos/cdefs.h>
+__BEGIN_DECLS
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include <dc/pvr_chunk_render.h>
+#include <dc/pvr_deform.h>
+
+/** \addtogroup pvr_chunk_render
+    @{
+*/
+
+/** \brief Required base alignment of compact-model cache storage. */
+#define PVR_CHUNK_CACHE_ALIGNMENT 32u
+
+/** \brief Current in-memory draw-cache representation version. */
+#define PVR_CHUNK_CACHE_VERSION 1u
+
+/** \brief One immutable, decoded strip in a compact-model draw cache. */
+typedef struct pvr_chunk_cached_strip {
+    pvr_chunk_render_state_t state; /**< Complete state at strip admission. */
+    size_t first_vertex;            /**< First entry in the vertex arrays. */
+    size_t vertex_count;            /**< Complete strip vertex count. */
+    uint8_t source_type;            /**< Original pvr_chunk_strip_type_t. */
+    uint8_t source_flags;           /**< Original strip flags. */
+    uint16_t reserved;              /**< Must remain zero. */
+} pvr_chunk_cached_strip_t;
+
+/** \brief Exact caller-owned storage required by one draw cache. */
+typedef struct pvr_chunk_cache_requirements {
+    size_t alignment;
+    size_t strip_count;
+    size_t vertex_count;
+    size_t maximum_strip_vertices;
+    size_t strips_offset;
+    size_t vertices_offset;
+    size_t deform_vertices_offset;
+    size_t source_indices_offset;
+    size_t bytes;
+} pvr_chunk_cache_requirements_t;
+
+/** \brief Immutable view over a completed caller-owned draw cache.
+
+    The structure owns no memory. Its storage and every pointer published from
+    that storage must remain immutable and accessible while the cache is used.
+*/
+typedef struct pvr_chunk_model_cache {
+    uint32_t version;
+    const void *storage;
+    size_t storage_bytes;
+    const pvr_chunk_cached_strip_t *strips;
+    size_t strip_count;
+    const pvr_vertex_t *vertices;
+    const pvr_deform_vertex_t *deform_vertices;
+    const uint16_t *source_indices;
+    size_t vertex_count;
+    size_t maximum_strip_vertices;
+    float center[3];
+    float radius;
+} pvr_chunk_model_cache_t;
+
+/** \brief Progress from one cached compact-model emission. */
+typedef struct pvr_chunk_cache_result {
+    size_t emitted_strips;
+    size_t emitted_vertices;
+} pvr_chunk_cache_result_t;
+
+/** \brief Prepare material state for one cached strip.
+
+    This callback normally resolves the decoded texture identifiers and emits
+    a polygon header to the same destination as the geometry sink. It runs in
+    caller context immediately before the complete strip is submitted.
+*/
+typedef int (*pvr_chunk_cache_begin_strip_t)(
+    const pvr_chunk_cached_strip_t *strip, void *data);
+
+/** \brief Resolve an optional deformed vertex by original model index.
+
+    When no resolver is supplied, emission uses the cache's canonical base
+    position and normal. A resolver may bind skinning, morphing, or another
+    caller-owned deformation result without changing the cache.
+*/
+typedef int (*pvr_chunk_cache_resolve_vertex_t)(
+    uint16_t source_index, pvr_deform_vertex_t *vertex, void *data);
+
+/** \brief Apply per-frame policy to one cached vertex before projection.
+
+    The vertex already contains cached UV and color state and the resolved
+    object-space position. The deformation value supplies the corresponding
+    position and normal for lighting or other per-frame policy. The command
+    word is restored after the callback.
+*/
+typedef int (*pvr_chunk_cache_prepare_vertex_t)(
+    const pvr_chunk_render_state_t *state, uint16_t source_index,
+    const pvr_deform_vertex_t *deformation, pvr_vertex_t *vertex, void *data);
+
+/** \brief Query the exact draw-cache footprint for a prepared model.
+
+    The complete polygon stream and every referenced prepared vertex are
+    checked. The initial cache supports ordinary one-volume strips; modifier,
+    two-volume, and legacy polygon-cache records report ENOTSUP. Failure
+    initializes \p requirements to zero.
+*/
+int pvr_chunk_model_cache_query(
+    const pvr_chunk_model_plan_t *plan,
+    pvr_chunk_cache_requirements_t *requirements);
+
+/** \brief Decode one prepared compact model into caller-owned cache storage.
+
+    Complete structural, capacity, alignment, and overlap validation precedes
+    the first storage write. \p prepare_vertex is the existing one-time compact
+    vertex policy callback; it is required for intensity, non-unit-W, or bump
+    data whose final PVR representation is application policy. Callback
+    failure leaves \p cache unpublished and cache storage unspecified.
+*/
+int pvr_chunk_model_cache_build(
+    const pvr_chunk_model_plan_t *plan, void *storage, size_t storage_bytes,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex, void *data,
+    pvr_chunk_model_cache_t *cache);
+
+/** \brief Project and emit a completed compact-model draw cache.
+
+    One 32-byte-aligned pvr_vertex_t workspace entry is required per vertex in
+    the largest cached strip. A memory sink must have room for every cached
+    vertex before emission begins. Non-memory sinks require \p begin_strip.
+    Optional deformation and per-frame vertex callbacks run in caller context.
+    No compact stream is read by this operation.
+*/
+int pvr_chunk_model_cache_emit(
+    const pvr_chunk_model_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result);
+
+/** @} */
+
+__END_DECLS
+#endif /* __DC_PVR_CHUNK_CACHE_H */

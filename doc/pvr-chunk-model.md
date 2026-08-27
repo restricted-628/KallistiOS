@@ -194,6 +194,31 @@ but resolves both preflight and emission references through the constant-time
 plan. Prepared variants cover ordinary, two-volume, and modifier-volume
 emission; they neither change model bytes nor introduce a second render path.
 
+## Draw caches
+
+Frequently drawn ordinary-strip models can move compact decoding entirely out
+of the frame loop with `pvr_chunk_model_cache_query()` and
+`pvr_chunk_model_cache_build()`. The query reports one deterministic,
+32-byte-aligned caller-owned footprint. The build walks an admitted prepared
+model once and retains decoded strip state, assembled PVR-native vertices,
+canonical position/normal pairs, and original model indices. The completed
+cache does not retain or read either compact source stream.
+
+`pvr_chunk_model_cache_emit()` copies one already assembled strip at a time to
+the caller's maximum-strip workspace, optionally resolves a skin, morph, or
+other deformation result by original vertex index, applies optional per-frame
+vertex policy such as lighting, projects it, and publishes through the existing
+geometry sink. Material and texture resolution remains an explicit strip
+callback, and scene/list ownership remains with the application. The cache
+creates no allocator, worker, fiber, texture namespace, or retained renderer.
+
+The first cache representation deliberately admits ordinary one-volume strips
+only. Two-volume and modifier-volume records continue through their prepared
+emitters until dedicated native-layout caches can preserve their distinct
+64-byte and triangle packet contracts. Legacy polygon-cache control records
+remain unsupported because the draw cache replaces their hidden global-state
+purpose directly.
+
 `pvr_chunk_model_emit_two_volume()` provides the parallel bounded bridge for
 inside/outside parameter strips. It keeps primary and secondary texture and
 material state distinct, expands two UV sets, projects complete 32-byte or

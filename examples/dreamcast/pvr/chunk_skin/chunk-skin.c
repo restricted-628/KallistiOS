@@ -74,36 +74,33 @@ static void normal_identity(pvr_normal_matrix_t *matrix) {
     matrix->column[2][2] = 1.0f;
 }
 
-static int begin_strip(const pvr_chunk_render_state_t *state,
-                       const pvr_chunk_strip_view_t *strip, void *data) {
+static int begin_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
     render_context_t *context = data;
 
-    (void)state;
     (void)strip;
     pvr_prim(&context->header, sizeof(context->header));
     return 0;
 }
 
+static int resolve_vertex(uint16_t source_index,
+                          pvr_deform_vertex_t *deformed, void *data) {
+    render_context_t *context = data;
+
+    return pvr_chunk_skin_pose_vertex_get(&context->pose, source_index,
+                                          deformed);
+}
+
 static int prepare_vertex(
     const pvr_chunk_render_state_t *state,
-    const pvr_chunk_vertex_attributes_t *attributes,
-    const pvr_chunk_strip_attributes_t *strip_attributes,
+    uint16_t source_index, const pvr_deform_vertex_t *deformed,
     pvr_vertex_t *vertex, void *data) {
-    render_context_t *context = data;
-    pvr_deform_vertex_t deformed;
     float light;
     uint32_t intensity;
 
     (void)state;
-    (void)strip_attributes;
-    if(pvr_chunk_skin_pose_vertex_get(&context->pose, attributes->index,
-                                      &deformed) < 0)
-        return -1;
-
-    vertex->x = deformed.position.x;
-    vertex->y = deformed.position.y;
-    vertex->z = deformed.position.z;
-    light = 0.25f + 0.75f * fmaxf(0.0f, deformed.normal.z);
+    (void)source_index;
+    (void)data;
+    light = 0.25f + 0.75f * fmaxf(0.0f, deformed->normal.z);
     intensity = (uint32_t)(light * 255.0f);
     vertex->argb = UINT32_C(0xff000000) | (intensity << 16) |
                    ((intensity * 3u / 4u) << 8) | intensity / 2u;
@@ -125,6 +122,9 @@ int main(int argc, char **argv) {
     uint32_t dense_lookup[256];
     alignas(32) uint8_t source_workspace[192];
     pvr_chunk_skin_source_t source;
+    pvr_chunk_cache_requirements_t cache_requirements;
+    alignas(32) uint8_t cache_storage[512];
+    pvr_chunk_model_cache_t cache;
     alignas(8) matrix_t position_matrices[2];
     pvr_normal_matrix_t normal_matrices[2];
     pvr_skin_palette_t palette = {
@@ -136,7 +136,7 @@ int main(int argc, char **argv) {
     render_context_t render_context;
     pvr_geometry_sink_t sink;
     alignas(32) pvr_vertex_t render_workspace[3];
-    pvr_chunk_render_result_t render_result;
+    pvr_chunk_cache_result_t render_result;
     pvr_pipeline_status_t pipeline;
     unsigned frame;
 
@@ -156,6 +156,11 @@ int main(int argc, char **argv) {
     assert(pvr_chunk_skin_source_build(&binding, source_workspace,
                                        sizeof(source_workspace),
                                        &source) == 0);
+    assert(pvr_chunk_model_cache_query(&plan, &cache_requirements) == 0);
+    assert(cache_requirements.bytes <= sizeof(cache_storage));
+    assert(pvr_chunk_model_cache_build(&plan, cache_storage,
+                                       sizeof(cache_storage), NULL, NULL,
+                                       &cache) == 0);
 
     identity(position_matrices + 0);
     identity(position_matrices + 1);
@@ -182,10 +187,10 @@ int main(int argc, char **argv) {
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
-        assert(pvr_chunk_model_emit_prepared(
-            &plan, &screen_identity, &sink, render_workspace, 3,
-            begin_strip, prepare_vertex, &render_context,
-            &render_result) == 0);
+        assert(pvr_chunk_model_cache_emit(
+            &cache, &screen_identity, &sink, render_workspace, 3,
+            begin_strip, resolve_vertex, prepare_vertex,
+            &render_context, &render_result) == 0);
         assert(render_result.emitted_strips == 1 &&
                render_result.emitted_vertices == 3);
         assert(pvr_list_finish() == 0);

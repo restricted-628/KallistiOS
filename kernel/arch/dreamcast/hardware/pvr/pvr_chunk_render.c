@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "pvr_chunk_render_internal.h"
+
 #ifdef __DREAMCAST__
 #include "pvr_internal.h"
 #endif
@@ -197,7 +199,8 @@ static int validate_record_fields(const pvr_chunk_record_t *record) {
     return 0;
 }
 
-static int validate_state_record(const pvr_chunk_record_t *record) {
+int pvr_chunk_render_validate_state_record(
+    const pvr_chunk_record_t *record) {
     if(unsupported_record(record) < 0)
         return -1;
     return validate_record_fields(record);
@@ -227,7 +230,7 @@ static int validate_two_volume_state_record(
     return validate_record_fields(record);
 }
 
-static int model_vertex_attributes_get(
+int pvr_chunk_render_vertex_attributes_get(
     const pvr_chunk_model_view_t *view,
     const pvr_chunk_model_plan_t *plan, uint16_t index,
     pvr_chunk_vertex_attributes_t *attributes) {
@@ -275,8 +278,8 @@ static int preflight_strip(const pvr_chunk_model_view_t *view,
 
         if(pvr_chunk_strip_attributes_get(strip, vertex_index,
                                           &strip_attributes) < 0 ||
-           model_vertex_attributes_get(view, plan, strip_attributes.index,
-                                       &vertex_attributes) < 0)
+           pvr_chunk_render_vertex_attributes_get(
+               view, plan, strip_attributes.index, &vertex_attributes) < 0)
             return -1;
 
         if(!has_prepare_vertex &&
@@ -338,7 +341,7 @@ static int preflight(const pvr_chunk_model_view_t *view,
         if(record.record_class == PVR_CHUNK_RECORD_END)
             break;
         if(checked_add(&requirements->records, 1u) < 0 ||
-           validate_state_record(&record) < 0)
+           pvr_chunk_render_validate_state_record(&record) < 0)
             return -1;
 
         if(record.record_class == PVR_CHUNK_RECORD_MATERIAL &&
@@ -545,8 +548,8 @@ static void update_material(pvr_chunk_render_state_t *state,
     }
 }
 
-static void update_state(pvr_chunk_render_state_t *state,
-                         const pvr_chunk_record_t *record) {
+void pvr_chunk_render_update_state(pvr_chunk_render_state_t *state,
+                                   const pvr_chunk_record_t *record) {
     if(record->record_class == PVR_CHUNK_RECORD_BITS) {
         switch(record->type) {
             case PVR_CHUNK_CONTROL_BLEND:
@@ -610,8 +613,8 @@ static int assemble_strip(const pvr_chunk_model_view_t *view,
             source_index = 1u - destination_index;
         if(pvr_chunk_strip_attributes_get(strip, source_index,
                                           &strip_attributes) < 0 ||
-           model_vertex_attributes_get(view, plan, strip_attributes.index,
-                                       &vertex_attributes) < 0)
+           pvr_chunk_render_vertex_attributes_get(
+               view, plan, strip_attributes.index, &vertex_attributes) < 0)
             return -1;
 
         memset(&vertex, 0, sizeof(vertex));
@@ -689,7 +692,7 @@ static int model_emit(
         if(record.record_class == PVR_CHUNK_RECORD_END)
             break;
         ++progress.consumed_records;
-        update_state(&state, &record);
+        pvr_chunk_render_update_state(&state, &record);
 
         if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
             pvr_chunk_strip_iterator_t strip_iterator;
@@ -1022,8 +1025,8 @@ static int assemble_two_volume_strip(
             source_index = 1u - destination_index;
         if(pvr_chunk_strip_attributes_get(strip, source_index,
                                           &strip_attributes) < 0 ||
-           model_vertex_attributes_get(view, plan, strip_attributes.index,
-                                       &vertex_attributes) < 0)
+           pvr_chunk_render_vertex_attributes_get(
+               view, plan, strip_attributes.index, &vertex_attributes) < 0)
             return -1;
 
         memset(&vertex, 0, sizeof(vertex));
@@ -1106,7 +1109,7 @@ static int model_emit_two_volume(
         if(record.record_class == PVR_CHUNK_RECORD_END)
             break;
         ++progress.consumed_records;
-        update_state(&state, &record);
+        pvr_chunk_render_update_state(&state, &record);
 
         if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
             pvr_chunk_strip_iterator_t strip_iterator;
@@ -1451,8 +1454,8 @@ static int emit_modifier_triangle(
     size_t i;
 
     for(i = 0; i < 3u; ++i) {
-        if(model_vertex_attributes_get(view, plan, indices[i],
-                                       &vertices[i]) < 0)
+        if(pvr_chunk_render_vertex_attributes_get(
+               view, plan, indices[i], &vertices[i]) < 0)
             return -1;
         if(vertices[i].position.w != 1.0f && !prepare_triangle) {
             errno = ENOTSUP;
