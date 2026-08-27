@@ -76,6 +76,7 @@ gdrom_direct_read_sectors_dma_gaps
 gdrom_direct_read_sectors_dma_gaps_async
 gdrom_direct_stream_session_start
 gdrom_direct_dma_diagnose
+pvr_chunk_asset_read_direct
 
 # Bios Font
 bfont_set_foreground_color

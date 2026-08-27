@@ -108,6 +108,16 @@ history in ordinary system RAM is the default: expansion-bus SRAM adds bus
 ownership and transfer latency but does not make SH-4 dictionary lookups
 faster.
 
+For assets laid out on a disc, `pvr_chunk_asset_read_direct()` adds an
+explicit, bounded input path. It can issue direct GD-DMA into aligned system
+RAM, or stage each command-sized piece in a caller-owned GAPS SRAM lease and
+move it with timed G2-DMA. The latter path reports separate GD and G2 timing,
+never allocates the 32 KiB bridge window implicitly, and requires the caller
+to retain the lease and exclusively own generic G2 channel CH2 or CH3 for the
+duration of the call. Both paths validate the exact logical (unpadded)
+container after transfer; the sector-rounding tail is not parsed. The
+resulting view can feed any of the three decoder policies below.
+
 The decoder supports three policies over the same checked frame: a synchronous
 callback, a manually stepped state with a positive output-byte budget, and a
 separately linked adapter for the shared KOS fiber-service executor. The

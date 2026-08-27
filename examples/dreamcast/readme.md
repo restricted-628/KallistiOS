@@ -155,6 +155,9 @@ This page serves as an index for all KallistiOS examples.
   - [**chunk_asset**](pvr/chunk_asset/): Generates a versioned compact-model
     asset, LZ4-compresses its vertex partition, and loads it through exact
     caller-owned workspace without starting a service thread
+  - [**chunk_asset_disc**](pvr/chunk_asset_disc/): Reads a compact-model asset
+    through direct GD-DMA and optionally a leased GAPS/G2 staging path, then
+    verifies LZ4 decoding and reports separate transport and decode timings
   - [**chunk_resources**](pvr/chunk_resources/): Converts and embeds a compact
     model, then resolves its texture identifiers through a pre-acquired
     fixed-slot residency set and checked materials
