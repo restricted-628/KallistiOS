@@ -122,11 +122,60 @@ typedef struct pvr_chunk_two_volume_cache {
     float radius;
 } pvr_chunk_two_volume_cache_t;
 
+/** \brief One retained triangle in a compact modifier-volume cache. */
+typedef struct pvr_chunk_cached_modifier_triangle {
+    size_t first_corner;       /**< First of three deformation/index entries. */
+    size_t first_user_word;    /**< First retained triangle user word. */
+    size_t user_word_count;    /**< Number of retained user words. */
+    uint8_t source_type;       /**< Original pvr_chunk_volume_type_t. */
+    uint8_t final_in_volume;   /**< Nonzero for the volume's last triangle. */
+    uint16_t reserved;         /**< Must remain zero. */
+} pvr_chunk_cached_modifier_triangle_t;
+
+/** \brief Exact storage required by one modifier-volume draw cache. */
+typedef struct pvr_chunk_modifier_cache_requirements {
+    size_t alignment;
+    size_t volume_count;
+    size_t triangle_count;
+    size_t corner_count;
+    size_t user_word_count;
+    size_t triangles_offset;
+    size_t packets_offset;
+    size_t deform_vertices_offset;
+    size_t source_indices_offset;
+    size_t user_words_offset;
+    size_t bytes;
+} pvr_chunk_modifier_cache_requirements_t;
+
+/** \brief Immutable view over a completed modifier-volume draw cache. */
+typedef struct pvr_chunk_modifier_cache {
+    uint32_t version;
+    const void *storage;
+    size_t storage_bytes;
+    const pvr_chunk_cached_modifier_triangle_t *triangles;
+    const pvr_modifier_vol_t *packets;
+    const pvr_deform_vertex_t *deform_vertices;
+    const uint16_t *source_indices;
+    const uint16_t *user_words;
+    size_t volume_count;
+    size_t triangle_count;
+    size_t corner_count;
+    size_t user_word_count;
+    float center[3];
+    float radius;
+} pvr_chunk_modifier_cache_t;
+
 /** \brief Progress from one cached compact-model emission. */
 typedef struct pvr_chunk_cache_result {
     size_t emitted_strips;
     size_t emitted_vertices;
 } pvr_chunk_cache_result_t;
+
+/** \brief Progress from one cached modifier-volume emission. */
+typedef struct pvr_chunk_modifier_cache_result {
+    size_t emitted_volumes;
+    size_t emitted_triangles;
+} pvr_chunk_modifier_cache_result_t;
 
 /** \brief Prepare material state for one cached strip.
 
@@ -169,6 +218,20 @@ typedef int (*pvr_chunk_cache_prepare_two_volume_vertex_t)(
     const pvr_deform_vertex_t *deformation,
     pvr_geometry_vertex_format_t format,
     pvr_chunk_two_volume_vertex_t *vertex, void *data);
+
+/** \brief Apply per-frame policy to one cached modifier triangle.
+
+    The three source indices and resolved deformation values follow the
+    expanded triangle's winding. Retained user words are the same bounded
+    words exposed by the immediate modifier callback. The packet already
+    contains baked dummy fields and resolved object-space positions; its
+    command is restored after the callback.
+*/
+typedef int (*pvr_chunk_cache_prepare_modifier_t)(
+    const uint16_t source_indices[3],
+    const pvr_deform_vertex_t deformations[3],
+    const uint16_t *user_words, size_t user_word_count,
+    pvr_modifier_vol_t *triangle, void *data);
 
 /** \brief Query the exact draw-cache footprint for a prepared model.
 
@@ -247,6 +310,43 @@ int pvr_chunk_model_two_volume_cache_emit(
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_cache_result_t *result);
+
+/** \brief Query the exact modifier-volume cache footprint.
+
+    Triangle, quad, and strip volume records are expanded during admission.
+    The query validates every resulting reference and retains exact user-word
+    capacity. Failure initializes \p requirements to zero.
+*/
+int pvr_chunk_model_modifier_cache_query(
+    const pvr_chunk_model_plan_t *plan,
+    pvr_chunk_modifier_cache_requirements_t *requirements);
+
+/** \brief Build a caller-owned cache of expanded modifier triangles.
+
+    \p prepare_triangle is the existing one-time modifier policy callback. It
+    remains required if any referenced position has non-unit W. Failure leaves
+    \p cache unpublished and cache storage unspecified.
+*/
+int pvr_chunk_model_modifier_cache_build(
+    const pvr_chunk_model_plan_t *plan, void *storage, size_t storage_bytes,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle, void *data,
+    pvr_chunk_modifier_cache_t *cache);
+
+/** \brief Project and emit a completed modifier-volume draw cache.
+
+    The existing modifier configuration determines list, culling, and final
+    include/exclude mode. One aligned triangle workspace is required. Optional
+    deformation resolution and per-frame triangle policy run in caller context
+    without reading either compact source stream.
+*/
+int pvr_chunk_model_modifier_cache_emit(
+    const pvr_chunk_modifier_cache_t *cache,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink, pvr_modifier_vol_t *workspace,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_cache_result_t *result);
 
 /** @} */
 

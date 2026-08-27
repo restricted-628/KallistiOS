@@ -61,13 +61,14 @@ lifecycle and naming conventions.
   constant-time vertex resolution. Prepared ordinary, two-volume, and modifier
   emitters retain the immediate path's validation, callbacks, progress, and
   sinks while applications that do not prepare a model allocate no index.
-* Added caller-owned compact-model draw caches for ordinary and two-volume
-  strips. One-time admission retains decoded strip state, tightly packed
-  32-byte or 64-byte PVR vertices, canonical deformation inputs, and original
-  vertex indices in an exact queried footprint. Repeated emission reads
-  neither compact stream and can bind caller-owned skin or morph results plus
-  per-frame lighting without creating a scene owner, worker, allocator, or
-  hidden resource namespace.
+* Added caller-owned compact-model draw caches for ordinary strips, two-volume
+  strips, and modifier volumes. One-time admission retains decoded strip state
+  or expanded volume topology, tightly packed 32-byte or 64-byte PVR packets,
+  canonical deformation inputs, original vertex indices, and modifier user
+  words in exact queried footprints. Repeated emission reads neither compact
+  stream and can bind caller-owned skin or morph results plus per-frame policy
+  without creating a scene owner, worker, allocator, or hidden resource
+  namespace.
 * Added explicit compact-model skin bindings with four normalized influences
   per vertex, complete model and joint coverage validation, caller-owned
   constant-time pose lookup, and one-time canonical source construction for

@@ -219,10 +219,19 @@ Two-volume models use the parallel
 two-volume packets at their 32-byte size and textured packets at their 64-byte
 size instead of charging every model for a maximum-sized union. Both layouts
 retain the same canonical deformation/index sidecar and callback ownership as
-the ordinary cache. Modifier-volume records continue through their prepared
-emitter until a dedicated triangle-packet cache preserves that different
-topology contract. Legacy polygon-cache control records remain unsupported
-because the draw cache replaces their hidden global-state purpose directly.
+the ordinary cache.
+
+Modifier-volume models use `pvr_chunk_model_modifier_cache_query()`,
+`pvr_chunk_model_modifier_cache_build()`, and
+`pvr_chunk_model_modifier_cache_emit()`. Admission expands triangles, quads,
+and alternating-winding strips through the same topology walker as immediate
+emission. The cache retains one 64-byte modifier packet per resulting triangle,
+three canonical deformation/index entries, bounded triangle user words, and
+the final-triangle boundary for each source volume. Runtime configuration still
+selects the modifier list, culling, and include/exclude-last mode; the cache
+does not capture scene state. Legacy polygon-cache control records remain
+unsupported because these explicit caches replace their hidden global-state
+purpose directly.
 
 `pvr_chunk_model_emit_two_volume()` provides the parallel bounded bridge for
 inside/outside parameter strips. It keeps primary and secondary texture and

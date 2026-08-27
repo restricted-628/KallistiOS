@@ -34,6 +34,20 @@ static const uint32_t vertices[] = {
     UINT32_C(0x000000ff)
 };
 
+static const uint32_t modifier_vertices[] = {
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ_NORMAL, 25),
+    UINT32_C(0x00040000),
+    UINT32_C(0), UINT32_C(0), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0), UINT32_C(0x3f800000),
+    UINT32_C(0x3f800000), UINT32_C(0), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0), UINT32_C(0x3f800000),
+    UINT32_C(0), UINT32_C(0x3f800000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0), UINT32_C(0x3f800000),
+    UINT32_C(0x3f800000), UINT32_C(0x3f800000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0), UINT32_C(0x3f800000),
+    UINT32_C(0x000000ff)
+};
+
 static const uint16_t polygons[] = {
     PVR_CHUNK_MATERIAL_DIFFUSE, UINT16_C(2),
     UINT16_C(0x3344), UINT16_C(0xff22),
@@ -75,24 +89,46 @@ static const uint16_t two_volume_color_polygons[] = {
     UINT16_C(0), UINT16_C(1), UINT16_C(2), UINT16_C(0x00ff)
 };
 
+static const uint16_t modifier_polygons[] = {
+    PVR_CHUNK_VOLUME_TRIANGLES, UINT16_C(9), UINT16_C(0x4002),
+    UINT16_C(0), UINT16_C(1), UINT16_C(2), UINT16_C(0x00aa),
+    UINT16_C(0), UINT16_C(2), UINT16_C(1), UINT16_C(0x00bb),
+    PVR_CHUNK_VOLUME_QUADS, UINT16_C(5), UINT16_C(1),
+    UINT16_C(0), UINT16_C(1), UINT16_C(2), UINT16_C(3),
+    PVR_CHUNK_VOLUME_STRIPS, UINT16_C(8), UINT16_C(0x4001),
+    UINT16_C(4), UINT16_C(0), UINT16_C(1), UINT16_C(2),
+    UINT16_C(0x00cc), UINT16_C(3), UINT16_C(0x00dd),
+    UINT16_C(0x00ff)
+};
+
 typedef struct callback_state {
     size_t begins;
     size_t resolves;
     size_t prepares;
+    size_t modifier_calls;
+    uint16_t modifier_user_words[8];
     uint16_t fail_index;
 } callback_state_t;
 
+#ifndef __DREAMCAST__
+static uint32_t submitted_modifier_modes[8];
+static size_t submitted_modifier_count;
+
 void pvr_mod_compile(pvr_mod_hdr_t *dst, pvr_list_t list, uint32_t mode,
                      uint32_t cull) {
-    (void)dst;
-    (void)list;
-    (void)mode;
-    (void)cull;
+    memset(dst, 0, sizeof(*dst));
+    dst->cmd = (uint32_t)list;
+    dst->mode1 = mode | (cull << 8);
 }
 
 int pvr_prim(const void *data, size_t size) {
-    (void)data;
-    (void)size;
+    if(size == sizeof(pvr_mod_hdr_t) + sizeof(pvr_modifier_vol_t) &&
+       submitted_modifier_count < 8u) {
+        const pvr_mod_hdr_t *header = data;
+
+        submitted_modifier_modes[submitted_modifier_count++] =
+            header->mode1 & 255u;
+    }
     return 0;
 }
 
@@ -100,6 +136,7 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
     (void)list;
     return pvr_prim(data, size);
 }
+#endif
 
 static void identity(matrix_t *matrix) {
     const matrix_t value = {
@@ -184,6 +221,38 @@ static int prepare_cached_two_volume_vertex(
     assert(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED);
     vertex->textured.argb0 = UINT32_C(0xff000000) | source_index;
     ++callback->prepares;
+    return 0;
+}
+
+static int build_modifier_triangle(
+    const pvr_chunk_vertex_attributes_t vertices[3],
+    const uint16_t *user_words, size_t user_word_count,
+    pvr_modifier_vol_t *triangle, void *data) {
+    callback_state_t *callback = data;
+
+    assert(vertices && triangle);
+    if(user_word_count)
+        callback->modifier_user_words[callback->modifier_calls] =
+            user_words[0];
+    triangle->d1 = (uint32_t)callback->modifier_calls;
+    ++callback->modifier_calls;
+    return 0;
+}
+
+static int prepare_cached_modifier_triangle(
+    const uint16_t source_indices[3],
+    const pvr_deform_vertex_t deformations[3],
+    const uint16_t *user_words, size_t user_word_count,
+    pvr_modifier_vol_t *triangle, void *data) {
+    callback_state_t *callback = data;
+
+    assert(source_indices && deformations && triangle);
+    assert(deformations[0].normal.z == 1.0f);
+    if(user_word_count)
+        callback->modifier_user_words[callback->modifier_calls] =
+            user_words[0];
+    triangle->d2 = UINT32_C(0x100) | source_indices[2];
+    ++callback->modifier_calls;
     return 0;
 }
 
@@ -281,6 +350,138 @@ static void test_two_volume_cache(void) {
     assert(color_output[0].argb0 == UINT32_C(0xff112233));
     assert(color_output[0].argb1 == UINT32_C(0xff445566));
     assert(color_output[2].flags == PVR_CMD_VERTEX_EOL);
+}
+
+static void test_modifier_cache(void) {
+    pvr_chunk_model_t model = {
+        modifier_vertices,
+        sizeof(modifier_vertices) / sizeof(modifier_vertices[0]),
+        modifier_polygons,
+        sizeof(modifier_polygons) / sizeof(modifier_polygons[0]),
+        { 0.5f, 0.5f, 0.0f }, 1.0f
+    };
+    pvr_chunk_model_view_t view;
+    pvr_chunk_vertex_index_entry_t plan_entries[256];
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_modifier_cache_requirements_t requirements;
+    alignas(32) uint8_t storage[4096];
+    pvr_chunk_modifier_cache_t cache;
+    alignas(8) matrix_t matrix;
+    pvr_chunk_modifier_config_t config = {
+        PVR_LIST_OP_MOD, PVR_CULLING_NONE,
+        PVR_MODIFIER_INCLUDE_LAST_POLY
+    };
+    alignas(32) pvr_modifier_vol_t workspace;
+    alignas(32) pvr_modifier_vol_t output[6];
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_modifier_cache_result_t result;
+    callback_state_t callbacks = { 0 };
+    pvr_chunk_cached_modifier_triangle_t *mutable_triangles;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_build(&view, plan_entries, 256, &plan) == 0);
+    assert(pvr_chunk_model_modifier_cache_query(
+        &plan, &requirements) == 0);
+    assert(requirements.alignment == 32);
+    assert(requirements.volume_count == 3);
+    assert(requirements.triangle_count == 6);
+    assert(requirements.corner_count == 18);
+    assert(requirements.user_word_count == 4);
+    assert(requirements.bytes <= sizeof(storage));
+
+    errno = 0;
+    assert(pvr_chunk_model_modifier_cache_build(
+        &plan, storage, requirements.bytes - 1u, build_modifier_triangle,
+        &callbacks, &cache) == -1);
+    assert(errno == ENOSPC && cache.version == 0);
+    assert(pvr_chunk_model_modifier_cache_build(
+        &plan, storage, sizeof(storage), build_modifier_triangle,
+        &callbacks, &cache) == 0);
+    assert(callbacks.modifier_calls == 6);
+    assert(cache.volume_count == 3 && cache.triangle_count == 6);
+    assert(cache.triangles[0].final_in_volume == 0);
+    assert(cache.triangles[1].final_in_volume == 1);
+    assert(cache.triangles[2].final_in_volume == 0);
+    assert(cache.triangles[3].final_in_volume == 1);
+    assert(cache.triangles[4].final_in_volume == 0);
+    assert(cache.triangles[5].final_in_volume == 1);
+    assert(cache.user_words[0] == UINT16_C(0x00aa));
+    assert(cache.user_words[1] == UINT16_C(0x00bb));
+    assert(cache.user_words[2] == UINT16_C(0x00cc));
+    assert(cache.user_words[3] == UINT16_C(0x00dd));
+    assert(cache.source_indices[6] == 0 && cache.source_indices[7] == 1 &&
+           cache.source_indices[8] == 2);
+    assert(cache.source_indices[9] == 2 && cache.source_indices[10] == 1 &&
+           cache.source_indices[11] == 3);
+
+    identity(&matrix);
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.fail_index = UINT16_MAX;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 6) == 0);
+    assert(pvr_chunk_model_modifier_cache_emit(
+        &cache, &matrix, &config, &sink, &workspace, resolve_vertex,
+        prepare_cached_modifier_triangle, &callbacks, &result) == 0);
+    assert(result.emitted_volumes == 3 && result.emitted_triangles == 6);
+    assert(callbacks.resolves == 18 && callbacks.modifier_calls == 6);
+    assert(output[0].ax == 10.0f && output[0].bx == 11.0f &&
+           output[0].cx == 10.0f);
+    assert(output[2].ax == 10.0f && output[2].bx == 11.0f &&
+           output[2].cy == 1.0f);
+    assert(output[3].ax == 10.0f && output[3].ay == 1.0f &&
+           output[3].bx == 11.0f && output[3].by == 0.0f);
+    assert(output[5].d1 == 5u && output[5].d2 == UINT32_C(0x103));
+    assert(output[5].flags == PVR_CMD_VERTEX_EOL);
+
+#ifndef __DREAMCAST__
+    submitted_modifier_count = 0;
+    assert(pvr_geometry_vertex_sink_init_current(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER) == 0);
+    assert(pvr_chunk_model_modifier_cache_emit(
+        &cache, &matrix, &config, &sink, &workspace, NULL,
+        NULL, NULL, &result) == 0);
+    assert(submitted_modifier_count == 6);
+    assert(submitted_modifier_modes[0] == PVR_MODIFIER_OTHER_POLY);
+    assert(submitted_modifier_modes[1] == PVR_MODIFIER_INCLUDE_LAST_POLY);
+    assert(submitted_modifier_modes[2] == PVR_MODIFIER_OTHER_POLY);
+    assert(submitted_modifier_modes[3] == PVR_MODIFIER_INCLUDE_LAST_POLY);
+    assert(submitted_modifier_modes[4] == PVR_MODIFIER_OTHER_POLY);
+    assert(submitted_modifier_modes[5] == PVR_MODIFIER_INCLUDE_LAST_POLY);
+#endif
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.fail_index = UINT16_MAX;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 5) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_modifier_cache_emit(
+        &cache, &matrix, &config, &sink, &workspace, resolve_vertex,
+        NULL, &callbacks, &result) == -1);
+    assert(errno == ENOSPC && callbacks.resolves == 0 &&
+           result.emitted_triangles == 0 && sink.emitted_vertices == 0);
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.fail_index = 2;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 6) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_modifier_cache_emit(
+        &cache, &matrix, &config, &sink, &workspace, resolve_vertex,
+        NULL, &callbacks, &result) == -1);
+    assert(errno == ECANCELED && result.emitted_triangles == 0 &&
+           sink.emitted_vertices == 0);
+
+    mutable_triangles =
+        (pvr_chunk_cached_modifier_triangle_t *)cache.triangles;
+    mutable_triangles[0].final_in_volume = 2;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 6) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_modifier_cache_emit(
+        &cache, &matrix, &config, &sink, &workspace, NULL,
+        NULL, NULL, &result) == -1);
+    assert(errno == EILSEQ && sink.emitted_vertices == 0);
+    mutable_triangles[0].final_in_volume = 0;
 }
 
 int main(void) {
@@ -384,6 +585,7 @@ int main(void) {
     assert(errno == ENOTSUP && requirements.bytes == 0);
 
     test_two_volume_cache();
+    test_modifier_cache();
     puts("pvr-chunk-cache-test: PASS");
     return 0;
 }

@@ -1361,3 +1361,558 @@ fail:
         *result = progress;
     return -1;
 }
+
+static int modifier_cache_layout_finish(
+    pvr_chunk_modifier_cache_requirements_t *result) {
+    size_t cursor;
+    size_t bytes;
+
+    if(result->triangle_count > SIZE_MAX / 3u) {
+        errno = ERANGE;
+        return -1;
+    }
+    result->corner_count = result->triangle_count * 3u;
+    if(multiply_size(result->triangle_count,
+                     sizeof(pvr_chunk_cached_modifier_triangle_t),
+                     &cursor) < 0 ||
+       align_size(cursor, PVR_CHUNK_CACHE_ALIGNMENT,
+                  &result->packets_offset) < 0 ||
+       multiply_size(result->triangle_count,
+                     sizeof(pvr_modifier_vol_t), &bytes) < 0 ||
+       add_size(result->packets_offset, bytes, &cursor) < 0 ||
+       align_size(cursor, PVR_CHUNK_CACHE_ALIGNMENT,
+                  &result->deform_vertices_offset) < 0 ||
+       multiply_size(result->corner_count,
+                     sizeof(pvr_deform_vertex_t), &bytes) < 0 ||
+       add_size(result->deform_vertices_offset, bytes, &cursor) < 0 ||
+       align_size(cursor, _Alignof(uint16_t),
+                  &result->source_indices_offset) < 0 ||
+       multiply_size(result->corner_count, sizeof(uint16_t), &bytes) < 0 ||
+       add_size(result->source_indices_offset, bytes, &cursor) < 0 ||
+       align_size(cursor, _Alignof(uint16_t),
+                  &result->user_words_offset) < 0 ||
+       multiply_size(result->user_word_count, sizeof(uint16_t), &bytes) < 0 ||
+       add_size(result->user_words_offset, bytes, &cursor) < 0 ||
+       align_size(cursor, PVR_CHUNK_CACHE_ALIGNMENT, &result->bytes) < 0)
+        return -1;
+
+    result->alignment = PVR_CHUNK_CACHE_ALIGNMENT;
+    return 0;
+}
+
+typedef struct modifier_query_context {
+    const pvr_chunk_model_view_t *view;
+    const pvr_chunk_model_plan_t *plan;
+    pvr_chunk_modifier_cache_requirements_t *requirements;
+} modifier_query_context_t;
+
+static int query_modifier_triangle(
+    const uint16_t indices[3], const uint16_t *user_words,
+    size_t user_word_count, uint8_t source_type, int final_in_volume,
+    void *data) {
+    modifier_query_context_t *context = data;
+    size_t corner;
+
+    (void)user_words;
+    (void)source_type;
+    (void)final_in_volume;
+    for(corner = 0; corner < 3u; ++corner) {
+        pvr_chunk_vertex_attributes_t attributes;
+
+        if(pvr_chunk_render_vertex_attributes_get(
+               context->view, context->plan, indices[corner],
+               &attributes) < 0)
+            return -1;
+    }
+    if(accumulate(&context->requirements->triangle_count, 1u) < 0 ||
+       accumulate(&context->requirements->user_word_count,
+                  user_word_count) < 0)
+        return -1;
+    return 0;
+}
+
+int pvr_chunk_model_modifier_cache_query(
+    const pvr_chunk_model_plan_t *plan,
+    pvr_chunk_modifier_cache_requirements_t *requirements) {
+    pvr_chunk_modifier_cache_requirements_t result = { 0 };
+    pvr_chunk_model_view_t checked;
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    modifier_query_context_t context;
+    int rv;
+
+    if(requirements)
+        memset(requirements, 0, sizeof(*requirements));
+    if(!plan || !requirements) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_model_open(&plan->view.model, &checked) < 0 ||
+       pvr_chunk_polygon_iterator_init(&iterator,
+           checked.model.polygon_words,
+           checked.model.polygon_word_count) < 0)
+        return -1;
+
+    context.view = &checked;
+    context.plan = plan;
+    context.requirements = &result;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        size_t triangles;
+
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(record.record_class != PVR_CHUNK_RECORD_VOLUME)
+            continue;
+        if(pvr_chunk_render_modifier_triangle_count(
+               &record, &triangles) < 0)
+            return -1;
+        if(!triangles)
+            continue;
+        if(accumulate(&result.volume_count, 1u) < 0 ||
+           pvr_chunk_render_visit_modifier_record(
+               &record, query_modifier_triangle, &context) < 0)
+            return -1;
+    }
+    if(rv < 0)
+        return -1;
+    if(!result.volume_count || !result.triangle_count) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if(modifier_cache_layout_finish(&result) < 0)
+        return -1;
+
+    *requirements = result;
+    return 0;
+}
+
+typedef struct modifier_build_context {
+    const pvr_chunk_model_view_t *view;
+    const pvr_chunk_model_plan_t *plan;
+    pvr_chunk_cached_modifier_triangle_t *triangles;
+    pvr_modifier_vol_t *packets;
+    pvr_deform_vertex_t *deform_vertices;
+    uint16_t *source_indices;
+    uint16_t *user_words;
+    size_t triangle_index;
+    size_t corner_index;
+    size_t user_word_index;
+    pvr_chunk_render_prepare_modifier_t prepare_triangle;
+    void *data;
+} modifier_build_context_t;
+
+static int build_modifier_triangle(
+    const uint16_t indices[3], const uint16_t *user_words,
+    size_t user_word_count, uint8_t source_type, int final_in_volume,
+    void *data) {
+    modifier_build_context_t *context = data;
+    pvr_chunk_cached_modifier_triangle_t *descriptor =
+        context->triangles + context->triangle_index;
+    pvr_modifier_vol_t *packet =
+        context->packets + context->triangle_index;
+    pvr_chunk_vertex_attributes_t attributes[3];
+    size_t corner;
+
+    for(corner = 0; corner < 3u; ++corner) {
+        if(pvr_chunk_render_vertex_attributes_get(
+               context->view, context->plan, indices[corner],
+               attributes + corner) < 0)
+            return -1;
+        if(attributes[corner].position.w != 1.0f &&
+           !context->prepare_triangle) {
+            errno = ENOTSUP;
+            return -1;
+        }
+        base_deformation(attributes + corner,
+                         context->deform_vertices +
+                         context->corner_index + corner);
+        context->source_indices[context->corner_index + corner] =
+            indices[corner];
+    }
+
+    memset(descriptor, 0, sizeof(*descriptor));
+    descriptor->first_corner = context->corner_index;
+    descriptor->first_user_word = context->user_word_index;
+    descriptor->user_word_count = user_word_count;
+    descriptor->source_type = source_type;
+    descriptor->final_in_volume = final_in_volume != 0;
+    if(user_word_count)
+        memcpy(context->user_words + context->user_word_index,
+               user_words, user_word_count * sizeof(*user_words));
+
+    memset(packet, 0, sizeof(*packet));
+    packet->flags = PVR_CMD_VERTEX_EOL;
+    packet->ax = attributes[0].position.x;
+    packet->ay = attributes[0].position.y;
+    packet->az = attributes[0].position.z;
+    packet->bx = attributes[1].position.x;
+    packet->by = attributes[1].position.y;
+    packet->bz = attributes[1].position.z;
+    packet->cx = attributes[2].position.x;
+    packet->cy = attributes[2].position.y;
+    packet->cz = attributes[2].position.z;
+    if(context->prepare_triangle) {
+        errno = 0;
+        if(context->prepare_triangle(attributes, user_words,
+                                     user_word_count, packet,
+                                     context->data) < 0) {
+            if(!errno)
+                errno = EIO;
+            return -1;
+        }
+        packet->flags = PVR_CMD_VERTEX_EOL;
+        context->deform_vertices[context->corner_index].position.x =
+            packet->ax;
+        context->deform_vertices[context->corner_index].position.y =
+            packet->ay;
+        context->deform_vertices[context->corner_index].position.z =
+            packet->az;
+        context->deform_vertices[context->corner_index + 1u].position.x =
+            packet->bx;
+        context->deform_vertices[context->corner_index + 1u].position.y =
+            packet->by;
+        context->deform_vertices[context->corner_index + 1u].position.z =
+            packet->bz;
+        context->deform_vertices[context->corner_index + 2u].position.x =
+            packet->cx;
+        context->deform_vertices[context->corner_index + 2u].position.y =
+            packet->cy;
+        context->deform_vertices[context->corner_index + 2u].position.z =
+            packet->cz;
+    }
+
+    ++context->triangle_index;
+    context->corner_index += 3u;
+    context->user_word_index += user_word_count;
+    return 0;
+}
+
+int pvr_chunk_model_modifier_cache_build(
+    const pvr_chunk_model_plan_t *plan, void *storage, size_t storage_bytes,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle, void *data,
+    pvr_chunk_modifier_cache_t *cache) {
+    pvr_chunk_modifier_cache_requirements_t requirements;
+    pvr_chunk_modifier_cache_t prepared = { 0 };
+    modifier_build_context_t context;
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    size_t volume_count = 0;
+    int rv;
+
+    if(cache)
+        memset(cache, 0, sizeof(*cache));
+    if(!plan || !cache || pvr_chunk_model_modifier_cache_query(
+           plan, &requirements) < 0)
+        return -1;
+    if(!storage || ((uintptr_t)storage &
+                    (PVR_CHUNK_CACHE_ALIGNMENT - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(storage_bytes < requirements.bytes) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(reject_storage_overlap(plan, storage, requirements.bytes,
+                              cache, sizeof(*cache)) < 0)
+        return -1;
+
+    memset(&context, 0, sizeof(context));
+    context.view = &plan->view;
+    context.plan = plan;
+    context.triangles = storage;
+    context.packets = (pvr_modifier_vol_t *)((uint8_t *)storage +
+                                             requirements.packets_offset);
+    context.deform_vertices = (pvr_deform_vertex_t *)(
+        (uint8_t *)storage + requirements.deform_vertices_offset);
+    context.source_indices = (uint16_t *)(
+        (uint8_t *)storage + requirements.source_indices_offset);
+    context.user_words = (uint16_t *)(
+        (uint8_t *)storage + requirements.user_words_offset);
+    context.prepare_triangle = prepare_triangle;
+    context.data = data;
+
+    if(pvr_chunk_polygon_iterator_init(&iterator,
+           plan->view.model.polygon_words,
+           plan->view.model.polygon_word_count) < 0)
+        return -1;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        size_t triangles;
+
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(record.record_class != PVR_CHUNK_RECORD_VOLUME)
+            continue;
+        if(pvr_chunk_render_modifier_triangle_count(
+               &record, &triangles) < 0)
+            return -1;
+        if(!triangles)
+            continue;
+        if(pvr_chunk_render_visit_modifier_record(
+               &record, build_modifier_triangle, &context) < 0)
+            return -1;
+        ++volume_count;
+    }
+    if(rv < 0 || volume_count != requirements.volume_count ||
+       context.triangle_index != requirements.triangle_count ||
+       context.corner_index != requirements.corner_count ||
+       context.user_word_index != requirements.user_word_count) {
+        if(rv >= 0)
+            errno = EILSEQ;
+        return -1;
+    }
+
+    prepared.version = PVR_CHUNK_CACHE_VERSION;
+    prepared.storage = storage;
+    prepared.storage_bytes = requirements.bytes;
+    prepared.triangles = context.triangles;
+    prepared.packets = context.packets;
+    prepared.deform_vertices = context.deform_vertices;
+    prepared.source_indices = context.source_indices;
+    prepared.user_words = context.user_words;
+    prepared.volume_count = requirements.volume_count;
+    prepared.triangle_count = requirements.triangle_count;
+    prepared.corner_count = requirements.corner_count;
+    prepared.user_word_count = requirements.user_word_count;
+    memcpy(prepared.center, plan->view.model.center,
+           sizeof(prepared.center));
+    prepared.radius = plan->view.model.radius;
+    *cache = prepared;
+    return 0;
+}
+
+static int modifier_cache_valid(const pvr_chunk_modifier_cache_t *cache) {
+    pvr_chunk_modifier_cache_requirements_t layout = { 0 };
+    uintptr_t storage_start;
+    uintptr_t storage_end;
+    size_t corner_cursor = 0;
+    size_t user_word_cursor = 0;
+    size_t volume_count = 0;
+    size_t index;
+
+    if(!cache || cache->version != PVR_CHUNK_CACHE_VERSION ||
+       !cache->storage || ((uintptr_t)cache->storage & 31u) ||
+       !isfinite(cache->center[0]) || !isfinite(cache->center[1]) ||
+       !isfinite(cache->center[2]) || !isfinite(cache->radius) ||
+       cache->radius < 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+    layout.volume_count = cache->volume_count;
+    layout.triangle_count = cache->triangle_count;
+    layout.user_word_count = cache->user_word_count;
+    if(modifier_cache_layout_finish(&layout) < 0)
+        return -1;
+    if(address_range(cache->storage, cache->storage_bytes,
+                     &storage_start, &storage_end) < 0)
+        return -1;
+    (void)storage_end;
+    if(!layout.volume_count || !layout.triangle_count ||
+       cache->corner_count != layout.corner_count ||
+       cache->storage_bytes != layout.bytes ||
+       (uintptr_t)cache->triangles != storage_start ||
+       (uintptr_t)cache->packets != storage_start + layout.packets_offset ||
+       (uintptr_t)cache->deform_vertices !=
+           storage_start + layout.deform_vertices_offset ||
+       (uintptr_t)cache->source_indices !=
+           storage_start + layout.source_indices_offset ||
+       (uintptr_t)cache->user_words !=
+           storage_start + layout.user_words_offset) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    for(index = 0; index < cache->triangle_count; ++index) {
+        const pvr_chunk_cached_modifier_triangle_t *triangle =
+            cache->triangles + index;
+
+        if(triangle->reserved || triangle->first_corner != corner_cursor ||
+           triangle->first_user_word != user_word_cursor ||
+           triangle->source_type < PVR_CHUNK_VOLUME_TRIANGLES ||
+           triangle->source_type > PVR_CHUNK_VOLUME_STRIPS ||
+           triangle->final_in_volume > 1u ||
+           accumulate(&corner_cursor, 3u) < 0 ||
+           accumulate(&user_word_cursor, triangle->user_word_count) < 0 ||
+           corner_cursor > cache->corner_count ||
+           user_word_cursor > cache->user_word_count) {
+            if(!errno)
+                errno = EILSEQ;
+            return -1;
+        }
+        if(triangle->final_in_volume)
+            ++volume_count;
+    }
+    if(corner_cursor != cache->corner_count ||
+       user_word_cursor != cache->user_word_count ||
+       volume_count != cache->volume_count ||
+       !cache->triangles[cache->triangle_count - 1u].final_in_volume) {
+        errno = EILSEQ;
+        return -1;
+    }
+    return 0;
+}
+
+static int modifier_cache_emit_preflight(
+    const pvr_chunk_modifier_cache_t *cache, const matrix_t *matrix,
+    const pvr_chunk_modifier_config_t *config,
+    const pvr_geometry_vertex_sink_t *sink,
+    const pvr_modifier_vol_t *workspace) {
+    uintptr_t cache_start;
+    uintptr_t cache_end;
+    uintptr_t descriptor_start;
+    uintptr_t descriptor_end;
+    uintptr_t workspace_start;
+    uintptr_t workspace_end;
+    uintptr_t matrix_start;
+    uintptr_t matrix_end;
+    uintptr_t output_start = 0;
+    uintptr_t output_end = 0;
+    size_t bytes;
+
+    if(modifier_cache_valid(cache) < 0 || matrix_valid(matrix) < 0 ||
+       pvr_chunk_render_modifier_sink_valid(sink) < 0 ||
+       pvr_chunk_render_modifier_config_valid(config, sink) < 0)
+        return -1;
+    if(!workspace || ((uintptr_t)workspace & 31u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       cache->triangle_count >
+       sink->destination.memory.capacity - sink->emitted_vertices) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(address_range(cache->storage, cache->storage_bytes,
+                     &cache_start, &cache_end) < 0 ||
+       address_range(cache, sizeof(*cache),
+                     &descriptor_start, &descriptor_end) < 0 ||
+       address_range(workspace, sizeof(*workspace),
+                     &workspace_start, &workspace_end) < 0 ||
+       address_range(matrix, sizeof(*matrix),
+                     &matrix_start, &matrix_end) < 0)
+        return -1;
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY) {
+        if(multiply_size(sink->destination.memory.capacity,
+                         sizeof(pvr_modifier_vol_t), &bytes) < 0 ||
+           address_range(sink->destination.memory.vertices, bytes,
+                         &output_start, &output_end) < 0)
+            return -1;
+    }
+    if(ranges_overlap(cache_start, cache_end,
+                      workspace_start, workspace_end) ||
+       ranges_overlap(cache_start, cache_end, matrix_start, matrix_end) ||
+       ranges_overlap(cache_start, cache_end, output_start, output_end) ||
+       ranges_overlap(workspace_start, workspace_end,
+                      matrix_start, matrix_end) ||
+       ranges_overlap(workspace_start, workspace_end,
+                      output_start, output_end) ||
+       ranges_overlap(descriptor_start, descriptor_end,
+                      workspace_start, workspace_end) ||
+       ranges_overlap(descriptor_start, descriptor_end,
+                      output_start, output_end) ||
+       ranges_overlap(descriptor_start, descriptor_end,
+                      matrix_start, matrix_end) ||
+       ranges_overlap(output_start, output_end,
+                      matrix_start, matrix_end)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+int pvr_chunk_model_modifier_cache_emit(
+    const pvr_chunk_modifier_cache_t *cache,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink, pvr_modifier_vol_t *workspace,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_cache_result_t *result) {
+    pvr_chunk_modifier_cache_result_t progress = { 0 };
+    size_t triangle_index;
+
+    if(result)
+        *result = progress;
+    if(modifier_cache_emit_preflight(cache, object_to_screen, config, sink,
+                                     workspace) < 0)
+        return -1;
+
+    for(triangle_index = 0; triangle_index < cache->triangle_count;
+        ++triangle_index) {
+        const pvr_chunk_cached_modifier_triangle_t *descriptor =
+            cache->triangles + triangle_index;
+        uint16_t indices[3];
+        pvr_deform_vertex_t deformations[3];
+        pvr_geometry_vertex_stream_t stream;
+        uint32_t mode = descriptor->final_in_volume ? config->final_mode :
+                        PVR_MODIFIER_OTHER_POLY;
+        size_t corner;
+
+        *workspace = cache->packets[triangle_index];
+        for(corner = 0; corner < 3u; ++corner) {
+            size_t cached_corner = descriptor->first_corner + corner;
+
+            indices[corner] = cache->source_indices[cached_corner];
+            deformations[corner] = cache->deform_vertices[cached_corner];
+            if(resolve_vertex) {
+                errno = 0;
+                if(resolve_vertex(indices[corner], deformations + corner,
+                                  data) < 0) {
+                    if(!errno)
+                        errno = EIO;
+                    goto fail;
+                }
+            }
+            if(finite_deformation(deformations + corner) < 0)
+                goto fail;
+        }
+
+        workspace->ax = deformations[0].position.x;
+        workspace->ay = deformations[0].position.y;
+        workspace->az = deformations[0].position.z;
+        workspace->bx = deformations[1].position.x;
+        workspace->by = deformations[1].position.y;
+        workspace->bz = deformations[1].position.z;
+        workspace->cx = deformations[2].position.x;
+        workspace->cy = deformations[2].position.y;
+        workspace->cz = deformations[2].position.z;
+        if(prepare_triangle) {
+            errno = 0;
+            if(prepare_triangle(indices, deformations,
+                                cache->user_words +
+                                descriptor->first_user_word,
+                                descriptor->user_word_count,
+                                workspace, data) < 0) {
+                if(!errno)
+                    errno = EIO;
+                goto fail;
+            }
+        }
+        workspace->flags = PVR_CMD_VERTEX_EOL;
+        stream.vertices = workspace;
+        stream.vertex_count = 1u;
+        stream.stride = sizeof(*workspace);
+        stream.format = PVR_GEOMETRY_VERTEX_MODIFIER;
+        if(pvr_geometry_project_vertices(workspace, 1u, &stream,
+                                         object_to_screen, NULL) < 0 ||
+           pvr_chunk_render_publish_modifier(sink, config, workspace,
+                                             mode) < 0)
+            goto fail;
+
+        ++progress.emitted_triangles;
+        if(descriptor->final_in_volume)
+            ++progress.emitted_volumes;
+    }
+
+    if(result)
+        *result = progress;
+    return 0;
+
+fail:
+    if(!errno)
+        errno = EIO;
+    if(result)
+        *result = progress;
+    return -1;
+}
