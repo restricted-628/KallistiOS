@@ -212,12 +212,17 @@ geometry sink. Material and texture resolution remains an explicit strip
 callback, and scene/list ownership remains with the application. The cache
 creates no allocator, worker, fiber, texture namespace, or retained renderer.
 
-The first cache representation deliberately admits ordinary one-volume strips
-only. Two-volume and modifier-volume records continue through their prepared
-emitters until dedicated native-layout caches can preserve their distinct
-64-byte and triangle packet contracts. Legacy polygon-cache control records
-remain unsupported because the draw cache replaces their hidden global-state
-purpose directly.
+Two-volume models use the parallel
+`pvr_chunk_model_two_volume_cache_query()`,
+`pvr_chunk_model_two_volume_cache_build()`, and
+`pvr_chunk_model_two_volume_cache_emit()` path. It preserves untextured
+two-volume packets at their 32-byte size and textured packets at their 64-byte
+size instead of charging every model for a maximum-sized union. Both layouts
+retain the same canonical deformation/index sidecar and callback ownership as
+the ordinary cache. Modifier-volume records continue through their prepared
+emitter until a dedicated triangle-packet cache preserves that different
+topology contract. Legacy polygon-cache control records remain unsupported
+because the draw cache replaces their hidden global-state purpose directly.
 
 `pvr_chunk_model_emit_two_volume()` provides the parallel bounded bridge for
 inside/outside parameter strips. It keeps primary and secondary texture and

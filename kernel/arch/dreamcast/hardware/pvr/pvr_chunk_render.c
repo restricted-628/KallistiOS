@@ -223,7 +223,7 @@ static int unsupported_two_volume_record(
     return 0;
 }
 
-static int validate_two_volume_state_record(
+int pvr_chunk_render_validate_two_volume_state_record(
     const pvr_chunk_record_t *record) {
     if(unsupported_two_volume_record(record) < 0)
         return -1;
@@ -780,7 +780,7 @@ int pvr_chunk_model_emit_prepared(
                       result);
 }
 
-static size_t two_volume_format_size(
+size_t pvr_chunk_render_two_volume_format_size(
     pvr_geometry_vertex_format_t format) {
     switch(format) {
         case PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR:
@@ -831,7 +831,8 @@ static int two_volume_sink_valid(
     return 0;
 }
 
-static pvr_geometry_vertex_format_t two_volume_strip_format(uint8_t type) {
+pvr_geometry_vertex_format_t pvr_chunk_render_two_volume_strip_format(
+    uint8_t type) {
     return type == PVR_CHUNK_STRIP_TWO_VOLUME ?
            PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR :
            PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED;
@@ -863,7 +864,8 @@ static int preflight_two_volume(
     size_t output_bytes = 0;
     size_t plan_bytes;
     size_t index_bytes;
-    size_t vertex_size = sink ? two_volume_format_size(sink->format) : 0;
+    size_t vertex_size = sink ?
+        pvr_chunk_render_two_volume_format_size(sink->format) : 0;
     int rv;
 
     memset(requirements, 0, sizeof(*requirements));
@@ -886,7 +888,7 @@ static int preflight_two_volume(
         if(record.record_class == PVR_CHUNK_RECORD_END)
             break;
         if(checked_add(&requirements->records, 1u) < 0 ||
-           validate_two_volume_state_record(&record) < 0)
+           pvr_chunk_render_validate_two_volume_state_record(&record) < 0)
             return -1;
 
         if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
@@ -894,7 +896,8 @@ static int preflight_two_volume(
             pvr_chunk_strip_view_t strip;
             int strip_rv;
 
-            if(two_volume_strip_format(record.type) != sink->format) {
+            if(pvr_chunk_render_two_volume_strip_format(record.type) !=
+               sink->format) {
                 errno = EINVAL;
                 return -1;
             }
@@ -1009,7 +1012,7 @@ static int assemble_two_volume_strip(
     pvr_chunk_two_volume_vertex_t *workspace,
     pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data) {
-    size_t vertex_size = two_volume_format_size(format);
+    size_t vertex_size = pvr_chunk_render_two_volume_format_size(format);
     size_t destination_index;
 
     for(destination_index = 0; destination_index < strip->vertex_count;
@@ -1099,7 +1102,7 @@ static int model_emit_two_volume(
                             &requirements) < 0)
         return -1;
 
-    vertex_size = two_volume_format_size(sink->format);
+    vertex_size = pvr_chunk_render_two_volume_format_size(sink->format);
     memset(&state, 0, sizeof(state));
     if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
                                        view->model.polygon_word_count) < 0)

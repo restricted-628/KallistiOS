@@ -80,6 +80,48 @@ typedef struct pvr_chunk_model_cache {
     float radius;
 } pvr_chunk_model_cache_t;
 
+/** \brief Exact storage required by one two-volume draw cache.
+
+    `vertex_size` is 32 bytes for color packets and 64 bytes for textured
+    packets. The retained packet array is tightly packed at that size.
+*/
+typedef struct pvr_chunk_two_volume_cache_requirements {
+    size_t alignment;
+    pvr_geometry_vertex_format_t format;
+    size_t vertex_size;
+    size_t strip_count;
+    size_t vertex_count;
+    size_t maximum_strip_vertices;
+    size_t strips_offset;
+    size_t vertices_offset;
+    size_t deform_vertices_offset;
+    size_t source_indices_offset;
+    size_t bytes;
+} pvr_chunk_two_volume_cache_requirements_t;
+
+/** \brief Immutable view over a completed two-volume draw cache.
+
+    The structure owns no memory. `vertices` contains tightly packed packets
+    of `format`, rather than maximum-sized union entries, so color-only models
+    retain their native 32-byte footprint.
+*/
+typedef struct pvr_chunk_two_volume_cache {
+    uint32_t version;
+    const void *storage;
+    size_t storage_bytes;
+    const pvr_chunk_cached_strip_t *strips;
+    size_t strip_count;
+    const void *vertices;
+    const pvr_deform_vertex_t *deform_vertices;
+    const uint16_t *source_indices;
+    size_t vertex_count;
+    size_t maximum_strip_vertices;
+    pvr_geometry_vertex_format_t format;
+    size_t vertex_size;
+    float center[3];
+    float radius;
+} pvr_chunk_two_volume_cache_t;
+
 /** \brief Progress from one cached compact-model emission. */
 typedef struct pvr_chunk_cache_result {
     size_t emitted_strips;
@@ -114,6 +156,19 @@ typedef int (*pvr_chunk_cache_resolve_vertex_t)(
 typedef int (*pvr_chunk_cache_prepare_vertex_t)(
     const pvr_chunk_render_state_t *state, uint16_t source_index,
     const pvr_deform_vertex_t *deformation, pvr_vertex_t *vertex, void *data);
+
+/** \brief Apply per-frame policy to one cached two-volume vertex.
+
+    The member selected by \p format already contains cached UV/color state
+    and the resolved object-space position. The deformation value supplies the
+    corresponding normal for lighting or other policy. The command word is
+    restored after the callback.
+*/
+typedef int (*pvr_chunk_cache_prepare_two_volume_vertex_t)(
+    const pvr_chunk_render_state_t *state, uint16_t source_index,
+    const pvr_deform_vertex_t *deformation,
+    pvr_geometry_vertex_format_t format,
+    pvr_chunk_two_volume_vertex_t *vertex, void *data);
 
 /** \brief Query the exact draw-cache footprint for a prepared model.
 
@@ -154,6 +209,43 @@ int pvr_chunk_model_cache_emit(
     pvr_chunk_cache_begin_strip_t begin_strip,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result);
+
+/** \brief Query the exact two-volume cache footprint for a prepared model.
+
+    Every strip must use one consistent two-volume output layout. Ordinary,
+    modifier, bump, and legacy polygon-cache records report ENOTSUP. Failure
+    initializes \p requirements to zero.
+*/
+int pvr_chunk_model_two_volume_cache_query(
+    const pvr_chunk_model_plan_t *plan,
+    pvr_chunk_two_volume_cache_requirements_t *requirements);
+
+/** \brief Decode a prepared two-volume model into caller-owned storage.
+
+    \p prepare_vertex is the existing one-time two-volume policy callback and
+    remains required for intensity or non-unit-W vertex data. No storage is
+    retained by KOS, and failure leaves \p cache unpublished.
+*/
+int pvr_chunk_model_two_volume_cache_build(
+    const pvr_chunk_model_plan_t *plan, void *storage, size_t storage_bytes,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex, void *data,
+    pvr_chunk_two_volume_cache_t *cache);
+
+/** \brief Project and emit a completed two-volume draw cache.
+
+    One aligned maximum-sized workspace union is required per vertex in the
+    largest strip. Output uses a format-bound vertex sink matching the cache.
+    Optional deformation and per-frame policy callbacks run in caller context.
+    Neither compact source stream is read.
+*/
+int pvr_chunk_model_two_volume_cache_emit(
+    const pvr_chunk_two_volume_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_cache_result_t *result);
 
 /** @} */
