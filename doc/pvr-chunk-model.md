@@ -79,6 +79,39 @@ immediate view and pay no index-storage cost.
 Both decoded forms retain access to the raw bounded views, allowing uncommon
 application policy without weakening the checked framing boundary.
 
+## Versioned asset containers and optional compression
+
+`pvr_chunk_asset_open()` admits a bounded, versioned container whose vertex
+and polygon streams are separate 32-byte-aligned sections. Each section has an
+independent stored size, decoded size, codec, dictionary identifier, and CRC32.
+The fixed header has its own CRC and reserved-zero fields, and every span is
+checked for overflow, overlap, and natural word alignment before it is exposed.
+
+Raw sections are borrowed directly when the container address permits it. A
+compressed or unaligned section is materialized into exact caller-owned
+workspace, CRC-checked, and then passed through the normal complete compact-
+model admission boundary. The core container API allocates nothing and does
+not create a thread, fiber, callback worker, or decompression dependency.
+
+The optional `liblz4.a` addon provides full upstream LZ4 block, high-
+compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The
+converter's `--emit-asset --lz4-vertices` mode emits one checksummed LZ4 Frame
+for the cold vertex partition while leaving the usually smaller polygon/state
+partition directly readable. Applications that never link `liblz4` retain the
+raw-container path and pay no LZ4 code or runtime-memory cost.
+
+A dictionary is not required. It is most useful for many small related assets,
+and only its final 64 KiB can participate in LZ4 matches. Version one records a
+dictionary identifier without embedding dictionary bytes; the application
+may share one caller-owned dictionary across many models. Keeping that hot
+history in ordinary system RAM is the default: expansion-bus SRAM adds bus
+ownership and transfer latency but does not make SH-4 dictionary lookups
+faster.
+
+The current decode callback is synchronous and may be invoked from an ordinary
+thread or from a developer-owned fiber. Incremental cooperative stepping is a
+separate service layer; the asset format and raw loader do not require it.
+
 ## Hierarchies
 
 `pvr_chunk_hierarchy_traverse()` composes caller-owned nodes in array order.

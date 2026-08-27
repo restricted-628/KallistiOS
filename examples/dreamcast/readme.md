@@ -152,6 +152,9 @@ This page serves as an index for all KallistiOS examples.
   - background_plane
   - bumpmap
   - cheap_shadow
+  - [**chunk_asset**](pvr/chunk_asset/): Generates a versioned compact-model
+    asset, LZ4-compresses its vertex partition, and loads it through exact
+    caller-owned workspace without starting a service thread
   - [**chunk_resources**](pvr/chunk_resources/): Converts and embeds a compact
     model, then resolves its texture identifiers through a pre-acquired
     fixed-slot residency set and checked materials

@@ -573,6 +573,9 @@ pvr_chunk_model_validate
 pvr_chunk_model_open
 pvr_chunk_model_plan_query
 pvr_chunk_model_plan_build
+pvr_chunk_asset_open
+pvr_chunk_asset_workspace_query
+pvr_chunk_asset_load
 pvr_chunk_vertex_batch_decode
 pvr_chunk_vertex_batch_get
 pvr_chunk_vertex_attributes_get

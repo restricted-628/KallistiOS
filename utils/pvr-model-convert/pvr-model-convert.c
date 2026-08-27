@@ -17,7 +17,12 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <dc/pvr_chunk_asset.h>
 #include <dc/pvr_chunk_model.h>
+
+#include <kos/pvr_chunk_asset_lz4.h>
+
+#include <lz4frame.h>
 
 #include <ctype.h>
 #include <errno.h>
@@ -148,8 +153,9 @@ static void usage(FILE *stream, const char *program) {
     fprintf(stream,
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
             "--material NAME=ID ...] [--material-library FILE ...] "
-            "[--join-strips] [--emit-c SYMBOL] [--] "
-            "INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c}\n",
+            "[--join-strips] [--emit-c SYMBOL | --emit-asset "
+            "[--lz4-vertices]] [--] INPUT.obj "
+            "{VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}\n",
             program);
 }
 
@@ -1604,6 +1610,285 @@ static int write_word(FILE *file, uint32_t value, size_t width) {
     return 0;
 }
 
+static uint32_t crc32_bytes(const void *data, size_t size) {
+    const uint8_t *bytes = data;
+    uint32_t crc = UINT32_MAX;
+    size_t index;
+
+    for(index = 0; index < size; ++index) {
+        unsigned bit;
+
+        crc ^= bytes[index];
+        for(bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^
+                  (UINT32_C(0xedb88320) & (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return ~crc;
+}
+
+static void store_le16(uint8_t *bytes, uint16_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+}
+
+static void store_le32(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+static int align_size_32(size_t value, size_t *result) {
+    if(value > SIZE_MAX - (PVR_CHUNK_ASSET_ALIGNMENT - 1u)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *result = (value + PVR_CHUNK_ASSET_ALIGNMENT - 1u) &
+              ~(size_t)(PVR_CHUNK_ASSET_ALIGNMENT - 1u);
+    return 0;
+}
+
+static int serialize_words(const void *words, size_t word_count,
+                           size_t word_size, uint8_t **bytes_out,
+                           size_t *size_out) {
+    uint8_t *bytes;
+    size_t size;
+    size_t word;
+
+    if((word_size != sizeof(uint16_t) && word_size != sizeof(uint32_t)) ||
+       word_count > SIZE_MAX / word_size) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    size = word_count * word_size;
+    bytes = malloc(size);
+    if(!bytes) {
+        errno = ENOMEM;
+        return -1;
+    }
+    for(word = 0; word < word_count; ++word) {
+        uint32_t value = word_size == sizeof(uint32_t) ?
+            ((const uint32_t *)words)[word] :
+            ((const uint16_t *)words)[word];
+
+        if(word_size == sizeof(uint32_t))
+            store_le32(bytes + word * word_size, value);
+        else
+            store_le16(bytes + word * word_size, (uint16_t)value);
+    }
+    *bytes_out = bytes;
+    *size_out = size;
+    return 0;
+}
+
+static int build_asset_blob(const output_streams_t *streams,
+                            int lz4_vertices, uint8_t **blob_out,
+                            size_t *blob_bytes_out) {
+    uint8_t *vertex_raw = NULL;
+    uint8_t *polygon_raw = NULL;
+    uint8_t *vertex_compressed = NULL;
+    const uint8_t *vertex_stored;
+    uint8_t *blob = NULL;
+    size_t vertex_bytes;
+    size_t polygon_bytes;
+    size_t vertex_stored_bytes;
+    size_t polygon_offset;
+    size_t file_bytes;
+    int saved_errno;
+
+    if(serialize_words(streams->vertex_words, streams->vertex_word_count,
+                       sizeof(uint32_t), &vertex_raw, &vertex_bytes) < 0 ||
+       serialize_words(streams->polygon_words, streams->polygon_word_count,
+                       sizeof(uint16_t), &polygon_raw, &polygon_bytes) < 0)
+        goto fail;
+    vertex_stored = vertex_raw;
+    vertex_stored_bytes = vertex_bytes;
+
+    if(lz4_vertices) {
+        LZ4F_preferences_t preferences = LZ4F_INIT_PREFERENCES;
+        size_t bound;
+        size_t compressed;
+
+        preferences.frameInfo.blockSizeID = LZ4F_max64KB;
+        preferences.frameInfo.blockMode = LZ4F_blockIndependent;
+        preferences.frameInfo.contentChecksumFlag =
+            LZ4F_contentChecksumEnabled;
+        preferences.frameInfo.blockChecksumFlag = LZ4F_blockChecksumEnabled;
+        preferences.frameInfo.contentSize = vertex_bytes;
+        preferences.autoFlush = 1;
+        preferences.favorDecSpeed = 1;
+        bound = LZ4F_compressFrameBound(vertex_bytes, &preferences);
+        vertex_compressed = malloc(bound);
+        if(!vertex_compressed) {
+            errno = ENOMEM;
+            goto fail;
+        }
+        compressed = LZ4F_compressFrame(vertex_compressed, bound, vertex_raw,
+                                        vertex_bytes, &preferences);
+        if(LZ4F_isError(compressed)) {
+            errno = EIO;
+            goto fail;
+        }
+        vertex_stored = vertex_compressed;
+        vertex_stored_bytes = compressed;
+    }
+
+    if(vertex_bytes > UINT32_MAX || polygon_bytes > UINT32_MAX ||
+       vertex_stored_bytes > UINT32_MAX ||
+       PVR_CHUNK_ASSET_HEADER_BYTES > SIZE_MAX - vertex_stored_bytes ||
+       align_size_32(PVR_CHUNK_ASSET_HEADER_BYTES + vertex_stored_bytes,
+                     &polygon_offset) < 0 ||
+       polygon_offset > SIZE_MAX - polygon_bytes) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    file_bytes = polygon_offset + polygon_bytes;
+    if(file_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+
+    blob = calloc(1, file_bytes);
+    if(!blob) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    memcpy(blob + PVR_CHUNK_ASSET_HEADER_BYTES, vertex_stored,
+           vertex_stored_bytes);
+    memcpy(blob + polygon_offset, polygon_raw, polygon_bytes);
+
+    store_le32(blob, PVR_CHUNK_ASSET_MAGIC);
+    store_le16(blob + 4, PVR_CHUNK_ASSET_VERSION);
+    store_le16(blob + 6, PVR_CHUNK_ASSET_HEADER_BYTES);
+    store_le32(blob + 8, (uint32_t)file_bytes);
+    store_le32(blob + 16, float_word(streams->center[0]));
+    store_le32(blob + 20, float_word(streams->center[1]));
+    store_le32(blob + 24, float_word(streams->center[2]));
+    store_le32(blob + 28, float_word(streams->radius));
+
+    store_le32(blob + 32, PVR_CHUNK_ASSET_HEADER_BYTES);
+    store_le32(blob + 36, (uint32_t)vertex_stored_bytes);
+    store_le32(blob + 40, (uint32_t)vertex_bytes);
+    store_le32(blob + 44, crc32_bytes(vertex_raw, vertex_bytes));
+    store_le16(blob + 48, lz4_vertices ?
+        PVR_CHUNK_ASSET_CODEC_LZ4_FRAME : PVR_CHUNK_ASSET_CODEC_RAW);
+
+    store_le32(blob + 56, (uint32_t)polygon_offset);
+    store_le32(blob + 60, (uint32_t)polygon_bytes);
+    store_le32(blob + 64, (uint32_t)polygon_bytes);
+    store_le32(blob + 68, crc32_bytes(polygon_raw, polygon_bytes));
+    store_le16(blob + 72, PVR_CHUNK_ASSET_CODEC_RAW);
+    store_le32(blob + 80, crc32_bytes(blob, 80));
+
+    free(vertex_compressed);
+    free(vertex_raw);
+    free(polygon_raw);
+    *blob_out = blob;
+    *blob_bytes_out = file_bytes;
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    free(blob);
+    free(vertex_compressed);
+    free(vertex_raw);
+    free(polygon_raw);
+    errno = saved_errno;
+    return -1;
+}
+
+static int prepare_blob_output(const char *target, const void *data,
+                               size_t size,
+                               temporary_output_t *temporary) {
+    static const char suffix[] = ".tmp.XXXXXX";
+    size_t target_length = strlen(target);
+    FILE *file = NULL;
+    int descriptor = -1;
+    int saved_errno;
+
+    memset(temporary, 0, sizeof(*temporary));
+    if(target_length > SIZE_MAX - sizeof(suffix)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    temporary->path = malloc(target_length + sizeof(suffix));
+    if(!temporary->path) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memcpy(temporary->path, target, target_length);
+    memcpy(temporary->path + target_length, suffix, sizeof(suffix));
+    descriptor = mkstemp(temporary->path);
+    if(descriptor < 0)
+        goto fail;
+    file = fdopen(descriptor, "wb");
+    if(!file)
+        goto fail;
+    descriptor = -1;
+    if(fwrite(data, 1, size, file) != size || fflush(file) < 0)
+        goto fail;
+    if(fclose(file) < 0) {
+        file = NULL;
+        goto fail;
+    }
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    if(file)
+        fclose(file);
+    else if(descriptor >= 0)
+        close(descriptor);
+    if(temporary->path)
+        unlink(temporary->path);
+    free(temporary->path);
+    temporary->path = NULL;
+    errno = saved_errno;
+    return -1;
+}
+
+static int prepare_asset_output(const char *target,
+                                const output_streams_t *streams,
+                                int lz4_vertices,
+                                temporary_output_t *temporary,
+                                size_t *asset_bytes) {
+    uint8_t *blob = NULL;
+    size_t blob_bytes = 0;
+    pvr_chunk_asset_view_t asset_view;
+    pvr_chunk_asset_workspace_requirements_t requirements;
+    pvr_chunk_model_view_t model_view;
+    void *workspace = NULL;
+    size_t workspace_allocation = 0;
+    int result = -1;
+
+    if(build_asset_blob(streams, lz4_vertices, &blob, &blob_bytes) < 0 ||
+       pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
+       pvr_chunk_asset_workspace_query(&asset_view, &requirements) < 0)
+        goto out;
+    if(requirements.bytes) {
+        if(align_size_32(requirements.bytes, &workspace_allocation) < 0)
+            goto out;
+        workspace = aligned_alloc(PVR_CHUNK_ASSET_ALIGNMENT,
+                                  workspace_allocation);
+        if(!workspace) {
+            errno = ENOMEM;
+            goto out;
+        }
+    }
+    if(pvr_chunk_asset_load(&asset_view, pvr_chunk_asset_lz4_decode, NULL,
+                            workspace, workspace_allocation,
+                            &model_view) < 0 ||
+       prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
+        goto out;
+    *asset_bytes = blob_bytes;
+    result = 0;
+
+out:
+    free(workspace);
+    free(blob);
+    return result;
+}
+
 static int prepare_output(const char *target, const void *words,
                           size_t word_count, size_t word_size,
                           temporary_output_t *temporary) {
@@ -1920,11 +2205,15 @@ int main(int argc, char **argv) {
     const char *vertex_output = NULL;
     const char *polygon_output = NULL;
     const char *c_output = NULL;
+    const char *asset_output = NULL;
     const char *c_symbol = NULL;
+    size_t asset_bytes = 0;
     size_t error_line = 0;
     int flip_winding = 0;
     int flip_v = 0;
     int join_strips = 0;
+    int emit_asset = 0;
+    int lz4_vertices = 0;
     int texture_identifier = -1;
     int argument = 1;
     int result = 2;
@@ -1995,7 +2284,7 @@ int main(int argc, char **argv) {
             continue;
         }
         else if(!strcmp(argv[argument], "--emit-c")) {
-            if(argument + 1 >= argc || c_symbol ||
+            if(argument + 1 >= argc || c_symbol || emit_asset ||
                !valid_c_symbol(argv[argument + 1])) {
                 usage(stderr, argv[0]);
                 material_table_free(&materials);
@@ -2006,6 +2295,24 @@ int main(int argc, char **argv) {
             argument += 2;
             continue;
         }
+        else if(!strcmp(argv[argument], "--emit-asset")) {
+            if(c_symbol || emit_asset) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            emit_asset = 1;
+        }
+        else if(!strcmp(argv[argument], "--lz4-vertices")) {
+            if(lz4_vertices) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            lz4_vertices = 1;
+        }
         else {
             usage(stderr, argv[0]);
             material_table_free(&materials);
@@ -2014,7 +2321,13 @@ int main(int argc, char **argv) {
         }
         ++argument;
     }
-    if(argc - argument != (c_symbol ? 2 : 3)) {
+    if(lz4_vertices && !emit_asset) {
+        fprintf(stderr, "--lz4-vertices requires --emit-asset\n");
+        material_table_free(&materials);
+        material_library_free(&library);
+        return 2;
+    }
+    if(argc - argument != (c_symbol || emit_asset ? 2 : 3)) {
         usage(stderr, argv[0]);
         material_table_free(&materials);
         material_library_free(&library);
@@ -2024,16 +2337,19 @@ int main(int argc, char **argv) {
     input = argv[argument];
     if(c_symbol)
         c_output = argv[argument + 1];
+    else if(emit_asset)
+        asset_output = argv[argument + 1];
     else {
         vertex_output = argv[argument + 1];
         polygon_output = argv[argument + 2];
     }
     {
-        const char *first_output = c_symbol ? c_output : vertex_output;
+        const char *first_output = c_symbol ? c_output :
+            (emit_asset ? asset_output : vertex_output);
         int input_first = same_existing_file(input, first_output);
-        int input_polygon = c_symbol ? 0 :
+        int input_polygon = c_symbol || emit_asset ? 0 :
             same_existing_file(input, polygon_output);
-        int output_pair = c_symbol ? 0 :
+        int output_pair = c_symbol || emit_asset ? 0 :
             same_existing_file(vertex_output, polygon_output);
         size_t material_file;
 
@@ -2053,7 +2369,7 @@ int main(int argc, char **argv) {
             ++material_file) {
             int material_first = same_existing_file(
                 library.paths[material_file], first_output);
-            int material_polygon = c_symbol ? 0 : same_existing_file(
+            int material_polygon = c_symbol || emit_asset ? 0 : same_existing_file(
                 library.paths[material_file], polygon_output);
 
             if(material_first < 0 || material_polygon < 0) {
@@ -2071,8 +2387,11 @@ int main(int argc, char **argv) {
             }
         }
     }
-    if(output_target_admissible(c_symbol ? c_output : vertex_output) < 0 ||
-       (!c_symbol && output_target_admissible(polygon_output) < 0)) {
+    if(output_target_admissible(c_symbol ? c_output :
+                                (emit_asset ? asset_output :
+                                              vertex_output)) < 0 ||
+       (!c_symbol && !emit_asset &&
+        output_target_admissible(polygon_output) < 0)) {
         fprintf(stderr, "output target is not a regular file: %s\n",
                 strerror(errno));
         material_table_free(&materials);
@@ -2125,6 +2444,18 @@ int main(int argc, char **argv) {
             goto out;
         }
     }
+    else if(emit_asset) {
+        if(prepare_asset_output(asset_output, &streams, lz4_vertices,
+                                &vertex_temporary, &asset_bytes) < 0) {
+            fprintf(stderr, "asset preparation failed: %s\n",
+                    strerror(errno));
+            goto out;
+        }
+        if(publish_output(&vertex_temporary, asset_output) < 0) {
+            fprintf(stderr, "%s: %s\n", asset_output, strerror(errno));
+            goto out;
+        }
+    }
     else {
         if(prepare_output(vertex_output, streams.vertex_words,
                           streams.vertex_word_count, sizeof(uint32_t),
@@ -2149,6 +2480,10 @@ int main(int argc, char **argv) {
     print_report(&source, &streams, &info, &materials, &library);
     if(c_symbol)
         printf("c_symbol=%s\n", c_symbol);
+    if(emit_asset) {
+        printf("asset_bytes=%zu\n", asset_bytes);
+        printf("vertex_codec=%s\n", lz4_vertices ? "lz4-frame" : "raw");
+    }
     result = 0;
 
 out:

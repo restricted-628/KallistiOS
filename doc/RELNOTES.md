@@ -61,6 +61,13 @@ lifecycle and naming conventions.
   constant-time vertex resolution. Prepared ordinary, two-volume, and modifier
   emitters retain the immediate path's validation, callbacks, progress, and
   sinks while applications that do not prepare a model allocate no index.
+* Added versioned compact-model asset containers with independently stored
+  vertex and polygon sections, bounded workspace queries, header and decoded-
+  stream CRCs, raw zero-copy loading, and optional codec callbacks. The model
+  converter can emit raw assets or LZ4 Frame-compressed vertex partitions.
+* Bundled the unmodified BSD-2-Clause LZ4 1.10.0 library as an optional static
+  addon, including its Frame and dictionary APIs and a strict compact-asset
+  decoder callback. Applications that do not link it incur no runtime cost.
 * PVR TA startup now propagates bounded readiness failures instead of
   continuing into a busy or faulted accelerator, and AICA store-queue paths
   acquire their real mapped destination under the checked SQ contract.

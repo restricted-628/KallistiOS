@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 
 
 REPORT = """converted=1
@@ -173,6 +174,83 @@ f 1/1/1 2/2/1 3/3/1# trailing comment
         assert ".radius = 0x1.6a09e6p+0F" in generated_text
         assert str(source) not in generated_text
         compile_embedded(generated, root)
+
+        raw_asset = root / "triangle-raw.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            source,
+            raw_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        raw_bytes = raw_asset.read_bytes()
+        assert result.stdout == (
+            REPORT + f"asset_bytes={len(raw_bytes)}\nvertex_codec=raw\n"
+        )
+        assert raw_bytes[:4] == b"PCM1"
+        assert struct.unpack_from("<HHI", raw_bytes, 4) == (
+            1, 96, len(raw_bytes)
+        )
+        assert zlib.crc32(raw_bytes[:80]) == struct.unpack_from(
+            "<I", raw_bytes, 80
+        )[0]
+        vertex_offset, vertex_stored, vertex_decoded, vertex_crc = (
+            struct.unpack_from("<4I", raw_bytes, 32)
+        )
+        polygon_offset, polygon_stored, polygon_decoded, polygon_crc = (
+            struct.unpack_from("<4I", raw_bytes, 56)
+        )
+        assert struct.unpack_from("<H", raw_bytes, 48)[0] == 0
+        assert struct.unpack_from("<H", raw_bytes, 72)[0] == 0
+        assert vertex_stored == vertex_decoded == len(vertices.read_bytes())
+        assert polygon_stored == polygon_decoded == len(polygons.read_bytes())
+        assert raw_bytes[vertex_offset:vertex_offset + vertex_stored] == (
+            vertices.read_bytes()
+        )
+        assert raw_bytes[polygon_offset:polygon_offset + polygon_stored] == (
+            polygons.read_bytes()
+        )
+        assert vertex_crc == zlib.crc32(vertices.read_bytes())
+        assert polygon_crc == zlib.crc32(polygons.read_bytes())
+
+        lz4_asset = root / "triangle-lz4.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            "--lz4-vertices",
+            source,
+            lz4_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        lz4_bytes = lz4_asset.read_bytes()
+        assert result.stdout == (
+            REPORT +
+            f"asset_bytes={len(lz4_bytes)}\nvertex_codec=lz4-frame\n"
+        )
+        assert struct.unpack_from("<H", lz4_bytes, 48)[0] == 1
+        lz4_vertex_offset = struct.unpack_from("<I", lz4_bytes, 32)[0]
+        assert lz4_bytes[lz4_vertex_offset:lz4_vertex_offset + 4] == (
+            b"\x04\x22\x4d\x18"
+        )
+        lz4_again = root / "triangle-lz4-again.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            "--lz4-vertices",
+            source,
+            lz4_again,
+        )
+        assert result.returncode == 0, result.stderr
+        assert lz4_again.read_bytes() == lz4_bytes
+
+        result = invoke(
+            converter, "--lz4-vertices", source, vertices, polygons
+        )
+        assert result.returncode == 2
+        assert result.stderr == "--lz4-vertices requires --emit-asset\n"
 
         generated_again = root / "test-model-again.c"
         result = invoke(
