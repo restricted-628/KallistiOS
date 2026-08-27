@@ -108,9 +108,20 @@ history in ordinary system RAM is the default: expansion-bus SRAM adds bus
 ownership and transfer latency but does not make SH-4 dictionary lookups
 faster.
 
-The current decode callback is synchronous and may be invoked from an ordinary
-thread or from a developer-owned fiber. Incremental cooperative stepping is a
-separate service layer; the asset format and raw loader do not require it.
+The decoder supports three policies over the same checked frame: a synchronous
+callback, a manually stepped state with a positive output-byte budget, and a
+separately linked adapter for the shared KOS fiber-service executor. The
+adapter allocates its fixed job ring only when created, borrows an application-
+selected fiber stack, and yields between decode steps. It creates neither an
+executor nor a thread. Executor shutdown converts active and queued work into
+terminal cancellation before returning.
+
+An output budget bounds bytes published during one cooperative step. The Frame
+decoder may internally decompress a complete block while satisfying a smaller
+destination, so CPU work is additionally capped by the encoded block size. The
+converter fixes blocks at 64 KiB and makes them independent. This is a useful
+latency ceiling, not a claim that CPU time scales exactly with the output
+budget.
 
 ## Hierarchies
 

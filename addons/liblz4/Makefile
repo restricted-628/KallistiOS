@@ -7,7 +7,8 @@
 
 TARGET = liblz4.a
 
-OBJS = lz4.o lz4frame.o lz4hc.o xxhash.o pvr_chunk_asset_lz4.o
+OBJS = lz4.o lz4frame.o lz4hc.o xxhash.o pvr_chunk_asset_lz4.o \
+	pvr_chunk_asset_lz4_service.o
 
 # Keep large one-shot compression contexts off the SH-4 stack. Applications
 # still pay no heap cost until they create or use a frame compression context.

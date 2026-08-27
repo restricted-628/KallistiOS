@@ -68,6 +68,9 @@ lifecycle and naming conventions.
 * Bundled the unmodified BSD-2-Clause LZ4 1.10.0 library as an optional static
   addon, including its Frame and dictionary APIs and a strict compact-asset
   decoder callback. Applications that do not link it incur no runtime cost.
+  The addon also provides manually budgeted incremental decoding and a separate
+  opt-in adapter for caller-configured shared fiber-service executors; neither
+  policy reserves a thread, stack, queue, or workspace until selected.
 * PVR TA startup now propagates bounded readiness failures instead of
   continuing into a busy or faulted accelerator, and AICA store-queue paths
   acquire their real mapped destination under the checked SQ contract.

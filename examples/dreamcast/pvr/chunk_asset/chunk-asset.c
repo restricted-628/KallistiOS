@@ -6,19 +6,56 @@
 
 #include <kos.h>
 #include <kos/pvr_chunk_asset_lz4.h>
+#include <kos/pvr_chunk_asset_lz4_service.h>
 
 #include <errno.h>
+#include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 extern const unsigned char chunk_asset_model_data[];
 extern const int chunk_asset_model_size;
+
+static alignas(THD_STACK_ALIGNMENT) uint8_t decode_stack[8192];
+static volatile int decode_done;
+
+typedef struct decoded_section {
+    const void *stored_data;
+    void *decoded_data;
+    size_t decoded_bytes;
+} decoded_section_t;
+
+static void decode_complete(pvr_chunk_asset_lz4_job_t *job, void *data) {
+    (void)job;
+    (void)data;
+    decode_done = 1;
+}
+
+static int use_predecoded_section(const pvr_chunk_asset_section_t *section,
+                                  void *destination,
+                                  size_t destination_bytes, void *data) {
+    const decoded_section_t *decoded = data;
+
+    if(section->stored_data != decoded->stored_data ||
+       destination != decoded->decoded_data ||
+       destination_bytes != decoded->decoded_bytes) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
 
 int main(void) {
     pvr_chunk_asset_view_t asset;
     pvr_chunk_asset_workspace_requirements_t requirements;
     pvr_chunk_model_view_t model;
+    pvr_chunk_asset_lz4_service_t *decode_service = NULL;
+    pvr_chunk_asset_lz4_job_t *job = NULL;
+    pvr_chunk_asset_lz4_job_status_t status;
+    fiber_service_executor_t *executor = NULL;
+    decoded_section_t decoded;
     void *workspace = NULL;
     size_t allocation = 0;
     int result = 1;
@@ -41,20 +78,52 @@ int main(void) {
         }
     }
 
-    if(pvr_chunk_asset_load(&asset, pvr_chunk_asset_lz4_decode, NULL,
+    executor = fiber_service_executor_create();
+    if(!executor)
+        goto out;
+    decode_service = pvr_chunk_asset_lz4_service_create(
+        executor, decode_stack, sizeof(decode_stack), 2, 16);
+    if(!decode_service ||
+       fiber_service_executor_start(executor, NULL) < 0 ||
+       pvr_chunk_asset_lz4_service_start(decode_service, 1000) < 0)
+        goto out;
+
+    decoded.stored_data = asset.vertex.stored_data;
+    decoded.decoded_data = (uint8_t *)workspace + requirements.vertex_offset;
+    decoded.decoded_bytes = asset.vertex.decoded_bytes;
+    job = pvr_chunk_asset_lz4_job_create(
+        &asset.vertex, decoded.decoded_data, decoded.decoded_bytes, NULL,
+        decode_complete, NULL);
+    if(!job || pvr_chunk_asset_lz4_service_submit(decode_service, job) < 0)
+        goto out;
+    while(!decode_done)
+        thd_pass();
+    if(pvr_chunk_asset_lz4_job_get_status(job, &status) < 0 ||
+       status.state != PVR_CHUNK_ASSET_LZ4_JOB_COMPLETE)
+        goto out;
+
+    if(pvr_chunk_asset_load(&asset, use_predecoded_section, &decoded,
                             workspace, allocation, &model) == 0 &&
        model.info.vertex_entries == 3 && model.info.triangles == 1) {
-        printf("KOSPVRASSET loaded=1 vertices=%lu triangles=%lu "
-               "workspace=%lu\n",
+        printf("KOSPVRASSET loaded=1 service=1 vertices=%lu triangles=%lu "
+               "workspace=%lu decoded=%lu\n",
                (unsigned long)model.info.vertex_entries,
                (unsigned long)model.info.triangles,
-               (unsigned long)requirements.bytes);
+               (unsigned long)requirements.bytes,
+               (unsigned long)status.output_bytes);
         result = 0;
     }
     else {
         printf("KOSPVRASSET loaded=0 errno=%d\n", errno);
     }
 
+out:
+    if(executor)
+        fiber_service_executor_destroy(executor);
+    if(decode_service)
+        pvr_chunk_asset_lz4_service_destroy(decode_service);
+    if(job)
+        pvr_chunk_asset_lz4_job_destroy(job);
     free(workspace);
     return result;
 }

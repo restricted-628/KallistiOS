@@ -185,6 +185,50 @@ static void test_lz4_vertex(void) {
     assert(errno == EILSEQ);
 }
 
+static void test_incremental_lz4(void) {
+    alignas(32) uint8_t asset[2048];
+    alignas(32) uint8_t output[sizeof(vertices)];
+    pvr_chunk_asset_view_t view;
+    pvr_chunk_asset_lz4_state_t *state;
+    pvr_chunk_asset_lz4_progress_t progress;
+    size_t previous = 0;
+    size_t bytes = build_asset(asset, sizeof(asset), 1);
+    int result;
+
+    assert(pvr_chunk_asset_open(asset, bytes, &view) == 0);
+    state = pvr_chunk_asset_lz4_state_create(&view.vertex, output,
+                                             sizeof(output), NULL);
+    assert(state);
+    do {
+        result = pvr_chunk_asset_lz4_state_step(state, 7);
+        assert(result >= 0);
+        assert(pvr_chunk_asset_lz4_state_get_progress(state, &progress) == 0);
+        assert(progress.output_bytes >= previous);
+        assert(progress.output_bytes - previous <= 7);
+        assert(progress.output_bytes <= progress.output_total);
+        previous = progress.output_bytes;
+    } while(result == PVR_CHUNK_ASSET_LZ4_MORE);
+    assert(result == PVR_CHUNK_ASSET_LZ4_COMPLETE);
+    assert(progress.complete && progress.output_bytes == sizeof(output));
+    assert(progress.source_bytes == progress.source_total);
+    assert(memcmp(output, vertices, sizeof(output)) == 0);
+    assert(pvr_chunk_asset_lz4_state_step(state, 7) ==
+           PVR_CHUNK_ASSET_LZ4_COMPLETE);
+    pvr_chunk_asset_lz4_state_destroy(state);
+
+    errno = 0;
+    assert(!pvr_chunk_asset_lz4_state_create(
+        &view.vertex, asset + PVR_CHUNK_ASSET_HEADER_BYTES,
+        view.vertex.decoded_bytes, NULL));
+    assert(errno == EINVAL);
+
+    view.vertex.stored_data = NULL;
+    errno = 0;
+    assert(!pvr_chunk_asset_lz4_state_create(
+        &view.vertex, output, sizeof(output), NULL));
+    assert(errno == EINVAL);
+}
+
 static void test_unaligned_container(void) {
     alignas(32) uint8_t storage[2080];
     alignas(32) uint8_t workspace[2048];
@@ -231,6 +275,7 @@ static void test_corrupt_headers(void) {
 int main(void) {
     test_raw_borrow();
     test_lz4_vertex();
+    test_incremental_lz4();
     test_unaligned_container();
     test_corrupt_headers();
     puts("pvr chunk asset tests passed");
