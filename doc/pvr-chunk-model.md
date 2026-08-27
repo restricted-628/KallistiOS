@@ -79,6 +79,31 @@ immediate view and pay no index-storage cost.
 Both decoded forms retain access to the raw bounded views, allowing uncommon
 application policy without weakening the checked framing boundary.
 
+## Explicit skinning
+
+`pvr_chunk_skin_bind()` associates one compact influence record with every
+vertex in a prepared model. Records are strictly ordered by vertex index and
+carry four 16-bit joint indices plus four unsigned-normalized weights. Active
+weights must sum to exactly 65535, inactive slots are canonical zeroes, every
+joint must fit the declared palette, and every admitted model vertex must be
+covered exactly once. This replaces draw-order-dependent accumulation with a
+deterministic, byte-comparable side table.
+
+Binding completely validates the model-to-influence relationship before it
+writes the caller-owned sparse-page lookup. `pvr_chunk_skin_source_build()`
+then decodes positions, normals, and floating influences once into an exact
+32-byte-aligned caller workspace. The resulting source feeds
+`pvr_chunk_skin_apply()` for each sampled joint palette without reparsing the
+compact vertex stream. The operation uses the existing bounded deformation
+kernel and its SH4ZAM target path.
+
+A completed `pvr_chunk_skin_pose_t` retains the binding and dense deformed
+array. `pvr_chunk_skin_pose_vertex_get()` maps the original 16-bit model index
+to its pose vertex in constant time, so render policy callbacks can replace
+position and consume the deformed normal without creating a global vertex
+buffer. Applications that do not bind a skin link no additional state and
+allocate no lookup, source, or pose storage.
+
 ## Versioned asset containers and optional compression
 
 `pvr_chunk_asset_open()` admits a bounded, versioned container whose vertex
