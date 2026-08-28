@@ -32,7 +32,7 @@ workloads.
 | Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
 | Object hierarchy | Parent-before-child compact-model traversal composes static or sampled caller-owned local transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
-| Lighting | Checked inverse-transpose normals, signed directional/point diffuse lights, offset-color specular, distance-cue alpha, deterministic ARGB packing, caller-owned animated light sampling, and compact render-policy presets are available | Keep light ownership, custom shading, and scene state outside the PVR driver. |
+| Lighting | Checked inverse-transpose normals, signed directional/point diffuse lights, offset-color specular, distance-cue alpha, deterministic ARGB packing, compact render-policy presets, and allocation-free binary or multiband cel partitioning are available | Keep light ownership, custom shading, and scene state outside the PVR driver. |
 | Keyframe animation | Validated immutable tracks, clips, blended TRS poses, and explicit one-shot/loop/ping-pong cursors bind to object hierarchies, cameras, lights, visibility, events, and morph targets | Keep system clocks, storage, event meaning, and scene ownership in the application. |
 | Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes; explicit compact-model skin and sparse shape bindings build reusable dense sources, bind scalar weight tracks, and expose indexed completed poses | Keep skeleton ownership, pose evaluation, playback clocks, output storage, and blend policy outside the deformation kernels. |
 | Sprite cells | Checked caller-owned 2D/3D cell compilation, UV regions, pivot, scale, rotation, flip, visibility compaction, projection, and existing sprite sinks/materials | Complete; texture, material, instance, scene, list, animation, and clock ownership remain explicit. |
@@ -204,6 +204,12 @@ thread, retain no state, and perform no work unless called. The smaller Lambert
 function remains unchanged for callers which do not need the extended policy.
 An admitted compact binding validates its borrowed immutable lighting context
 once, retaining per-sample checks without repeating constant light validation.
+`pvr_toon_split_triangle()` supplies the topology-changing counterpart. It
+partitions one canonical attributed triangle at any ordered set of scalar
+thresholds, interpolates decoded float attributes, triangulates each band, and
+reports exact bounded capacity without allocation. Binary shading is the
+one-threshold case rather than a separate implementation. Compact integration
+therefore remains policy above the unchanged model format.
 
 ## Sixth tranche
 

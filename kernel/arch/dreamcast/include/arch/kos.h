@@ -69,6 +69,7 @@ __BEGIN_DECLS
 #include <dc/pvr_chunk_shape.h>
 #include <dc/pvr_deform.h>
 #include <dc/pvr_lighting.h>
+#include <dc/pvr_toon.h>
 #include <dc/pvr_material.h>
 #include <dc/pvr_chunk_binding.h>
 #include <dc/pvr_particle.h>

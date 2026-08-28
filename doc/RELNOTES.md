@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added allocation-free scalar-band geometry for cel shading. One generic
+  partitioner covers binary and arbitrary ordered multiband shading, preserves
+  position, normalized normal, signed or floating UVs, base/offset color, and
+  exact threshold shade, and deterministically intersects oppositely traversed
+  shared edges. Small checked helpers supply signed directional shade profiles,
+  band lookup, capacity bounds, and packed-color modulation without adding
+  model records, renderer state, or per-frame allocation.
 * Added a caller-owned compact-model render-policy binding with unlit,
   diffuse, and diffuse-plus-specular presets. It composes homogeneous position
   handling, vertex intensity, signed lights, material ambient and exponent,

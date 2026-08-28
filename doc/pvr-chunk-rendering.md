@@ -139,6 +139,15 @@ records or render-function markers, begins no scene or list, retains no model,
 allocates nothing, and performs no work when not selected. Applications can
 still pass their own callbacks directly to every emitter and cache path.
 
+Topology-changing cel shading uses the same separation. The low-level
+`pvr_toon_split_triangle()` primitive accepts an already evaluated scalar on
+each canonical working vertex and partitions the triangle across any number of
+ordered thresholds. The single-threshold case produces the exact sharp binary
+boundary; additional thresholds use the same implementation. Signed UV8,
+signed UV10, and floating UV records have all decoded to floating U/V before
+this stage, so generated boundaries interpolate one canonical representation.
+The primitive owns no material, light collection, model, cache, list, or scene.
+
 The dedicated two-volume path follows the same position and callback policy.
 Ordinary texture and material records update the outside-volume fields;
 two-volume variants update `secondary_*`, the inside-volume fields. Textured
