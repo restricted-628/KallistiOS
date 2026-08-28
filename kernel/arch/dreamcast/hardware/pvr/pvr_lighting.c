@@ -16,6 +16,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "pvr_lighting_internal.h"
+
 static int finite3(float x, float y, float z) {
     return isfinite(x) && isfinite(y) && isfinite(z);
 }
@@ -617,11 +619,11 @@ static int add_checked(float *accumulated, float amount) {
     return 0;
 }
 
-int pvr_lighting_apply_extended(
+static int lighting_apply_extended(
         pvr_lighting_output_t *output, size_t output_capacity,
         const pvr_lighting_extended_stream_t *stream,
         const pvr_lighting_extended_context_t *context,
-        pvr_lighting_result_t *result) {
+        pvr_lighting_result_t *result, int admit_context) {
     pvr_lighting_result_t progress = { 0 };
     uintptr_t input_start;
     uintptr_t output_start;
@@ -635,7 +637,8 @@ int pvr_lighting_apply_extended(
     if(!output || !stream || !stream->samples ||
        ((uintptr_t)output & 3u) || ((uintptr_t)stream->samples & 3u) ||
        stream->stride < sizeof(pvr_lighting_extended_sample_t) ||
-       (stream->stride & 3u) || !extended_context_valid(context)) {
+       (stream->stride & 3u) || !context ||
+       (admit_context && !extended_context_valid(context))) {
         errno = EINVAL;
         return -1;
     }
@@ -871,4 +874,22 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_lighting_apply_extended(
+        pvr_lighting_output_t *output, size_t output_capacity,
+        const pvr_lighting_extended_stream_t *stream,
+        const pvr_lighting_extended_context_t *context,
+        pvr_lighting_result_t *result) {
+    return lighting_apply_extended(output, output_capacity, stream, context,
+                                   result, 1);
+}
+
+int pvr_lighting_apply_extended_admitted(
+        pvr_lighting_output_t *output, size_t output_capacity,
+        const pvr_lighting_extended_stream_t *stream,
+        const pvr_lighting_extended_context_t *context,
+        pvr_lighting_result_t *result) {
+    return lighting_apply_extended(output, output_capacity, stream, context,
+                                   result, 0);
 }

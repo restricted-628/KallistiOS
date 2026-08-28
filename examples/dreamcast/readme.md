@@ -160,7 +160,8 @@ This page serves as an index for all KallistiOS examples.
     verifies LZ4 decoding and reports separate transport and decode timings
   - [**chunk_resources**](pvr/chunk_resources/): Converts and embeds a compact
     model, then resolves its texture identifiers through a pre-acquired
-    fixed-slot residency set and checked materials
+    fixed-slot residency set, checked materials, and an admitted signed-light
+    diffuse-plus-specular render policy
   - [**chunk_skin**](pvr/chunk_skin/): Binds explicit normalized joint
     influences, builds a reusable canonical source, and renders a moving
     deformed pose through constant-time model-index lookup

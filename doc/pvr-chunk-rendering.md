@@ -119,6 +119,26 @@ callbacks can build samples from decoded or deformed position/normal data and
 write the returned `argb` and `oargb` directly. The original minimal Lambert
 function remains available when none of this policy is required.
 
+`pvr_chunk_render_policy_binding_t` supplies the standard immediate/prepared
+emission adapter for that work. Its three presets are deliberately small:
+
+- UNLIT preserves decoded colors and applies optional vertex intensities;
+- DIFFUSE adds ambient plus signed directional or point Lambert lighting; and
+- DIFFUSE_SPECULAR additionally generates positive-light offset color.
+
+Environment-map UV generation and distance-cue alpha are orthogonal features.
+The binding canonicalizes homogeneous positions, prefers per-reference normals
+over indexed normals, maps compact exponent 0 through 16 to lighting powers 1
+through 17, observes the strip ignore-light/ambient/specular flags, and then
+runs an optional application callback. Its required begin-strip callback still
+owns material/header submission. Matrices and lighting context are copied at
+initialization; the admitted light array remains borrowed and immutable.
+
+This is a rendering-policy adapter, not a second renderer. It adds no model
+records or render-function markers, begins no scene or list, retains no model,
+allocates nothing, and performs no work when not selected. Applications can
+still pass their own callbacks directly to every emitter and cache path.
+
 The dedicated two-volume path follows the same position and callback policy.
 Ordinary texture and material records update the outside-volume fields;
 two-volume variants update `secondary_*`, the inside-volume fields. Textured

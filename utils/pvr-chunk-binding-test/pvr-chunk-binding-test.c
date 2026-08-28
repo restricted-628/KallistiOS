@@ -20,6 +20,8 @@ static size_t current_submits;
 static size_t buffered_submits;
 static size_t environment_begin_calls;
 static size_t environment_vertex_calls;
+static size_t policy_begin_calls;
+static size_t policy_vertex_calls;
 
 int pvr_chunk_polygon_iterator_init(pvr_chunk_iterator_t *iterator,
                                     const uint16_t *words,
@@ -340,6 +342,153 @@ static void test_environment_binding(void) {
     assert(pvr_chunk_environment_map_binding_init(
         &binding, &identity, environment_begin, NULL, NULL, NULL) == -1);
     assert(errno == ERANGE &&
+           memcmp(&binding, &unchanged, sizeof(binding)) == 0);
+}
+
+static int policy_begin(const pvr_chunk_render_state_t *state,
+                        const pvr_chunk_strip_view_t *strip, void *data) {
+    assert(state && strip && data == &policy_begin_calls);
+    ++policy_begin_calls;
+    return 0;
+}
+
+static int policy_vertex(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_vertex_attributes_t *vertex_attributes,
+        const pvr_chunk_strip_attributes_t *strip_attributes,
+        pvr_vertex_t *vertex, void *data) {
+    assert(state && vertex_attributes && strip_attributes && vertex);
+    assert(data == &policy_vertex_calls);
+    ++policy_vertex_calls;
+    vertex->v = 0.75f;
+    return 0;
+}
+
+static void test_render_policy_binding(void) {
+    matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_light_t lights[2];
+    pvr_lighting_extended_context_t lighting;
+    pvr_chunk_render_policy_config_t config;
+    pvr_chunk_render_policy_binding_t binding;
+    pvr_chunk_render_policy_binding_t unchanged;
+    pvr_chunk_render_state_t state;
+    pvr_chunk_strip_view_t strip;
+    pvr_chunk_vertex_attributes_t vertex_attributes;
+    pvr_chunk_strip_attributes_t strip_attributes;
+    pvr_vertex_t vertex;
+
+    memset(&config, 0, sizeof(config));
+    memset(&state, 0, sizeof(state));
+    memset(&strip, 0, sizeof(strip));
+    memset(&vertex_attributes, 0, sizeof(vertex_attributes));
+    memset(&strip_attributes, 0, sizeof(strip_attributes));
+    memset(&vertex, 0, sizeof(vertex));
+    config.policy = PVR_CHUNK_RENDER_POLICY_UNLIT;
+    config.begin_strip = policy_begin;
+    config.begin_strip_data = &policy_begin_calls;
+    assert(pvr_chunk_render_policy_binding_init(&binding, &config) == 0);
+    policy_begin_calls = 0;
+    assert(pvr_chunk_render_policy_binding_begin_strip(
+        &state, &strip, &binding) == 0);
+    assert(policy_begin_calls == 1);
+
+    vertex_attributes.position.x = 2.0f;
+    vertex_attributes.position.y = 4.0f;
+    vertex_attributes.position.z = 6.0f;
+    vertex_attributes.position.w = 2.0f;
+    vertex_attributes.present = PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY |
+                                PVR_CHUNK_VERTEX_ATTR_SPECULAR_INTENSITY;
+    vertex_attributes.diffuse_intensity = 0.5f;
+    vertex_attributes.specular_intensity = 0.5f;
+    vertex.argb = UINT32_C(0x80402010);
+    vertex.oargb = UINT32_C(0x00804020);
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == 0);
+    assert(vertex.x == 1.0f && vertex.y == 2.0f && vertex.z == 3.0f);
+    assert(vertex.argb == UINT32_C(0x80201008));
+    assert(vertex.oargb == UINT32_C(0x00402010));
+
+    state.strip_flags = PVR_CHUNK_STRIP_ENVIRONMENT;
+    errno = 0;
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == -1);
+    assert(errno == ENOTSUP);
+
+    memset(lights, 0, sizeof(lights));
+    lights[0].kind = PVR_LIGHT_DIRECTIONAL;
+    lights[0].source.direction.z = 1.0f;
+    lights[0].color.x = lights[0].color.y = lights[0].color.z = 1.0f;
+    lights[0].intensity = 0.5f;
+    lights[1] = lights[0];
+    lights[1].color.y = lights[1].color.z = 0.0f;
+    lights[1].intensity = -0.25f;
+    memset(&lighting, 0, sizeof(lighting));
+    lighting.ambient[0] = lighting.ambient[1] = lighting.ambient[2] = 0.25f;
+    lighting.lights = lights;
+    lighting.light_count = 2;
+    lighting.view_position.z = 10.0f;
+    lighting.specular_exponent = 4.0f;
+    lighting.depth_near = 0.0f;
+    lighting.depth_far = 20.0f;
+    lighting.depth_near_factor = 1.0f;
+    lighting.depth_far_factor = 0.2f;
+
+    memset(&config, 0, sizeof(config));
+    config.policy = PVR_CHUNK_RENDER_POLICY_DIFFUSE_SPECULAR;
+    config.features = PVR_CHUNK_RENDER_POLICY_ENVIRONMENT_MAP |
+                      PVR_CHUNK_RENDER_POLICY_DEPTH_CUE_ALPHA;
+    config.object_to_world = &identity;
+    config.object_to_view = &identity;
+    config.lighting = &lighting;
+    config.begin_strip = policy_begin;
+    config.prepare_vertex = policy_vertex;
+    config.begin_strip_data = &policy_begin_calls;
+    config.prepare_vertex_data = &policy_vertex_calls;
+    assert(pvr_chunk_render_policy_binding_init(&binding, &config) == 0);
+
+    memset(&state, 0, sizeof(state));
+    state.strip_flags = PVR_CHUNK_STRIP_ENVIRONMENT;
+    state.present = PVR_CHUNK_RENDER_SPECULAR_EXPONENT;
+    state.specular_exponent = 16;
+    memset(&vertex_attributes, 0, sizeof(vertex_attributes));
+    vertex_attributes.position.w = 1.0f;
+    vertex_attributes.present = PVR_CHUNK_VERTEX_ATTR_NORMAL;
+    vertex_attributes.normal.z = 1.0f;
+    memset(&strip_attributes, 0, sizeof(strip_attributes));
+    memset(&vertex, 0, sizeof(vertex));
+    vertex.argb = UINT32_C(0xccff8040);
+    vertex.oargb = UINT32_C(0x00ff8040);
+    policy_vertex_calls = 0;
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == 0);
+    assert(vertex.u == 0.5f && vertex.v == 0.75f);
+    assert(vertex.argb == UINT32_C(0x7a806030));
+    assert(vertex.oargb == UINT32_C(0x00804020));
+    assert(policy_vertex_calls == 1);
+
+    state.strip_flags = PVR_CHUNK_STRIP_IGNORE_LIGHT |
+                        PVR_CHUNK_STRIP_IGNORE_AMBIENT |
+                        PVR_CHUNK_STRIP_IGNORE_SPECULAR;
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == 0);
+    assert((vertex.argb & UINT32_C(0x00ffffff)) == 0);
+    assert(vertex.oargb == 0);
+
+    memset(&binding, 0x5a, sizeof(binding));
+    memcpy(&unchanged, &binding, sizeof(binding));
+    config.policy = PVR_CHUNK_RENDER_POLICY_UNLIT;
+    errno = 0;
+    assert(pvr_chunk_render_policy_binding_init(&binding, &config) == -1);
+    assert(errno == EINVAL &&
            memcmp(&binding, &unchanged, sizeof(binding)) == 0);
 }
 
@@ -686,6 +835,7 @@ int main(void) {
     test_resolve();
     test_two_volume_and_submission();
     test_environment_binding();
+    test_render_policy_binding();
     test_residency_binding();
     puts("PVR compact resource-binding tests passed");
     return 0;

@@ -11,6 +11,7 @@
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
@@ -23,6 +24,21 @@ static alignas(32) const matrix_t screen_identity = {
     { 0.0f, 1.0f, 0.0f, 0.0f },
     { 0.0f, 0.0f, 1.0f, 0.0f },
     { 0.0f, 0.0f, 0.0f, 1.0f }
+};
+
+static const pvr_light_t model_lights[] = {
+    {
+        .kind = PVR_LIGHT_DIRECTIONAL,
+        .source.direction = { 0.0f, 0.0f, 1.0f, 0.0f },
+        .color = { 1.0f, 1.0f, 1.0f, 0.0f },
+        .intensity = 0.8f
+    },
+    {
+        .kind = PVR_LIGHT_DIRECTIONAL,
+        .source.direction = { 0.0f, 0.0f, 1.0f, 0.0f },
+        .color = { 1.0f, 0.0f, 0.0f, 0.0f },
+        .intensity = -0.1f
+    }
 };
 
 static uint16_t texture_pixels[TEXTURE_SIZE * TEXTURE_SIZE];
@@ -57,6 +73,9 @@ int main(int argc, char **argv) {
     pvr_txr_residency_handle_t render_handle[1];
     pvr_poly_cxt_t context;
     pvr_chunk_residency_binding_t material_binding;
+    pvr_lighting_extended_context_t lighting;
+    pvr_chunk_render_policy_config_t policy_config;
+    pvr_chunk_render_policy_binding_t policy_binding;
     pvr_geometry_sink_t sink;
     alignas(32) pvr_vertex_t workspace[4];
     pvr_chunk_render_result_t render_result;
@@ -101,6 +120,24 @@ int main(int argc, char **argv) {
         NULL, NULL, &context, PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
     assert(pvr_chunk_residency_binding_prepare_model(&material_binding,
                                                      &model_view) == 0);
+    memset(&lighting, 0, sizeof(lighting));
+    lighting.ambient[0] = lighting.ambient[1] = lighting.ambient[2] = 0.2f;
+    lighting.lights = model_lights;
+    lighting.light_count = sizeof(model_lights) / sizeof(model_lights[0]);
+    lighting.view_position.x = 320.0f;
+    lighting.view_position.y = 240.0f;
+    lighting.view_position.z = 10.0f;
+    lighting.specular_exponent = 8.0f;
+
+    memset(&policy_config, 0, sizeof(policy_config));
+    policy_config.policy = PVR_CHUNK_RENDER_POLICY_DIFFUSE_SPECULAR;
+    policy_config.object_to_world = &screen_identity;
+    policy_config.lighting = &lighting;
+    policy_config.begin_strip =
+        pvr_chunk_residency_binding_begin_strip;
+    policy_config.begin_strip_data = &material_binding;
+    assert(pvr_chunk_render_policy_binding_init(
+        &policy_binding, &policy_config) == 0);
     assert(pvr_geometry_sink_init_current(&sink) == 0);
 
     for(frame = 0; frame < 120u; ++frame) {
@@ -109,8 +146,9 @@ int main(int argc, char **argv) {
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
         assert(pvr_chunk_model_emit_prepared(
             &model_plan, &screen_identity, &sink, workspace, 4,
-            pvr_chunk_residency_binding_begin_strip, NULL,
-            &material_binding, &render_result) == 0);
+            pvr_chunk_render_policy_binding_begin_strip,
+            pvr_chunk_render_policy_binding_prepare_vertex,
+            &policy_binding, &render_result) == 0);
         assert(render_result.emitted_strips == 1 &&
                render_result.emitted_vertices == 4);
         assert(pvr_list_finish() == 0);

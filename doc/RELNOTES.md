@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a caller-owned compact-model render-policy binding with unlit,
+  diffuse, and diffuse-plus-specular presets. It composes homogeneous position
+  handling, vertex intensity, signed lights, material ambient and exponent,
+  optional environment UV generation, optional distance-cue alpha, material
+  submission, and an application callback without adding model records,
+  global renderer state, allocation, or scene ownership. Lighting context is
+  admitted once rather than revalidated for every bound vertex.
 * Added an allocation-free extended PVR vertex-lighting kernel beside the
   established minimal Lambert path. It accumulates signed diffuse lights
   before saturation, generates checked Blinn-Phong offset color from positive

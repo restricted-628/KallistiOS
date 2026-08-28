@@ -32,7 +32,7 @@ workloads.
 | Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
 | Object hierarchy | Parent-before-child compact-model traversal composes static or sampled caller-owned local transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
-| Lighting | Checked inverse-transpose normals, directional and point Lambert lights, deterministic ARGB packing, and caller-owned animated light sampling are available | Keep light ownership, material policy, and advanced shading outside the PVR driver. |
+| Lighting | Checked inverse-transpose normals, signed directional/point diffuse lights, offset-color specular, distance-cue alpha, deterministic ARGB packing, caller-owned animated light sampling, and compact render-policy presets are available | Keep light ownership, custom shading, and scene state outside the PVR driver. |
 | Keyframe animation | Validated immutable tracks, clips, blended TRS poses, and explicit one-shot/loop/ping-pong cursors bind to object hierarchies, cameras, lights, visibility, events, and morph targets | Keep system clocks, storage, event meaning, and scene ownership in the application. |
 | Skinning and morphing | Bounded additive morphing and indexed linear-blend skinning operate over caller-owned streams and palettes; explicit compact-model skin and sparse shape bindings build reusable dense sources, bind scalar weight tracks, and expose indexed completed poses | Keep skeleton ownership, pose evaluation, playback clocks, output storage, and blend policy outside the deformation kernels. |
 | Sprite cells | Checked caller-owned 2D/3D cell compilation, UV regions, pivot, scale, rotation, flip, visibility compaction, projection, and existing sprite sinks/materials | Complete; texture, material, instance, scene, list, animation, and clock ownership remain explicit. |
@@ -190,6 +190,10 @@ application-owned mesh renderers without adding a retained light manager:
   adding signed diffuse accumulation before saturation, positive-light
   Blinn-Phong offset color, per-vertex diffuse/specular material modulation,
   and optional caller-ranged distance cue in diffuse alpha;
+- `pvr_chunk_render_policy_binding_t` binds those kernels to compact immediate
+  or prepared emission through unlit, diffuse, and diffuse-plus-specular
+  presets, while consuming model intensity, ambient, exponent, environment,
+  and ignore-state semantics before a final application callback;
 - `pvr_color_pack_argb()` clamps and rounds finite linear RGBA values into the
   established `0xAARRGGBB` representation.
 
@@ -198,6 +202,8 @@ products use SH4ZAM without loading XMTRX. Portable scalar code supplies the
 same checked contract to host tests. Both paths allocate nothing, create no
 thread, retain no state, and perform no work unless called. The smaller Lambert
 function remains unchanged for callers which do not need the extended policy.
+An admitted compact binding validates its borrowed immutable lighting context
+once, retaining per-sample checks without repeating constant light validation.
 
 ## Sixth tranche
 

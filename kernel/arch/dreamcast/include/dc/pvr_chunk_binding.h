@@ -93,6 +93,67 @@ typedef struct pvr_chunk_environment_map_binding {
     void *prepare_vertex_data;
 } pvr_chunk_environment_map_binding_t;
 
+/** \brief Standard shading presets for compact-model vertices.
+
+    Presets select reusable vertex policy, not model-stream syntax or scene
+    ownership. UNLIT retains decoded colors while consuming optional vertex
+    intensity. DIFFUSE evaluates ambient and signed Lambert light. The final
+    preset additionally produces offset-color specular highlights.
+*/
+typedef enum pvr_chunk_render_policy {
+    PVR_CHUNK_RENDER_POLICY_UNLIT = 0,
+    PVR_CHUNK_RENDER_POLICY_DIFFUSE,
+    PVR_CHUNK_RENDER_POLICY_DIFFUSE_SPECULAR
+} pvr_chunk_render_policy_t;
+
+/** \brief Optional features composed with a compact render policy. */
+typedef enum pvr_chunk_render_policy_feature {
+    /** Generate view-space sphere-map UVs for environment-marked strips. */
+    PVR_CHUNK_RENDER_POLICY_ENVIRONMENT_MAP = 1u << 0,
+    /** Multiply lit diffuse alpha by the lighting distance-cue factor. */
+    PVR_CHUNK_RENDER_POLICY_DEPTH_CUE_ALPHA = 1u << 1
+} pvr_chunk_render_policy_feature_t;
+
+/** \brief Caller-owned description used to build a render-policy binding.
+
+    Lit policies borrow an immutable light array through \a lighting and
+    require \a object_to_world. Environment mapping requires
+    \a object_to_view. The matrices and lighting context are copied, while the
+    light array and chained callback data remain borrowed for the binding's
+    lifetime. The selected policy and feature mask derive the copied lighting
+    flags; flags supplied in \a lighting are deliberately ignored.
+*/
+typedef struct pvr_chunk_render_policy_config {
+    pvr_chunk_render_policy_t policy;
+    uint32_t features;
+    const matrix_t *object_to_world;
+    const matrix_t *object_to_view;
+    const pvr_lighting_extended_context_t *lighting;
+    pvr_chunk_render_begin_strip_t begin_strip;
+    pvr_chunk_render_prepare_vertex_t prepare_vertex;
+    void *begin_strip_data;
+    void *prepare_vertex_data;
+} pvr_chunk_render_policy_config_t;
+
+/** \brief Admitted allocation-free compact render-policy callback adapter.
+
+    Treat fields as private after initialization. The object is passed as the
+    shared callback data to pvr_chunk_render_policy_binding_begin_strip() and
+    pvr_chunk_render_policy_binding_prepare_vertex().
+*/
+typedef struct pvr_chunk_render_policy_binding {
+    pvr_chunk_render_policy_t policy;
+    uint32_t features;
+    matrix_t object_to_world;
+    pvr_normal_matrix_t world_normal_matrix;
+    pvr_normal_matrix_t view_normal_matrix;
+    pvr_lighting_extended_context_t lighting;
+    pvr_chunk_render_begin_strip_t begin_strip;
+    pvr_chunk_render_prepare_vertex_t prepare_vertex;
+    void *begin_strip_data;
+    void *prepare_vertex_data;
+} pvr_chunk_render_policy_binding_t;
+
 /** \brief Resolve one model identifier's global palette-bank selector.
 
     The callback runs only during model preparation, before PVR list emission.
@@ -221,6 +282,40 @@ int pvr_chunk_environment_map_binding_begin_strip(
     instead of being silently accepted by the adapter.
 */
 int pvr_chunk_environment_map_binding_prepare_vertex(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *vertex_attributes,
+    const pvr_chunk_strip_attributes_t *strip_attributes,
+    pvr_vertex_t *vertex, void *data);
+
+/** \brief Initialize one composable compact render-policy adapter.
+
+    Initialization validates every selected matrix, light, attenuation,
+    specular, and depth-cue field before changing \p binding. The policy owns
+    no render resources and performs no work until its callbacks are invoked.
+
+    A lit policy uses per-reference normals before indexed normals, transforms
+    position and normal into world space, consumes vertex intensity, and lets
+    compact ambient color and exponent refine the copied lighting context.
+    The encoded exponent range maps to powers 1 through 17. Environment UVs
+    use the independent object-to-view normal transform.
+*/
+int pvr_chunk_render_policy_binding_init(
+    pvr_chunk_render_policy_binding_t *binding,
+    const pvr_chunk_render_policy_config_t *config);
+
+/** \brief Forward strip setup to a render policy's material callback. */
+int pvr_chunk_render_policy_binding_begin_strip(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Apply the selected compact vertex policy and chained callback.
+
+    Homogeneous model positions are canonicalized before lighting and before
+    the emitter's later projection. Missing normals required by lighting or an
+    environment-marked strip report ENOTSUP. The chained vertex callback runs
+    last and may override any generated non-command field.
+*/
+int pvr_chunk_render_policy_binding_prepare_vertex(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_vertex_attributes_t *vertex_attributes,
     const pvr_chunk_strip_attributes_t *strip_attributes,
