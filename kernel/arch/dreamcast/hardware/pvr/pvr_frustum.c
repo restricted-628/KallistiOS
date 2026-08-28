@@ -219,6 +219,102 @@ int pvr_frustum_classify_aabb(const pvr_frustum_t *frustum,
     return 0;
 }
 
+static void object_plane(const pvr_frustum_t *frustum, size_t plane,
+                         float coefficients[4]) {
+    const matrix_t *matrix = &frustum->object_to_screen;
+    float scale;
+
+    switch(plane) {
+        case 0:
+            scale = -frustum->left;
+            coefficients[0] = (*matrix)[0][0] + scale * (*matrix)[0][3];
+            coefficients[1] = (*matrix)[1][0] + scale * (*matrix)[1][3];
+            coefficients[2] = (*matrix)[2][0] + scale * (*matrix)[2][3];
+            coefficients[3] = (*matrix)[3][0] + scale * (*matrix)[3][3];
+            break;
+        case 1:
+            scale = frustum->right;
+            coefficients[0] = scale * (*matrix)[0][3] - (*matrix)[0][0];
+            coefficients[1] = scale * (*matrix)[1][3] - (*matrix)[1][0];
+            coefficients[2] = scale * (*matrix)[2][3] - (*matrix)[2][0];
+            coefficients[3] = scale * (*matrix)[3][3] - (*matrix)[3][0];
+            break;
+        case 2:
+            scale = -frustum->top;
+            coefficients[0] = (*matrix)[0][1] + scale * (*matrix)[0][3];
+            coefficients[1] = (*matrix)[1][1] + scale * (*matrix)[1][3];
+            coefficients[2] = (*matrix)[2][1] + scale * (*matrix)[2][3];
+            coefficients[3] = (*matrix)[3][1] + scale * (*matrix)[3][3];
+            break;
+        case 3:
+            scale = frustum->bottom;
+            coefficients[0] = scale * (*matrix)[0][3] - (*matrix)[0][1];
+            coefficients[1] = scale * (*matrix)[1][3] - (*matrix)[1][1];
+            coefficients[2] = scale * (*matrix)[2][3] - (*matrix)[2][1];
+            coefficients[3] = scale * (*matrix)[3][3] - (*matrix)[3][1];
+            break;
+        case 4:
+            coefficients[0] = (*matrix)[0][3];
+            coefficients[1] = (*matrix)[1][3];
+            coefficients[2] = (*matrix)[2][3];
+            coefficients[3] = (*matrix)[3][3] - frustum->w_near;
+            break;
+        default:
+            coefficients[0] = -(*matrix)[0][3];
+            coefficients[1] = -(*matrix)[1][3];
+            coefficients[2] = -(*matrix)[2][3];
+            coefficients[3] = frustum->w_far - (*matrix)[3][3];
+            break;
+    }
+}
+
+int pvr_frustum_classify_sphere(const pvr_frustum_t *frustum,
+                                const point_t *center, float radius,
+                                pvr_frustum_classification_t *result) {
+    pvr_frustum_classification_t classification = PVR_FRUSTUM_INSIDE;
+    size_t plane;
+
+    if(!frustum_valid(frustum) || !center || !result) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!isfinite(center->x) || !isfinite(center->y) ||
+       !isfinite(center->z) || !isfinite(radius) || radius < 0.0f) {
+        errno = EDOM;
+        return -1;
+    }
+
+    for(plane = 0; plane < FRUSTUM_PLANES; ++plane) {
+        float coefficients[4];
+        float normal_length;
+        float distance;
+        float extent;
+
+        object_plane(frustum, plane, coefficients);
+        normal_length = sqrtf(coefficients[0] * coefficients[0] +
+                              coefficients[1] * coefficients[1] +
+                              coefficients[2] * coefficients[2]);
+        distance = coefficients[0] * center->x +
+                   coefficients[1] * center->y +
+                   coefficients[2] * center->z + coefficients[3];
+        extent = radius * normal_length;
+        if(!isfinite(normal_length) || !isfinite(distance) ||
+           !isfinite(extent)) {
+            errno = ERANGE;
+            return -1;
+        }
+        if(distance < -extent) {
+            *result = PVR_FRUSTUM_OUTSIDE;
+            return 0;
+        }
+        if(distance < extent)
+            classification = PVR_FRUSTUM_INTERSECT;
+    }
+
+    *result = classification;
+    return 0;
+}
+
 static uint32_t color_lerp(uint32_t lhs, uint32_t rhs, float amount) {
     uint32_t output = 0;
     unsigned int shift;

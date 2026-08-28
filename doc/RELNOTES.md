@@ -11,6 +11,10 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added exact object-space sphere classification against homogeneous PVR
+  frusta and a compact-model wrapper for retained model bounds. Applications
+  can reject whole models before stream traversal and identify fully visible
+  models before selecting more expensive per-triangle clipping paths.
 * Added a validated compact-volume triangle iterator shared by model tools,
   collision consumers, modifier rendering, and prepared modifier caches. It
   expands triangle, quad, and strip records with consistent winding while

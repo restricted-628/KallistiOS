@@ -262,6 +262,15 @@ dynamic callers must use a conservative current-pose decision or emit the
 strip. This adds useful sub-model culling without hiding a scene, frustum, pose,
 or traversal owner inside the cache.
 
+The model-level `center` and `radius` are consumed by
+`pvr_chunk_model_classify()`. It transforms all six homogeneous frustum planes
+back into model space and classifies the retained sphere before any stream
+walk, vertex lookup, material callback, or projection. `PVR_FRUSTUM_OUTSIDE`
+therefore rejects a static model immediately, while `PVR_FRUSTUM_INSIDE`
+allows a later renderer to omit per-triangle clipping. Deformed content must
+provide a bound that encloses the complete current pose before relying on
+either optimization.
+
 Modifier-volume models use `pvr_chunk_model_modifier_cache_query()`,
 `pvr_chunk_model_modifier_cache_build()`, and
 `pvr_chunk_model_modifier_cache_emit()`. Admission expands triangles, quads,

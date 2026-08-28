@@ -8,6 +8,7 @@ TARGET = pvr-chunk-render-test
 SOURCES = pvr-chunk-render-test.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_render.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c
 
 .PHONY: all clean test

@@ -22,6 +22,7 @@ __BEGIN_DECLS
 #include <stdint.h>
 
 #include <dc/pvr_chunk_model.h>
+#include <dc/pvr_frustum.h>
 #include <dc/pvr_geometry.h>
 
 /** \defgroup pvr_chunk_render Compact-model emission
@@ -95,6 +96,16 @@ typedef struct pvr_chunk_render_result {
     size_t emitted_strips;
     size_t emitted_vertices;
 } pvr_chunk_render_result_t;
+
+/** \brief Classify an admitted model's retained bounding sphere.
+
+    This is an allocation-free whole-model visibility test. A dynamic
+    deformation path must ensure the retained center and radius conservatively
+    enclose the current pose before using an OUTSIDE result to skip rendering.
+*/
+int pvr_chunk_model_classify(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    pvr_frustum_classification_t *result);
 
 /** \brief Modifier-volume header policy for compact volume records. */
 typedef struct pvr_chunk_modifier_config {

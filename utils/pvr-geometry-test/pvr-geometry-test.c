@@ -689,6 +689,7 @@ static void test_frustum_classification(void) {
     point_t maximum;
     pvr_frustum_classification_t result;
     pvr_frustum_t unchanged;
+    point_t center;
 
     assert(pvr_frustum_init(&frustum, &identity, -1.0f, -1.0f,
                             1.0f, 1.0f, 0.5f, 2.0f) == 0);
@@ -710,6 +711,28 @@ static void test_frustum_classification(void) {
     assert(pvr_frustum_classify_aabb(&frustum, &minimum, &maximum,
                                      &result) == 0);
     assert(result == PVR_FRUSTUM_INTERSECT);
+
+    center = (point_t){ 0.0f, 0.0f, 0.0f, 1.0f };
+    assert(pvr_frustum_classify_sphere(&frustum, &center, 0.4f,
+                                       &result) == 0);
+    assert(result == PVR_FRUSTUM_INSIDE);
+
+    center.x = 1.5f;
+    assert(pvr_frustum_classify_sphere(&frustum, &center, 0.4f,
+                                       &result) == 0);
+    assert(result == PVR_FRUSTUM_OUTSIDE);
+
+    center.x = 0.8f;
+    assert(pvr_frustum_classify_sphere(&frustum, &center, 0.4f,
+                                       &result) == 0);
+    assert(result == PVR_FRUSTUM_INTERSECT);
+
+    center.x = 0.0f;
+    result = PVR_FRUSTUM_OUTSIDE;
+    errno = 0;
+    assert(pvr_frustum_classify_sphere(&frustum, &center, -1.0f,
+                                       &result) == -1);
+    assert(errno == EDOM && result == PVR_FRUSTUM_OUTSIDE);
 
     unchanged = frustum;
     errno = 0;

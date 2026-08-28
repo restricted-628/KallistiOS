@@ -30,6 +30,24 @@ _Static_assert(sizeof(pvr_chunk_two_volume_vertex_t) ==
 _Static_assert(_Alignof(pvr_chunk_two_volume_vertex_t) == 32,
                "two-volume workspace entries must retain TA alignment");
 
+int pvr_chunk_model_classify(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    pvr_frustum_classification_t *result) {
+    point_t center;
+
+    if(!view) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    center.x = view->model.center[0];
+    center.y = view->model.center[1];
+    center.z = view->model.center[2];
+    center.w = 1.0f;
+    return pvr_frustum_classify_sphere(frustum, &center,
+                                       view->model.radius, result);
+}
+
 static int checked_add(size_t *value, size_t addend) {
     if(addend > SIZE_MAX - *value) {
         errno = ERANGE;

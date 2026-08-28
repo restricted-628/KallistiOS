@@ -99,6 +99,21 @@ int pvr_frustum_classify_aabb(const pvr_frustum_t *frustum,
                               const point_t *minimum, const point_t *maximum,
                               pvr_frustum_classification_t *result);
 
+/** \brief Classify an object-space bounding sphere.
+
+    Each homogeneous frustum plane is transformed back into object space, so
+    the result remains conservative under affine or perspective transforms.
+    The sphere radius must be finite and nonnegative. Output is unchanged on
+    failure.
+
+    \retval 0  Classification produced.
+    \retval -1 Invalid input or arithmetic overflow, with errno set to EINVAL,
+               EDOM, or ERANGE.
+*/
+int pvr_frustum_classify_sphere(const pvr_frustum_t *frustum,
+                                const point_t *center, float radius,
+                                pvr_frustum_classification_t *result);
+
 /** \brief Clip, project, and triangulate one canonical PVR triangle.
 
     Input contains exactly three vertices. Generated intersections linearly

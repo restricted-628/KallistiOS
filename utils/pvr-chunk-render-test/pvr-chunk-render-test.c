@@ -207,6 +207,35 @@ static pvr_chunk_model_t make_model(const uint16_t *polygon_words,
     return model;
 }
 
+static void test_model_classification(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_chunk_model_t model = make_model(polygons,
+        sizeof(polygons) / sizeof(polygons[0]));
+    pvr_chunk_model_view_t view;
+    pvr_frustum_t frustum;
+    pvr_frustum_classification_t classification;
+
+    model.radius = 0.25f;
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_frustum_init(&frustum, &identity, -1.0f, -1.0f,
+                            1.0f, 1.0f, 0.5f, 2.0f) == 0);
+    assert(pvr_chunk_model_classify(&view, &frustum, &classification) == 0);
+    assert(classification == PVR_FRUSTUM_INSIDE);
+
+    view.model.center[0] = 1.1f;
+    assert(pvr_chunk_model_classify(&view, &frustum, &classification) == 0);
+    assert(classification == PVR_FRUSTUM_INTERSECT);
+
+    view.model.center[0] = 2.0f;
+    assert(pvr_chunk_model_classify(&view, &frustum, &classification) == 0);
+    assert(classification == PVR_FRUSTUM_OUTSIDE);
+}
+
 static int begin_strip(const pvr_chunk_render_state_t *state,
                        const pvr_chunk_strip_view_t *strip, void *data) {
     callback_state_t *callback = data;
@@ -844,6 +873,7 @@ static void test_modifier_emit(void) {
 }
 
 int main(void) {
+    test_model_classification();
     test_emit();
     test_preflight_and_prefix();
     test_unsupported();
