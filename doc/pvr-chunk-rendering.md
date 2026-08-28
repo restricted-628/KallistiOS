@@ -124,6 +124,32 @@ The renderer does not guess either missing input. Two-volume emission rejects
 bump material because the compact format defines no corresponding inside
 parameter record.
 
+## Frustum policy
+
+`pvr_chunk_model_emit_clipped()` and its prepared-plan variant make clipping a
+per-call choice for ordinary compact strips. Both first classify the retained
+model sphere. An outside model returns before touching either stream, while an
+inside model stays on the ordinary strip emitter. An intersecting model is
+expanded into independent winding-correct triangles under one of three
+policies:
+
+- `PVR_CHUNK_CLIP_SPLIT` clips against all six homogeneous planes and linearly
+  interpolates UV, base color, and offset color at generated edges;
+- `PVR_CHUNK_CLIP_DROP` emits only triangles already wholly inside every plane;
+- `PVR_CHUNK_CLIP_ASSUME_VISIBLE` skips classification and clipping when the
+  caller has stronger scene-level knowledge.
+
+The split workspace holds the bounded output of one source triangle; it is not
+a model-sized intermediate buffer. Memory sinks are preflighted against the
+worst-case expansion before callbacks or output, so insufficient capacity is
+failure-atomic. The retained sphere must enclose any callback-driven
+deformation used to make the model-level rejection safe.
+
+Two-volume vertices carry more interpolants than canonical one-volume packets,
+and closed modifier volumes need topology-preserving near-plane handling.
+Those paths remain separate rather than silently discarding their extra state
+through the ordinary clipper.
+
 ## Modifier-volume topology
 
 `pvr_chunk_model_emit_modifiers()` is a separate pass over the same admitted

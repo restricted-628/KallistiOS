@@ -315,6 +315,61 @@ int pvr_frustum_classify_sphere(const pvr_frustum_t *frustum,
     return 0;
 }
 
+int pvr_frustum_classify_triangle(
+    const pvr_vertex_t input[3], const pvr_frustum_t *frustum,
+    pvr_frustum_classification_t *result) {
+    clip_vertex_t vertices[3];
+    pvr_frustum_classification_t classification = PVR_FRUSTUM_INSIDE;
+    position_transform_t transform;
+    size_t vertex;
+    size_t plane;
+
+    if(!input || !frustum_valid(frustum) || !result) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    position_transform_init(&transform, &frustum->object_to_screen);
+    for(vertex = 0; vertex < 3; ++vertex) {
+        if(!isfinite(input[vertex].x) || !isfinite(input[vertex].y) ||
+           !isfinite(input[vertex].z)) {
+            errno = EDOM;
+            return -1;
+        }
+        if(!transform_position(&transform, input[vertex].x,
+                               input[vertex].y, input[vertex].z,
+                               vertices + vertex)) {
+            errno = ERANGE;
+            return -1;
+        }
+    }
+
+    for(plane = 0; plane < FRUSTUM_PLANES; ++plane) {
+        size_t inside = 0;
+
+        for(vertex = 0; vertex < 3; ++vertex) {
+            float distance = plane_distance(frustum, vertices + vertex,
+                                            plane);
+
+            if(!isfinite(distance)) {
+                errno = ERANGE;
+                return -1;
+            }
+            if(distance >= 0.0f)
+                ++inside;
+        }
+        if(!inside) {
+            *result = PVR_FRUSTUM_OUTSIDE;
+            return 0;
+        }
+        if(inside != 3u)
+            classification = PVR_FRUSTUM_INTERSECT;
+    }
+
+    *result = classification;
+    return 0;
+}
+
 static uint32_t color_lerp(uint32_t lhs, uint32_t rhs, float amount) {
     uint32_t output = 0;
     unsigned int shift;

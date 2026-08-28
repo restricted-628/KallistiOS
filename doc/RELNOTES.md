@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added explicit compact-model frustum policies for ordinary strips. Fully
+  outside models return before stream traversal, fully inside models retain
+  the fast strip path, and intersecting models can either split triangles with
+  UV/color interpolation or drop crossing triangles. A trusted-visible mode
+  preserves the minimum-overhead path for caller-proven content.
 * Added exact object-space sphere classification against homogeneous PVR
   frusta and a compact-model wrapper for retained model bounds. Applications
   can reject whole models before stream traversal and identify fully visible

@@ -556,6 +556,7 @@ collision_aabb_from_points
 pvr_frustum_init
 pvr_frustum_classify_aabb
 pvr_frustum_classify_sphere
+pvr_frustum_classify_triangle
 pvr_frustum_clip_triangle
 pvr_geometry_project
 pvr_geometry_project_vertices
@@ -594,6 +595,8 @@ pvr_chunk_hierarchy_traverse_transforms
 pvr_chunk_model_emit
 pvr_chunk_model_emit_prepared
 pvr_chunk_model_classify
+pvr_chunk_model_emit_clipped
+pvr_chunk_model_emit_clipped_prepared
 pvr_chunk_model_emit_two_volume
 pvr_chunk_model_emit_two_volume_prepared
 pvr_chunk_model_emit_modifiers

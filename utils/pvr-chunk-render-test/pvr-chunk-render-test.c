@@ -144,7 +144,7 @@ typedef struct callback_state {
     pvr_chunk_render_state_t state;
 } callback_state_t;
 
-static alignas(32) pvr_vertex_t submitted[8];
+static alignas(32) pvr_vertex_t submitted[32];
 static size_t submitted_count;
 static uint32_t submitted_modifier_modes[16];
 static size_t submitted_modifier_count;
@@ -287,6 +287,124 @@ static int prepare_two_volume_vertex(
 
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.00001f;
+}
+
+static void test_clipped_emit(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_chunk_model_t model = make_model(
+        polygons, sizeof(polygons) / sizeof(polygons[0]));
+    pvr_chunk_model_view_t view;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_model_plan_requirements_t plan_requirements;
+    pvr_chunk_vertex_index_entry_t index[256];
+    pvr_frustum_t frustum;
+    alignas(32) pvr_vertex_t workspace[3];
+    alignas(32) pvr_vertex_t clip_workspace[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    alignas(32) pvr_vertex_t output[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    pvr_geometry_sink_t sink;
+    pvr_chunk_render_result_t result;
+    callback_state_t callback;
+    size_t i;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_frustum_init(&frustum, &identity, -0.5f, -2.0f,
+                            0.5f, 2.0f, 0.5f, 2.0f) == 0);
+
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_memory(
+        &sink, output, PVR_FRUSTUM_CLIP_MAX_VERTICES) == 0);
+    assert(pvr_chunk_model_emit_clipped(
+               &view, &frustum, PVR_CHUNK_CLIP_SPLIT, &sink,
+               workspace, 3, clip_workspace,
+               PVR_FRUSTUM_CLIP_MAX_VERTICES, begin_strip, prepare_vertex,
+               &callback, &result) == 0);
+    assert(result.consumed_records == 4 && result.emitted_strips == 1 &&
+           result.emitted_vertices == 9 && sink.emitted_vertices == 9);
+    assert(callback.begins == 1 && callback.prepares == 3);
+    for(i = 0; i < sink.emitted_vertices; ++i)
+        assert(output[i].x >= -0.50001f && output[i].x <= 0.50001f);
+
+    submitted_count = 0;
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_current(&sink) == 0);
+    assert(pvr_chunk_model_emit_clipped(
+               &view, &frustum, PVR_CHUNK_CLIP_SPLIT, &sink,
+               workspace, 3, clip_workspace,
+               PVR_FRUSTUM_CLIP_MAX_VERTICES, begin_strip, prepare_vertex,
+               &callback, &result) == 0);
+    assert(submitted_count == 9 && sink.emitted_vertices == 9 &&
+           callback.begins == 1 && callback.prepares == 3);
+
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_memory(
+        &sink, output, PVR_FRUSTUM_CLIP_MAX_VERTICES) == 0);
+    assert(pvr_chunk_model_emit_clipped(
+               &view, &frustum, PVR_CHUNK_CLIP_DROP, &sink,
+               workspace, 3, NULL, 0, begin_strip, prepare_vertex,
+               &callback, &result) == 0);
+    assert(result.consumed_records == 4 && result.emitted_strips == 0 &&
+           result.emitted_vertices == 0 && sink.emitted_vertices == 0);
+    assert(callback.begins == 0 && callback.prepares == 3);
+
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_emit_clipped(
+               &view, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink,
+               workspace, 3, NULL, 0, begin_strip, prepare_vertex,
+               &callback, &result) == 0);
+    assert(result.emitted_strips == 1 && result.emitted_vertices == 3 &&
+           close_enough(output[0].x, 1.0f));
+
+    assert(pvr_chunk_model_plan_query(&view, &plan_requirements) == 0);
+    assert(plan_requirements.vertex_index_entries == 256);
+    assert(pvr_chunk_model_plan_build(&view, index, 256, &plan) == 0);
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_memory(
+        &sink, output, PVR_FRUSTUM_CLIP_MAX_VERTICES) == 0);
+    assert(pvr_chunk_model_emit_clipped_prepared(
+               &plan, &frustum, PVR_CHUNK_CLIP_SPLIT, &sink,
+               workspace, 3, clip_workspace,
+               PVR_FRUSTUM_CLIP_MAX_VERTICES, begin_strip, prepare_vertex,
+               &callback, &result) == 0);
+    assert(result.emitted_vertices == 9 && callback.begins == 1 &&
+           callback.prepares == 3);
+
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_memory(&sink, output, 20) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit_clipped(
+               &view, &frustum, PVR_CHUNK_CLIP_SPLIT, &sink,
+               workspace, 3, clip_workspace,
+               PVR_FRUSTUM_CLIP_MAX_VERTICES, begin_strip, prepare_vertex,
+               &callback, &result) == -1);
+    assert(errno == ENOSPC && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+
+    assert(pvr_geometry_sink_init_memory(
+        &sink, clip_workspace, PVR_FRUSTUM_CLIP_MAX_VERTICES) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit_clipped(
+               &view, &frustum, PVR_CHUNK_CLIP_SPLIT, &sink,
+               workspace, 3, clip_workspace,
+               PVR_FRUSTUM_CLIP_MAX_VERTICES, NULL, NULL, NULL,
+               &result) == -1);
+    assert(errno == EINVAL && sink.emitted_vertices == 0);
+
+    view.model.center[0] = 10.0f;
+    view.model.radius = 0.25f;
+    memset(&callback, 0, sizeof(callback));
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_emit_clipped(
+               &view, &frustum, PVR_CHUNK_CLIP_DROP, &sink,
+               workspace, 3, NULL, 0, begin_strip, prepare_vertex,
+               &callback, &result) == 0);
+    assert(result.consumed_records == 0 && result.emitted_vertices == 0 &&
+           callback.begins == 0 && callback.prepares == 0);
 }
 
 static void test_emit(void) {
@@ -874,6 +992,7 @@ static void test_modifier_emit(void) {
 
 int main(void) {
     test_model_classification();
+    test_clipped_emit();
     test_emit();
     test_preflight_and_prefix();
     test_unsupported();

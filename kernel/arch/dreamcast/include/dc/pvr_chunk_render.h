@@ -97,6 +97,16 @@ typedef struct pvr_chunk_render_result {
     size_t emitted_vertices;
 } pvr_chunk_render_result_t;
 
+/** \brief Frustum policy for compact-model triangle emission. */
+typedef enum pvr_chunk_clip_policy {
+    /** Clip intersecting triangles and interpolate canonical attributes. */
+    PVR_CHUNK_CLIP_SPLIT = 0,
+    /** Emit only triangles wholly inside all six frustum planes. */
+    PVR_CHUNK_CLIP_DROP,
+    /** Skip classification and trust that all model geometry is visible. */
+    PVR_CHUNK_CLIP_ASSUME_VISIBLE
+} pvr_chunk_clip_policy_t;
+
 /** \brief Classify an admitted model's retained bounding sphere.
 
     This is an allocation-free whole-model visibility test. A dynamic
@@ -230,6 +240,38 @@ int pvr_chunk_model_emit_prepared(
     const matrix_t *object_to_screen,
     pvr_geometry_sink_t *sink,
     pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
+/** \brief Emit an admitted model under an explicit clipping policy.
+
+    SPLIT and DROP first classify the model's retained sphere. An outside model
+    returns successfully without walking either stream; an inside model uses
+    the ordinary strip path. Intersecting models expand each source strip into
+    independent triangles. SPLIT clips and interpolates UV/base/offset color;
+    DROP omits every triangle not wholly inside the frustum.
+
+    SPLIT requires a 32-byte-aligned clip workspace with at least
+    PVR_FRUSTUM_CLIP_MAX_VERTICES entries. DROP and ASSUME_VISIBLE do not use
+    that workspace. The ordinary strip workspace and all other callback,
+    destination, and failure-prefix contracts match pvr_chunk_model_emit().
+*/
+int pvr_chunk_model_emit_clipped(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
+/** \brief Emit a clipped model through a prepared vertex plan. */
+int pvr_chunk_model_emit_clipped_prepared(
+    const pvr_chunk_model_plan_t *plan, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);

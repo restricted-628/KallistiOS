@@ -21,6 +21,7 @@ typedef struct render_requirements {
     size_t records;
     size_t strips;
     size_t vertices;
+    size_t triangles;
     size_t maximum_strip_vertices;
 } render_requirements_t;
 
@@ -292,7 +293,9 @@ static int preflight_strip(const pvr_chunk_model_view_t *view,
     size_t vertex_index;
 
     if(checked_add(&requirements->strips, 1u) < 0 ||
-       checked_add(&requirements->vertices, strip->vertex_count) < 0)
+       checked_add(&requirements->vertices, strip->vertex_count) < 0 ||
+       checked_add(&requirements->triangles,
+                   strip->vertex_count - 2u) < 0)
         return -1;
 
     if(strip->vertex_count > requirements->maximum_strip_vertices)
@@ -804,6 +807,319 @@ int pvr_chunk_model_emit_prepared(
     return model_emit(&plan->view, plan, object_to_screen, sink, workspace,
                       workspace_count, begin_strip, prepare_vertex, data,
                       result);
+}
+
+static int clipped_workspace_valid(
+    const pvr_chunk_model_view_t *view, const pvr_chunk_model_plan_t *plan,
+    const pvr_frustum_t *frustum, const pvr_geometry_sink_t *sink,
+    const pvr_vertex_t *workspace, size_t workspace_count,
+    const pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    const render_requirements_t *requirements, pvr_chunk_clip_policy_t policy) {
+    uintptr_t workspace_start;
+    uintptr_t clip_start = 0;
+    uintptr_t vertex_start;
+    uintptr_t polygon_start;
+    uintptr_t frustum_start;
+    uintptr_t output_start = 0;
+    uintptr_t plan_start;
+    uintptr_t index_start;
+    size_t workspace_bytes;
+    size_t clip_bytes = 0;
+    size_t vertex_bytes;
+    size_t polygon_bytes;
+    size_t frustum_bytes;
+    size_t output_bytes = 0;
+    size_t plan_bytes;
+    size_t index_bytes;
+    size_t maximum_vertices;
+
+    maximum_vertices = policy == PVR_CHUNK_CLIP_SPLIT ?
+                       PVR_FRUSTUM_CLIP_MAX_VERTICES : 3u;
+    if(requirements->triangles > SIZE_MAX / maximum_vertices) {
+        errno = ERANGE;
+        return -1;
+    }
+    maximum_vertices *= requirements->triangles;
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       maximum_vertices > sink->destination.memory.capacity -
+                          sink->emitted_vertices) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(policy == PVR_CHUNK_CLIP_SPLIT &&
+       (!clip_workspace || ((uintptr_t)clip_workspace & 31u) ||
+        clip_workspace_count < PVR_FRUSTUM_CLIP_MAX_VERTICES)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(range_get(workspace, requirements->maximum_strip_vertices,
+                 sizeof(*workspace), &workspace_start, &workspace_bytes) < 0 ||
+       range_get(view->model.vertex_words, view->model.vertex_word_count,
+                 sizeof(*view->model.vertex_words), &vertex_start,
+                 &vertex_bytes) < 0 ||
+       range_get(view->model.polygon_words, view->model.polygon_word_count,
+                 sizeof(*view->model.polygon_words), &polygon_start,
+                 &polygon_bytes) < 0 ||
+       range_get(frustum, 1u, sizeof(*frustum), &frustum_start,
+                 &frustum_bytes) < 0 ||
+       model_plan_ranges_get(plan, &plan_start, &plan_bytes,
+                             &index_start, &index_bytes) < 0)
+        return -1;
+    if(policy == PVR_CHUNK_CLIP_SPLIT &&
+       range_get(clip_workspace, PVR_FRUSTUM_CLIP_MAX_VERTICES,
+                 sizeof(*clip_workspace), &clip_start, &clip_bytes) < 0)
+        return -1;
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       range_get(sink->destination.memory.vertices,
+                 sink->destination.memory.capacity,
+                 sizeof(*sink->destination.memory.vertices), &output_start,
+                 &output_bytes) < 0)
+        return -1;
+
+    if(ranges_overlap(workspace_start, workspace_bytes,
+                      frustum_start, frustum_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      frustum_start, frustum_bytes) ||
+       ranges_overlap(clip_start, clip_bytes, workspace_start,
+                      workspace_bytes) ||
+       ranges_overlap(clip_start, clip_bytes, vertex_start, vertex_bytes) ||
+       ranges_overlap(clip_start, clip_bytes, polygon_start, polygon_bytes) ||
+       ranges_overlap(clip_start, clip_bytes, frustum_start, frustum_bytes) ||
+       ranges_overlap(clip_start, clip_bytes, output_start, output_bytes) ||
+       ranges_overlap(clip_start, clip_bytes, plan_start, plan_bytes) ||
+       ranges_overlap(clip_start, clip_bytes, index_start, index_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    (void)workspace_count;
+    (void)clip_workspace_count;
+    return 0;
+}
+
+static void independent_triangle(const pvr_vertex_t *strip,
+                                 size_t triangle_index,
+                                 pvr_vertex_t triangle[3]) {
+    size_t first = triangle_index;
+    size_t second = triangle_index + 1u;
+
+    if(triangle_index & 1u) {
+        size_t swap = first;
+
+        first = second;
+        second = swap;
+    }
+    triangle[0] = strip[first];
+    triangle[1] = strip[second];
+    triangle[2] = strip[triangle_index + 2u];
+    triangle[0].flags = PVR_CMD_VERTEX;
+    triangle[1].flags = PVR_CMD_VERTEX;
+    triangle[2].flags = PVR_CMD_VERTEX_EOL;
+}
+
+static int prepare_clipped_triangle(
+    pvr_vertex_t triangle[3], pvr_vertex_t *clip_workspace,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t policy,
+    const pvr_vertex_t **output, size_t *output_count) {
+    pvr_frustum_classification_t classification;
+
+    *output = NULL;
+    *output_count = 0;
+
+    if(pvr_frustum_classify_triangle(triangle, frustum,
+                                     &classification) < 0)
+        return -1;
+    if(classification == PVR_FRUSTUM_OUTSIDE ||
+       (classification == PVR_FRUSTUM_INTERSECT &&
+        policy == PVR_CHUNK_CLIP_DROP)) {
+        return 0;
+    }
+
+    if(classification == PVR_FRUSTUM_INTERSECT) {
+        pvr_frustum_clip_result_t clip_result;
+
+        if(pvr_frustum_clip_triangle(
+               clip_workspace, PVR_FRUSTUM_CLIP_MAX_VERTICES, triangle,
+               frustum, PVR_FRUSTUM_CLIP_ALL, &clip_result) < 0)
+            return -1;
+        *output = clip_workspace;
+        *output_count = clip_result.output_vertices;
+    }
+    else {
+        pvr_geometry_stream_t geometry = { triangle, 3u,
+                                           sizeof(triangle[0]) };
+
+        if(pvr_geometry_project(triangle, 3u, &geometry,
+                                &frustum->object_to_screen, NULL) < 0)
+            return -1;
+        *output = triangle;
+        *output_count = 3u;
+    }
+    return 0;
+}
+
+static int model_emit_clipped(
+    const pvr_chunk_model_view_t *view, const pvr_chunk_model_plan_t *plan,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t policy,
+    pvr_geometry_sink_t *sink, pvr_vertex_t *workspace,
+    size_t workspace_count, pvr_vertex_t *clip_workspace,
+    size_t clip_workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    pvr_chunk_render_result_t progress = { 0, 0, 0 };
+    pvr_frustum_classification_t model_classification;
+    render_requirements_t requirements;
+    pvr_chunk_render_state_t state;
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    int rv;
+
+    if(result)
+        *result = progress;
+    if(!view || !frustum || policy < PVR_CHUNK_CLIP_SPLIT ||
+       policy > PVR_CHUNK_CLIP_ASSUME_VISIBLE || !workspace ||
+       ((uintptr_t)workspace & 31u) ||
+       (policy == PVR_CHUNK_CLIP_SPLIT &&
+        (!clip_workspace || ((uintptr_t)clip_workspace & 31u) ||
+         clip_workspace_count < PVR_FRUSTUM_CLIP_MAX_VERTICES))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sink_valid(sink) < 0)
+        return -1;
+    if(policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE)
+        return model_emit(view, plan, &frustum->object_to_screen, sink,
+                          workspace, workspace_count, begin_strip,
+                          prepare_vertex, data, result);
+
+    if(pvr_chunk_model_classify(view, frustum, &model_classification) < 0)
+        return -1;
+    if(model_classification == PVR_FRUSTUM_OUTSIDE)
+        return 0;
+    if(model_classification == PVR_FRUSTUM_INSIDE)
+        return model_emit(view, plan, &frustum->object_to_screen, sink,
+                          workspace, workspace_count, begin_strip,
+                          prepare_vertex, data, result);
+
+    if(preflight(view, plan, &frustum->object_to_screen, sink, workspace,
+                 workspace_count, begin_strip, prepare_vertex,
+                 &requirements) < 0 ||
+       clipped_workspace_valid(view, plan, frustum, sink, workspace,
+                               workspace_count, clip_workspace,
+                               clip_workspace_count, &requirements,
+                               policy) < 0)
+        return -1;
+
+    memset(&state, 0, sizeof(state));
+    if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
+                                       view->model.polygon_word_count) < 0)
+        return -1;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        ++progress.consumed_records;
+        pvr_chunk_render_update_state(&state, &record);
+
+        if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
+            pvr_chunk_strip_iterator_t strip_iterator;
+            pvr_chunk_strip_view_t strip;
+            int strip_rv;
+
+            if(pvr_chunk_strip_iterator_init(&strip_iterator, &record) < 0)
+                goto fail;
+            while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
+                                                             &strip)) > 0) {
+                int strip_started = 0;
+                size_t triangle_index;
+
+                state.strip_flags = strip.flags;
+                if(assemble_strip(view, plan, &state, &strip, workspace,
+                                  prepare_vertex, data) < 0)
+                    goto fail;
+                for(triangle_index = 0;
+                    triangle_index + 2u < strip.vertex_count;
+                    ++triangle_index) {
+                    alignas(32) pvr_vertex_t triangle[3];
+                    const pvr_vertex_t *output;
+                    size_t emitted;
+
+                    independent_triangle(workspace, triangle_index,
+                                         triangle);
+                    if(prepare_clipped_triangle(
+                           triangle, clip_workspace, frustum, policy,
+                           &output, &emitted) < 0)
+                        goto fail;
+                    if(!emitted)
+                        continue;
+                    if(!strip_started && begin_strip) {
+                        errno = 0;
+                        if(begin_strip(&state, &strip, data) < 0) {
+                            if(!errno)
+                                errno = EIO;
+                            goto fail;
+                        }
+                    }
+                    if(pvr_geometry_sink_emit(sink, output, emitted) < 0)
+                        goto fail;
+                    strip_started = 1;
+                    progress.emitted_vertices += emitted;
+                }
+                if(strip_started)
+                    ++progress.emitted_strips;
+            }
+            if(strip_rv < 0)
+                goto fail;
+        }
+    }
+
+    if(rv < 0)
+        goto fail;
+    if(result)
+        *result = progress;
+    return 0;
+
+fail:
+    if(!errno)
+        errno = EIO;
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+int pvr_chunk_model_emit_clipped(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    return model_emit_clipped(view, NULL, frustum, policy, sink, workspace,
+                              workspace_count, clip_workspace,
+                              clip_workspace_count, begin_strip,
+                              prepare_vertex, data, result);
+}
+
+int pvr_chunk_model_emit_clipped_prepared(
+    const pvr_chunk_model_plan_t *plan, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    if(!plan) {
+        if(result)
+            memset(result, 0, sizeof(*result));
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit_clipped(&plan->view, plan, frustum, policy, sink,
+                              workspace, workspace_count, clip_workspace,
+                              clip_workspace_count, begin_strip,
+                              prepare_vertex, data, result);
 }
 
 size_t pvr_chunk_render_two_volume_format_size(

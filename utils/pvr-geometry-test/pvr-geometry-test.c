@@ -690,6 +690,7 @@ static void test_frustum_classification(void) {
     pvr_frustum_classification_t result;
     pvr_frustum_t unchanged;
     point_t center;
+    alignas(32) pvr_vertex_t triangle[3];
 
     assert(pvr_frustum_init(&frustum, &identity, -1.0f, -1.0f,
                             1.0f, 1.0f, 0.5f, 2.0f) == 0);
@@ -733,6 +734,24 @@ static void test_frustum_classification(void) {
     assert(pvr_frustum_classify_sphere(&frustum, &center, -1.0f,
                                        &result) == -1);
     assert(errno == EDOM && result == PVR_FRUSTUM_OUTSIDE);
+
+    triangle[0] = make_vertex(-0.5f, -0.5f, 0.0f, PVR_CMD_VERTEX,
+                              UINT32_C(0xffffffff));
+    triangle[1] = make_vertex(0.5f, -0.5f, 0.0f, PVR_CMD_VERTEX,
+                              UINT32_C(0xffffffff));
+    triangle[2] = make_vertex(0.0f, 0.5f, 0.0f, PVR_CMD_VERTEX_EOL,
+                              UINT32_C(0xffffffff));
+    assert(pvr_frustum_classify_triangle(triangle, &frustum, &result) == 0);
+    assert(result == PVR_FRUSTUM_INSIDE);
+
+    triangle[2].x = 1.5f;
+    assert(pvr_frustum_classify_triangle(triangle, &frustum, &result) == 0);
+    assert(result == PVR_FRUSTUM_INTERSECT);
+
+    triangle[0].x = 1.5f;
+    triangle[1].x = 1.5f;
+    assert(pvr_frustum_classify_triangle(triangle, &frustum, &result) == 0);
+    assert(result == PVR_FRUSTUM_OUTSIDE);
 
     unchanged = frustum;
     errno = 0;

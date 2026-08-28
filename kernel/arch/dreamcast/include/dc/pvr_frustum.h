@@ -114,6 +114,15 @@ int pvr_frustum_classify_sphere(const pvr_frustum_t *frustum,
                                 const point_t *center, float radius,
                                 pvr_frustum_classification_t *result);
 
+/** \brief Classify one object-space triangle without projecting it.
+
+    Positions are read from the XYZ fields of three canonical vertices. The
+    command and material fields are ignored. Output is unchanged on failure.
+*/
+int pvr_frustum_classify_triangle(
+    const pvr_vertex_t input[3], const pvr_frustum_t *frustum,
+    pvr_frustum_classification_t *result);
+
 /** \brief Clip, project, and triangulate one canonical PVR triangle.
 
     Input contains exactly three vertices. Generated intersections linearly
