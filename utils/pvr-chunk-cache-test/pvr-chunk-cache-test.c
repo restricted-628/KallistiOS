@@ -71,12 +71,12 @@ static const uint16_t two_volume_textured_polygons[] = {
     POLYGON_HEADER(PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR_TWO_VOLUME, 0x25),
     UINT16_C(4), UINT16_C(0xbbcc), UINT16_C(0xffaa),
     UINT16_C(0x0506), UINT16_C(0x0404),
-    POLYGON_HEADER(PVR_CHUNK_STRIP_UV8_TWO_VOLUME,
+    POLYGON_HEADER(PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME,
                    PVR_CHUNK_STRIP_USE_ALPHA),
     UINT16_C(17), UINT16_C(1), UINT16_C(0x8003),
-    UINT16_C(0), UINT16_C(0), UINT16_C(0), UINT16_C(255), UINT16_C(255),
+    UINT16_C(0), UINT16_C(0), UINT16_C(0), UINT16_C(256), UINT16_C(256),
     UINT16_C(1), UINT16_C(128), UINT16_C(0), UINT16_C(64), UINT16_C(128),
-    UINT16_C(2), UINT16_C(255), UINT16_C(128), UINT16_C(0), UINT16_C(64),
+    UINT16_C(2), UINT16_C(256), UINT16_C(128), UINT16_C(0), UINT16_C(64),
     UINT16_C(0x00ff)
 };
 
@@ -347,8 +347,8 @@ static void test_two_volume_cache(void) {
            callbacks.prepares == 3);
     assert(output[0].x == 11.0f && output[1].x == 10.0f &&
            output[2].x == 12.0f);
-    assert(output[0].u0 == 128.0f / 255.0f);
-    assert(output[0].u1 == 64.0f / 255.0f);
+    assert(output[0].u0 == 0.5f);
+    assert(output[0].u1 == 0.25f);
     assert(output[0].argb0 == UINT32_C(0xff000001));
     assert(output[0].oargb1 == (UINT32_C(0xff040506) ^ 1u));
     assert(output[2].flags == PVR_CMD_VERTEX_EOL);

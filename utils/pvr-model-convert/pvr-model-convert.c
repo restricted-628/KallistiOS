@@ -772,11 +772,6 @@ static int append_texcoord(source_model_t *model, char *cursor, int flip_v) {
 
         if(!token || parse_float_token(token, &texcoord.value[component]) < 0)
             return -1;
-        if(texcoord.value[component] < 0.0f ||
-           texcoord.value[component] > 1.0f) {
-            errno = ERANGE;
-            return -1;
-        }
     }
     if(next_token(&cursor)) {
         errno = ENOTSUP;
@@ -830,7 +825,30 @@ static int append_normal(source_model_t *model, char *cursor) {
     return 0;
 }
 
-static int triangle_type(source_triangle_t *triangle) {
+static int uv_fits(const source_model_t *model,
+                   const source_triangle_t *triangle,
+                   unsigned int fractional_bits) {
+    double scale = (double)(UINT32_C(1) << fractional_bits);
+    size_t corner;
+    size_t component;
+
+    for(corner = 0; corner < 3u; ++corner) {
+        const source_texcoord_t *texcoord =
+            &model->texcoords[triangle->corner[corner].texcoord];
+
+        for(component = 0; component < 2u; ++component) {
+            double scaled = (double)texcoord->value[component] * scale;
+
+            if(scaled <= (double)INT16_MIN - 0.5 ||
+               scaled >= (double)INT16_MAX + 0.5)
+                return 0;
+        }
+    }
+    return 1;
+}
+
+static int triangle_type(const source_model_t *model,
+                         source_triangle_t *triangle) {
     int has_texcoord = triangle->corner[0].texcoord != SIZE_MAX;
     int has_normal = triangle->corner[0].normal != SIZE_MAX;
     size_t corner;
@@ -842,10 +860,22 @@ static int triangle_type(source_triangle_t *triangle) {
             return -1;
         }
     }
-    if(has_texcoord && has_normal)
-        triangle->strip_type = PVR_CHUNK_STRIP_UV10_NORMAL;
-    else if(has_texcoord)
-        triangle->strip_type = PVR_CHUNK_STRIP_UV10;
+    if(has_texcoord) {
+        int uv10 = uv_fits(model, triangle, 10u);
+        int uv8 = uv10 || uv_fits(model, triangle, 8u);
+
+        if(!uv8) {
+            errno = ERANGE;
+            return -1;
+        }
+        if(has_normal)
+            triangle->strip_type = uv10 ?
+                PVR_CHUNK_STRIP_UV10_FIXED_NORMAL :
+                PVR_CHUNK_STRIP_UV8_FIXED_NORMAL;
+        else
+            triangle->strip_type = uv10 ? PVR_CHUNK_STRIP_UV10_FIXED :
+                                          PVR_CHUNK_STRIP_UV8_FIXED;
+    }
     else if(has_normal)
         triangle->strip_type = PVR_CHUNK_STRIP_NORMAL;
     else
@@ -870,7 +900,7 @@ static int append_triangle(source_model_t *model, char *cursor,
         errno = ENOTSUP;
         return -1;
     }
-    if(triangle_type(&triangle) < 0)
+    if(triangle_type(model, &triangle) < 0)
         return -1;
     if(texture_identifier < -1) {
         errno = ENOENT;
@@ -1086,11 +1116,13 @@ static size_t strip_vertex_words(uint8_t type) {
     switch(type) {
         case PVR_CHUNK_STRIP_INDEX:
             return 1u;
-        case PVR_CHUNK_STRIP_UV10:
+        case PVR_CHUNK_STRIP_UV8_FIXED:
+        case PVR_CHUNK_STRIP_UV10_FIXED:
             return 3u;
         case PVR_CHUNK_STRIP_NORMAL:
             return 4u;
-        case PVR_CHUNK_STRIP_UV10_NORMAL:
+        case PVR_CHUNK_STRIP_UV8_FIXED_NORMAL:
+        case PVR_CHUNK_STRIP_UV10_FIXED_NORMAL:
             return 6u;
         default:
             return 0;
@@ -1319,8 +1351,11 @@ static uint32_t float_word(float value) {
     return word;
 }
 
-static uint16_t quantize_uv(float value) {
-    return (uint16_t)lroundf(value * 1023.0f);
+static uint16_t quantize_uv(float value, unsigned int fractional_bits) {
+    long encoded = lround((double)value *
+                          (double)(UINT32_C(1) << fractional_bits));
+
+    return (uint16_t)(int16_t)encoded;
 }
 
 static uint16_t quantize_normal(float value) {
@@ -1422,15 +1457,21 @@ static int calculate_bounds(const source_model_t *model,
 static void emit_corner(uint16_t **output, const source_model_t *model,
                         const source_corner_t *corner, uint8_t type) {
     *(*output)++ = (uint16_t)corner->position;
-    if(type == PVR_CHUNK_STRIP_UV10 ||
-       type == PVR_CHUNK_STRIP_UV10_NORMAL) {
+    if(type == PVR_CHUNK_STRIP_UV8_FIXED ||
+       type == PVR_CHUNK_STRIP_UV10_FIXED ||
+       type == PVR_CHUNK_STRIP_UV8_FIXED_NORMAL ||
+       type == PVR_CHUNK_STRIP_UV10_FIXED_NORMAL) {
         const source_texcoord_t *texcoord = &model->texcoords[corner->texcoord];
+        unsigned int fractional_bits =
+            type == PVR_CHUNK_STRIP_UV8_FIXED ||
+            type == PVR_CHUNK_STRIP_UV8_FIXED_NORMAL ? 8u : 10u;
 
-        *(*output)++ = quantize_uv(texcoord->value[0]);
-        *(*output)++ = quantize_uv(texcoord->value[1]);
+        *(*output)++ = quantize_uv(texcoord->value[0], fractional_bits);
+        *(*output)++ = quantize_uv(texcoord->value[1], fractional_bits);
     }
     if(type == PVR_CHUNK_STRIP_NORMAL ||
-       type == PVR_CHUNK_STRIP_UV10_NORMAL) {
+       type == PVR_CHUNK_STRIP_UV8_FIXED_NORMAL ||
+       type == PVR_CHUNK_STRIP_UV10_FIXED_NORMAL) {
         const source_normal_t *normal = &model->normals[corner->normal];
         size_t component;
 

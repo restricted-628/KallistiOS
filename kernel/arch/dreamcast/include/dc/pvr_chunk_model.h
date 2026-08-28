@@ -114,10 +114,18 @@ typedef enum pvr_chunk_vertex_type {
     PVR_CHUNK_SHAPE_ARGB = 130
 } pvr_chunk_vertex_type_t;
 
-/** \brief Polygon strip record types understood by the validator. */
+/** \brief Polygon strip record types understood by the validator.
+
+    The original UV8/UV10 families retain unsigned-normalized decoding for
+    existing streams. New content should use the `_FIXED` families: UV8 is
+    signed 8.8 fixed point and UV10 is signed 6.10 fixed point. Both occupy
+    one 16-bit word per coordinate.
+*/
 typedef enum pvr_chunk_strip_type {
     PVR_CHUNK_STRIP_INDEX = 64,
+    /** Legacy unsigned-normalized UVs in `[0, 1]`. */
     PVR_CHUNK_STRIP_UV8 = 65,
+    /** Legacy unsigned-normalized UVs in `[0, 1]`. */
     PVR_CHUNK_STRIP_UV10 = 66,
     PVR_CHUNK_STRIP_NORMAL = 67,
     PVR_CHUNK_STRIP_UV8_NORMAL = 68,
@@ -127,7 +135,17 @@ typedef enum pvr_chunk_strip_type {
     PVR_CHUNK_STRIP_UV10_ARGB = 72,
     PVR_CHUNK_STRIP_TWO_VOLUME = 73,
     PVR_CHUNK_STRIP_UV8_TWO_VOLUME = 74,
-    PVR_CHUNK_STRIP_UV10_TWO_VOLUME = 75
+    PVR_CHUNK_STRIP_UV10_TWO_VOLUME = 75,
+    /** Signed 8.8 fixed-point UVs with a `1 / 256` step. */
+    PVR_CHUNK_STRIP_UV8_FIXED = 76,
+    /** Signed 6.10 fixed-point UVs with a `1 / 1024` step. */
+    PVR_CHUNK_STRIP_UV10_FIXED = 77,
+    PVR_CHUNK_STRIP_UV8_FIXED_NORMAL = 78,
+    PVR_CHUNK_STRIP_UV10_FIXED_NORMAL = 79,
+    PVR_CHUNK_STRIP_UV8_FIXED_ARGB = 80,
+    PVR_CHUNK_STRIP_UV10_FIXED_ARGB = 81,
+    PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME = 82,
+    PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME = 83
 } pvr_chunk_strip_type_t;
 
 /** \brief Modifier-volume record types. */

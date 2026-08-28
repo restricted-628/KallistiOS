@@ -366,7 +366,7 @@ static void test_resolve(void) {
     state.strip_flags = PVR_CHUNK_STRIP_USE_ALPHA |
                         PVR_CHUNK_STRIP_DOUBLE_SIDED |
                         PVR_CHUNK_STRIP_FLAT_SHADED;
-    strip.type = PVR_CHUNK_STRIP_UV8;
+    strip.type = PVR_CHUNK_STRIP_UV8_FIXED;
     strip.flags = state.strip_flags;
     compile_calls = 0;
     assert(pvr_chunk_material_resolve(&material, &context, &view,
@@ -440,7 +440,7 @@ static void test_two_volume_and_submission(void) {
     state.secondary_texture.identifier = 2;
     state.secondary_texture.filter = PVR_FILTER_NEAREST;
     state.secondary_texture.supersample = 1;
-    strip.type = PVR_CHUNK_STRIP_UV8_TWO_VOLUME;
+    strip.type = PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME;
     assert(pvr_chunk_material_resolve(&material, &context, &view,
                                       &state, &strip) == 0);
     assert(compiled_kind == PVR_MATERIAL_TWO_VOLUME);

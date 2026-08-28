@@ -477,10 +477,18 @@ static void apply_secondary_texture(pvr_poly_cxt_t *context,
     context->txr2.base = texture->base;
 }
 
+static int strip_is_two_volume(uint8_t type) {
+    return type == PVR_CHUNK_STRIP_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV8_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV10_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME;
+}
+
 static int render_state_valid(const pvr_chunk_render_state_t *state,
                               const pvr_chunk_strip_view_t *strip) {
     if(!state || !strip || strip->type < PVR_CHUNK_STRIP_INDEX ||
-       strip->type > PVR_CHUNK_STRIP_UV10_TWO_VOLUME ||
+       strip->type > PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME ||
        (strip->flags & ~PVR_CHUNK_STRIP_FLAGS_ALL) ||
        /* The callback state and view must describe the same decoded strip. */
        state->strip_flags != strip->flags ||
@@ -514,7 +522,7 @@ int pvr_chunk_material_resolve(
             errno = EINVAL;
         return -1;
     }
-    two_volume = strip->type >= PVR_CHUNK_STRIP_TWO_VOLUME;
+    two_volume = strip_is_two_volume(strip->type);
     if((two_volume && !base_context->fmt.modifier) ||
        (!two_volume && base_context->fmt.modifier) ||
        (!two_volume && state->secondary_present)) {

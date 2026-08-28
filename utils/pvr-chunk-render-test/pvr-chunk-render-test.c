@@ -33,14 +33,14 @@ static const uint16_t polygons[] = {
     POLYGON_HEADER(PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR, 0x25), UINT16_C(4),
     UINT16_C(0x6699), UINT16_C(0xff33),
     UINT16_C(0x0203), UINT16_C(0x0801),
-    POLYGON_HEADER(PVR_CHUNK_STRIP_UV8_ARGB,
+    POLYGON_HEADER(PVR_CHUNK_STRIP_UV8_FIXED_ARGB,
                    PVR_CHUNK_STRIP_USE_ALPHA),
     UINT16_C(17), UINT16_C(1), UINT16_C(0x8003),
-    UINT16_C(0), UINT16_C(0), UINT16_C(255),
+    UINT16_C(0), UINT16_C(0), UINT16_C(256),
     UINT16_C(0x8040), UINT16_C(0x20ff),
     UINT16_C(1), UINT16_C(128), UINT16_C(0),
     UINT16_C(0xff10), UINT16_C(0x2030),
-    UINT16_C(2), UINT16_C(255), UINT16_C(128),
+    UINT16_C(2), UINT16_C(256), UINT16_C(128),
     UINT16_C(0x7f01), UINT16_C(0x0203),
     UINT16_C(0x00ff)
 };
@@ -67,14 +67,14 @@ static const uint16_t two_volume_textured_polygons[] = {
     POLYGON_HEADER(PVR_CHUNK_MATERIAL_DIFFUSE_SPECULAR_TWO_VOLUME, 0x25),
     UINT16_C(4), UINT16_C(0xbbcc), UINT16_C(0xffaa),
     UINT16_C(0x0506), UINT16_C(0x0404),
-    POLYGON_HEADER(PVR_CHUNK_STRIP_UV8_TWO_VOLUME,
+    POLYGON_HEADER(PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME,
                    PVR_CHUNK_STRIP_USE_ALPHA),
     UINT16_C(17), UINT16_C(1), UINT16_C(0x8003),
     UINT16_C(0), UINT16_C(0), UINT16_C(0),
-    UINT16_C(255), UINT16_C(255),
+    UINT16_C(256), UINT16_C(256),
     UINT16_C(1), UINT16_C(128), UINT16_C(0),
     UINT16_C(64), UINT16_C(128),
-    UINT16_C(2), UINT16_C(255), UINT16_C(128),
+    UINT16_C(2), UINT16_C(256), UINT16_C(128),
     UINT16_C(0), UINT16_C(64),
     UINT16_C(0x00ff)
 };
@@ -310,7 +310,7 @@ static void test_emit(void) {
     assert(close_enough(output[0].x, 1.0f));
     assert(close_enough(output[1].x, -1.0f));
     assert(close_enough(output[2].y, 1.0f));
-    assert(close_enough(output[0].u, 128.0f / 255.0f));
+    assert(close_enough(output[0].u, 0.5f));
     assert(close_enough(output[1].v, 1.0f));
     assert(output[0].argb == UINT32_C(0xff102030));
     assert(output[1].argb == UINT32_C(0x804020ff));
@@ -599,9 +599,9 @@ static void test_two_volume_emit(void) {
 
     /* Reversal exchanges complete references, including both UV sets. */
     assert(output[0].x == 1.0f && output[1].x == -1.0f);
-    assert(close_enough(output[0].u0, 128.0f / 255.0f));
-    assert(close_enough(output[0].u1, 64.0f / 255.0f));
-    assert(close_enough(output[0].v1, 128.0f / 255.0f));
+    assert(close_enough(output[0].u0, 0.5f));
+    assert(close_enough(output[0].u1, 0.25f));
+    assert(close_enough(output[0].v1, 0.5f));
     assert(output[0].argb0 == UINT32_C(0xff336699));
     assert(output[0].argb1 == UINT32_C(0xffaabbcc));
     assert(output[0].oargb0 == UINT32_C(0xff010203));

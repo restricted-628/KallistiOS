@@ -47,8 +47,11 @@ colors, intensities, user data, and generic metadata into a format-neutral
 value. The generic metadata field is deliberately not treated as a complete
 skinning influence; applications that use it for model-specific deformation
 must supply an explicit interpretation. The corresponding strip decoder
-normalizes eight-bit or ten-bit UV coordinates, expands signed normals and
-ARGB color, and retains bounded per-triangle user words.
+retains legacy unsigned-normalized UV records and decodes the preferred signed
+8.8 and 6.10 fixed-point records. Signed records provide approximately
+`[-128, 128)` at `1 / 256` precision or `[-32, 32)` at `1 / 1024` precision,
+including negative and repeated coordinates. The decoder also expands signed
+normals and ARGB color and retains bounded per-triangle user words.
 
 `pvr_chunk_model_vertex_attributes_get()` resolves an index directly from an
 admitted model without allocating memory. Admission rejects overlapping

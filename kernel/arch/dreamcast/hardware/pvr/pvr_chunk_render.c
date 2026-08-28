@@ -125,6 +125,14 @@ static int sink_valid(const pvr_geometry_sink_t *sink) {
     return 0;
 }
 
+static int strip_is_two_volume(uint8_t type) {
+    return type == PVR_CHUNK_STRIP_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV8_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV10_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME;
+}
+
 static int unsupported_record(const pvr_chunk_record_t *record) {
     if(record->record_class == PVR_CHUNK_RECORD_VOLUME ||
        (record->record_class == PVR_CHUNK_RECORD_BITS &&
@@ -135,7 +143,7 @@ static int unsupported_record(const pvr_chunk_record_t *record) {
        (record->record_class == PVR_CHUNK_RECORD_MATERIAL &&
         record->type >= PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME) ||
        (record->record_class == PVR_CHUNK_RECORD_STRIP &&
-        record->type >= PVR_CHUNK_STRIP_TWO_VOLUME)) {
+        strip_is_two_volume(record->type))) {
         errno = ENOTSUP;
         return -1;
     }
@@ -215,7 +223,7 @@ static int unsupported_two_volume_record(
        (record->record_class == PVR_CHUNK_RECORD_MATERIAL &&
         record->type == PVR_CHUNK_MATERIAL_BUMP) ||
        (record->record_class == PVR_CHUNK_RECORD_STRIP &&
-        record->type < PVR_CHUNK_STRIP_TWO_VOLUME)) {
+        !strip_is_two_volume(record->type))) {
         errno = ENOTSUP;
         return -1;
     }

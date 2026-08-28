@@ -13,6 +13,14 @@
 
 #include "pvr_chunk_render_internal.h"
 
+static int strip_is_two_volume(uint8_t type) {
+    return type == PVR_CHUNK_STRIP_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV8_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV10_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME;
+}
+
 static int add_size(size_t left, size_t right, size_t *result) {
     if(left > SIZE_MAX - right) {
         errno = ERANGE;
@@ -634,7 +642,8 @@ static int cache_valid(const pvr_chunk_model_cache_t *cache) {
         if(strip->reserved || strip->first_vertex != vertex_cursor ||
            strip->vertex_count < 3u ||
            strip->source_type < PVR_CHUNK_STRIP_INDEX ||
-           strip->source_type >= PVR_CHUNK_STRIP_TWO_VOLUME ||
+           strip->source_type > PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME ||
+           strip_is_two_volume(strip->source_type) ||
            strip->source_flags & UINT8_C(0x80) ||
            strip->state.strip_flags != strip->source_flags ||
            accumulate(&vertex_cursor, strip->vertex_count) < 0 ||
@@ -1241,8 +1250,11 @@ static int two_volume_cache_valid(
 
         if(strip->reserved || strip->first_vertex != vertex_cursor ||
            strip->vertex_count < 3u ||
-           strip->source_type < PVR_CHUNK_STRIP_TWO_VOLUME ||
-           strip->source_type > PVR_CHUNK_STRIP_UV10_TWO_VOLUME ||
+           (strip->source_type != PVR_CHUNK_STRIP_TWO_VOLUME &&
+            strip->source_type != PVR_CHUNK_STRIP_UV8_TWO_VOLUME &&
+            strip->source_type != PVR_CHUNK_STRIP_UV10_TWO_VOLUME &&
+            strip->source_type != PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME &&
+            strip->source_type != PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME) ||
            format != cache->format ||
            strip->source_flags & UINT8_C(0x80) ||
            strip->state.strip_flags != strip->source_flags ||

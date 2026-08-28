@@ -15,7 +15,7 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
 The admitted source subset is:
 
 - finite `v X Y Z` positions;
-- finite `vt U V` coordinates in `[0, 1]`;
+- finite `vt U V` coordinates representable by a signed compact UV format;
 - finite, nonzero `vn X Y Z` normals;
 - triangulated faces using `v`, `v/vt`, `v//vn`, or `v/vt/vn`; and
 - positive or relative-negative OBJ indices.
@@ -26,8 +26,11 @@ alter this geometry stream. Faces with more or fewer than three vertices are
 rejected; source triangulation policy stays in the content tool that owns the
 original mesh.
 
-UVs are quantized to unsigned 10-bit values. Normals are normalized and
-quantized to signed 16-bit components. `--flip-v` applies `V = 1 - V`, while
+UVs use signed 16-bit fixed point. The converter chooses 6.10 fixed point when
+all corners fit its approximately `[-32, 32)` range, otherwise it uses 8.8
+fixed point with approximately `[-128, 128)` range. Inputs outside both ranges
+are rejected. Normals are normalized and quantized to signed 16-bit
+components. `--flip-v` applies `V = 1 - V`, while
 `--flip-winding` exchanges the second and third corner of every triangle. No
 coordinate-system transform is implicit. Models with UV-bearing faces require
 resolved 13-bit texture identifiers, and every face must then carry UVs. A

@@ -49,10 +49,10 @@ VERTICES = [
 POLYGONS = [
     17, 2, 0xFFFF, 0xFFFF,
     8, 7,
-    69, 20, 1, 3,
+    79, 20, 1, 3,
     0, 0, 0, 0, 0, 0x7FFF,
-    1, 1023, 0, 0, 0, 0x7FFF,
-    2, 0, 1023, 0, 0, 0x7FFF,
+    1, 1024, 0, 0, 0, 0x7FFF,
+    2, 0, 1024, 0, 0, 0x7FFF,
     0xFF,
 ]
 
@@ -155,6 +155,59 @@ f 1/1/1 2/2/1 3/3/1# trailing comment
         assert not result.stderr, result.stderr
         assert vertices.read_bytes() == struct.pack("<12I", *VERTICES)
         assert polygons.read_bytes() == struct.pack("<29H", *POLYGONS)
+
+        signed_source = root / "signed-uv.obj"
+        signed_vertices = root / "signed-uv-vertices.bin"
+        signed_polygons = root / "signed-uv-polygons.bin"
+        write_text(
+            signed_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+vt -2.5 0
+vt 31.5 0
+vt 0 1
+f 1/1 2/2 3/3
+""",
+        )
+        result = invoke(
+            converter, "--texture-id", "7", signed_source,
+            signed_vertices, signed_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        signed_words = struct.unpack(
+            f"<{len(signed_polygons.read_bytes()) // 2}H",
+            signed_polygons.read_bytes(),
+        )
+        assert signed_words[6] == 77
+        assert signed_words[11:13] == ((-2560) & 0xFFFF, 0)
+        assert signed_words[14:16] == (32256, 0)
+
+        wide_source = root / "wide-uv.obj"
+        wide_vertices = root / "wide-uv-vertices.bin"
+        wide_polygons = root / "wide-uv-polygons.bin"
+        write_text(
+            wide_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+vt 70 0
+vt 71 0
+vt 70 1
+f 1/1 2/2 3/3
+""",
+        )
+        result = invoke(
+            converter, "--texture-id", "7", wide_source,
+            wide_vertices, wide_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        wide_words = struct.unpack(
+            f"<{len(wide_polygons.read_bytes()) // 2}H",
+            wide_polygons.read_bytes(),
+        )
+        assert wide_words[6] == 76
+        assert wide_words[11:13] == (17920, 0)
 
         generated = root / "test-model.c"
         result = invoke(
@@ -474,9 +527,9 @@ f 3//2 2//1 4//1
         )
         assert result.returncode == 0, result.stderr
         expected = POLYGONS.copy()
-        expected[10:16] = [0, 0, 1023, 0, 0, 0x7FFF]
+        expected[10:16] = [0, 0, 1024, 0, 0, 0x7FFF]
         expected[16:22] = [2, 0, 0, 0, 0, 0x7FFF]
-        expected[22:28] = [1, 1023, 1023, 0, 0, 0x7FFF]
+        expected[22:28] = [1, 1024, 1024, 0, 0, 0x7FFF]
         assert flipped_polygons.read_bytes() == struct.pack("<29H", *expected)
 
         relative = root / "relative.obj"
@@ -651,10 +704,10 @@ f 1/1 2/2 3/3
             "<60H", materials_polygons.read_bytes()
         )
         assert material_words[:9] == (
-            17, 2, 0xFFFF, 0xFFFF, 8, 2, 66, 21, 2
+            17, 2, 0xFFFF, 0xFFFF, 8, 2, 77, 21, 2
         )
-        assert material_words[29:32] == (8, 9, 66)
-        assert material_words[44:47] == (8, 2, 66)
+        assert material_words[29:32] == (8, 9, 77)
+        assert material_words[44:47] == (8, 2, 77)
         assert material_words[59] == 0xFF
         result = invoke(inspector, materials_vertices, materials_polygons)
         assert result.returncode == 0, result.stderr

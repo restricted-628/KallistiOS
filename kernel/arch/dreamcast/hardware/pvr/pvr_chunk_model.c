@@ -30,7 +30,7 @@
 #define CHUNK_TYPE_VOLUME_FIRST     56u
 #define CHUNK_TYPE_VOLUME_LAST      58u
 #define CHUNK_TYPE_STRIP_FIRST      64u
-#define CHUNK_TYPE_STRIP_LAST       75u
+#define CHUNK_TYPE_STRIP_LAST       83u
 #define CHUNK_TYPE_SHAPE_FIRST      128u
 #define CHUNK_TYPE_SHAPE_LAST       130u
 #define CHUNK_TYPE_END              255u
@@ -516,6 +516,8 @@ static size_t strip_vertex_words(uint8_t type) {
             return 1;
         case PVR_CHUNK_STRIP_UV8:
         case PVR_CHUNK_STRIP_UV10:
+        case PVR_CHUNK_STRIP_UV8_FIXED:
+        case PVR_CHUNK_STRIP_UV10_FIXED:
         case PVR_CHUNK_STRIP_ARGB:
             return 3;
         case PVR_CHUNK_STRIP_NORMAL:
@@ -524,9 +526,15 @@ static size_t strip_vertex_words(uint8_t type) {
         case PVR_CHUNK_STRIP_UV10_ARGB:
         case PVR_CHUNK_STRIP_UV8_TWO_VOLUME:
         case PVR_CHUNK_STRIP_UV10_TWO_VOLUME:
+        case PVR_CHUNK_STRIP_UV8_FIXED_ARGB:
+        case PVR_CHUNK_STRIP_UV10_FIXED_ARGB:
+        case PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME:
+        case PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME:
             return 5;
         case PVR_CHUNK_STRIP_UV8_NORMAL:
         case PVR_CHUNK_STRIP_UV10_NORMAL:
+        case PVR_CHUNK_STRIP_UV8_FIXED_NORMAL:
+        case PVR_CHUNK_STRIP_UV10_FIXED_NORMAL:
             return 6;
         default:
             return 0;
@@ -559,6 +567,16 @@ static int validate_strip_attributes(uint8_t type, const uint16_t *words) {
             maximum = 1023u;
             uv_sets = 2u;
             break;
+        case PVR_CHUNK_STRIP_UV8_FIXED:
+        case PVR_CHUNK_STRIP_UV10_FIXED:
+        case PVR_CHUNK_STRIP_UV8_FIXED_NORMAL:
+        case PVR_CHUNK_STRIP_UV10_FIXED_NORMAL:
+        case PVR_CHUNK_STRIP_UV8_FIXED_ARGB:
+        case PVR_CHUNK_STRIP_UV10_FIXED_ARGB:
+        case PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME:
+        case PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME:
+            /* Every 16-bit pattern is one valid signed fixed-point value. */
+            return 0;
         default:
             return 0;
     }
@@ -1640,7 +1658,8 @@ int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
     return 0;
 }
 
-static int decode_uv(float uv[2], const uint16_t *words, uint16_t maximum) {
+static int decode_uv_unorm(float uv[2], const uint16_t *words,
+                           uint16_t maximum) {
     if(words[0] > maximum || words[1] > maximum) {
         errno = EILSEQ;
         return -1;
@@ -1649,6 +1668,12 @@ static int decode_uv(float uv[2], const uint16_t *words, uint16_t maximum) {
     uv[0] = (float)words[0] / (float)maximum;
     uv[1] = (float)words[1] / (float)maximum;
     return 0;
+}
+
+static void decode_uv_fixed(float uv[2], const uint16_t *words,
+                            float divisor) {
+    uv[0] = (float)(int16_t)words[0] / divisor;
+    uv[1] = (float)(int16_t)words[1] / divisor;
 }
 
 static uint32_t strip_color(const uint16_t *words) {
@@ -1667,6 +1692,7 @@ int pvr_chunk_strip_attributes_get(
     pvr_chunk_strip_vertex_view_t vertex;
     const uint16_t *words;
     uint16_t uv_maximum = 0;
+    float uv_divisor = 0.0f;
     size_t expected;
     size_t normal_offset = SIZE_MAX;
     size_t color_offset = SIZE_MAX;
@@ -1732,6 +1758,42 @@ int pvr_chunk_strip_attributes_get(
             expected = 4u;
             uv_maximum = 1023u;
             break;
+        case PVR_CHUNK_STRIP_UV8_FIXED:
+            expected = 2u;
+            uv_divisor = 256.0f;
+            break;
+        case PVR_CHUNK_STRIP_UV10_FIXED:
+            expected = 2u;
+            uv_divisor = 1024.0f;
+            break;
+        case PVR_CHUNK_STRIP_UV8_FIXED_NORMAL:
+            expected = 5u;
+            uv_divisor = 256.0f;
+            normal_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV10_FIXED_NORMAL:
+            expected = 5u;
+            uv_divisor = 1024.0f;
+            normal_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV8_FIXED_ARGB:
+            expected = 4u;
+            uv_divisor = 256.0f;
+            color_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV10_FIXED_ARGB:
+            expected = 4u;
+            uv_divisor = 1024.0f;
+            color_offset = 2u;
+            break;
+        case PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME:
+            expected = 4u;
+            uv_divisor = 256.0f;
+            break;
+        case PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME:
+            expected = 4u;
+            uv_divisor = 1024.0f;
+            break;
         default:
             errno = EILSEQ;
             return -1;
@@ -1743,13 +1805,23 @@ int pvr_chunk_strip_attributes_get(
     }
 
     if(uv_maximum) {
-        if(decode_uv(decoded.uv[0], words, uv_maximum) < 0)
+        if(decode_uv_unorm(decoded.uv[0], words, uv_maximum) < 0)
             return -1;
         decoded.present |= PVR_CHUNK_STRIP_ATTR_UV0;
         if(strip->type == PVR_CHUNK_STRIP_UV8_TWO_VOLUME ||
            strip->type == PVR_CHUNK_STRIP_UV10_TWO_VOLUME) {
-            if(decode_uv(decoded.uv[1], words + 2u, uv_maximum) < 0)
+            if(decode_uv_unorm(decoded.uv[1], words + 2u,
+                               uv_maximum) < 0)
                 return -1;
+            decoded.present |= PVR_CHUNK_STRIP_ATTR_UV1;
+        }
+    }
+    else if(uv_divisor) {
+        decode_uv_fixed(decoded.uv[0], words, uv_divisor);
+        decoded.present |= PVR_CHUNK_STRIP_ATTR_UV0;
+        if(strip->type == PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME ||
+           strip->type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME) {
+            decode_uv_fixed(decoded.uv[1], words + 2u, uv_divisor);
             decoded.present |= PVR_CHUNK_STRIP_ATTR_UV1;
         }
     }

@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added signed fixed-point compact-model texture coordinates. New 8.8 records
+  provide wide repeat range and new 6.10 records provide finer precision while
+  retaining the same 16-bit coordinate storage. The model converter selects
+  6.10 when representable and falls back to 8.8 for wide tiling; negative and
+  repeated coordinates are accepted. Existing unsigned-normalized records
+  remain readable but are no longer emitted by the converter.
 * Added an independently managed expansion-bridge lifecycle and a fixed-state,
   generation-checked allocator for its complete 32 KiB SRAM window. The BBA
   now leases and releases its established receive, wrap-guard, and transmit
@@ -216,10 +222,11 @@ lifecycle and naming conventions.
   statistics. It defines no additional container format, and malformed assets
   can now be rejected during a host build before being linked or packaged.
 * Added a deterministic host-side OBJ converter for finite indexed positions,
-  per-corner 10-bit UVs, normalized signed-16-bit normals, and explicitly
-  triangulated faces. It preserves independent OBJ attribute indices without
-  duplicating positions, accepts positive and relative-negative references,
-  splits vertex and strip records before their 16-bit fields overflow, applies
+  per-corner signed fixed-point UVs, normalized signed-16-bit normals, and
+  explicitly triangulated faces. It preserves independent OBJ attribute
+  indices without duplicating positions, accepts positive and
+  relative-negative references, splits vertex and strip records before their
+  16-bit fields overflow, applies
   explicit winding/V flips and either one global texture identifier or repeated
   material-name-to-identifier bindings, coalesces aliases, emits persistent
   texture state only on actual transitions, and runs the target validator
