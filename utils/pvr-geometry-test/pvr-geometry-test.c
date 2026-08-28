@@ -867,6 +867,46 @@ static void test_example_frustum(void) {
     assert(close_enough(output[0].z, 1.0f / 3.0f));
 }
 
+static void test_modifier_near_warp(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    alignas(32) pvr_modifier_vol_t input = {
+        .flags = PVR_CMD_VERTEX_EOL,
+        .ax = 2.0f, .ay = 4.0f, .az = 0.0f,
+        .bx = -2.0f, .by = 6.0f, .bz = 0.0f,
+        .cx = 8.0f, .cy = -4.0f, .cz = 0.0f,
+        .d1 = 1, .d2 = 2, .d3 = 3, .d4 = 4, .d5 = 5, .d6 = 6
+    };
+    alignas(32) pvr_modifier_vol_t output;
+    alignas(32) pvr_modifier_vol_t unchanged;
+    pvr_frustum_t frustum;
+
+    assert(pvr_frustum_init(&frustum, &identity, -100.0f, -100.0f,
+                            100.0f, 100.0f, 2.0f, 10.0f) == 0);
+    assert(pvr_frustum_project_modifier_warp(&output, &input, &frustum) == 0);
+    assert(close_enough(output.ax, 1.0f) &&
+           close_enough(output.ay, 2.0f) &&
+           close_enough(output.az, 0.5f));
+    assert(close_enough(output.bx, -1.0f) &&
+           close_enough(output.by, 3.0f) &&
+           close_enough(output.bz, 0.5f));
+    assert(close_enough(output.cx, 4.0f) &&
+           close_enough(output.cy, -2.0f) &&
+           close_enough(output.cz, 0.5f));
+    assert(output.flags == input.flags && output.d1 == 1 && output.d6 == 6);
+
+    input.flags = UINT32_C(0xd0000000);
+    memset(&output, 0x5a, sizeof(output));
+    unchanged = output;
+    errno = 0;
+    assert(pvr_frustum_project_modifier_warp(&output, &input, &frustum) == -1);
+    assert(errno == EILSEQ && !memcmp(&output, &unchanged, sizeof(output)));
+}
+
 int main(void) {
     test_projection();
     test_projection_failures();
@@ -877,6 +917,7 @@ int main(void) {
     test_frustum_classification();
     test_frustum_clipping();
     test_example_frustum();
+    test_modifier_near_warp();
     puts("PVR geometry tests passed");
     return 0;
 }

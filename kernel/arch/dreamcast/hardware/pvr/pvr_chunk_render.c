@@ -1635,6 +1635,7 @@ static int modifier_preflight(
     const pvr_chunk_model_view_t *view,
     const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
+    const pvr_frustum_t *frustum,
     const pvr_chunk_modifier_config_t *config,
     const pvr_geometry_vertex_sink_t *sink,
     const pvr_modifier_vol_t *workspace,
@@ -1645,6 +1646,7 @@ static int modifier_preflight(
     uintptr_t vertex_start;
     uintptr_t polygon_start;
     uintptr_t matrix_start;
+    uintptr_t frustum_start;
     uintptr_t output_start = 0;
     uintptr_t plan_start;
     uintptr_t index_start;
@@ -1652,6 +1654,7 @@ static int modifier_preflight(
     size_t vertex_bytes;
     size_t polygon_bytes;
     size_t matrix_bytes;
+    size_t frustum_bytes;
     size_t output_bytes = 0;
     size_t plan_bytes;
     size_t index_bytes;
@@ -1663,6 +1666,16 @@ static int modifier_preflight(
        pvr_chunk_render_modifier_sink_valid(sink) < 0 ||
        pvr_chunk_render_modifier_config_valid(config, sink) < 0)
         return -1;
+    if(frustum) {
+        pvr_frustum_classification_t ignored;
+
+        if(object_to_screen != &frustum->object_to_screen ||
+           pvr_chunk_model_classify(view, frustum, &ignored) < 0) {
+            if(!errno)
+                errno = EINVAL;
+            return -1;
+        }
+    }
     if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
                                        view->model.polygon_word_count) < 0)
         return -1;
@@ -1697,6 +1710,8 @@ static int modifier_preflight(
                  &polygon_bytes) < 0 ||
        range_get(object_to_screen, 1u, sizeof(*object_to_screen),
                  &matrix_start, &matrix_bytes) < 0 ||
+       range_get(frustum, frustum ? 1u : 0u, sizeof(*frustum),
+                 &frustum_start, &frustum_bytes) < 0 ||
        model_plan_ranges_get(plan, &plan_start, &plan_bytes,
                              &index_start, &index_bytes) < 0)
         return -1;
@@ -1713,6 +1728,8 @@ static int modifier_preflight(
        ranges_overlap(workspace_start, workspace_bytes,
                       matrix_start, matrix_bytes) ||
        ranges_overlap(workspace_start, workspace_bytes,
+                      frustum_start, frustum_bytes) ||
+       ranges_overlap(workspace_start, workspace_bytes,
                       output_start, output_bytes) ||
        ranges_overlap(workspace_start, workspace_bytes,
                       plan_start, plan_bytes) ||
@@ -1724,6 +1741,8 @@ static int modifier_preflight(
                       polygon_start, polygon_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       matrix_start, matrix_bytes) ||
+       ranges_overlap(output_start, output_bytes,
+                      frustum_start, frustum_bytes) ||
        ranges_overlap(output_start, output_bytes,
                       plan_start, plan_bytes) ||
        ranges_overlap(output_start, output_bytes,
@@ -1780,6 +1799,7 @@ static int emit_modifier_triangle(
     const pvr_chunk_model_view_t *view,
     const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
+    const pvr_frustum_t *frustum,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink,
     pvr_modifier_vol_t *workspace, const uint16_t indices[3],
@@ -1822,13 +1842,20 @@ static int emit_modifier_triangle(
         workspace->flags = PVR_CMD_VERTEX_EOL;
     }
 
-    stream.vertices = workspace;
-    stream.vertex_count = 1u;
-    stream.stride = sizeof(*workspace);
-    stream.format = PVR_GEOMETRY_VERTEX_MODIFIER;
-    if(pvr_geometry_project_vertices(workspace, 1u, &stream,
-                                     object_to_screen, NULL) < 0)
-        return -1;
+    if(frustum) {
+        if(pvr_frustum_project_modifier_warp(workspace, workspace,
+                                             frustum) < 0)
+            return -1;
+    }
+    else {
+        stream.vertices = workspace;
+        stream.vertex_count = 1u;
+        stream.stride = sizeof(*workspace);
+        stream.format = PVR_GEOMETRY_VERTEX_MODIFIER;
+        if(pvr_geometry_project_vertices(workspace, 1u, &stream,
+                                         object_to_screen, NULL) < 0)
+            return -1;
+    }
     return pvr_chunk_render_publish_modifier(sink, config, workspace, mode);
 }
 
@@ -1836,6 +1863,7 @@ typedef struct modifier_emit_context {
     const pvr_chunk_model_view_t *view;
     const pvr_chunk_model_plan_t *plan;
     const matrix_t *object_to_screen;
+    const pvr_frustum_t *frustum;
     const pvr_chunk_modifier_config_t *config;
     pvr_geometry_vertex_sink_t *sink;
     pvr_modifier_vol_t *workspace;
@@ -1854,7 +1882,8 @@ static int emit_visited_modifier_triangle(
     (void)source_type;
     return emit_modifier_triangle(
         context->view, context->plan, context->object_to_screen,
-        context->config, context->sink, context->workspace, indices,
+        context->frustum, context->config, context->sink,
+        context->workspace, indices,
         user_words, user_word_count, mode, context->prepare_triangle,
         context->data);
 }
@@ -1863,13 +1892,14 @@ static int emit_modifier_record(
     const pvr_chunk_model_view_t *view,
     const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
+    const pvr_frustum_t *frustum,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink,
     pvr_modifier_vol_t *workspace, const pvr_chunk_record_t *record,
     pvr_chunk_render_prepare_modifier_t prepare_triangle,
     void *data) {
     modifier_emit_context_t context = {
-        view, plan, object_to_screen, config, sink, workspace,
+        view, plan, object_to_screen, frustum, config, sink, workspace,
         prepare_triangle, data
     };
 
@@ -1881,6 +1911,7 @@ static int model_emit_modifiers(
     const pvr_chunk_model_view_t *view,
     const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
+    const pvr_frustum_t *frustum,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink,
     pvr_modifier_vol_t *workspace,
@@ -1894,8 +1925,8 @@ static int model_emit_modifiers(
 
     if(result)
         *result = progress;
-    if(modifier_preflight(view, plan, object_to_screen, config, sink, workspace,
-                          &triangle_count) < 0)
+    if(modifier_preflight(view, plan, object_to_screen, frustum, config, sink,
+                          workspace, &triangle_count) < 0)
         return -1;
 
     if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
@@ -1914,8 +1945,8 @@ static int model_emit_modifiers(
             goto fail;
         if(!record_triangles)
             continue;
-        if(emit_modifier_record(view, plan, object_to_screen, config, sink,
-                                workspace, &record, prepare_triangle,
+        if(emit_modifier_record(view, plan, object_to_screen, frustum, config,
+                                sink, workspace, &record, prepare_triangle,
                                 data) < 0)
             goto fail;
         ++progress.emitted_volumes;
@@ -1943,8 +1974,9 @@ int pvr_chunk_model_emit_modifiers(
     pvr_modifier_vol_t *workspace,
     pvr_chunk_render_prepare_modifier_t prepare_triangle,
     void *data, pvr_chunk_modifier_result_t *result) {
-    return model_emit_modifiers(view, NULL, object_to_screen, config, sink,
-                                workspace, prepare_triangle, data, result);
+    return model_emit_modifiers(view, NULL, object_to_screen, NULL, config,
+                                sink, workspace, prepare_triangle, data,
+                                result);
 }
 
 int pvr_chunk_model_emit_modifiers_prepared(
@@ -1959,7 +1991,40 @@ int pvr_chunk_model_emit_modifiers_prepared(
         errno = EINVAL;
         return -1;
     }
-    return model_emit_modifiers(&plan->view, plan, object_to_screen, config,
+    return model_emit_modifiers(&plan->view, plan, object_to_screen, NULL,
+                                config, sink, workspace, prepare_triangle,
+                                data, result);
+}
+
+int pvr_chunk_model_emit_modifiers_warped(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result) {
+    if(!frustum) {
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit_modifiers(view, NULL, &frustum->object_to_screen,
+                                frustum, config, sink, workspace,
+                                prepare_triangle, data, result);
+}
+
+int pvr_chunk_model_emit_modifiers_warped_prepared(
+    const pvr_chunk_model_plan_t *plan, const pvr_frustum_t *frustum,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result) {
+    if(!plan || !frustum) {
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit_modifiers(&plan->view, plan,
+                                &frustum->object_to_screen, frustum, config,
                                 sink, workspace, prepare_triangle, data,
                                 result);
 }

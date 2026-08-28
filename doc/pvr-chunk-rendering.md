@@ -146,9 +146,9 @@ failure-atomic. The retained sphere must enclose any callback-driven
 deformation used to make the model-level rejection safe.
 
 Two-volume vertices carry more interpolants than canonical one-volume packets,
-and closed modifier volumes need topology-preserving near-plane handling.
-Those paths remain separate rather than silently discarding their extra state
-through the ordinary clipper.
+so that path remains separate rather than silently discarding its extra state
+through the ordinary clipper. Closed modifier volumes use the dedicated
+near-plane warp described below.
 
 ## Modifier-volume topology
 
@@ -172,6 +172,15 @@ user words. It can apply an application-specific position-W policy or fill
 dummy fields before all three positions are projected through the format-aware
 SH4ZAM geometry path. Complete triangle count, memory capacity, configuration,
 and overlap validation occur before callbacks or output.
+
+`pvr_chunk_model_emit_modifiers_warped()` and its prepared-plan variant solve
+the modifier near-plane case without cutting open the source volume. They use
+the transform and near-W bound in a caller-owned `pvr_frustum_t`; every point
+nearer than that bound is projected on the bound instead. Shared source points
+therefore remain shared, the triangle count and include-last sequence do not
+change, and the volume cannot acquire a clipping hole. Side and far clipping
+remain normal PVR policy. The unwarped entry points remain the lowest-overhead
+choice when scene-level bounds prove the volume does not cross the near plane.
 
 ## Concurrency and lifetime
 

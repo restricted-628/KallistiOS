@@ -370,6 +370,89 @@ int pvr_frustum_classify_triangle(
     return 0;
 }
 
+int pvr_frustum_project_modifier_warp(
+    pvr_modifier_vol_t *output, const pvr_modifier_vol_t *input,
+    const pvr_frustum_t *frustum) {
+    alignas(32) pvr_modifier_vol_t staged;
+    float source[3][3];
+    float *destination[3][3];
+    position_transform_t transform;
+    size_t vertex;
+
+    if(!output || !input || !frustum_valid(frustum) ||
+       ((uintptr_t)output & 31u) || ((uintptr_t)input & 31u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(input->flags != PVR_CMD_VERTEX &&
+       input->flags != PVR_CMD_VERTEX_EOL) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    staged = *input;
+    source[0][0] = input->ax;
+    source[0][1] = input->ay;
+    source[0][2] = input->az;
+    source[1][0] = input->bx;
+    source[1][1] = input->by;
+    source[1][2] = input->bz;
+    source[2][0] = input->cx;
+    source[2][1] = input->cy;
+    source[2][2] = input->cz;
+    destination[0][0] = &staged.ax;
+    destination[0][1] = &staged.ay;
+    destination[0][2] = &staged.az;
+    destination[1][0] = &staged.bx;
+    destination[1][1] = &staged.by;
+    destination[1][2] = &staged.bz;
+    destination[2][0] = &staged.cx;
+    destination[2][1] = &staged.cy;
+    destination[2][2] = &staged.cz;
+    position_transform_init(&transform, &frustum->object_to_screen);
+
+    for(vertex = 0; vertex < 3u; ++vertex) {
+        clip_vertex_t transformed;
+        float reciprocal_w;
+
+        if(!isfinite(source[vertex][0]) ||
+           !isfinite(source[vertex][1]) ||
+           !isfinite(source[vertex][2])) {
+            errno = EDOM;
+            return -1;
+        }
+        if(!transform_position(&transform, source[vertex][0],
+                               source[vertex][1], source[vertex][2],
+                               &transformed)) {
+            errno = ERANGE;
+            return -1;
+        }
+
+        /* Moving W, rather than clipping an edge, preserves the input
+           topology. Identical shared positions map to identical screen
+           positions, so a closed volume cannot acquire a near-plane hole. */
+        if(transformed.w < frustum->w_near)
+            transformed.w = frustum->w_near;
+#ifdef __DREAMCAST__
+        reciprocal_w = shz_invf(transformed.w);
+#else
+        reciprocal_w = 1.0f / transformed.w;
+#endif
+        *destination[vertex][0] = transformed.x * reciprocal_w;
+        *destination[vertex][1] = transformed.y * reciprocal_w;
+        *destination[vertex][2] = reciprocal_w;
+        if(!isfinite(*destination[vertex][0]) ||
+           !isfinite(*destination[vertex][1]) ||
+           !isfinite(*destination[vertex][2])) {
+            errno = ERANGE;
+            return -1;
+        }
+    }
+
+    memmove(output, &staged, sizeof(staged));
+    return 0;
+}
+
 static uint32_t color_lerp(uint32_t lhs, uint32_t rhs, float amount) {
     uint32_t output = 0;
     unsigned int shift;

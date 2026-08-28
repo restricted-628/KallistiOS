@@ -147,6 +147,24 @@ int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
                               uint32_t attributes,
                               pvr_frustum_clip_result_t *result);
 
+/** \brief Project a closed-volume triangle with near-plane warping.
+
+    The three positions are transformed to homogeneous screen space. A point
+    nearer than frustum::w_near is moved to that W plane instead of being
+    discarded or creating new topology. This keeps shared vertices shared and
+    therefore preserves a closed modifier volume while avoiding invalid W.
+    Side and far planes are left to normal PVR clipping.
+
+    Input and output may be identical. Both must be 32-byte aligned. Dummy
+    words and the command are preserved. Output is unchanged on failure.
+
+    \retval 0  Projected triangle produced.
+    \retval -1 Invalid input or arithmetic overflow, with errno set.
+*/
+int pvr_frustum_project_modifier_warp(
+    pvr_modifier_vol_t *output, const pvr_modifier_vol_t *input,
+    const pvr_frustum_t *frustum);
+
 /** @} */
 
 __END_DECLS

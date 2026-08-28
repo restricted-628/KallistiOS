@@ -916,6 +916,7 @@ static void test_modifier_emit(void) {
     pvr_geometry_vertex_sink_t sink;
     pvr_chunk_modifier_result_t result;
     modifier_callback_state_t callback = { 0 };
+    pvr_frustum_t frustum;
 
     assert(pvr_chunk_model_open(&model, &view) == 0);
     assert(pvr_geometry_vertex_sink_init_memory(
@@ -953,6 +954,31 @@ static void test_modifier_emit(void) {
     assert(!memcmp(output, immediate_output, sizeof(output)));
     assert(callback.calls == 6 && result.emitted_triangles == 6);
 
+    assert(pvr_frustum_init(&frustum, &identity, -100.0f, -100.0f,
+                            100.0f, 100.0f, 2.0f, 10.0f) == 0);
+    memset(output, 0, sizeof(output));
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 6) == 0);
+    assert(pvr_chunk_model_emit_modifiers_warped(
+        &view, &frustum, &config, &sink, &workspace, NULL, NULL,
+        &result) == 0);
+    assert(result.emitted_volumes == 3 && result.emitted_triangles == 6);
+    assert(output[0].ax == 0.0f && output[0].ay == 0.0f &&
+           output[0].az == 0.5f);
+    assert(output[0].bx == 0.5f && output[0].by == 0.0f &&
+           output[0].bz == 0.5f);
+    assert(output[0].cx == 0.0f && output[0].cy == 0.5f &&
+           output[0].cz == 0.5f);
+
+    memcpy(immediate_output, output, sizeof(output));
+    memset(output, 0, sizeof(output));
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 6) == 0);
+    assert(pvr_chunk_model_emit_modifiers_warped_prepared(
+        &plan, &frustum, &config, &sink, &workspace, NULL, NULL,
+        &result) == 0);
+    assert(!memcmp(output, immediate_output, sizeof(output)));
+
     memset(output, 0x5a, sizeof(output));
     memcpy(unchanged, output, sizeof(output));
     memset(&callback, 0, sizeof(callback));
@@ -986,6 +1012,16 @@ static void test_modifier_emit(void) {
     errno = 0;
     assert(pvr_chunk_model_emit_modifiers(
         &view, &identity, &config, &sink, &workspace, NULL, NULL,
+        &result) == -1);
+    assert(errno == EINVAL && sink.emitted_vertices == 0);
+
+    config.final_mode = PVR_MODIFIER_INCLUDE_LAST_POLY;
+    frustum.w_near = 0.0f;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_MODIFIER, output, 6) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit_modifiers_warped(
+        &view, &frustum, &config, &sink, &workspace, NULL, NULL,
         &result) == -1);
     assert(errno == EINVAL && sink.emitted_vertices == 0);
 }

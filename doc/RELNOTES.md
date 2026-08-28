@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added topology-preserving near-plane warping for PVR modifier triangles and
+  compact modifier-volume models. Crossing points move to the caller's near-W
+  plane without adding or dropping triangles, so closed shadow volumes cannot
+  acquire clipping holes; prepared and immediate model paths share the same
+  checked implementation.
 * Added explicit compact-model frustum policies for ordinary strips. Fully
   outside models return before stream traversal, fully inside models retain
   the fast strip path, and intersecting models can either split triangles with

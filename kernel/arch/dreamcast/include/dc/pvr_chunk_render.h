@@ -347,6 +347,31 @@ int pvr_chunk_model_emit_modifiers_prepared(
     pvr_chunk_render_prepare_modifier_t prepare_triangle,
     void *data, pvr_chunk_modifier_result_t *result);
 
+/** \brief Emit modifier volumes with topology-preserving near-plane warping.
+
+    This variant uses the matrix and near plane stored in \p frustum. Vertices
+    crossing the near plane are warped to it rather than clipped, so the
+    source volume remains closed. Side and far clipping remain PVR policy.
+    All other validation, callback, sink, and progress contracts match
+    pvr_chunk_model_emit_modifiers().
+*/
+int pvr_chunk_model_emit_modifiers_warped(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result);
+
+/** \brief Emit warped modifier volumes through a prepared vertex plan. */
+int pvr_chunk_model_emit_modifiers_warped_prepared(
+    const pvr_chunk_model_plan_t *plan, const pvr_frustum_t *frustum,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_modifier_vol_t *workspace,
+    pvr_chunk_render_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_result_t *result);
+
 /** @} */
 
 __END_DECLS
