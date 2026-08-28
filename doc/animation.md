@@ -16,8 +16,13 @@ immutable view. The source must not change while the view is in use.
 Sampling clamps time before the first key and after the last key. Times inside
 the track use binary search, so admitted tracks do not pay a linear validation
 or interval-search cost every frame. Step interpolation publishes the lower
-key. Linear scalar and vector tracks interpolate components; quaternion tracks
-normalize their inputs and take the shortest spherical path.
+key. Linear scalar and vector tracks interpolate components. Catmull-Rom
+scalar and vector tracks use adjacent key times to derive time-domain tangents,
+so uneven key spacing does not silently become uniform parameter spacing. A
+missing outer endpoint is represented by repeating the endpoint value one
+current interval beyond the track. Quaternion tracks normalize their inputs
+and take the shortest spherical path; cubic quaternion and Boolean tracks are
+rejected rather than being assigned misleading component-wise semantics.
 
 Individual tracks clamp rather than wrap. An admitted `anim_clip_view_t`
 collects object tracks under an explicit positive-duration play interval.

@@ -43,7 +43,9 @@ typedef enum anim_value_kind {
 /** \brief Interpolation applied between adjacent keys. */
 typedef enum anim_interpolation {
     ANIM_INTERPOLATION_STEP = 0,
-    ANIM_INTERPOLATION_LINEAR
+    ANIM_INTERPOLATION_LINEAR,
+    /** Time-aware Catmull-Rom spline for scalar and vector tracks. */
+    ANIM_INTERPOLATION_CATMULL_ROM
 } anim_interpolation_t;
 
 /** \brief Quaternion components in scalar-first WXYZ order. */
@@ -296,11 +298,20 @@ typedef struct anim_light_tracks {
 */
 int anim_track_open(const anim_track_t *track, anim_track_view_t *output);
 
-/** \brief Sample a scalar track, clamping time to its endpoints. */
+/** \brief Sample a scalar track, clamping time to its endpoints.
+
+    Catmull-Rom tracks use adjacent key times when deriving their tangents, so
+    unevenly spaced keys retain a consistent time-domain slope. Endpoint keys
+    are repeated as the missing outer control point.
+*/
 int anim_track_sample_scalar(const anim_track_view_t *track, float time,
                              float *output, anim_sample_info_t *info);
 
-/** \brief Sample a vector track, clamping time to its endpoints. */
+/** \brief Sample a vector track, clamping time to its endpoints.
+
+    Catmull-Rom interpolation applies independently to XYZW with the same
+    time-aware tangent and endpoint rules as scalar tracks.
+*/
 int anim_track_sample_vector(const anim_track_view_t *track, float time,
                              vector_t *output, anim_sample_info_t *info);
 

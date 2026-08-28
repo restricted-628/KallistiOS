@@ -11,6 +11,10 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added time-aware Catmull-Rom interpolation for scalar and four-component
+  animation tracks. Uneven key spacing contributes to the spline tangents,
+  endpoint behavior is explicit, and quaternion and Boolean tracks retain
+  their established spherical and step-only contracts.
 * Added arbitrary-count compact skinning beside the existing four-joint fast
   path. A canonical span/weight representation preserves every influence,
   expands once into caller-owned runtime storage, and uses a checked general

@@ -87,6 +87,54 @@ static void test_scalar_tracks(void) {
     assert(errno == EINVAL && value == unchanged);
 }
 
+static void test_catmull_rom_tracks(void) {
+    const anim_scalar_key_t scalars[] = {
+        { 0.0f, 0.0f }, { 1.0f, 2.0f },
+        { 3.0f, 4.0f }, { 4.0f, 8.0f }
+    };
+    const anim_vector_key_t vectors[] = {
+        { 0.0f, { 0.0f, 0.0f, 1.0f, 1.0f } },
+        { 1.0f, { 2.0f, 4.0f, 2.0f, 1.0f } },
+        { 3.0f, { 4.0f, 8.0f, 3.0f, 1.0f } },
+        { 4.0f, { 8.0f, 16.0f, 4.0f, 1.0f } }
+    };
+    anim_track_view_t scalar = open_track(
+        ANIM_VALUE_SCALAR, ANIM_INTERPOLATION_CATMULL_ROM,
+        scalars, 4, sizeof(scalars[0]));
+    anim_track_view_t vector = open_track(
+        ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_CATMULL_ROM,
+        vectors, 4, sizeof(vectors[0]));
+    anim_sample_info_t info;
+    vector_t vector_value;
+    float scalar_value;
+
+    /* The uneven key spacing makes this observably different from both
+       uniform Catmull-Rom (2.625) and linear interpolation (3.0). */
+    assert(anim_track_sample_scalar(&scalar, 2.0f, &scalar_value,
+                                    &info) == 0);
+    assert(close_enough(scalar_value, 17.0f / 6.0f));
+    assert(info.lower_key == 1 && info.upper_key == 2 &&
+           info.factor == 0.5f);
+
+    assert(anim_track_sample_vector(&vector, 2.0f, &vector_value,
+                                    NULL) == 0);
+    assert(close_enough(vector_value.x, 17.0f / 6.0f));
+    assert(close_enough(vector_value.y, 17.0f / 3.0f));
+    assert(close_enough(vector_value.z, 2.5f));
+    assert(close_enough(vector_value.w, 1.0f));
+
+    assert(anim_track_sample_scalar(&scalar, 1.0f, &scalar_value,
+                                    &info) == 0);
+    assert(scalar_value == 2.0f && info.lower_key == 1 &&
+           info.upper_key == 1 && info.factor == 0.0f);
+    assert(anim_track_sample_scalar(&scalar, -1.0f, &scalar_value,
+                                    NULL) == 0);
+    assert(scalar_value == 0.0f);
+    assert(anim_track_sample_scalar(&scalar, 8.0f, &scalar_value,
+                                    NULL) == 0);
+    assert(scalar_value == 8.0f);
+}
+
 static void test_track_rejection(void) {
     anim_scalar_key_t scalar[] = {
         { 0.0f, 1.0f }, { 0.0f, 2.0f }
@@ -122,6 +170,20 @@ static void test_track_rejection(void) {
 
     source.kind = ANIM_VALUE_BOOLEAN;
     source.interpolation = ANIM_INTERPOLATION_LINEAR;
+    source.keys = &boolean;
+    source.stride = sizeof(boolean);
+    errno = 0;
+    assert(anim_track_open(&source, &output) == -1 && errno == EINVAL);
+
+    quaternion.value.w = 1.0f;
+    source.kind = ANIM_VALUE_QUATERNION;
+    source.interpolation = ANIM_INTERPOLATION_CATMULL_ROM;
+    source.keys = &quaternion;
+    source.stride = sizeof(quaternion);
+    errno = 0;
+    assert(anim_track_open(&source, &output) == -1 && errno == EINVAL);
+
+    source.kind = ANIM_VALUE_BOOLEAN;
     source.keys = &boolean;
     source.stride = sizeof(boolean);
     errno = 0;
@@ -843,6 +905,7 @@ static void test_events_and_morph_binding(void) {
 
 int main(void) {
     test_scalar_tracks();
+    test_catmull_rom_tracks();
     test_track_rejection();
     test_vector_and_quaternion_tracks();
     test_transforms();

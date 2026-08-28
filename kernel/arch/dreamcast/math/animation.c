@@ -98,7 +98,8 @@ int anim_track_open(const anim_track_t *track, anim_track_view_t *output) {
     if(!track || !output || !track->keys || !track->key_count ||
        ((uintptr_t)track->keys & 3u) ||
        (track->interpolation != ANIM_INTERPOLATION_STEP &&
-        track->interpolation != ANIM_INTERPOLATION_LINEAR)) {
+        track->interpolation != ANIM_INTERPOLATION_LINEAR &&
+        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM)) {
         errno = EINVAL;
         return -1;
     }
@@ -107,7 +108,10 @@ int anim_track_open(const anim_track_t *track, anim_track_view_t *output) {
     if(!minimum_size || track->stride < minimum_size ||
        (track->stride & 3u) ||
        (track->kind == ANIM_VALUE_BOOLEAN &&
-        track->interpolation != ANIM_INTERPOLATION_STEP)) {
+        track->interpolation != ANIM_INTERPOLATION_STEP) ||
+       ((track->kind == ANIM_VALUE_QUATERNION ||
+         track->kind == ANIM_VALUE_BOOLEAN) &&
+        track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM)) {
         errno = EINVAL;
         return -1;
     }
@@ -153,7 +157,11 @@ static int view_valid(const anim_track_view_t *view,
     if(track->kind != expected_kind || !track->keys || !track->key_count ||
        ((uintptr_t)track->keys & 3u) ||
        (track->interpolation != ANIM_INTERPOLATION_STEP &&
-        track->interpolation != ANIM_INTERPOLATION_LINEAR) ||
+        track->interpolation != ANIM_INTERPOLATION_LINEAR &&
+        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM) ||
+       ((expected_kind == ANIM_VALUE_QUATERNION ||
+         expected_kind == ANIM_VALUE_BOOLEAN) &&
+        track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) ||
        track->stride < minimum_size || (track->stride & 3u) ||
        !isfinite(view->start_time) || !isfinite(view->end_time) ||
        view->start_time > view->end_time ||
@@ -243,6 +251,65 @@ static int sample_interval(const anim_track_view_t *view, float time,
     return 0;
 }
 
+static int catmull_component(float previous, float lower, float upper,
+                             float next, float previous_time,
+                             float lower_time, float upper_time,
+                             float next_time, float factor, float *output) {
+    float interval = upper_time - lower_time;
+    float lower_denominator = upper_time - previous_time;
+    float upper_denominator = next_time - lower_time;
+    float lower_tangent;
+    float upper_tangent;
+    float factor_squared = factor * factor;
+    float factor_cubed = factor_squared * factor;
+    float value;
+
+    if(!isfinite(interval) || !isfinite(lower_denominator) ||
+       !isfinite(upper_denominator) || interval <= 0.0f ||
+       lower_denominator <= 0.0f || upper_denominator <= 0.0f) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    lower_tangent = (upper - previous) * interval / lower_denominator;
+    upper_tangent = (next - lower) * interval / upper_denominator;
+    value = (2.0f * factor_cubed - 3.0f * factor_squared + 1.0f) * lower +
+            (factor_cubed - 2.0f * factor_squared + factor) * lower_tangent +
+            (-2.0f * factor_cubed + 3.0f * factor_squared) * upper +
+            (factor_cubed - factor_squared) * upper_tangent;
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = value;
+    return 0;
+}
+
+static void catmull_indices(const anim_track_view_t *view,
+                            size_t lower, size_t upper,
+                            size_t *previous, size_t *next,
+                            float *previous_time, float *next_time) {
+    const anim_track_t *track = &view->track;
+    float interval = key_time(track, upper) - key_time(track, lower);
+
+    if(lower) {
+        *previous = lower - 1u;
+        *previous_time = key_time(track, *previous);
+    }
+    else {
+        *previous = lower;
+        *previous_time = key_time(track, lower) - interval;
+    }
+    if(upper + 1u < track->key_count) {
+        *next = upper + 1u;
+        *next_time = key_time(track, *next);
+    }
+    else {
+        *next = upper;
+        *next_time = key_time(track, upper) + interval;
+    }
+}
+
 int anim_track_sample_scalar(const anim_track_view_t *view, float time,
                              float *output, anim_sample_info_t *info) {
     size_t lower;
@@ -261,7 +328,30 @@ int anim_track_sample_scalar(const anim_track_view_t *view, float time,
     if(upper != lower) {
         float next = ((const anim_scalar_key_t *)
                       key_at(&view->track, upper))->value;
-        value += (next - value) * factor;
+
+        if(view->track.interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
+            size_t previous_index;
+            size_t next_index;
+            float previous_time;
+            float next_time;
+            float previous;
+            float following;
+
+            catmull_indices(view, lower, upper, &previous_index,
+                            &next_index, &previous_time, &next_time);
+            previous = ((const anim_scalar_key_t *)
+                        key_at(&view->track, previous_index))->value;
+            following = ((const anim_scalar_key_t *)
+                         key_at(&view->track, next_index))->value;
+            if(catmull_component(previous, value, next, following,
+                                 previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &value) < 0)
+                return -1;
+        }
+        else
+            value += (next - value) * factor;
     }
     if(!isfinite(value)) {
         errno = ERANGE;
@@ -289,21 +379,61 @@ int anim_track_sample_vector(const anim_track_view_t *view, float time,
     if(upper != lower) {
         const vector_t *next = &((const anim_vector_key_t *)
                                  key_at(&view->track, upper))->value;
-#ifdef __DREAMCAST__
-        shz_vec4_t interpolated = shz_vec4_lerp(
-            shz_vec4_init(value.x, value.y, value.z, value.w),
-            shz_vec4_init(next->x, next->y, next->z, next->w), factor);
+        if(view->track.interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
+            size_t previous_index;
+            size_t next_index;
+            float previous_time;
+            float next_time;
+            const vector_t *previous;
+            const vector_t *following;
+            vector_t interpolated;
 
-        value.x = interpolated.x;
-        value.y = interpolated.y;
-        value.z = interpolated.z;
-        value.w = interpolated.w;
+            catmull_indices(view, lower, upper, &previous_index,
+                            &next_index, &previous_time, &next_time);
+            previous = &((const anim_vector_key_t *)
+                         key_at(&view->track, previous_index))->value;
+            following = &((const anim_vector_key_t *)
+                          key_at(&view->track, next_index))->value;
+            if(catmull_component(previous->x, value.x, next->x,
+                                 following->x, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.x) < 0 ||
+               catmull_component(previous->y, value.y, next->y,
+                                 following->y, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.y) < 0 ||
+               catmull_component(previous->z, value.z, next->z,
+                                 following->z, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.z) < 0 ||
+               catmull_component(previous->w, value.w, next->w,
+                                 following->w, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.w) < 0)
+                return -1;
+            value = interpolated;
+        }
+        else {
+#ifdef __DREAMCAST__
+            shz_vec4_t interpolated = shz_vec4_lerp(
+                shz_vec4_init(value.x, value.y, value.z, value.w),
+                shz_vec4_init(next->x, next->y, next->z, next->w), factor);
+
+            value.x = interpolated.x;
+            value.y = interpolated.y;
+            value.z = interpolated.z;
+            value.w = interpolated.w;
 #else
-        value.x += (next->x - value.x) * factor;
-        value.y += (next->y - value.y) * factor;
-        value.z += (next->z - value.z) * factor;
-        value.w += (next->w - value.w) * factor;
+            value.x += (next->x - value.x) * factor;
+            value.y += (next->y - value.y) * factor;
+            value.z += (next->z - value.z) * factor;
+            value.w += (next->w - value.w) * factor;
 #endif
+        }
     }
     if(!finite4(value.x, value.y, value.z, value.w)) {
         errno = ERANGE;
