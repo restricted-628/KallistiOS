@@ -60,6 +60,14 @@ model, namespace, material cache, allocator, thread, fiber, clock, or callback
 dispatcher. Applications that need persistent material caching or a different
 asset lookup policy can continue supplying their own begin-strip callback.
 
+`pvr_chunk_environment_map_binding_t` composes with that boundary rather than
+creating a second renderer. It forwards material setup, derives view-space
+normals from a copied inverse-transpose matrix, generates UVs only for marked
+environment strips, and then runs an optional application vertex callback.
+Per-reference normals override indexed vertex normals so discontinuous hard
+edges remain discontinuous. It allocates nothing and retains neither the
+source matrix nor render storage.
+
 ## Fixed-slot residency integration
 
 `pvr_chunk_residency_binding_t` connects the same material resolver to an

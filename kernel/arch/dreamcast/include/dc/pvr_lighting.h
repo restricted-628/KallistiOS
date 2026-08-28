@@ -128,6 +128,20 @@ int pvr_normal_transform(vector_t *output, size_t output_capacity,
                          const pvr_normal_matrix_t *matrix,
                          pvr_normal_result_t *result);
 
+/** \brief Generate sphere-map texture coordinates from a view-space normal.
+
+    The input must be finite, nonzero, and unit length within 0.1 percent.
+    Positive X maps toward the texture's right edge and positive Y toward its
+    top edge; a normal facing either positive or negative Z maps to the texture
+    center. This convention matches KOS's top-left texture-coordinate origin.
+
+    Failure leaves \p output unchanged.
+
+    \retval 0  Success.
+    \retval -1 Invalid or non-unit input, with errno set to EINVAL or EDOM.
+*/
+int pvr_environment_map_uv(float output[2], const vector_t *view_normal);
+
 /** \brief Saturate and pack linear RGBA components as `0xAARRGGBB`.
 
     Finite values are clamped to `[0, 1]` and rounded to the nearest 8-bit

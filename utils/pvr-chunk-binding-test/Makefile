@@ -11,14 +11,16 @@ CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
 
 TARGET = pvr-chunk-binding-test
 SOURCES = pvr-chunk-binding-test.c \
-          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_binding.c
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_binding.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c
+LDLIBS += -lm
 
 .PHONY: all clean test
 
 all: $(TARGET)
 
 $(TARGET): $(SOURCES)
-	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) -o $@
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)
 	./$(TARGET)

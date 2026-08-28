@@ -62,6 +62,16 @@ static int ranges_overlap(uintptr_t lhs, size_t lhs_size,
     return lhs < rhs + rhs_size && rhs < lhs + lhs_size;
 }
 
+static int vertex_requires_application_policy(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_vertex_attributes_t *attributes) {
+    return (attributes->present &
+            (PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY |
+             PVR_CHUNK_VERTEX_ATTR_SPECULAR_INTENSITY)) ||
+           attributes->position.w != 1.0f ||
+           (state->present & PVR_CHUNK_RENDER_BUMP_BASIS);
+}
+
 static int table_view_valid(const pvr_chunk_texture_table_view_t *view) {
     uintptr_t start;
     size_t bytes;
@@ -639,6 +649,98 @@ int pvr_chunk_material_binding_begin_strip(
 
     errno = EINVAL;
     return -1;
+}
+
+int pvr_chunk_environment_map_binding_init(
+        pvr_chunk_environment_map_binding_t *binding,
+        const matrix_t *object_to_view,
+        pvr_chunk_render_begin_strip_t begin_strip, void *begin_strip_data,
+        pvr_chunk_render_prepare_vertex_t prepare_vertex,
+        void *prepare_vertex_data) {
+    pvr_chunk_environment_map_binding_t candidate;
+
+    if(!binding || !object_to_view || !begin_strip) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(&candidate, 0, sizeof(candidate));
+    if(pvr_normal_matrix_build(&candidate.normal_matrix, object_to_view) < 0)
+        return -1;
+    candidate.begin_strip = begin_strip;
+    candidate.prepare_vertex = prepare_vertex;
+    candidate.begin_strip_data = begin_strip_data;
+    candidate.prepare_vertex_data = prepare_vertex_data;
+    memcpy(binding, &candidate, sizeof(candidate));
+    return 0;
+}
+
+int pvr_chunk_environment_map_binding_begin_strip(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_strip_view_t *strip, void *data) {
+    pvr_chunk_environment_map_binding_t *binding = data;
+
+    if(!state || !strip || !binding || !binding->begin_strip) {
+        errno = EINVAL;
+        return -1;
+    }
+    return binding->begin_strip(state, strip, binding->begin_strip_data);
+}
+
+int pvr_chunk_environment_map_binding_prepare_vertex(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_vertex_attributes_t *vertex_attributes,
+        const pvr_chunk_strip_attributes_t *strip_attributes,
+        pvr_vertex_t *vertex, void *data) {
+    pvr_chunk_environment_map_binding_t *binding = data;
+
+    if(!state || !vertex_attributes || !strip_attributes || !vertex ||
+       !binding || !binding->begin_strip) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Supplying the adapter makes the generic emitter regard vertex policy as
+       present. Refuse fields this adapter does not resolve unless a chained
+       application callback is available to do so. */
+    if(!binding->prepare_vertex &&
+       vertex_requires_application_policy(state, vertex_attributes)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(state->strip_flags & PVR_CHUNK_STRIP_ENVIRONMENT) {
+        pvr_normal_stream_t stream;
+        pvr_normal_result_t result;
+        const vector_t *source;
+        vector_t view_normal;
+        float uv[2];
+
+        if(strip_attributes->present & PVR_CHUNK_STRIP_ATTR_NORMAL)
+            source = &strip_attributes->normal;
+        else if(vertex_attributes->present & PVR_CHUNK_VERTEX_ATTR_NORMAL)
+            source = &vertex_attributes->normal;
+        else {
+            errno = ENOTSUP;
+            return -1;
+        }
+
+        stream.normals = source;
+        stream.normal_count = 1;
+        stream.stride = sizeof(*source);
+        if(pvr_normal_transform(&view_normal, 1, &stream,
+                                &binding->normal_matrix, &result) < 0 ||
+           pvr_environment_map_uv(uv, &view_normal) < 0)
+            return -1;
+        vertex->u = uv[0];
+        vertex->v = uv[1];
+    }
+
+    if(binding->prepare_vertex)
+        return binding->prepare_vertex(state, vertex_attributes,
+                                       strip_attributes, vertex,
+                                       binding->prepare_vertex_data);
+    return 0;
 }
 
 int pvr_chunk_residency_binding_init(

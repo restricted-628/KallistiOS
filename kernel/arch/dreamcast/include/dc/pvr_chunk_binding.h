@@ -19,6 +19,7 @@ __BEGIN_DECLS
 #include <stdint.h>
 
 #include <dc/pvr_chunk_render.h>
+#include <dc/pvr_lighting.h>
 #include <dc/pvr_material.h>
 
 /** \defgroup pvr_chunk_binding Compact-model resource binding
@@ -72,6 +73,25 @@ typedef struct pvr_chunk_material_binding {
     pvr_poly_cxt_t context;
     pvr_geometry_sink_kind_t destination;
 } pvr_chunk_material_binding_t;
+
+/** \brief Composable view-space environment-map callback adapter.
+
+    The adapter owns no model, matrix, material, or render storage. It copies
+    the normal matrix at initialization, forwards strip setup to the required
+    callback, generates UV coordinates only for strips carrying
+    PVR_CHUNK_STRIP_ENVIRONMENT, and then invokes the optional vertex callback.
+
+    The nested vertex callback runs after coordinate generation and may replace
+    the generated UVs. This permits application-specific orientation, animated
+    reflection policy, or lighting to compose with the standard mapping.
+*/
+typedef struct pvr_chunk_environment_map_binding {
+    pvr_normal_matrix_t normal_matrix;
+    pvr_chunk_render_begin_strip_t begin_strip;
+    pvr_chunk_render_prepare_vertex_t prepare_vertex;
+    void *begin_strip_data;
+    void *prepare_vertex_data;
+} pvr_chunk_environment_map_binding_t;
 
 /** \brief Resolve one model identifier's global palette-bank selector.
 
@@ -135,8 +155,9 @@ int pvr_chunk_texture_table_find(
     environment, and other policy not encoded by the model. Compact state
     supplies blend, texture, filtering, mip bias, UV, supersampling, alpha,
     flat-shading, double-sided, and specular-enable changes. Environment-map
-    coordinates remain vertex-callback policy. One- and two-volume strips
-    select the corresponding checked material compiler.
+    coordinates can use pvr_chunk_environment_map_binding_prepare_vertex() or
+    another caller-selected vertex policy. One- and two-volume strips select
+    the corresponding checked material compiler.
 
     Missing identifiers report ENOENT. Invalid model state, surface state, or
     an incompatible context leaves `material` unchanged.
@@ -168,6 +189,42 @@ int pvr_chunk_material_binding_init(
 int pvr_chunk_material_binding_begin_strip(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Initialize the standard compact-model environment-map adapter.
+
+    \p object_to_view supplies the complete object-to-view transform used to
+    build an inverse-transpose normal matrix. The required \p begin_strip
+    callback preserves material submission while both compact callbacks share
+    this adapter as their opaque data. \p prepare_vertex may be null when no
+    additional vertex policy is needed.
+
+    Failure leaves \p binding unchanged.
+*/
+int pvr_chunk_environment_map_binding_init(
+    pvr_chunk_environment_map_binding_t *binding,
+    const matrix_t *object_to_view,
+    pvr_chunk_render_begin_strip_t begin_strip, void *begin_strip_data,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *prepare_vertex_data);
+
+/** \brief Forward one strip to an environment adapter's material callback. */
+int pvr_chunk_environment_map_binding_begin_strip(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Generate environment UVs and run the chained vertex callback.
+
+    A per-reference strip normal takes precedence over the indexed vertex
+    normal, preserving hard-normal discontinuities. An environment strip with
+    no normal reports ENOTSUP. Without a chained callback, intensity fields,
+    non-unit position W, and an active bump basis likewise report ENOTSUP
+    instead of being silently accepted by the adapter.
+*/
+int pvr_chunk_environment_map_binding_prepare_vertex(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *vertex_attributes,
+    const pvr_chunk_strip_attributes_t *strip_attributes,
+    pvr_vertex_t *vertex, void *data);
 
 /** \brief Configure a compact-model adapter over one residency cache.
 

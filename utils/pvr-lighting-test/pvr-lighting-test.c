@@ -119,6 +119,31 @@ static void test_color_pack(void) {
     assert(errno == EINVAL);
 }
 
+static void test_environment_map(void) {
+    vector_t normal = { 0.0f, 0.0f, 1.0f, 0.0f };
+    float uv[2] = { -1.0f, -1.0f };
+    float unchanged[2];
+
+    assert(pvr_environment_map_uv(uv, &normal) == 0);
+    assert(close_enough(uv[0], 0.5f) && close_enough(uv[1], 0.5f));
+
+    normal.x = 1.0f;
+    normal.z = 0.0f;
+    assert(pvr_environment_map_uv(uv, &normal) == 0);
+    assert(close_enough(uv[0], 1.0f) && close_enough(uv[1], 0.5f));
+
+    normal.x = 0.0f;
+    normal.y = 1.0f;
+    assert(pvr_environment_map_uv(uv, &normal) == 0);
+    assert(close_enough(uv[0], 0.5f) && close_enough(uv[1], 0.0f));
+
+    memcpy(unchanged, uv, sizeof(uv));
+    normal.y = 0.5f;
+    errno = 0;
+    assert(pvr_environment_map_uv(uv, &normal) == -1);
+    assert(errno == EDOM && memcmp(uv, unchanged, sizeof(uv)) == 0);
+}
+
 static void initialize_lighting(pvr_light_t lights[2],
                                 pvr_lighting_context_t *context) {
     memset(lights, 0, 2 * sizeof(*lights));
@@ -201,6 +226,7 @@ static void test_lighting(void) {
 int main(void) {
     test_normal_matrix();
     test_normal_transform();
+    test_environment_map();
     test_color_pack();
     test_lighting();
     puts("pvr lighting tests: PASS");

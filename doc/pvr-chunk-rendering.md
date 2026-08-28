@@ -80,6 +80,29 @@ It is also required for a position W other than one because canonical
 into the submitted position. The emitter restores the command field after the
 callback.
 
+## Environment-map policy
+
+`pvr_environment_map_uv()` converts one normalized view-space normal into the
+standard KOS top-left-origin sphere-map coordinates. The allocation-free
+`pvr_chunk_environment_map_binding_t` adapter makes that kernel directly
+usable with the ordinary compact-model emitter while preserving its two
+callbacks and one opaque-data argument.
+
+The adapter builds an inverse-transpose normal matrix from the caller's
+object-to-view transform. On a strip carrying
+`PVR_CHUNK_STRIP_ENVIRONMENT`, it prefers the per-reference strip normal over
+the indexed vertex normal, transforms and normalizes it, and replaces UV0.
+This precedence preserves authored hard-normal seams. It then invokes an
+optional chained vertex callback, which may override the coordinates or add
+lighting and other application policy. The required chained begin-strip
+callback continues to own material resolution and header submission.
+
+The generic UV kernel is also directly usable from two-volume and prepared
+draw-cache callbacks. Those paths retain their distinct vertex layouts and do
+not acquire hidden adapter state. Missing normals report `ENOTSUP`; malformed
+normals and transforms report checked domain/range errors instead of silently
+using the model's stored UV.
+
 The dedicated two-volume path follows the same position and callback policy.
 Ordinary texture and material records update the outside-volume fields;
 two-volume variants update `secondary_*`, the inside-volume fields. Textured

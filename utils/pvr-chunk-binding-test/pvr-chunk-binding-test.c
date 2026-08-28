@@ -18,6 +18,8 @@ static pvr_material_kind_t compiled_kind;
 static size_t compile_calls;
 static size_t current_submits;
 static size_t buffered_submits;
+static size_t environment_begin_calls;
+static size_t environment_vertex_calls;
 
 int pvr_chunk_polygon_iterator_init(pvr_chunk_iterator_t *iterator,
                                     const uint16_t *words,
@@ -242,6 +244,103 @@ int pvr_material_submit_list(const pvr_material_t *material, pvr_list_t list) {
     assert(material && material->list == list);
     ++buffered_submits;
     return 0;
+}
+
+static int environment_begin(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_strip_view_t *strip, void *data) {
+    assert(state && strip && data == &environment_begin_calls);
+    ++environment_begin_calls;
+    return 0;
+}
+
+static int environment_vertex(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_vertex_attributes_t *vertex_attributes,
+        const pvr_chunk_strip_attributes_t *strip_attributes,
+        pvr_vertex_t *vertex, void *data) {
+    assert(state && vertex_attributes && strip_attributes && vertex);
+    assert(data == &environment_vertex_calls);
+    assert(vertex->u == 1.0f && vertex->v == 0.5f);
+    vertex->u = 0.25f;
+    ++environment_vertex_calls;
+    return 0;
+}
+
+static void test_environment_binding(void) {
+    matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_chunk_environment_map_binding_t binding;
+    pvr_chunk_environment_map_binding_t unchanged;
+    pvr_chunk_render_state_t state;
+    pvr_chunk_strip_view_t strip;
+    pvr_chunk_vertex_attributes_t vertex_attributes;
+    pvr_chunk_strip_attributes_t strip_attributes;
+    pvr_vertex_t vertex;
+
+    memset(&state, 0, sizeof(state));
+    memset(&strip, 0, sizeof(strip));
+    memset(&vertex_attributes, 0, sizeof(vertex_attributes));
+    memset(&strip_attributes, 0, sizeof(strip_attributes));
+    memset(&vertex, 0, sizeof(vertex));
+    environment_begin_calls = environment_vertex_calls = 0;
+
+    assert(pvr_chunk_environment_map_binding_init(
+        &binding, &identity, environment_begin, &environment_begin_calls,
+        environment_vertex, &environment_vertex_calls) == 0);
+    assert(pvr_chunk_environment_map_binding_begin_strip(
+        &state, &strip, &binding) == 0);
+    assert(environment_begin_calls == 1);
+
+    state.strip_flags = PVR_CHUNK_STRIP_ENVIRONMENT;
+    vertex_attributes.present = PVR_CHUNK_VERTEX_ATTR_NORMAL;
+    vertex_attributes.normal.y = 1.0f;
+    vertex_attributes.position.w = 1.0f;
+    strip_attributes.present = PVR_CHUNK_STRIP_ATTR_NORMAL;
+    strip_attributes.normal.x = 1.0f;
+    assert(pvr_chunk_environment_map_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == 0);
+    assert(environment_vertex_calls == 1 && vertex.u == 0.25f &&
+           vertex.v == 0.5f);
+
+    /* With no per-reference normal, the indexed vertex normal is used. */
+    strip_attributes.present = 0;
+    binding.prepare_vertex = NULL;
+    vertex.u = vertex.v = -1.0f;
+    assert(pvr_chunk_environment_map_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == 0);
+    assert(vertex.u == 0.5f && vertex.v == 0.0f);
+
+    vertex_attributes.present = 0;
+    errno = 0;
+    assert(pvr_chunk_environment_map_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == -1);
+    assert(errno == ENOTSUP);
+
+    vertex_attributes.present = PVR_CHUNK_VERTEX_ATTR_NORMAL |
+                                PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY;
+    vertex_attributes.normal.z = 1.0f;
+    errno = 0;
+    assert(pvr_chunk_environment_map_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &vertex,
+        &binding) == -1);
+    assert(errno == ENOTSUP);
+
+    memset(&binding, 0x5a, sizeof(binding));
+    memcpy(&unchanged, &binding, sizeof(binding));
+    identity[2][2] = 0.0f;
+    errno = 0;
+    assert(pvr_chunk_environment_map_binding_init(
+        &binding, &identity, environment_begin, NULL, NULL, NULL) == -1);
+    assert(errno == ERANGE &&
+           memcmp(&binding, &unchanged, sizeof(binding)) == 0);
 }
 
 static pvr_txr_surface_t make_surface(uintptr_t offset,
@@ -586,6 +685,7 @@ int main(void) {
     test_table();
     test_resolve();
     test_two_volume_and_submission();
+    test_environment_binding();
     test_residency_binding();
     puts("PVR compact resource-binding tests passed");
     return 0;

@@ -180,6 +180,9 @@ application-owned mesh renderers without adding a retained light manager:
 - `pvr_normal_transform()` processes bounded, strided normals, normalizes each
   result, supports exact in-place operation, and reports a valid output prefix
   on malformed input;
+- `pvr_environment_map_uv()` supplies a checked top-left-origin sphere-map
+  projection, and the compact binding adapter turns the environment strip flag
+  into an executable view-space UV policy while preserving caller callbacks;
 - `pvr_lighting_apply()` validates all ambient, directional, point, range, and
   attenuation state before publication, then emits bounded diffuse Lambert
   colors from world-space samples;

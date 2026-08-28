@@ -279,6 +279,34 @@ fail:
     return -1;
 }
 
+int pvr_environment_map_uv(float output[2], const vector_t *view_normal) {
+    float uv[2];
+    float length_squared;
+
+    if(!output || !view_normal || ((uintptr_t)output & 3u) ||
+       ((uintptr_t)view_normal & 3u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!finite3(view_normal->x, view_normal->y, view_normal->z)) {
+        errno = EDOM;
+        return -1;
+    }
+
+    length_squared = view_normal->x * view_normal->x +
+                     view_normal->y * view_normal->y +
+                     view_normal->z * view_normal->z;
+    if(!isfinite(length_squared) || fabsf(length_squared - 1.0f) > 0.001f) {
+        errno = EDOM;
+        return -1;
+    }
+
+    uv[0] = 0.5f * (view_normal->x + 1.0f);
+    uv[1] = 0.5f * (1.0f - view_normal->y);
+    memcpy(output, uv, sizeof(uv));
+    return 0;
+}
+
 int pvr_color_pack_argb(uint32_t *output, float alpha, float red,
                         float green, float blue) {
     uint32_t packed;

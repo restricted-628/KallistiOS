@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a checked view-normal-to-UV environment-map kernel and a composable
+  compact-model callback adapter. Environment strips now have a standard
+  executable policy which preserves per-reference normal discontinuities,
+  transforms normals correctly under nonuniform object scale, forwards
+  material submission, and permits a chained application vertex policy to
+  override generated coordinates or combine lighting.
 * Added time-aware Catmull-Rom interpolation for scalar and four-component
   animation tracks. Uneven key spacing contributes to the spline tangents,
   endpoint behavior is explicit, and quaternion and Boolean tracks retain
