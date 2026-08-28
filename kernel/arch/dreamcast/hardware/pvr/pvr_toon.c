@@ -6,6 +6,10 @@
 
 #include <dc/pvr_toon.h>
 
+#ifdef __DREAMCAST__
+#include <dc/sh4zam.h>
+#endif
+
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -21,28 +25,79 @@ static int finite_vector(const vector_t *value) {
 
 static int normalize_xyz(vector_t *output, const vector_t *input) {
     float length_squared;
+#ifdef __DREAMCAST__
+    shz_vec3_t value;
+#else
     float reciprocal;
+#endif
 
     if(!finite_vector(input)) {
         errno = EDOM;
         return -1;
     }
+#ifdef __DREAMCAST__
+    value = shz_vec3_init(input->x, input->y, input->z);
+    length_squared = shz_vec3_dot(value, value);
+#else
     length_squared = input->x * input->x + input->y * input->y +
                      input->z * input->z;
+#endif
     if(!isfinite(length_squared) || length_squared <= FLT_MIN) {
         errno = EDOM;
         return -1;
     }
+#ifdef __DREAMCAST__
+    value = shz_vec3_normalize(value);
+    output->x = value.x;
+    output->y = value.y;
+    output->z = value.z;
+#else
     reciprocal = 1.0f / sqrtf(length_squared);
     output->x = input->x * reciprocal;
     output->y = input->y * reciprocal;
     output->z = input->z * reciprocal;
+#endif
     output->w = 0.0f;
     if(!isfinite(output->x) || !isfinite(output->y) ||
        !isfinite(output->z)) {
         errno = ERANGE;
         return -1;
     }
+    return 0;
+}
+
+static int ranges_overlap(uintptr_t first, size_t first_bytes,
+                          uintptr_t second, size_t second_bytes) {
+    return first < second + second_bytes && second < first + first_bytes;
+}
+
+static float vector_dot(const vector_t *first, const vector_t *second) {
+#ifdef __DREAMCAST__
+    return shz_vec3_dot(shz_vec3_init(first->x, first->y, first->z),
+                        shz_vec3_init(second->x, second->y, second->z));
+#else
+    return first->x * second->x + first->y * second->y +
+           first->z * second->z;
+#endif
+}
+
+static int shade_admitted(float *shade, const vector_t *unit_normal,
+                          const pvr_toon_light_t *light,
+                          pvr_toon_shade_equation_t equation) {
+    float dot = vector_dot(unit_normal, &light->direction);
+    float value;
+
+    if(equation == PVR_TOON_SHADE_INVERTED_DOT)
+        value = light->ambient - light->intensity * dot;
+    else if(equation == PVR_TOON_SHADE_HALF_LAMBERT)
+        value = light->ambient + light->intensity * (0.5f * dot + 0.5f);
+    else
+        value = light->ambient + light->intensity * dot;
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *shade = value;
     return 0;
 }
 
@@ -72,8 +127,7 @@ int pvr_toon_shade_evaluate(float *shade, const vector_t *normal,
                             pvr_toon_shade_equation_t equation) {
     vector_t unit_normal;
     vector_t unit_light;
-    float dot;
-    float value;
+    pvr_toon_light_t admitted;
 
     if(!shade || !light || !finite_vector(&light->direction) ||
        light->direction.w != 0.0f || !isfinite(light->intensity) ||
@@ -86,20 +140,86 @@ int pvr_toon_shade_evaluate(float *shade, const vector_t *normal,
     if(normalize_xyz(&unit_normal, normal) < 0 ||
        normalize_xyz(&unit_light, &light->direction) < 0)
         return -1;
-    dot = unit_normal.x * unit_light.x + unit_normal.y * unit_light.y +
-          unit_normal.z * unit_light.z;
-    if(equation == PVR_TOON_SHADE_INVERTED_DOT)
-        value = light->ambient - light->intensity * dot;
-    else if(equation == PVR_TOON_SHADE_HALF_LAMBERT)
-        value = light->ambient + light->intensity * (0.5f * dot + 0.5f);
-    else
-        value = light->ambient + light->intensity * dot;
-    if(!isfinite(value)) {
+    admitted.direction = unit_light;
+    admitted.intensity = light->intensity;
+    admitted.ambient = light->ambient;
+    return shade_admitted(shade, &unit_normal, &admitted, equation);
+}
+
+int pvr_toon_shade_apply(float *output, size_t output_capacity,
+                         const pvr_toon_shade_stream_t *stream,
+                         const pvr_toon_light_t *light,
+                         pvr_toon_shade_equation_t equation,
+                         pvr_toon_shade_result_t *result) {
+    pvr_toon_shade_result_t progress = { 0 };
+    pvr_toon_light_t admitted;
+    uintptr_t input_start;
+    uintptr_t output_start;
+    size_t input_bytes;
+    size_t output_bytes;
+    size_t index;
+
+    if(result)
+        *result = progress;
+    if(!output || !stream || !stream->normals || !light ||
+       ((uintptr_t)output & 3u) || ((uintptr_t)stream->normals & 3u) ||
+       stream->stride < sizeof(vector_t) || (stream->stride & 3u) ||
+       light->direction.w != 0.0f ||
+       equation < PVR_TOON_SHADE_DOT ||
+       equation > PVR_TOON_SHADE_HALF_LAMBERT) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < stream->normal_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(pvr_toon_light_init(&admitted, &light->direction,
+                           light->intensity, light->ambient) < 0)
+        return -1;
+    if(!stream->normal_count)
+        return 0;
+    if(stream->normal_count - 1u >
+       (SIZE_MAX - sizeof(vector_t)) / stream->stride ||
+       stream->normal_count > SIZE_MAX / sizeof(float)) {
         errno = ERANGE;
         return -1;
     }
-    *shade = value;
+    input_bytes = (stream->normal_count - 1u) * stream->stride +
+                  sizeof(vector_t);
+    output_bytes = stream->normal_count * sizeof(float);
+    input_start = (uintptr_t)stream->normals;
+    output_start = (uintptr_t)output;
+    if(input_bytes > UINTPTR_MAX - input_start ||
+       output_bytes > UINTPTR_MAX - output_start) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(ranges_overlap(input_start, input_bytes,
+                      output_start, output_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for(index = 0; index < stream->normal_count; ++index) {
+        const vector_t *source = (const vector_t *)
+            ((const uint8_t *)stream->normals + index * stream->stride);
+        vector_t normal;
+
+        if(normalize_xyz(&normal, source) < 0 ||
+           shade_admitted(output + index, &normal, &admitted,
+                          equation) < 0)
+            goto fail;
+        ++progress.shaded_normals;
+    }
+    if(result)
+        *result = progress;
     return 0;
+
+fail:
+    if(result)
+        *result = progress;
+    return -1;
 }
 
 static int thresholds_valid(const float *thresholds, size_t count,
@@ -205,6 +325,7 @@ static int vertex_interpolate(pvr_toon_vertex_t *output,
     const pvr_toon_vertex_t *high = second;
     pvr_toon_vertex_t result;
     float amount;
+    float normal_length_squared;
 
     /* Ordering by the scalar makes independently traversed shared edges use
        identical arithmetic instead of mirrored t and 1-t expressions. */
@@ -239,7 +360,20 @@ static int vertex_interpolate(pvr_toon_vertex_t *output,
     result.argb = color_lerp(low->argb, high->argb, amount);
     result.oargb = color_lerp(low->oargb, high->oargb, amount);
     result.source_index = PVR_TOON_GENERATED_INDEX;
-    if(normalize_xyz(&result.normal, &result.normal) < 0)
+    normal_length_squared = result.normal.x * result.normal.x +
+                            result.normal.y * result.normal.y +
+                            result.normal.z * result.normal.z;
+    if(!isfinite(normal_length_squared)) {
+        errno = ERANGE;
+        return -1;
+    }
+    /* Antipodal endpoint normals can cancel exactly at a valid shade
+       boundary. The scalar and visible attributes remain well-defined;
+       select the nearer admitted endpoint normal rather than rejecting the
+       generated vertex. Ordering by shade also makes the tie deterministic. */
+    if(normal_length_squared <= FLT_MIN)
+        result.normal = amount <= 0.5f ? low->normal : high->normal;
+    else if(normalize_xyz(&result.normal, &result.normal) < 0)
         return -1;
     if(!isfinite(result.position.x) || !isfinite(result.position.y) ||
        !isfinite(result.position.z) || result.position.w != 1.0f ||

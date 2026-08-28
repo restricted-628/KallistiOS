@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_cache.h>
+#include <dc/pvr_chunk_toon.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -183,6 +184,18 @@ static int resolve_vertex(uint16_t source_index,
     return 0;
 }
 
+static int resolve_toon_vertex(uint16_t source_index,
+                               pvr_deform_vertex_t *vertex, void *data) {
+    callback_state_t *state = data;
+
+    ++state->resolves;
+    vertex->normal.x = 0.0f;
+    vertex->normal.y = 0.0f;
+    vertex->normal.z = source_index ? 1.0f : -1.0f;
+    vertex->normal.w = 0.0f;
+    return 0;
+}
+
 static int prepare_vertex(const pvr_chunk_render_state_t *state,
                           uint16_t source_index,
                           const pvr_deform_vertex_t *deformation,
@@ -277,6 +290,88 @@ static pvr_chunk_model_t make_model(const uint16_t *polygon_words,
     };
 
     return model;
+}
+
+static void test_toon_cache(const pvr_chunk_model_cache_t *cache) {
+    const float thresholds[] = { 0.0f };
+    const uint32_t colors[] = {
+        UINT32_C(0xff404040), UINT32_C(0xffffffff)
+    };
+    vector_t direction = { 0.0f, 0.0f, 1.0f, 0.0f };
+    pvr_chunk_toon_profile_t profile;
+    alignas(8) matrix_t matrix;
+    pvr_normal_matrix_t normal_matrix;
+    pvr_frustum_t frustum;
+    alignas(32) pvr_vertex_t vertices[3];
+    alignas(32) pvr_deform_vertex_t deformations[3];
+    vector_t normals[3];
+    float shades[3];
+    pvr_toon_triangle_t toon_triangles[3];
+    alignas(32) pvr_vertex_t clip_vertices[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    pvr_chunk_toon_workspace_t workspace = {
+        vertices, deformations, normals, shades, 3,
+        toon_triangles, 3, clip_vertices, PVR_FRUSTUM_CLIP_MAX_VERTICES
+    };
+    pvr_chunk_toon_workspace_t overlapping_workspace;
+    alignas(32) pvr_vertex_t output[9];
+    pvr_geometry_sink_t sink;
+    pvr_chunk_toon_result_t result;
+    callback_state_t callbacks = { 0 };
+    uint32_t dark;
+    size_t index;
+    size_t dark_vertices = 0;
+    size_t light_vertices = 0;
+    int rv;
+
+    identity(&matrix);
+    assert(pvr_normal_matrix_build(&normal_matrix, &matrix) == 0);
+    assert(pvr_frustum_init(&frustum, &matrix, -1.0f, -1.0f,
+                            3.0f, 1.0f, 0.5f, 2.0f) == 0);
+    memset(&profile, 0, sizeof(profile));
+    assert(pvr_toon_light_init(&profile.light, &direction,
+                               1.0f, 0.0f) == 0);
+    profile.equation = PVR_TOON_SHADE_DOT;
+    profile.thresholds = thresholds;
+    profile.argb_modulation = colors;
+    profile.threshold_count = 1;
+    profile.epsilon = 1.0e-6f;
+    assert(pvr_chunk_toon_profile_validate(&profile) == 0);
+    assert(pvr_geometry_sink_init_memory(&sink, output, 9) == 0);
+    rv = pvr_chunk_model_cache_emit_toon(
+        cache, &normal_matrix, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
+        &profile, &sink, &workspace, NULL, begin_strip,
+        resolve_toon_vertex, NULL, NULL, &callbacks, &result);
+    if(rv < 0)
+        perror("pvr_chunk_model_cache_emit_toon");
+    assert(rv == 0);
+    assert(result.visited_strips == 1 && result.source_triangles == 1);
+    assert(result.emitted_strips == 1 && result.emitted_triangles == 3 &&
+           result.emitted_vertices == 9 && result.generated_vertices == 5);
+    assert(callbacks.begins == 1 && callbacks.resolves == 3);
+    assert(sink.emitted_vertices == 9);
+
+    overlapping_workspace = workspace;
+    overlapping_workspace.shades = (float *)normals;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 9) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_cache_emit_toon(
+        cache, &normal_matrix, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
+        &profile, &sink, &overlapping_workspace, NULL, begin_strip,
+        resolve_toon_vertex, NULL, NULL, &callbacks, &result) == -1);
+    assert(errno == EINVAL && sink.emitted_vertices == 0);
+
+    assert(pvr_toon_color_modulate(&dark, UINT32_C(0xff223344),
+                                   colors[0]) == 0);
+    for(index = 0; index < 9; ++index) {
+        if(output[index].argb == dark)
+            ++dark_vertices;
+        else if(output[index].argb == UINT32_C(0xff223344))
+            ++light_vertices;
+        assert(output[index].flags == (index % 3u == 2u ?
+                                       PVR_CMD_VERTEX_EOL :
+                                       PVR_CMD_VERTEX));
+    }
+    assert(dark_vertices && light_vertices);
 }
 
 static void test_two_volume_cache(void) {
@@ -569,6 +664,9 @@ int main(void) {
     assert(cache.strips[0].maximum.x == 2.0f);
     assert(cache.strips[0].maximum.y == 0.0f);
     assert(cache.strips[0].maximum.z == 0.0f);
+
+    assert(pvr_chunk_model_cache_validate(&cache) == 0);
+    test_toon_cache(&cache);
 
     identity(&matrix);
     assert(pvr_frustum_init(&frustum, &matrix, -1.0f, -1.0f,

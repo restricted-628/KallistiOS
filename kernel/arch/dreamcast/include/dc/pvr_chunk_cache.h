@@ -251,6 +251,15 @@ typedef int (*pvr_chunk_cache_prepare_modifier_t)(
     const uint16_t *user_words, size_t user_word_count,
     pvr_modifier_vol_t *triangle, void *data);
 
+/** \brief Revalidate one published ordinary draw-cache descriptor.
+
+    This checks the version, complete derived layout, stored ranges, strip
+    coverage, bounds, and immutable cache pointers without reading either
+    original compact stream. It is useful to policy emitters layered above the
+    standard cache path.
+*/
+int pvr_chunk_model_cache_validate(const pvr_chunk_model_cache_t *cache);
+
 /** \brief Query the exact draw-cache footprint for a prepared model.
 
     The complete polygon stream and every referenced prepared vertex are

@@ -143,10 +143,29 @@ Topology-changing cel shading uses the same separation. The low-level
 `pvr_toon_split_triangle()` primitive accepts an already evaluated scalar on
 each canonical working vertex and partitions the triangle across any number of
 ordered thresholds. The single-threshold case produces the exact sharp binary
-boundary; additional thresholds use the same implementation. Signed UV8,
-signed UV10, and floating UV records have all decoded to floating U/V before
-this stage, so generated boundaries interpolate one canonical representation.
-The primitive owns no material, light collection, model, cache, list, or scene.
+boundary; additional thresholds use the same implementation. Signed UV8 and
+signed UV10 records have already decoded to floating U/V before this stage, so
+generated boundaries interpolate one canonical representation. The primitive
+owns no material, light collection, model, cache, list, or scene.
+
+`pvr_chunk_model_cache_emit_toon()` is the prepared hot path over that
+primitive. It resolves the current deformation pose, batch-transforms normals
+through the caller's inverse-transpose matrix, evaluates one scalar per strip
+reference, restores triangle-strip winding, and subdivides at every crossed
+threshold. The resulting independent triangles are color-modulated per band
+and then pass through the existing SPLIT, DROP, or ASSUME_VISIBLE frustum
+policy. Doing band subdivision before frustum clipping preserves generated UV,
+base-color, and offset-color continuity through both topology-changing stages.
+
+One threshold is the exact binary profile; multiple thresholds use the same
+bounded implementation. An optional profile resolver can select different
+thresholds and modulation ramps per cached material state. Flat-shaded strips
+use one geometric face normal and therefore acquire no false internal
+boundary. IGNORE_LIGHT strips remain unmodified. The cache, profile arrays,
+strip scratch, maximum `2*N+1` band-triangle scratch, clip scratch, scene,
+material header, and sink are all caller-owned. There is no per-frame
+allocation, retained light manager, renderer marker in the model stream, or
+mandatory cost for applications that do not call this policy.
 
 The dedicated two-volume path follows the same position and callback policy.
 Ordinary texture and material records update the outside-volume fields;
@@ -258,3 +277,56 @@ memory sink; a memory sink must also remain separate from the streams and
 matrix. Callbacks execute synchronously on the caller's thread. They may use
 application asset tables, but must not mutate the active model, workspace, or
 sink. The emitter retains no pointer after return.
+
+## Remaining compact-model work
+
+The prepared ordinary band-shading path closes the highest-priority cel
+topology gap, but it does not make the broader compact-model program complete.
+The remaining work is deliberately tracked here so renderer work cannot hide
+format, deformation, or tooling gaps:
+
+1. Add a strip-topology wireframe policy over prepared caches without storing
+   renderer commands in the model format.
+2. Decide whether two-volume surfaces need topology-changing band shading. The
+   current ordinary policy rejects that distinct vertex layout instead of
+   dropping its second parameter set.
+3. Add optional silhouette outlines as a separate modifier-volume, back-face,
+   or author-supplied shell pass; keep it independent of interior banding.
+4. Evaluate a small admitted lookup-ramp mode and quantized offset-color
+   highlights against the existing exact geometric bands and extended
+   lighting path. These are policy/throughput choices, not new model records.
+5. Resolve the admitted cached-polygon control records. Prefer translating
+   them into explicit prepared-cache/submesh reuse in the host compiler rather
+   than adding a second runtime cache mechanism.
+6. Add a rare floating-UV escape record only if conformance content exceeds
+   both signed fixed-point ranges or needs precision neither encoding can
+   preserve. The host compiler already selects UV10 when it fits and otherwise
+   UV8; it must continue failing loudly rather than silently clamping.
+7. Define a backward-compatible section-directory asset revision when compact
+   assets need to bundle optional hierarchy, general-skin, morph, animation,
+   collision-volume, resource-table, or cooked-cache sections. PCM1 remains
+   the small two-stream container; a larger fixed header must not grow around
+   every optional feature.
+8. Extend the host compiler around one canonical scene IR, including modern
+   scene import, lossless general skin and morph import, hierarchy/evaluation
+   metadata, parent-result canonicalization, optional cooked caches, and
+   repeatable round-trip conformance fixtures for seams and deformation.
+9. Add exact imported hierarchy policies only where conversion proves they are
+   observable: translation/rotation/scale suppression, child-pruning, and
+   explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
+   not replace the current flat parent-before-child hierarchy or complete-pose
+   deformation with pointer trees or deferred polygon execution.
+10. Finish the separate cell-sprite stream/list animation layer. It composes
+   with PVR sprite geometry but does not belong in the 3D compact mesh grammar.
+
+Already completed and not to be reimplemented are distinct signed UV8/UV10
+records with automatic host-side selection, variable-count skin influences
+beside the four-weight fast path, shape-to-morph binding, volume
+iteration/collision reuse, retained bounds and clipping, environment-map UV
+generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy
+traversal, and ordinary/two-volume/modifier prepared caches.
+
+The signed encodings use distinct record types, so existing unsigned streams
+remain unambiguous without adding a version field to the borrowed raw-model
+descriptor. Container versioning, optional bundled sections, and stream-record
+semantics remain separate contracts.

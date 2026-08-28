@@ -47,6 +47,18 @@ typedef struct pvr_toon_light {
     float ambient;                /**< Finite scalar bias. */
 } pvr_toon_light_t;
 
+/** \brief Strided normalized-or-normalizable input normal stream. */
+typedef struct pvr_toon_shade_stream {
+    const void *normals;
+    size_t normal_count;
+    size_t stride;
+} pvr_toon_shade_stream_t;
+
+/** \brief Completed prefix from one scalar shade batch. */
+typedef struct pvr_toon_shade_result {
+    size_t shaded_normals;
+} pvr_toon_shade_result_t;
+
 /** \brief Canonical working vertex used only while partitioning geometry.
 
     This is not an asset or Tile Accelerator packet. Compact UV encodings have
@@ -95,6 +107,18 @@ int pvr_toon_shade_evaluate(float *shade, const vector_t *normal,
                             const pvr_toon_light_t *light,
                             pvr_toon_shade_equation_t equation);
 
+/** \brief Evaluate a checked strided normal batch into contiguous scalars.
+
+    Light admission is amortized across the stream. Each input normal is
+    normalized before the selected equation is evaluated. The output and
+    complete strided input span must not overlap.
+*/
+int pvr_toon_shade_apply(float *output, size_t output_capacity,
+                         const pvr_toon_shade_stream_t *stream,
+                         const pvr_toon_light_t *light,
+                         pvr_toon_shade_equation_t equation,
+                         pvr_toon_shade_result_t *result);
+
 /** \brief Return the band containing one finite scalar.
 
     Thresholds must be finite and strictly increasing. A scalar equal to a
@@ -116,10 +140,12 @@ int pvr_toon_triangle_capacity(size_t threshold_count, size_t *capacity);
     Each band is produced by clipping the input triangle against its lower and
     upper scalar boundaries, then expanding the resulting convex polygon into
     independent triangles. Position, normalized normal, UV, packed base and
-    offset color, and shade are interpolated. Boundary shade is assigned the
-    threshold exactly. Edge interpolation orders endpoints by shade, making a
-    shared edge deterministic even when adjacent triangles traverse it in
-    opposite directions.
+    offset color, and shade are interpolated. Exactly cancelling endpoint
+    normals select the nearer endpoint normal with a deterministic low-shade
+    tie break. Boundary shade is assigned the threshold exactly. Edge
+    interpolation orders endpoints by shade, making a shared edge
+    deterministic even when adjacent triangles traverse it in opposite
+    directions.
 
     Vertices within \p epsilon of a threshold are snapped to that threshold
     before partitioning. Threshold gaps must exceed twice epsilon so one input

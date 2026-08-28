@@ -80,6 +80,62 @@ static void test_light_and_bands(void) {
     assert(errno == EDOM && memcmp(&light, &unchanged, sizeof(light)) == 0);
 }
 
+static void test_shade_batch(void) {
+    struct normal_record {
+        vector_t normal;
+        uint32_t tag;
+    } records[] = {
+        { { 0.0f, 0.0f, 2.0f, 0.0f }, UINT32_C(1) },
+        { { 0.0f, 3.0f, 0.0f, 0.0f }, UINT32_C(2) },
+        { { 4.0f, 0.0f, 0.0f, 0.0f }, UINT32_C(3) }
+    };
+    vector_t direction = { 0.0f, 0.0f, 8.0f, 0.0f };
+    pvr_toon_shade_stream_t stream = {
+        records, 3, sizeof(records[0])
+    };
+    pvr_toon_shade_result_t result;
+    pvr_toon_light_t light;
+    float output[3] = { -9.0f, -9.0f, -9.0f };
+    float scalar;
+
+    assert(pvr_toon_light_init(&light, &direction, 0.75f, 0.25f) == 0);
+    assert(pvr_toon_shade_apply(output, 3, &stream, &light,
+                                PVR_TOON_SHADE_DOT, &result) == 0);
+    assert(result.shaded_normals == 3);
+    assert(output[0] == 1.0f && output[1] == 0.25f &&
+           output[2] == 0.25f);
+    assert(pvr_toon_shade_evaluate(&scalar, &records[1].normal, &light,
+                                   PVR_TOON_SHADE_DOT) == 0);
+    assert(output[1] == scalar);
+
+    output[0] = output[1] = output[2] = -9.0f;
+    errno = 0;
+    assert(pvr_toon_shade_apply(output, 2, &stream, &light,
+                                PVR_TOON_SHADE_DOT, &result) == -1);
+    assert(errno == ENOSPC && result.shaded_normals == 0 &&
+           output[0] == -9.0f && output[1] == -9.0f);
+
+    errno = 0;
+    assert(pvr_toon_shade_apply((float *)&records[0], 3, &stream, &light,
+                                PVR_TOON_SHADE_DOT, &result) == -1);
+    assert(errno == EINVAL && result.shaded_normals == 0);
+
+    light.direction.w = 1.0f;
+    errno = 0;
+    assert(pvr_toon_shade_apply(output, 3, &stream, &light,
+                                PVR_TOON_SHADE_DOT, &result) == -1);
+    assert(errno == EINVAL && result.shaded_normals == 0);
+    light.direction.w = 0.0f;
+
+    records[1].normal.x = NAN;
+    output[0] = output[1] = output[2] = -9.0f;
+    errno = 0;
+    assert(pvr_toon_shade_apply(output, 3, &stream, &light,
+                                PVR_TOON_SHADE_DOT, &result) == -1);
+    assert(errno == EDOM && result.shaded_normals == 1 &&
+           output[0] == 1.0f && output[1] == -9.0f);
+}
+
 static void test_binary_split(void) {
     const float threshold = 0.0f;
     pvr_toon_vertex_t input[3] = {
@@ -252,6 +308,7 @@ static void test_random_partitions(void) {
 
 int main(void) {
     test_light_and_bands();
+    test_shade_batch();
     test_binary_split();
     test_shared_edge_and_multiband();
     test_boundaries_capacity_and_color();

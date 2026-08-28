@@ -665,6 +665,10 @@ static int cache_valid(const pvr_chunk_model_cache_t *cache) {
     return 0;
 }
 
+int pvr_chunk_model_cache_validate(const pvr_chunk_model_cache_t *cache) {
+    return cache_valid(cache);
+}
+
 static int emit_preflight(const pvr_chunk_model_cache_t *cache,
                           const matrix_t *matrix,
                           const pvr_geometry_sink_t *sink,
