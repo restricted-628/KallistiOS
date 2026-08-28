@@ -186,13 +186,18 @@ application-owned mesh renderers without adding a retained light manager:
 - `pvr_lighting_apply()` validates all ambient, directional, point, range, and
   attenuation state before publication, then emits bounded diffuse Lambert
   colors from world-space samples;
+- `pvr_lighting_apply_extended()` retains that allocation-free boundary while
+  adding signed diffuse accumulation before saturation, positive-light
+  Blinn-Phong offset color, per-vertex diffuse/specular material modulation,
+  and optional caller-ranged distance cue in diffuse alpha;
 - `pvr_color_pack_argb()` clamps and rounds finite linear RGBA values into the
   established `0xAARRGGBB` representation.
 
 Dreamcast vector transforms, normalization, reciprocal square roots, and dot
 products use SH4ZAM without loading XMTRX. Portable scalar code supplies the
-same checked contract to host tests. The layer allocates nothing, creates no
-thread, retains no state, and performs no work unless called.
+same checked contract to host tests. Both paths allocate nothing, create no
+thread, retain no state, and perform no work unless called. The smaller Lambert
+function remains unchanged for callers which do not need the extended policy.
 
 ## Sixth tranche
 

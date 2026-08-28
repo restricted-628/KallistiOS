@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added an allocation-free extended PVR vertex-lighting kernel beside the
+  established minimal Lambert path. It accumulates signed diffuse lights
+  before saturation, generates checked Blinn-Phong offset color from positive
+  lights, multiplies per-vertex diffuse/specular material values, and can
+  encode a caller-defined distance cue into vertex alpha. The original API and
+  its nonnegative-light contract remain unchanged.
 * Added a checked view-normal-to-UV environment-map kernel and a composable
   compact-model callback adapter. Environment strips now have a standard
   executable policy which preserves per-reference normal discontinuities,

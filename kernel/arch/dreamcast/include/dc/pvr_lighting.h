@@ -56,7 +56,9 @@ typedef enum pvr_light_kind {
     Directional-light vector points from the shaded surface toward the light.
     Point lights use position and the attenuation equation
     `1 / (constant + linear * distance + quadratic * distance^2)`. A zero
-    range is unbounded. RGB color and intensity are linear, nonnegative values.
+    range is unbounded. RGB color is linear and nonnegative. The basic lighting
+    function requires nonnegative intensity; the extended function permits a
+    negative intensity as a subtractive or dark light.
 */
 typedef struct pvr_light {
     pvr_light_kind_t kind;
@@ -102,6 +104,65 @@ typedef struct pvr_lighting_context {
 typedef struct pvr_lighting_result {
     size_t shaded_samples;
 } pvr_lighting_result_t;
+
+/** \brief Optional calculations performed by extended vertex lighting. */
+typedef enum pvr_lighting_extended_flag {
+    /** Calculate additive RGB for the PVR offset-color vertex field. */
+    PVR_LIGHTING_EXTENDED_SPECULAR = 1u << 0,
+    /** Multiply diffuse alpha by the configured distance-cue factor. */
+    PVR_LIGHTING_EXTENDED_DEPTH_CUE_ALPHA = 1u << 1
+} pvr_lighting_extended_flag_t;
+
+/** \brief One world-space input sample for extended CPU vertex lighting.
+
+    `diffuse` and `specular` are linear RGBA/RGB material or vertex values.
+    Specular intensity is nonnegative and is used only when specular output is
+    enabled. The normal must be unit length within 0.1 percent.
+*/
+typedef struct pvr_lighting_extended_sample {
+    point_t position;
+    vector_t normal;
+    float diffuse[4];
+    float specular[3];
+    float specular_intensity;
+} pvr_lighting_extended_sample_t;
+
+/** \brief Strided view of extended lighting samples. */
+typedef struct pvr_lighting_extended_stream {
+    const void *samples;
+    size_t sample_count;
+    size_t stride;
+} pvr_lighting_extended_stream_t;
+
+/** \brief Caller-owned extended lighting description.
+
+    Ambient and light RGB values remain nonnegative. Light intensity may be
+    signed: negative values subtract diffuse light but never create specular
+    highlights. Specular uses a Blinn-Phong half vector and an exponent in
+    `[1, 128]`.
+
+    When depth-cue alpha is enabled, Euclidean distance from `view_position`
+    is clamped to `[depth_near, depth_far]`, the corresponding near/far factors
+    are linearly interpolated, and that factor multiplies sample diffuse alpha.
+*/
+typedef struct pvr_lighting_extended_context {
+    uint32_t flags;
+    float ambient[3];
+    const pvr_light_t *lights;
+    size_t light_count;
+    point_t view_position;
+    float specular_exponent;
+    float depth_near;
+    float depth_far;
+    float depth_near_factor;
+    float depth_far_factor;
+} pvr_lighting_extended_context_t;
+
+/** \brief Packed colors produced for one ordinary PVR vertex. */
+typedef struct pvr_lighting_output {
+    uint32_t argb;  /**< Saturated diffuse color and resulting alpha. */
+    uint32_t oargb; /**< Additive specular RGB; ignored alpha is zero. */
+} pvr_lighting_output_t;
 
 /** \brief Build a checked inverse-transpose normal matrix.
 
@@ -163,6 +224,25 @@ int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
                        const pvr_lighting_stream_t *stream,
                        const pvr_lighting_context_t *context,
                        pvr_lighting_result_t *result);
+
+/** \brief Apply signed diffuse, specular, and depth-cue vertex lighting.
+
+    Context validation completes before the first output write. Signed light
+    contributions are accumulated before saturation, avoiding intermediate
+    clipping between bright and dark lights. Positive lights optionally produce
+    Blinn-Phong RGB in `oargb`; its ignored alpha byte is zero. Diffuse material
+    color multiplies the accumulated light, while depth cue can independently
+    modulate diffuse alpha.
+
+    Input and output ranges must not overlap. A malformed sample leaves a valid
+    output prefix identified by \p result. The function allocates no memory and
+    changes no global or XMTRX state.
+*/
+int pvr_lighting_apply_extended(
+    pvr_lighting_output_t *output, size_t output_capacity,
+    const pvr_lighting_extended_stream_t *stream,
+    const pvr_lighting_extended_context_t *context,
+    pvr_lighting_result_t *result);
 
 /** @} */
 

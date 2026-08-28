@@ -103,6 +103,22 @@ not acquire hidden adapter state. Missing normals report `ENOTSUP`; malformed
 normals and transforms report checked domain/range errors instead of silently
 using the model's stored UV.
 
+## Extended lighting policy
+
+`pvr_lighting_apply_extended()` produces the two packed colors consumed by an
+ordinary PVR vertex. Diffuse lighting, including negative-intensity dark
+lights, is accumulated before saturation and multiplied by each sample's
+diffuse material color. Positive lights can separately generate Blinn-Phong
+RGB for `oargb`; the offset color's ignored alpha byte remains zero.
+
+The optional distance cue linearly interpolates two caller-selected factors
+over a world-space view-distance interval and multiplies only diffuse alpha.
+It therefore composes with application blending and fog choices instead of
+turning either one into model-owned state. Compact immediate and draw-cache
+callbacks can build samples from decoded or deformed position/normal data and
+write the returned `argb` and `oargb` directly. The original minimal Lambert
+function remains available when none of this policy is required.
+
 The dedicated two-volume path follows the same position and callback policy.
 Ordinary texture and material records update the outside-volume fields;
 two-volume variants update `secondary_*`, the inside-volume fields. Textured

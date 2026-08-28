@@ -328,7 +328,7 @@ int pvr_color_pack_argb(uint32_t *output, float alpha, float red,
     return 0;
 }
 
-static int light_valid(const pvr_light_t *light) {
+static int light_valid(const pvr_light_t *light, int signed_intensity) {
     float length_squared;
 
     if(!light || (light->kind != PVR_LIGHT_DIRECTIONAL &&
@@ -336,7 +336,7 @@ static int light_valid(const pvr_light_t *light) {
        !finite3(light->color.x, light->color.y, light->color.z) ||
        light->color.x < 0.0f || light->color.y < 0.0f ||
        light->color.z < 0.0f || !isfinite(light->intensity) ||
-       light->intensity < 0.0f ||
+       (!signed_intensity && light->intensity < 0.0f) ||
        !isfinite(light->attenuation_constant) ||
        !isfinite(light->attenuation_linear) ||
        !isfinite(light->attenuation_quadratic) ||
@@ -375,7 +375,7 @@ static int context_valid(const pvr_lighting_context_t *context) {
         return 0;
 
     for(i = 0; i < context->light_count; ++i) {
-        if(!light_valid(context->lights + i))
+        if(!light_valid(context->lights + i, 0))
             return 0;
     }
 
@@ -543,6 +543,322 @@ int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
                                sample->color[0] * accumulated[0],
                                sample->color[1] * accumulated[1],
                                sample->color[2] * accumulated[2]) < 0)
+            goto fail;
+        ++progress.shaded_samples;
+    }
+
+    if(result)
+        *result = progress;
+    return 0;
+
+fail:
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+#define PVR_LIGHTING_EXTENDED_FLAGS_ALL \
+    (PVR_LIGHTING_EXTENDED_SPECULAR | \
+     PVR_LIGHTING_EXTENDED_DEPTH_CUE_ALPHA)
+
+static int extended_context_valid(
+        const pvr_lighting_extended_context_t *context) {
+    size_t i;
+
+    if(!context || (context->flags & ~PVR_LIGHTING_EXTENDED_FLAGS_ALL) ||
+       !finite3(context->ambient[0], context->ambient[1],
+                context->ambient[2]) ||
+       context->ambient[0] < 0.0f || context->ambient[1] < 0.0f ||
+       context->ambient[2] < 0.0f ||
+       (context->light_count && !context->lights) ||
+       (context->light_count && ((uintptr_t)context->lights & 3u)) ||
+       context->light_count > SIZE_MAX / sizeof(*context->lights) ||
+       (context->light_count &&
+        context->light_count * sizeof(*context->lights) >
+        UINTPTR_MAX - (uintptr_t)context->lights) ||
+       !finite3(context->view_position.x, context->view_position.y,
+                context->view_position.z))
+        return 0;
+
+    if((context->flags & PVR_LIGHTING_EXTENDED_SPECULAR) &&
+       (!isfinite(context->specular_exponent) ||
+        context->specular_exponent < 1.0f ||
+        context->specular_exponent > 128.0f))
+        return 0;
+
+    if((context->flags & PVR_LIGHTING_EXTENDED_DEPTH_CUE_ALPHA) &&
+       (!isfinite(context->depth_near) ||
+        !isfinite(context->depth_far) ||
+        !isfinite(context->depth_near_factor) ||
+        !isfinite(context->depth_far_factor) ||
+        context->depth_near < 0.0f ||
+        context->depth_far <= context->depth_near ||
+        context->depth_near_factor < 0.0f ||
+        context->depth_near_factor > 1.0f ||
+        context->depth_far_factor < 0.0f ||
+        context->depth_far_factor > 1.0f))
+        return 0;
+
+    for(i = 0; i < context->light_count; ++i) {
+        if(!light_valid(context->lights + i, 1))
+            return 0;
+    }
+    return 1;
+}
+
+static int add_checked(float *accumulated, float amount) {
+    float result = *accumulated + amount;
+
+    if(!isfinite(result)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *accumulated = result;
+    return 0;
+}
+
+int pvr_lighting_apply_extended(
+        pvr_lighting_output_t *output, size_t output_capacity,
+        const pvr_lighting_extended_stream_t *stream,
+        const pvr_lighting_extended_context_t *context,
+        pvr_lighting_result_t *result) {
+    pvr_lighting_result_t progress = { 0 };
+    uintptr_t input_start;
+    uintptr_t output_start;
+    size_t input_bytes;
+    size_t output_bytes;
+    size_t i;
+
+    if(result)
+        *result = progress;
+
+    if(!output || !stream || !stream->samples ||
+       ((uintptr_t)output & 3u) || ((uintptr_t)stream->samples & 3u) ||
+       stream->stride < sizeof(pvr_lighting_extended_sample_t) ||
+       (stream->stride & 3u) || !extended_context_valid(context)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < stream->sample_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(!stream->sample_count)
+        return 0;
+
+    if(stream->sample_count - 1u >
+       (SIZE_MAX - sizeof(pvr_lighting_extended_sample_t)) / stream->stride ||
+       stream->sample_count > SIZE_MAX / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+    input_bytes = (stream->sample_count - 1u) * stream->stride +
+                  sizeof(pvr_lighting_extended_sample_t);
+    output_bytes = stream->sample_count * sizeof(*output);
+    input_start = (uintptr_t)stream->samples;
+    output_start = (uintptr_t)output;
+    if(input_bytes > UINTPTR_MAX - input_start ||
+       output_bytes > UINTPTR_MAX - output_start) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(ranges_overlap(input_start, input_bytes, output_start, output_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for(i = 0; i < stream->sample_count; ++i) {
+        const pvr_lighting_extended_sample_t *sample =
+            (const pvr_lighting_extended_sample_t *)
+            ((const uint8_t *)stream->samples + i * stream->stride);
+        float diffuse[3] = {
+            context->ambient[0], context->ambient[1], context->ambient[2]
+        };
+        float specular[3] = { 0.0f, 0.0f, 0.0f };
+        float view_x = context->view_position.x - sample->position.x;
+        float view_y = context->view_position.y - sample->position.y;
+        float view_z = context->view_position.z - sample->position.z;
+        float view_length_squared;
+        float view_reciprocal_length = 0.0f;
+        float output_alpha = sample->diffuse[3];
+        float normal_length_squared;
+        size_t light_index;
+
+        if(!finite3(sample->position.x, sample->position.y,
+                    sample->position.z) ||
+           !finite3(sample->normal.x, sample->normal.y, sample->normal.z) ||
+           !finite3(sample->diffuse[0], sample->diffuse[1],
+                    sample->diffuse[2]) || !isfinite(sample->diffuse[3]) ||
+           ((context->flags & PVR_LIGHTING_EXTENDED_SPECULAR) &&
+            (!finite3(sample->specular[0], sample->specular[1],
+                      sample->specular[2]) ||
+             sample->specular[0] < 0.0f || sample->specular[1] < 0.0f ||
+             sample->specular[2] < 0.0f ||
+             !isfinite(sample->specular_intensity) ||
+             sample->specular_intensity < 0.0f))) {
+            errno = EDOM;
+            goto fail;
+        }
+
+        normal_length_squared = dot3(&sample->normal, sample->normal.x,
+                                     sample->normal.y, sample->normal.z);
+        if(!isfinite(normal_length_squared) ||
+           fabsf(normal_length_squared - 1.0f) > 0.002001f) {
+            errno = EDOM;
+            goto fail;
+        }
+
+        view_length_squared = view_x * view_x + view_y * view_y +
+                              view_z * view_z;
+        if(!isfinite(view_length_squared)) {
+            errno = ERANGE;
+            goto fail;
+        }
+        if(view_length_squared > FLT_MIN) {
+#ifdef __DREAMCAST__
+            view_reciprocal_length = shz_inv_sqrtf_fsrra(
+                view_length_squared);
+#else
+            view_reciprocal_length = 1.0f / sqrtf(view_length_squared);
+#endif
+        }
+
+        if(context->flags & PVR_LIGHTING_EXTENDED_DEPTH_CUE_ALPHA) {
+            float distance = view_length_squared * view_reciprocal_length;
+            float amount;
+            float factor;
+
+            if(view_length_squared <= FLT_MIN)
+                distance = 0.0f;
+            amount = saturate((distance - context->depth_near) /
+                              (context->depth_far - context->depth_near));
+            factor = context->depth_near_factor +
+                     amount * (context->depth_far_factor -
+                               context->depth_near_factor);
+            output_alpha *= factor;
+        }
+
+        for(light_index = 0; light_index < context->light_count;
+            ++light_index) {
+            const pvr_light_t *light = context->lights + light_index;
+            float direction_x;
+            float direction_y;
+            float direction_z;
+            float length_squared;
+            float reciprocal_length;
+            float attenuation = 1.0f;
+            float lambert;
+            float diffuse_scale;
+
+            if(light->kind == PVR_LIGHT_DIRECTIONAL) {
+                direction_x = light->source.direction.x;
+                direction_y = light->source.direction.y;
+                direction_z = light->source.direction.z;
+            }
+            else {
+                direction_x = light->source.position.x - sample->position.x;
+                direction_y = light->source.position.y - sample->position.y;
+                direction_z = light->source.position.z - sample->position.z;
+            }
+
+            length_squared = direction_x * direction_x +
+                             direction_y * direction_y +
+                             direction_z * direction_z;
+            if(!isfinite(length_squared)) {
+                errno = ERANGE;
+                goto fail;
+            }
+            if(length_squared <= FLT_MIN)
+                continue;
+#ifdef __DREAMCAST__
+            reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
+#else
+            reciprocal_length = 1.0f / sqrtf(length_squared);
+#endif
+
+            if(light->kind == PVR_LIGHT_POINT) {
+                float distance = length_squared * reciprocal_length;
+                float denominator;
+
+                if(light->range > 0.0f && distance > light->range)
+                    continue;
+                denominator = light->attenuation_constant +
+                    light->attenuation_linear * distance +
+                    light->attenuation_quadratic * length_squared;
+                if(!isfinite(denominator) || denominator <= FLT_MIN)
+                    continue;
+                attenuation = 1.0f / denominator;
+            }
+
+            direction_x *= reciprocal_length;
+            direction_y *= reciprocal_length;
+            direction_z *= reciprocal_length;
+            lambert = dot3(&sample->normal, direction_x, direction_y,
+                           direction_z);
+            if(lambert <= 0.0f)
+                continue;
+            lambert = saturate(lambert);
+
+            diffuse_scale = lambert * light->intensity * attenuation;
+            if(!isfinite(diffuse_scale) ||
+               add_checked(&diffuse[0], diffuse_scale * light->color.x) < 0 ||
+               add_checked(&diffuse[1], diffuse_scale * light->color.y) < 0 ||
+               add_checked(&diffuse[2], diffuse_scale * light->color.z) < 0)
+                goto fail;
+
+            if((context->flags & PVR_LIGHTING_EXTENDED_SPECULAR) &&
+               light->intensity > 0.0f && view_reciprocal_length > 0.0f &&
+               sample->specular_intensity > 0.0f) {
+                float half_x = direction_x + view_x * view_reciprocal_length;
+                float half_y = direction_y + view_y * view_reciprocal_length;
+                float half_z = direction_z + view_z * view_reciprocal_length;
+                float half_length_squared = half_x * half_x +
+                    half_y * half_y + half_z * half_z;
+
+                if(!isfinite(half_length_squared)) {
+                    errno = ERANGE;
+                    goto fail;
+                }
+                if(half_length_squared > FLT_MIN) {
+                    float half_reciprocal_length;
+                    float normal_half;
+                    float specular_scale;
+
+#ifdef __DREAMCAST__
+                    half_reciprocal_length = shz_inv_sqrtf_fsrra(
+                        half_length_squared);
+#else
+                    half_reciprocal_length = 1.0f /
+                                             sqrtf(half_length_squared);
+#endif
+                    normal_half = dot3(&sample->normal,
+                                       half_x * half_reciprocal_length,
+                                       half_y * half_reciprocal_length,
+                                       half_z * half_reciprocal_length);
+                    if(normal_half > 0.0f) {
+                        specular_scale = powf(saturate(normal_half),
+                            context->specular_exponent) * light->intensity *
+                            attenuation * sample->specular_intensity;
+                        if(!isfinite(specular_scale) ||
+                           add_checked(&specular[0], specular_scale *
+                               light->color.x * sample->specular[0]) < 0 ||
+                           add_checked(&specular[1], specular_scale *
+                               light->color.y * sample->specular[1]) < 0 ||
+                           add_checked(&specular[2], specular_scale *
+                               light->color.z * sample->specular[2]) < 0)
+                            goto fail;
+                    }
+                }
+            }
+        }
+
+        if(!isfinite(output_alpha) ||
+           pvr_color_pack_argb(&output[i].argb, output_alpha,
+                               sample->diffuse[0] * saturate(diffuse[0]),
+                               sample->diffuse[1] * saturate(diffuse[1]),
+                               sample->diffuse[2] * saturate(diffuse[2])) < 0 ||
+           pvr_color_pack_argb(&output[i].oargb, 0.0f,
+                               specular[0], specular[1], specular[2]) < 0)
             goto fail;
         ++progress.shaded_samples;
     }

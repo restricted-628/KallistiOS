@@ -223,12 +223,126 @@ static void test_lighting(void) {
     assert(memcmp(output, unchanged, sizeof(output)) == 0);
 }
 
+static void test_extended_lighting(void) {
+    pvr_light_t lights[2];
+    pvr_light_t reversed[2];
+    pvr_lighting_context_t basic_context;
+    pvr_lighting_sample_t basic_sample;
+    pvr_lighting_stream_t basic_stream;
+    pvr_lighting_extended_context_t context;
+    pvr_lighting_extended_sample_t samples[2];
+    pvr_lighting_extended_stream_t stream;
+    pvr_lighting_output_t output[2];
+    pvr_lighting_output_t unchanged[2];
+    pvr_lighting_result_t result;
+
+    memset(lights, 0, sizeof(lights));
+    lights[0].kind = PVR_LIGHT_DIRECTIONAL;
+    lights[0].source.direction.z = 1.0f;
+    lights[0].color.x = 1.0f;
+    lights[0].color.y = 1.0f;
+    lights[0].color.z = 1.0f;
+    lights[0].intensity = 0.5f;
+    lights[1] = lights[0];
+    lights[1].color.y = 0.0f;
+    lights[1].color.z = 0.0f;
+    lights[1].intensity = -0.25f;
+
+    /* The existing minimal path retains its nonnegative-light contract. */
+    memset(&basic_context, 0, sizeof(basic_context));
+    memset(&basic_sample, 0, sizeof(basic_sample));
+    basic_context.lights = lights + 1;
+    basic_context.light_count = 1;
+    basic_sample.normal.z = 1.0f;
+    basic_stream.samples = &basic_sample;
+    basic_stream.sample_count = 1;
+    basic_stream.stride = sizeof(basic_sample);
+    errno = 0;
+    assert(pvr_lighting_apply((uint32_t *)output, 1, &basic_stream,
+                              &basic_context, NULL) == -1);
+    assert(errno == EINVAL);
+
+    memset(&context, 0, sizeof(context));
+    context.flags = PVR_LIGHTING_EXTENDED_SPECULAR;
+    context.ambient[0] = 0.25f;
+    context.ambient[1] = 0.25f;
+    context.ambient[2] = 0.25f;
+    context.lights = lights;
+    context.light_count = 2;
+    context.view_position.z = 10.0f;
+    context.specular_exponent = 17.0f;
+    context.depth_near = 0.0f;
+    context.depth_far = 20.0f;
+    context.depth_near_factor = 1.0f;
+    context.depth_far_factor = 0.2f;
+
+    memset(samples, 0, sizeof(samples));
+    samples[0].normal.z = 1.0f;
+    samples[0].diffuse[0] = 1.0f;
+    samples[0].diffuse[1] = 0.5f;
+    samples[0].diffuse[2] = 0.25f;
+    samples[0].diffuse[3] = 0.8f;
+    samples[0].specular[0] = 1.0f;
+    samples[0].specular[1] = 0.5f;
+    samples[0].specular[2] = 0.25f;
+    samples[0].specular_intensity = 1.0f;
+    samples[1] = samples[0];
+    stream.samples = samples;
+    stream.sample_count = 1;
+    stream.stride = sizeof(*samples);
+
+    assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
+                                       &result) == 0);
+    assert(result.shaded_samples == 1);
+    assert(output[0].argb == UINT32_C(0xcc806030));
+    assert(output[0].oargb == UINT32_C(0x00804020));
+
+    /* Swapping these exact bright/dark terms must not expose intermediate
+       saturation between lights. */
+    reversed[0] = lights[1];
+    reversed[1] = lights[0];
+    context.lights = reversed;
+    assert(pvr_lighting_apply_extended(output + 1, 1, &stream, &context,
+                                       NULL) == 0);
+    assert(memcmp(output, output + 1, sizeof(*output)) == 0);
+    context.lights = lights;
+
+    context.flags |= PVR_LIGHTING_EXTENDED_DEPTH_CUE_ALPHA;
+    assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
+                                       &result) == 0);
+    assert(output[0].argb == UINT32_C(0x7a806030));
+    assert(output[0].oargb == UINT32_C(0x00804020));
+
+    /* A malformed later sample retains the complete first output. */
+    stream.sample_count = 2;
+    samples[1].normal.z = 0.5f;
+    output[0].argb = output[0].oargb = UINT32_C(0xaaaaaaaa);
+    output[1].argb = output[1].oargb = UINT32_C(0x5a5a5a5a);
+    errno = 0;
+    assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
+                                       &result) == -1);
+    assert(errno == EDOM && result.shaded_samples == 1);
+    assert(output[0].argb == UINT32_C(0x7a806030));
+    assert(output[1].argb == UINT32_C(0x5a5a5a5a));
+
+    /* Complete context validation is failure-atomic. */
+    stream.sample_count = 1;
+    memcpy(unchanged, output, sizeof(output));
+    context.specular_exponent = 0.0f;
+    errno = 0;
+    assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
+                                       &result) == -1);
+    assert(errno == EINVAL && result.shaded_samples == 0);
+    assert(memcmp(output, unchanged, sizeof(output)) == 0);
+}
+
 int main(void) {
     test_normal_matrix();
     test_normal_transform();
     test_environment_map();
     test_color_pack();
     test_lighting();
+    test_extended_lighting();
     puts("pvr lighting tests: PASS");
     return 0;
 }
