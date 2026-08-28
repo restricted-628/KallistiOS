@@ -194,6 +194,53 @@ static void test_projection_failures(void) {
     assert(errno == EINVAL && result.produced_vertices == 0);
 }
 
+static void test_line_geometry(void) {
+    alignas(32) pvr_vertex_t endpoints[2] = {
+        {
+            .flags = PVR_CMD_VERTEX,
+            .x = 10.0f, .y = 20.0f, .z = 0.5f,
+            .u = 0.0f, .v = 0.0f,
+            .argb = UINT32_C(0xff102030),
+            .oargb = UINT32_C(0xff010203)
+        },
+        {
+            .flags = PVR_CMD_VERTEX_EOL,
+            .x = 20.0f, .y = 20.0f, .z = 0.25f,
+            .u = 1.0f, .v = 1.0f,
+            .argb = UINT32_C(0xff405060),
+            .oargb = UINT32_C(0xff040506)
+        }
+    };
+    alignas(32) pvr_vertex_t output[PVR_GEOMETRY_LINE_VERTICES];
+    alignas(32) pvr_vertex_t unchanged[PVR_GEOMETRY_LINE_VERTICES];
+    pvr_geometry_result_t result;
+
+    assert(pvr_geometry_expand_line(output, endpoints, 4.0f, &result) == 0);
+    assert(result.consumed_vertices == 2 && result.produced_vertices == 4);
+    assert(output[0].x == 10.0f && output[0].y == 22.0f &&
+           output[1].x == 10.0f && output[1].y == 18.0f &&
+           output[2].x == 20.0f && output[2].y == 22.0f &&
+           output[3].x == 20.0f && output[3].y == 18.0f);
+    assert(output[0].z == 0.5f && output[1].argb == endpoints[0].argb &&
+           output[2].z == 0.25f && output[3].argb == endpoints[1].argb);
+    assert(output[0].flags == PVR_CMD_VERTEX &&
+           output[2].flags == PVR_CMD_VERTEX &&
+           output[3].flags == PVR_CMD_VERTEX_EOL);
+
+    memset(output, 0x5a, sizeof(output));
+    memcpy(unchanged, output, sizeof(output));
+    endpoints[1].x = endpoints[0].x;
+    endpoints[1].y = endpoints[0].y;
+    assert(pvr_geometry_expand_line(output, endpoints, 4.0f, &result) == 0);
+    assert(result.consumed_vertices == 2 && result.produced_vertices == 0 &&
+           !memcmp(output, unchanged, sizeof(output)));
+
+    errno = 0;
+    assert(pvr_geometry_expand_line(output, endpoints, 0.0f, &result) == -1);
+    assert(errno == EINVAL && result.consumed_vertices == 0 &&
+           !memcmp(output, unchanged, sizeof(output)));
+}
+
 static void test_sinks(void) {
     alignas(32) pvr_vertex_t vertices[3] = {
         { .flags = PVR_CMD_VERTEX },
@@ -837,6 +884,48 @@ static void test_frustum_clipping(void) {
     assert(errno == EILSEQ);
 }
 
+static void test_frustum_segment_clipping(void) {
+    pvr_frustum_t frustum;
+    alignas(32) pvr_vertex_t input[2];
+    alignas(32) pvr_vertex_t output[2];
+    alignas(32) pvr_vertex_t unchanged[2];
+    pvr_frustum_segment_result_t result;
+
+    assert(pvr_frustum_init(&frustum, &identity, -1.0f, -1.0f,
+                            1.0f, 1.0f, 0.5f, 2.0f) == 0);
+    input[0] = make_vertex(-2.0f, 0.0f, 0.0f, PVR_CMD_VERTEX,
+                           UINT32_C(0xff000000));
+    input[1] = make_vertex(0.0f, 0.0f, 0.0f, PVR_CMD_VERTEX_EOL,
+                           UINT32_C(0xffffffff));
+    input[0].u = 0.0f;
+    input[1].u = 1.0f;
+    assert(pvr_frustum_clip_segment(output, input, &frustum,
+                                    PVR_FRUSTUM_CLIP_ALL, &result) == 0);
+    assert(result.visible == 1 && result.clipped == 1);
+    assert(output[0].x == -1.0f && output[1].x == 0.0f &&
+           output[0].z == 1.0f && output[1].z == 1.0f);
+    assert(close_enough(output[0].u, 0.5f));
+    assert(output[0].argb == UINT32_C(0xff808080));
+    assert(output[0].flags == PVR_CMD_VERTEX &&
+           output[1].flags == PVR_CMD_VERTEX_EOL);
+
+    input[0].x = -3.0f;
+    input[1].x = -2.0f;
+    memset(output, 0x5a, sizeof(output));
+    memcpy(unchanged, output, sizeof(output));
+    assert(pvr_frustum_clip_segment(output, input, &frustum, 0,
+                                    &result) == 0);
+    assert(result.visible == 0 && result.clipped == 0 &&
+           !memcmp(output, unchanged, sizeof(output)));
+
+    input[0].x = -0.5f;
+    input[1].x = 0.5f;
+    assert(pvr_frustum_clip_segment(output, input, &frustum, 0,
+                                    &result) == 0);
+    assert(result.visible == 1 && result.clipped == 0 &&
+           output[0].x == -0.5f && output[1].x == 0.5f);
+}
+
 static void test_example_frustum(void) {
     alignas(32) const matrix_t projection = {
         { 240.0f, 0.0f, 0.0f, 0.0f },
@@ -910,12 +999,14 @@ static void test_modifier_near_warp(void) {
 int main(void) {
     test_projection();
     test_projection_failures();
+    test_line_geometry();
     test_sinks();
     test_format_projection();
     test_sprite_cells();
     test_vertex_sinks();
     test_frustum_classification();
     test_frustum_clipping();
+    test_frustum_segment_clipping();
     test_example_frustum();
     test_modifier_near_warp();
     puts("PVR geometry tests passed");

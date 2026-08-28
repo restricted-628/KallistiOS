@@ -71,6 +71,7 @@ __BEGIN_DECLS
 #include <dc/pvr_lighting.h>
 #include <dc/pvr_toon.h>
 #include <dc/pvr_chunk_toon.h>
+#include <dc/pvr_chunk_wire.h>
 #include <dc/pvr_material.h>
 #include <dc/pvr_chunk_binding.h>
 #include <dc/pvr_particle.h>

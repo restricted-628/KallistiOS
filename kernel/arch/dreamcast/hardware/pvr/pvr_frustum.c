@@ -566,6 +566,134 @@ static int clip_plane(const pvr_frustum_t *frustum, size_t plane,
     return 0;
 }
 
+int pvr_frustum_clip_segment(
+    pvr_vertex_t output[2], const pvr_vertex_t input[2],
+    const pvr_frustum_t *frustum, uint32_t attributes,
+    pvr_frustum_segment_result_t *result) {
+    pvr_frustum_segment_result_t progress = { 0, 0 };
+    alignas(32) pvr_vertex_t staged[2];
+    clip_vertex_t endpoints[2];
+    position_transform_t transform;
+    size_t vertex;
+    size_t plane;
+
+    if(result)
+        *result = progress;
+    if(!output || !input || !frustum_valid(frustum) ||
+       ((uintptr_t)output & 31u) || ((uintptr_t)input & 31u) ||
+       (attributes & ~PVR_FRUSTUM_CLIP_ALL)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if((uintptr_t)output > UINTPTR_MAX - sizeof(staged) ||
+       (uintptr_t)input > UINTPTR_MAX - 2u * sizeof(input[0])) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    position_transform_init(&transform, &frustum->object_to_screen);
+    for(vertex = 0; vertex < 2u; ++vertex) {
+        if(input[vertex].flags != PVR_CMD_VERTEX &&
+           input[vertex].flags != PVR_CMD_VERTEX_EOL) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if(!isfinite(input[vertex].x) || !isfinite(input[vertex].y) ||
+           !isfinite(input[vertex].z) ||
+           ((attributes & PVR_FRUSTUM_CLIP_UV) &&
+            (!isfinite(input[vertex].u) ||
+             !isfinite(input[vertex].v)))) {
+            errno = EDOM;
+            return -1;
+        }
+        if(!transform_position(&transform, input[vertex].x,
+                               input[vertex].y, input[vertex].z,
+                               endpoints + vertex)) {
+            errno = ERANGE;
+            return -1;
+        }
+        endpoints[vertex].u = input[vertex].u;
+        endpoints[vertex].v = input[vertex].v;
+        endpoints[vertex].argb = input[vertex].argb;
+        endpoints[vertex].oargb = input[vertex].oargb;
+    }
+
+    for(plane = 0; plane < FRUSTUM_PLANES; ++plane) {
+        float first_distance = plane_distance(frustum, endpoints, plane);
+        float second_distance = plane_distance(frustum, endpoints + 1, plane);
+        int first_inside;
+        int second_inside;
+
+        if(!isfinite(first_distance) || !isfinite(second_distance)) {
+            errno = ERANGE;
+            return -1;
+        }
+        first_inside = first_distance >= 0.0f;
+        second_inside = second_distance >= 0.0f;
+        if(!first_inside && !second_inside) {
+            if(result)
+                *result = progress;
+            return 0;
+        }
+        if(first_inside != second_inside) {
+            float denominator = first_distance - second_distance;
+            float amount;
+            clip_vertex_t intersection;
+
+            if(!isfinite(denominator) || fabsf(denominator) <= FLT_MIN) {
+                errno = ERANGE;
+                return -1;
+            }
+#ifdef __DREAMCAST__
+            amount = shz_divf(first_distance, denominator);
+#else
+            amount = first_distance / denominator;
+#endif
+            if(!isfinite(amount) || amount < 0.0f || amount > 1.0f) {
+                errno = ERANGE;
+                return -1;
+            }
+            intersection = vertex_lerp(endpoints, endpoints + 1,
+                                       amount, attributes);
+            endpoints[first_inside ? 1u : 0u] = intersection;
+            progress.clipped = 1;
+        }
+    }
+
+    for(vertex = 0; vertex < 2u; ++vertex) {
+        float reciprocal_w;
+
+        if(endpoints[vertex].w <= FLT_MIN) {
+            errno = ERANGE;
+            return -1;
+        }
+#ifdef __DREAMCAST__
+        reciprocal_w = shz_invf(endpoints[vertex].w);
+#else
+        reciprocal_w = 1.0f / endpoints[vertex].w;
+#endif
+        staged[vertex] = input[vertex];
+        staged[vertex].flags = vertex ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
+        staged[vertex].x = endpoints[vertex].x * reciprocal_w;
+        staged[vertex].y = endpoints[vertex].y * reciprocal_w;
+        staged[vertex].z = reciprocal_w;
+        staged[vertex].u = endpoints[vertex].u;
+        staged[vertex].v = endpoints[vertex].v;
+        staged[vertex].argb = endpoints[vertex].argb;
+        staged[vertex].oargb = endpoints[vertex].oargb;
+        if(!isfinite(staged[vertex].x) || !isfinite(staged[vertex].y) ||
+           !isfinite(staged[vertex].z)) {
+            errno = ERANGE;
+            return -1;
+        }
+    }
+    memmove(output, staged, sizeof(staged));
+    progress.visible = 1;
+    if(result)
+        *result = progress;
+    return 0;
+}
+
 int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
                               const pvr_vertex_t input[3],
                               const pvr_frustum_t *frustum,

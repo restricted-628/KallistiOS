@@ -168,6 +168,9 @@ This page serves as an index for all KallistiOS examples.
   - [**chunk_toon**](pvr/chunk_toon/): Subdivides a prepared compact model at
     a moving scalar shade threshold, preserving attributes and strip winding
     without per-frame allocation
+  - [**chunk_wire**](pvr/chunk_wire/): Draws a prepared compact strip as full
+    mesh, outside-boundary, or consecutive-path wireframe geometry using
+    clipped constant-width screen-space quads
   - clipping
   - fb_tex
   - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned

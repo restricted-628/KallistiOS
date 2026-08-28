@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <float.h>
 #include <math.h>
+#include <stdalign.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -341,6 +342,101 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
     typed_stream.format = PVR_GEOMETRY_VERTEX_CANONICAL;
     return pvr_geometry_project_vertices(output, output_capacity,
                                          &typed_stream, matrix, result);
+}
+
+int pvr_geometry_expand_line(
+    pvr_vertex_t output[PVR_GEOMETRY_LINE_VERTICES],
+    const pvr_vertex_t endpoints[2], float width,
+    pvr_geometry_result_t *result) {
+    pvr_geometry_result_t progress = { 0 };
+    alignas(32) pvr_vertex_t staged[PVR_GEOMETRY_LINE_VERTICES];
+    float dx;
+    float dy;
+    float length_squared;
+    float inverse_length;
+    float scale;
+    float nx;
+    float ny;
+    size_t index;
+
+    if(result)
+        *result = progress;
+    if(!output || !endpoints || ((uintptr_t)output & 31u) ||
+       ((uintptr_t)endpoints & 31u) || !isfinite(width) || width <= 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+    if((uintptr_t)output > UINTPTR_MAX - sizeof(staged) ||
+       (uintptr_t)endpoints > UINTPTR_MAX - 2u * sizeof(endpoints[0])) {
+        errno = ERANGE;
+        return -1;
+    }
+    for(index = 0; index < 2u; ++index) {
+        if(endpoints[index].flags != PVR_CMD_VERTEX &&
+           endpoints[index].flags != PVR_CMD_VERTEX_EOL) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if(!isfinite(endpoints[index].x) ||
+           !isfinite(endpoints[index].y) ||
+           !isfinite(endpoints[index].z) || endpoints[index].z <= 0.0f ||
+           !isfinite(endpoints[index].u) ||
+           !isfinite(endpoints[index].v)) {
+            errno = EDOM;
+            return -1;
+        }
+    }
+    progress.consumed_vertices = 2u;
+    dx = endpoints[1].x - endpoints[0].x;
+    dy = endpoints[1].y - endpoints[0].y;
+    length_squared = dx * dx + dy * dy;
+    if(!isfinite(length_squared)) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(length_squared <= FLT_MIN) {
+        if(result)
+            *result = progress;
+        return 0;
+    }
+#ifdef __DREAMCAST__
+    inverse_length = shz_inv_sqrtf_fsrra(length_squared);
+#else
+    inverse_length = 1.0f / sqrtf(length_squared);
+#endif
+    scale = inverse_length * width * 0.5f;
+    nx = -dy * scale;
+    ny = dx * scale;
+    if(!isfinite(nx) || !isfinite(ny)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    staged[0] = endpoints[0];
+    staged[1] = endpoints[0];
+    staged[2] = endpoints[1];
+    staged[3] = endpoints[1];
+    staged[0].x += nx;
+    staged[0].y += ny;
+    staged[1].x -= nx;
+    staged[1].y -= ny;
+    staged[2].x += nx;
+    staged[2].y += ny;
+    staged[3].x -= nx;
+    staged[3].y -= ny;
+    for(index = 0; index < PVR_GEOMETRY_LINE_VERTICES; ++index) {
+        staged[index].flags = index + 1u == PVR_GEOMETRY_LINE_VERTICES ?
+                              PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
+        if(!isfinite(staged[index].x) || !isfinite(staged[index].y)) {
+            errno = ERANGE;
+            return -1;
+        }
+    }
+    memmove(output, staged, sizeof(staged));
+    progress.produced_vertices = PVR_GEOMETRY_LINE_VERTICES;
+    if(result)
+        *result = progress;
+    return 0;
 }
 
 int pvr_geometry_sink_init_memory(pvr_geometry_sink_t *sink,

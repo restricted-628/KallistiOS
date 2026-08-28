@@ -29,7 +29,7 @@ workloads.
 | Transform hierarchy | Bounded caller-owned matrix stack plus parent-before-child compact-model traversal | Preserve explicit overflow and underflow reporting, allocation-free storage, and caller-owned hierarchy policy. |
 | Camera state | Established immediate operations, checked perspective/look-at builders, and caller-owned animated camera poses | Keep camera and clock ownership in the application while sharing the established matrix contract. |
 | Frustum and visibility | Caller-owned screen/W frusta provide bounded AABB classification and triangle clipping | Leave spatial partitioning, occlusion policy, and retained object state to applications. |
-| Mesh submission | Checked strided projection into canonical vertices plus caller-owned memory, current-list, and explicit buffered-list sinks | Build future mesh traversal over this contract without taking scene or resource ownership. |
+| Mesh submission | Checked strided projection into canonical vertices, homogeneous triangle/segment clipping, constant-width line expansion, and caller-owned memory, current-list, or explicit buffered-list sinks | Build mesh traversal over this contract without taking scene or resource ownership. |
 | Materials | Checked immutable packets compile existing PVR contexts into polygon, sprite, and two-volume headers | Keep texture allocation and scene ownership in their established PVR APIs. |
 | Object hierarchy | Parent-before-child compact-model traversal composes static or sampled caller-owned local transforms with bounded workspace and callbacks | Keep scene policy and model lifetime outside the traversal core. |
 | Lighting | Checked inverse-transpose normals, signed directional/point diffuse lights, offset-color specular, distance-cue alpha, deterministic ARGB packing, compact render-policy presets, allocation-free binary or multiband cel partitioning, and a prepared-cache topology-aware band emitter are available | Keep light ownership, custom shading, profiles, and scene state outside the PVR driver. |
@@ -215,6 +215,10 @@ it consumes resolved current-pose normals, uses the batched Dreamcast math
 path, applies optional per-material profiles, and composes geometric band
 subdivision with the existing frustum policies without allocating or adding a
 renderer record to compact assets.
+The matching prepared-cache wireframe policy enumerates unique strip edges,
+offers full-mesh, boundary, and path topology, clips centerlines before
+constant-pixel-width expansion, and preserves the same deformation and sink
+ownership boundary.
 
 ## Sixth tranche
 

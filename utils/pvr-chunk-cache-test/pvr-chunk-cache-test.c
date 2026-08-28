@@ -6,6 +6,7 @@
 
 #include <dc/pvr_chunk_cache.h>
 #include <dc/pvr_chunk_toon.h>
+#include <dc/pvr_chunk_wire.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -54,6 +55,14 @@ static const uint16_t polygons[] = {
     UINT16_C(0x3344), UINT16_C(0xff22),
     PVR_CHUNK_STRIP_INDEX, UINT16_C(5), UINT16_C(1),
     UINT16_C(3), UINT16_C(0), UINT16_C(1), UINT16_C(2),
+    UINT16_C(0x00ff)
+};
+
+static const uint16_t wire_quad_polygons[] = {
+    PVR_CHUNK_MATERIAL_DIFFUSE, UINT16_C(2),
+    UINT16_C(0x3344), UINT16_C(0xff22),
+    PVR_CHUNK_STRIP_INDEX, UINT16_C(6), UINT16_C(1),
+    UINT16_C(4), UINT16_C(0), UINT16_C(1), UINT16_C(2), UINT16_C(3),
     UINT16_C(0x00ff)
 };
 
@@ -193,6 +202,16 @@ static int resolve_toon_vertex(uint16_t source_index,
     vertex->normal.y = 0.0f;
     vertex->normal.z = source_index ? 1.0f : -1.0f;
     vertex->normal.w = 0.0f;
+    return 0;
+}
+
+static int resolve_wire_vertex(uint16_t source_index,
+                               pvr_deform_vertex_t *vertex, void *data) {
+    callback_state_t *state = data;
+
+    ++state->resolves;
+    if(!source_index)
+        vertex->position.x = -2.0f;
     return 0;
 }
 
@@ -372,6 +391,178 @@ static void test_toon_cache(const pvr_chunk_model_cache_t *cache) {
                                        PVR_CMD_VERTEX));
     }
     assert(dark_vertices && light_vertices);
+}
+
+static void test_wire_cache(const pvr_chunk_model_cache_t *cache) {
+    alignas(8) matrix_t matrix;
+    pvr_frustum_t frustum;
+    pvr_chunk_wire_profile_t profile = {
+        2.0f, UINT32_C(0xff80c0ff), UINT32_C(0),
+        PVR_CHUNK_WIRE_MESH, PVR_CHUNK_WIRE_COLOR_PROFILE
+    };
+    alignas(32) pvr_vertex_t vertices[3];
+    alignas(32) pvr_deform_vertex_t deformations[3];
+    pvr_chunk_wire_workspace_t workspace = {
+        vertices, deformations, 3
+    };
+    pvr_chunk_wire_workspace_t overlapping_workspace;
+    alignas(32) pvr_vertex_t output[12];
+    pvr_geometry_sink_t sink;
+    pvr_chunk_wire_result_t result;
+    callback_state_t callbacks = { 0 };
+    size_t capacity;
+    size_t index;
+
+    identity(&matrix);
+    assert(pvr_frustum_init(&frustum, &matrix, -1.0f, -2.0f,
+                            3.0f, 2.0f, 0.5f, 2.0f) == 0);
+    assert(pvr_chunk_wire_profile_validate(&profile) == 0);
+    assert(pvr_chunk_model_cache_wire_capacity(cache, &capacity) == 0 &&
+           capacity == 12);
+
+    assert(pvr_geometry_sink_init_memory(&sink, output, 12) == 0);
+    assert(pvr_chunk_model_cache_emit_wire(
+        cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, NULL, NULL, NULL, NULL, NULL,
+        &result) == 0);
+    assert(result.visited_strips == 1 && result.source_edges == 3 &&
+           result.emitted_edges == 3 && result.emitted_vertices == 12 &&
+           result.clipped_edges == 0 && result.dropped_edges == 0);
+    assert(sink.emitted_vertices == 12);
+    assert(output[0].x == 0.0f && output[0].y == 1.0f &&
+           output[1].x == 0.0f && output[1].y == -1.0f &&
+           output[2].x == 1.0f && output[2].y == 1.0f &&
+           output[3].x == 1.0f && output[3].y == -1.0f);
+    for(index = 0; index < 12u; ++index) {
+        assert(output[index].argb == profile.argb);
+        assert(output[index].flags == (index % 4u == 3u ?
+                                       PVR_CMD_VERTEX_EOL :
+                                       PVR_CMD_VERTEX));
+    }
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    assert(pvr_geometry_sink_init_current(&sink) == 0);
+    assert(pvr_chunk_model_cache_emit_wire(
+        cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, begin_strip, NULL, NULL, NULL,
+        &callbacks, &result) == 0);
+    assert(callbacks.begins == 1 && sink.emitted_vertices == 12 &&
+           result.emitted_edges == 3 && result.emitted_vertices == 12);
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    assert(pvr_geometry_sink_init_memory(&sink, output, 12) == 0);
+    assert(pvr_chunk_model_cache_emit_wire(
+        cache, &frustum, PVR_CHUNK_CLIP_SPLIT, &profile,
+        &sink, &workspace, NULL, NULL, resolve_wire_vertex, NULL,
+        NULL, &callbacks, &result) == 0);
+    assert(callbacks.resolves == 3 && result.source_edges == 3 &&
+           result.clipped_edges == 2 && result.dropped_edges == 0 &&
+           result.emitted_edges == 3 && result.emitted_vertices == 12);
+
+    memset(&callbacks, 0, sizeof(callbacks));
+    assert(pvr_geometry_sink_init_memory(&sink, output, 12) == 0);
+    assert(pvr_chunk_model_cache_emit_wire(
+        cache, &frustum, PVR_CHUNK_CLIP_DROP, &profile,
+        &sink, &workspace, NULL, NULL, resolve_wire_vertex, NULL,
+        NULL, &callbacks, &result) == 0);
+    assert(callbacks.resolves == 3 && result.source_edges == 3 &&
+           result.clipped_edges == 2 && result.dropped_edges == 2 &&
+           result.emitted_edges == 1 && result.emitted_vertices == 4);
+
+    assert(pvr_geometry_sink_init_memory(&sink, output, 11) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_cache_emit_wire(
+        cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, NULL, NULL, NULL, NULL, NULL,
+        &result) == -1);
+    assert(errno == ENOSPC && sink.emitted_vertices == 0 &&
+           result.source_edges == 0);
+
+    overlapping_workspace = workspace;
+    overlapping_workspace.deformations =
+        (pvr_deform_vertex_t *)(void *)vertices;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 12) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_cache_emit_wire(
+        cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &overlapping_workspace, NULL, NULL, NULL, NULL,
+        NULL, NULL, &result) == -1);
+    assert(errno == EINVAL && sink.emitted_vertices == 0);
+
+    profile.width = 0.0f;
+    errno = 0;
+    assert(pvr_chunk_wire_profile_validate(&profile) == -1);
+    assert(errno == EINVAL);
+}
+
+static void test_wire_topologies(void) {
+    const pvr_chunk_model_t model = {
+        modifier_vertices,
+        sizeof(modifier_vertices) / sizeof(modifier_vertices[0]),
+        wire_quad_polygons,
+        sizeof(wire_quad_polygons) / sizeof(wire_quad_polygons[0]),
+        { 0.5f, 0.5f, 0.0f }, 1.0f
+    };
+    pvr_chunk_model_view_t view;
+    pvr_chunk_vertex_index_entry_t plan_entries[256];
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_cache_requirements_t requirements;
+    alignas(32) uint8_t storage[2048];
+    pvr_chunk_model_cache_t cache;
+    alignas(8) matrix_t matrix;
+    pvr_frustum_t frustum;
+    alignas(32) pvr_vertex_t vertices[4];
+    alignas(32) pvr_deform_vertex_t deformations[4];
+    pvr_chunk_wire_workspace_t workspace = {
+        vertices, deformations, 4
+    };
+    pvr_chunk_wire_profile_t profile = {
+        1.0f, UINT32_C(0xffffffff), UINT32_C(0),
+        PVR_CHUNK_WIRE_BOUNDARY, PVR_CHUNK_WIRE_COLOR_VERTEX
+    };
+    alignas(32) pvr_vertex_t output[20];
+    pvr_geometry_sink_t sink;
+    pvr_chunk_wire_result_t result;
+    size_t capacity;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_build(&view, plan_entries, 256, &plan) == 0);
+    assert(pvr_chunk_model_cache_query(&plan, &requirements) == 0);
+    assert(requirements.bytes <= sizeof(storage));
+    assert(pvr_chunk_model_cache_build(&plan, storage, sizeof(storage),
+                                       NULL, NULL, &cache) == 0);
+    assert(pvr_chunk_model_cache_wire_capacity(&cache, &capacity) == 0 &&
+           capacity == 20);
+    identity(&matrix);
+    assert(pvr_frustum_init(&frustum, &matrix, -2.0f, -2.0f,
+                            2.0f, 2.0f, 0.5f, 2.0f) == 0);
+
+    assert(pvr_geometry_sink_init_memory(&sink, output, 20) == 0);
+    assert(pvr_chunk_model_cache_emit_wire(
+        &cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, NULL, NULL, NULL, NULL, NULL,
+        &result) == 0);
+    assert(result.source_edges == 4 && result.emitted_edges == 4 &&
+           result.emitted_vertices == 16);
+    assert(output[0].argb == UINT32_C(0xff223344));
+
+    profile.topology = PVR_CHUNK_WIRE_PATH;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 20) == 0);
+    assert(pvr_chunk_model_cache_emit_wire(
+        &cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, NULL, NULL, NULL, NULL, NULL,
+        &result) == 0);
+    assert(result.source_edges == 3 && result.emitted_edges == 3 &&
+           result.emitted_vertices == 12);
+
+    profile.topology = PVR_CHUNK_WIRE_MESH;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 20) == 0);
+    assert(pvr_chunk_model_cache_emit_wire(
+        &cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, NULL, NULL, NULL, NULL, NULL,
+        &result) == 0);
+    assert(result.source_edges == 5 && result.emitted_edges == 5 &&
+           result.emitted_vertices == 20);
 }
 
 static void test_two_volume_cache(void) {
@@ -667,6 +858,7 @@ int main(void) {
 
     assert(pvr_chunk_model_cache_validate(&cache) == 0);
     test_toon_cache(&cache);
+    test_wire_cache(&cache);
 
     identity(&matrix);
     assert(pvr_frustum_init(&frustum, &matrix, -1.0f, -1.0f,
@@ -764,6 +956,7 @@ int main(void) {
 
     test_two_volume_cache();
     test_modifier_cache();
+    test_wire_topologies();
     puts("pvr-chunk-cache-test: PASS");
     return 0;
 }

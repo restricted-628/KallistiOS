@@ -44,6 +44,9 @@ typedef struct pvr_geometry_result {
     size_t produced_vertices;   /**< Valid vertices written to output. */
 } pvr_geometry_result_t;
 
+/** Number of canonical vertices in one expanded screen-space line. */
+#define PVR_GEOMETRY_LINE_VERTICES 4u
+
 /** \brief Complete PVR vertex layouts supported by format-aware geometry. */
 typedef enum pvr_geometry_vertex_format {
     PVR_GEOMETRY_VERTEX_CANONICAL = 0, /**< pvr_vertex_t. */
@@ -139,6 +142,26 @@ int pvr_geometry_project(pvr_vertex_t *output, size_t output_capacity,
                          const pvr_geometry_stream_t *stream,
                          const matrix_t *matrix,
                          pvr_geometry_result_t *result);
+
+/** \brief Expand one projected line segment into a constant-width quad.
+
+    The two endpoints must already contain screen X/Y and reciprocal-W depth.
+    A four-vertex triangle strip is generated perpendicular to the segment,
+    with endpoint attributes copied to their corresponding vertex pair. Width
+    is measured in screen pixels. A zero-length segment is a successful no-op
+    with two consumed and zero produced vertices.
+
+    Input and output may overlap. The complete result is staged before output,
+    so validation failure leaves output unchanged. The intended polygon header
+    must disable culling; textured line policy remains application-owned.
+
+    \retval 0  Quad produced, or a degenerate segment consumed as a no-op.
+    \retval -1 Error, with errno set to EINVAL, EILSEQ, EDOM, or ERANGE.
+*/
+int pvr_geometry_expand_line(
+    pvr_vertex_t output[PVR_GEOMETRY_LINE_VERTICES],
+    const pvr_vertex_t endpoints[2], float width,
+    pvr_geometry_result_t *result);
 
 /** \brief Project a declared complete PVR vertex layout.
 

@@ -68,6 +68,12 @@ typedef struct pvr_frustum_clip_result {
     size_t output_vertices;   /**< Vertices after triangle-fan expansion. */
 } pvr_frustum_clip_result_t;
 
+/** \brief Result from clipping and projecting one line segment. */
+typedef struct pvr_frustum_segment_result {
+    int visible;              /**< Nonzero when two projected endpoints exist. */
+    int clipped;              /**< Nonzero when either endpoint was replaced. */
+} pvr_frustum_segment_result_t;
+
 /** \brief Initialize a checked screen-space frustum.
 
     Output is unchanged on failure. All values and matrix elements must be
@@ -146,6 +152,23 @@ int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
                               const pvr_frustum_t *frustum,
                               uint32_t attributes,
                               pvr_frustum_clip_result_t *result);
+
+/** \brief Clip and project one canonical line segment.
+
+    The segment is clipped against all six homogeneous frustum planes.
+    Generated endpoints interpolate the selected attributes, use
+    VERTEX/VERTEX_EOL commands, and are then projected into screen space.
+    Complete rejection succeeds with result::visible equal to zero and leaves
+    output unchanged. Input and output may overlap, and output must be
+    32-byte aligned.
+
+    \retval 0  Success, including a completely rejected segment.
+    \retval -1 Error, with errno set to EINVAL, EILSEQ, EDOM, or ERANGE.
+*/
+int pvr_frustum_clip_segment(
+    pvr_vertex_t output[2], const pvr_vertex_t input[2],
+    const pvr_frustum_t *frustum, uint32_t attributes,
+    pvr_frustum_segment_result_t *result);
 
 /** \brief Project a closed-volume triangle with near-plane warping.
 
