@@ -68,6 +68,29 @@ typedef struct pvr_skin_stream {
     size_t stride;
 } pvr_skin_stream_t;
 
+/** \brief One member of a variable-length joint influence list. */
+typedef struct pvr_skin_weight {
+    uint16_t joint;       /**< Joint palette index. */
+    uint16_t reserved;    /**< Must be zero. */
+    float weight;         /**< Finite, nonnegative blend weight. */
+} pvr_skin_weight_t;
+
+/** \brief Bounded weight span for one source vertex. */
+typedef struct pvr_skin_span {
+    uint32_t first_weight; /**< First entry in the shared weight array. */
+    uint16_t weight_count; /**< Nonzero number of entries for this vertex. */
+    uint16_t reserved;     /**< Must be zero. */
+} pvr_skin_span_t;
+
+/** \brief Strided spans and their shared variable-length weight array. */
+typedef struct pvr_skin_span_stream {
+    const void *spans;
+    size_t vertex_count;
+    size_t stride;
+    const pvr_skin_weight_t *weights;
+    size_t weight_count;
+} pvr_skin_span_stream_t;
+
 /** \brief Caller-owned position and normal joint matrices. */
 typedef struct pvr_skin_palette {
     const matrix_t *position_matrices;
@@ -108,6 +131,24 @@ int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
                    const pvr_skin_stream_t *influences,
                    const pvr_skin_palette_t *palette,
                    pvr_deform_result_t *result);
+
+/** \brief Apply variable-count indexed linear-blend skinning.
+
+    This is the general path beside pvr_skin_apply()'s four-influence fast
+    path. Each source vertex selects one nonempty bounded span in a shared
+    weight array. Spans may contain any representable number of weights;
+    active joint indices and all palette matrices are validated before the
+    first output write. Weights are normalized by their finite positive sum.
+
+    Exact canonical in-place vertex deformation is supported. Span, weight,
+    and palette storage must not overlap output.
+*/
+int pvr_skin_apply_spans(pvr_deform_vertex_t *output,
+                         size_t output_capacity,
+                         const pvr_deform_stream_t *vertices,
+                         const pvr_skin_span_stream_t *influences,
+                         const pvr_skin_palette_t *palette,
+                         pvr_deform_result_t *result);
 
 /** @} */
 

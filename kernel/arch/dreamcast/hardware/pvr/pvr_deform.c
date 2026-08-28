@@ -20,6 +20,10 @@
 _Static_assert(sizeof(pvr_normal_matrix_t) == sizeof(shz_mat3x3_t),
                "normal matrix bridge must preserve all components");
 #endif
+_Static_assert(sizeof(pvr_skin_span_t) == 8u,
+               "skin spans must occupy 8 bytes");
+_Static_assert(sizeof(pvr_skin_weight_t) == 8u,
+               "skin weights must occupy 8 bytes");
 
 static int finite3(float x, float y, float z) {
     return isfinite(x) && isfinite(y) && isfinite(z);
@@ -244,6 +248,71 @@ static int normal_matrix_finite(const pvr_normal_matrix_t *matrix) {
     return 1;
 }
 
+static void skin_accumulate(const pvr_deform_vertex_t *source,
+                            const pvr_skin_palette_t *palette,
+                            uint16_t joint, float weight,
+                            pvr_deform_vertex_t *vertex) {
+    const matrix_t *position = palette->position_matrices + joint;
+    const pvr_normal_matrix_t *normal = palette->normal_matrices + joint;
+    float px;
+    float py;
+    float pz;
+    float nx;
+    float ny;
+    float nz;
+
+#ifdef __DREAMCAST__
+    {
+        shz_mat4x4_t position_matrix;
+        shz_mat3x3_t normal_matrix;
+        shz_vec3_t transformed_position;
+        shz_vec3_t transformed_normal;
+
+        shz_kos_matrix_import(&position_matrix, position);
+        memcpy(&normal_matrix, normal, sizeof(normal_matrix));
+        transformed_position = shz_mat4x4_transform_point3(
+            &position_matrix,
+            shz_vec3_init(source->position.x, source->position.y,
+                          source->position.z));
+        transformed_normal = shz_mat3x3_transform_vec3(
+            &normal_matrix,
+            shz_vec3_init(source->normal.x, source->normal.y,
+                          source->normal.z));
+        px = transformed_position.x;
+        py = transformed_position.y;
+        pz = transformed_position.z;
+        nx = transformed_normal.x;
+        ny = transformed_normal.y;
+        nz = transformed_normal.z;
+    }
+#else
+    px = (*position)[0][0] * source->position.x +
+         (*position)[1][0] * source->position.y +
+         (*position)[2][0] * source->position.z + (*position)[3][0];
+    py = (*position)[0][1] * source->position.x +
+         (*position)[1][1] * source->position.y +
+         (*position)[2][1] * source->position.z + (*position)[3][1];
+    pz = (*position)[0][2] * source->position.x +
+         (*position)[1][2] * source->position.y +
+         (*position)[2][2] * source->position.z + (*position)[3][2];
+    nx = normal->column[0][0] * source->normal.x +
+         normal->column[1][0] * source->normal.y +
+         normal->column[2][0] * source->normal.z;
+    ny = normal->column[0][1] * source->normal.x +
+         normal->column[1][1] * source->normal.y +
+         normal->column[2][1] * source->normal.z;
+    nz = normal->column[0][2] * source->normal.x +
+         normal->column[1][2] * source->normal.y +
+         normal->column[2][2] * source->normal.z;
+#endif
+    vertex->position.x += px * weight;
+    vertex->position.y += py * weight;
+    vertex->position.z += pz * weight;
+    vertex->normal.x += nx * weight;
+    vertex->normal.y += ny * weight;
+    vertex->normal.z += nz * weight;
+}
+
 int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
                    const pvr_deform_stream_t *vertices,
                    const pvr_skin_stream_t *influences,
@@ -347,71 +416,13 @@ int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
             goto skin_fail;
         }
         for(slot = 0; slot < 4; ++slot) {
-            const matrix_t *position;
-            const pvr_normal_matrix_t *normal;
             float weight;
-            float px;
-            float py;
-            float pz;
-            float nx;
-            float ny;
-            float nz;
 
             if(influence->weight[slot] == 0.0f)
                 continue;
             weight = influence->weight[slot] / total;
-            position = palette->position_matrices + influence->joint[slot];
-            normal = palette->normal_matrices + influence->joint[slot];
-#ifdef __DREAMCAST__
-            {
-                shz_mat4x4_t position_matrix;
-                shz_mat3x3_t normal_matrix;
-                shz_vec3_t transformed_position;
-                shz_vec3_t transformed_normal;
-
-                shz_kos_matrix_import(&position_matrix, position);
-                memcpy(&normal_matrix, normal, sizeof(normal_matrix));
-                transformed_position = shz_mat4x4_transform_point3(
-                    &position_matrix,
-                    shz_vec3_init(source->position.x, source->position.y,
-                                  source->position.z));
-                transformed_normal = shz_mat3x3_transform_vec3(
-                    &normal_matrix,
-                    shz_vec3_init(source->normal.x, source->normal.y,
-                                  source->normal.z));
-                px = transformed_position.x;
-                py = transformed_position.y;
-                pz = transformed_position.z;
-                nx = transformed_normal.x;
-                ny = transformed_normal.y;
-                nz = transformed_normal.z;
-            }
-#else
-            px = (*position)[0][0] * source->position.x +
-                 (*position)[1][0] * source->position.y +
-                 (*position)[2][0] * source->position.z + (*position)[3][0];
-            py = (*position)[0][1] * source->position.x +
-                 (*position)[1][1] * source->position.y +
-                 (*position)[2][1] * source->position.z + (*position)[3][1];
-            pz = (*position)[0][2] * source->position.x +
-                 (*position)[1][2] * source->position.y +
-                 (*position)[2][2] * source->position.z + (*position)[3][2];
-            nx = normal->column[0][0] * source->normal.x +
-                 normal->column[1][0] * source->normal.y +
-                 normal->column[2][0] * source->normal.z;
-            ny = normal->column[0][1] * source->normal.x +
-                 normal->column[1][1] * source->normal.y +
-                 normal->column[2][1] * source->normal.z;
-            nz = normal->column[0][2] * source->normal.x +
-                 normal->column[1][2] * source->normal.y +
-                 normal->column[2][2] * source->normal.z;
-#endif
-            vertex.position.x += px * weight;
-            vertex.position.y += py * weight;
-            vertex.position.z += pz * weight;
-            vertex.normal.x += nx * weight;
-            vertex.normal.y += ny * weight;
-            vertex.normal.z += nz * weight;
+            skin_accumulate(source, palette, influence->joint[slot], weight,
+                            &vertex);
         }
         if(!finite3(vertex.position.x, vertex.position.y, vertex.position.z) ||
            normalize(&vertex.normal.x, &vertex.normal.y, &vertex.normal.z) < 0) {
@@ -428,6 +439,161 @@ int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
     return 0;
 
 skin_fail:
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+int pvr_skin_apply_spans(pvr_deform_vertex_t *output,
+                         size_t output_capacity,
+                         const pvr_deform_stream_t *vertices,
+                         const pvr_skin_span_stream_t *influences,
+                         const pvr_skin_palette_t *palette,
+                         pvr_deform_result_t *result) {
+    pvr_deform_result_t progress = { 0 };
+    size_t input_bytes;
+    size_t output_bytes;
+    size_t span_bytes;
+    size_t weight_bytes;
+    size_t position_bytes;
+    size_t normal_bytes;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(stream_preflight(vertices, output, output_capacity, &input_bytes,
+                        &output_bytes) < 0)
+        return -1;
+    if(!influences || !palette || !influences->spans ||
+       !influences->weights || !influences->weight_count ||
+       influences->vertex_count != vertices->vertex_count ||
+       ((uintptr_t)influences->spans &
+        (_Alignof(pvr_skin_span_t) - 1u)) ||
+       ((uintptr_t)influences->weights &
+        (_Alignof(pvr_skin_weight_t) - 1u)) ||
+       influences->stride < sizeof(pvr_skin_span_t) ||
+       (influences->stride & 3u) || !palette->position_matrices ||
+       !palette->normal_matrices || !palette->joint_count ||
+       ((uintptr_t)palette->position_matrices &
+        (_Alignof(matrix_t) - 1u)) ||
+       ((uintptr_t)palette->normal_matrices &
+        (_Alignof(pvr_normal_matrix_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(range_size(influences->vertex_count, influences->stride,
+                  sizeof(pvr_skin_span_t), &span_bytes) < 0 ||
+       influences->weight_count > SIZE_MAX / sizeof(pvr_skin_weight_t) ||
+       palette->joint_count > SIZE_MAX / sizeof(matrix_t) ||
+       palette->joint_count > SIZE_MAX / sizeof(pvr_normal_matrix_t)) {
+        errno = ERANGE;
+        return -1;
+    }
+    weight_bytes = influences->weight_count * sizeof(pvr_skin_weight_t);
+    position_bytes = palette->joint_count * sizeof(matrix_t);
+    normal_bytes = palette->joint_count * sizeof(pvr_normal_matrix_t);
+    if(!address_range(influences->spans, span_bytes) ||
+       !address_range(influences->weights, weight_bytes) ||
+       !address_range(palette->position_matrices, position_bytes) ||
+       !address_range(palette->normal_matrices, normal_bytes)) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(ranges_overlap(influences->spans, span_bytes, output, output_bytes) ||
+       ranges_overlap(influences->weights, weight_bytes,
+                      output, output_bytes) ||
+       ranges_overlap(palette->position_matrices, position_bytes,
+                      output, output_bytes) ||
+       ranges_overlap(palette->normal_matrices, normal_bytes,
+                      output, output_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for(i = 0; i < palette->joint_count; ++i) {
+        if(!matrix_finite(palette->position_matrices + i) ||
+           !normal_matrix_finite(palette->normal_matrices + i)) {
+            errno = EDOM;
+            return -1;
+        }
+    }
+
+    /* Validate every span and referenced weight before an in-place output can
+       overwrite the vertex stream. Individual source values remain bounded
+       prefix errors, matching the four-influence path. */
+    for(i = 0; i < influences->vertex_count; ++i) {
+        const pvr_skin_span_t *span = (const pvr_skin_span_t *)
+            ((const uint8_t *)influences->spans + i * influences->stride);
+        float total = 0.0f;
+        size_t slot;
+
+        if(span->reserved || !span->weight_count ||
+           span->first_weight > influences->weight_count ||
+           span->weight_count >
+           influences->weight_count - span->first_weight) {
+            errno = EILSEQ;
+            return -1;
+        }
+        for(slot = 0; slot < span->weight_count; ++slot) {
+            const pvr_skin_weight_t *weight = influences->weights +
+                span->first_weight + slot;
+
+            if(weight->reserved || !isfinite(weight->weight) ||
+               weight->weight < 0.0f ||
+               (weight->weight > 0.0f &&
+                weight->joint >= palette->joint_count)) {
+                errno = EILSEQ;
+                return -1;
+            }
+            total += weight->weight;
+        }
+        if(!isfinite(total) || total <= FLT_MIN) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+
+    for(i = 0; i < vertices->vertex_count; ++i) {
+        const pvr_deform_vertex_t *source = (const pvr_deform_vertex_t *)
+            ((const uint8_t *)vertices->vertices + i * vertices->stride);
+        const pvr_skin_span_t *span = (const pvr_skin_span_t *)
+            ((const uint8_t *)influences->spans + i * influences->stride);
+        pvr_deform_vertex_t vertex = { 0 };
+        float total = 0.0f;
+        size_t slot;
+
+        if(!vertex_finite(source)) {
+            errno = EDOM;
+            goto span_fail;
+        }
+        for(slot = 0; slot < span->weight_count; ++slot)
+            total += influences->weights[span->first_weight + slot].weight;
+        for(slot = 0; slot < span->weight_count; ++slot) {
+            const pvr_skin_weight_t *weight = influences->weights +
+                span->first_weight + slot;
+
+            if(weight->weight == 0.0f)
+                continue;
+            skin_accumulate(source, palette, weight->joint,
+                            weight->weight / total, &vertex);
+        }
+        if(!finite3(vertex.position.x, vertex.position.y,
+                    vertex.position.z) ||
+           normalize(&vertex.normal.x, &vertex.normal.y,
+                     &vertex.normal.z) < 0) {
+            errno = ERANGE;
+            goto span_fail;
+        }
+        vertex.position.w = 1.0f;
+        vertex.normal.w = 0.0f;
+        memcpy(output + i, &vertex, sizeof(vertex));
+        ++progress.deformed_vertices;
+    }
+    if(result)
+        *result = progress;
+    return 0;
+
+span_fail:
     if(result)
         *result = progress;
     return -1;

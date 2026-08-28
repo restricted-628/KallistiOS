@@ -99,6 +99,71 @@ typedef struct pvr_chunk_skin_pose {
     size_t vertex_count;
 } pvr_chunk_skin_pose_t;
 
+/** \brief One variable-length compact influence span keyed by model index. */
+typedef struct pvr_chunk_skin_span {
+    uint16_t vertex_index;
+    uint16_t weight_count;
+    uint32_t first_weight;
+} pvr_chunk_skin_span_t;
+
+/** \brief One unsigned-normalized member of a compact influence span. */
+typedef struct pvr_chunk_skin_weight {
+    uint16_t joint;
+    uint16_t weight;
+} pvr_chunk_skin_weight_t;
+
+/** \brief General compact skin with arbitrary influences per vertex.
+
+    Spans are strictly ordered by vertex index and weights are packed without
+    gaps in span order. Every span is nonempty and sums exactly to
+    PVR_CHUNK_SKIN_WEIGHT_SUM. Skin4 remains the preferred common fast path;
+    this representation preserves models that cannot be reduced to four
+    influences without changing their deformation.
+*/
+typedef struct pvr_chunk_skin_general {
+    const pvr_chunk_skin_span_t *spans;
+    size_t span_count;
+    const pvr_chunk_skin_weight_t *weights;
+    size_t weight_count;
+    size_t joint_count;
+} pvr_chunk_skin_general_t;
+
+/** \brief Storage required to bind and expand one general compact skin. */
+typedef struct pvr_chunk_skin_general_requirements {
+    size_t alignment;
+    size_t lookup_entries;
+    size_t lookup_bytes;
+    size_t source_vertices;
+    size_t source_spans;
+    size_t source_weights;
+    size_t source_bytes;
+} pvr_chunk_skin_general_requirements_t;
+
+/** \brief Immutable checked association for a general compact skin. */
+typedef struct pvr_chunk_skin_general_binding {
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_skin_general_t skin;
+    const uint32_t *dense_lookup;
+    size_t dense_lookup_count;
+} pvr_chunk_skin_general_binding_t;
+
+/** \brief Canonical vertices and span-form influences built once. */
+typedef struct pvr_chunk_skin_general_source {
+    const pvr_deform_vertex_t *vertices;
+    const pvr_skin_span_t *spans;
+    const pvr_skin_weight_t *weights;
+    size_t vertex_count;
+    size_t weight_count;
+    size_t joint_count;
+} pvr_chunk_skin_general_source_t;
+
+/** \brief Indexed view of one general-skin deformed pose. */
+typedef struct pvr_chunk_skin_general_pose {
+    const pvr_chunk_skin_general_binding_t *binding;
+    const pvr_deform_vertex_t *vertices;
+    size_t vertex_count;
+} pvr_chunk_skin_general_pose_t;
+
 /** \brief Query exact caller-owned storage for one model plan.
 
     lookup_bytes is separate persistent binding storage. source_bytes is a
@@ -140,6 +205,37 @@ int pvr_chunk_skin_apply(const pvr_chunk_skin_source_t *source,
 int pvr_chunk_skin_pose_vertex_get(const pvr_chunk_skin_pose_t *pose,
                                    uint16_t vertex_index,
                                    pvr_deform_vertex_t *vertex);
+
+/** \brief Query exact caller-owned storage for a general compact skin. */
+int pvr_chunk_skin_general_query(
+    const pvr_chunk_model_plan_t *plan,
+    const pvr_chunk_skin_general_t *skin,
+    pvr_chunk_skin_general_requirements_t *requirements);
+
+/** \brief Validate and bind arbitrary-count influences to every model vertex. */
+int pvr_chunk_skin_general_bind(
+    const pvr_chunk_model_plan_t *plan,
+    const pvr_chunk_skin_general_t *skin,
+    uint32_t *dense_lookup, size_t dense_lookup_capacity,
+    pvr_chunk_skin_general_binding_t *binding);
+
+/** \brief Decode a bound general skin into reusable canonical storage. */
+int pvr_chunk_skin_general_source_build(
+    const pvr_chunk_skin_general_binding_t *binding,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_skin_general_source_t *source);
+
+/** \brief Apply one joint palette to a reusable general skin source. */
+int pvr_chunk_skin_general_apply(
+    const pvr_chunk_skin_general_source_t *source,
+    const pvr_skin_palette_t *palette,
+    pvr_deform_vertex_t *output, size_t output_capacity,
+    pvr_deform_result_t *result);
+
+/** \brief Resolve one original model index in a general-skin pose. */
+int pvr_chunk_skin_general_pose_vertex_get(
+    const pvr_chunk_skin_general_pose_t *pose,
+    uint16_t vertex_index, pvr_deform_vertex_t *vertex);
 
 /** @} */
 

@@ -44,6 +44,19 @@ static const pvr_chunk_skin_influence_t valid_influences[] = {
     { 2, { 0, 1, 0, 0 }, { 32768, 32767, 0, 0 }, 0 }
 };
 
+static const pvr_chunk_skin_span_t general_spans[] = {
+    { 0, 1, 0 },
+    { 1, 1, 1 },
+    { 2, 6, 2 }
+};
+
+static const pvr_chunk_skin_weight_t general_weights[] = {
+    { 0, UINT16_MAX },
+    { 1, UINT16_MAX },
+    { 0, 10923 }, { 1, 10923 }, { 2, 10923 },
+    { 3, 10923 }, { 4, 10923 }, { 5, 10920 }
+};
+
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.0002f;
 }
@@ -162,6 +175,80 @@ int main(void) {
     errno = 0;
     assert(pvr_chunk_skin_pose_vertex_get(&pose, 3, &resolved) == -1);
     assert(errno == ENOENT);
+
+    {
+        const pvr_chunk_skin_general_t general_skin = {
+            general_spans, 3, general_weights, 8, 6
+        };
+        pvr_chunk_skin_general_requirements_t general_requirements;
+        pvr_chunk_skin_general_binding_t general_binding;
+        uint32_t general_lookup[256];
+        alignas(32) uint8_t general_workspace[192];
+        pvr_chunk_skin_general_source_t general_source;
+        alignas(8) matrix_t general_positions[6];
+        pvr_normal_matrix_t general_normals[6];
+        pvr_skin_palette_t general_palette = {
+            general_positions, general_normals, 6
+        };
+        pvr_chunk_skin_general_pose_t general_pose;
+        pvr_chunk_skin_span_t malformed_spans[3];
+        float expected = 2.0f;
+        size_t joint;
+
+        assert(pvr_chunk_skin_general_query(
+            &plan, &general_skin, &general_requirements) == 0);
+        assert(general_requirements.lookup_entries == 256 &&
+               general_requirements.source_vertices == 3 &&
+               general_requirements.source_spans == 3 &&
+               general_requirements.source_weights == 8 &&
+               general_requirements.source_bytes ==
+               sizeof(general_workspace));
+        assert(pvr_chunk_skin_general_bind(
+            &plan, &general_skin, general_lookup, 256,
+            &general_binding) == 0);
+        assert(pvr_chunk_skin_general_source_build(
+            &general_binding, general_workspace,
+            sizeof(general_workspace), &general_source) == 0);
+        assert(general_source.vertex_count == 3 &&
+               general_source.weight_count == 8 &&
+               general_source.spans[2].weight_count == 6);
+
+        for(joint = 0; joint < 6; ++joint) {
+            identity(general_positions + joint);
+            general_positions[joint][3][0] = (float)joint * 2.0f;
+            normal_identity(general_normals + joint);
+            expected += (float)joint * 2.0f *
+                ((float)general_weights[2 + joint].weight / 65535.0f);
+        }
+        assert(pvr_chunk_skin_general_apply(
+            &general_source, &general_palette, output, 3, &result) == 0);
+        assert(result.deformed_vertices == 3);
+        assert(close_enough(output[1].position.x, 3.0f));
+        assert(close_enough(output[2].position.x, expected));
+
+        general_pose.binding = &general_binding;
+        general_pose.vertices = output;
+        general_pose.vertex_count = 3;
+        assert(pvr_chunk_skin_general_pose_vertex_get(
+            &general_pose, 2, &resolved) == 0);
+        assert(close_enough(resolved.position.x, expected));
+
+        memcpy(malformed_spans, general_spans, sizeof(malformed_spans));
+        malformed_spans[2].first_weight = 3;
+        {
+            const pvr_chunk_skin_general_t invalid = {
+                malformed_spans, 3, general_weights, 8, 6
+            };
+
+            memset(general_lookup, 0x5a, sizeof(general_lookup));
+            errno = 0;
+            assert(pvr_chunk_skin_general_bind(
+                &plan, &invalid, general_lookup, 256,
+                &general_binding) == -1);
+            assert(errno == EILSEQ &&
+                   general_lookup[0] == UINT32_C(0x5a5a5a5a));
+        }
+    }
 
     lookup[1] = PVR_CHUNK_SKIN_INDEX_NONE;
     errno = 0;

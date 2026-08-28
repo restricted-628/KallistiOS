@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added arbitrary-count compact skinning beside the existing four-joint fast
+  path. A canonical span/weight representation preserves every influence,
+  expands once into caller-owned runtime storage, and uses a checked general
+  deformation kernel with the same palette, overlap, prefix, and pose-lookup
+  contracts. The previously public Compact Skin4 entry points are now also
+  available to loadable modules.
 * Added topology-preserving near-plane warping for PVR modifier triangles and
   compact modifier-volume models. Crossing points move to the caller's near-W
   plane without adding or dropping triangles, so closed shadow volumes cannot

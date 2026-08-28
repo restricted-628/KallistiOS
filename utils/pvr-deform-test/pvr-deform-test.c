@@ -144,9 +144,68 @@ static void test_skin(void) {
     assert(errno == EILSEQ && result.deformed_vertices == 0);
 }
 
+static void test_skin_spans(void) {
+    pvr_deform_vertex_t source = {
+        { 0.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f, 0.0f }
+    };
+    pvr_skin_span_t span = { 0, 6, 0 };
+    pvr_skin_weight_t weights[6];
+    alignas(8) matrix_t positions[6];
+    pvr_normal_matrix_t normals[6];
+    pvr_skin_palette_t palette = { positions, normals, 6 };
+    pvr_deform_stream_t vertices = { &source, 1, sizeof(source) };
+    pvr_skin_span_stream_t influences = {
+        &span, 1, sizeof(span), weights, 6
+    };
+    pvr_deform_vertex_t output;
+    pvr_deform_vertex_t unchanged;
+    pvr_deform_result_t result;
+    size_t joint;
+
+    for(joint = 0; joint < 6; ++joint) {
+        identity(positions + joint);
+        positions[joint][3][0] = (float)joint * 2.0f;
+        normal_identity(normals + joint);
+        weights[joint].joint = (uint16_t)joint;
+        weights[joint].reserved = 0;
+        weights[joint].weight = 1.0f;
+    }
+
+    assert(pvr_skin_apply_spans(&output, 1, &vertices, &influences,
+                                &palette, &result) == 0);
+    assert(result.deformed_vertices == 1);
+    assert(close_enough(output.position.x, 5.0f));
+    assert(close_enough(output.normal.z, 1.0f));
+
+    output = source;
+    vertices.vertices = &output;
+    assert(pvr_skin_apply_spans(&output, 1, &vertices, &influences,
+                                &palette, &result) == 0);
+    assert(close_enough(output.position.x, 5.0f));
+    vertices.vertices = &source;
+
+    memset(&output, 0x5a, sizeof(output));
+    unchanged = output;
+    span.first_weight = 1;
+    errno = 0;
+    assert(pvr_skin_apply_spans(&output, 1, &vertices, &influences,
+                                &palette, &result) == -1);
+    assert(errno == EILSEQ && result.deformed_vertices == 0);
+    assert(!memcmp(&output, &unchanged, sizeof(output)));
+
+    span.first_weight = 0;
+    weights[5].joint = 6;
+    errno = 0;
+    assert(pvr_skin_apply_spans(&output, 1, &vertices, &influences,
+                                &palette, &result) == -1);
+    assert(errno == EILSEQ && result.deformed_vertices == 0);
+    assert(!memcmp(&output, &unchanged, sizeof(output)));
+}
+
 int main(void) {
     test_morph();
     test_skin();
+    test_skin_spans();
     puts("pvr deformation tests: PASS");
     return 0;
 }

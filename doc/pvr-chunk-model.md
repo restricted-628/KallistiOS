@@ -107,6 +107,17 @@ position and consume the deformed normal without creating a global vertex
 buffer. Applications that do not bind a skin link no additional state and
 allocate no lookup, source, or pose storage.
 
+Skin4 remains the compact and optimized common path, but it is no longer a
+representation ceiling. `pvr_chunk_skin_general_t` stores one ordered span per
+model vertex plus a packed unsigned-normalized joint/weight array. Spans may
+contain any count representable by their 16-bit length, must pack without
+gaps, and must each sum exactly to 65535. The general binding and source stages
+retain the same complete validation, sparse-page lookup, caller-owned storage,
+and pose-resolution contracts as Skin4, then feed
+`pvr_skin_apply_spans()`. A host compiler can therefore reduce a skin to four
+weights when the error budget permits it and preserve every influence when it
+does not, without introducing draw-order-dependent accumulation.
+
 ## Explicit shape motion
 
 `pvr_chunk_shape_bind()` associates one or more sparse morph targets with a
