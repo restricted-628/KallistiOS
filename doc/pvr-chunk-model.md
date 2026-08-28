@@ -288,6 +288,15 @@ three positions, and terminates every nonempty volume record with an explicit
 include or exclude header policy. The application still owns scene and list
 lifetime.
 
+Volume records are also available without entering the render path.
+`pvr_chunk_volume_iterator_init()` validates the complete record before
+publication, and `pvr_chunk_volume_iterator_next()` expands its triangle,
+quad, or strip topology one triangle at a time. Quad splitting, alternating
+strip winding, reversed strips, and zero to three per-triangle user words use
+the same implementation as modifier rendering and prepared modifier caches.
+This makes the volume stream directly usable as caller-owned collision or
+query geometry without duplicating its framing rules.
+
 The ordinary emitter also decodes compact bump-material records. Their two
 signed-normalized basis vectors remain in persistent render state and reach
 both strip callbacks. A vertex-policy callback is mandatory while the basis is

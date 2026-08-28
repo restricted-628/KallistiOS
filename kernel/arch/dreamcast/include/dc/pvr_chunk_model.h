@@ -373,6 +373,39 @@ typedef struct pvr_chunk_strip_attributes {
     size_t triangle_user_word_count;
 } pvr_chunk_strip_attributes_t;
 
+/** \brief One triangle decoded from a compact volume record.
+
+    Quads and strips are expanded deterministically. The user-word view points
+    into the immutable source record and remains valid for as long as that
+    record's stream remains valid.
+*/
+typedef struct pvr_chunk_volume_triangle {
+    uint16_t index[3];
+    const uint16_t *user_words;
+    size_t user_word_count;
+    uint8_t source_type;
+    uint8_t final_in_record;
+} pvr_chunk_volume_triangle_t;
+
+/** \brief Caller-owned iterator over triangles in one volume record.
+
+    Applications should treat every field as private. Initialization validates
+    the complete record framing before the first triangle can be returned.
+*/
+typedef struct pvr_chunk_volume_iterator {
+    uint8_t type;
+    uint8_t index_count;
+    uint8_t quad_second;
+    uint8_t strip_active;
+    const uint16_t *cursor;
+    size_t remaining_primitives;
+    size_t remaining_triangles;
+    size_t user_word_count;
+    pvr_chunk_strip_iterator_t strip_iterator;
+    pvr_chunk_strip_view_t strip;
+    size_t strip_triangle;
+} pvr_chunk_volume_iterator_t;
+
 /** \brief Sentinel identifying a root node in a compact-model hierarchy. */
 #define PVR_CHUNK_NODE_NONE SIZE_MAX
 
@@ -537,6 +570,32 @@ int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
 int pvr_chunk_strip_attributes_get(
     const pvr_chunk_strip_view_t *strip, size_t vertex_index,
     pvr_chunk_strip_attributes_t *attributes);
+
+/** \brief Count triangles in one structurally valid volume record.
+
+    Quads count as two triangles and strips count as `vertex_count - 2`.
+    Failure initializes \p count to zero.
+*/
+int pvr_chunk_volume_triangle_count(const pvr_chunk_record_t *record,
+                                    size_t *count);
+
+/** \brief Initialize a bounded triangle iterator for one volume record.
+
+    This performs a complete framing pass, so a successful iterator cannot
+    encounter a truncated primitive later unless its immutable source is
+    modified concurrently.
+*/
+int pvr_chunk_volume_iterator_init(pvr_chunk_volume_iterator_t *iterator,
+                                   const pvr_chunk_record_t *record);
+
+/** \brief Return the next triangle from a volume record.
+
+    \retval 1  A triangle was returned.
+    \retval 0  All triangles were already returned.
+    \retval -1 Invalid iterator state or mutated source framing.
+*/
+int pvr_chunk_volume_iterator_next(pvr_chunk_volume_iterator_t *iterator,
+                                   pvr_chunk_volume_triangle_t *triangle);
 
 /** \brief Compose and visit a bounded parent-before-child hierarchy.
 

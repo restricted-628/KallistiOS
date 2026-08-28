@@ -11,6 +11,10 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a validated compact-volume triangle iterator shared by model tools,
+  collision consumers, modifier rendering, and prepared modifier caches. It
+  expands triangle, quad, and strip records with consistent winding while
+  preserving all per-triangle user words and exact record boundaries.
 * Added signed fixed-point compact-model texture coordinates. New 8.8 records
   provide wide repeat range and new 6.10 records provide finer precision while
   retaining the same 16-bit coordinate storage. The model converter selects

@@ -1615,6 +1615,216 @@ int pvr_chunk_strip_iterator_next(pvr_chunk_strip_iterator_t *iterator,
     return 1;
 }
 
+int pvr_chunk_volume_triangle_count(const pvr_chunk_record_t *record,
+                                    size_t *count) {
+    pvr_chunk_record_t strip_record;
+    pvr_chunk_strip_iterator_t strip_iterator;
+    pvr_chunk_strip_view_t strip;
+    const uint16_t *payload;
+    size_t primitive_count;
+    size_t user_word_count;
+    size_t index_count;
+    size_t total = 0;
+    size_t stride;
+    int rv;
+
+    if(count)
+        *count = 0;
+    if(!record || !count || record->stream != PVR_CHUNK_STREAM_POLYGON ||
+       record->record_class != PVR_CHUNK_RECORD_VOLUME) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!record->payload || !record->payload_word_count) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    payload = record->payload;
+    primitive_count = payload[0] & UINT16_C(0x3fff);
+    user_word_count = payload[0] >> 14;
+    if(record->type == PVR_CHUNK_VOLUME_TRIANGLES ||
+       record->type == PVR_CHUNK_VOLUME_QUADS) {
+        index_count = record->type == PVR_CHUNK_VOLUME_TRIANGLES ? 3u : 4u;
+        stride = index_count + user_word_count;
+        if(primitive_count > (SIZE_MAX - 1u) / stride ||
+           record->payload_word_count != 1u + primitive_count * stride) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if(record->type == PVR_CHUNK_VOLUME_QUADS &&
+           primitive_count > SIZE_MAX / 2u) {
+            errno = ERANGE;
+            return -1;
+        }
+        *count = record->type == PVR_CHUNK_VOLUME_TRIANGLES ?
+                 primitive_count : primitive_count * 2u;
+        return 0;
+    }
+    if(record->type != PVR_CHUNK_VOLUME_STRIPS) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    strip_record = *record;
+    strip_record.type = PVR_CHUNK_STRIP_INDEX;
+    strip_record.record_class = PVR_CHUNK_RECORD_STRIP;
+    if(pvr_chunk_strip_iterator_init(&strip_iterator, &strip_record) < 0)
+        return -1;
+    while((rv = pvr_chunk_strip_iterator_next(&strip_iterator, &strip)) > 0) {
+        if(checked_add(&total, strip.vertex_count - 2u) < 0)
+            return -1;
+    }
+    if(rv < 0)
+        return -1;
+
+    *count = total;
+    return 0;
+}
+
+int pvr_chunk_volume_iterator_init(pvr_chunk_volume_iterator_t *iterator,
+                                   const pvr_chunk_record_t *record) {
+    pvr_chunk_volume_iterator_t prepared;
+    pvr_chunk_record_t strip_record;
+    const uint16_t *payload;
+    size_t triangle_count;
+
+    if(iterator)
+        memset(iterator, 0, sizeof(*iterator));
+    if(!iterator || !record) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_volume_triangle_count(record, &triangle_count) < 0)
+        return -1;
+
+    memset(&prepared, 0, sizeof(prepared));
+    payload = record->payload;
+    prepared.type = record->type;
+    prepared.remaining_triangles = triangle_count;
+    prepared.user_word_count = payload[0] >> 14;
+    if(record->type == PVR_CHUNK_VOLUME_STRIPS) {
+        strip_record = *record;
+        strip_record.type = PVR_CHUNK_STRIP_INDEX;
+        strip_record.record_class = PVR_CHUNK_RECORD_STRIP;
+        if(pvr_chunk_strip_iterator_init(&prepared.strip_iterator,
+                                         &strip_record) < 0)
+            return -1;
+    }
+    else {
+        prepared.index_count =
+            record->type == PVR_CHUNK_VOLUME_TRIANGLES ? 3u : 4u;
+        prepared.cursor = payload + 1u;
+        prepared.remaining_primitives = payload[0] & UINT16_C(0x3fff);
+    }
+
+    *iterator = prepared;
+    return 0;
+}
+
+int pvr_chunk_volume_iterator_next(pvr_chunk_volume_iterator_t *iterator,
+                                   pvr_chunk_volume_triangle_t *triangle) {
+    pvr_chunk_volume_triangle_t decoded;
+
+    if(triangle)
+        memset(triangle, 0, sizeof(*triangle));
+    if(!iterator || !triangle ||
+       iterator->type < PVR_CHUNK_VOLUME_TRIANGLES ||
+       iterator->type > PVR_CHUNK_VOLUME_STRIPS) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!iterator->remaining_triangles)
+        return 0;
+
+    memset(&decoded, 0, sizeof(decoded));
+    decoded.source_type = iterator->type;
+    decoded.user_word_count = iterator->user_word_count;
+    if(iterator->type == PVR_CHUNK_VOLUME_TRIANGLES ||
+       iterator->type == PVR_CHUNK_VOLUME_QUADS) {
+        const uint16_t *indices = iterator->cursor;
+
+        if(!indices || !iterator->remaining_primitives ||
+           (iterator->index_count != 3u && iterator->index_count != 4u)) {
+            errno = EILSEQ;
+            return -1;
+        }
+        decoded.user_words = indices + iterator->index_count;
+        if(iterator->index_count == 3u) {
+            decoded.index[0] = indices[0];
+            decoded.index[1] = indices[1];
+            decoded.index[2] = indices[2];
+        }
+        else if(!iterator->quad_second) {
+            decoded.index[0] = indices[0];
+            decoded.index[1] = indices[1];
+            decoded.index[2] = indices[2];
+            iterator->quad_second = 1u;
+        }
+        else {
+            decoded.index[0] = indices[2];
+            decoded.index[1] = indices[1];
+            decoded.index[2] = indices[3];
+            iterator->quad_second = 0u;
+        }
+
+        if(iterator->index_count == 3u || !iterator->quad_second) {
+            iterator->cursor += iterator->index_count +
+                                iterator->user_word_count;
+            --iterator->remaining_primitives;
+        }
+    }
+    else {
+        pvr_chunk_strip_vertex_view_t a;
+        pvr_chunk_strip_vertex_view_t b;
+        pvr_chunk_strip_vertex_view_t c;
+        int rv;
+
+        while(!iterator->strip_active ||
+              iterator->strip_triangle + 2u >= iterator->strip.vertex_count) {
+            rv = pvr_chunk_strip_iterator_next(&iterator->strip_iterator,
+                                                &iterator->strip);
+            if(rv <= 0) {
+                errno = EILSEQ;
+                return -1;
+            }
+            iterator->strip_triangle = 0;
+            iterator->strip_active = 1u;
+        }
+        if(pvr_chunk_strip_vertex_get(&iterator->strip,
+                                      iterator->strip_triangle, &a) < 0 ||
+           pvr_chunk_strip_vertex_get(&iterator->strip,
+                                      iterator->strip_triangle + 1u,
+                                      &b) < 0 ||
+           pvr_chunk_strip_vertex_get(&iterator->strip,
+                                      iterator->strip_triangle + 2u,
+                                      &c) < 0)
+            return -1;
+
+        decoded.index[0] = a.index;
+        decoded.index[1] = b.index;
+        decoded.index[2] = c.index;
+        if((iterator->strip_triangle & 1u) != 0u) {
+            decoded.index[0] = b.index;
+            decoded.index[1] = a.index;
+        }
+        if(iterator->strip.reversed) {
+            uint16_t swap = decoded.index[0];
+
+            decoded.index[0] = decoded.index[1];
+            decoded.index[1] = swap;
+        }
+        decoded.user_words = c.triangle_user_words;
+        decoded.user_word_count = c.triangle_user_word_count;
+        ++iterator->strip_triangle;
+    }
+
+    --iterator->remaining_triangles;
+    decoded.final_in_record = iterator->remaining_triangles == 0u;
+    *triangle = decoded;
+    return 1;
+}
+
 int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
                                size_t vertex_index,
                                pvr_chunk_strip_vertex_view_t *vertex) {

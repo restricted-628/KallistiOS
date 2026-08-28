@@ -1271,134 +1271,30 @@ int pvr_chunk_render_modifier_config_valid(
 
 int pvr_chunk_render_modifier_triangle_count(
     const pvr_chunk_record_t *record, size_t *count) {
-    const uint16_t *payload = record->payload;
-    size_t total = 0;
-
-    if(record->type == PVR_CHUNK_VOLUME_TRIANGLES)
-        total = payload[0] & UINT16_C(0x3fff);
-    else if(record->type == PVR_CHUNK_VOLUME_QUADS) {
-        size_t quads = payload[0] & UINT16_C(0x3fff);
-
-        if(quads > SIZE_MAX / 2u) {
-            errno = ERANGE;
-            return -1;
-        }
-        total = quads * 2u;
-    }
-    else {
-        pvr_chunk_record_t strip_record = *record;
-        pvr_chunk_strip_iterator_t iterator;
-        pvr_chunk_strip_view_t strip;
-        int rv;
-
-        strip_record.type = PVR_CHUNK_STRIP_INDEX;
-        strip_record.record_class = PVR_CHUNK_RECORD_STRIP;
-        if(pvr_chunk_strip_iterator_init(&iterator, &strip_record) < 0)
-            return -1;
-        while((rv = pvr_chunk_strip_iterator_next(&iterator, &strip)) > 0) {
-            if(checked_add(&total, strip.vertex_count - 2u) < 0)
-                return -1;
-        }
-        if(rv < 0)
-            return -1;
-    }
-
-    *count = total;
-    return 0;
+    return pvr_chunk_volume_triangle_count(record, count);
 }
 
 int pvr_chunk_render_visit_modifier_record(
     const pvr_chunk_record_t *record,
     pvr_chunk_render_modifier_visitor_t visitor, void *data) {
-    size_t triangle_count;
-    size_t emitted = 0;
+    pvr_chunk_volume_iterator_t iterator;
+    pvr_chunk_volume_triangle_t triangle;
+    int rv;
 
     if(!record || record->record_class != PVR_CHUNK_RECORD_VOLUME ||
        !visitor) {
         errno = EINVAL;
         return -1;
     }
-    if(pvr_chunk_render_modifier_triangle_count(record, &triangle_count) < 0)
+    if(pvr_chunk_volume_iterator_init(&iterator, record) < 0)
         return -1;
-
-    if(record->type == PVR_CHUNK_VOLUME_TRIANGLES ||
-       record->type == PVR_CHUNK_VOLUME_QUADS) {
-        const uint16_t *payload = record->payload;
-        size_t user_count = payload[0] >> 14;
-        size_t primitive_count = payload[0] & UINT16_C(0x3fff);
-        size_t index_count = record->type == PVR_CHUNK_VOLUME_TRIANGLES ?
-                             3u : 4u;
-        size_t primitive;
-
-        ++payload;
-        for(primitive = 0; primitive < primitive_count; ++primitive) {
-            uint16_t first[3] = { payload[0], payload[1], payload[2] };
-
-            if(visitor(first, payload + index_count, user_count,
-                       record->type, ++emitted == triangle_count,
-                       data) < 0)
-                return -1;
-            if(index_count == 4u) {
-                uint16_t second[3] = { payload[2], payload[1], payload[3] };
-
-                if(visitor(second, payload + index_count, user_count,
-                           record->type, ++emitted == triangle_count,
-                           data) < 0)
-                    return -1;
-            }
-            payload += index_count + user_count;
-        }
-    }
-    else {
-        pvr_chunk_record_t strip_record = *record;
-        pvr_chunk_strip_iterator_t iterator;
-        pvr_chunk_strip_view_t strip;
-        int rv;
-
-        strip_record.type = PVR_CHUNK_STRIP_INDEX;
-        strip_record.record_class = PVR_CHUNK_RECORD_STRIP;
-        if(pvr_chunk_strip_iterator_init(&iterator, &strip_record) < 0)
-            return -1;
-        while((rv = pvr_chunk_strip_iterator_next(&iterator, &strip)) > 0) {
-            size_t triangle;
-
-            for(triangle = 0; triangle + 2u < strip.vertex_count;
-                ++triangle) {
-                pvr_chunk_strip_vertex_view_t a;
-                pvr_chunk_strip_vertex_view_t b;
-                pvr_chunk_strip_vertex_view_t c;
-                uint16_t indices[3];
-
-                if(pvr_chunk_strip_vertex_get(&strip, triangle, &a) < 0 ||
-                   pvr_chunk_strip_vertex_get(&strip, triangle + 1u, &b) < 0 ||
-                   pvr_chunk_strip_vertex_get(&strip, triangle + 2u, &c) < 0)
-                    return -1;
-                indices[0] = a.index;
-                indices[1] = b.index;
-                indices[2] = c.index;
-                if((triangle & 1u) != 0u)
-                    indices[0] = b.index, indices[1] = a.index;
-                if(strip.reversed) {
-                    uint16_t swap = indices[0];
-
-                    indices[0] = indices[1];
-                    indices[1] = swap;
-                }
-                if(visitor(indices, c.triangle_user_words,
-                           c.triangle_user_word_count, record->type,
-                           ++emitted == triangle_count, data) < 0)
-                    return -1;
-            }
-        }
-        if(rv < 0)
+    while((rv = pvr_chunk_volume_iterator_next(&iterator, &triangle)) > 0) {
+        if(visitor(triangle.index, triangle.user_words,
+                   triangle.user_word_count, triangle.source_type,
+                   triangle.final_in_record, data) < 0)
             return -1;
     }
-
-    if(emitted != triangle_count) {
-        errno = EILSEQ;
-        return -1;
-    }
-    return 0;
+    return rv;
 }
 
 static int modifier_preflight(

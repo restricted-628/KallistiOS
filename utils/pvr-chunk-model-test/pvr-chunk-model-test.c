@@ -545,6 +545,118 @@ static void test_decoded_attributes(void) {
     assert(errno == EILSEQ && strip_attributes.present == 0);
 }
 
+static pvr_chunk_record_t volume_record(uint8_t type,
+                                        const uint16_t *payload,
+                                        size_t payload_word_count) {
+    pvr_chunk_record_t record;
+
+    memset(&record, 0, sizeof(record));
+    record.stream = PVR_CHUNK_STREAM_POLYGON;
+    record.record_class = PVR_CHUNK_RECORD_VOLUME;
+    record.type = type;
+    record.payload = payload;
+    record.payload_word_count = payload_word_count;
+    return record;
+}
+
+static void test_volume_iterator(void) {
+    static const uint16_t triangle_payload[] = {
+        UINT16_C(0xc002),
+        0, 1, 2, UINT16_C(0xa001), UINT16_C(0xa002), UINT16_C(0xa003),
+        3, 4, 5, UINT16_C(0xb001), UINT16_C(0xb002), UINT16_C(0xb003)
+    };
+    static const uint16_t quad_payload[] = {
+        UINT16_C(0x4001), 10, 11, 12, 13, UINT16_C(0xc001)
+    };
+    static const uint16_t strip_payload[] = {
+        UINT16_C(0x8002),
+        UINT16_C(4),
+        20, 21, 22, UINT16_C(0xd001), UINT16_C(0xd002),
+        23, UINT16_C(0xe001), UINT16_C(0xe002),
+        UINT16_C(0x8003),
+        30, 31, 32, UINT16_C(0xf001), UINT16_C(0xf002)
+    };
+    pvr_chunk_record_t record;
+    pvr_chunk_volume_iterator_t iterator;
+    pvr_chunk_volume_triangle_t triangle;
+    size_t count = SIZE_MAX;
+
+    record = volume_record(PVR_CHUNK_VOLUME_TRIANGLES, triangle_payload,
+                           sizeof(triangle_payload) /
+                           sizeof(triangle_payload[0]));
+    assert(pvr_chunk_volume_triangle_count(&record, &count) == 0 &&
+           count == 2);
+    assert(pvr_chunk_volume_iterator_init(&iterator, &record) == 0);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 1);
+    assert(triangle.index[0] == 0 && triangle.index[1] == 1 &&
+           triangle.index[2] == 2 && triangle.user_word_count == 3 &&
+           triangle.user_words[0] == UINT16_C(0xa001) &&
+           triangle.user_words[2] == UINT16_C(0xa003) &&
+           triangle.source_type == PVR_CHUNK_VOLUME_TRIANGLES &&
+           !triangle.final_in_record);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 1);
+    assert(triangle.index[0] == 3 && triangle.index[1] == 4 &&
+           triangle.index[2] == 5 &&
+           triangle.user_words[0] == UINT16_C(0xb001) &&
+           triangle.final_in_record);
+    memset(&triangle, 0x5a, sizeof(triangle));
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 0);
+    assert(triangle.index[0] == 0 && triangle.user_words == NULL);
+
+    record = volume_record(PVR_CHUNK_VOLUME_QUADS, quad_payload,
+                           sizeof(quad_payload) / sizeof(quad_payload[0]));
+    assert(pvr_chunk_volume_triangle_count(&record, &count) == 0 &&
+           count == 2);
+    assert(pvr_chunk_volume_iterator_init(&iterator, &record) == 0);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 1);
+    assert(triangle.index[0] == 10 && triangle.index[1] == 11 &&
+           triangle.index[2] == 12 && !triangle.final_in_record);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 1);
+    assert(triangle.index[0] == 12 && triangle.index[1] == 11 &&
+           triangle.index[2] == 13 &&
+           triangle.user_words[0] == UINT16_C(0xc001) &&
+           triangle.final_in_record);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 0);
+
+    record = volume_record(PVR_CHUNK_VOLUME_STRIPS, strip_payload,
+                           sizeof(strip_payload) / sizeof(strip_payload[0]));
+    assert(pvr_chunk_volume_triangle_count(&record, &count) == 0 &&
+           count == 3);
+    assert(pvr_chunk_volume_iterator_init(&iterator, &record) == 0);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 1);
+    assert(triangle.index[0] == 20 && triangle.index[1] == 21 &&
+           triangle.index[2] == 22 && triangle.user_word_count == 2 &&
+           triangle.user_words[0] == UINT16_C(0xd001));
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 1);
+    assert(triangle.index[0] == 22 && triangle.index[1] == 21 &&
+           triangle.index[2] == 23 &&
+           triangle.user_words[0] == UINT16_C(0xe001) &&
+           !triangle.final_in_record);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 1);
+    assert(triangle.index[0] == 31 && triangle.index[1] == 30 &&
+           triangle.index[2] == 32 &&
+           triangle.user_words[0] == UINT16_C(0xf001) &&
+           triangle.final_in_record);
+    assert(pvr_chunk_volume_iterator_next(&iterator, &triangle) == 0);
+
+    record.payload_word_count--;
+    count = SIZE_MAX;
+    errno = 0;
+    assert(pvr_chunk_volume_triangle_count(&record, &count) == -1);
+    assert(errno == EILSEQ && count == 0);
+    memset(&iterator, 0x5a, sizeof(iterator));
+    errno = 0;
+    assert(pvr_chunk_volume_iterator_init(&iterator, &record) == -1);
+    assert(errno == EILSEQ && iterator.type == 0);
+
+    record = volume_record(UINT8_C(59), triangle_payload,
+                           sizeof(triangle_payload) /
+                           sizeof(triangle_payload[0]));
+    errno = 0;
+    assert(pvr_chunk_volume_triangle_count(&record, &count) == -1);
+    assert(errno == EILSEQ && count == 0);
+}
+
 static void translation(matrix_t *matrix, float x, float y, float z) {
     const matrix_t value = {
         { 1.0f, 0.0f, 0.0f, 0.0f },
@@ -798,6 +910,7 @@ int main(void) {
     test_bad_streams();
     test_user_flags_and_reverse_strip();
     test_decoded_attributes();
+    test_volume_iterator();
     test_hierarchy();
     test_bounded_random_streams();
     puts("pvr chunk model tests: PASS");
