@@ -221,8 +221,8 @@ f 1/1 2/2 3/3
         assert result.stdout == REPORT + "c_symbol=test_model\n"
         generated_text = generated.read_text(encoding="ascii")
         assert "const pvr_chunk_model_t test_model = {" in generated_text
-        assert "static alignas(uint32_t) const uint32_t " in generated_text
-        assert "static alignas(uint16_t) const uint16_t " in generated_text
+        assert "alignas(uint32_t) static const uint32_t " in generated_text
+        assert "alignas(uint16_t) static const uint16_t " in generated_text
         assert ".center = { 0x0p+0F, 0x0p+0F, 0x0p+0F }," in generated_text
         assert ".radius = 0x1.6a09e6p+0F" in generated_text
         assert str(source) not in generated_text

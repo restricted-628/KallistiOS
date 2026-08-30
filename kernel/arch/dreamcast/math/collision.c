@@ -1060,9 +1060,9 @@ int collision_obb_intersects_obb(const collision_obb_t *first,
     xyz_t centers;
     float rotation[3][3];
     float absolute[3][3];
-    float translation[3];
-    float first_extents[3];
-    float second_extents[3];
+    float translation[3] = { 0.0f, 0.0f, 0.0f };
+    float first_extents[3] = { 0.0f, 0.0f, 0.0f };
+    float second_extents[3] = { 0.0f, 0.0f, 0.0f };
     float scale;
     int i;
     int j;

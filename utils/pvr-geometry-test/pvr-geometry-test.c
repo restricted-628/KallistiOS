@@ -22,7 +22,7 @@ typedef struct extended_vertex {
     uint32_t application_data[8];
 } extended_vertex_t;
 
-static alignas(32) pvr_vertex_t submitted[8];
+alignas(32) static pvr_vertex_t submitted[8];
 static size_t submitted_count;
 static pvr_list_t submitted_list;
 static int submit_error;

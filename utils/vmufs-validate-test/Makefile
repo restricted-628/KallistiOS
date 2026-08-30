@@ -3,7 +3,7 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 
 KOS_ROOT = ../..
 VMUFS_DIR = $(KOS_ROOT)/kernel/arch/dreamcast/fs

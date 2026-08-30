@@ -1,6 +1,6 @@
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 CPPFLAGS += -I../pvr-deform-test/include \
 	-I../../kernel/arch/dreamcast/include
 LDLIBS += -lm
@@ -25,7 +25,7 @@ test: $(TARGET)
 dreamcast: $(DREAMCAST_TARGET)
 
 $(DREAMCAST_TARGET): pvr-chunk-shape-test.c
-	kos-cc -std=gnu17 -Wall -Wextra $< -lm -o $@
+	kos-cc $(KOS_CSTD) -Wall -Wextra $< -lm -o $@
 
 clean:
 	rm -f $(TARGET) $(DREAMCAST_TARGET)

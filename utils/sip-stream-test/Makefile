@@ -5,7 +5,7 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 
 TARGET = sip-stream-test
 SOURCE = ../../kernel/arch/dreamcast/hardware/maple/sip_stream.c

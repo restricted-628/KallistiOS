@@ -4,7 +4,7 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 ROOT := ../..
 INCLUDES := -Iinclude -I$(ROOT)/kernel/arch/dreamcast/include \
             -I$(ROOT)/kernel/arch/dreamcast/hardware

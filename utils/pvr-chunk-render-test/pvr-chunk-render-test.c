@@ -144,7 +144,7 @@ typedef struct callback_state {
     pvr_chunk_render_state_t state;
 } callback_state_t;
 
-static alignas(32) pvr_vertex_t submitted[32];
+alignas(32) static pvr_vertex_t submitted[32];
 static size_t submitted_count;
 static uint32_t submitted_modifier_modes[16];
 static size_t submitted_modifier_count;

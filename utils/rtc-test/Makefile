@@ -4,7 +4,7 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 ROOT := ../..
 TEST_INCLUDES := -Iinclude
 CALENDAR_SOURCE := $(ROOT)/kernel/arch/dreamcast/hardware/rtc_calendar.c

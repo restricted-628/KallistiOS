@@ -13,7 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static alignas(32) matrix_t current_matrix;
+alignas(32) static matrix_t current_matrix;
 
 void mat_store(matrix_t *out) {
     memcpy(out, &current_matrix, sizeof(*out));

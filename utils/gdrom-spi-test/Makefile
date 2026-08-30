@@ -2,7 +2,7 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 
 HARDWARE_DIR = ../../kernel/arch/dreamcast/hardware
 TARGET = gdrom-spi-test

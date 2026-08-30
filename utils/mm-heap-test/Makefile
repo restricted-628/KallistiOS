@@ -5,7 +5,8 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic -pthread
+include ../Makefile.host-test
+CFLAGS += -pthread
 ROOT := ../..
 INCLUDES := -Iinclude
 SOURCE := $(ROOT)/kernel/mm/heap.c

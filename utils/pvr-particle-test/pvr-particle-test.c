@@ -20,7 +20,7 @@ typedef struct extended_particle {
     uint32_t application_data[4];
 } extended_particle_t;
 
-static alignas(32) const matrix_t identity = {
+alignas(32) static const matrix_t identity = {
     { 1.0f, 0.0f, 0.0f, 0.0f },
     { 0.0f, 1.0f, 0.0f, 0.0f },
     { 0.0f, 0.0f, 1.0f, 0.0f },
@@ -113,8 +113,7 @@ static void test_step(void) {
         particle_seed(0.0f, 0.0f, 1.0f, 2.0f,
                       UINT32_C(0xff000001)),
         particle_seed(5.0f, 0.0f, 1.0f, 0.25f,
-                      UINT32_C(0xff000002)),
-        { 0 }
+                      UINT32_C(0xff000002))
     };
     pvr_particle_stream_t stream = {
         particles, 3, sizeof(particles[0])
@@ -161,8 +160,7 @@ static void test_sprite_instances(void) {
         particle_seed(4.0f, 5.0f, 6.0f, 2.0f,
                       UINT32_C(0xff000002)),
         particle_seed(7.0f, 8.0f, 9.0f, 2.0f,
-                      UINT32_C(0xff000003)),
-        { 0 }
+                      UINT32_C(0xff000003))
     };
     pvr_particle_stream_t stream = {
         particles, 4, sizeof(particles[0])

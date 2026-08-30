@@ -5,7 +5,7 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
             -I../../kernel/arch/dreamcast/include
 

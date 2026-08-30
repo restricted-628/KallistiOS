@@ -41,9 +41,12 @@ static uint16_t crc_update(const uint8_t *data, size_t length, uint16_t crc) {
         unsigned int bit;
 
         crc ^= (uint16_t)data[i] << 8;
-        for(bit = 0; bit < 8; ++bit)
-            crc = (uint16_t)((crc & 0x8000u) ?
-                             (crc << 1) ^ 0x1021u : crc << 1);
+        for(bit = 0; bit < 8; ++bit) {
+            uint32_t shifted = (uint32_t)crc << 1;
+
+            crc = (uint16_t)((crc & UINT16_C(0x8000)) ?
+                             shifted ^ UINT32_C(0x1021) : shifted);
+        }
     }
 
     return crc;

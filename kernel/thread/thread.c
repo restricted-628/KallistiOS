@@ -47,8 +47,8 @@ also using their queue library verbatim (sys/queue.h).
 */
 
 /* Builtin background thread data */
-static alignas(THD_STACK_ALIGNMENT) uint8_t thd_reaper_stack[512];
-static alignas(THD_STACK_ALIGNMENT) uint8_t thd_idle_stack[512];
+alignas(THD_STACK_ALIGNMENT) static uint8_t thd_reaper_stack[512];
+alignas(THD_STACK_ALIGNMENT) static uint8_t thd_idle_stack[512];
 
 /*****************************************************************************/
 /* Thread scheduler data */

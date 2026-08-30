@@ -1,6 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
+CFLAGS += $(HOST_LZ4_WARNINGS)
 CPPFLAGS += -I../pvr-chunk-model-test/include \
             -I../../kernel/arch/dreamcast/include -I../../addons/include
 LDLIBS += -lm

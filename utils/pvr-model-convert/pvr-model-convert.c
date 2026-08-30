@@ -2020,7 +2020,7 @@ static int write_c_array(FILE *file, const char *symbol, const char *suffix,
     size_t word;
 
     if(checked_fprintf(file,
-                       "static alignas(%s) const %s %s_%s[] = {\n",
+                       "alignas(%s) static const %s %s_%s[] = {\n",
                        type, type, symbol, suffix) < 0)
         return -1;
     for(word = 0; word < word_count; ++word) {

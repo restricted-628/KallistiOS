@@ -15,7 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static alignas(32) matrix_t current_matrix;
+alignas(32) static matrix_t current_matrix;
 
 static const matrix_t identity = {
     { 1.0f, 0.0f, 0.0f, 0.0f },

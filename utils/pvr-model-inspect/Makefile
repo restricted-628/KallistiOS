@@ -6,7 +6,7 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
+include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../../kernel/arch/dreamcast/include
 
 TARGET = pvr-model-inspect
