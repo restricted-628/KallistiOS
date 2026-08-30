@@ -282,6 +282,74 @@ static void test_boundaries_capacity_and_color(void) {
     assert(color == UINT32_C(0x40401004));
 }
 
+static void test_lookup_ramp(void) {
+    const float thresholds[] = { -0.25f, 0.5f };
+    const float unordered[] = { 0.5f, -0.25f };
+    const uint32_t diffuse[] = {
+        UINT32_C(0xff404040), UINT32_C(0xff808080),
+        UINT32_C(0xffffffff)
+    };
+    const uint32_t offset[] = {
+        UINT32_C(0x00000000), UINT32_C(0x80808080),
+        UINT32_C(0xffffffff)
+    };
+    pvr_toon_ramp_config_t config = {
+        .thresholds = thresholds,
+        .argb_modulation = diffuse,
+        .oargb_modulation = offset,
+        .threshold_count = 2
+    };
+    pvr_toon_ramp_t ramp;
+    pvr_toon_ramp_t unchanged;
+    uint32_t argb;
+    uint32_t oargb;
+    size_t band;
+
+    assert(pvr_toon_ramp_init(&ramp, &config) == 0);
+    assert(pvr_toon_ramp_apply(&argb, &oargb, &band,
+                               UINT32_C(0xff804020),
+                               UINT32_C(0xff204080), -0.25f,
+                               &ramp) == 0);
+    assert(band == 1 && argb == UINT32_C(0xff402010) &&
+           oargb == UINT32_C(0x80102040));
+    assert(pvr_toon_ramp_apply(&argb, &oargb, &band,
+                               UINT32_C(0xff804020),
+                               UINT32_C(0xff204080), 2.0f,
+                               &ramp) == 0);
+    assert(band == 2 && argb == UINT32_C(0xff804020) &&
+           oargb == UINT32_C(0xff204080));
+
+    config.argb_modulation = NULL;
+    assert(pvr_toon_ramp_init(&ramp, &config) == 0);
+    assert(pvr_toon_ramp_apply(&argb, &oargb, NULL,
+                               UINT32_C(0x12345678),
+                               UINT32_C(0xff204080), -1.0f,
+                               &ramp) == 0);
+    assert(argb == UINT32_C(0x12345678) && oargb == 0);
+
+    unchanged = ramp;
+    config.oargb_modulation = NULL;
+    errno = 0;
+    assert(pvr_toon_ramp_init(&ramp, &config) == -1 && errno == EINVAL);
+    assert(memcmp(&ramp, &unchanged, sizeof(ramp)) == 0);
+
+    config.thresholds = unordered;
+    config.argb_modulation = diffuse;
+    config.oargb_modulation = offset;
+    errno = 0;
+    assert(pvr_toon_ramp_init(&ramp, &config) == -1 && errno == EINVAL);
+    assert(memcmp(&ramp, &unchanged, sizeof(ramp)) == 0);
+
+    argb = UINT32_C(0xaaaaaaaa);
+    oargb = UINT32_C(0xbbbbbbbb);
+    band = 77;
+    errno = 0;
+    assert(pvr_toon_ramp_apply(&argb, &oargb, &band, 0, 0, NAN,
+                               &unchanged) == -1 && errno == EINVAL);
+    assert(argb == UINT32_C(0xaaaaaaaa) &&
+           oargb == UINT32_C(0xbbbbbbbb) && band == 77);
+}
+
 static uint32_t random_state = UINT32_C(0x6d2b79f5);
 
 static float random_signed(void) {
@@ -333,6 +401,7 @@ int main(void) {
     test_binary_split();
     test_shared_edge_and_multiband();
     test_boundaries_capacity_and_color();
+    test_lookup_ramp();
     test_random_partitions();
     puts("pvr toon tests: PASS");
     return 0;

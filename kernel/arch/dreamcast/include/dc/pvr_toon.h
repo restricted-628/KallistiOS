@@ -89,6 +89,31 @@ typedef struct pvr_toon_split_result {
     size_t crossed_thresholds;    /**< Thresholds strictly inside shade span. */
 } pvr_toon_split_result_t;
 
+/** \brief Source arrays used to admit a vertex-quantized color ramp.
+
+    With N thresholds each nonnull modulation array contains N+1 packed ARGB
+    entries. A null modulation array leaves that color channel set unchanged.
+    At least one modulation array is required. The arrays remain caller-owned.
+*/
+typedef struct pvr_toon_ramp_config {
+    const float *thresholds;
+    const uint32_t *argb_modulation;
+    const uint32_t *oargb_modulation;
+    size_t threshold_count;
+} pvr_toon_ramp_config_t;
+
+/** \brief Admitted immutable vertex-quantized color-ramp view.
+
+    Initialize only with pvr_toon_ramp_init(). The borrowed arrays must remain
+    valid and immutable while the ramp is used.
+*/
+typedef struct pvr_toon_ramp {
+    const float *thresholds;
+    const uint32_t *argb_modulation;
+    const uint32_t *oargb_modulation;
+    size_t threshold_count;
+} pvr_toon_ramp_t;
+
 /** \brief Initialize and normalize one directional scalar light.
 
     Output is unchanged on failure. Direction W is ignored. Signed intensity
@@ -127,6 +152,31 @@ int pvr_toon_shade_apply(float *output, size_t output_capacity,
 */
 int pvr_toon_band_index(size_t *band, float shade,
                         const float *thresholds, size_t threshold_count);
+
+/** \brief Admit one allocation-free vertex-quantized color ramp.
+
+    Thresholds must be finite and strictly increasing. The configuration and
+    complete threshold array are validated before the candidate is published;
+    output is unchanged on failure. As with other borrowed KOS views, the
+    caller is responsible for the advertised N+1 modulation-array extents.
+*/
+int pvr_toon_ramp_init(pvr_toon_ramp_t *ramp,
+                       const pvr_toon_ramp_config_t *config);
+
+/** \brief Select and apply one admitted color-ramp entry.
+
+    The lookup is logarithmic in the threshold count and does not revalidate
+    the admitted arrays. Base and offset colors are independently multiplied
+    with rounded channel products. A scalar equal to a threshold selects the
+    higher band. Both outputs and optional \p band are unchanged on failure.
+
+    This is a low-cost per-vertex approximation: the PVR may interpolate
+    different endpoint colors across a primitive. Use
+    pvr_toon_split_triangle() when a sharp geometric boundary is required.
+*/
+int pvr_toon_ramp_apply(uint32_t *argb_output, uint32_t *oargb_output,
+                        size_t *band, uint32_t argb, uint32_t oargb,
+                        float shade, const pvr_toon_ramp_t *ramp);
 
 /** \brief Query the worst-case triangle capacity for N thresholds.
 

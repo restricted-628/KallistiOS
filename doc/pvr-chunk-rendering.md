@@ -177,6 +177,16 @@ original 32-byte color or 64-byte textured packet. The hardware therefore
 continues to select the outside or inside parameter set per pixel after both
 topology-changing stages. IGNORE_LIGHT preserves both authored sets unchanged.
 
+For content that does not need topology-exact boundaries,
+`pvr_toon_ramp_init()` admits a small borrowed lookup ramp once and
+`pvr_toon_ramp_apply()` performs a logarithmic per-vertex lookup without
+revalidating it. Base and offset colors have independent optional modulation
+arrays, so a compact renderer can quantize diffuse bands and highlight bands
+without allocating storage or changing the model grammar. This is explicitly
+a throughput policy: endpoint colors may be interpolated across a primitive.
+The prepared geometric emitters remain the exact choice when a threshold must
+become a sharp line inside a triangle.
+
 Prepared-cache wireframe drawing is another policy over the same canonical
 geometry. `pvr_chunk_model_cache_emit_wire()` enumerates unique edges directly
 from triangle-strip references instead of emitting all three edges of every
@@ -319,31 +329,28 @@ topology gap, but it does not make the broader compact-model program complete.
 The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
-1. Evaluate a small admitted lookup-ramp mode and quantized offset-color
-   highlights against the existing exact geometric bands and extended
-   lighting path. These are policy/throughput choices, not new model records.
-2. Resolve the admitted cached-polygon control records. Prefer translating
+1. Resolve the admitted cached-polygon control records. Prefer translating
    them into explicit prepared-cache/submesh reuse in the host compiler rather
    than adding a second runtime cache mechanism.
-3. Add a rare floating-UV escape record only if conformance content exceeds
+2. Add a rare floating-UV escape record only if conformance content exceeds
    both signed fixed-point ranges or needs precision neither encoding can
    preserve. The host compiler already selects UV10 when it fits and otherwise
    UV8; it must continue failing loudly rather than silently clamping.
-4. Define a backward-compatible section-directory asset revision when compact
+3. Define a backward-compatible section-directory asset revision when compact
    assets need to bundle optional hierarchy, general-skin, morph, animation,
    collision-volume, resource-table, or cooked-cache sections. PCM1 remains
    the small two-stream container; a larger fixed header must not grow around
    every optional feature.
-5. Extend the host compiler around one canonical scene IR, including modern
+4. Extend the host compiler around one canonical scene IR, including modern
    scene import, lossless general skin and morph import, hierarchy/evaluation
    metadata, parent-result canonicalization, optional cooked caches, and
    repeatable round-trip conformance fixtures for seams and deformation.
-6. Add exact imported hierarchy policies only where conversion proves they are
+5. Add exact imported hierarchy policies only where conversion proves they are
    observable: translation/rotation/scale suppression, child-pruning, and
    explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
    not replace the current flat parent-before-child hierarchy or complete-pose
    deformation with pointer trees or deferred polygon execution.
-7. Extend the separate cell-sprite layer with host authoring support. Its core
+6. Extend the separate cell-sprite layer with host authoring support. Its core
    timestamped stream/list sampling and events, generic whole-motion binding,
    signed priority, material/color metadata, and compact or colored 2D/3D
    geometry paths are complete and remain outside the 3D compact mesh grammar.

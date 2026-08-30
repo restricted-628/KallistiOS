@@ -267,6 +267,74 @@ int pvr_toon_band_index(size_t *band, float shade,
     return 0;
 }
 
+int pvr_toon_ramp_init(pvr_toon_ramp_t *ramp,
+                       const pvr_toon_ramp_config_t *config) {
+    pvr_toon_ramp_t candidate;
+
+    if(!ramp || !config ||
+       (!config->argb_modulation && !config->oargb_modulation)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(config->threshold_count == SIZE_MAX) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(thresholds_valid(config->thresholds, config->threshold_count,
+                        0.0f) < 0)
+        return -1;
+
+    candidate.thresholds = config->thresholds;
+    candidate.argb_modulation = config->argb_modulation;
+    candidate.oargb_modulation = config->oargb_modulation;
+    candidate.threshold_count = config->threshold_count;
+    *ramp = candidate;
+    return 0;
+}
+
+int pvr_toon_ramp_apply(uint32_t *argb_output, uint32_t *oargb_output,
+                        size_t *band, uint32_t argb, uint32_t oargb,
+                        float shade, const pvr_toon_ramp_t *ramp) {
+    uint32_t argb_candidate = argb;
+    uint32_t oargb_candidate = oargb;
+    size_t low = 0;
+    size_t high;
+
+    if(!argb_output || !oargb_output || argb_output == oargb_output ||
+       !ramp || !isfinite(shade) ||
+       (ramp->threshold_count && !ramp->thresholds) ||
+       (!ramp->argb_modulation && !ramp->oargb_modulation)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Ramp admission proved ordering and finiteness once. Hot lookup only
+       searches the immutable threshold array. */
+    high = ramp->threshold_count;
+    while(low < high) {
+        size_t middle = low + (high - low) / 2u;
+
+        if(shade < ramp->thresholds[middle])
+            high = middle;
+        else
+            low = middle + 1u;
+    }
+    if(ramp->argb_modulation &&
+       pvr_toon_color_modulate(&argb_candidate, argb,
+                               ramp->argb_modulation[low]) < 0)
+        return -1;
+    if(ramp->oargb_modulation &&
+       pvr_toon_color_modulate(&oargb_candidate, oargb,
+                               ramp->oargb_modulation[low]) < 0)
+        return -1;
+
+    *argb_output = argb_candidate;
+    *oargb_output = oargb_candidate;
+    if(band)
+        *band = low;
+    return 0;
+}
+
 int pvr_toon_triangle_capacity(size_t threshold_count, size_t *capacity) {
     size_t value;
 
