@@ -23,6 +23,9 @@ strip_records=1
 strips=1
 triangles=1
 index_references=3
+polygon_cache_records=0
+polygon_draw_records=0
+requirements=0x00000000
 maximum_vertex_index=2
 texture_references=3
 distinct_textures=2
@@ -75,6 +78,17 @@ def main():
         result = invoke(tool, "--", vertex_path, polygon_path)
         assert result.returncode == 0, result.stderr
         assert result.stdout == EXPECTED
+
+        deferred = root / "deferred.bin"
+        deferred.write_bytes(struct.pack("<3H", (17 << 8) | 4,
+                                         (17 << 8) | 5, 0xFF))
+        result = invoke(tool, vertex_path, deferred)
+        assert result.returncode == 0, result.stderr
+        report = dict(line.split("=", 1)
+                      for line in result.stdout.splitlines())
+        assert report["polygon_cache_records"] == "1"
+        assert report["polygon_draw_records"] == "1"
+        assert report["requirements"] == "0x00000001"
 
         truncated = root / "truncated.bin"
         truncated.write_bytes(polygon_path.read_bytes()[:-2])

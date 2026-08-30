@@ -23,6 +23,11 @@ lifecycle and naming conventions.
   validation and independently modulates packed base and offset colors, giving
   custom and compact renderers a smaller approximate diffuse/highlight policy
   while retaining exact topology-changing emission when required.
+* Classified deferred polygon capture/draw controls as an explicit compact-
+  model canonicalization requirement. Validation and inspection report both
+  record counts, while runtime emitters continue rejecting the cross-hierarchy
+  execution mechanism before side effects instead of creating a competing
+  on-console polygon cache.
 * Added a prepared two-volume compact-cache band path. It preserves both
   texture-coordinate, diffuse, and offset-color parameter sets through shade
   subdivision and homogeneous frustum clipping, supports independent

@@ -239,7 +239,14 @@ contract:
 - two-volume texture, material, and strip records;
 - cached-polygon control records.
 
-These records are not skipped or approximated. Two-volume texture, material,
+These records are not skipped or approximated. Deferred polygon capture/draw
+controls are classified by `pvr_chunk_model_info_t` as requiring polygon
+canonicalization; they describe cross-hierarchy execution ordering rather than
+a reusable submesh inside one compact model. Importers must evaluate their
+complete deformation dependency and emit ordinary strips. KOS deliberately
+does not create a second runtime polygon cache beside prepared draw caches.
+
+Two-volume texture, material,
 and strip records instead use `pvr_chunk_model_emit_two_volume()`, which binds
 the entire call to either KOS's complete 32-byte untextured layout or 64-byte
 textured layout and rejects mixed layouts before output. Modifier geometry,
@@ -329,28 +336,26 @@ topology gap, but it does not make the broader compact-model program complete.
 The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
-1. Resolve the admitted cached-polygon control records. Prefer translating
-   them into explicit prepared-cache/submesh reuse in the host compiler rather
-   than adding a second runtime cache mechanism.
-2. Add a rare floating-UV escape record only if conformance content exceeds
+1. Add a rare floating-UV escape record only if conformance content exceeds
    both signed fixed-point ranges or needs precision neither encoding can
    preserve. The host compiler already selects UV10 when it fits and otherwise
    UV8; it must continue failing loudly rather than silently clamping.
-3. Define a backward-compatible section-directory asset revision when compact
+2. Define a backward-compatible section-directory asset revision when compact
    assets need to bundle optional hierarchy, general-skin, morph, animation,
    collision-volume, resource-table, or cooked-cache sections. PCM1 remains
    the small two-stream container; a larger fixed header must not grow around
    every optional feature.
-4. Extend the host compiler around one canonical scene IR, including modern
+3. Extend the host compiler around one canonical scene IR, including modern
    scene import, lossless general skin and morph import, hierarchy/evaluation
-   metadata, parent-result canonicalization, optional cooked caches, and
+   metadata, parent-result canonicalization, elimination of deferred polygon
+   controls, optional cooked caches, and
    repeatable round-trip conformance fixtures for seams and deformation.
-5. Add exact imported hierarchy policies only where conversion proves they are
+4. Add exact imported hierarchy policies only where conversion proves they are
    observable: translation/rotation/scale suppression, child-pruning, and
    explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
    not replace the current flat parent-before-child hierarchy or complete-pose
    deformation with pointer trees or deferred polygon execution.
-6. Extend the separate cell-sprite layer with host authoring support. Its core
+5. Extend the separate cell-sprite layer with host authoring support. Its core
    timestamped stream/list sampling and events, generic whole-motion binding,
    signed priority, material/color metadata, and compact or colored 2D/3D
    geometry paths are complete and remain outside the 3D compact mesh grammar.

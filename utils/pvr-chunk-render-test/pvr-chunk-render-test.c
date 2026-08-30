@@ -49,6 +49,12 @@ static const uint16_t unsupported_polygons[] = {
     PVR_CHUNK_TEXTURE_TWO_VOLUME, UINT16_C(0), UINT16_C(0x00ff)
 };
 
+static const uint16_t deferred_polygons[] = {
+    POLYGON_HEADER(PVR_CHUNK_CONTROL_CACHE_POLYGONS, 7),
+    POLYGON_HEADER(PVR_CHUNK_CONTROL_DRAW_CACHED_POLYGONS, 7),
+    UINT16_C(0x00ff)
+};
+
 static const uint16_t bump_polygons[] = {
     POLYGON_HEADER(PVR_CHUNK_MATERIAL_BUMP, 0x25), UINT16_C(6),
     UINT16_C(0x7fff), UINT16_C(0x0000), UINT16_C(0x8000),
@@ -567,6 +573,22 @@ static void test_unsupported(void) {
     callback_state_t callback = { 0 };
 
     assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    errno = 0;
+    assert(pvr_chunk_model_emit(&view, &identity, &sink, workspace, 3,
+                                begin_strip, prepare_vertex, &callback,
+                                &result) == -1);
+    assert(errno == ENOTSUP && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+    assert(result.consumed_records == 0 && result.emitted_vertices == 0);
+
+    model = make_model(deferred_polygons,
+                       sizeof(deferred_polygons) /
+                       sizeof(deferred_polygons[0]));
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(view.info.requirements ==
+           PVR_CHUNK_MODEL_REQUIRES_POLYGON_CANONICALIZATION);
+    memset(&callback, 0, sizeof(callback));
     assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
     errno = 0;
     assert(pvr_chunk_model_emit(&view, &identity, &sink, workspace, 3,

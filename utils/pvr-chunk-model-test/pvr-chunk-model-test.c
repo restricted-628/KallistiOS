@@ -95,6 +95,9 @@ static void test_valid_model(void) {
     assert(info.strips == 1);
     assert(info.triangles == 1);
     assert(info.index_references == 3);
+    assert(info.polygon_cache_records == 0);
+    assert(info.polygon_draw_records == 0);
+    assert(info.requirements == 0);
     assert(info.maximum_strip_vertices == 3);
     assert(info.maximum_vertex_index == 2);
     assert(pvr_chunk_model_vertex_attributes_get(&view, 1, &attributes) == 0);
@@ -145,6 +148,28 @@ static void test_valid_model(void) {
     assert(strip_vertex.index == 2 &&
            strip_vertex.triangle_user_word_count == 0);
     assert(pvr_chunk_strip_iterator_next(&strip_iterator, &strip) == 0);
+}
+
+static void test_deferred_polygon_controls(void) {
+    static const uint16_t polygons[] = {
+        (UINT16_C(17) << 8) | PVR_CHUNK_CONTROL_CACHE_POLYGONS,
+        (UINT16_C(17) << 8) | PVR_CHUNK_CONTROL_DRAW_CACHED_POLYGONS,
+        UINT16_C(0x00ff)
+    };
+    pvr_chunk_model_t model = model_with(
+        valid_vertices, sizeof(valid_vertices) / sizeof(valid_vertices[0]),
+        polygons, sizeof(polygons) / sizeof(polygons[0]));
+    pvr_chunk_model_info_t info;
+    pvr_chunk_model_view_t view;
+
+    assert(pvr_chunk_model_validate(&model, &info) == 0);
+    assert(info.polygon_records == 2);
+    assert(info.polygon_cache_records == 1);
+    assert(info.polygon_draw_records == 1);
+    assert(info.requirements ==
+           PVR_CHUNK_MODEL_REQUIRES_POLYGON_CANONICALIZATION);
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(view.info.requirements == info.requirements);
 }
 
 static void test_prepared_plan(void) {
@@ -906,6 +931,7 @@ static void test_bounded_random_streams(void) {
 
 int main(void) {
     test_valid_model();
+    test_deferred_polygon_controls();
     test_prepared_plan();
     test_bad_streams();
     test_user_flags_and_reverse_strip();

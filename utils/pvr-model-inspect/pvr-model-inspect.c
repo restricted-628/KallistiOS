@@ -202,6 +202,9 @@ static void print_report(const pvr_chunk_model_t *model,
     printf("strips=%zu\n", info->strips);
     printf("triangles=%zu\n", info->triangles);
     printf("index_references=%zu\n", info->index_references);
+    printf("polygon_cache_records=%zu\n", info->polygon_cache_records);
+    printf("polygon_draw_records=%zu\n", info->polygon_draw_records);
+    printf("requirements=0x%08" PRIx32 "\n", info->requirements);
     printf("maximum_vertex_index=%" PRIu32 "\n",
            info->maximum_vertex_index);
     printf("texture_references=%zu\n", stats->texture_references);

@@ -751,6 +751,19 @@ static int validate_polygon_record(const pvr_chunk_model_t *model,
         return -1;
 
     switch(record->record_class) {
+        case PVR_CHUNK_RECORD_BITS:
+            if(record->type == PVR_CHUNK_CONTROL_CACHE_POLYGONS) {
+                info->requirements |=
+                    PVR_CHUNK_MODEL_REQUIRES_POLYGON_CANONICALIZATION;
+                return checked_add(&info->polygon_cache_records, 1u);
+            }
+            if(record->type == PVR_CHUNK_CONTROL_DRAW_CACHED_POLYGONS) {
+                info->requirements |=
+                    PVR_CHUNK_MODEL_REQUIRES_POLYGON_CANONICALIZATION;
+                return checked_add(&info->polygon_draw_records, 1u);
+            }
+            return 0;
+
         case PVR_CHUNK_RECORD_MATERIAL:
             if(record->payload_word_count !=
                material_payload_words(record->type)) {

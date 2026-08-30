@@ -56,7 +56,9 @@ typedef enum pvr_chunk_control_type {
     PVR_CHUNK_CONTROL_BLEND = 1,
     PVR_CHUNK_CONTROL_MIPMAP_ADJUST = 2,
     PVR_CHUNK_CONTROL_SPECULAR_EXPONENT = 3,
+    /** Import-only deferred polygon-list capture marker. */
     PVR_CHUNK_CONTROL_CACHE_POLYGONS = 4,
+    /** Import-only deferred polygon-list execution marker. */
     PVR_CHUNK_CONTROL_DRAW_CACHED_POLYGONS = 5,
     PVR_CHUNK_CONTROL_END = 255
 } pvr_chunk_control_type_t;
@@ -207,7 +209,21 @@ typedef struct pvr_chunk_iterator {
     int ended;
 } pvr_chunk_iterator_t;
 
-/** \brief Summary produced by complete model validation. */
+/** \brief Runtime requirements discovered during model validation. */
+typedef enum pvr_chunk_model_requirement {
+    /** Deferred polygon controls must be canonicalized before rendering. */
+    PVR_CHUNK_MODEL_REQUIRES_POLYGON_CANONICALIZATION = 1u << 0
+} pvr_chunk_model_requirement_t;
+
+/** \brief Summary produced by complete model validation.
+
+    Deferred polygon controls remain structurally inspectable so import tools
+    can recognize them, but they describe execution ordering across a complete
+    hierarchy rather than reusable geometry inside one model. Their presence
+    sets PVR_CHUNK_MODEL_REQUIRES_POLYGON_CANONICALIZATION. Runtime emitters
+    reject such streams before side effects; a host compiler must resolve the
+    complete deformation and polygon order into ordinary compact strips.
+*/
 typedef struct pvr_chunk_model_info {
     size_t vertex_records;
     size_t vertex_entries;
@@ -218,8 +234,11 @@ typedef struct pvr_chunk_model_info {
     size_t strips;
     size_t triangles;
     size_t index_references;
+    size_t polygon_cache_records;
+    size_t polygon_draw_records;
     size_t maximum_strip_vertices; /**< Minimum strip workspace capacity. */
     uint32_t maximum_vertex_index;
+    uint32_t requirements;         /**< pvr_chunk_model_requirement_t bits. */
 } pvr_chunk_model_info_t;
 
 /** \brief Validated, immutable view of one compact model.
