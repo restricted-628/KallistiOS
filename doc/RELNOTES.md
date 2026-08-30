@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a backward-compatible PCM2 compact-model asset directory beside PCM1.
+  It validates checksummed, offset-ordered, nonoverlapping section descriptors;
+  requires exactly one vertex and polygon stream; and exposes repeatable
+  optional typed or application sections through checked lookup and
+  allocation-free materialization APIs. Raw aligned data remains zero-copy,
+  while compressed or unaligned sections use exact caller-owned workspace.
 * Added allocation-free scalar-band geometry for cel shading. One generic
   partitioner covers binary and arbitrary ordered multiband shading, preserves
   position, normalized normal, decoded floating UVs, base/offset color, and

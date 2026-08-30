@@ -8,8 +8,10 @@ temporary output is published.
 ```text
 pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
     [--texture-id ID | --material NAME=ID ...] \
-    [--material-library FILE ...] [--emit-c SYMBOL] [--] \
-    INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c}
+    [--material-library FILE ...] \
+    [--emit-c SYMBOL | --emit-asset [--section-directory] \
+     [--lz4-vertices]] [--] \
+    INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}
 ```
 
 The admitted source subset is:
@@ -97,6 +99,14 @@ consumer code with, for example:
 
 extern const pvr_chunk_model_t ship_model;
 ```
+
+`--emit-asset` writes the small PCM1 two-stream container by default.
+`--lz4-vertices` independently compresses its vertex stream with a checksummed
+LZ4 Frame. `--section-directory` instead writes PCM2, retaining the same two
+required streams in an extensible checksummed directory. A two-stream PCM2 is
+larger than PCM1 and is intended as the host-pipeline base for optional
+resource, deformation, hierarchy, animation, collision, cache, or application
+sections; models which need none of those should keep PCM1.
 
 Compile the generated file normally in the application build to produce the
 target object; the converter does not invoke or choose a compiler. Each output

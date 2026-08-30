@@ -355,29 +355,27 @@ topology gap, but it does not make the broader compact-model program complete.
 The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
-1. Define a backward-compatible section-directory asset revision when compact
-   assets need to bundle optional hierarchy, general-skin, morph, animation,
-   collision-volume, resource-table, or cooked-cache sections. PCM1 remains
-   the small two-stream container; a larger fixed header must not grow around
-   every optional feature.
-2. Extend the host compiler around one canonical scene IR, including modern
-   scene import, lossless general skin and morph import, hierarchy/evaluation
-   metadata, parent-result canonicalization, elimination of deferred polygon
-   controls, optional cooked caches, and
+1. Extend the host compiler around one canonical scene IR and populate the
+   completed PCM2 directory with optional hierarchy, general-skin, morph,
+   animation, collision-volume, resource-table, or cooked-cache sections.
+   Include modern scene import, lossless general skin and morph import,
+   hierarchy/evaluation metadata, parent-result canonicalization, elimination
+   of deferred polygon controls, optional cooked caches, and
    repeatable round-trip conformance fixtures for seams and deformation.
-3. Add exact imported hierarchy policies only where conversion proves they are
+2. Add exact imported hierarchy policies only where conversion proves they are
    observable: translation/rotation/scale suppression, child-pruning, and
    explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
    not replace the current flat parent-before-child hierarchy or complete-pose
    deformation with pointer trees or deferred polygon execution.
-4. Extend the separate cell-sprite layer with host authoring support. Its core
+3. Extend the separate cell-sprite layer with host authoring support. Its core
    timestamped stream/list sampling and events, generic whole-motion binding,
    signed priority, material/color metadata, and compact or colored 2D/3D
    geometry paths are complete and remain outside the 3D compact mesh grammar.
 
 Already completed and not to be reimplemented are distinct signed UV8/UV10
 records with automatic host-side selection and a finite float-UV escape for
-coordinates outside both compact ranges, variable-count skin influences
+coordinates outside both compact ranges, the backward-compatible PCM2 checked
+section directory and generic section loader, variable-count skin influences
 beside the four-weight fast path, shape-to-morph binding, volume
 iteration/collision reuse, retained bounds and clipping, environment-map UV
 generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy

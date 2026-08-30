@@ -160,6 +160,31 @@ workspace, CRC-checked, and then passed through the normal complete compact-
 model admission boundary. The core container API allocates nothing and does
 not create a thread, fiber, callback worker, or decompression dependency.
 
+PCM2 preserves that contract while replacing header growth with a fixed
+64-byte header and a checksummed directory of 32-byte descriptors. Exactly one
+vertex stream and one polygon stream are required. Resource tables, volume
+data, compact or general skins, morph targets, hierarchies, animations, cooked
+caches, and application-defined sections are optional; repeatable types are
+addressed by zero-based ordinal rather than by adding pointers to the fixed
+asset view. Unknown nonzero section identifiers remain queryable for forward
+compatibility.
+
+Directory descriptors are ordered by increasing stored-data offset. Admission
+proves the complete directory checksum, each section span and codec, decoded
+alignment, raw-size identity, and nonoverlap before publishing either core
+stream. `pvr_chunk_asset_section_get()` and
+`pvr_chunk_asset_section_find()` return checked borrowed views. The matching
+workspace query and load APIs preserve zero-copy access for aligned raw bytes
+and CRC-check either borrowed or caller-decoded data. PCM1 is exposed through
+the same APIs as two synthetic sections, so consumers can migrate without a
+second loading path.
+
+The model converter continues emitting PCM1 by default because it is smaller
+for a model with only two streams. `--section-directory` emits an admitted
+PCM2 container when a content pipeline intends to append optional sections;
+it composes with raw or LZ4-framed vertex storage. The converter reopens and
+loads either output through the runtime parser before publishing the file.
+
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The
 converter's `--emit-asset --lz4-vertices` mode emits one checksummed LZ4 Frame

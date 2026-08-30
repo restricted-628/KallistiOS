@@ -295,6 +295,68 @@ f 1/1/1 2/2/1 3/3/1
         assert vertex_crc == zlib.crc32(vertices.read_bytes())
         assert polygon_crc == zlib.crc32(polygons.read_bytes())
 
+        directory_asset = root / "triangle-directory.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            "--section-directory",
+            source,
+            directory_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        directory_bytes = directory_asset.read_bytes()
+        assert result.stdout == (
+            REPORT + f"asset_bytes={len(directory_bytes)}\n"
+            "vertex_codec=raw\nasset_container=pcm2\n"
+        )
+        assert directory_bytes[:4] == b"PCM2"
+        assert struct.unpack_from("<HHI", directory_bytes, 4) == (
+            2, 64, len(directory_bytes)
+        )
+        assert zlib.crc32(directory_bytes[:60]) == struct.unpack_from(
+            "<I", directory_bytes, 60
+        )[0]
+        section_count, directory_offset, directory_size, directory_crc = (
+            struct.unpack_from("<4I", directory_bytes, 32)
+        )
+        assert (section_count, directory_offset, directory_size) == (2, 64, 64)
+        assert zlib.crc32(
+            directory_bytes[directory_offset:directory_offset + directory_size]
+        ) == directory_crc
+        vertex_descriptor = struct.unpack_from("<7IHH", directory_bytes, 64)
+        polygon_descriptor = struct.unpack_from("<7IHH", directory_bytes, 96)
+        assert vertex_descriptor[0] == 1 and vertex_descriptor[1] == 0
+        assert polygon_descriptor[0] == 2 and polygon_descriptor[1] == 0
+        assert vertex_descriptor[7:] == (0, 4)
+        assert polygon_descriptor[7:] == (0, 2)
+        assert directory_bytes[
+            vertex_descriptor[2]:vertex_descriptor[2] + vertex_descriptor[3]
+        ] == vertices.read_bytes()
+        assert directory_bytes[
+            polygon_descriptor[2]:polygon_descriptor[2] + polygon_descriptor[3]
+        ] == polygons.read_bytes()
+
+        directory_lz4 = root / "triangle-directory-lz4.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            "--section-directory",
+            "--lz4-vertices",
+            source,
+            directory_lz4,
+        )
+        assert result.returncode == 0, result.stderr
+        directory_lz4_bytes = directory_lz4.read_bytes()
+        lz4_descriptor = struct.unpack_from(
+            "<7IHH", directory_lz4_bytes, 64
+        )
+        assert lz4_descriptor[7:] == (1, 4)
+        assert directory_lz4_bytes[
+            lz4_descriptor[2]:lz4_descriptor[2] + 4
+        ] == b"\x04\x22\x4d\x18"
+
         lz4_asset = root / "triangle-lz4.pcm"
         result = invoke(
             converter,
