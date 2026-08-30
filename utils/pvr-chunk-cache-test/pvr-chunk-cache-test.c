@@ -645,6 +645,88 @@ static void test_wire_topologies(void) {
            result.emitted_vertices == 20);
 }
 
+static void test_two_volume_toon(
+    const pvr_chunk_two_volume_cache_t *cache) {
+    const float thresholds[] = { 0.0f };
+    const uint32_t outside[] = {
+        UINT32_C(0xff808080), UINT32_C(0xffffffff)
+    };
+    const uint32_t inside[] = {
+        UINT32_C(0xffffffff), UINT32_C(0xff404040)
+    };
+    vector_t direction = { 0.0f, 0.0f, 1.0f, 0.0f };
+    pvr_chunk_toon_profile_t profile;
+    pvr_chunk_two_volume_toon_modulation_t secondary = {
+        inside, inside
+    };
+    alignas(8) matrix_t matrix;
+    pvr_normal_matrix_t normal_matrix;
+    pvr_frustum_t frustum;
+    alignas(32) pvr_chunk_two_volume_vertex_t vertices[3];
+    alignas(32) pvr_deform_vertex_t deformations[3];
+    vector_t normals[3];
+    float shades[3];
+    pvr_toon_triangle_t toon_triangles[3];
+    pvr_toon_triangle_t secondary_toon_triangles[3];
+    alignas(32) pvr_vertex_t clip_primary[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    alignas(32) pvr_vertex_t clip_secondary[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    alignas(32) pvr_chunk_two_volume_vertex_t
+        clip_vertices[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    pvr_chunk_two_volume_toon_workspace_t workspace = {
+        vertices, deformations, normals, shades, 3,
+        toon_triangles, secondary_toon_triangles, 3,
+        clip_primary, clip_secondary, clip_vertices,
+        PVR_FRUSTUM_CLIP_MAX_VERTICES
+    };
+    alignas(32) pvr_vertex_tpcm_t output[63];
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_toon_result_t result;
+    callback_state_t callbacks = { 0 };
+    size_t index;
+    size_t distinct_sets = 0;
+
+    identity(&matrix);
+    assert(pvr_normal_matrix_build(&normal_matrix, &matrix) == 0);
+    /* The left plane crosses the source triangle, exercising the parallel
+       two-attribute clipping path after the shade boundary is generated. */
+    assert(pvr_frustum_init(&frustum, &matrix, 0.5f, -1.0f,
+                            3.0f, 1.0f, 0.5f, 2.0f) == 0);
+    memset(&profile, 0, sizeof(profile));
+    assert(pvr_toon_light_init(&profile.light, &direction,
+                               1.0f, 0.0f) == 0);
+    profile.equation = PVR_TOON_SHADE_DOT;
+    profile.thresholds = thresholds;
+    profile.argb_modulation = outside;
+    profile.oargb_modulation = outside;
+    profile.threshold_count = 1;
+    profile.epsilon = 1.0e-6f;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, cache->format, output, 63) == 0);
+    assert(pvr_chunk_model_two_volume_cache_emit_toon(
+        cache, &normal_matrix, &frustum, PVR_CHUNK_CLIP_SPLIT,
+        &profile, &secondary, &sink, &workspace, NULL,
+        begin_two_volume, resolve_toon_vertex, NULL,
+        &callbacks, &result) == 0);
+    assert(result.visited_strips == 1 && result.source_triangles == 1);
+    assert(result.emitted_strips == 1 && result.generated_vertices == 5);
+    assert(result.emitted_vertices == sink.emitted_vertices &&
+           result.emitted_vertices >= 3);
+    assert(callbacks.begins == 1 && callbacks.resolves == 3);
+    for(index = 0; index < sink.emitted_vertices; ++index) {
+        assert(output[index].flags == (index % 3u == 2u ?
+                                       PVR_CMD_VERTEX_EOL :
+                                       PVR_CMD_VERTEX));
+        assert(isfinite(output[index].u0) && isfinite(output[index].v0) &&
+               isfinite(output[index].u1) && isfinite(output[index].v1));
+        if(output[index].argb0 != output[index].argb1 ||
+           output[index].oargb0 != output[index].oargb1 ||
+           output[index].u0 != output[index].u1 ||
+           output[index].v0 != output[index].v1)
+            ++distinct_sets;
+    }
+    assert(distinct_sets == sink.emitted_vertices);
+}
+
 static void test_two_volume_cache(void) {
     pvr_chunk_model_t model = make_model(
         two_volume_textured_polygons,
@@ -718,6 +800,8 @@ static void test_two_volume_cache(void) {
     assert(output[0].argb0 == UINT32_C(0xff000001));
     assert(output[0].oargb1 == (UINT32_C(0xff040506) ^ 1u));
     assert(output[2].flags == PVR_CMD_VERTEX_EOL);
+
+    test_two_volume_toon(&cache);
 
     model = make_model(two_volume_color_polygons,
                        sizeof(two_volume_color_polygons) /

@@ -71,6 +71,32 @@ typedef struct pvr_chunk_toon_workspace {
     size_t clip_vertex_capacity;
 } pvr_chunk_toon_workspace_t;
 
+/** \brief Caller-owned scratch storage for a two-volume band draw.
+
+    `vertices`, `deformations`, `normals`, and `shades` require at least one
+    entry per reference in the largest cached strip. Both triangle arrays
+    follow the ordinary band-capacity rule and carry the outside and inside
+    attribute sets through the same deterministic partition. SPLIT clipping
+    requires two canonical
+    clip arrays and one two-volume packet array, each with at least
+    PVR_FRUSTUM_CLIP_MAX_VERTICES entries. All vertex arrays require 32-byte
+    base alignment.
+*/
+typedef struct pvr_chunk_two_volume_toon_workspace {
+    pvr_chunk_two_volume_vertex_t *vertices;
+    pvr_deform_vertex_t *deformations;
+    vector_t *normals;
+    float *shades;
+    size_t strip_capacity;
+    pvr_toon_triangle_t *toon_triangles;
+    pvr_toon_triangle_t *secondary_toon_triangles;
+    size_t toon_triangle_capacity;
+    pvr_vertex_t *clip_primary;
+    pvr_vertex_t *clip_secondary;
+    pvr_chunk_two_volume_vertex_t *clip_vertices;
+    size_t clip_vertex_capacity;
+} pvr_chunk_two_volume_toon_workspace_t;
+
 /** \brief Completed prefix from one cached band-shading draw. */
 typedef struct pvr_chunk_toon_result {
     size_t visited_strips;
@@ -92,6 +118,19 @@ typedef struct pvr_chunk_toon_result {
 typedef int (*pvr_chunk_toon_resolve_profile_t)(
     const pvr_chunk_cached_strip_t *strip,
     pvr_chunk_toon_profile_t *profile, void *data);
+
+/** \brief Optional inside-volume modulation for one band profile.
+
+    The ordinary profile arrays apply to the outside-volume attributes. Each
+    non-NULL array here contains `threshold_count + 1` entries and applies to
+    the corresponding inside-volume attribute. NULL preserves that attribute
+    unchanged, including on surfaces whose two volume states intentionally
+    use different authored colors.
+*/
+typedef struct pvr_chunk_two_volume_toon_modulation {
+    const uint32_t *argb_modulation;
+    const uint32_t *oargb_modulation;
+} pvr_chunk_two_volume_toon_modulation_t;
 
 /** \brief One material-independent inverted-shell outline profile.
 
@@ -176,6 +215,33 @@ int pvr_chunk_model_cache_emit_toon(
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_vertex_t prepare_vertex,
     pvr_chunk_toon_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_toon_result_t *result);
+
+/** \brief Emit a prepared two-volume cache through geometric shade bands.
+
+    This is the lossless two-volume counterpart of
+    pvr_chunk_model_cache_emit_toon(). Both UV/color parameter sets survive
+    band subdivision and six-plane frustum clipping. The outside set uses the
+    ordinary profile modulation arrays; p secondary_modulation independently
+    controls the inside set. The cache and sink formats must match.
+
+    No parameter set is collapsed into the other and no modifier-volume state
+    is selected on the CPU. The Tile Accelerator therefore retains ownership
+    of the per-pixel outside/inside choice after all generated geometry has
+    been submitted.
+*/
+int pvr_chunk_model_two_volume_cache_emit_toon(
+    const pvr_chunk_two_volume_cache_t *cache,
+    const pvr_normal_matrix_t *normal_matrix,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_toon_profile_t *profile,
+    const pvr_chunk_two_volume_toon_modulation_t *secondary_modulation,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_toon_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_toon_result_t *result);
 
 /** \brief Emit an expanded inverted shell from an ordinary compact cache.

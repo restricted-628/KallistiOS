@@ -260,6 +260,10 @@ typedef int (*pvr_chunk_cache_prepare_modifier_t)(
 */
 int pvr_chunk_model_cache_validate(const pvr_chunk_model_cache_t *cache);
 
+/** \brief Revalidate one published two-volume draw-cache descriptor. */
+int pvr_chunk_model_two_volume_cache_validate(
+    const pvr_chunk_two_volume_cache_t *cache);
+
 /** \brief Query the exact draw-cache footprint for a prepared model.
 
     The complete polygon stream and every referenced prepared vertex are

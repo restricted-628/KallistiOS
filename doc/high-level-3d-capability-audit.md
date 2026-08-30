@@ -215,6 +215,12 @@ it consumes resolved current-pose normals, uses the batched Dreamcast math
 path, applies optional per-material profiles, and composes geometric band
 subdivision with the existing frustum policies without allocating or adding a
 renderer record to compact assets.
+`pvr_chunk_model_two_volume_cache_emit_toon()` extends that same policy across
+the format-bound prepared cache. Both UV/diffuse/offset parameter sets are
+interpolated independently through shade subdivision and homogeneous frustum
+clipping, then recombined into the original hardware packet. Independent
+outside/inside ramps preserve modifier-selected surface intent rather than
+reducing a two-volume model to an ordinary vertex layout.
 `pvr_chunk_model_cache_emit_outline()` adds the complementary inverted-shell
 silhouette pass. It expands smooth strips along current vertex normals, derives
 face normals for flat strips, and leaves opposite-face culling in the explicit

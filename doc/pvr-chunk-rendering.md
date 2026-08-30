@@ -167,6 +167,16 @@ material header, and sink are all caller-owned. There is no per-frame
 allocation, retained light manager, renderer marker in the model stream, or
 mandatory cost for applications that do not call this policy.
 
+`pvr_chunk_model_two_volume_cache_emit_toon()` applies the same geometric
+policy to prepared two-volume surfaces without collapsing their paired
+attributes. Band subdivision interpolates both UV pairs, both diffuse colors,
+and both offset colors. Outside- and inside-volume colors have independent
+optional modulation ramps. Intersecting geometry is clipped by two parallel
+canonical attribute passes with identical positions, then recombined into the
+original 32-byte color or 64-byte textured packet. The hardware therefore
+continues to select the outside or inside parameter set per pixel after both
+topology-changing stages. IGNORE_LIGHT preserves both authored sets unchanged.
+
 Prepared-cache wireframe drawing is another policy over the same canonical
 geometry. `pvr_chunk_model_cache_emit_wire()` enumerates unique edges directly
 from triangle-strip references instead of emitting all three edges of every
@@ -309,34 +319,31 @@ topology gap, but it does not make the broader compact-model program complete.
 The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
-1. Decide whether two-volume surfaces need topology-changing band shading. The
-   current ordinary policy rejects that distinct vertex layout instead of
-   dropping its second parameter set.
-2. Evaluate a small admitted lookup-ramp mode and quantized offset-color
+1. Evaluate a small admitted lookup-ramp mode and quantized offset-color
    highlights against the existing exact geometric bands and extended
    lighting path. These are policy/throughput choices, not new model records.
-3. Resolve the admitted cached-polygon control records. Prefer translating
+2. Resolve the admitted cached-polygon control records. Prefer translating
    them into explicit prepared-cache/submesh reuse in the host compiler rather
    than adding a second runtime cache mechanism.
-4. Add a rare floating-UV escape record only if conformance content exceeds
+3. Add a rare floating-UV escape record only if conformance content exceeds
    both signed fixed-point ranges or needs precision neither encoding can
    preserve. The host compiler already selects UV10 when it fits and otherwise
    UV8; it must continue failing loudly rather than silently clamping.
-5. Define a backward-compatible section-directory asset revision when compact
+4. Define a backward-compatible section-directory asset revision when compact
    assets need to bundle optional hierarchy, general-skin, morph, animation,
    collision-volume, resource-table, or cooked-cache sections. PCM1 remains
    the small two-stream container; a larger fixed header must not grow around
    every optional feature.
-6. Extend the host compiler around one canonical scene IR, including modern
+5. Extend the host compiler around one canonical scene IR, including modern
    scene import, lossless general skin and morph import, hierarchy/evaluation
    metadata, parent-result canonicalization, optional cooked caches, and
    repeatable round-trip conformance fixtures for seams and deformation.
-7. Add exact imported hierarchy policies only where conversion proves they are
+6. Add exact imported hierarchy policies only where conversion proves they are
    observable: translation/rotation/scale suppression, child-pruning, and
    explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
    not replace the current flat parent-before-child hierarchy or complete-pose
    deformation with pointer trees or deferred polygon execution.
-8. Extend the separate cell-sprite layer with host authoring support. Its core
+7. Extend the separate cell-sprite layer with host authoring support. Its core
    timestamped stream/list sampling and events, generic whole-motion binding,
    signed priority, material/color metadata, and compact or colored 2D/3D
    geometry paths are complete and remain outside the 3D compact mesh grammar.

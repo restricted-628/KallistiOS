@@ -1281,6 +1281,11 @@ static int two_volume_cache_valid(
     return 0;
 }
 
+int pvr_chunk_model_two_volume_cache_validate(
+    const pvr_chunk_two_volume_cache_t *cache) {
+    return two_volume_cache_valid(cache);
+}
+
 static int two_volume_cache_sink_valid(
     const pvr_chunk_two_volume_cache_t *cache,
     const pvr_geometry_vertex_sink_t *sink) {

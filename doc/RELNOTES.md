@@ -18,6 +18,11 @@ lifecycle and naming conventions.
   shared edges. Small checked helpers supply signed directional shade profiles,
   band lookup, capacity bounds, and packed-color modulation without adding
   model records, renderer state, or per-frame allocation.
+* Added a prepared two-volume compact-cache band path. It preserves both
+  texture-coordinate, diffuse, and offset-color parameter sets through shade
+  subdivision and homogeneous frustum clipping, supports independent
+  outside/inside modulation ramps, and emits the original format-bound PVR
+  packets without selecting modifier state on the CPU.
 * Added SH4ZAM-backed normal extrusion and a prepared compact-cache inverted-
   shell outline pass. Smooth and flat-shaded strips preserve current
   deformation, optional per-frame policy, frustum clipping, and established
