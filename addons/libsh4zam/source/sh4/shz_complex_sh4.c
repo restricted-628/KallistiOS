@@ -8,6 +8,7 @@
  *
  *  \author     2026 Falco Girgis
  *  \copyright  MIT License
+ *  \copyright  Copyright (C) 2026 Joseph Black
  */
 
 #include "sh4zam/shz_complex.h"
@@ -97,9 +98,9 @@ static void shz_fft_2pt(shz_complex_t* s, size_t size, size_t stage, float facto
                 fmov.d  dr4, @%[x]
                 fmov.d  dr6, @%[y]
             )"
-            : "+m" (s[i]), "+m" (s[i + stage])
+            :
             : [x] "r" (&s[i]), [y] "r" (&s[i + stage])
-            : "fr4", "fr5" ,"fr6", "fr7");
+            : "fr4", "fr5" ,"fr6", "fr7", "memory");
         }
         SHZ_FSCHG();
 
@@ -128,10 +129,11 @@ static void shz_fft_4pt(shz_complex_t* s, size_t size, size_t stage, float facto
                 fmov.d  dr8, @%[z]
                 fmov.d  dr10, @%[w]
             )"
-            : "+m" (s[i]), "+m" (s[i + stage]), "+m" (s[i + inc]), "+m" (s[i + inc + stage])
+            :
             : [x] "r" (&s[i]), [y] "r" (&s[i + stage]),
               [z] "r" (&s[i + inc]), [w] "r" (&s[i + inc + stage])
-            : "fr4", "fr5" ,"fr6", "fr7", "fr8", "fr9", "fr10", "fr11");
+            : "fr4", "fr5" ,"fr6", "fr7", "fr8", "fr9", "fr10", "fr11",
+              "memory");
         }
         SHZ_FSCHG();
 
@@ -176,16 +178,13 @@ static void shz_fft_8pt(shz_complex_t* s, size_t size, size_t stage, float facto
                 fmov.d  dr0, @%[c]
                 fmov.d  dr2, @%[d]
             )"
-            : "+m" (s[i]), "+m" (s[i + stage]),
-              "+m" (s[i + inc1]), "+m" (s[i + inc1 + stage]),
-              "+m" (s[i + inc2]), "+m" (s[i + inc2 + stage]),
-              "+m" (s[i + inc2 + inc1]), "+m" (s[i + inc2 + inc1 + stage])
+            :
             : [x] "r" (&s[i]), [y] "r" (&s[i + stage]),
               [z] "r" (&s[i + inc1]), [w] "r" (&s[i + inc1 + stage]),
               [a] "r" (&s[i + inc2]), [b] "r" (&s[i + inc2 + stage]),
               [c] "r" (&s[i + inc2 + inc1]), [d] "r" (&s[i + inc2 + inc1 + stage])
             : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5",
-              "fr6", "fr7", "fr8", "fr9", "fr10", "fr11");
+              "fr6", "fr7", "fr8", "fr9", "fr10", "fr11", "memory");
         }
 
         SHZ_FSCHG();
