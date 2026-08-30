@@ -303,6 +303,238 @@ int pvr_cell_stream_list_sample(const pvr_cell_sprite_t *sprite,
     return 0;
 }
 
+static int cell_event_view_valid(const anim_event_track_view_t *view,
+                                 const pvr_cell_stream_t *stream) {
+    const anim_event_track_t *track;
+    size_t i;
+
+    if(!view)
+        return 0;
+    track = &view->track;
+    if(!track->events || !track->event_count ||
+       ((uintptr_t)track->events &
+        (_Alignof(anim_event_key_t) - 1u)) ||
+       !range_valid((uintptr_t)track->events, track->event_count,
+                    sizeof(*track->events)) ||
+       !isfinite(view->start_time) || !isfinite(view->end_time) ||
+       track->events[0].time != view->start_time ||
+       track->events[track->event_count - 1u].time != view->end_time)
+        return 0;
+
+    for(i = 0; i < track->event_count; ++i) {
+        float time = track->events[i].time;
+
+        if(!isfinite(time) || time < 0.0f ||
+           (stream->repeat ? time >= stream->time_max :
+                             time > stream->time_max) ||
+           (i && time <= track->events[i - 1u].time))
+            return 0;
+    }
+    return 1;
+}
+
+static int event_total_add(uint64_t *total, double count) {
+    const double first_unrepresentable = 18446744073709551616.0;
+
+    if(!isfinite(count) || count < 0.0 ||
+       count >= first_unrepresentable ||
+       count > (double)(UINT64_MAX - *total)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *total += (uint64_t)count;
+    return 0;
+}
+
+int pvr_cell_stream_collect_events(
+        const pvr_cell_stream_view_t *stream,
+        float previous_time, float current_time,
+        const anim_event_track_view_t *events,
+        anim_event_occurrence_t *output, size_t output_capacity,
+        anim_event_result_t *result) {
+    anim_event_result_t collected = { 0, 0, false };
+    const anim_event_track_t *track;
+    double shifted_previous;
+    double shifted_current;
+    size_t published = 0;
+    size_t i;
+
+    if(result)
+        *result = collected;
+    if(!stream_view_valid(stream) || !isfinite(previous_time) ||
+       !isfinite(current_time) || current_time < previous_time ||
+       !cell_event_view_valid(events, &stream->stream) ||
+       (output_capacity && !output) ||
+       (output &&
+        ((uintptr_t)output &
+         (_Alignof(anim_event_occurrence_t) - 1u))) ||
+       !range_valid((uintptr_t)output, output_capacity, sizeof(*output))) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    track = &events->track;
+    shifted_previous = (double)previous_time + stream->stream.time_offset;
+    shifted_current = (double)current_time + stream->stream.time_offset;
+
+    if(!stream->stream.repeat) {
+        for(i = 0; i < track->event_count; ++i) {
+            const anim_event_key_t *event = &track->events[i];
+
+            /* Compare on the unclamped local timeline so an event at zero is
+               observed when a positive stream offset brings the application
+               interval across the stream's starting boundary. */
+            if(event->time > shifted_previous &&
+               event->time <= shifted_current) {
+                if(collected.matching_events == UINT64_MAX) {
+                    errno = ERANGE;
+                    return -1;
+                }
+                ++collected.matching_events;
+                if(published < output_capacity) {
+                    output[published].event = *event;
+                    output[published].direction = ANIM_PLAYBACK_FORWARD;
+                    ++published;
+                }
+            }
+        }
+    }
+    else {
+        const double exact_integer_limit = 9007199254740991.0;
+        double period = stream->stream.time_max;
+        double cursor = shifted_previous;
+
+        for(i = 0; i < track->event_count; ++i) {
+            double event_time = track->events[i].time;
+            double first = floor((shifted_previous - event_time) / period);
+            double last = floor((shifted_current - event_time) / period);
+
+            /* Above 2^53, a double cannot distinguish adjacent cycle indices,
+               so an exact event count or chronological occurrence is no
+               longer representable from the float-based public timeline. */
+            if(fabs(first) > exact_integer_limit ||
+               fabs(last) > exact_integer_limit) {
+                errno = ERANGE;
+                return -1;
+            }
+            if(event_total_add(&collected.matching_events,
+                               last - first) < 0)
+                return -1;
+        }
+
+        /* Select the next occurrence from each event's arithmetic sequence.
+           Work is bounded by output capacity times event count even if an
+           application interval crosses millions of cycles. */
+        while(published < output_capacity) {
+            double best = INFINITY;
+            size_t best_index = SIZE_MAX;
+
+            for(i = 0; i < track->event_count; ++i) {
+                double event_time = track->events[i].time;
+                double cycle = floor((cursor - event_time) / period) + 1.0;
+                double occurrence = cycle * period + event_time;
+
+                if(occurrence <= cursor)
+                    occurrence += period;
+                if(occurrence <= shifted_current && occurrence < best) {
+                    best = occurrence;
+                    best_index = i;
+                }
+            }
+            if(best_index == SIZE_MAX)
+                break;
+            output[published].event = track->events[best_index];
+            output[published].direction = ANIM_PLAYBACK_FORWARD;
+            ++published;
+            cursor = best;
+        }
+    }
+
+    collected.published_events = published;
+    collected.truncated = collected.matching_events > published;
+    if(result)
+        *result = collected;
+    return 0;
+}
+
+int pvr_cell_sprite_apply_transform(const pvr_cell_sprite_t *sprite,
+                                    const anim_transform_t *transform,
+                                    pvr_cell_sprite_t *output) {
+    pvr_cell_sprite_t composed;
+    double magnitude_squared;
+    float x;
+    float y;
+    float z_angle;
+
+    if(!sprite_valid(sprite) || !transform || !output ||
+       !finite3(transform->translation.x, transform->translation.y,
+                transform->translation.z) ||
+       !finite3(transform->scale.x, transform->scale.y,
+                transform->scale.z) ||
+       transform->scale.x <= 0.0f || transform->scale.y <= 0.0f ||
+       !isfinite(transform->rotation.w) ||
+       !isfinite(transform->rotation.x) ||
+       !isfinite(transform->rotation.y) ||
+       !isfinite(transform->rotation.z)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    magnitude_squared =
+        (double)transform->rotation.w * transform->rotation.w +
+        (double)transform->rotation.x * transform->rotation.x +
+        (double)transform->rotation.y * transform->rotation.y +
+        (double)transform->rotation.z * transform->rotation.z;
+    if(!isfinite(magnitude_squared) || magnitude_squared <= FLT_MIN) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef __DREAMCAST__
+    {
+        shz_quat_t rotation = shz_quat_normalize(shz_quat_init(
+            transform->rotation.w, transform->rotation.x,
+            transform->rotation.y, transform->rotation.z));
+
+        x = rotation.x;
+        y = rotation.y;
+        z_angle = shz_quat_angle_z(rotation);
+    }
+#else
+    {
+        float inverse_magnitude = (float)(1.0 / sqrt(magnitude_squared));
+        float w;
+        float z;
+
+        w = transform->rotation.w * inverse_magnitude;
+        x = transform->rotation.x * inverse_magnitude;
+        y = transform->rotation.y * inverse_magnitude;
+        z = transform->rotation.z * inverse_magnitude;
+        z_angle = atan2f(2.0f * (w * z + x * y),
+                         1.0f - 2.0f * (y * y + z * z));
+    }
+#endif
+    if(fabsf(x) > 0.0001f || fabsf(y) > 0.0001f) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    composed = *sprite;
+    composed.position.x += transform->translation.x;
+    composed.position.y += transform->translation.y;
+    composed.position.z += transform->translation.z;
+    composed.rotation += z_angle;
+    composed.scale_x *= transform->scale.x;
+    composed.scale_y *= transform->scale.y;
+    if(!finite3(composed.position.x, composed.position.y,
+                composed.position.z) || !isfinite(composed.rotation) ||
+       !isfinite(composed.scale_x) || !isfinite(composed.scale_y) ||
+       composed.scale_x <= 0.0f || composed.scale_y <= 0.0f) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = composed;
+    return 0;
+}
+
 static uint32_t color_modulate(uint32_t lhs, uint32_t rhs) {
     uint32_t output = 0;
     unsigned shift;

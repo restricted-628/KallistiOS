@@ -45,6 +45,11 @@ Playback clocks and timestamp event meaning remain in the generic animation or
 application layer. This keeps independently repeatable cell streams usable
 without introducing a mandatory global clock.
 
+`pvr_cell_stream_collect_events()` traverses an admitted generic event track
+on one stream's own offset/repeat time base. It counts full repeated cycles
+arithmetically and publishes only up to caller capacity in chronological order,
+so a delayed frame cannot create unbounded work.
+
 ## Composition and priority
 
 `pvr_cell_sprite_resolve()` composes every sampled local cell under one
@@ -56,6 +61,11 @@ the resolved array is directly consumable as a strided sprite-instance stream.
 Priority does not silently modify reciprocal PVR depth. Applications may keep
 author order or call `pvr_cell_resolved_sort()` for deterministic ascending
 priority and slot order before list/material routing.
+
+`pvr_cell_sprite_apply_transform()` binds the generic animation transform to
+the whole sprite without creating another motion representation. Translation
+and XY scale compose directly. A quaternion must represent planar Z rotation;
+three-dimensional rotation fails with `ENOTSUP` instead of being flattened.
 
 ## Two geometry paths
 
@@ -90,10 +100,6 @@ vector math would add overhead without useful parallel work.
 The core stream/list, transform, priority, material metadata, color, and 2D/3D
 geometry paths are complete. The remaining optional integration work is:
 
-- a direct adapter from generic animated transforms into the whole-sprite
-  descriptor;
-- stream-local event collection for applications that need events on a stream
-  time base different from their ordinary animation playback;
 - host-side scene/compiler support for authoring stream lists and cell tables;
 - an integration example that routes multiple materials through one resolved
   cell sprite.

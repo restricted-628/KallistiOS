@@ -23,6 +23,7 @@ __BEGIN_DECLS
 #include <stddef.h>
 #include <stdint.h>
 
+#include <dc/animation.h>
 #include <dc/pvr_sprite_geometry.h>
 
 /** \defgroup pvr_cell Cell-sprite animation
@@ -181,6 +182,35 @@ int pvr_cell_stream_list_sample(const pvr_cell_sprite_t *sprite,
                                 pvr_cell_state_t *workspace,
                                 size_t capacity,
                                 pvr_cell_sample_result_t *result);
+
+/** \brief Collect forward event crossings on one stream's local time base.
+
+    Previous and current are finite application times with
+    `current_time >= previous_time`. The stream offset and repeat/clamp policy
+    are applied before event traversal. Repeated full cycles are counted
+    arithmetically; publication remains bounded by \p output_capacity and is
+    chronological. Event times must lie in the stream interval, with the
+    repeating endpoint excluded just like cell keys. `ERANGE` is returned when
+    a repeated cycle index is too large for exact traversal accounting.
+*/
+int pvr_cell_stream_collect_events(
+    const pvr_cell_stream_view_t *stream,
+    float previous_time, float current_time,
+    const anim_event_track_view_t *events,
+    anim_event_occurrence_t *output, size_t output_capacity,
+    anim_event_result_t *result);
+
+/** \brief Apply one generic animated transform to a cell-sprite descriptor.
+
+    Translation is added to the sprite position and XY scale is multiplied.
+    Rotation must be planar about Z; genuinely three-dimensional quaternions
+    return `ENOTSUP` instead of being silently projected. Dreamcast builds use
+    SH4ZAM for quaternion normalization and Z-angle extraction. Failure leaves
+    \p output unchanged.
+*/
+int pvr_cell_sprite_apply_transform(const pvr_cell_sprite_t *sprite,
+                                    const anim_transform_t *transform,
+                                    pvr_cell_sprite_t *output);
 
 /** \brief Compose sampled cells under the whole cell-sprite transform.
 

@@ -285,10 +285,100 @@ static void test_compile_and_failures(void) {
     assert(errno == EINVAL);
 }
 
+static void test_motion_and_events(void) {
+    pvr_cell_state_t base = make_state(0, 0.0f, 0.0f, 0, 0);
+    pvr_cell_sprite_t sprite = {
+        .base_cells = &base,
+        .cell_count = 1,
+        .position = { 10.0f, 20.0f, 0.5f, 0.0f },
+        .rotation = 0.25f,
+        .scale_x = 2.0f,
+        .scale_y = 3.0f,
+        .argb = UINT32_MAX,
+        .oargb = UINT32_MAX
+    };
+    anim_transform_t transform = {
+        .translation = { 1.0f, 2.0f, 0.25f, 0.0f },
+        .rotation = {
+            0.70710678118654752440f, 0.0f, 0.0f,
+            0.70710678118654752440f
+        },
+        .scale = { 0.5f, 2.0f, 1.0f, 0.0f }
+    };
+    pvr_cell_sprite_t composed;
+    pvr_cell_sprite_t unchanged;
+    const pvr_cell_stream_t source = { NULL, 0, 0.25f, 1.0f, 1 };
+    pvr_cell_stream_view_t stream;
+    const anim_event_key_t event_keys[2] = {
+        { 0.0f, 10, 100 },
+        { 0.5f, 20, 200 }
+    };
+    const anim_event_track_view_t events = {
+        { event_keys, 2 }, 0.0f, 0.5f
+    };
+    anim_event_occurrence_t occurrences[3];
+    anim_event_result_t event_result;
+
+    assert(pvr_cell_sprite_apply_transform(&sprite, &transform,
+                                           &composed) == 0);
+    assert(composed.base_cells == sprite.base_cells);
+    assert(close_enough(composed.position.x, 11.0f));
+    assert(close_enough(composed.position.y, 22.0f));
+    assert(close_enough(composed.position.z, 0.75f));
+    assert(close_enough(composed.rotation,
+                        1.82079632679489661923f));
+    assert(close_enough(composed.scale_x, 1.0f));
+    assert(close_enough(composed.scale_y, 6.0f));
+
+    unchanged = composed;
+    transform.rotation.w = 0.70710678118654752440f;
+    transform.rotation.x = 0.70710678118654752440f;
+    transform.rotation.z = 0.0f;
+    errno = 0;
+    assert(pvr_cell_sprite_apply_transform(&sprite, &transform,
+                                           &composed) == -1);
+    assert(errno == ENOTSUP);
+    assert(memcmp(&composed, &unchanged, sizeof(composed)) == 0);
+
+    assert(pvr_cell_stream_open(&source, 1, &stream) == 0);
+    assert(pvr_cell_stream_collect_events(&stream, 0.0f, 2.0f, &events,
+                                          occurrences, 3,
+                                          &event_result) == 0);
+    assert(event_result.matching_events == 4);
+    assert(event_result.published_events == 3);
+    assert(event_result.truncated);
+    assert(occurrences[0].event.identifier == 20);
+    assert(occurrences[1].event.identifier == 10);
+    assert(occurrences[2].event.identifier == 20);
+    assert(occurrences[0].direction == ANIM_PLAYBACK_FORWARD);
+
+    {
+        const pvr_cell_stream_t clamped_source = {
+            NULL, 0, 0.25f, 1.0f, 0
+        };
+        pvr_cell_stream_view_t clamped;
+
+        assert(pvr_cell_stream_open(&clamped_source, 1, &clamped) == 0);
+        assert(pvr_cell_stream_collect_events(&clamped, -0.5f, 0.0f,
+                                              &events, occurrences, 3,
+                                              &event_result) == 0);
+        assert(event_result.matching_events == 1);
+        assert(event_result.published_events == 1);
+        assert(!event_result.truncated);
+        assert(occurrences[0].event.identifier == 10);
+    }
+
+    errno = 0;
+    assert(pvr_cell_stream_collect_events(&stream, 2.0f, 1.0f, &events,
+                                          NULL, 0, NULL) == -1);
+    assert(errno == EINVAL);
+}
+
 int main(void) {
     test_streams_and_composition();
     test_stream_time_policy();
     test_compile_and_failures();
+    test_motion_and_events();
     puts("pvr-cell-test: PASS");
     return 0;
 }

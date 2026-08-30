@@ -681,6 +681,8 @@ pvr_sprite_batch_compile_3d
 pvr_cell_stream_open
 pvr_cell_stream_sample
 pvr_cell_stream_list_sample
+pvr_cell_stream_collect_events
+pvr_cell_sprite_apply_transform
 pvr_cell_sprite_resolve
 pvr_cell_resolved_sort
 pvr_cell_resolved_stream

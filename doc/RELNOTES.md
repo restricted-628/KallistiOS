@@ -243,8 +243,11 @@ lifecycle and naming conventions.
   signed priority, visibility, material routing, and per-corner colors before
   one whole-sprite transform is applied. Resolved cells feed either the compact
   hardware sprite path or expressive four-corner colored strips in 2D and 3D.
-  Dreamcast rotations and projection use SH4ZAM; callers retain every clock,
-  state array, workspace, texture, material, scene, and submission object.
+  Generic animated transforms bind directly to whole sprites, and bounded
+  event traversal follows each stream's independent repeat time base.
+  Dreamcast rotations, quaternion extraction, and projection use SH4ZAM;
+  callers retain every clock, state array, workspace, texture, material, scene,
+  and submission object.
 * Added bounded caller-owned particles with failure-atomic pool clearing,
   spawning, and deterministic constant-acceleration stepping. Active particles
   can compact into the sprite-cell path, expand into colored or textured
