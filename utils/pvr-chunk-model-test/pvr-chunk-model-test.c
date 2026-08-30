@@ -424,6 +424,26 @@ static void test_decoded_attributes(void) {
         17, 0, 0, 0, 0,
         18, 0, 0, 0, 0
     };
+    uint16_t float_uv_words[15] = {
+        19, UINT16_C(0x4000), UINT16_C(0x4348),
+        UINT16_C(0x0000), UINT16_C(0xc28d),
+        20, 0, 0, 0, 0,
+        21, 0, 0, 0, 0
+    };
+    uint16_t float_normal_words[24] = {
+        22, UINT16_C(0x4000), UINT16_C(0x4348),
+        UINT16_C(0x0000), UINT16_C(0xc28d),
+        UINT16_C(0x7fff), 0, UINT16_C(0x8000),
+        23, 0, 0, 0, 0, 0, 0, 0,
+        24, 0, 0, 0, 0, 0, 0, 0
+    };
+    uint16_t float_color_words[21] = {
+        25, UINT16_C(0x4000), UINT16_C(0x4348),
+        UINT16_C(0x0000), UINT16_C(0xc28d),
+        UINT16_C(0x8040), UINT16_C(0x20ff),
+        26, 0, 0, 0, 0, 0, 0,
+        27, 0, 0, 0, 0, 0, 0
+    };
     pvr_chunk_strip_view_t strip;
     pvr_chunk_strip_attributes_t strip_attributes;
 
@@ -557,6 +577,51 @@ static void test_decoded_attributes(void) {
     assert(close_enough(strip_attributes.uv[0][1], 70.0f));
     assert(close_enough(strip_attributes.uv[1][0], -1.0f / 256.0f));
     assert(close_enough(strip_attributes.uv[1][1], 1.0f));
+
+    strip.type = PVR_CHUNK_STRIP_UV_FLOAT;
+    strip.words = float_uv_words;
+    strip.vertex_word_count = 5;
+    strip.word_count = 15;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == 0);
+    assert(strip_attributes.present == PVR_CHUNK_STRIP_ATTR_UV0);
+    assert(close_enough(strip_attributes.uv[0][0], 200.25f));
+    assert(close_enough(strip_attributes.uv[0][1], -70.5f));
+
+    strip.type = PVR_CHUNK_STRIP_UV_FLOAT_NORMAL;
+    strip.words = float_normal_words;
+    strip.vertex_word_count = 8;
+    strip.word_count = 24;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == 0);
+    assert(strip_attributes.present == (PVR_CHUNK_STRIP_ATTR_UV0 |
+                                        PVR_CHUNK_STRIP_ATTR_NORMAL));
+    assert(close_enough(strip_attributes.uv[0][0], 200.25f));
+    assert(close_enough(strip_attributes.normal.x, 1.0f));
+    assert(close_enough(strip_attributes.normal.z, -1.0f));
+
+    strip.type = PVR_CHUNK_STRIP_UV_FLOAT_ARGB;
+    strip.words = float_color_words;
+    strip.vertex_word_count = 7;
+    strip.word_count = 21;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == 0);
+    assert(strip_attributes.present == (PVR_CHUNK_STRIP_ATTR_UV0 |
+                                        PVR_CHUNK_STRIP_ATTR_COLOR));
+    assert(close_enough(strip_attributes.uv[0][1], -70.5f));
+    assert(strip_attributes.argb == UINT32_C(0x804020ff));
+
+    float_uv_words[1] = 0;
+    float_uv_words[2] = UINT16_C(0x7fc0);
+    strip.type = PVR_CHUNK_STRIP_UV_FLOAT;
+    strip.words = float_uv_words;
+    strip.vertex_word_count = 5;
+    strip.word_count = 15;
+    memset(&strip_attributes, 0x5a, sizeof(strip_attributes));
+    errno = 0;
+    assert(pvr_chunk_strip_attributes_get(&strip, 0,
+                                          &strip_attributes) == -1);
+    assert(errno == EILSEQ && strip_attributes.present == 0);
 
     strip.type = PVR_CHUNK_STRIP_UV8_ARGB;
     strip.words = uv_color_words;

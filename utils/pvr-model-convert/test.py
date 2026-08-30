@@ -209,6 +209,34 @@ f 1/1 2/2 3/3
         assert wide_words[6] == 76
         assert wide_words[11:13] == (17920, 0)
 
+        float_source = root / "float-uv.obj"
+        float_vertices = root / "float-uv-vertices.bin"
+        float_polygons = root / "float-uv-polygons.bin"
+        write_text(
+            float_source,
+            """v 0 0 0
+v 1 0 0
+v 0 1 0
+vt 200.25 -70.5
+vt 201.25 -70.5
+vt 200.25 -69.5
+vn 0 0 1
+f 1/1/1 2/2/1 3/3/1
+""",
+        )
+        result = invoke(
+            converter, "--texture-id", "7", float_source,
+            float_vertices, float_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        float_words = struct.unpack(
+            f"<{len(float_polygons.read_bytes()) // 2}H",
+            float_polygons.read_bytes(),
+        )
+        assert float_words[6] == 85
+        assert struct.unpack_from("<ff", float_polygons.read_bytes(),
+                                  22) == (200.25, -70.5)
+
         generated = root / "test-model.c"
         result = invoke(
             converter,

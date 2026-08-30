@@ -58,6 +58,29 @@ static const uint16_t polygons[] = {
     UINT16_C(0x00ff)
 };
 
+static const uint16_t float_uv_polygons[] = {
+    PVR_CHUNK_STRIP_UV_FLOAT, UINT16_C(17), UINT16_C(1), UINT16_C(3),
+    UINT16_C(0), UINT16_C(0x4000), UINT16_C(0x4348),
+    UINT16_C(0x0000), UINT16_C(0xc28d),
+    UINT16_C(1), UINT16_C(0x0000), UINT16_C(0x3fc0),
+    UINT16_C(0x0000), UINT16_C(0xc010),
+    UINT16_C(2), UINT16_C(0x0000), UINT16_C(0x0000),
+    UINT16_C(0x0000), UINT16_C(0x3f80),
+    UINT16_C(0x00ff)
+};
+
+static const uint16_t float_two_volume_polygons[] = {
+    PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME, UINT16_C(29), UINT16_C(1),
+    UINT16_C(3),
+    UINT16_C(0), UINT16_C(0x4000), UINT16_C(0x4348),
+    UINT16_C(0x0000), UINT16_C(0xc28d),
+    UINT16_C(0x0000), UINT16_C(0x3fc0),
+    UINT16_C(0x0000), UINT16_C(0xc010),
+    UINT16_C(1), 0, 0, 0, 0, 0, 0, 0, 0,
+    UINT16_C(2), 0, 0, 0, 0, 0, 0, 0, 0,
+    UINT16_C(0x00ff)
+};
+
 static const uint16_t wire_quad_polygons[] = {
     PVR_CHUNK_MATERIAL_DIFFUSE, UINT16_C(2),
     UINT16_C(0x3344), UINT16_C(0xff22),
@@ -336,6 +359,54 @@ static pvr_chunk_model_t make_model(const uint16_t *polygon_words,
     };
 
     return model;
+}
+
+static void test_float_uv_caches(void) {
+    pvr_chunk_model_t model = make_model(
+        float_uv_polygons,
+        sizeof(float_uv_polygons) / sizeof(float_uv_polygons[0]));
+    pvr_chunk_model_view_t view;
+    pvr_chunk_vertex_index_entry_t plan_entries[256];
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_cache_requirements_t requirements;
+    pvr_chunk_two_volume_cache_requirements_t two_volume_requirements;
+    alignas(32) uint8_t storage[2048];
+    pvr_chunk_model_cache_t cache;
+    pvr_chunk_two_volume_cache_t two_volume_cache;
+    const pvr_vertex_tpcm_t *two_volume_vertices;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_build(&view, plan_entries, 256, &plan) == 0);
+    assert(pvr_chunk_model_cache_query(&plan, &requirements) == 0);
+    assert(requirements.bytes <= sizeof(storage));
+    assert(pvr_chunk_model_cache_build(&plan, storage, sizeof(storage),
+                                       NULL, NULL, &cache) == 0);
+    assert(cache.strips[0].source_type == PVR_CHUNK_STRIP_UV_FLOAT);
+    assert(fabsf(cache.vertices[0].u - 200.25f) < 1.0e-6f);
+    assert(fabsf(cache.vertices[0].v + 70.5f) < 1.0e-6f);
+    assert(fabsf(cache.vertices[1].u - 1.5f) < 1.0e-6f);
+    assert(fabsf(cache.vertices[1].v + 2.25f) < 1.0e-6f);
+
+    model = make_model(
+        float_two_volume_polygons,
+        sizeof(float_two_volume_polygons) /
+        sizeof(float_two_volume_polygons[0]));
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_build(&view, plan_entries, 256, &plan) == 0);
+    assert(pvr_chunk_model_two_volume_cache_query(
+        &plan, &two_volume_requirements) == 0);
+    assert(two_volume_requirements.format ==
+           PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED);
+    assert(two_volume_requirements.bytes <= sizeof(storage));
+    assert(pvr_chunk_model_two_volume_cache_build(
+        &plan, storage, sizeof(storage), NULL, NULL, &two_volume_cache) == 0);
+    assert(two_volume_cache.strips[0].source_type ==
+           PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME);
+    two_volume_vertices = two_volume_cache.vertices;
+    assert(fabsf(two_volume_vertices[0].u0 - 200.25f) < 1.0e-6f);
+    assert(fabsf(two_volume_vertices[0].v0 + 70.5f) < 1.0e-6f);
+    assert(fabsf(two_volume_vertices[0].u1 - 1.5f) < 1.0e-6f);
+    assert(fabsf(two_volume_vertices[0].v1 + 2.25f) < 1.0e-6f);
 }
 
 static void test_toon_cache(const pvr_chunk_model_cache_t *cache) {
@@ -1120,6 +1191,7 @@ int main(void) {
     assert(errno == ENOTSUP && requirements.bytes == 0);
 
     test_two_volume_cache();
+    test_float_uv_caches();
     test_modifier_cache();
     test_wire_topologies();
     puts("pvr-chunk-cache-test: PASS");

@@ -15,7 +15,7 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
 The admitted source subset is:
 
 - finite `v X Y Z` positions;
-- finite `vt U V` coordinates representable by a signed compact UV format;
+- finite `vt U V` coordinates;
 - finite, nonzero `vn X Y Z` normals;
 - triangulated faces using `v`, `v/vt`, `v//vn`, or `v/vt/vn`; and
 - positive or relative-negative OBJ indices.
@@ -26,11 +26,15 @@ alter this geometry stream. Faces with more or fewer than three vertices are
 rejected; source triangulation policy stays in the content tool that owns the
 original mesh.
 
-UVs use signed 16-bit fixed point. The converter chooses 6.10 fixed point when
-all corners fit its approximately `[-32, 32)` range, otherwise it uses 8.8
-fixed point with approximately `[-128, 128)` range. Inputs outside both ranges
-are rejected. Normals are normalized and quantized to signed 16-bit
-components. `--flip-v` applies `V = 1 - V`, while
+UVs use the smallest admitted representation that preserves the compact
+format's range policy. The converter first chooses signed 6.10 fixed point
+when every corner fits its approximately `[-32, 32)` range, then signed 8.8
+fixed point when every corner fits approximately `[-128, 128)`. Coordinates
+outside both fixed-point ranges use the finite 32-bit floating-point escape
+record rather than being clamped or rejected. The escape doubles the UV words
+per texture set, so ordinary content retains the denser fixed-point path.
+Normals are normalized and quantized to signed 16-bit components. `--flip-v`
+applies `V = 1 - V`, while
 `--flip-winding` exchanges the second and third corner of every triangle. No
 coordinate-system transform is implicit. Models with UV-bearing faces require
 resolved 13-bit texture identifiers, and every face must then carry UVs. A

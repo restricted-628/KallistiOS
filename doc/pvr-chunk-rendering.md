@@ -139,6 +139,25 @@ records or render-function markers, begins no scene or list, retains no model,
 allocates nothing, and performs no work when not selected. Applications can
 still pass their own callbacks directly to every emitter and cache path.
 
+## UV encoding policy
+
+The compact stream has three signed UV encodings with an explicit density and
+range order. Signed UV10 is the default: it uses 6.10 fixed point for roughly
+`[-32, 32)` with 1/1024 steps. Signed UV8 uses 8.8 fixed point for roughly
+`[-128, 128)` with 1/256 steps when wider tiling is required. A finite
+floating-point record is the escape path only when a coordinate lies outside
+both fixed-point ranges. It is never selected merely to replace the normal
+compact quantization policy.
+
+The host converter selects that order automatically and never clamps an
+out-of-range coordinate. A floating-point texture set occupies four 16-bit
+words per vertex instead of two, which keeps the larger representation a rare
+and measurable content choice. All three forms decode to canonical floating
+U/V before clipping, cel-band subdivision, environment mapping, or prepared
+cache construction, so later rendering policy does not branch on storage
+format. Existing unsigned records keep their original meanings; the signed
+and floating encodings have distinct record identifiers.
+
 Topology-changing cel shading uses the same separation. The low-level
 `pvr_toon_split_triangle()` primitive accepts an already evaluated scalar on
 each canonical working vertex and partitions the triangle across any number of
@@ -336,32 +355,29 @@ topology gap, but it does not make the broader compact-model program complete.
 The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
-1. Add a rare floating-UV escape record only if conformance content exceeds
-   both signed fixed-point ranges or needs precision neither encoding can
-   preserve. The host compiler already selects UV10 when it fits and otherwise
-   UV8; it must continue failing loudly rather than silently clamping.
-2. Define a backward-compatible section-directory asset revision when compact
+1. Define a backward-compatible section-directory asset revision when compact
    assets need to bundle optional hierarchy, general-skin, morph, animation,
    collision-volume, resource-table, or cooked-cache sections. PCM1 remains
    the small two-stream container; a larger fixed header must not grow around
    every optional feature.
-3. Extend the host compiler around one canonical scene IR, including modern
+2. Extend the host compiler around one canonical scene IR, including modern
    scene import, lossless general skin and morph import, hierarchy/evaluation
    metadata, parent-result canonicalization, elimination of deferred polygon
    controls, optional cooked caches, and
    repeatable round-trip conformance fixtures for seams and deformation.
-4. Add exact imported hierarchy policies only where conversion proves they are
+3. Add exact imported hierarchy policies only where conversion proves they are
    observable: translation/rotation/scale suppression, child-pruning, and
    explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
    not replace the current flat parent-before-child hierarchy or complete-pose
    deformation with pointer trees or deferred polygon execution.
-5. Extend the separate cell-sprite layer with host authoring support. Its core
+4. Extend the separate cell-sprite layer with host authoring support. Its core
    timestamped stream/list sampling and events, generic whole-motion binding,
    signed priority, material/color metadata, and compact or colored 2D/3D
    geometry paths are complete and remain outside the 3D compact mesh grammar.
 
 Already completed and not to be reimplemented are distinct signed UV8/UV10
-records with automatic host-side selection, variable-count skin influences
+records with automatic host-side selection and a finite float-UV escape for
+coordinates outside both compact ranges, variable-count skin influences
 beside the four-weight fast path, shape-to-morph binding, volume
 iteration/collision reuse, retained bounds and clipping, environment-map UV
 generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy

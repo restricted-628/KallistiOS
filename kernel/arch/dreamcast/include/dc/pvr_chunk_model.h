@@ -121,7 +121,10 @@ typedef enum pvr_chunk_vertex_type {
     The original UV8/UV10 families retain unsigned-normalized decoding for
     existing streams. New content should use the `_FIXED` families: UV8 is
     signed 8.8 fixed point and UV10 is signed 6.10 fixed point. Both occupy
-    one 16-bit word per coordinate.
+    one 16-bit word per coordinate. The `_FLOAT` escape family preserves
+    finite coordinates outside both fixed ranges at two 16-bit words per
+    coordinate; host tools should emit it only when a fixed family cannot
+    represent the authored range.
 */
 typedef enum pvr_chunk_strip_type {
     PVR_CHUNK_STRIP_INDEX = 64,
@@ -147,7 +150,12 @@ typedef enum pvr_chunk_strip_type {
     PVR_CHUNK_STRIP_UV8_FIXED_ARGB = 80,
     PVR_CHUNK_STRIP_UV10_FIXED_ARGB = 81,
     PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME = 82,
-    PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME = 83
+    PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME = 83,
+    /** Finite 32-bit floating UVs, stored little-endian in 16-bit words. */
+    PVR_CHUNK_STRIP_UV_FLOAT = 84,
+    PVR_CHUNK_STRIP_UV_FLOAT_NORMAL = 85,
+    PVR_CHUNK_STRIP_UV_FLOAT_ARGB = 86,
+    PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME = 87
 } pvr_chunk_strip_type_t;
 
 /** \brief Modifier-volume record types. */

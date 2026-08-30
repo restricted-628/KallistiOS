@@ -864,17 +864,14 @@ static int triangle_type(const source_model_t *model,
         int uv10 = uv_fits(model, triangle, 10u);
         int uv8 = uv10 || uv_fits(model, triangle, 8u);
 
-        if(!uv8) {
-            errno = ERANGE;
-            return -1;
-        }
         if(has_normal)
             triangle->strip_type = uv10 ?
-                PVR_CHUNK_STRIP_UV10_FIXED_NORMAL :
-                PVR_CHUNK_STRIP_UV8_FIXED_NORMAL;
+                PVR_CHUNK_STRIP_UV10_FIXED_NORMAL : uv8 ?
+                PVR_CHUNK_STRIP_UV8_FIXED_NORMAL :
+                PVR_CHUNK_STRIP_UV_FLOAT_NORMAL;
         else
-            triangle->strip_type = uv10 ? PVR_CHUNK_STRIP_UV10_FIXED :
-                                          PVR_CHUNK_STRIP_UV8_FIXED;
+            triangle->strip_type = uv10 ? PVR_CHUNK_STRIP_UV10_FIXED : uv8 ?
+                PVR_CHUNK_STRIP_UV8_FIXED : PVR_CHUNK_STRIP_UV_FLOAT;
     }
     else if(has_normal)
         triangle->strip_type = PVR_CHUNK_STRIP_NORMAL;
@@ -1119,11 +1116,15 @@ static size_t strip_vertex_words(uint8_t type) {
         case PVR_CHUNK_STRIP_UV8_FIXED:
         case PVR_CHUNK_STRIP_UV10_FIXED:
             return 3u;
+        case PVR_CHUNK_STRIP_UV_FLOAT:
+            return 5u;
         case PVR_CHUNK_STRIP_NORMAL:
             return 4u;
         case PVR_CHUNK_STRIP_UV8_FIXED_NORMAL:
         case PVR_CHUNK_STRIP_UV10_FIXED_NORMAL:
             return 6u;
+        case PVR_CHUNK_STRIP_UV_FLOAT_NORMAL:
+            return 8u;
         default:
             return 0;
     }
@@ -1469,9 +1470,17 @@ static void emit_corner(uint16_t **output, const source_model_t *model,
         *(*output)++ = quantize_uv(texcoord->value[0], fractional_bits);
         *(*output)++ = quantize_uv(texcoord->value[1], fractional_bits);
     }
+    else if(type == PVR_CHUNK_STRIP_UV_FLOAT ||
+            type == PVR_CHUNK_STRIP_UV_FLOAT_NORMAL) {
+        const source_texcoord_t *texcoord = &model->texcoords[corner->texcoord];
+
+        emit_u32(output, float_word(texcoord->value[0]));
+        emit_u32(output, float_word(texcoord->value[1]));
+    }
     if(type == PVR_CHUNK_STRIP_NORMAL ||
        type == PVR_CHUNK_STRIP_UV8_FIXED_NORMAL ||
-       type == PVR_CHUNK_STRIP_UV10_FIXED_NORMAL) {
+       type == PVR_CHUNK_STRIP_UV10_FIXED_NORMAL ||
+       type == PVR_CHUNK_STRIP_UV_FLOAT_NORMAL) {
         const source_normal_t *normal = &model->normals[corner->normal];
         size_t component;
 

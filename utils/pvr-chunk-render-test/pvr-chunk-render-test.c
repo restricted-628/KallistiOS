@@ -55,6 +55,17 @@ static const uint16_t deferred_polygons[] = {
     UINT16_C(0x00ff)
 };
 
+static const uint16_t float_uv_polygons[] = {
+    PVR_CHUNK_STRIP_UV_FLOAT, UINT16_C(17), UINT16_C(1), UINT16_C(3),
+    UINT16_C(0), UINT16_C(0x4000), UINT16_C(0x4348),
+    UINT16_C(0x0000), UINT16_C(0xc28d),
+    UINT16_C(1), UINT16_C(0x0000), UINT16_C(0x3fc0),
+    UINT16_C(0x0000), UINT16_C(0xc010),
+    UINT16_C(2), UINT16_C(0x0000), UINT16_C(0x0000),
+    UINT16_C(0x0000), UINT16_C(0x3f80),
+    UINT16_C(0x00ff)
+};
+
 static const uint16_t bump_polygons[] = {
     POLYGON_HEADER(PVR_CHUNK_MATERIAL_BUMP, 0x25), UINT16_C(6),
     UINT16_C(0x7fff), UINT16_C(0x0000), UINT16_C(0x8000),
@@ -92,6 +103,18 @@ static const uint16_t two_volume_color_polygons[] = {
     UINT16_C(2), UINT16_C(0x5566), UINT16_C(0xff44),
     PVR_CHUNK_STRIP_TWO_VOLUME, UINT16_C(5), UINT16_C(1), UINT16_C(3),
     UINT16_C(0), UINT16_C(1), UINT16_C(2),
+    UINT16_C(0x00ff)
+};
+
+static const uint16_t float_two_volume_polygons[] = {
+    PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME, UINT16_C(29), UINT16_C(1),
+    UINT16_C(3),
+    UINT16_C(0), UINT16_C(0x4000), UINT16_C(0x4348),
+    UINT16_C(0x0000), UINT16_C(0xc28d),
+    UINT16_C(0x0000), UINT16_C(0x3fc0),
+    UINT16_C(0x0000), UINT16_C(0xc010),
+    UINT16_C(1), 0, 0, 0, 0, 0, 0, 0, 0,
+    UINT16_C(2), 0, 0, 0, 0, 0, 0, 0, 0,
     UINT16_C(0x00ff)
 };
 
@@ -488,6 +511,33 @@ static void test_emit(void) {
     assert(callback.begins == 1 && callback.prepares == 3);
 }
 
+static void test_float_uv_emit(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_chunk_model_t model = make_model(
+        float_uv_polygons,
+        sizeof(float_uv_polygons) / sizeof(float_uv_polygons[0]));
+    pvr_chunk_model_view_t view;
+    alignas(32) pvr_vertex_t workspace[3];
+    alignas(32) pvr_vertex_t output[3];
+    pvr_geometry_sink_t sink;
+    pvr_chunk_render_result_t result;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_emit(&view, &identity, &sink, workspace, 3,
+                                NULL, NULL, NULL, &result) == 0);
+    assert(result.emitted_strips == 1 && result.emitted_vertices == 3);
+    assert(close_enough(output[0].u, 200.25f));
+    assert(close_enough(output[0].v, -70.5f));
+    assert(close_enough(output[1].u, 1.5f));
+    assert(close_enough(output[1].v, -2.25f));
+}
+
 static void test_preflight_and_prefix(void) {
     alignas(32) const matrix_t identity = {
         { 1.0f, 0.0f, 0.0f, 0.0f },
@@ -841,6 +891,36 @@ static void test_two_volume_color_emit(void) {
     assert(submitted_count == 3);
 }
 
+static void test_float_two_volume_emit(void) {
+    alignas(32) const matrix_t identity = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+    pvr_chunk_model_t model = make_model(
+        float_two_volume_polygons,
+        sizeof(float_two_volume_polygons) /
+        sizeof(float_two_volume_polygons[0]));
+    pvr_chunk_model_view_t view;
+    alignas(32) pvr_chunk_two_volume_vertex_t workspace[3];
+    alignas(32) pvr_vertex_tpcm_t output[3];
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_render_result_t result;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, output, 3) == 0);
+    assert(pvr_chunk_model_emit_two_volume(
+        &view, &identity, &sink, workspace, 3, NULL, NULL, NULL,
+        &result) == 0);
+    assert(result.emitted_strips == 1 && result.emitted_vertices == 3);
+    assert(close_enough(output[0].u0, 200.25f));
+    assert(close_enough(output[0].v0, -70.5f));
+    assert(close_enough(output[0].u1, 1.5f));
+    assert(close_enough(output[0].v1, -2.25f));
+}
+
 static void test_two_volume_preflight(void) {
     alignas(32) const matrix_t identity = {
         { 1.0f, 0.0f, 0.0f, 0.0f },
@@ -1052,12 +1132,14 @@ int main(void) {
     test_model_classification();
     test_clipped_emit();
     test_emit();
+    test_float_uv_emit();
     test_preflight_and_prefix();
     test_unsupported();
     test_bump_material();
     test_intensity_policy_and_reserved_state();
     test_two_volume_emit();
     test_two_volume_color_emit();
+    test_float_two_volume_emit();
     test_two_volume_preflight();
     test_modifier_emit();
     puts("pvr chunk render tests passed");

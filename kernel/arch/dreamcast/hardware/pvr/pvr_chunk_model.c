@@ -30,7 +30,7 @@
 #define CHUNK_TYPE_VOLUME_FIRST     56u
 #define CHUNK_TYPE_VOLUME_LAST      58u
 #define CHUNK_TYPE_STRIP_FIRST      64u
-#define CHUNK_TYPE_STRIP_LAST       83u
+#define CHUNK_TYPE_STRIP_LAST       87u
 #define CHUNK_TYPE_SHAPE_FIRST      128u
 #define CHUNK_TYPE_SHAPE_LAST       130u
 #define CHUNK_TYPE_END              255u
@@ -520,6 +520,8 @@ static size_t strip_vertex_words(uint8_t type) {
         case PVR_CHUNK_STRIP_UV10_FIXED:
         case PVR_CHUNK_STRIP_ARGB:
             return 3;
+        case PVR_CHUNK_STRIP_UV_FLOAT:
+            return 5;
         case PVR_CHUNK_STRIP_NORMAL:
             return 4;
         case PVR_CHUNK_STRIP_UV8_ARGB:
@@ -531,11 +533,17 @@ static size_t strip_vertex_words(uint8_t type) {
         case PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME:
         case PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME:
             return 5;
+        case PVR_CHUNK_STRIP_UV_FLOAT_ARGB:
+            return 7;
+        case PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME:
+            return 9;
         case PVR_CHUNK_STRIP_UV8_NORMAL:
         case PVR_CHUNK_STRIP_UV10_NORMAL:
         case PVR_CHUNK_STRIP_UV8_FIXED_NORMAL:
         case PVR_CHUNK_STRIP_UV10_FIXED_NORMAL:
             return 6;
+        case PVR_CHUNK_STRIP_UV_FLOAT_NORMAL:
+            return 8;
         default:
             return 0;
     }
@@ -577,8 +585,31 @@ static int validate_strip_attributes(uint8_t type, const uint16_t *words) {
         case PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME:
             /* Every 16-bit pattern is one valid signed fixed-point value. */
             return 0;
+        case PVR_CHUNK_STRIP_UV_FLOAT:
+        case PVR_CHUNK_STRIP_UV_FLOAT_NORMAL:
+        case PVR_CHUNK_STRIP_UV_FLOAT_ARGB:
+            uv_sets = 1u;
+            maximum = 0u;
+            break;
+        case PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME:
+            uv_sets = 2u;
+            maximum = 0u;
+            break;
         default:
             return 0;
+    }
+
+    if(!maximum) {
+        for(set = 0; set < uv_sets * 2u; ++set) {
+            uint32_t encoded = (uint32_t)words[1u + set * 2u] |
+                               (uint32_t)words[2u + set * 2u] << 16;
+
+            if(!isfinite(word_float(encoded))) {
+                errno = EILSEQ;
+                return -1;
+            }
+        }
+        return 0;
     }
 
     for(set = 0; set < uv_sets; ++set) {
@@ -1899,6 +1930,20 @@ static void decode_uv_fixed(float uv[2], const uint16_t *words,
     uv[1] = (float)(int16_t)words[1] / divisor;
 }
 
+static int decode_uv_float(float uv[2], const uint16_t *words) {
+    uint32_t encoded;
+
+    encoded = (uint32_t)words[0] | (uint32_t)words[1] << 16;
+    uv[0] = word_float(encoded);
+    encoded = (uint32_t)words[2] | (uint32_t)words[3] << 16;
+    uv[1] = word_float(encoded);
+    if(!isfinite(uv[0]) || !isfinite(uv[1])) {
+        errno = EILSEQ;
+        return -1;
+    }
+    return 0;
+}
+
 static uint32_t strip_color(const uint16_t *words) {
     uint32_t alpha = words[0] >> 8;
     uint32_t red = words[0] & 255u;
@@ -1916,6 +1961,7 @@ int pvr_chunk_strip_attributes_get(
     const uint16_t *words;
     uint16_t uv_maximum = 0;
     float uv_divisor = 0.0f;
+    int uv_float = 0;
     size_t expected;
     size_t normal_offset = SIZE_MAX;
     size_t color_offset = SIZE_MAX;
@@ -2017,6 +2063,24 @@ int pvr_chunk_strip_attributes_get(
             expected = 4u;
             uv_divisor = 1024.0f;
             break;
+        case PVR_CHUNK_STRIP_UV_FLOAT:
+            expected = 4u;
+            uv_float = 1;
+            break;
+        case PVR_CHUNK_STRIP_UV_FLOAT_NORMAL:
+            expected = 7u;
+            uv_float = 1;
+            normal_offset = 4u;
+            break;
+        case PVR_CHUNK_STRIP_UV_FLOAT_ARGB:
+            expected = 6u;
+            uv_float = 1;
+            color_offset = 4u;
+            break;
+        case PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME:
+            expected = 8u;
+            uv_float = 1;
+            break;
         default:
             errno = EILSEQ;
             return -1;
@@ -2045,6 +2109,16 @@ int pvr_chunk_strip_attributes_get(
         if(strip->type == PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME ||
            strip->type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME) {
             decode_uv_fixed(decoded.uv[1], words + 2u, uv_divisor);
+            decoded.present |= PVR_CHUNK_STRIP_ATTR_UV1;
+        }
+    }
+    else if(uv_float) {
+        if(decode_uv_float(decoded.uv[0], words) < 0)
+            return -1;
+        decoded.present |= PVR_CHUNK_STRIP_ATTR_UV0;
+        if(strip->type == PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME) {
+            if(decode_uv_float(decoded.uv[1], words + 4u) < 0)
+                return -1;
             decoded.present |= PVR_CHUNK_STRIP_ATTR_UV1;
         }
     }

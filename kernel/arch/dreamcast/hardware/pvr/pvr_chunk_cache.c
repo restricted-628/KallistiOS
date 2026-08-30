@@ -18,7 +18,8 @@ static int strip_is_two_volume(uint8_t type) {
            type == PVR_CHUNK_STRIP_UV8_TWO_VOLUME ||
            type == PVR_CHUNK_STRIP_UV10_TWO_VOLUME ||
            type == PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME ||
-           type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME;
+           type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME;
 }
 
 static int add_size(size_t left, size_t right, size_t *result) {
@@ -642,7 +643,7 @@ static int cache_valid(const pvr_chunk_model_cache_t *cache) {
         if(strip->reserved || strip->first_vertex != vertex_cursor ||
            strip->vertex_count < 3u ||
            strip->source_type < PVR_CHUNK_STRIP_INDEX ||
-           strip->source_type > PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME ||
+           strip->source_type > PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME ||
            strip_is_two_volume(strip->source_type) ||
            strip->source_flags & UINT8_C(0x80) ||
            strip->state.strip_flags != strip->source_flags ||
@@ -1258,7 +1259,8 @@ static int two_volume_cache_valid(
             strip->source_type != PVR_CHUNK_STRIP_UV8_TWO_VOLUME &&
             strip->source_type != PVR_CHUNK_STRIP_UV10_TWO_VOLUME &&
             strip->source_type != PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME &&
-            strip->source_type != PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME) ||
+            strip->source_type != PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME &&
+            strip->source_type != PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME) ||
            format != cache->format ||
            strip->source_flags & UINT8_C(0x80) ||
            strip->state.strip_flags != strip->source_flags ||

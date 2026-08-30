@@ -149,7 +149,8 @@ static int strip_is_two_volume(uint8_t type) {
            type == PVR_CHUNK_STRIP_UV8_TWO_VOLUME ||
            type == PVR_CHUNK_STRIP_UV10_TWO_VOLUME ||
            type == PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME ||
-           type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME;
+           type == PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME ||
+           type == PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME;
 }
 
 static int unsupported_record(const pvr_chunk_record_t *record) {

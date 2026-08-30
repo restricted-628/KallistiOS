@@ -28,6 +28,11 @@ lifecycle and naming conventions.
   record counts, while runtime emitters continue rejecting the cross-hierarchy
   execution mechanism before side effects instead of creating a competing
   on-console polygon cache.
+* Added finite floating-point UV strip records as a rare compact-model escape
+  beside signed 8.8 and 6.10 coordinates. The model converter retains 6.10 as
+  its first choice and 8.8 for wider tiling, selecting float UVs only when the
+  authored range exceeds both fixed encodings instead of rejecting or
+  clamping it.
 * Added a prepared two-volume compact-cache band path. It preserves both
   texture-coordinate, diffuse, and offset-color parameter sets through shade
   subdivision and homogeneous frustum clipping, supports independent
