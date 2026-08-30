@@ -165,6 +165,16 @@ int pvr_toon_split_triangle(
 int pvr_toon_color_modulate(uint32_t *output, uint32_t base,
                             uint32_t modulation);
 
+/** \brief Expand one point along one normalized-or-normalizable normal.
+
+    This is the geometry primitive behind an inverted-shell silhouette pass.
+    Position requires W=1, normal requires W=0, and \p distance must be finite
+    and positive. Dreamcast builds use SH4ZAM vector normalization and
+    composition. Failure leaves \p output unchanged.
+*/
+int pvr_toon_outline_expand(point_t *output, const point_t *position,
+                            const vector_t *normal, float distance);
+
 /** @} */
 
 __END_DECLS

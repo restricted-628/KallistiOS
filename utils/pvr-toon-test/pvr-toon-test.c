@@ -80,6 +80,26 @@ static void test_light_and_bands(void) {
     assert(errno == EDOM && memcmp(&light, &unchanged, sizeof(light)) == 0);
 }
 
+static void test_outline_expand(void) {
+    point_t position = { 1.0f, 2.0f, 3.0f, 1.0f };
+    vector_t normal = { 0.0f, 3.0f, 4.0f, 0.0f };
+    point_t output;
+    point_t unchanged;
+
+    assert(pvr_toon_outline_expand(&output, &position, &normal, 2.5f) == 0);
+    assert(CLOSE(output.x, 1.0f));
+    assert(CLOSE(output.y, 3.5f));
+    assert(CLOSE(output.z, 5.0f));
+    assert(output.w == 1.0f);
+
+    unchanged = output;
+    normal.x = normal.y = normal.z = 0.0f;
+    errno = 0;
+    assert(pvr_toon_outline_expand(&output, &position, &normal, 2.5f) == -1);
+    assert(errno == EDOM);
+    assert(memcmp(&output, &unchanged, sizeof(output)) == 0);
+}
+
 static void test_shade_batch(void) {
     struct normal_record {
         vector_t normal;
@@ -308,6 +328,7 @@ static void test_random_partitions(void) {
 
 int main(void) {
     test_light_and_bands();
+    test_outline_expand();
     test_shade_batch();
     test_binary_split();
     test_shared_edge_and_multiband();

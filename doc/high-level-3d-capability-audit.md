@@ -215,6 +215,10 @@ it consumes resolved current-pose normals, uses the batched Dreamcast math
 path, applies optional per-material profiles, and composes geometric band
 subdivision with the existing frustum policies without allocating or adding a
 renderer record to compact assets.
+`pvr_chunk_model_cache_emit_outline()` adds the complementary inverted-shell
+silhouette pass. It expands smooth strips along current vertex normals, derives
+face normals for flat strips, and leaves opposite-face culling in the explicit
+material callback. The low-level normal extrusion uses SH4ZAM on Dreamcast.
 The matching prepared-cache wireframe policy enumerates unique strip edges,
 offers full-mesh, boundary, and path topology, clips centerlines before
 constant-pixel-width expansion, and preserves the same deformation and sink

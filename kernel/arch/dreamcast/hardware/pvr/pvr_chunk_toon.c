@@ -6,6 +6,10 @@
 
 #include <dc/pvr_chunk_toon.h>
 
+#ifdef __DREAMCAST__
+#include <dc/sh4zam.h>
+#endif
+
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -81,15 +85,12 @@ static int sink_valid(const pvr_geometry_sink_t *sink) {
     return 0;
 }
 
-static int transforms_valid(const pvr_normal_matrix_t *normal_matrix,
-                            const pvr_frustum_t *frustum) {
-    const float *normal_values = normal_matrix ?
-        &normal_matrix->column[0][0] : NULL;
+static int frustum_valid(const pvr_frustum_t *frustum) {
     const float *matrix_values = frustum ?
         &frustum->object_to_screen[0][0] : NULL;
     size_t index;
 
-    if(!normal_matrix || !frustum ||
+    if(!frustum ||
        ((uintptr_t)&frustum->object_to_screen & 7u) ||
        !isfinite(frustum->left) || !isfinite(frustum->top) ||
        !isfinite(frustum->right) || !isfinite(frustum->bottom) ||
@@ -99,12 +100,6 @@ static int transforms_valid(const pvr_normal_matrix_t *normal_matrix,
         errno = EINVAL;
         return -1;
     }
-    for(index = 0; index < 9u; ++index) {
-        if(!isfinite(normal_values[index])) {
-            errno = EDOM;
-            return -1;
-        }
-    }
     for(index = 0; index < 16u; ++index) {
         if(!isfinite(matrix_values[index])) {
             errno = EDOM;
@@ -112,6 +107,25 @@ static int transforms_valid(const pvr_normal_matrix_t *normal_matrix,
         }
     }
     return 0;
+}
+
+static int transforms_valid(const pvr_normal_matrix_t *normal_matrix,
+                            const pvr_frustum_t *frustum) {
+    const float *normal_values = normal_matrix ?
+        &normal_matrix->column[0][0] : NULL;
+    size_t index;
+
+    if(!normal_matrix) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(index = 0; index < 9u; ++index) {
+        if(!isfinite(normal_values[index])) {
+            errno = EDOM;
+            return -1;
+        }
+    }
+    return frustum_valid(frustum);
 }
 
 int pvr_chunk_toon_profile_validate(const pvr_chunk_toon_profile_t *profile) {
@@ -147,6 +161,16 @@ int pvr_chunk_toon_profile_validate(const pvr_chunk_toon_profile_t *profile) {
             errno = EINVAL;
             return -1;
         }
+    }
+    return 0;
+}
+
+int pvr_chunk_outline_profile_validate(
+        const pvr_chunk_outline_profile_t *profile) {
+    if(!profile || !isfinite(profile->distance) ||
+       profile->distance <= 0.0f) {
+        errno = EINVAL;
+        return -1;
     }
     return 0;
 }
@@ -297,12 +321,24 @@ static int face_normal(vector_t *normal,
     float bz = vertices[2].z - vertices[0].z;
     float length_squared;
 
+#ifdef __DREAMCAST__
+    {
+        shz_vec3_t result = shz_vec3_cross(shz_vec3_init(ax, ay, az),
+                                           shz_vec3_init(bx, by, bz));
+
+        normal->x = result.x;
+        normal->y = result.y;
+        normal->z = result.z;
+        length_squared = shz_vec3_dot(result, result);
+    }
+#else
     normal->x = ay * bz - az * by;
     normal->y = az * bx - ax * bz;
     normal->z = ax * by - ay * bx;
-    normal->w = 0.0f;
     length_squared = normal->x * normal->x + normal->y * normal->y +
                      normal->z * normal->z;
+#endif
+    normal->w = 0.0f;
     if(!isfinite(length_squared)) {
         errno = ERANGE;
         return -1;
@@ -396,7 +432,7 @@ static int project_or_clip(
 static int assemble_strip(
     const pvr_chunk_model_cache_t *cache,
     const pvr_chunk_cached_strip_t *strip,
-    pvr_chunk_toon_workspace_t *workspace,
+    pvr_vertex_t *vertices, pvr_deform_vertex_t *deformations,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_vertex_t prepare_vertex, void *data) {
     size_t index;
@@ -407,42 +443,38 @@ static int assemble_strip(
         uint32_t command = index + 1u == strip->vertex_count ?
                            PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
 
-        workspace->deformations[index] =
-            cache->deform_vertices[cached_index];
+        deformations[index] = cache->deform_vertices[cached_index];
         if(resolve_vertex) {
             errno = 0;
-            if(resolve_vertex(source_index, workspace->deformations + index,
+            if(resolve_vertex(source_index, deformations + index,
                               data) < 0) {
                 if(!errno)
                     errno = EIO;
                 return -1;
             }
         }
-        if(finite_deformation(workspace->deformations + index) < 0)
+        if(finite_deformation(deformations + index) < 0)
             return -1;
-        workspace->vertices[index] = cache->vertices[cached_index];
-        workspace->vertices[index].x =
-            workspace->deformations[index].position.x;
-        workspace->vertices[index].y =
-            workspace->deformations[index].position.y;
-        workspace->vertices[index].z =
-            workspace->deformations[index].position.z;
+        vertices[index] = cache->vertices[cached_index];
+        vertices[index].x = deformations[index].position.x;
+        vertices[index].y = deformations[index].position.y;
+        vertices[index].z = deformations[index].position.z;
         if(prepare_vertex) {
             errno = 0;
             if(prepare_vertex(&strip->state, source_index,
-                              workspace->deformations + index,
-                              workspace->vertices + index, data) < 0) {
+                              deformations + index,
+                              vertices + index, data) < 0) {
                 if(!errno)
                     errno = EIO;
                 return -1;
             }
         }
-        workspace->vertices[index].flags = command;
-        if(!isfinite(workspace->vertices[index].x) ||
-           !isfinite(workspace->vertices[index].y) ||
-           !isfinite(workspace->vertices[index].z) ||
-           !isfinite(workspace->vertices[index].u) ||
-           !isfinite(workspace->vertices[index].v)) {
+        vertices[index].flags = command;
+        if(!isfinite(vertices[index].x) ||
+           !isfinite(vertices[index].y) ||
+           !isfinite(vertices[index].z) ||
+           !isfinite(vertices[index].u) ||
+           !isfinite(vertices[index].v)) {
             errno = EILSEQ;
             return -1;
         }
@@ -536,7 +568,8 @@ int pvr_chunk_model_cache_emit_toon(
             errno = ENOSPC;
             goto fail;
         }
-        if(assemble_strip(cache, strip, workspace, resolve_vertex,
+        if(assemble_strip(cache, strip, workspace->vertices,
+                          workspace->deformations, resolve_vertex,
                           prepare_vertex, data) < 0)
             goto fail;
 
@@ -688,6 +721,239 @@ int pvr_chunk_model_cache_emit_toon(
                 progress.emitted_triangles += output_count / 3u;
                 progress.emitted_vertices += output_count;
             }
+        }
+        if(strip_started)
+            ++progress.emitted_strips;
+    }
+    if(result)
+        *result = progress;
+    return 0;
+
+fail:
+    if(!errno)
+        errno = EIO;
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+static int outline_workspace_valid(
+        const pvr_chunk_model_cache_t *cache,
+        const pvr_frustum_t *frustum,
+        const pvr_chunk_outline_profile_t *default_profile,
+        const pvr_geometry_sink_t *sink,
+        const pvr_chunk_outline_workspace_t *workspace,
+        pvr_chunk_clip_policy_t policy) {
+    address_range_t ranges[10];
+    size_t range_count = 0;
+    size_t first;
+    size_t second;
+
+    if(!workspace ||
+       workspace->strip_capacity < cache->maximum_strip_vertices ||
+       (cache->vertex_count &&
+        (!workspace->vertices || !workspace->deformations)) ||
+       ((uintptr_t)workspace->vertices & 31u) ||
+       ((uintptr_t)workspace->deformations & 31u) ||
+       (policy == PVR_CHUNK_CLIP_SPLIT &&
+        (!workspace->clip_vertices ||
+         ((uintptr_t)workspace->clip_vertices & 31u) ||
+         workspace->clip_vertex_capacity <
+             PVR_FRUSTUM_CLIP_MAX_VERTICES))) {
+        errno = EINVAL;
+        return -1;
+    }
+
+#define ADD_OUTLINE_RANGE(pointer, count, type) do {                          \
+    if(range_get((pointer), (count), sizeof(type),                            \
+                 ranges + range_count) < 0)                                  \
+        return -1;                                                            \
+    ++range_count;                                                            \
+} while(0)
+
+    ADD_OUTLINE_RANGE(cache->storage, cache->storage_bytes, uint8_t);
+    ADD_OUTLINE_RANGE(cache, 1u, pvr_chunk_model_cache_t);
+    ADD_OUTLINE_RANGE(frustum, 1u, pvr_frustum_t);
+    ADD_OUTLINE_RANGE(default_profile, 1u, pvr_chunk_outline_profile_t);
+    ADD_OUTLINE_RANGE(sink, 1u, pvr_geometry_sink_t);
+    ADD_OUTLINE_RANGE(workspace, 1u, pvr_chunk_outline_workspace_t);
+    ADD_OUTLINE_RANGE(workspace->vertices, workspace->strip_capacity,
+                      pvr_vertex_t);
+    ADD_OUTLINE_RANGE(workspace->deformations, workspace->strip_capacity,
+                      pvr_deform_vertex_t);
+    if(policy == PVR_CHUNK_CLIP_SPLIT)
+        ADD_OUTLINE_RANGE(workspace->clip_vertices,
+                          workspace->clip_vertex_capacity, pvr_vertex_t);
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY)
+        ADD_OUTLINE_RANGE(sink->destination.memory.vertices,
+                          sink->destination.memory.capacity, pvr_vertex_t);
+
+#undef ADD_OUTLINE_RANGE
+
+    for(first = 0; first < range_count; ++first) {
+        for(second = first + 1u; second < range_count; ++second) {
+            if(ranges_overlap(ranges + first, ranges + second)) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int outline_vertex(pvr_vertex_t *vertex, const vector_t *normal,
+                          const pvr_chunk_outline_profile_t *profile) {
+    point_t position = { vertex->x, vertex->y, vertex->z, 1.0f };
+    point_t expanded;
+
+    if(pvr_toon_outline_expand(&expanded, &position, normal,
+                               profile->distance) < 0)
+        return -1;
+    vertex->x = expanded.x;
+    vertex->y = expanded.y;
+    vertex->z = expanded.z;
+    vertex->argb = profile->argb;
+    vertex->oargb = profile->oargb;
+    return 0;
+}
+
+int pvr_chunk_model_cache_emit_outline(
+        const pvr_chunk_model_cache_t *cache,
+        const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+        const pvr_chunk_outline_profile_t *default_profile,
+        pvr_geometry_sink_t *sink,
+        pvr_chunk_outline_workspace_t *workspace,
+        pvr_chunk_cache_filter_strip_t filter_strip,
+        pvr_chunk_cache_begin_strip_t begin_strip,
+        pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+        pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+        pvr_chunk_outline_resolve_profile_t resolve_profile,
+        void *data, pvr_chunk_outline_result_t *result) {
+    pvr_chunk_outline_result_t progress = { 0 };
+    size_t strip_index;
+
+    if(result)
+        *result = progress;
+    if(clip_policy < PVR_CHUNK_CLIP_SPLIT ||
+       clip_policy > PVR_CHUNK_CLIP_ASSUME_VISIBLE ||
+       pvr_chunk_model_cache_validate(cache) < 0 ||
+       frustum_valid(frustum) < 0 || sink_valid(sink) < 0 ||
+       pvr_chunk_outline_profile_validate(default_profile) < 0 ||
+       outline_workspace_valid(cache, frustum, default_profile, sink,
+                               workspace, clip_policy) < 0 ||
+       (sink->kind != PVR_GEOMETRY_SINK_MEMORY && !begin_strip))
+        return -1;
+
+    for(strip_index = 0; strip_index < cache->strip_count; ++strip_index) {
+        const pvr_chunk_cached_strip_t *strip = cache->strips + strip_index;
+        pvr_chunk_outline_profile_t profile = *default_profile;
+        size_t triangle_index;
+        int flat;
+        int strip_started = 0;
+
+        ++progress.visited_strips;
+        if(filter_strip) {
+            int keep;
+
+            errno = 0;
+            keep = filter_strip(strip, data);
+            if(keep < 0) {
+                if(!errno)
+                    errno = EIO;
+                goto fail;
+            }
+            if(!keep) {
+                ++progress.skipped_strips;
+                continue;
+            }
+        }
+        if(resolve_profile) {
+            errno = 0;
+            if(resolve_profile(strip, &profile, data) < 0) {
+                if(!errno)
+                    errno = EIO;
+                goto fail;
+            }
+        }
+        if(pvr_chunk_outline_profile_validate(&profile) < 0 ||
+           assemble_strip(cache, strip, workspace->vertices,
+                          workspace->deformations, resolve_vertex,
+                          prepare_vertex, data) < 0)
+            goto fail;
+
+        flat = !!(strip->state.strip_flags &
+                  PVR_CHUNK_STRIP_FLAT_SHADED);
+        if(!flat) {
+            size_t vertex_index;
+
+            for(vertex_index = 0; vertex_index < strip->vertex_count;
+                ++vertex_index) {
+                if(outline_vertex(workspace->vertices + vertex_index,
+                                  &workspace->deformations[vertex_index].normal,
+                                  &profile) < 0)
+                    goto fail;
+            }
+        }
+
+        for(triangle_index = 0;
+            triangle_index + 2u < strip->vertex_count;
+            ++triangle_index) {
+            alignas(32) pvr_vertex_t triangle[3];
+            const pvr_vertex_t *output;
+            size_t output_count;
+            size_t indices[3];
+            size_t corner;
+
+            ++progress.source_triangles;
+            independent_indices(triangle_index, indices);
+            for(corner = 0; corner < 3u; ++corner)
+                triangle[corner] = workspace->vertices[indices[corner]];
+            if(flat) {
+                vector_t normal;
+                int normal_result = face_normal(&normal, triangle);
+
+                if(normal_result < 0)
+                    goto fail;
+                if(!normal_result) {
+                    ++progress.dropped_triangles;
+                    continue;
+                }
+                for(corner = 0; corner < 3u; ++corner) {
+                    if(outline_vertex(triangle + corner, &normal,
+                                      &profile) < 0)
+                        goto fail;
+                }
+            }
+            else {
+                for(corner = 0; corner < 3u; ++corner) {
+                    triangle[corner].argb = profile.argb;
+                    triangle[corner].oargb = profile.oargb;
+                }
+            }
+            triangle[0].flags = PVR_CMD_VERTEX;
+            triangle[1].flags = PVR_CMD_VERTEX;
+            triangle[2].flags = PVR_CMD_VERTEX_EOL;
+            if(project_or_clip(triangle, frustum, clip_policy,
+                               workspace->clip_vertices, &output,
+                               &output_count) < 0)
+                goto fail;
+            if(!output_count) {
+                ++progress.dropped_triangles;
+                continue;
+            }
+            if(!strip_started && begin_strip) {
+                errno = 0;
+                if(begin_strip(strip, data) < 0) {
+                    if(!errno)
+                        errno = EIO;
+                    goto fail;
+                }
+            }
+            if(pvr_geometry_sink_emit(sink, output, output_count) < 0)
+                goto fail;
+            strip_started = 1;
+            progress.emitted_triangles += output_count / 3u;
+            progress.emitted_vertices += output_count;
         }
         if(strip_started)
             ++progress.emitted_strips;

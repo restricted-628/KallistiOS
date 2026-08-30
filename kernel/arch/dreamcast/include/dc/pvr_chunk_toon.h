@@ -93,8 +93,53 @@ typedef int (*pvr_chunk_toon_resolve_profile_t)(
     const pvr_chunk_cached_strip_t *strip,
     pvr_chunk_toon_profile_t *profile, void *data);
 
+/** \brief One material-independent inverted-shell outline profile.
+
+    Distance is measured in the cache's object space. Base and offset colors
+    replace prepared vertex colors after the optional per-frame callback.
+*/
+typedef struct pvr_chunk_outline_profile {
+    float distance;
+    uint32_t argb;
+    uint32_t oargb;
+} pvr_chunk_outline_profile_t;
+
+/** \brief Caller-owned scratch storage for one cached outline draw.
+
+    Vertex and deformation arrays require at least one entry per reference in
+    the largest cached strip and 32-byte base alignment. SPLIT clipping also
+    requires at least PVR_FRUSTUM_CLIP_MAX_VERTICES aligned clip entries.
+*/
+typedef struct pvr_chunk_outline_workspace {
+    pvr_vertex_t *vertices;
+    pvr_deform_vertex_t *deformations;
+    size_t strip_capacity;
+    pvr_vertex_t *clip_vertices;
+    size_t clip_vertex_capacity;
+} pvr_chunk_outline_workspace_t;
+
+/** \brief Completed prefix from one cached outline draw. */
+typedef struct pvr_chunk_outline_result {
+    size_t visited_strips;
+    size_t skipped_strips;
+    size_t source_triangles;
+    size_t dropped_triangles;
+    size_t emitted_strips;
+    size_t emitted_triangles;
+    size_t emitted_vertices;
+} pvr_chunk_outline_result_t;
+
+/** \brief Select an outline profile for one cached strip. */
+typedef int (*pvr_chunk_outline_resolve_profile_t)(
+    const pvr_chunk_cached_strip_t *strip,
+    pvr_chunk_outline_profile_t *profile, void *data);
+
 /** \brief Validate one band-shading profile without retaining it. */
 int pvr_chunk_toon_profile_validate(const pvr_chunk_toon_profile_t *profile);
+
+/** \brief Validate one inverted-shell outline profile without retaining it. */
+int pvr_chunk_outline_profile_validate(
+    const pvr_chunk_outline_profile_t *profile);
 
 /** \brief Emit an ordinary compact draw cache through geometric shade bands.
 
@@ -132,6 +177,39 @@ int pvr_chunk_model_cache_emit_toon(
     pvr_chunk_cache_prepare_vertex_t prepare_vertex,
     pvr_chunk_toon_resolve_profile_t resolve_profile,
     void *data, pvr_chunk_toon_result_t *result);
+
+/** \brief Emit an expanded inverted shell from an ordinary compact cache.
+
+    Current deformation and optional per-frame vertex policy are resolved once
+    per strip. Smooth strips expand along their resolved vertex normals. A
+    flat-shaded strip computes one geometric face normal per source triangle,
+    preventing unrelated reference normals from rounding a hard face. Every
+    triangle is then frustum-clipped and projected through the established
+    geometry sink.
+
+    This function emits the shell geometry; the required silhouette policy is
+    explicit in \p begin_strip. That callback must submit an untextured outline
+    material whose culling mode is the opposite of the ordinary surface pass,
+    so only the expanded back faces remain visible. Draw the outline before
+    the ordinary model. Object-space distance intentionally follows model
+    scale; applications needing constant screen thickness may resolve a
+    distance per strip or per draw.
+
+    No adjacency structure, allocation, global state, or model record is
+    introduced. A callback or sink failure leaves the complete prefix reported
+    by \p result valid.
+*/
+int pvr_chunk_model_cache_emit_outline(
+    const pvr_chunk_model_cache_t *cache,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_outline_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_outline_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_outline_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_outline_result_t *result);
 
 /** @} */
 

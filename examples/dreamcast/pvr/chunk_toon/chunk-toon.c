@@ -21,15 +21,15 @@ KOS_INIT_FLAGS(INIT_DEFAULT);
 static const uint32_t model_vertices[] = {
     VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ_NORMAL, 19),
     UINT32_C(0x00030000),
-    /* Position (160, 360, 0), normal (0, 0, -1). */
+    /* Position (160, 360, 0), outward normal (-1, 1, 1). */
     UINT32_C(0x43200000), UINT32_C(0x43b40000), UINT32_C(0x00000000),
-    UINT32_C(0x00000000), UINT32_C(0x00000000), UINT32_C(0xbf800000),
-    /* Position (480, 360, 0), normal (1, 0, 1). */
+    UINT32_C(0xbf800000), UINT32_C(0x3f800000), UINT32_C(0x3f800000),
+    /* Position (480, 360, 0), outward normal (1, 1, 1). */
     UINT32_C(0x43f00000), UINT32_C(0x43b40000), UINT32_C(0x00000000),
-    UINT32_C(0x3f800000), UINT32_C(0x00000000), UINT32_C(0x3f800000),
-    /* Position (320, 100, 0), normal (-1, 0, 1). */
+    UINT32_C(0x3f800000), UINT32_C(0x3f800000), UINT32_C(0x3f800000),
+    /* Position (320, 100, 0), outward normal (0, -1, 1). */
     UINT32_C(0x43a00000), UINT32_C(0x42c80000), UINT32_C(0x00000000),
-    UINT32_C(0xbf800000), UINT32_C(0x00000000), UINT32_C(0x3f800000),
+    UINT32_C(0x00000000), UINT32_C(0xbf800000), UINT32_C(0x3f800000),
     UINT32_C(0x000000ff)
 };
 
@@ -74,6 +74,7 @@ int main(int argc, char **argv) {
     pvr_chunk_model_cache_t cache;
     pvr_poly_cxt_t polygon_context;
     pvr_poly_hdr_t polygon_header;
+    pvr_poly_hdr_t outline_header;
     pvr_normal_matrix_t normal_matrix;
     pvr_frustum_t frustum;
     pvr_geometry_sink_t sink;
@@ -87,8 +88,16 @@ int main(int argc, char **argv) {
         vertices, deformations, normals, shades, 3,
         toon_triangles, 3, clip_vertices, PVR_FRUSTUM_CLIP_MAX_VERTICES
     };
+    pvr_chunk_outline_workspace_t outline_workspace = {
+        vertices, deformations, 3,
+        clip_vertices, PVR_FRUSTUM_CLIP_MAX_VERTICES
+    };
     pvr_chunk_toon_profile_t profile;
+    const pvr_chunk_outline_profile_t outline_profile = {
+        12.0f, UINT32_C(0xff080c18), UINT32_C(0)
+    };
     pvr_chunk_toon_result_t result;
+    pvr_chunk_outline_result_t outline_result;
     pvr_pipeline_status_t status;
     unsigned frame;
 
@@ -119,6 +128,8 @@ int main(int argc, char **argv) {
     pvr_poly_cxt_col(&polygon_context, PVR_LIST_OP_POLY);
     polygon_context.gen.culling = PVR_CULLING_NONE;
     pvr_poly_compile(&polygon_header, &polygon_context);
+    polygon_context.depth.write = false;
+    pvr_poly_compile(&outline_header, &polygon_context);
     assert(pvr_geometry_sink_init_current(&sink) == 0);
 
     for(frame = 0; frame < 240u; ++frame) {
@@ -132,6 +143,13 @@ int main(int argc, char **argv) {
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
+        assert(pvr_chunk_model_cache_emit_outline(
+            &cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
+            &outline_profile, &sink, &outline_workspace, NULL, begin_strip,
+            NULL, NULL, NULL, &outline_header, &outline_result) == 0);
+        assert(outline_result.emitted_strips == 1 &&
+               outline_result.source_triangles == 1 &&
+               outline_result.emitted_vertices == 3);
         assert(pvr_chunk_model_cache_emit_toon(
             &cache, &normal_matrix, &frustum,
             PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile, &sink, &workspace,
@@ -152,8 +170,8 @@ int main(int argc, char **argv) {
     vid_clear(0, 64, 0);
     bfont_draw_str(vram_s + vid_mode->width * BFONT_HEIGHT +
                    BFONT_THIN_WIDTH * 2, vid_mode->width, 1,
-                   "RESULT: PASS (compact topology-aware bands)");
-    puts("RESULT: PASS (compact topology-aware bands)");
+                   "RESULT: PASS (bands and outline shell)");
+    puts("RESULT: PASS (bands and outline shell)");
 
     for(;;)
         thd_sleep(1000);

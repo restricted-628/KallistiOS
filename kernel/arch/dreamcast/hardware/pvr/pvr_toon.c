@@ -590,3 +590,57 @@ int pvr_toon_color_modulate(uint32_t *output, uint32_t base,
     *output = result;
     return 0;
 }
+
+int pvr_toon_outline_expand(point_t *output, const point_t *position,
+                            const vector_t *normal, float distance) {
+    point_t expanded;
+    float length_squared;
+
+    if(!output || !finite_vector(position) || !finite_vector(normal) ||
+       position->w != 1.0f || normal->w != 0.0f ||
+       !isfinite(distance) || distance <= 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef __DREAMCAST__
+    {
+        shz_vec3_t source = shz_vec3_init(normal->x, normal->y, normal->z);
+        shz_vec3_t result;
+
+        length_squared = shz_vec3_dot(source, source);
+        if(!isfinite(length_squared) || length_squared <= FLT_MIN) {
+            errno = EDOM;
+            return -1;
+        }
+        result = shz_vec3_add(
+            shz_vec3_init(position->x, position->y, position->z),
+            shz_vec3_scale(shz_vec3_normalize(source), distance));
+        expanded.x = result.x;
+        expanded.y = result.y;
+        expanded.z = result.z;
+    }
+#else
+    {
+        float reciprocal;
+
+        length_squared = normal->x * normal->x +
+                         normal->y * normal->y +
+                         normal->z * normal->z;
+        if(!isfinite(length_squared) || length_squared <= FLT_MIN) {
+            errno = EDOM;
+            return -1;
+        }
+        reciprocal = distance / sqrtf(length_squared);
+        expanded.x = position->x + normal->x * reciprocal;
+        expanded.y = position->y + normal->y * reciprocal;
+        expanded.z = position->z + normal->z * reciprocal;
+    }
+#endif
+    expanded.w = 1.0f;
+    if(!finite_vector(&expanded)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = expanded;
+    return 0;
+}

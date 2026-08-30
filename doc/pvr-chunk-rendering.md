@@ -182,6 +182,15 @@ constant base and offset color. The model contains no wireframe marker, and the
 cache, resolved-strip workspace, profile, material header, list, and scene all
 remain caller-owned.
 
+Silhouette outlines use a separate inverted-shell pass rather than changing
+the compact model grammar. `pvr_toon_outline_expand()` provides checked normal
+extrusion, using SH4ZAM vector math on Dreamcast, while
+`pvr_chunk_model_cache_emit_outline()` composes that operation with prepared
+deformation, smooth or flat-shaded normal policy, frustum clipping, and the
+existing geometry sinks. Applications draw this shell before the ordinary
+surface and submit an untextured material with the opposite culling mode.
+Object-space width, colors, scratch, material, scene, and list remain explicit.
+
 The dedicated two-volume path follows the same position and callback policy.
 Ordinary texture and material records update the outside-volume fields;
 two-volume variants update `secondary_*`, the inside-volume fields. Textured
@@ -303,33 +312,31 @@ format, deformation, or tooling gaps:
 1. Decide whether two-volume surfaces need topology-changing band shading. The
    current ordinary policy rejects that distinct vertex layout instead of
    dropping its second parameter set.
-2. Add optional silhouette outlines as a separate modifier-volume, back-face,
-   or author-supplied shell pass; keep it independent of interior banding.
-3. Evaluate a small admitted lookup-ramp mode and quantized offset-color
+2. Evaluate a small admitted lookup-ramp mode and quantized offset-color
    highlights against the existing exact geometric bands and extended
    lighting path. These are policy/throughput choices, not new model records.
-4. Resolve the admitted cached-polygon control records. Prefer translating
+3. Resolve the admitted cached-polygon control records. Prefer translating
    them into explicit prepared-cache/submesh reuse in the host compiler rather
    than adding a second runtime cache mechanism.
-5. Add a rare floating-UV escape record only if conformance content exceeds
+4. Add a rare floating-UV escape record only if conformance content exceeds
    both signed fixed-point ranges or needs precision neither encoding can
    preserve. The host compiler already selects UV10 when it fits and otherwise
    UV8; it must continue failing loudly rather than silently clamping.
-6. Define a backward-compatible section-directory asset revision when compact
+5. Define a backward-compatible section-directory asset revision when compact
    assets need to bundle optional hierarchy, general-skin, morph, animation,
    collision-volume, resource-table, or cooked-cache sections. PCM1 remains
    the small two-stream container; a larger fixed header must not grow around
    every optional feature.
-7. Extend the host compiler around one canonical scene IR, including modern
+6. Extend the host compiler around one canonical scene IR, including modern
    scene import, lossless general skin and morph import, hierarchy/evaluation
    metadata, parent-result canonicalization, optional cooked caches, and
    repeatable round-trip conformance fixtures for seams and deformation.
-8. Add exact imported hierarchy policies only where conversion proves they are
+7. Add exact imported hierarchy policies only where conversion proves they are
    observable: translation/rotation/scale suppression, child-pruning, and
    explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
    not replace the current flat parent-before-child hierarchy or complete-pose
    deformation with pointer trees or deferred polygon execution.
-9. Extend the separate cell-sprite layer with host authoring support. Its core
+8. Extend the separate cell-sprite layer with host authoring support. Its core
    timestamped stream/list sampling and events, generic whole-motion binding,
    signed priority, material/color metadata, and compact or colored 2D/3D
    geometry paths are complete and remain outside the 3D compact mesh grammar.
@@ -339,8 +346,8 @@ records with automatic host-side selection, variable-count skin influences
 beside the four-weight fast path, shape-to-morph binding, volume
 iteration/collision reuse, retained bounds and clipping, environment-map UV
 generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy
-traversal, ordinary/two-volume/modifier prepared caches, and prepared-cache
-strip-topology wireframe drawing.
+traversal, ordinary/two-volume/modifier prepared caches, prepared-cache
+inverted-shell outlines, and strip-topology wireframe drawing.
 
 The signed encodings use distinct record types, so existing unsigned streams
 remain unambiguous without adding a version field to the borrowed raw-model

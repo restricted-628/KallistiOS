@@ -215,6 +215,19 @@ static int resolve_wire_vertex(uint16_t source_index,
     return 0;
 }
 
+static int resolve_outline_vertex(uint16_t source_index,
+                                  pvr_deform_vertex_t *vertex, void *data) {
+    callback_state_t *state = data;
+
+    (void)source_index;
+    ++state->resolves;
+    vertex->normal.x = 0.0f;
+    vertex->normal.y = 2.0f;
+    vertex->normal.z = 0.0f;
+    vertex->normal.w = 0.0f;
+    return 0;
+}
+
 static int prepare_vertex(const pvr_chunk_render_state_t *state,
                           uint16_t source_index,
                           const pvr_deform_vertex_t *deformation,
@@ -224,6 +237,20 @@ static int prepare_vertex(const pvr_chunk_render_state_t *state,
     assert(state->diffuse_argb == UINT32_C(0xff223344));
     assert(deformation->normal.z == 1.0f);
     vertex->argb = UINT32_C(0xff000000) | source_index;
+    ++callback->prepares;
+    return 0;
+}
+
+static int prepare_outline_vertex(
+        const pvr_chunk_render_state_t *state, uint16_t source_index,
+        const pvr_deform_vertex_t *deformation,
+        pvr_vertex_t *vertex, void *data) {
+    callback_state_t *callback = data;
+
+    assert(state->diffuse_argb == UINT32_C(0xff223344));
+    assert(deformation->normal.y == 2.0f);
+    vertex->argb = UINT32_C(0xff800000) | source_index;
+    vertex->oargb = UINT32_C(0xff008000) | source_index;
     ++callback->prepares;
     return 0;
 }
@@ -391,6 +418,59 @@ static void test_toon_cache(const pvr_chunk_model_cache_t *cache) {
                                        PVR_CMD_VERTEX));
     }
     assert(dark_vertices && light_vertices);
+}
+
+static void test_outline_cache(const pvr_chunk_model_cache_t *cache) {
+    pvr_chunk_outline_profile_t profile = {
+        0.5f, UINT32_C(0xff102030), UINT32_C(0xff010203)
+    };
+    alignas(8) matrix_t matrix;
+    pvr_frustum_t frustum;
+    alignas(32) pvr_vertex_t vertices[3];
+    alignas(32) pvr_deform_vertex_t deformations[3];
+    alignas(32) pvr_vertex_t clip_vertices[
+        PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    pvr_chunk_outline_workspace_t workspace = {
+        vertices, deformations, 3,
+        clip_vertices, PVR_FRUSTUM_CLIP_MAX_VERTICES
+    };
+    alignas(32) pvr_vertex_t output[3];
+    pvr_geometry_sink_t sink;
+    pvr_chunk_outline_result_t result;
+    callback_state_t callbacks = { 0 };
+    size_t index;
+
+    identity(&matrix);
+    assert(pvr_frustum_init(&frustum, &matrix, -1.0f, -1.0f,
+                            3.0f, 1.0f, 0.5f, 2.0f) == 0);
+    assert(pvr_chunk_outline_profile_validate(&profile) == 0);
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_cache_emit_outline(
+        cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, begin_strip, resolve_outline_vertex,
+        prepare_outline_vertex, NULL, &callbacks, &result) == 0);
+    assert(result.visited_strips == 1 && result.skipped_strips == 0);
+    assert(result.source_triangles == 1 && result.dropped_triangles == 0);
+    assert(result.emitted_strips == 1 && result.emitted_triangles == 1 &&
+           result.emitted_vertices == 3);
+    assert(callbacks.begins == 1 && callbacks.resolves == 3 &&
+           callbacks.prepares == 3);
+    assert(sink.emitted_vertices == 3);
+    for(index = 0; index < 3u; ++index) {
+        assert(output[index].y == 0.5f);
+        assert(output[index].argb == profile.argb);
+        assert(output[index].oargb == profile.oargb);
+        assert(output[index].flags == (index == 2u ? PVR_CMD_VERTEX_EOL :
+                                                    PVR_CMD_VERTEX));
+    }
+
+    profile.distance = 0.0f;
+    errno = 0;
+    assert(pvr_chunk_model_cache_emit_outline(
+        cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, NULL, NULL, NULL, NULL, NULL,
+        &result) == -1);
+    assert(errno == EINVAL && result.visited_strips == 0);
 }
 
 static void test_wire_cache(const pvr_chunk_model_cache_t *cache) {
@@ -858,6 +938,7 @@ int main(void) {
 
     assert(pvr_chunk_model_cache_validate(&cache) == 0);
     test_toon_cache(&cache);
+    test_outline_cache(&cache);
     test_wire_cache(&cache);
 
     identity(&matrix);

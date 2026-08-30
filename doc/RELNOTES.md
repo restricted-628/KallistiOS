@@ -18,6 +18,11 @@ lifecycle and naming conventions.
   shared edges. Small checked helpers supply signed directional shade profiles,
   band lookup, capacity bounds, and packed-color modulation without adding
   model records, renderer state, or per-frame allocation.
+* Added SH4ZAM-backed normal extrusion and a prepared compact-cache inverted-
+  shell outline pass. Smooth and flat-shaded strips preserve current
+  deformation, optional per-frame policy, frustum clipping, and established
+  geometry sinks while the application retains explicit culling, material,
+  scene, and list ownership.
 * Added checked homogeneous line-segment clipping and constant-width
   screen-space line expansion, plus an allocation-free prepared compact-model
   wireframe policy. It enumerates unique full-mesh, outside-boundary, or
