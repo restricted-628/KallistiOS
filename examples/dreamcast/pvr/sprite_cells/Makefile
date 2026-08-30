@@ -1,6 +1,6 @@
 # KallistiOS ##version##
 #
-# Checked caller-owned sprite-cell geometry example
+# Checked caller-owned cell-sprite stream example
 # Copyright (C) 2026 Joseph Black
 #
 

@@ -329,8 +329,11 @@ format, deformation, or tooling gaps:
    explicit XYZ/ZXY Euler sampling beside the preferred quaternion path. Do
    not replace the current flat parent-before-child hierarchy or complete-pose
    deformation with pointer trees or deferred polygon execution.
-9. Finish the separate cell-sprite stream/list animation layer. It composes
-   with PVR sprite geometry but does not belong in the 3D compact mesh grammar.
+9. Extend the separate cell-sprite layer with a generic-motion adapter,
+   stream-local event collection, and host authoring support. Its core
+   timestamped stream/list sampling, whole-sprite composition, signed priority,
+   material/color metadata, and compact or colored 2D/3D geometry paths are
+   complete and remain outside the 3D compact mesh grammar.
 
 Already completed and not to be reimplemented are distinct signed UV8/UV10
 records with automatic host-side selection, variable-count skin influences

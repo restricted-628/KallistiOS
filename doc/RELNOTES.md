@@ -238,6 +238,13 @@ lifecycle and naming conventions.
   UV flips, visibility compaction, screen-space output, and projected 3D
   billboards. Existing checked materials and geometry sinks retain texture,
   color, scene, list, and submission ownership.
+* Added allocation-free cell-sprite composition and timestamped step streams.
+  Ordered stream lists independently override atlas selection, local transform,
+  signed priority, visibility, material routing, and per-corner colors before
+  one whole-sprite transform is applied. Resolved cells feed either the compact
+  hardware sprite path or expressive four-corner colored strips in 2D and 3D.
+  Dreamcast rotations and projection use SH4ZAM; callers retain every clock,
+  state array, workspace, texture, material, scene, and submission object.
 * Added bounded caller-owned particles with failure-atomic pool clearing,
   spawning, and deterministic constant-acceleration stepping. Active particles
   can compact into the sprite-cell path, expand into colored or textured

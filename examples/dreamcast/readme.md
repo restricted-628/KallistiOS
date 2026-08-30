@@ -194,8 +194,9 @@ This page serves as an index for all KallistiOS examples.
   - pvrmark_strips
   - pvrmark_strips_direct
   - render_ticket
-  - [**sprite_cells**](pvr/sprite_cells/): Compiles reusable atlas cells and
-    caller-owned instances into existing textured PVR sprite packets
+  - [**sprite_cells**](pvr/sprite_cells/): Samples independent caller-owned
+    cell streams, composes and priority-sorts their state, and emits compact
+    textured PVR sprite packets through SH4ZAM-backed target paths
   - strided_texture
   - [**texture_reservation**](pvr/texture_reservation/): Packs multiple checked
     surfaces into one caller-owned contiguous VRAM reservation
