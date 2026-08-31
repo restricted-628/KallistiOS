@@ -21,6 +21,7 @@
 #include <dc/pvr_chunk_model.h>
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_skin_asset.h>
+#include <dc/pvr_chunk_shape_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -158,7 +159,8 @@ static void usage(FILE *stream, const char *program) {
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
             "--material NAME=ID ...] [--material-library FILE ...] "
             "[--join-strips] [--emit-c SYMBOL | --emit-asset "
-            "[--section-directory [--scene-root] [--rigid-skin]] "
+            "[--section-directory [--scene-root] [--rigid-skin] "
+            "[--morph-target DX DY DZ]] "
             "[--lz4-vertices]] "
             "[--] INPUT.obj "
             "{VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}\n",
@@ -1755,6 +1757,7 @@ static int build_asset_blob(const output_streams_t *streams,
                             int lz4_vertices, int section_directory,
                             const pvr_scene_ir_t *scene,
                             const pvr_chunk_skin_general_t *skin,
+                            const pvr_chunk_shape_set_t *shapes,
                             uint8_t **blob_out,
                             size_t *blob_bytes_out) {
     uint8_t *vertex_raw = NULL;
@@ -1762,6 +1765,7 @@ static int build_asset_blob(const output_streams_t *streams,
     uint8_t *vertex_compressed = NULL;
     uint8_t *hierarchy_raw = NULL;
     uint8_t *skin_raw = NULL;
+    uint8_t *shape_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
@@ -1769,16 +1773,18 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t vertex_stored_bytes;
     size_t hierarchy_bytes = 0;
     size_t skin_bytes = 0;
+    size_t shape_bytes = 0;
     size_t section_count;
     size_t directory_bytes;
     size_t vertex_offset;
     size_t polygon_offset;
     size_t hierarchy_offset = 0;
     size_t skin_offset = 0;
+    size_t shape_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
-    if((scene || skin) && !section_directory) {
+    if((scene || skin || shapes) && !section_directory) {
         errno = EINVAL;
         goto fail;
     }
@@ -1792,6 +1798,9 @@ static int build_asset_blob(const output_streams_t *streams,
         goto fail;
     if(skin && pvr_scene_ir_serialize_general_skin(
                    skin, &skin_raw, &skin_bytes) < 0)
+        goto fail;
+    if(shapes && pvr_scene_ir_serialize_shapes(
+                     shapes, &shape_raw, &shape_bytes) < 0)
         goto fail;
     vertex_stored = vertex_raw;
     vertex_stored_bytes = vertex_bytes;
@@ -1826,7 +1835,8 @@ static int build_asset_blob(const output_streams_t *streams,
     }
 
     section_count = 2u + (hierarchy_raw ? 1u : 0u) +
-                    (skin_raw ? 1u : 0u);
+                    (skin_raw ? 1u : 0u) +
+                    (shape_raw ? 1u : 0u);
     if(section_count > SIZE_MAX / PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES) {
         errno = EOVERFLOW;
         goto fail;
@@ -1862,6 +1872,14 @@ static int build_asset_blob(const output_streams_t *streams,
         }
         file_bytes = skin_offset + skin_bytes;
     }
+    if(shape_raw) {
+        if(align_size_32(file_bytes, &shape_offset) < 0 ||
+           shape_offset > SIZE_MAX - shape_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = shape_offset + shape_bytes;
+    }
     if(file_bytes > UINT32_MAX) {
         errno = EOVERFLOW;
         goto fail;
@@ -1879,6 +1897,8 @@ static int build_asset_blob(const output_streams_t *streams,
         memcpy(blob + hierarchy_offset, hierarchy_raw, hierarchy_bytes);
     if(skin_raw)
         memcpy(blob + skin_offset, skin_raw, skin_bytes);
+    if(shape_raw)
+        memcpy(blob + shape_offset, shape_raw, shape_bytes);
 
     store_le32(blob + 8, (uint32_t)file_bytes);
     store_le32(blob + 16, float_word(streams->center[0]));
@@ -1927,6 +1947,18 @@ static int build_asset_blob(const output_streams_t *streams,
                 crc32_bytes(skin_raw, skin_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
+        if(shape_raw) {
+            size_t descriptor_index = 2u + (hierarchy_raw ? 1u : 0u) +
+                                      (skin_raw ? 1u : 0u);
+
+            store_pcm2_section(
+                directory + descriptor_index *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS,
+                shape_offset, shape_bytes, shape_bytes,
+                crc32_bytes(shape_raw, shape_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
         store_le32(blob + 44, crc32_bytes(
             directory, directory_bytes));
         store_le32(blob + 60, crc32_bytes(blob, 60));
@@ -1952,6 +1984,7 @@ static int build_asset_blob(const output_streams_t *streams,
     free(vertex_compressed);
     free(hierarchy_raw);
     free(skin_raw);
+    free(shape_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -1964,6 +1997,7 @@ fail:
     free(vertex_compressed);
     free(hierarchy_raw);
     free(skin_raw);
+    free(shape_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
@@ -2025,6 +2059,7 @@ static int prepare_asset_output(const char *target,
                                 int lz4_vertices, int section_directory,
                                 const pvr_scene_ir_t *scene,
                                 const pvr_chunk_skin_general_t *skin,
+                                const pvr_chunk_shape_set_t *shapes,
                                 temporary_output_t *temporary,
                                 size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -2033,23 +2068,29 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_workspace_requirements_t requirements;
     pvr_chunk_asset_section_t hierarchy_section;
     pvr_chunk_asset_section_t skin_section;
+    pvr_chunk_asset_section_t shape_section;
     pvr_chunk_model_view_t model_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
     pvr_chunk_skin_general_t materialized_skin;
+    pvr_chunk_shape_section_view_t shape_view;
+    pvr_chunk_shape_set_t materialized_shapes;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
     pvr_chunk_skin_span_t *skin_spans = NULL;
     pvr_chunk_skin_weight_t *skin_weights = NULL;
+    pvr_chunk_shape_target_t *shape_targets = NULL;
+    pvr_chunk_shape_delta_t *shape_deltas = NULL;
     const pvr_chunk_model_view_t *models[1];
     const void *hierarchy_data = NULL;
     const void *skin_data = NULL;
+    const void *shape_data = NULL;
     void *workspace = NULL;
     size_t workspace_allocation = 0;
     int result = -1;
 
     if(build_asset_blob(streams, lz4_vertices, section_directory, scene, skin,
-                        &blob, &blob_bytes) < 0 ||
+                        shapes, &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        pvr_chunk_asset_workspace_query(&asset_view, &requirements) < 0)
         goto out;
@@ -2128,12 +2169,48 @@ static int prepare_asset_output(const char *target,
             goto out;
         }
     }
+    if(shapes) {
+        size_t section_index = 2u + (scene ? 1u : 0u) +
+                               (skin ? 1u : 0u);
+
+        if(pvr_chunk_asset_section_get(
+               &asset_view, section_index, &shape_section) < 0 ||
+           shape_section.type != PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS ||
+           pvr_chunk_asset_section_load(
+               &asset_view, section_index, NULL, NULL, NULL, 0,
+               &shape_data) < 0 ||
+           pvr_chunk_shape_section_open(
+               shape_data, shape_section.decoded_bytes, &shape_view) < 0) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+        shape_targets = calloc(shape_view.target_count,
+                               sizeof(*shape_targets));
+        shape_deltas = calloc(shape_view.delta_count,
+                              sizeof(*shape_deltas));
+        if(!shape_targets || !shape_deltas) {
+            errno = ENOMEM;
+            goto out;
+        }
+        if(pvr_chunk_shape_section_materialize(
+               &shape_view, shape_targets, shape_view.target_count,
+               shape_deltas, shape_view.delta_count,
+               &materialized_shapes) < 0 ||
+           materialized_shapes.target_count != shapes->target_count) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+    }
     if(prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
         goto out;
     *asset_bytes = blob_bytes;
     result = 0;
 
 out:
+    free(shape_deltas);
+    free(shape_targets);
     free(skin_weights);
     free(skin_spans);
     free(hierarchy_nodes);
@@ -2453,6 +2530,9 @@ int main(int argc, char **argv) {
     output_streams_t streams = { 0 };
     pvr_scene_ir_t scene = { 0 };
     pvr_chunk_skin_general_t rigid_skin_data = { 0 };
+    pvr_chunk_shape_delta_t morph_delta = { 0 };
+    pvr_chunk_shape_target_t morph_shape_target = { 0 };
+    pvr_chunk_shape_set_t morph_shapes = { 0 };
     pvr_chunk_model_info_t info;
     temporary_output_t vertex_temporary = { 0 };
     temporary_output_t polygon_temporary = { 0 };
@@ -2474,6 +2554,8 @@ int main(int argc, char **argv) {
     int section_directory = 0;
     int scene_root = 0;
     int rigid_skin = 0;
+    int morph_target = 0;
+    float morph_offset[3] = { 0.0f, 0.0f, 0.0f };
     int texture_identifier = -1;
     int argument = 1;
     int result = 2;
@@ -2600,6 +2682,20 @@ int main(int argc, char **argv) {
             }
             rigid_skin = 1;
         }
+        else if(!strcmp(argv[argument], "--morph-target")) {
+            if(argument + 3 >= argc || morph_target ||
+               parse_float_token(argv[argument + 1], morph_offset + 0) < 0 ||
+               parse_float_token(argv[argument + 2], morph_offset + 1) < 0 ||
+               parse_float_token(argv[argument + 3], morph_offset + 2) < 0) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            morph_target = 1;
+            argument += 4;
+            continue;
+        }
         else {
             usage(stderr, argv[0]);
             material_table_free(&materials);
@@ -2630,6 +2726,13 @@ int main(int argc, char **argv) {
     if(rigid_skin && !section_directory) {
         fprintf(stderr,
                 "--rigid-skin requires --emit-asset --section-directory\n");
+        material_table_free(&materials);
+        material_library_free(&library);
+        return 2;
+    }
+    if(morph_target && !section_directory) {
+        fprintf(stderr,
+                "--morph-target requires --emit-asset --section-directory\n");
         material_table_free(&materials);
         material_library_free(&library);
         return 2;
@@ -2774,6 +2877,22 @@ int main(int argc, char **argv) {
         rigid_skin_data.weight_count = info.vertex_entries;
         rigid_skin_data.joint_count = 1;
     }
+    if(morph_target) {
+        if(!info.vertex_entries) {
+            errno = EILSEQ;
+            fprintf(stderr, "morph construction failed: %s\n",
+                    strerror(errno));
+            goto out;
+        }
+        morph_delta.vertex_index = 0;
+        morph_delta.delta.position.x = morph_offset[0];
+        morph_delta.delta.position.y = morph_offset[1];
+        morph_delta.delta.position.z = morph_offset[2];
+        morph_shape_target.deltas = &morph_delta;
+        morph_shape_target.delta_count = 1;
+        morph_shapes.targets = &morph_shape_target;
+        morph_shapes.target_count = 1;
+    }
     if(c_symbol) {
         if(prepare_c_output(c_output, c_symbol, &streams,
                             &vertex_temporary) < 0) {
@@ -2791,6 +2910,7 @@ int main(int argc, char **argv) {
                                 section_directory,
                                 scene_root ? &scene : NULL,
                                 rigid_skin ? &rigid_skin_data : NULL,
+                                morph_target ? &morph_shapes : NULL,
                                 &vertex_temporary, &asset_bytes) < 0) {
             fprintf(stderr, "asset preparation failed: %s\n",
                     strerror(errno));
@@ -2836,6 +2956,11 @@ int main(int argc, char **argv) {
             printf("general_skin_spans=%zu\n", rigid_skin_data.span_count);
             printf("general_skin_weights=%zu\n",
                    rigid_skin_data.weight_count);
+        }
+        if(morph_target) {
+            printf("morph_targets=%zu\n", morph_shapes.target_count);
+            printf("morph_deltas=%zu\n",
+                   morph_shape_target.delta_count);
         }
     }
     result = 0;

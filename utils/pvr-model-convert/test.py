@@ -393,6 +393,7 @@ f 1/1/1 2/2/1 3/3/1
             "--section-directory",
             "--scene-root",
             "--rigid-skin",
+            "--morph-target", "1.5", "-2.0", "0.25",
             source,
             skin_asset,
         )
@@ -404,8 +405,10 @@ f 1/1/1 2/2/1 3/3/1
             "hierarchy_nodes=1\n"
             "general_skin_spans=3\n"
             "general_skin_weights=3\n"
+            "morph_targets=1\n"
+            "morph_deltas=1\n"
         )
-        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 4
+        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 5
         skin_descriptor = struct.unpack_from(
             "<7IHH", skin_asset_bytes, 64 + 3 * 32
         )
@@ -432,6 +435,29 @@ f 1/1/1 2/2/1 3/3/1
             struct.unpack_from("<HH", skin, 72 + index * 4)
             for index in range(3)
         ) == ((0, 65535), (0, 65535), (0, 65535))
+
+        shape_descriptor = struct.unpack_from(
+            "<7IHH", skin_asset_bytes, 64 + 4 * 32
+        )
+        assert shape_descriptor[0] == 7
+        assert shape_descriptor[7:] == (0, 4)
+        shape_offset = shape_descriptor[2]
+        shape_size = shape_descriptor[3]
+        shape = skin_asset_bytes[shape_offset:shape_offset + shape_size]
+        assert shape[:4] == b"PMS1"
+        assert struct.unpack_from("<HHIIIHHII", shape, 4) == (
+            1, 48, 84, 1, 1, 8, 28, 8, 28
+        )
+        assert zlib.crc32(shape[48:]) == struct.unpack_from(
+            "<I", shape, 32
+        )[0]
+        assert zlib.crc32(shape[:44]) == struct.unpack_from(
+            "<I", shape, 44
+        )[0]
+        assert struct.unpack_from("<II", shape, 48) == (0, 1)
+        assert struct.unpack_from("<HH6f", shape, 56) == (
+            0, 0, 1.5, -2.0, 0.25, 0.0, 0.0, 0.0
+        )
 
         directory_lz4 = root / "triangle-directory-lz4.pcm"
         result = invoke(
@@ -505,6 +531,15 @@ f 1/1/1 2/2/1 3/3/1
         assert result.returncode == 2
         assert result.stderr == (
             "--rigid-skin requires --emit-asset --section-directory\n"
+        )
+
+        result = invoke(
+            converter, "--emit-asset", "--morph-target", "1", "0", "0",
+            source, raw_asset
+        )
+        assert result.returncode == 2
+        assert result.stderr == (
+            "--morph-target requires --emit-asset --section-directory\n"
         )
 
         generated_again = root / "test-model-again.c"

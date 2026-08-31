@@ -52,17 +52,23 @@ int main(void) {
     pvr_chunk_asset_workspace_requirements_t requirements;
     pvr_chunk_asset_section_t hierarchy_section;
     pvr_chunk_asset_section_t skin_section;
+    pvr_chunk_asset_section_t shape_section;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
     pvr_chunk_skin_span_t skin_spans[3];
     pvr_chunk_skin_weight_t skin_weights[3];
     pvr_chunk_skin_general_t skin;
+    pvr_chunk_shape_section_view_t shape_view;
+    pvr_chunk_shape_target_t shape_target;
+    pvr_chunk_shape_delta_t shape_delta;
+    pvr_chunk_shape_set_t shapes;
     pvr_chunk_hierarchy_node_t hierarchy_node;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_model_view_t model;
     const pvr_chunk_model_view_t *models[1];
     const void *hierarchy_data = NULL;
     const void *skin_data = NULL;
+    const void *shape_data = NULL;
     pvr_chunk_asset_lz4_service_t *decode_service = NULL;
     pvr_chunk_asset_lz4_job_t *job = NULL;
     pvr_chunk_asset_lz4_job_status_t status;
@@ -139,13 +145,26 @@ int main(void) {
        hierarchy.node_count == 1 && hierarchy_node.model == &model &&
        hierarchy_node.parent_index == PVR_CHUNK_NODE_NONE &&
        skin.span_count == 3 && skin.weight_count == 3 &&
-       skin.joint_count == 1) {
+       skin.joint_count == 1 &&
+       pvr_chunk_asset_section_get(&asset, 4, &shape_section) == 0 &&
+       shape_section.type == PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS &&
+       pvr_chunk_asset_section_load(&asset, 4, NULL, NULL, NULL, 0,
+                                    &shape_data) == 0 &&
+       pvr_chunk_shape_section_open(
+           shape_data, shape_section.decoded_bytes, &shape_view) == 0 &&
+       pvr_chunk_shape_section_materialize(
+           &shape_view, &shape_target, 1, &shape_delta, 1, &shapes) == 0 &&
+       shapes.target_count == 1 && shape_target.delta_count == 1 &&
+       shape_delta.vertex_index == 0 &&
+       shape_delta.delta.position.x == 1.0f) {
         printf("KOSPVRASSET loaded=1 service=1 vertices=%lu triangles=%lu "
-               "hierarchy=%lu skin=%lu workspace=%lu decoded=%lu\n",
+               "hierarchy=%lu skin=%lu morph=%lu workspace=%lu "
+               "decoded=%lu\n",
                (unsigned long)model.info.vertex_entries,
                (unsigned long)model.info.triangles,
                (unsigned long)hierarchy.node_count,
                (unsigned long)skin.span_count,
+               (unsigned long)shapes.target_count,
                (unsigned long)requirements.bytes,
                (unsigned long)status.output_bytes);
         result = 0;

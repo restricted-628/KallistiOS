@@ -10,7 +10,8 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
     [--texture-id ID | --material NAME=ID ...] \
     [--material-library FILE ...] \
     [--emit-c SYMBOL | --emit-asset [--section-directory \
-     [--scene-root] [--rigid-skin]] [--lz4-vertices]] [--] \
+     [--scene-root] [--rigid-skin] [--morph-target DX DY DZ]] \
+     [--lz4-vertices]] [--] \
     INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}
 ```
 
@@ -123,6 +124,15 @@ target parser/materializer, and existing variable-influence runtime binder. It
 does not infer an authored skeleton from OBJ and is not a replacement for a
 scene importer that owns real joint and weight data. The option likewise
 requires `--section-directory`.
+
+`--morph-target DX DY DZ` adds one admitted `PMS1` sparse morph-target
+section to PCM2. The target applies the supplied finite position delta to
+model vertex zero and leaves its normal unchanged. This is a narrow authoring
+and integration primitive for the host serializer, generic section loader,
+target parser/materializer, and existing model-aware shape binder; OBJ has no
+morph-target grammar, so the option does not infer or import wider shape data.
+Scene importers supply any number of sparse authored targets to the same
+serializer. The option requires `--section-directory`.
 
 Compile the generated file normally in the application build to produce the
 target object; the converter does not invoke or choose a compiler. Each output

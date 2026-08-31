@@ -157,6 +157,18 @@ the immediate or cached deformation callback. The shape layer allocates
 nothing, owns no playback clock, and is completely absent from applications
 that do not bind shape data.
 
+PCM2 stores the same sparse representation in a pointer-free little-endian
+`PMS1` section. Each target names one gapless span in a packed delta array;
+each delta stores a 16-bit model vertex index and finite XYZ position/normal
+changes, with canonical zero W components reconstructed by the loader.
+`pvr_chunk_shape_section_open()` checks framing, checksums, ordered target
+spans, finite records, and strictly increasing indices before publishing a
+borrowed view. Indexed accessors decode individual spans and deltas, while
+`pvr_chunk_shape_section_materialize()` fills caller-owned target and delta
+arrays only after complete capacity, alignment, and overlap validation. The
+result still passes through `pvr_chunk_shape_bind()`, which remains the sole
+authority for proving every sparse index exists in the selected model.
+
 ## Versioned asset containers and optional compression
 
 `pvr_chunk_asset_open()` admits a bounded, versioned container whose vertex
@@ -207,6 +219,11 @@ it through the target implementation before publishing. This deliberately
 tests the section contract without claiming that the bounded OBJ source can
 express an authored rig; a future scene importer supplies real spans and
 weights to the same serializer.
+With `--morph-target DX DY DZ`, it writes one `PMS1` section containing a
+single position delta for model vertex zero, then reloads and materializes it
+through the target implementation. This gives bounded OBJ builds an explicit
+round-trip fixture without inventing morph semantics that OBJ cannot express;
+future scene importers populate the same sparse target representation.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The

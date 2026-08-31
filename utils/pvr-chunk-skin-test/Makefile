@@ -12,6 +12,7 @@ SOURCES = pvr-chunk-skin-test.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_deform.c
 

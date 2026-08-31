@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a portable PCM2 sparse morph-target section. Checked target APIs
+  validate pointer-free target spans and finite indexed deltas, expose
+  individual records, and materialize directly into the existing compact
+  shape runtime using caller-owned storage. The host pipeline can emit and
+  reopen a single explicit offset target today; scene importers provide wider
+  authored target sets without adding another morph engine.
 * Added a portable PCM2 variable-influence skin section. Checked target APIs
   validate pointer-free spans and weights, expose indexed records, and
   materialize directly into the existing general-skin runtime using only

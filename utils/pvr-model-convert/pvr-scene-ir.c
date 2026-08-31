@@ -8,6 +8,7 @@
 
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_skin_asset.h>
+#include <dc/pvr_chunk_shape_asset.h>
 
 #include <errno.h>
 #include <math.h>
@@ -323,6 +324,156 @@ int pvr_scene_ir_serialize_general_skin(
 
     if(pvr_chunk_skin_general_section_open(
            bytes, file_bytes, &checked) < 0) {
+        int saved_errno = errno;
+
+        free(bytes);
+        errno = saved_errno;
+        return -1;
+    }
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
+}
+
+int pvr_scene_ir_serialize_shapes(
+    const pvr_chunk_shape_set_t *shapes,
+    uint8_t **bytes_out, size_t *size_out) {
+    pvr_chunk_shape_section_view_t checked;
+    uint8_t *bytes;
+    size_t target_bytes;
+    size_t delta_count = 0;
+    size_t delta_bytes;
+    size_t payload_bytes;
+    size_t file_bytes;
+    size_t target_index;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!shapes || !bytes_out || !size_out || !shapes->targets ||
+       !shapes->target_count || shapes->target_count > UINT32_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(shapes->target_count >
+       SIZE_MAX / PVR_CHUNK_SHAPE_SECTION_TARGET_BYTES) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    for(target_index = 0; target_index < shapes->target_count;
+        ++target_index) {
+        const pvr_chunk_shape_target_t *target =
+            shapes->targets + target_index;
+        size_t delta_index;
+
+        if(!target->deltas || !target->delta_count ||
+           target->delta_count > UINT32_MAX - delta_count) {
+            errno = target->deltas && target->delta_count ? EOVERFLOW :
+                                                             EINVAL;
+            return -1;
+        }
+        for(delta_index = 0; delta_index < target->delta_count;
+            ++delta_index) {
+            const pvr_chunk_shape_delta_t *delta =
+                target->deltas + delta_index;
+
+            if(delta->reserved ||
+               (delta_index && delta->vertex_index <=
+                                target->deltas[delta_index - 1u].vertex_index) ||
+               !isfinite(delta->delta.position.x) ||
+               !isfinite(delta->delta.position.y) ||
+               !isfinite(delta->delta.position.z) ||
+               !isfinite(delta->delta.normal.x) ||
+               !isfinite(delta->delta.normal.y) ||
+               !isfinite(delta->delta.normal.z) ||
+               delta->delta.position.w != 0.0f ||
+               delta->delta.normal.w != 0.0f) {
+                errno = EILSEQ;
+                return -1;
+            }
+        }
+        delta_count += target->delta_count;
+    }
+    if(!delta_count || delta_count >
+       SIZE_MAX / PVR_CHUNK_SHAPE_SECTION_DELTA_BYTES) {
+        errno = delta_count ? EOVERFLOW : EINVAL;
+        return -1;
+    }
+
+    target_bytes = shapes->target_count *
+                   PVR_CHUNK_SHAPE_SECTION_TARGET_BYTES;
+    delta_bytes = delta_count * PVR_CHUNK_SHAPE_SECTION_DELTA_BYTES;
+    if(target_bytes > SIZE_MAX - delta_bytes) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    payload_bytes = target_bytes + delta_bytes;
+    if(payload_bytes > SIZE_MAX - PVR_CHUNK_SHAPE_SECTION_HEADER_BYTES) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    file_bytes = PVR_CHUNK_SHAPE_SECTION_HEADER_BYTES + payload_bytes;
+    if(file_bytes > UINT32_MAX || target_bytes > UINT32_MAX ||
+       delta_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    delta_count = 0;
+    for(target_index = 0; target_index < shapes->target_count;
+        ++target_index) {
+        const pvr_chunk_shape_target_t *target =
+            shapes->targets + target_index;
+        uint8_t *target_record = bytes +
+            PVR_CHUNK_SHAPE_SECTION_HEADER_BYTES + target_index *
+                PVR_CHUNK_SHAPE_SECTION_TARGET_BYTES;
+        size_t delta_index;
+
+        store_le32(target_record, (uint32_t)delta_count);
+        store_le32(target_record + 4, (uint32_t)target->delta_count);
+        for(delta_index = 0; delta_index < target->delta_count;
+            ++delta_index) {
+            const pvr_chunk_shape_delta_t *delta =
+                target->deltas + delta_index;
+            uint8_t *delta_record = bytes +
+                PVR_CHUNK_SHAPE_SECTION_HEADER_BYTES + target_bytes +
+                (delta_count + delta_index) *
+                    PVR_CHUNK_SHAPE_SECTION_DELTA_BYTES;
+
+            store_le16(delta_record, delta->vertex_index);
+            store_le16(delta_record + 2, 0);
+            store_float(delta_record + 4, delta->delta.position.x);
+            store_float(delta_record + 8, delta->delta.position.y);
+            store_float(delta_record + 12, delta->delta.position.z);
+            store_float(delta_record + 16, delta->delta.normal.x);
+            store_float(delta_record + 20, delta->delta.normal.y);
+            store_float(delta_record + 24, delta->delta.normal.z);
+        }
+        delta_count += target->delta_count;
+    }
+
+    store_le32(bytes, PVR_CHUNK_SHAPE_SECTION_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_SHAPE_SECTION_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_SHAPE_SECTION_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)shapes->target_count);
+    store_le32(bytes + 16, (uint32_t)delta_count);
+    store_le16(bytes + 20, PVR_CHUNK_SHAPE_SECTION_TARGET_BYTES);
+    store_le16(bytes + 22, PVR_CHUNK_SHAPE_SECTION_DELTA_BYTES);
+    store_le32(bytes + 24, (uint32_t)target_bytes);
+    store_le32(bytes + 28, (uint32_t)delta_bytes);
+    store_le32(bytes + 32, crc32_bytes(
+        bytes + PVR_CHUNK_SHAPE_SECTION_HEADER_BYTES, payload_bytes));
+    store_le32(bytes + 44, crc32_bytes(bytes, 44));
+
+    if(pvr_chunk_shape_section_open(bytes, file_bytes, &checked) < 0) {
         int saved_errno = errno;
 
         free(bytes);
