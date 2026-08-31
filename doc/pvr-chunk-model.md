@@ -118,6 +118,17 @@ and pose-resolution contracts as Skin4, then feed
 weights when the error budget permits it and preserve every influence when it
 does not, without introducing draw-order-dependent accumulation.
 
+PCM2 can carry that same representation in a pointer-free little-endian `PSG1`
+section. `pvr_chunk_skin_general_section_open()` verifies its framing,
+checksums, reserved fields, ordered gapless spans, joint bounds, nonzero
+weights, and exact normalized totals before publishing a borrowed view. The
+indexed accessors decode individual records, while
+`pvr_chunk_skin_general_section_materialize()` fills caller-owned aligned span
+and weight arrays only after capacities and overlaps are completely checked.
+The resulting `pvr_chunk_skin_general_t` goes through the existing model-aware
+query and bind path; the section parser does not duplicate or weaken that
+authority. Applications that do not load a skin section allocate nothing.
+
 ## Explicit shape motion
 
 `pvr_chunk_shape_bind()` associates one or more sparse morph targets with a
@@ -190,6 +201,12 @@ The converter then loads, admits, and binds that section through the target
 implementation before publishing the PCM2 file. The current OBJ boundary has
 only one model and therefore emits only this explicit root; future scene
 importers populate the same IR rather than defining another target format.
+With `--rigid-skin`, the same host pipeline writes one `PSG1` section whose
+vertices are each fully weighted to joint zero, then reloads and materializes
+it through the target implementation before publishing. This deliberately
+tests the section contract without claiming that the bounded OBJ source can
+express an authored rig; a future scene importer supplies real spans and
+weights to the same serializer.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The

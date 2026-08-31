@@ -20,6 +20,7 @@
 #include <dc/pvr_chunk_asset.h>
 #include <dc/pvr_chunk_model.h>
 #include <dc/pvr_chunk_scene.h>
+#include <dc/pvr_chunk_skin_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -157,7 +158,8 @@ static void usage(FILE *stream, const char *program) {
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
             "--material NAME=ID ...] [--material-library FILE ...] "
             "[--join-strips] [--emit-c SYMBOL | --emit-asset "
-            "[--section-directory [--scene-root]] [--lz4-vertices]] "
+            "[--section-directory [--scene-root] [--rigid-skin]] "
+            "[--lz4-vertices]] "
             "[--] INPUT.obj "
             "{VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}\n",
             program);
@@ -1752,27 +1754,31 @@ static void store_pcm2_section(uint8_t *descriptor, uint32_t type,
 static int build_asset_blob(const output_streams_t *streams,
                             int lz4_vertices, int section_directory,
                             const pvr_scene_ir_t *scene,
+                            const pvr_chunk_skin_general_t *skin,
                             uint8_t **blob_out,
                             size_t *blob_bytes_out) {
     uint8_t *vertex_raw = NULL;
     uint8_t *polygon_raw = NULL;
     uint8_t *vertex_compressed = NULL;
     uint8_t *hierarchy_raw = NULL;
+    uint8_t *skin_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
     size_t polygon_bytes;
     size_t vertex_stored_bytes;
     size_t hierarchy_bytes = 0;
+    size_t skin_bytes = 0;
     size_t section_count;
     size_t directory_bytes;
     size_t vertex_offset;
     size_t polygon_offset;
     size_t hierarchy_offset = 0;
+    size_t skin_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
-    if(scene && !section_directory) {
+    if((scene || skin) && !section_directory) {
         errno = EINVAL;
         goto fail;
     }
@@ -1783,6 +1789,9 @@ static int build_asset_blob(const output_streams_t *streams,
         goto fail;
     if(scene && pvr_scene_ir_serialize_hierarchy(
                     scene, &hierarchy_raw, &hierarchy_bytes) < 0)
+        goto fail;
+    if(skin && pvr_scene_ir_serialize_general_skin(
+                   skin, &skin_raw, &skin_bytes) < 0)
         goto fail;
     vertex_stored = vertex_raw;
     vertex_stored_bytes = vertex_bytes;
@@ -1816,7 +1825,8 @@ static int build_asset_blob(const output_streams_t *streams,
         vertex_stored_bytes = compressed;
     }
 
-    section_count = 2u + (hierarchy_raw ? 1u : 0u);
+    section_count = 2u + (hierarchy_raw ? 1u : 0u) +
+                    (skin_raw ? 1u : 0u);
     if(section_count > SIZE_MAX / PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES) {
         errno = EOVERFLOW;
         goto fail;
@@ -1844,6 +1854,14 @@ static int build_asset_blob(const output_streams_t *streams,
         }
         file_bytes = hierarchy_offset + hierarchy_bytes;
     }
+    if(skin_raw) {
+        if(align_size_32(file_bytes, &skin_offset) < 0 ||
+           skin_offset > SIZE_MAX - skin_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = skin_offset + skin_bytes;
+    }
     if(file_bytes > UINT32_MAX) {
         errno = EOVERFLOW;
         goto fail;
@@ -1859,6 +1877,8 @@ static int build_asset_blob(const output_streams_t *streams,
     memcpy(blob + polygon_offset, polygon_raw, polygon_bytes);
     if(hierarchy_raw)
         memcpy(blob + hierarchy_offset, hierarchy_raw, hierarchy_bytes);
+    if(skin_raw)
+        memcpy(blob + skin_offset, skin_raw, skin_bytes);
 
     store_le32(blob + 8, (uint32_t)file_bytes);
     store_le32(blob + 16, float_word(streams->center[0]));
@@ -1896,6 +1916,17 @@ static int build_asset_blob(const output_streams_t *streams,
                 crc32_bytes(hierarchy_raw, hierarchy_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
+        if(skin_raw) {
+            size_t descriptor_index = 2u + (hierarchy_raw ? 1u : 0u);
+
+            store_pcm2_section(
+                directory + descriptor_index *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL,
+                skin_offset, skin_bytes, skin_bytes,
+                crc32_bytes(skin_raw, skin_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
         store_le32(blob + 44, crc32_bytes(
             directory, directory_bytes));
         store_le32(blob + 60, crc32_bytes(blob, 60));
@@ -1920,6 +1951,7 @@ static int build_asset_blob(const output_streams_t *streams,
 
     free(vertex_compressed);
     free(hierarchy_raw);
+    free(skin_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -1931,6 +1963,7 @@ fail:
     free(blob);
     free(vertex_compressed);
     free(hierarchy_raw);
+    free(skin_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
@@ -1991,6 +2024,7 @@ static int prepare_asset_output(const char *target,
                                 const output_streams_t *streams,
                                 int lz4_vertices, int section_directory,
                                 const pvr_scene_ir_t *scene,
+                                const pvr_chunk_skin_general_t *skin,
                                 temporary_output_t *temporary,
                                 size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -1998,17 +2032,23 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_view_t asset_view;
     pvr_chunk_asset_workspace_requirements_t requirements;
     pvr_chunk_asset_section_t hierarchy_section;
+    pvr_chunk_asset_section_t skin_section;
     pvr_chunk_model_view_t model_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
+    pvr_chunk_skin_general_section_view_t skin_view;
+    pvr_chunk_skin_general_t materialized_skin;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
+    pvr_chunk_skin_span_t *skin_spans = NULL;
+    pvr_chunk_skin_weight_t *skin_weights = NULL;
     const pvr_chunk_model_view_t *models[1];
     const void *hierarchy_data = NULL;
+    const void *skin_data = NULL;
     void *workspace = NULL;
     size_t workspace_allocation = 0;
     int result = -1;
 
-    if(build_asset_blob(streams, lz4_vertices, section_directory, scene,
+    if(build_asset_blob(streams, lz4_vertices, section_directory, scene, skin,
                         &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        pvr_chunk_asset_workspace_query(&asset_view, &requirements) < 0)
@@ -2055,12 +2095,47 @@ static int prepare_asset_output(const char *target,
                hierarchy_view.node_count, &hierarchy) < 0)
             goto out;
     }
+    if(skin) {
+        size_t section_index = 2u + (scene ? 1u : 0u);
+
+        if(pvr_chunk_asset_section_get(
+               &asset_view, section_index, &skin_section) < 0 ||
+           skin_section.type != PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL ||
+           pvr_chunk_asset_section_load(
+               &asset_view, section_index, NULL, NULL, NULL, 0,
+               &skin_data) < 0 ||
+           pvr_chunk_skin_general_section_open(
+               skin_data, skin_section.decoded_bytes, &skin_view) < 0) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+        skin_spans = calloc(skin_view.span_count, sizeof(*skin_spans));
+        skin_weights = calloc(skin_view.weight_count, sizeof(*skin_weights));
+        if(!skin_spans || !skin_weights) {
+            errno = ENOMEM;
+            goto out;
+        }
+        if(pvr_chunk_skin_general_section_materialize(
+               &skin_view, skin_spans, skin_view.span_count,
+               skin_weights, skin_view.weight_count,
+               &materialized_skin) < 0 ||
+           materialized_skin.span_count != skin->span_count ||
+           materialized_skin.weight_count != skin->weight_count ||
+           materialized_skin.joint_count != skin->joint_count) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+    }
     if(prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
         goto out;
     *asset_bytes = blob_bytes;
     result = 0;
 
 out:
+    free(skin_weights);
+    free(skin_spans);
     free(hierarchy_nodes);
     free(workspace);
     free(blob);
@@ -2377,6 +2452,7 @@ int main(int argc, char **argv) {
     material_library_t library = { 0 };
     output_streams_t streams = { 0 };
     pvr_scene_ir_t scene = { 0 };
+    pvr_chunk_skin_general_t rigid_skin_data = { 0 };
     pvr_chunk_model_info_t info;
     temporary_output_t vertex_temporary = { 0 };
     temporary_output_t polygon_temporary = { 0 };
@@ -2388,6 +2464,8 @@ int main(int argc, char **argv) {
     const char *c_symbol = NULL;
     size_t asset_bytes = 0;
     size_t error_line = 0;
+    pvr_chunk_skin_span_t *rigid_spans = NULL;
+    pvr_chunk_skin_weight_t *rigid_weights = NULL;
     int flip_winding = 0;
     int flip_v = 0;
     int join_strips = 0;
@@ -2395,6 +2473,7 @@ int main(int argc, char **argv) {
     int lz4_vertices = 0;
     int section_directory = 0;
     int scene_root = 0;
+    int rigid_skin = 0;
     int texture_identifier = -1;
     int argument = 1;
     int result = 2;
@@ -2512,6 +2591,15 @@ int main(int argc, char **argv) {
             }
             scene_root = 1;
         }
+        else if(!strcmp(argv[argument], "--rigid-skin")) {
+            if(rigid_skin) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            rigid_skin = 1;
+        }
         else {
             usage(stderr, argv[0]);
             material_table_free(&materials);
@@ -2535,6 +2623,13 @@ int main(int argc, char **argv) {
     if(scene_root && !section_directory) {
         fprintf(stderr,
                 "--scene-root requires --emit-asset --section-directory\n");
+        material_table_free(&materials);
+        material_library_free(&library);
+        return 2;
+    }
+    if(rigid_skin && !section_directory) {
+        fprintf(stderr,
+                "--rigid-skin requires --emit-asset --section-directory\n");
         material_table_free(&materials);
         material_library_free(&library);
         return 2;
@@ -2648,6 +2743,37 @@ int main(int argc, char **argv) {
         fprintf(stderr, "scene construction failed: %s\n", strerror(errno));
         goto out;
     }
+    if(rigid_skin) {
+        size_t vertex;
+
+        if(!info.vertex_entries || info.vertex_entries > UINT16_MAX + 1u ||
+           info.vertex_entries > UINT32_MAX) {
+            errno = EOVERFLOW;
+            fprintf(stderr, "rigid skin construction failed: %s\n",
+                    strerror(errno));
+            goto out;
+        }
+        rigid_spans = calloc(info.vertex_entries, sizeof(*rigid_spans));
+        rigid_weights = calloc(info.vertex_entries, sizeof(*rigid_weights));
+        if(!rigid_spans || !rigid_weights) {
+            errno = ENOMEM;
+            fprintf(stderr, "rigid skin construction failed: %s\n",
+                    strerror(errno));
+            goto out;
+        }
+        for(vertex = 0; vertex < info.vertex_entries; ++vertex) {
+            rigid_spans[vertex].vertex_index = (uint16_t)vertex;
+            rigid_spans[vertex].weight_count = 1;
+            rigid_spans[vertex].first_weight = (uint32_t)vertex;
+            rigid_weights[vertex].joint = 0;
+            rigid_weights[vertex].weight = UINT16_MAX;
+        }
+        rigid_skin_data.spans = rigid_spans;
+        rigid_skin_data.span_count = info.vertex_entries;
+        rigid_skin_data.weights = rigid_weights;
+        rigid_skin_data.weight_count = info.vertex_entries;
+        rigid_skin_data.joint_count = 1;
+    }
     if(c_symbol) {
         if(prepare_c_output(c_output, c_symbol, &streams,
                             &vertex_temporary) < 0) {
@@ -2664,6 +2790,7 @@ int main(int argc, char **argv) {
         if(prepare_asset_output(asset_output, &streams, lz4_vertices,
                                 section_directory,
                                 scene_root ? &scene : NULL,
+                                rigid_skin ? &rigid_skin_data : NULL,
                                 &vertex_temporary, &asset_bytes) < 0) {
             fprintf(stderr, "asset preparation failed: %s\n",
                     strerror(errno));
@@ -2705,10 +2832,17 @@ int main(int argc, char **argv) {
             printf("asset_container=pcm2\n");
         if(scene_root)
             printf("hierarchy_nodes=%zu\n", scene.node_count);
+        if(rigid_skin) {
+            printf("general_skin_spans=%zu\n", rigid_skin_data.span_count);
+            printf("general_skin_weights=%zu\n",
+                   rigid_skin_data.weight_count);
+        }
     }
     result = 0;
 
 out:
+    free(rigid_weights);
+    free(rigid_spans);
     discard_output(&vertex_temporary);
     discard_output(&polygon_temporary);
     output_streams_free(&streams);

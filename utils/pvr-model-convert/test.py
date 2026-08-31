@@ -385,6 +385,54 @@ f 1/1/1 2/2/1 3/3/1
             0.0, 0.0, 0.0, 1.0,
         )
 
+        skin_asset = root / "triangle-scene-skin.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            "--section-directory",
+            "--scene-root",
+            "--rigid-skin",
+            source,
+            skin_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        skin_asset_bytes = skin_asset.read_bytes()
+        assert result.stdout == (
+            REPORT + f"asset_bytes={len(skin_asset_bytes)}\n"
+            "vertex_codec=raw\nasset_container=pcm2\n"
+            "hierarchy_nodes=1\n"
+            "general_skin_spans=3\n"
+            "general_skin_weights=3\n"
+        )
+        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 4
+        skin_descriptor = struct.unpack_from(
+            "<7IHH", skin_asset_bytes, 64 + 3 * 32
+        )
+        assert skin_descriptor[0] == 6
+        assert skin_descriptor[7:] == (0, 4)
+        skin_offset = skin_descriptor[2]
+        skin_size = skin_descriptor[3]
+        skin = skin_asset_bytes[skin_offset:skin_offset + skin_size]
+        assert skin[:4] == b"PSG1"
+        assert struct.unpack_from("<HHIIIIHHII", skin, 4) == (
+            1, 48, 84, 3, 3, 1, 8, 4, 24, 12
+        )
+        assert zlib.crc32(skin[48:]) == struct.unpack_from(
+            "<I", skin, 36
+        )[0]
+        assert zlib.crc32(skin[:44]) == struct.unpack_from(
+            "<I", skin, 44
+        )[0]
+        assert tuple(
+            struct.unpack_from("<HHI", skin, 48 + index * 8)
+            for index in range(3)
+        ) == ((0, 1, 0), (1, 1, 1), (2, 1, 2))
+        assert tuple(
+            struct.unpack_from("<HH", skin, 72 + index * 4)
+            for index in range(3)
+        ) == ((0, 65535), (0, 65535), (0, 65535))
+
         directory_lz4 = root / "triangle-directory-lz4.pcm"
         result = invoke(
             converter,
@@ -449,6 +497,14 @@ f 1/1/1 2/2/1 3/3/1
         assert result.returncode == 2
         assert result.stderr == (
             "--scene-root requires --emit-asset --section-directory\n"
+        )
+
+        result = invoke(
+            converter, "--emit-asset", "--rigid-skin", source, raw_asset
+        )
+        assert result.returncode == 2
+        assert result.stderr == (
+            "--rigid-skin requires --emit-asset --section-directory\n"
         )
 
         generated_again = root / "test-model-again.c"

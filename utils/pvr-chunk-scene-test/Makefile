@@ -9,7 +9,8 @@ LDLIBS += -lm
 TARGET = pvr-chunk-scene-test
 SOURCES = pvr-chunk-scene-test.c \
           ../pvr-model-convert/pvr-scene-ir.c \
-          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c
 
 .PHONY: all clean test
 

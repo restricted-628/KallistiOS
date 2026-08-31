@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a portable PCM2 variable-influence skin section. Checked target APIs
+  validate pointer-free spans and weights, expose indexed records, and
+  materialize directly into the existing general-skin runtime using only
+  caller-owned storage. The host scene pipeline can serialize, reopen, and
+  verify a rigid integration fixture today; later scene importers provide
+  authored joint data without adding another deformation engine.
 * Added a portable PCM2 hierarchy-section contract and the first canonical
   host scene-IR output path. Checked target APIs admit finite parent-before-
   child nodes and bind stable model ordinals into the existing allocation-free

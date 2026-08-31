@@ -356,10 +356,10 @@ The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
 1. Extend the now-established canonical host scene IR beyond its admitted
-   hierarchy section and populate the completed PCM2 directory with optional
-   general-skin, morph,
-   animation, collision-volume, resource-table, or cooked-cache sections.
-   Include modern scene import, lossless general skin and morph import,
+   hierarchy and general-skin sections and populate the completed PCM2
+   directory with optional morph, animation, collision-volume, resource-table,
+   or cooked-cache sections. Include modern scene import, lossless authored
+   general-skin and morph import,
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
    of deferred polygon controls, optional cooked caches, and
    repeatable round-trip conformance fixtures for seams and deformation.
@@ -378,7 +378,8 @@ records with automatic host-side selection and a finite float-UV escape for
 coordinates outside both compact ranges, the backward-compatible PCM2 checked
 section directory and generic section loader, the canonical host scene IR and
 pointer-free checked hierarchy section/binder, variable-count skin influences
-beside the four-weight fast path, shape-to-morph binding, volume
+beside the four-weight fast path, the pointer-free checked general-skin
+section/parser/materializer, shape-to-morph binding, volume
 iteration/collision reuse, retained bounds and clipping, environment-map UV
 generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy
 traversal, ordinary/two-volume/modifier prepared caches, prepared-cache

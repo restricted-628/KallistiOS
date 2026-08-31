@@ -7,6 +7,7 @@
 #include "pvr-scene-ir.h"
 
 #include <dc/pvr_chunk_scene.h>
+#include <dc/pvr_chunk_skin_asset.h>
 
 #include <errno.h>
 #include <math.h>
@@ -196,6 +197,138 @@ int pvr_scene_ir_serialize_hierarchy(const pvr_scene_ir_t *scene,
         bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES, node_bytes));
     store_le32(bytes + 28, crc32_bytes(bytes, 28));
 
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
+}
+
+int pvr_scene_ir_serialize_general_skin(
+    const pvr_chunk_skin_general_t *skin,
+    uint8_t **bytes_out, size_t *size_out) {
+    pvr_chunk_skin_general_section_view_t checked;
+    uint8_t *bytes;
+    size_t span_bytes;
+    size_t weight_bytes;
+    size_t payload_bytes;
+    size_t file_bytes;
+    size_t next_weight = 0;
+    size_t index;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!skin || !bytes_out || !size_out || !skin->spans ||
+       !skin->weights || !skin->span_count || !skin->weight_count ||
+       !skin->joint_count || skin->joint_count > UINT16_MAX + 1u ||
+       skin->span_count > UINT32_MAX || skin->weight_count > UINT32_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(skin->span_count > SIZE_MAX / PVR_CHUNK_SKIN_GENERAL_SPAN_BYTES ||
+       skin->weight_count >
+           SIZE_MAX / PVR_CHUNK_SKIN_GENERAL_WEIGHT_BYTES) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+
+    for(index = 0; index < skin->span_count; ++index) {
+        const pvr_chunk_skin_span_t *span = skin->spans + index;
+        uint32_t total = 0;
+        size_t slot;
+
+        if((index && span->vertex_index <=
+                     skin->spans[index - 1u].vertex_index) ||
+           !span->weight_count || span->first_weight != next_weight ||
+           span->weight_count > skin->weight_count - next_weight) {
+            errno = EILSEQ;
+            return -1;
+        }
+        for(slot = 0; slot < span->weight_count; ++slot) {
+            const pvr_chunk_skin_weight_t *weight =
+                skin->weights + next_weight + slot;
+
+            if(!weight->weight || weight->joint >= skin->joint_count) {
+                errno = EILSEQ;
+                return -1;
+            }
+            total += weight->weight;
+        }
+        if(total != PVR_CHUNK_SKIN_WEIGHT_SUM) {
+            errno = EILSEQ;
+            return -1;
+        }
+        next_weight += span->weight_count;
+    }
+    if(next_weight != skin->weight_count) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    span_bytes = skin->span_count * PVR_CHUNK_SKIN_GENERAL_SPAN_BYTES;
+    weight_bytes = skin->weight_count *
+                   PVR_CHUNK_SKIN_GENERAL_WEIGHT_BYTES;
+    if(span_bytes > SIZE_MAX - weight_bytes) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    payload_bytes = span_bytes + weight_bytes;
+    if(payload_bytes > SIZE_MAX - PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    file_bytes = PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES + payload_bytes;
+    if(file_bytes > UINT32_MAX || span_bytes > UINT32_MAX ||
+       weight_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    for(index = 0; index < skin->span_count; ++index) {
+        uint8_t *record = bytes + PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES +
+                          index * PVR_CHUNK_SKIN_GENERAL_SPAN_BYTES;
+
+        store_le16(record, skin->spans[index].vertex_index);
+        store_le16(record + 2, skin->spans[index].weight_count);
+        store_le32(record + 4, skin->spans[index].first_weight);
+    }
+    for(index = 0; index < skin->weight_count; ++index) {
+        uint8_t *record = bytes + PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES +
+                          span_bytes +
+                          index * PVR_CHUNK_SKIN_GENERAL_WEIGHT_BYTES;
+
+        store_le16(record, skin->weights[index].joint);
+        store_le16(record + 2, skin->weights[index].weight);
+    }
+
+    store_le32(bytes, PVR_CHUNK_SKIN_GENERAL_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_SKIN_GENERAL_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)skin->span_count);
+    store_le32(bytes + 16, (uint32_t)skin->weight_count);
+    store_le32(bytes + 20, (uint32_t)skin->joint_count);
+    store_le16(bytes + 24, PVR_CHUNK_SKIN_GENERAL_SPAN_BYTES);
+    store_le16(bytes + 26, PVR_CHUNK_SKIN_GENERAL_WEIGHT_BYTES);
+    store_le32(bytes + 28, (uint32_t)span_bytes);
+    store_le32(bytes + 32, (uint32_t)weight_bytes);
+    store_le32(bytes + 36, crc32_bytes(
+        bytes + PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES, payload_bytes));
+    store_le32(bytes + 44, crc32_bytes(bytes, 44));
+
+    if(pvr_chunk_skin_general_section_open(
+           bytes, file_bytes, &checked) < 0) {
+        int saved_errno = errno;
+
+        free(bytes);
+        errno = saved_errno;
+        return -1;
+    }
     *bytes_out = bytes;
     *size_out = file_bytes;
     return 0;

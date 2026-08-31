@@ -10,6 +10,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <dc/pvr_chunk_skin.h>
+
 typedef struct pvr_scene_ir_node {
     uint32_t parent_index;
     uint32_t model_ordinal;
@@ -36,5 +38,9 @@ int pvr_scene_ir_validate(const pvr_scene_ir_t *scene);
 int pvr_scene_ir_serialize_hierarchy(const pvr_scene_ir_t *scene,
                                      uint8_t **bytes_out,
                                      size_t *size_out);
+
+int pvr_scene_ir_serialize_general_skin(
+    const pvr_chunk_skin_general_t *skin,
+    uint8_t **bytes_out, size_t *size_out);
 
 #endif /* PVR_SCENE_IR_H */

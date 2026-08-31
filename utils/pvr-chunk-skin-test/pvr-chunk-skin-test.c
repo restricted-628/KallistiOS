@@ -5,6 +5,9 @@
 */
 
 #include <dc/pvr_chunk_skin.h>
+#include <dc/pvr_chunk_skin_asset.h>
+
+#include "pvr-scene-ir.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -12,6 +15,7 @@
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define VERTEX_HEADER(type, size) ((uint32_t)(type) | \
@@ -59,6 +63,37 @@ static const pvr_chunk_skin_weight_t general_weights[] = {
 
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.0002f;
+}
+
+static uint32_t crc32_bytes(const void *data, size_t size) {
+    const uint8_t *bytes = data;
+    uint32_t crc = UINT32_MAX;
+    size_t index;
+
+    for(index = 0; index < size; ++index) {
+        unsigned bit;
+
+        crc ^= bytes[index];
+        for(bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^
+                  (UINT32_C(0xedb88320) &
+                   (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return ~crc;
+}
+
+static void store_le32(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+static void refresh_skin_crc(uint8_t *bytes, size_t size) {
+    store_le32(bytes + 36, crc32_bytes(
+        bytes + PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES,
+        size - PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES));
+    store_le32(bytes + 44, crc32_bytes(bytes, 44));
 }
 
 static void identity(matrix_t *matrix) {
@@ -177,9 +212,18 @@ int main(void) {
     assert(errno == ENOENT);
 
     {
-        const pvr_chunk_skin_general_t general_skin = {
+        pvr_chunk_skin_general_t general_skin = {
             general_spans, 3, general_weights, 8, 6
         };
+        pvr_chunk_skin_general_section_view_t section_view;
+        pvr_chunk_skin_span_t decoded_spans[3];
+        pvr_chunk_skin_weight_t decoded_weights[8];
+        pvr_chunk_skin_general_t decoded_skin;
+        pvr_chunk_skin_span_t decoded_span;
+        pvr_chunk_skin_weight_t decoded_weight;
+        uint8_t *serialized_skin = NULL;
+        uint8_t *corrupt_skin = NULL;
+        size_t serialized_bytes = 0;
         pvr_chunk_skin_general_requirements_t general_requirements;
         pvr_chunk_skin_general_binding_t general_binding;
         uint32_t general_lookup[256];
@@ -194,6 +238,75 @@ int main(void) {
         pvr_chunk_skin_span_t malformed_spans[3];
         float expected = 2.0f;
         size_t joint;
+
+        assert(pvr_scene_ir_serialize_general_skin(
+            &general_skin, &serialized_skin, &serialized_bytes) == 0);
+        assert(serialized_bytes == PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES +
+               3 * PVR_CHUNK_SKIN_GENERAL_SPAN_BYTES +
+               8 * PVR_CHUNK_SKIN_GENERAL_WEIGHT_BYTES);
+        assert(pvr_chunk_skin_general_section_open(
+            serialized_skin, serialized_bytes, &section_view) == 0);
+        assert(section_view.span_count == 3 &&
+               section_view.weight_count == 8 &&
+               section_view.joint_count == 6);
+        assert(pvr_chunk_skin_general_section_span_get(
+            &section_view, 2, &decoded_span) == 0);
+        assert(decoded_span.vertex_index == 2 &&
+               decoded_span.weight_count == 6 &&
+               decoded_span.first_weight == 2);
+        assert(pvr_chunk_skin_general_section_weight_get(
+            &section_view, 7, &decoded_weight) == 0);
+        assert(decoded_weight.joint == 5 && decoded_weight.weight == 10920);
+
+        memset(decoded_spans, 0x5a, sizeof(decoded_spans));
+        memset(decoded_weights, 0x5a, sizeof(decoded_weights));
+        memset(&decoded_skin, 0x5a, sizeof(decoded_skin));
+        {
+            pvr_chunk_skin_general_t unchanged_skin = decoded_skin;
+
+            errno = 0;
+            assert(pvr_chunk_skin_general_section_materialize(
+                &section_view, decoded_spans, 2, decoded_weights, 8,
+                &decoded_skin) == -1);
+            assert(errno == ENOSPC &&
+                   decoded_spans[0].vertex_index == UINT16_C(0x5a5a) &&
+                   decoded_weights[0].joint == UINT16_C(0x5a5a) &&
+                   !memcmp(&decoded_skin, &unchanged_skin,
+                           sizeof(decoded_skin)));
+        }
+        assert(pvr_chunk_skin_general_section_materialize(
+            &section_view, decoded_spans, 3, decoded_weights, 8,
+            &decoded_skin) == 0);
+        assert(decoded_skin.spans == decoded_spans &&
+               decoded_skin.weights == decoded_weights);
+
+        corrupt_skin = malloc(serialized_bytes);
+        assert(corrupt_skin);
+        memcpy(corrupt_skin, serialized_skin, serialized_bytes);
+        corrupt_skin[serialized_bytes - 1u] ^= UINT8_C(0x80);
+        errno = 0;
+        assert(pvr_chunk_skin_general_section_open(
+            corrupt_skin, serialized_bytes, &section_view) == -1);
+        assert(errno == EILSEQ);
+        memcpy(corrupt_skin, serialized_skin, serialized_bytes);
+        store_le32(corrupt_skin + 48 + 2 * 8 + 4, 3);
+        refresh_skin_crc(corrupt_skin, serialized_bytes);
+        errno = 0;
+        assert(pvr_chunk_skin_general_section_open(
+            corrupt_skin, serialized_bytes, &section_view) == -1);
+        assert(errno == EILSEQ);
+        memcpy(corrupt_skin, serialized_skin, serialized_bytes);
+        corrupt_skin[48 + 3 * 8] = 6;
+        corrupt_skin[48 + 3 * 8 + 1] = 0;
+        refresh_skin_crc(corrupt_skin, serialized_bytes);
+        errno = 0;
+        assert(pvr_chunk_skin_general_section_open(
+            corrupt_skin, serialized_bytes, &section_view) == -1);
+        assert(errno == EILSEQ);
+        free(corrupt_skin);
+        corrupt_skin = NULL;
+
+        general_skin = decoded_skin;
 
         assert(pvr_chunk_skin_general_query(
             &plan, &general_skin, &general_requirements) == 0);
@@ -248,6 +361,7 @@ int main(void) {
             assert(errno == EILSEQ &&
                    general_lookup[0] == UINT32_C(0x5a5a5a5a));
         }
+        free(serialized_skin);
     }
 
     lookup[1] = PVR_CHUNK_SKIN_INDEX_NONE;

@@ -10,7 +10,7 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
     [--texture-id ID | --material NAME=ID ...] \
     [--material-library FILE ...] \
     [--emit-c SYMBOL | --emit-asset [--section-directory \
-     [--scene-root]] [--lz4-vertices]] [--] \
+     [--scene-root] [--rigid-skin]] [--lz4-vertices]] [--] \
     INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}
 ```
 
@@ -115,6 +115,14 @@ multi-node scene importers use without inventing a second runtime hierarchy.
 The option deliberately requires `--section-directory`; it is a pipeline
 integration primitive, not an implicit scene graph wrapped around ordinary
 PCM1 output.
+
+`--rigid-skin` adds one admitted `PSG1` general-skin section to PCM2. Every
+admitted model vertex receives one full-weight influence from joint zero. This
+is an integration fixture for the host serializer, generic section loader,
+target parser/materializer, and existing variable-influence runtime binder. It
+does not infer an authored skeleton from OBJ and is not a replacement for a
+scene importer that owns real joint and weight data. The option likewise
+requires `--section-directory`.
 
 Compile the generated file normally in the application build to produce the
 target object; the converter does not invoke or choose a compiler. Each output
