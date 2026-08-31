@@ -53,4 +53,8 @@ int pvr_scene_ir_serialize_animation(
     const anim_clip_view_t *clip,
     uint8_t **bytes_out, size_t *size_out);
 
+int pvr_scene_ir_serialize_volumes(
+    const pvr_chunk_model_view_t *model,
+    uint8_t **bytes_out, size_t *size_out);
+
 #endif /* PVR_SCENE_IR_H */

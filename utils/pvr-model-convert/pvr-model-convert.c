@@ -23,6 +23,7 @@
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_volume_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -1769,6 +1770,7 @@ static int build_asset_blob(const output_streams_t *streams,
     uint8_t *skin_raw = NULL;
     uint8_t *shape_raw = NULL;
     uint8_t *animation_raw = NULL;
+    uint8_t *volume_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
@@ -1778,6 +1780,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t skin_bytes = 0;
     size_t shape_bytes = 0;
     size_t animation_bytes = 0;
+    size_t volume_bytes = 0;
     size_t section_count;
     size_t directory_bytes;
     size_t vertex_offset;
@@ -1786,6 +1789,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t skin_offset = 0;
     size_t shape_offset = 0;
     size_t animation_offset = 0;
+    size_t volume_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
@@ -1798,6 +1802,20 @@ static int build_asset_blob(const output_streams_t *streams,
        serialize_words(streams->polygon_words, streams->polygon_word_count,
                        sizeof(uint16_t), &polygon_raw, &polygon_bytes) < 0)
         goto fail;
+    if(section_directory) {
+        pvr_chunk_model_t source_model = {
+            streams->vertex_words, streams->vertex_word_count,
+            streams->polygon_words, streams->polygon_word_count,
+            { streams->center[0], streams->center[1], streams->center[2] },
+            streams->radius
+        };
+        pvr_chunk_model_view_t source_view;
+
+        if(pvr_chunk_model_open(&source_model, &source_view) < 0 ||
+           pvr_scene_ir_serialize_volumes(
+               &source_view, &volume_raw, &volume_bytes) < 0)
+            goto fail;
+    }
     if(scene && pvr_scene_ir_serialize_hierarchy(
                     scene, &hierarchy_raw, &hierarchy_bytes) < 0)
         goto fail;
@@ -1843,7 +1861,8 @@ static int build_asset_blob(const output_streams_t *streams,
         vertex_stored_bytes = compressed;
     }
 
-    section_count = 2u + (hierarchy_raw ? 1u : 0u) +
+    section_count = 2u + (volume_raw ? 1u : 0u) +
+                    (hierarchy_raw ? 1u : 0u) +
                     (skin_raw ? 1u : 0u) +
                     (shape_raw ? 1u : 0u) +
                     (animation_raw ? 1u : 0u);
@@ -1866,6 +1885,14 @@ static int build_asset_blob(const output_streams_t *streams,
         goto fail;
     }
     file_bytes = polygon_offset + polygon_bytes;
+    if(volume_raw) {
+        if(align_size_32(file_bytes, &volume_offset) < 0 ||
+           volume_offset > SIZE_MAX - volume_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = volume_offset + volume_bytes;
+    }
     if(hierarchy_raw) {
         if(align_size_32(file_bytes, &hierarchy_offset) < 0 ||
            hierarchy_offset > SIZE_MAX - hierarchy_bytes) {
@@ -1911,6 +1938,8 @@ static int build_asset_blob(const output_streams_t *streams,
     memcpy(blob + vertex_offset, vertex_stored,
            vertex_stored_bytes);
     memcpy(blob + polygon_offset, polygon_raw, polygon_bytes);
+    if(volume_raw)
+        memcpy(blob + volume_offset, volume_raw, volume_bytes);
     if(hierarchy_raw)
         memcpy(blob + hierarchy_offset, hierarchy_raw, hierarchy_bytes);
     if(skin_raw)
@@ -1928,6 +1957,7 @@ static int build_asset_blob(const output_streams_t *streams,
     if(section_directory) {
         uint8_t *directory = blob +
             PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
+        size_t descriptor_index = 0;
 
         store_le32(blob, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
         store_le16(blob + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
@@ -1936,31 +1966,42 @@ static int build_asset_blob(const output_streams_t *streams,
         store_le32(blob + 36, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
         store_le32(blob + 40, (uint32_t)directory_bytes);
         store_pcm2_section(
-            directory, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+            directory + descriptor_index++ *
+                PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+            PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
             vertex_offset, vertex_stored_bytes, vertex_bytes,
             crc32_bytes(vertex_raw, vertex_bytes),
             lz4_vertices ? PVR_CHUNK_ASSET_CODEC_LZ4_FRAME :
                            PVR_CHUNK_ASSET_CODEC_RAW,
             sizeof(uint32_t));
         store_pcm2_section(
-            directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+            directory + descriptor_index++ *
+                PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
             PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
             polygon_offset, polygon_bytes, polygon_bytes,
             crc32_bytes(polygon_raw, polygon_bytes),
             PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint16_t));
+        if(volume_raw) {
+            store_pcm2_section(
+                directory + descriptor_index++ *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_VOLUME_DATA,
+                volume_offset, volume_bytes, volume_bytes,
+                crc32_bytes(volume_raw, volume_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint16_t));
+        }
         if(hierarchy_raw) {
             store_pcm2_section(
-                directory + 2u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                directory + descriptor_index++ *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
                 PVR_CHUNK_ASSET_SECTION_HIERARCHY,
                 hierarchy_offset, hierarchy_bytes, hierarchy_bytes,
                 crc32_bytes(hierarchy_raw, hierarchy_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
         if(skin_raw) {
-            size_t descriptor_index = 2u + (hierarchy_raw ? 1u : 0u);
-
             store_pcm2_section(
-                directory + descriptor_index *
+                directory + descriptor_index++ *
                     PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
                 PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL,
                 skin_offset, skin_bytes, skin_bytes,
@@ -1968,11 +2009,8 @@ static int build_asset_blob(const output_streams_t *streams,
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
         if(shape_raw) {
-            size_t descriptor_index = 2u + (hierarchy_raw ? 1u : 0u) +
-                                      (skin_raw ? 1u : 0u);
-
             store_pcm2_section(
-                directory + descriptor_index *
+                directory + descriptor_index++ *
                     PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
                 PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS,
                 shape_offset, shape_bytes, shape_bytes,
@@ -1980,17 +2018,17 @@ static int build_asset_blob(const output_streams_t *streams,
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
         if(animation_raw) {
-            size_t descriptor_index = 2u + (hierarchy_raw ? 1u : 0u) +
-                                      (skin_raw ? 1u : 0u) +
-                                      (shape_raw ? 1u : 0u);
-
             store_pcm2_section(
-                directory + descriptor_index *
+                directory + descriptor_index++ *
                     PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
                 PVR_CHUNK_ASSET_SECTION_ANIMATION,
                 animation_offset, animation_bytes, animation_bytes,
                 crc32_bytes(animation_raw, animation_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
+        if(descriptor_index != section_count) {
+            errno = EILSEQ;
+            goto fail;
         }
         store_le32(blob + 44, crc32_bytes(
             directory, directory_bytes));
@@ -2019,6 +2057,7 @@ static int build_asset_blob(const output_streams_t *streams,
     free(skin_raw);
     free(shape_raw);
     free(animation_raw);
+    free(volume_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -2033,9 +2072,33 @@ fail:
     free(skin_raw);
     free(shape_raw);
     free(animation_raw);
+    free(volume_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
+    return -1;
+}
+
+static int load_raw_section_type(
+    const pvr_chunk_asset_view_t *view, uint32_t type,
+    pvr_chunk_asset_section_t *section, const void **decoded) {
+    size_t index;
+
+    if(decoded)
+        *decoded = NULL;
+    if(!view || !section || !decoded) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(index = 0; index < view->section_count; ++index) {
+        if(pvr_chunk_asset_section_get(view, index, section) < 0)
+            return -1;
+        if(section->type != type)
+            continue;
+        return pvr_chunk_asset_section_load(
+            view, index, NULL, NULL, NULL, 0, decoded);
+    }
+    errno = ENOENT;
     return -1;
 }
 
@@ -2106,6 +2169,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_section_t skin_section;
     pvr_chunk_asset_section_t shape_section;
     pvr_chunk_asset_section_t animation_section;
+    pvr_chunk_asset_section_t volume_section;
     pvr_chunk_model_view_t model_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
@@ -2113,6 +2177,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_shape_section_view_t shape_view;
     pvr_chunk_shape_set_t materialized_shapes;
     pvr_chunk_animation_section_view_t animation_view;
+    pvr_chunk_volume_section_view_t volume_view;
     anim_clip_view_t materialized_animation;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
@@ -2129,6 +2194,7 @@ static int prepare_asset_output(const char *target,
     const void *skin_data = NULL;
     const void *shape_data = NULL;
     const void *animation_data = NULL;
+    const void *volume_data = NULL;
     void *workspace = NULL;
     size_t workspace_allocation = 0;
     int result = -1;
@@ -2152,13 +2218,24 @@ static int prepare_asset_output(const char *target,
                             workspace, workspace_allocation,
                             &model_view) < 0)
         goto out;
+    if(section_directory) {
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_VOLUME_DATA,
+               &volume_section, &volume_data) == 0) {
+            if(pvr_chunk_volume_section_open(
+                   volume_data, volume_section.decoded_bytes,
+                   &volume_view) < 0 ||
+               pvr_chunk_volume_section_validate_model(
+                   &volume_view, &model_view) < 0)
+                goto out;
+        }
+        else if(errno != ENOENT)
+            goto out;
+    }
     if(scene) {
-        if(pvr_chunk_asset_section_get(
-               &asset_view, 2, &hierarchy_section) < 0 ||
-           hierarchy_section.type != PVR_CHUNK_ASSET_SECTION_HIERARCHY ||
-           pvr_chunk_asset_section_load(
-               &asset_view, 2, NULL, NULL, NULL, 0,
-               &hierarchy_data) < 0 ||
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_HIERARCHY,
+               &hierarchy_section, &hierarchy_data) < 0 ||
            pvr_chunk_scene_hierarchy_open(
                hierarchy_data, hierarchy_section.decoded_bytes,
                &hierarchy_view) < 0) {
@@ -2181,14 +2258,9 @@ static int prepare_asset_output(const char *target,
             goto out;
     }
     if(skin) {
-        size_t section_index = 2u + (scene ? 1u : 0u);
-
-        if(pvr_chunk_asset_section_get(
-               &asset_view, section_index, &skin_section) < 0 ||
-           skin_section.type != PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL ||
-           pvr_chunk_asset_section_load(
-               &asset_view, section_index, NULL, NULL, NULL, 0,
-               &skin_data) < 0 ||
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL,
+               &skin_section, &skin_data) < 0 ||
            pvr_chunk_skin_general_section_open(
                skin_data, skin_section.decoded_bytes, &skin_view) < 0) {
             if(!errno)
@@ -2214,15 +2286,9 @@ static int prepare_asset_output(const char *target,
         }
     }
     if(shapes) {
-        size_t section_index = 2u + (scene ? 1u : 0u) +
-                               (skin ? 1u : 0u);
-
-        if(pvr_chunk_asset_section_get(
-               &asset_view, section_index, &shape_section) < 0 ||
-           shape_section.type != PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS ||
-           pvr_chunk_asset_section_load(
-               &asset_view, section_index, NULL, NULL, NULL, 0,
-               &shape_data) < 0 ||
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS,
+               &shape_section, &shape_data) < 0 ||
            pvr_chunk_shape_section_open(
                shape_data, shape_section.decoded_bytes, &shape_view) < 0) {
             if(!errno)
@@ -2248,16 +2314,9 @@ static int prepare_asset_output(const char *target,
         }
     }
     if(animation) {
-        size_t section_index = 2u + (scene ? 1u : 0u) +
-                               (skin ? 1u : 0u) +
-                               (shapes ? 1u : 0u);
-
-        if(pvr_chunk_asset_section_get(
-               &asset_view, section_index, &animation_section) < 0 ||
-           animation_section.type != PVR_CHUNK_ASSET_SECTION_ANIMATION ||
-           pvr_chunk_asset_section_load(
-               &asset_view, section_index, NULL, NULL, NULL, 0,
-               &animation_data) < 0 ||
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_ANIMATION,
+               &animation_section, &animation_data) < 0 ||
            pvr_chunk_animation_section_open(
                animation_data, animation_section.decoded_bytes,
                &animation_view) < 0) {

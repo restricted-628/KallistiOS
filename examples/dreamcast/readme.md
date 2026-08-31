@@ -165,6 +165,9 @@ This page serves as an index for all KallistiOS examples.
   - [**chunk_skin**](pvr/chunk_skin/): Binds explicit normalized joint
     influences, builds a reusable canonical source, and renders a moving
     deformed pose through constant-time model-index lookup
+  - [**chunk_volume_asset**](pvr/chunk_volume_asset/): Opens pointer-free PCM2
+    volume data, binds its indices to a model, and iterates collision metadata
+    through the shared modifier-volume topology decoder
   - [**chunk_toon**](pvr/chunk_toon/): Subdivides a prepared compact model at
     a moving scalar shade threshold, preserving attributes and strip winding
     without per-frame allocation

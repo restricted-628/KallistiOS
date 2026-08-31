@@ -110,6 +110,12 @@ larger than PCM1 and is intended as the host-pipeline base for optional
 resource, deformation, hierarchy, animation, collision, cache, or application
 sections; models which need none of those should keep PCM1.
 
+If an admitted polygon stream contains compact volume records, PCM2 also
+receives a pointer-free `PVL1` volume-data section. The host tool preserves the
+original triangle, quad, strip, winding, and user-word representation, reloads
+it through the target parser, and verifies every index against the model. No
+section is emitted when the model has no volumes.
+
 `--scene-root` adds one admitted hierarchy section to PCM2. Its root has an
 identity local transform and references model ordinal zero, proving the same
 host-IR, serialization, generic section-loading, and target binding path that

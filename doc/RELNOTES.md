@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a portable PCM2 volume-data section. It retains exact compact
+  triangle, quad, and strip records in a checked pointer-free directory,
+  preserves zero-to-three per-triangle user words, and delegates expansion to
+  the existing modifier-volume topology iterator. Standalone collision data
+  can be bound against an admitted model before use, while the host pipeline
+  extracts, reloads, and verifies volume records automatically.
 * Added a portable PCM2 animation section. Checked APIs validate pointer-free
   transform bindings, channel types, gapless finite keys, canonical values,
   fallbacks, and checksums, then materialize caller-owned keys, track views,

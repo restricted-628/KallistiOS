@@ -10,6 +10,7 @@
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_volume_asset.h>
 
 #include <errno.h>
 #include <float.h>
@@ -52,6 +53,144 @@ static void store_float(uint8_t *bytes, float value) {
 
     memcpy(&word, &value, sizeof(word));
     store_le32(bytes, word);
+}
+
+int pvr_scene_ir_serialize_volumes(
+    const pvr_chunk_model_view_t *model,
+    uint8_t **bytes_out, size_t *size_out) {
+    pvr_chunk_model_view_t admitted;
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    uint8_t *bytes = NULL;
+    size_t record_count = 0;
+    size_t word_count = 0;
+    size_t record_bytes;
+    size_t stream_bytes;
+    size_t file_bytes;
+    size_t record_index = 0;
+    size_t first_word = 0;
+    int rv;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!model || !bytes_out || !size_out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_model_open(&model->model, &admitted) < 0 ||
+       pvr_chunk_polygon_iterator_init(
+           &iterator, admitted.model.polygon_words,
+           admitted.model.polygon_word_count) < 0)
+        return -1;
+
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(record.record_class != PVR_CHUNK_RECORD_VOLUME)
+            continue;
+        if(record_count == UINT32_MAX ||
+           record.word_count > UINT32_MAX - word_count) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        ++record_count;
+        word_count += record.word_count;
+    }
+    if(rv < 0)
+        return -1;
+    if(!record_count)
+        return 0;
+    if(record_count >
+           (SIZE_MAX - PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES) /
+               PVR_CHUNK_VOLUME_SECTION_RECORD_BYTES ||
+       word_count > SIZE_MAX / sizeof(uint16_t)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    record_bytes = record_count * PVR_CHUNK_VOLUME_SECTION_RECORD_BYTES;
+    stream_bytes = word_count * sizeof(uint16_t);
+    if(stream_bytes > SIZE_MAX - PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES -
+                              record_bytes) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    file_bytes = PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES + record_bytes +
+                 stream_bytes;
+    if(file_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    if(pvr_chunk_polygon_iterator_init(
+           &iterator, admitted.model.polygon_words,
+           admitted.model.polygon_word_count) < 0)
+        goto fail;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        uint8_t *descriptor;
+        uint8_t *destination;
+        const uint16_t *source;
+        size_t word;
+
+        if(record.record_class == PVR_CHUNK_RECORD_END)
+            break;
+        if(record.record_class != PVR_CHUNK_RECORD_VOLUME)
+            continue;
+        descriptor = bytes + PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES +
+                     record_index *
+                         PVR_CHUNK_VOLUME_SECTION_RECORD_BYTES;
+        destination = bytes + PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES +
+                      record_bytes + first_word * sizeof(uint16_t);
+        source = record.words;
+        store_le32(descriptor, (uint32_t)first_word);
+        store_le32(descriptor + 4, (uint32_t)record.word_count);
+        for(word = 0; word < record.word_count; ++word)
+            store_le16(destination + word * sizeof(uint16_t), source[word]);
+        first_word += record.word_count;
+        ++record_index;
+    }
+    if(rv < 0)
+        goto fail;
+    if(record_index != record_count || first_word != word_count) {
+        errno = EILSEQ;
+        goto fail;
+    }
+
+    store_le32(bytes, PVR_CHUNK_VOLUME_SECTION_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_VOLUME_SECTION_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)record_count);
+    store_le32(bytes + 16, (uint32_t)word_count);
+    store_le16(bytes + 20, PVR_CHUNK_VOLUME_SECTION_RECORD_BYTES);
+    store_le16(bytes + 22, sizeof(uint16_t));
+    store_le32(bytes + 24, (uint32_t)record_bytes);
+    store_le32(bytes + 28, (uint32_t)stream_bytes);
+    store_le32(bytes + 32, crc32_bytes(
+        bytes + PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES,
+        file_bytes - PVR_CHUNK_VOLUME_SECTION_HEADER_BYTES));
+    store_le32(bytes + 44, crc32_bytes(bytes, 44));
+    {
+        pvr_chunk_volume_section_view_t checked;
+
+        if(pvr_chunk_volume_section_open(bytes, file_bytes, &checked) < 0 ||
+           pvr_chunk_volume_section_validate_model(&checked, &admitted) < 0)
+            goto fail;
+    }
+
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
+
+fail:
+    free(bytes);
+    return -1;
 }
 
 void pvr_scene_ir_free(pvr_scene_ir_t *scene) {

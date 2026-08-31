@@ -192,6 +192,20 @@ addressed by zero-based ordinal rather than by adding pointers to the fixed
 asset view. Unknown nonzero section identifiers remain queryable for forward
 compatibility.
 
+Volume data uses a pointer-free little-endian `PVL1` section containing exact
+compact triangle, quad, or strip volume records. The descriptor table only
+names gapless record spans; it does not flatten topology into a second
+collision format. `pvr_chunk_volume_section_open()` checks the section CRC,
+record boundaries, and every payload before publication.
+`pvr_chunk_volume_section_record_get()` returns an ordinary
+`pvr_chunk_record_t`, and the flattened section iterator delegates each record
+to the existing `pvr_chunk_volume_iterator_t`. Consequently collision queries,
+modifier preparation, winding rules, record boundaries, and zero-to-three
+triangle user words retain one implementation. A standalone section can be
+checked against an admitted model with
+`pvr_chunk_volume_section_validate_model()`, which rejects every unresolved
+vertex index before the application uses the data.
+
 Directory descriptors are ordered by increasing stored-data offset. Admission
 proves the complete directory checksum, each section span and codec, decoded
 alignment, raw-size identity, and nonoverlap before publishing either core
@@ -207,6 +221,12 @@ for a model with only two streams. `--section-directory` emits an admitted
 PCM2 container when a content pipeline intends to append optional sections;
 it composes with raw or LZ4-framed vertex storage. The converter reopens and
 loads either output through the runtime parser before publishing the file.
+When PCM2 input polygon data contains compact volume records, the converter
+also writes a `PVL1` volume-data section automatically. The host serializer
+copies the admitted records exactly, and the converter reloads the resulting
+section and binds every expanded triangle back to the model before publishing
+the file. Models without volume records gain no section and pay no file or
+runtime-memory cost.
 With `--scene-root`, the host-side canonical scene IR writes one `PCH1`
 hierarchy section containing an identity root bound to model ordinal zero.
 The converter then loads, admits, and binds that section through the target

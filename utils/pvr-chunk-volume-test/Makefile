@@ -6,19 +6,18 @@ CPPFLAGS += -I../pvr-deform-test/include \
 	-I../../kernel/arch/dreamcast/include
 LDLIBS += -lm
 
-TARGET = pvr-chunk-skin-test
-SOURCES = pvr-chunk-skin-test.c \
+TARGET = pvr-chunk-volume-test
+DREAMCAST_TARGET = pvr-chunk-volume-test.elf
+SOURCES = pvr-chunk-volume-test.c \
 	../pvr-model-convert/pvr-scene-ir.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
-	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
-	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
-	../../kernel/arch/dreamcast/hardware/pvr/pvr_deform.c
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c
 
-.PHONY: all clean test
+.PHONY: all clean dreamcast test
 
 all: $(TARGET)
 
@@ -28,5 +27,12 @@ $(TARGET): $(SOURCES)
 test: $(TARGET)
 	./$(TARGET)
 
+dreamcast: $(DREAMCAST_TARGET)
+
+$(DREAMCAST_TARGET): pvr-chunk-volume-test.c \
+	../pvr-model-convert/pvr-scene-ir.c
+	kos-cc $(KOS_CSTD) -Wall -Wextra -I../pvr-model-convert $^ -lm -o $@
+
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(DREAMCAST_TARGET)
+	rm -rf $(TARGET).dSYM

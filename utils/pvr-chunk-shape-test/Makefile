@@ -11,6 +11,7 @@ DREAMCAST_TARGET = pvr-chunk-shape-test.elf
 SOURCES = pvr-chunk-shape-test.c \
 	../pvr-model-convert/pvr-scene-ir.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
