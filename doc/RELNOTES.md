@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a portable PCM2 hierarchy-section contract and the first canonical
+  host scene-IR output path. Checked target APIs admit finite parent-before-
+  child nodes and bind stable model ordinals into the existing allocation-free
+  compact hierarchy using caller-owned storage. The converter can emit and
+  reopen an explicit single-model root today, while later scene importers can
+  populate the same IR without adding pointer trees or another runtime scene
+  system.
 * Added a backward-compatible PCM2 compact-model asset directory beside PCM1.
   It validates checksummed, offset-ordered, nonoverlapping section descriptors;
   requires exactly one vertex and polygon stream; and exposes repeatable

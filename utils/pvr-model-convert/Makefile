@@ -13,9 +13,10 @@ CPPFLAGS += -Iinclude -I../../kernel/arch/dreamcast/include \
 LDLIBS += -lm
 
 TARGET = pvr-model-convert
-SOURCES = pvr-model-convert.c \
+SOURCES = pvr-model-convert.c pvr-scene-ir.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
           ../../addons/liblz4/pvr_chunk_asset_lz4.c \
           ../../addons/liblz4/lz4.c ../../addons/liblz4/lz4frame.c \
           ../../addons/liblz4/lz4hc.c ../../addons/liblz4/xxhash.c

@@ -337,6 +337,54 @@ f 1/1/1 2/2/1 3/3/1
             polygon_descriptor[2]:polygon_descriptor[2] + polygon_descriptor[3]
         ] == polygons.read_bytes()
 
+        scene_asset = root / "triangle-scene.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            "--section-directory",
+            "--scene-root",
+            source,
+            scene_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        scene_bytes = scene_asset.read_bytes()
+        assert result.stdout == (
+            REPORT + f"asset_bytes={len(scene_bytes)}\n"
+            "vertex_codec=raw\nasset_container=pcm2\n"
+            "hierarchy_nodes=1\n"
+        )
+        assert struct.unpack_from("<I", scene_bytes, 32)[0] == 3
+        hierarchy_descriptor = struct.unpack_from(
+            "<7IHH", scene_bytes, 64 + 2 * 32
+        )
+        assert hierarchy_descriptor[0] == 8
+        assert hierarchy_descriptor[7:] == (0, 4)
+        hierarchy_offset = hierarchy_descriptor[2]
+        hierarchy_size = hierarchy_descriptor[3]
+        hierarchy = scene_bytes[
+            hierarchy_offset:hierarchy_offset + hierarchy_size
+        ]
+        assert hierarchy[:4] == b"PCH1"
+        assert struct.unpack_from("<HHIIH", hierarchy, 4) == (
+            1, 32, 112, 1, 80
+        )
+        assert zlib.crc32(hierarchy[32:]) == struct.unpack_from(
+            "<I", hierarchy, 20
+        )[0]
+        assert zlib.crc32(hierarchy[:28]) == struct.unpack_from(
+            "<I", hierarchy, 28
+        )[0]
+        assert struct.unpack_from("<II", hierarchy, 32) == (
+            0xFFFFFFFF, 0
+        )
+        assert struct.unpack_from("<16f", hierarchy, 48) == (
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        )
+
         directory_lz4 = root / "triangle-directory-lz4.pcm"
         result = invoke(
             converter,
@@ -394,6 +442,14 @@ f 1/1/1 2/2/1 3/3/1
         )
         assert result.returncode == 2
         assert result.stderr == "--lz4-vertices requires --emit-asset\n"
+
+        result = invoke(
+            converter, "--emit-asset", "--scene-root", source, raw_asset
+        )
+        assert result.returncode == 2
+        assert result.stderr == (
+            "--scene-root requires --emit-asset --section-directory\n"
+        )
 
         generated_again = root / "test-model-again.c"
         result = invoke(

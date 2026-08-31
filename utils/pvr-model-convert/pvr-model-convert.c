@@ -19,6 +19,9 @@
 
 #include <dc/pvr_chunk_asset.h>
 #include <dc/pvr_chunk_model.h>
+#include <dc/pvr_chunk_scene.h>
+
+#include "pvr-scene-ir.h"
 
 #include <kos/pvr_chunk_asset_lz4.h>
 
@@ -154,7 +157,8 @@ static void usage(FILE *stream, const char *program) {
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
             "--material NAME=ID ...] [--material-library FILE ...] "
             "[--join-strips] [--emit-c SYMBOL | --emit-asset "
-            "[--section-directory] [--lz4-vertices]] [--] INPUT.obj "
+            "[--section-directory [--scene-root]] [--lz4-vertices]] "
+            "[--] INPUT.obj "
             "{VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}\n",
             program);
 }
@@ -1747,25 +1751,38 @@ static void store_pcm2_section(uint8_t *descriptor, uint32_t type,
 
 static int build_asset_blob(const output_streams_t *streams,
                             int lz4_vertices, int section_directory,
+                            const pvr_scene_ir_t *scene,
                             uint8_t **blob_out,
                             size_t *blob_bytes_out) {
     uint8_t *vertex_raw = NULL;
     uint8_t *polygon_raw = NULL;
     uint8_t *vertex_compressed = NULL;
+    uint8_t *hierarchy_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
     size_t polygon_bytes;
     size_t vertex_stored_bytes;
+    size_t hierarchy_bytes = 0;
+    size_t section_count;
+    size_t directory_bytes;
     size_t vertex_offset;
     size_t polygon_offset;
+    size_t hierarchy_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
+    if(scene && !section_directory) {
+        errno = EINVAL;
+        goto fail;
+    }
     if(serialize_words(streams->vertex_words, streams->vertex_word_count,
                        sizeof(uint32_t), &vertex_raw, &vertex_bytes) < 0 ||
        serialize_words(streams->polygon_words, streams->polygon_word_count,
                        sizeof(uint16_t), &polygon_raw, &polygon_bytes) < 0)
+        goto fail;
+    if(scene && pvr_scene_ir_serialize_hierarchy(
+                    scene, &hierarchy_raw, &hierarchy_bytes) < 0)
         goto fail;
     vertex_stored = vertex_raw;
     vertex_stored_bytes = vertex_bytes;
@@ -1799,9 +1816,15 @@ static int build_asset_blob(const output_streams_t *streams,
         vertex_stored_bytes = compressed;
     }
 
+    section_count = 2u + (hierarchy_raw ? 1u : 0u);
+    if(section_count > SIZE_MAX / PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    directory_bytes = section_count *
+        PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
     vertex_offset = section_directory ?
-        PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES +
-            2u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES :
+        PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES + directory_bytes :
         PVR_CHUNK_ASSET_HEADER_BYTES;
     if(vertex_bytes > UINT32_MAX || polygon_bytes > UINT32_MAX ||
        vertex_stored_bytes > UINT32_MAX ||
@@ -1813,6 +1836,14 @@ static int build_asset_blob(const output_streams_t *streams,
         goto fail;
     }
     file_bytes = polygon_offset + polygon_bytes;
+    if(hierarchy_raw) {
+        if(align_size_32(file_bytes, &hierarchy_offset) < 0 ||
+           hierarchy_offset > SIZE_MAX - hierarchy_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = hierarchy_offset + hierarchy_bytes;
+    }
     if(file_bytes > UINT32_MAX) {
         errno = EOVERFLOW;
         goto fail;
@@ -1826,6 +1857,8 @@ static int build_asset_blob(const output_streams_t *streams,
     memcpy(blob + vertex_offset, vertex_stored,
            vertex_stored_bytes);
     memcpy(blob + polygon_offset, polygon_raw, polygon_bytes);
+    if(hierarchy_raw)
+        memcpy(blob + hierarchy_offset, hierarchy_raw, hierarchy_bytes);
 
     store_le32(blob + 8, (uint32_t)file_bytes);
     store_le32(blob + 16, float_word(streams->center[0]));
@@ -1839,10 +1872,9 @@ static int build_asset_blob(const output_streams_t *streams,
         store_le32(blob, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
         store_le16(blob + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
         store_le16(blob + 6, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
-        store_le32(blob + 32, 2);
+        store_le32(blob + 32, (uint32_t)section_count);
         store_le32(blob + 36, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
-        store_le32(blob + 40,
-                   2u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES);
+        store_le32(blob + 40, (uint32_t)directory_bytes);
         store_pcm2_section(
             directory, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
             vertex_offset, vertex_stored_bytes, vertex_bytes,
@@ -1856,8 +1888,16 @@ static int build_asset_blob(const output_streams_t *streams,
             polygon_offset, polygon_bytes, polygon_bytes,
             crc32_bytes(polygon_raw, polygon_bytes),
             PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint16_t));
+        if(hierarchy_raw) {
+            store_pcm2_section(
+                directory + 2u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_HIERARCHY,
+                hierarchy_offset, hierarchy_bytes, hierarchy_bytes,
+                crc32_bytes(hierarchy_raw, hierarchy_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
         store_le32(blob + 44, crc32_bytes(
-            directory, 2u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES));
+            directory, directory_bytes));
         store_le32(blob + 60, crc32_bytes(blob, 60));
     }
     else {
@@ -1879,6 +1919,7 @@ static int build_asset_blob(const output_streams_t *streams,
     }
 
     free(vertex_compressed);
+    free(hierarchy_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -1889,6 +1930,7 @@ fail:
     saved_errno = errno ? errno : EIO;
     free(blob);
     free(vertex_compressed);
+    free(hierarchy_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
@@ -1948,18 +1990,25 @@ fail:
 static int prepare_asset_output(const char *target,
                                 const output_streams_t *streams,
                                 int lz4_vertices, int section_directory,
+                                const pvr_scene_ir_t *scene,
                                 temporary_output_t *temporary,
                                 size_t *asset_bytes) {
     uint8_t *blob = NULL;
     size_t blob_bytes = 0;
     pvr_chunk_asset_view_t asset_view;
     pvr_chunk_asset_workspace_requirements_t requirements;
+    pvr_chunk_asset_section_t hierarchy_section;
     pvr_chunk_model_view_t model_view;
+    pvr_chunk_scene_hierarchy_view_t hierarchy_view;
+    pvr_chunk_hierarchy_t hierarchy;
+    pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
+    const pvr_chunk_model_view_t *models[1];
+    const void *hierarchy_data = NULL;
     void *workspace = NULL;
     size_t workspace_allocation = 0;
     int result = -1;
 
-    if(build_asset_blob(streams, lz4_vertices, section_directory,
+    if(build_asset_blob(streams, lz4_vertices, section_directory, scene,
                         &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        pvr_chunk_asset_workspace_query(&asset_view, &requirements) < 0)
@@ -1976,13 +2025,43 @@ static int prepare_asset_output(const char *target,
     }
     if(pvr_chunk_asset_load(&asset_view, pvr_chunk_asset_lz4_decode, NULL,
                             workspace, workspace_allocation,
-                            &model_view) < 0 ||
-       prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
+                            &model_view) < 0)
+        goto out;
+    if(scene) {
+        if(pvr_chunk_asset_section_get(
+               &asset_view, 2, &hierarchy_section) < 0 ||
+           hierarchy_section.type != PVR_CHUNK_ASSET_SECTION_HIERARCHY ||
+           pvr_chunk_asset_section_load(
+               &asset_view, 2, NULL, NULL, NULL, 0,
+               &hierarchy_data) < 0 ||
+           pvr_chunk_scene_hierarchy_open(
+               hierarchy_data, hierarchy_section.decoded_bytes,
+               &hierarchy_view) < 0) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+        if(hierarchy_view.node_count) {
+            hierarchy_nodes = calloc(hierarchy_view.node_count,
+                                     sizeof(*hierarchy_nodes));
+            if(!hierarchy_nodes) {
+                errno = ENOMEM;
+                goto out;
+            }
+        }
+        models[0] = &model_view;
+        if(pvr_chunk_scene_hierarchy_bind(
+               &hierarchy_view, models, 1, hierarchy_nodes,
+               hierarchy_view.node_count, &hierarchy) < 0)
+            goto out;
+    }
+    if(prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
         goto out;
     *asset_bytes = blob_bytes;
     result = 0;
 
 out:
+    free(hierarchy_nodes);
     free(workspace);
     free(blob);
     return result;
@@ -2297,6 +2376,7 @@ int main(int argc, char **argv) {
     material_table_t materials = { 0 };
     material_library_t library = { 0 };
     output_streams_t streams = { 0 };
+    pvr_scene_ir_t scene = { 0 };
     pvr_chunk_model_info_t info;
     temporary_output_t vertex_temporary = { 0 };
     temporary_output_t polygon_temporary = { 0 };
@@ -2314,6 +2394,7 @@ int main(int argc, char **argv) {
     int emit_asset = 0;
     int lz4_vertices = 0;
     int section_directory = 0;
+    int scene_root = 0;
     int texture_identifier = -1;
     int argument = 1;
     int result = 2;
@@ -2422,6 +2503,15 @@ int main(int argc, char **argv) {
             }
             section_directory = 1;
         }
+        else if(!strcmp(argv[argument], "--scene-root")) {
+            if(scene_root) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            scene_root = 1;
+        }
         else {
             usage(stderr, argv[0]);
             material_table_free(&materials);
@@ -2438,6 +2528,13 @@ int main(int argc, char **argv) {
     }
     if(section_directory && !emit_asset) {
         fprintf(stderr, "--section-directory requires --emit-asset\n");
+        material_table_free(&materials);
+        material_library_free(&library);
+        return 2;
+    }
+    if(scene_root && !section_directory) {
+        fprintf(stderr,
+                "--scene-root requires --emit-asset --section-directory\n");
         material_table_free(&materials);
         material_library_free(&library);
         return 2;
@@ -2547,6 +2644,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "conversion failed: %s\n", strerror(errno));
         goto out;
     }
+    if(scene_root && pvr_scene_ir_add_root_model(&scene, 0) < 0) {
+        fprintf(stderr, "scene construction failed: %s\n", strerror(errno));
+        goto out;
+    }
     if(c_symbol) {
         if(prepare_c_output(c_output, c_symbol, &streams,
                             &vertex_temporary) < 0) {
@@ -2562,6 +2663,7 @@ int main(int argc, char **argv) {
     else if(emit_asset) {
         if(prepare_asset_output(asset_output, &streams, lz4_vertices,
                                 section_directory,
+                                scene_root ? &scene : NULL,
                                 &vertex_temporary, &asset_bytes) < 0) {
             fprintf(stderr, "asset preparation failed: %s\n",
                     strerror(errno));
@@ -2601,6 +2703,8 @@ int main(int argc, char **argv) {
         printf("vertex_codec=%s\n", lz4_vertices ? "lz4-frame" : "raw");
         if(section_directory)
             printf("asset_container=pcm2\n");
+        if(scene_root)
+            printf("hierarchy_nodes=%zu\n", scene.node_count);
     }
     result = 0;
 
@@ -2608,6 +2712,7 @@ out:
     discard_output(&vertex_temporary);
     discard_output(&polygon_temporary);
     output_streams_free(&streams);
+    pvr_scene_ir_free(&scene);
     source_model_free(&source);
     material_table_free(&materials);
     material_library_free(&library);

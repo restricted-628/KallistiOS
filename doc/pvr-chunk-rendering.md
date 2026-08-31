@@ -355,8 +355,9 @@ topology gap, but it does not make the broader compact-model program complete.
 The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
-1. Extend the host compiler around one canonical scene IR and populate the
-   completed PCM2 directory with optional hierarchy, general-skin, morph,
+1. Extend the now-established canonical host scene IR beyond its admitted
+   hierarchy section and populate the completed PCM2 directory with optional
+   general-skin, morph,
    animation, collision-volume, resource-table, or cooked-cache sections.
    Include modern scene import, lossless general skin and morph import,
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
@@ -375,7 +376,8 @@ format, deformation, or tooling gaps:
 Already completed and not to be reimplemented are distinct signed UV8/UV10
 records with automatic host-side selection and a finite float-UV escape for
 coordinates outside both compact ranges, the backward-compatible PCM2 checked
-section directory and generic section loader, variable-count skin influences
+section directory and generic section loader, the canonical host scene IR and
+pointer-free checked hierarchy section/binder, variable-count skin influences
 beside the four-weight fast path, shape-to-morph binding, volume
 iteration/collision reuse, retained bounds and clipping, environment-map UV
 generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy

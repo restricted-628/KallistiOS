@@ -184,6 +184,12 @@ for a model with only two streams. `--section-directory` emits an admitted
 PCM2 container when a content pipeline intends to append optional sections;
 it composes with raw or LZ4-framed vertex storage. The converter reopens and
 loads either output through the runtime parser before publishing the file.
+With `--scene-root`, the host-side canonical scene IR writes one `PCH1`
+hierarchy section containing an identity root bound to model ordinal zero.
+The converter then loads, admits, and binds that section through the target
+implementation before publishing the PCM2 file. The current OBJ boundary has
+only one model and therefore emits only this explicit root; future scene
+importers populate the same IR rather than defining another target format.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The
@@ -238,6 +244,16 @@ structure is validated before the first workspace write or callback. On
 Dreamcast the composition path reaches SH4ZAM through `mat_compose()`; host
 tests retain the portable scalar implementation. A callback may continue,
 request a successful early stop, or report failure with errno.
+
+PCM2 hierarchy sections use a fixed little-endian, pointer-free `PCH1` record.
+Every node stores one parent index, model ordinal, and 4x4 local transform.
+`pvr_chunk_scene_hierarchy_open()` verifies framing, reserved fields, header
+and node checksums, finite matrices, and parent-before-child order before
+publishing a view. `pvr_chunk_scene_hierarchy_bind()` then resolves ordinals
+through an explicit caller-owned model table into caller-owned runtime nodes.
+Transform-only nodes are represented by the stable no-model ordinal. The
+binding path allocates nothing, retains no hidden state, and rejects output
+overlap with the serialized source.
 
 ## Rendering boundary
 

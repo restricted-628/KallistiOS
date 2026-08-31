@@ -29,7 +29,8 @@ $(BIN2C):
 	$(MAKE) -C $(KOS_BASE)/utils/bin2c
 
 $(MODEL_ASSET): $(MODEL_SOURCE) $(MODEL_CONVERTER)
-	$(MODEL_CONVERTER) --join-strips --emit-asset --lz4-vertices \
+	$(MODEL_CONVERTER) --join-strips --emit-asset --section-directory \
+		--scene-root --lz4-vertices \
 		$(MODEL_SOURCE) $@
 
 $(GENERATED_MODEL): $(MODEL_ASSET) $(BIN2C)

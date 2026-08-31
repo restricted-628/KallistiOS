@@ -9,8 +9,8 @@ temporary output is published.
 pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
     [--texture-id ID | --material NAME=ID ...] \
     [--material-library FILE ...] \
-    [--emit-c SYMBOL | --emit-asset [--section-directory] \
-     [--lz4-vertices]] [--] \
+    [--emit-c SYMBOL | --emit-asset [--section-directory \
+     [--scene-root]] [--lz4-vertices]] [--] \
     INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}
 ```
 
@@ -107,6 +107,14 @@ required streams in an extensible checksummed directory. A two-stream PCM2 is
 larger than PCM1 and is intended as the host-pipeline base for optional
 resource, deformation, hierarchy, animation, collision, cache, or application
 sections; models which need none of those should keep PCM1.
+
+`--scene-root` adds one admitted hierarchy section to PCM2. Its root has an
+identity local transform and references model ordinal zero, proving the same
+host-IR, serialization, generic section-loading, and target binding path that
+multi-node scene importers use without inventing a second runtime hierarchy.
+The option deliberately requires `--section-directory`; it is a pipeline
+integration primitive, not an implicit scene graph wrapped around ordinary
+PCM1 output.
 
 Compile the generated file normally in the application build to produce the
 target object; the converter does not invoke or choose a compiler. Each output

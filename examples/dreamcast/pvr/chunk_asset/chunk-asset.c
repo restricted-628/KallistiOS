@@ -50,7 +50,13 @@ static int use_predecoded_section(const pvr_chunk_asset_section_t *section,
 int main(void) {
     pvr_chunk_asset_view_t asset;
     pvr_chunk_asset_workspace_requirements_t requirements;
+    pvr_chunk_asset_section_t hierarchy_section;
+    pvr_chunk_scene_hierarchy_view_t hierarchy_view;
+    pvr_chunk_hierarchy_node_t hierarchy_node;
+    pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_model_view_t model;
+    const pvr_chunk_model_view_t *models[1];
+    const void *hierarchy_data = NULL;
     pvr_chunk_asset_lz4_service_t *decode_service = NULL;
     pvr_chunk_asset_lz4_job_t *job = NULL;
     pvr_chunk_asset_lz4_job_status_t status;
@@ -102,13 +108,27 @@ int main(void) {
        status.state != PVR_CHUNK_ASSET_LZ4_JOB_COMPLETE)
         goto out;
 
+    models[0] = &model;
     if(pvr_chunk_asset_load(&asset, use_predecoded_section, &decoded,
                             workspace, allocation, &model) == 0 &&
-       model.info.vertex_entries == 3 && model.info.triangles == 1) {
+       pvr_chunk_asset_section_get(&asset, 2, &hierarchy_section) == 0 &&
+       hierarchy_section.type == PVR_CHUNK_ASSET_SECTION_HIERARCHY &&
+       pvr_chunk_asset_section_load(&asset, 2, NULL, NULL, NULL, 0,
+                                    &hierarchy_data) == 0 &&
+       pvr_chunk_scene_hierarchy_open(
+           hierarchy_data, hierarchy_section.decoded_bytes,
+           &hierarchy_view) == 0 &&
+       pvr_chunk_scene_hierarchy_bind(
+           &hierarchy_view, models, 1, &hierarchy_node, 1,
+           &hierarchy) == 0 &&
+       model.info.vertex_entries == 3 && model.info.triangles == 1 &&
+       hierarchy.node_count == 1 && hierarchy_node.model == &model &&
+       hierarchy_node.parent_index == PVR_CHUNK_NODE_NONE) {
         printf("KOSPVRASSET loaded=1 service=1 vertices=%lu triangles=%lu "
-               "workspace=%lu decoded=%lu\n",
+               "hierarchy=%lu workspace=%lu decoded=%lu\n",
                (unsigned long)model.info.vertex_entries,
                (unsigned long)model.info.triangles,
+               (unsigned long)hierarchy.node_count,
                (unsigned long)requirements.bytes,
                (unsigned long)status.output_bytes);
         result = 0;
