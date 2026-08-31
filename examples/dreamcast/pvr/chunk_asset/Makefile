@@ -30,7 +30,8 @@ $(BIN2C):
 
 $(MODEL_ASSET): $(MODEL_SOURCE) $(MODEL_CONVERTER)
 	$(MODEL_CONVERTER) --join-strips --emit-asset --section-directory \
-		--scene-root --rigid-skin --morph-target 1 0 0 --lz4-vertices \
+		--scene-root --rigid-skin --morph-target 1 0 0 \
+		--animation-offset 2 4 6 --lz4-vertices \
 		$(MODEL_SOURCE) $@
 
 $(GENERATED_MODEL): $(MODEL_ASSET) $(BIN2C)

@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <dc/animation.h>
 #include <dc/pvr_chunk_skin.h>
 #include <dc/pvr_chunk_shape.h>
 
@@ -46,6 +47,10 @@ int pvr_scene_ir_serialize_general_skin(
 
 int pvr_scene_ir_serialize_shapes(
     const pvr_chunk_shape_set_t *shapes,
+    uint8_t **bytes_out, size_t *size_out);
+
+int pvr_scene_ir_serialize_animation(
+    const anim_clip_view_t *clip,
     uint8_t **bytes_out, size_t *size_out);
 
 #endif /* PVR_SCENE_IR_H */

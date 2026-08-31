@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a portable PCM2 animation section. Checked APIs validate pointer-free
+  transform bindings, channel types, gapless finite keys, canonical values,
+  fallbacks, and checksums, then materialize caller-owned keys, track views,
+  transform/visibility bindings, and an existing animation clip. The host
+  pipeline emits and reopens an explicit root-translation fixture without
+  introducing a container clock or a second interpolation engine.
 * Added a portable PCM2 sparse morph-target section. Checked target APIs
   validate pointer-free target spans and finite indexed deltas, expose
   individual records, and materialize directly into the existing compact

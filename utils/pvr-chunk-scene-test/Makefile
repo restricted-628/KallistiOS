@@ -11,7 +11,8 @@ SOURCES = pvr-chunk-scene-test.c \
           ../pvr-model-convert/pvr-scene-ir.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
-          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c
 
 .PHONY: all clean test
 

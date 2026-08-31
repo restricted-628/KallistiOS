@@ -225,6 +225,17 @@ through the target implementation. This gives bounded OBJ builds an explicit
 round-trip fixture without inventing morph semantics that OBJ cannot express;
 future scene importers populate the same sparse target representation.
 
+With `--animation-offset DX DY DZ`, the converter writes one pointer-free
+`PAT1` section containing a two-key linear translation track for the explicit
+scene root. The section carries a finite clip interval, canonical scalar,
+vector, quaternion, or Boolean keys, typed channel ordinals, transform
+fallbacks, and visibility fallback state. `pvr_chunk_animation_section_open()`
+admits the whole section before publication; indexed accessors expose its
+transform and track records, and `pvr_chunk_animation_section_materialize()`
+fills caller-owned canonical keys and existing animation runtime bindings.
+Sampling, blending, events, and playback remain the responsibility of
+`dc/animation.h`; the asset layer owns no clock, worker, or alternate evaluator.
+
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The
 converter's `--emit-asset --lz4-vertices` mode emits one checksummed LZ4 Frame

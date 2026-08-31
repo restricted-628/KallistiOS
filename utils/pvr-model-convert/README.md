@@ -10,7 +10,8 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
     [--texture-id ID | --material NAME=ID ...] \
     [--material-library FILE ...] \
     [--emit-c SYMBOL | --emit-asset [--section-directory \
-     [--scene-root] [--rigid-skin] [--morph-target DX DY DZ]] \
+     [--scene-root] [--rigid-skin] [--morph-target DX DY DZ] \
+     [--animation-offset DX DY DZ]] \
      [--lz4-vertices]] [--] \
     INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}
 ```
@@ -133,6 +134,14 @@ target parser/materializer, and existing model-aware shape binder; OBJ has no
 morph-target grammar, so the option does not infer or import wider shape data.
 Scene importers supply any number of sparse authored targets to the same
 serializer. The option requires `--section-directory`.
+
+`--animation-offset DX DY DZ` adds one admitted `PAT1` animation section to
+PCM2. A two-key linear vector track moves the explicit scene root from zero to
+the supplied finite offset over the clip interval `[0, 1]`. The target parser
+materializes the clip into the existing animation track, transform, visibility,
+sampling, blending, and playback runtime; the container adds no second clock
+or interpolation engine. This bounded fixture requires `--scene-root`, while
+scene importers supply wider authored clips to the same serializer.
 
 Compile the generated file normally in the application build to produce the
 target object; the converter does not invoke or choose a compiler. Each output

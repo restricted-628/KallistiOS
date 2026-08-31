@@ -53,6 +53,7 @@ int main(void) {
     pvr_chunk_asset_section_t hierarchy_section;
     pvr_chunk_asset_section_t skin_section;
     pvr_chunk_asset_section_t shape_section;
+    pvr_chunk_asset_section_t animation_section;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
     pvr_chunk_skin_span_t skin_spans[3];
@@ -62,6 +63,14 @@ int main(void) {
     pvr_chunk_shape_target_t shape_target;
     pvr_chunk_shape_delta_t shape_delta;
     pvr_chunk_shape_set_t shapes;
+    pvr_chunk_animation_section_view_t animation_view;
+    pvr_chunk_animation_key_t animation_keys[2];
+    anim_track_view_t animation_track;
+    anim_transform_tracks_t animation_transform;
+    anim_visibility_tracks_t animation_visibility;
+    anim_clip_view_t animation_clip;
+    anim_transform_t animation_pose;
+    anim_pose_result_t animation_result;
     pvr_chunk_hierarchy_node_t hierarchy_node;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_model_view_t model;
@@ -69,6 +78,7 @@ int main(void) {
     const void *hierarchy_data = NULL;
     const void *skin_data = NULL;
     const void *shape_data = NULL;
+    const void *animation_data = NULL;
     pvr_chunk_asset_lz4_service_t *decode_service = NULL;
     pvr_chunk_asset_lz4_job_t *job = NULL;
     pvr_chunk_asset_lz4_job_status_t status;
@@ -156,15 +166,34 @@ int main(void) {
            &shape_view, &shape_target, 1, &shape_delta, 1, &shapes) == 0 &&
        shapes.target_count == 1 && shape_target.delta_count == 1 &&
        shape_delta.vertex_index == 0 &&
-       shape_delta.delta.position.x == 1.0f) {
+       shape_delta.delta.position.x == 1.0f &&
+       pvr_chunk_asset_section_get(&asset, 5, &animation_section) == 0 &&
+       animation_section.type == PVR_CHUNK_ASSET_SECTION_ANIMATION &&
+       pvr_chunk_asset_section_load(&asset, 5, NULL, NULL, NULL, 0,
+                                    &animation_data) == 0 &&
+       pvr_chunk_animation_section_open(
+           animation_data, animation_section.decoded_bytes,
+           &animation_view) == 0 &&
+       pvr_chunk_animation_section_materialize(
+           &animation_view, animation_keys, 2, &animation_track, 1,
+           &animation_transform, 1, &animation_visibility, 1,
+           &animation_clip) == 0 &&
+       anim_clip_sample(&animation_clip, 0.5f, &animation_pose, 1,
+                        &animation_result) == 0 &&
+       animation_result.sampled_transforms == 1 &&
+       animation_pose.translation.x == 1.0f &&
+       animation_pose.translation.y == 2.0f &&
+       animation_pose.translation.z == 3.0f) {
         printf("KOSPVRASSET loaded=1 service=1 vertices=%lu triangles=%lu "
-               "hierarchy=%lu skin=%lu morph=%lu workspace=%lu "
+               "hierarchy=%lu skin=%lu morph=%lu animation=%lu "
+               "workspace=%lu "
                "decoded=%lu\n",
                (unsigned long)model.info.vertex_entries,
                (unsigned long)model.info.triangles,
                (unsigned long)hierarchy.node_count,
                (unsigned long)skin.span_count,
                (unsigned long)shapes.target_count,
+               (unsigned long)animation_clip.clip.transform_count,
                (unsigned long)requirements.bytes,
                (unsigned long)status.output_bytes);
         result = 0;

@@ -394,6 +394,7 @@ f 1/1/1 2/2/1 3/3/1
             "--scene-root",
             "--rigid-skin",
             "--morph-target", "1.5", "-2.0", "0.25",
+            "--animation-offset", "3.0", "4.0", "5.0",
             source,
             skin_asset,
         )
@@ -407,8 +408,11 @@ f 1/1/1 2/2/1 3/3/1
             "general_skin_weights=3\n"
             "morph_targets=1\n"
             "morph_deltas=1\n"
+            "animation_transforms=1\n"
+            "animation_tracks=1\n"
+            "animation_keys=2\n"
         )
-        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 5
+        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 6
         skin_descriptor = struct.unpack_from(
             "<7IHH", skin_asset_bytes, 64 + 3 * 32
         )
@@ -457,6 +461,46 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<II", shape, 48) == (0, 1)
         assert struct.unpack_from("<HH6f", shape, 56) == (
             0, 0, 1.5, -2.0, 0.25, 0.0, 0.0, 0.0
+        )
+
+        animation_descriptor = struct.unpack_from(
+            "<7IHH", skin_asset_bytes, 64 + 5 * 32
+        )
+        assert animation_descriptor[0] == 9
+        assert animation_descriptor[7:] == (0, 4)
+        animation_offset = animation_descriptor[2]
+        animation_size = animation_descriptor[3]
+        animation = skin_asset_bytes[
+            animation_offset:animation_offset + animation_size
+        ]
+        assert animation[:4] == b"PAT1"
+        assert struct.unpack_from("<HHIIII", animation, 4) == (
+            1, 64, 192, 1, 1, 2
+        )
+        assert struct.unpack_from("<HHHHIIIff", animation, 24) == (
+            64, 16, 24, 0, 64, 16, 48, 0.0, 1.0
+        )
+        assert zlib.crc32(animation[64:]) == struct.unpack_from(
+            "<I", animation, 52
+        )[0]
+        assert zlib.crc32(animation[:60]) == struct.unpack_from(
+            "<I", animation, 60
+        )[0]
+        assert struct.unpack_from("<4I3f4f3f2I", animation, 64) == (
+            0, 0xffffffff, 0xffffffff, 0xffffffff,
+            0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            1.0, 1.0, 1.0,
+            1, 0,
+        )
+        assert struct.unpack_from("<HHIII", animation, 128) == (
+            1, 1, 0, 2, 0
+        )
+        assert struct.unpack_from("<5fI", animation, 144) == (
+            0.0, 0.0, 0.0, 0.0, 1.0, 0
+        )
+        assert struct.unpack_from("<5fI", animation, 168) == (
+            1.0, 3.0, 4.0, 5.0, 1.0, 0
         )
 
         directory_lz4 = root / "triangle-directory-lz4.pcm"
@@ -540,6 +584,16 @@ f 1/1/1 2/2/1 3/3/1
         assert result.returncode == 2
         assert result.stderr == (
             "--morph-target requires --emit-asset --section-directory\n"
+        )
+
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            "--animation-offset", "1", "0", "0", source, raw_asset
+        )
+        assert result.returncode == 2
+        assert result.stderr == (
+            "--animation-offset requires --emit-asset "
+            "--section-directory --scene-root\n"
         )
 
         generated_again = root / "test-model-again.c"

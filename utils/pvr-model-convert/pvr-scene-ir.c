@@ -9,8 +9,10 @@
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
+#include <dc/pvr_chunk_animation_asset.h>
 
 #include <errno.h>
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -483,4 +485,370 @@ int pvr_scene_ir_serialize_shapes(
     *bytes_out = bytes;
     *size_out = file_bytes;
     return 0;
+}
+
+static int animation_track_append(
+    const anim_track_view_t *track,
+    const anim_track_view_t **tracks, size_t *track_count,
+    size_t track_capacity) {
+    size_t index;
+
+    if(!track)
+        return 0;
+    for(index = 0; index < *track_count; ++index) {
+        if(tracks[index] == track)
+            return 0;
+    }
+    if(*track_count >= track_capacity || *track_count >= UINT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    tracks[(*track_count)++] = track;
+    return 0;
+}
+
+static uint32_t animation_track_ordinal(
+    const anim_track_view_t *track,
+    const anim_track_view_t *const *tracks, size_t track_count) {
+    size_t index;
+
+    if(!track)
+        return PVR_CHUNK_ANIMATION_TRACK_NONE;
+    for(index = 0; index < track_count; ++index) {
+        if(tracks[index] == track)
+            return (uint32_t)index;
+    }
+    return PVR_CHUNK_ANIMATION_TRACK_NONE;
+}
+
+static size_t animation_key_size(anim_value_kind_t kind) {
+    switch(kind) {
+        case ANIM_VALUE_SCALAR:
+            return sizeof(anim_scalar_key_t);
+        case ANIM_VALUE_VECTOR:
+            return sizeof(anim_vector_key_t);
+        case ANIM_VALUE_QUATERNION:
+            return sizeof(anim_quaternion_key_t);
+        case ANIM_VALUE_BOOLEAN:
+            return sizeof(anim_boolean_key_t);
+        default:
+            return 0;
+    }
+}
+
+static int animation_track_valid(const anim_track_view_t *view,
+                                 anim_value_kind_t expected) {
+    const anim_track_t *track;
+    size_t minimum_size;
+
+    if(!view)
+        return 1;
+    if((uintptr_t)view & (_Alignof(anim_track_view_t) - 1u))
+        return 0;
+    track = &view->track;
+    minimum_size = animation_key_size(expected);
+    return track->kind == expected && track->keys && track->key_count &&
+           !((uintptr_t)track->keys & 3u) && minimum_size &&
+           track->stride >= minimum_size && !(track->stride & 3u) &&
+           track->interpolation >= ANIM_INTERPOLATION_STEP &&
+           track->interpolation <= ANIM_INTERPOLATION_CATMULL_ROM &&
+           !(expected == ANIM_VALUE_BOOLEAN &&
+             track->interpolation != ANIM_INTERPOLATION_STEP) &&
+           !((expected == ANIM_VALUE_QUATERNION ||
+              expected == ANIM_VALUE_BOOLEAN) &&
+             track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) &&
+           track->key_count - 1u <=
+               (SIZE_MAX - minimum_size) / track->stride &&
+           (track->key_count - 1u) * track->stride + minimum_size <=
+               UINTPTR_MAX - (uintptr_t)track->keys;
+}
+
+static int animation_clip_valid(const anim_clip_t *clip) {
+    size_t index;
+
+    if(!clip || !clip->transforms || !clip->transform_count ||
+       ((uintptr_t)clip->transforms &
+        (_Alignof(anim_transform_tracks_t) - 1u)) ||
+       (clip->visibility &&
+        ((uintptr_t)clip->visibility &
+         (_Alignof(anim_visibility_tracks_t) - 1u))) ||
+       !isfinite(clip->start_time) || !isfinite(clip->end_time) ||
+       clip->start_time >= clip->end_time ||
+       clip->transform_count > SIZE_MAX / sizeof(*clip->transforms) ||
+       clip->transform_count * sizeof(*clip->transforms) >
+           UINTPTR_MAX - (uintptr_t)clip->transforms ||
+       (clip->visibility &&
+        (clip->transform_count > SIZE_MAX / sizeof(*clip->visibility) ||
+         clip->transform_count * sizeof(*clip->visibility) >
+             UINTPTR_MAX - (uintptr_t)clip->visibility)))
+        return 0;
+    for(index = 0; index < clip->transform_count; ++index) {
+        const anim_transform_tracks_t *transform = clip->transforms + index;
+        const anim_visibility_tracks_t *visibility =
+            clip->visibility ? clip->visibility + index : NULL;
+        const anim_quaternion_t *rotation = &transform->fallback.rotation;
+        float magnitude_squared = rotation->w * rotation->w +
+                                  rotation->x * rotation->x +
+                                  rotation->y * rotation->y +
+                                  rotation->z * rotation->z;
+
+        if(!isfinite(transform->fallback.translation.x) ||
+           !isfinite(transform->fallback.translation.y) ||
+           !isfinite(transform->fallback.translation.z) ||
+           !isfinite(transform->fallback.scale.x) ||
+           !isfinite(transform->fallback.scale.y) ||
+           !isfinite(transform->fallback.scale.z) ||
+           !isfinite(rotation->w) || !isfinite(rotation->x) ||
+           !isfinite(rotation->y) || !isfinite(rotation->z) ||
+           !isfinite(magnitude_squared) || magnitude_squared <= FLT_MIN ||
+           !animation_track_valid(transform->translation,
+                                  ANIM_VALUE_VECTOR) ||
+           !animation_track_valid(transform->rotation,
+                                  ANIM_VALUE_QUATERNION) ||
+           !animation_track_valid(transform->scale, ANIM_VALUE_VECTOR) ||
+           !animation_track_valid(visibility ? visibility->visible : NULL,
+                                  ANIM_VALUE_BOOLEAN))
+            return 0;
+    }
+    return 1;
+}
+
+int pvr_scene_ir_serialize_animation(
+    const anim_clip_view_t *clip,
+    uint8_t **bytes_out, size_t *size_out) {
+    const anim_track_view_t **track_refs = NULL;
+    const anim_clip_t *source;
+    pvr_chunk_animation_section_view_t section;
+    uint8_t *bytes = NULL;
+    size_t track_capacity;
+    size_t track_count = 0;
+    size_t key_count = 0;
+    size_t transform_bytes;
+    size_t track_bytes;
+    size_t key_bytes;
+    size_t payload_bytes;
+    size_t file_bytes;
+    size_t transform_index;
+    size_t track_index;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!clip || !bytes_out || !size_out ||
+       !animation_clip_valid(&clip->clip)) {
+        errno = EINVAL;
+        return -1;
+    }
+    source = &clip->clip;
+    if(source->transform_count > SIZE_MAX / 4u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    track_capacity = source->transform_count * 4u;
+    if(track_capacity) {
+        track_refs = calloc(track_capacity, sizeof(*track_refs));
+        if(!track_refs) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+
+    for(transform_index = 0;
+        transform_index < source->transform_count;
+        ++transform_index) {
+        const anim_transform_tracks_t *transform =
+            source->transforms + transform_index;
+        const anim_visibility_tracks_t *visibility =
+            source->visibility ? source->visibility + transform_index : NULL;
+
+        if(animation_track_append(transform->translation, track_refs,
+                                  &track_count, track_capacity) < 0 ||
+           animation_track_append(transform->rotation, track_refs,
+                                  &track_count, track_capacity) < 0 ||
+           animation_track_append(transform->scale, track_refs,
+                                  &track_count, track_capacity) < 0 ||
+           animation_track_append(visibility ? visibility->visible : NULL,
+                                  track_refs, &track_count,
+                                  track_capacity) < 0)
+            goto fail;
+    }
+    for(track_index = 0; track_index < track_count; ++track_index) {
+        if(track_refs[track_index]->track.key_count >
+           UINT32_MAX - key_count) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        key_count += track_refs[track_index]->track.key_count;
+    }
+
+    if(source->transform_count >
+           SIZE_MAX / PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES ||
+       track_count > SIZE_MAX / PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES ||
+       key_count > SIZE_MAX / PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    transform_bytes = source->transform_count *
+                      PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES;
+    track_bytes = track_count * PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES;
+    key_bytes = key_count * PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES;
+    if(transform_bytes > SIZE_MAX - track_bytes ||
+       transform_bytes + track_bytes > SIZE_MAX - key_bytes) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    payload_bytes = transform_bytes + track_bytes + key_bytes;
+    if(payload_bytes >
+       SIZE_MAX - PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    file_bytes = PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + payload_bytes;
+    if(file_bytes > UINT32_MAX || transform_bytes > UINT32_MAX ||
+       track_bytes > UINT32_MAX || key_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        goto fail;
+    }
+
+    for(transform_index = 0;
+        transform_index < source->transform_count;
+        ++transform_index) {
+        const anim_transform_tracks_t *transform =
+            source->transforms + transform_index;
+        const anim_visibility_tracks_t *visibility =
+            source->visibility ? source->visibility + transform_index : NULL;
+        uint8_t *record = bytes +
+            PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + transform_index *
+                PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES;
+
+        store_le32(record, animation_track_ordinal(
+            transform->translation, track_refs, track_count));
+        store_le32(record + 4, animation_track_ordinal(
+            transform->rotation, track_refs, track_count));
+        store_le32(record + 8, animation_track_ordinal(
+            transform->scale, track_refs, track_count));
+        store_le32(record + 12, animation_track_ordinal(
+            visibility ? visibility->visible : NULL,
+            track_refs, track_count));
+        store_float(record + 16, transform->fallback.translation.x);
+        store_float(record + 20, transform->fallback.translation.y);
+        store_float(record + 24, transform->fallback.translation.z);
+        store_float(record + 28, transform->fallback.rotation.w);
+        store_float(record + 32, transform->fallback.rotation.x);
+        store_float(record + 36, transform->fallback.rotation.y);
+        store_float(record + 40, transform->fallback.rotation.z);
+        store_float(record + 44, transform->fallback.scale.x);
+        store_float(record + 48, transform->fallback.scale.y);
+        store_float(record + 52, transform->fallback.scale.z);
+        store_le32(record + 56,
+                   visibility ? (uint32_t)visibility->fallback : 1u);
+    }
+
+    key_count = 0;
+    for(track_index = 0; track_index < track_count; ++track_index) {
+        const anim_track_t *track = &track_refs[track_index]->track;
+        uint8_t *track_record = bytes +
+            PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + transform_bytes +
+            track_index * PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES;
+        size_t key_index;
+
+        store_le16(track_record, (uint16_t)track->kind);
+        store_le16(track_record + 2, (uint16_t)track->interpolation);
+        store_le32(track_record + 4, (uint32_t)key_count);
+        store_le32(track_record + 8, (uint32_t)track->key_count);
+        for(key_index = 0; key_index < track->key_count; ++key_index) {
+            const uint8_t *source = (const uint8_t *)track->keys +
+                                    key_index * track->stride;
+            uint8_t *key_record = bytes +
+                PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + transform_bytes +
+                track_bytes + (key_count + key_index) *
+                    PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES;
+            float time;
+
+            memcpy(&time, source, sizeof(time));
+            store_float(key_record, time);
+            switch(track->kind) {
+                case ANIM_VALUE_SCALAR: {
+                    anim_scalar_key_t key;
+
+                    memcpy(&key, source, sizeof(key));
+                    store_float(key_record + 4, key.value);
+                    break;
+                }
+
+                case ANIM_VALUE_VECTOR: {
+                    anim_vector_key_t key;
+
+                    memcpy(&key, source, sizeof(key));
+                    store_float(key_record + 4, key.value.x);
+                    store_float(key_record + 8, key.value.y);
+                    store_float(key_record + 12, key.value.z);
+                    store_float(key_record + 16, key.value.w);
+                    break;
+                }
+
+                case ANIM_VALUE_QUATERNION: {
+                    anim_quaternion_key_t key;
+
+                    memcpy(&key, source, sizeof(key));
+                    store_float(key_record + 4, key.value.w);
+                    store_float(key_record + 8, key.value.x);
+                    store_float(key_record + 12, key.value.y);
+                    store_float(key_record + 16, key.value.z);
+                    break;
+                }
+
+                case ANIM_VALUE_BOOLEAN: {
+                    anim_boolean_key_t key;
+
+                    memcpy(&key, source, sizeof(key));
+                    store_le32(key_record + 4, key.value);
+                    break;
+                }
+            }
+        }
+        key_count += track->key_count;
+    }
+
+    store_le32(bytes, PVR_CHUNK_ANIMATION_SECTION_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_ANIMATION_SECTION_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)source->transform_count);
+    store_le32(bytes + 16, (uint32_t)track_count);
+    store_le32(bytes + 20, (uint32_t)key_count);
+    store_le16(bytes + 24,
+               PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES);
+    store_le16(bytes + 26, PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES);
+    store_le16(bytes + 28, PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES);
+    store_le32(bytes + 32, (uint32_t)transform_bytes);
+    store_le32(bytes + 36, (uint32_t)track_bytes);
+    store_le32(bytes + 40, (uint32_t)key_bytes);
+    store_float(bytes + 44, source->start_time);
+    store_float(bytes + 48, source->end_time);
+    store_le32(bytes + 52, crc32_bytes(
+        bytes + PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES, payload_bytes));
+    store_le32(bytes + 60, crc32_bytes(bytes, 60));
+
+    if(pvr_chunk_animation_section_open(bytes, file_bytes, &section) < 0)
+        goto fail;
+    free(track_refs);
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
+
+fail: {
+        int saved_errno = errno ? errno : EIO;
+
+        free(bytes);
+        free(track_refs);
+        errno = saved_errno;
+        return -1;
+    }
 }

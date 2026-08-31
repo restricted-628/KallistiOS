@@ -22,6 +22,7 @@
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
+#include <dc/pvr_chunk_animation_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -160,7 +161,7 @@ static void usage(FILE *stream, const char *program) {
             "--material NAME=ID ...] [--material-library FILE ...] "
             "[--join-strips] [--emit-c SYMBOL | --emit-asset "
             "[--section-directory [--scene-root] [--rigid-skin] "
-            "[--morph-target DX DY DZ]] "
+            "[--morph-target DX DY DZ] [--animation-offset DX DY DZ]] "
             "[--lz4-vertices]] "
             "[--] INPUT.obj "
             "{VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}\n",
@@ -1758,6 +1759,7 @@ static int build_asset_blob(const output_streams_t *streams,
                             const pvr_scene_ir_t *scene,
                             const pvr_chunk_skin_general_t *skin,
                             const pvr_chunk_shape_set_t *shapes,
+                            const anim_clip_view_t *animation,
                             uint8_t **blob_out,
                             size_t *blob_bytes_out) {
     uint8_t *vertex_raw = NULL;
@@ -1766,6 +1768,7 @@ static int build_asset_blob(const output_streams_t *streams,
     uint8_t *hierarchy_raw = NULL;
     uint8_t *skin_raw = NULL;
     uint8_t *shape_raw = NULL;
+    uint8_t *animation_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
@@ -1774,6 +1777,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t hierarchy_bytes = 0;
     size_t skin_bytes = 0;
     size_t shape_bytes = 0;
+    size_t animation_bytes = 0;
     size_t section_count;
     size_t directory_bytes;
     size_t vertex_offset;
@@ -1781,10 +1785,11 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t hierarchy_offset = 0;
     size_t skin_offset = 0;
     size_t shape_offset = 0;
+    size_t animation_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
-    if((scene || skin || shapes) && !section_directory) {
+    if((scene || skin || shapes || animation) && !section_directory) {
         errno = EINVAL;
         goto fail;
     }
@@ -1801,6 +1806,10 @@ static int build_asset_blob(const output_streams_t *streams,
         goto fail;
     if(shapes && pvr_scene_ir_serialize_shapes(
                      shapes, &shape_raw, &shape_bytes) < 0)
+        goto fail;
+    if(animation && pvr_scene_ir_serialize_animation(
+                         animation, &animation_raw,
+                         &animation_bytes) < 0)
         goto fail;
     vertex_stored = vertex_raw;
     vertex_stored_bytes = vertex_bytes;
@@ -1836,7 +1845,8 @@ static int build_asset_blob(const output_streams_t *streams,
 
     section_count = 2u + (hierarchy_raw ? 1u : 0u) +
                     (skin_raw ? 1u : 0u) +
-                    (shape_raw ? 1u : 0u);
+                    (shape_raw ? 1u : 0u) +
+                    (animation_raw ? 1u : 0u);
     if(section_count > SIZE_MAX / PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES) {
         errno = EOVERFLOW;
         goto fail;
@@ -1880,6 +1890,14 @@ static int build_asset_blob(const output_streams_t *streams,
         }
         file_bytes = shape_offset + shape_bytes;
     }
+    if(animation_raw) {
+        if(align_size_32(file_bytes, &animation_offset) < 0 ||
+           animation_offset > SIZE_MAX - animation_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = animation_offset + animation_bytes;
+    }
     if(file_bytes > UINT32_MAX) {
         errno = EOVERFLOW;
         goto fail;
@@ -1899,6 +1917,8 @@ static int build_asset_blob(const output_streams_t *streams,
         memcpy(blob + skin_offset, skin_raw, skin_bytes);
     if(shape_raw)
         memcpy(blob + shape_offset, shape_raw, shape_bytes);
+    if(animation_raw)
+        memcpy(blob + animation_offset, animation_raw, animation_bytes);
 
     store_le32(blob + 8, (uint32_t)file_bytes);
     store_le32(blob + 16, float_word(streams->center[0]));
@@ -1959,6 +1979,19 @@ static int build_asset_blob(const output_streams_t *streams,
                 crc32_bytes(shape_raw, shape_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
+        if(animation_raw) {
+            size_t descriptor_index = 2u + (hierarchy_raw ? 1u : 0u) +
+                                      (skin_raw ? 1u : 0u) +
+                                      (shape_raw ? 1u : 0u);
+
+            store_pcm2_section(
+                directory + descriptor_index *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_ANIMATION,
+                animation_offset, animation_bytes, animation_bytes,
+                crc32_bytes(animation_raw, animation_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
         store_le32(blob + 44, crc32_bytes(
             directory, directory_bytes));
         store_le32(blob + 60, crc32_bytes(blob, 60));
@@ -1985,6 +2018,7 @@ static int build_asset_blob(const output_streams_t *streams,
     free(hierarchy_raw);
     free(skin_raw);
     free(shape_raw);
+    free(animation_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -1998,6 +2032,7 @@ fail:
     free(hierarchy_raw);
     free(skin_raw);
     free(shape_raw);
+    free(animation_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
@@ -2060,6 +2095,7 @@ static int prepare_asset_output(const char *target,
                                 const pvr_scene_ir_t *scene,
                                 const pvr_chunk_skin_general_t *skin,
                                 const pvr_chunk_shape_set_t *shapes,
+                                const anim_clip_view_t *animation,
                                 temporary_output_t *temporary,
                                 size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -2069,28 +2105,36 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_section_t hierarchy_section;
     pvr_chunk_asset_section_t skin_section;
     pvr_chunk_asset_section_t shape_section;
+    pvr_chunk_asset_section_t animation_section;
     pvr_chunk_model_view_t model_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
     pvr_chunk_skin_general_t materialized_skin;
     pvr_chunk_shape_section_view_t shape_view;
     pvr_chunk_shape_set_t materialized_shapes;
+    pvr_chunk_animation_section_view_t animation_view;
+    anim_clip_view_t materialized_animation;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
     pvr_chunk_skin_span_t *skin_spans = NULL;
     pvr_chunk_skin_weight_t *skin_weights = NULL;
     pvr_chunk_shape_target_t *shape_targets = NULL;
     pvr_chunk_shape_delta_t *shape_deltas = NULL;
+    pvr_chunk_animation_key_t *animation_keys = NULL;
+    anim_track_view_t *animation_tracks = NULL;
+    anim_transform_tracks_t *animation_transforms = NULL;
+    anim_visibility_tracks_t *animation_visibility = NULL;
     const pvr_chunk_model_view_t *models[1];
     const void *hierarchy_data = NULL;
     const void *skin_data = NULL;
     const void *shape_data = NULL;
+    const void *animation_data = NULL;
     void *workspace = NULL;
     size_t workspace_allocation = 0;
     int result = -1;
 
     if(build_asset_blob(streams, lz4_vertices, section_directory, scene, skin,
-                        shapes, &blob, &blob_bytes) < 0 ||
+                        shapes, animation, &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        pvr_chunk_asset_workspace_query(&asset_view, &requirements) < 0)
         goto out;
@@ -2203,12 +2247,61 @@ static int prepare_asset_output(const char *target,
             goto out;
         }
     }
+    if(animation) {
+        size_t section_index = 2u + (scene ? 1u : 0u) +
+                               (skin ? 1u : 0u) +
+                               (shapes ? 1u : 0u);
+
+        if(pvr_chunk_asset_section_get(
+               &asset_view, section_index, &animation_section) < 0 ||
+           animation_section.type != PVR_CHUNK_ASSET_SECTION_ANIMATION ||
+           pvr_chunk_asset_section_load(
+               &asset_view, section_index, NULL, NULL, NULL, 0,
+               &animation_data) < 0 ||
+           pvr_chunk_animation_section_open(
+               animation_data, animation_section.decoded_bytes,
+               &animation_view) < 0) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+        animation_keys = calloc(animation_view.key_count,
+                                sizeof(*animation_keys));
+        animation_tracks = calloc(animation_view.track_count,
+                                  sizeof(*animation_tracks));
+        animation_transforms = calloc(animation_view.transform_count,
+                                      sizeof(*animation_transforms));
+        animation_visibility = calloc(animation_view.transform_count,
+                                      sizeof(*animation_visibility));
+        if((animation_view.key_count && !animation_keys) ||
+           (animation_view.track_count && !animation_tracks) ||
+           !animation_transforms || !animation_visibility) {
+            errno = ENOMEM;
+            goto out;
+        }
+        if(pvr_chunk_animation_section_materialize(
+               &animation_view, animation_keys, animation_view.key_count,
+               animation_tracks, animation_view.track_count,
+               animation_transforms, animation_view.transform_count,
+               animation_visibility, animation_view.transform_count,
+               &materialized_animation) < 0 ||
+           materialized_animation.clip.transform_count !=
+               animation->clip.transform_count) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+    }
     if(prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
         goto out;
     *asset_bytes = blob_bytes;
     result = 0;
 
 out:
+    free(animation_visibility);
+    free(animation_transforms);
+    free(animation_tracks);
+    free(animation_keys);
     free(shape_deltas);
     free(shape_targets);
     free(skin_weights);
@@ -2533,6 +2626,11 @@ int main(int argc, char **argv) {
     pvr_chunk_shape_delta_t morph_delta = { 0 };
     pvr_chunk_shape_target_t morph_shape_target = { 0 };
     pvr_chunk_shape_set_t morph_shapes = { 0 };
+    anim_vector_key_t animation_keys[2] = { 0 };
+    anim_track_view_t animation_track = { 0 };
+    anim_transform_tracks_t animation_transform = { 0 };
+    anim_visibility_tracks_t animation_visibility = { 0 };
+    anim_clip_view_t animation_clip = { 0 };
     pvr_chunk_model_info_t info;
     temporary_output_t vertex_temporary = { 0 };
     temporary_output_t polygon_temporary = { 0 };
@@ -2556,6 +2654,8 @@ int main(int argc, char **argv) {
     int rigid_skin = 0;
     int morph_target = 0;
     float morph_offset[3] = { 0.0f, 0.0f, 0.0f };
+    int animation_offset_set = 0;
+    float animation_offset[3] = { 0.0f, 0.0f, 0.0f };
     int texture_identifier = -1;
     int argument = 1;
     int result = 2;
@@ -2696,6 +2796,23 @@ int main(int argc, char **argv) {
             argument += 4;
             continue;
         }
+        else if(!strcmp(argv[argument], "--animation-offset")) {
+            if(argument + 3 >= argc || animation_offset_set ||
+               parse_float_token(argv[argument + 1],
+                                 animation_offset + 0) < 0 ||
+               parse_float_token(argv[argument + 2],
+                                 animation_offset + 1) < 0 ||
+               parse_float_token(argv[argument + 3],
+                                 animation_offset + 2) < 0) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            animation_offset_set = 1;
+            argument += 4;
+            continue;
+        }
         else {
             usage(stderr, argv[0]);
             material_table_free(&materials);
@@ -2733,6 +2850,14 @@ int main(int argc, char **argv) {
     if(morph_target && !section_directory) {
         fprintf(stderr,
                 "--morph-target requires --emit-asset --section-directory\n");
+        material_table_free(&materials);
+        material_library_free(&library);
+        return 2;
+    }
+    if(animation_offset_set && !scene_root) {
+        fprintf(stderr,
+                "--animation-offset requires --emit-asset "
+                "--section-directory --scene-root\n");
         material_table_free(&materials);
         material_library_free(&library);
         return 2;
@@ -2893,6 +3018,34 @@ int main(int argc, char **argv) {
         morph_shapes.targets = &morph_shape_target;
         morph_shapes.target_count = 1;
     }
+    if(animation_offset_set) {
+        animation_keys[0].time = 0.0f;
+        animation_keys[0].value.w = 1.0f;
+        animation_keys[1].time = 1.0f;
+        animation_keys[1].value.x = animation_offset[0];
+        animation_keys[1].value.y = animation_offset[1];
+        animation_keys[1].value.z = animation_offset[2];
+        animation_keys[1].value.w = 1.0f;
+        animation_track.track.kind = ANIM_VALUE_VECTOR;
+        animation_track.track.interpolation = ANIM_INTERPOLATION_LINEAR;
+        animation_track.track.keys = animation_keys;
+        animation_track.track.key_count = 2;
+        animation_track.track.stride = sizeof(animation_keys[0]);
+        animation_track.start_time = 0.0f;
+        animation_track.end_time = 1.0f;
+        animation_transform.translation = &animation_track;
+        animation_transform.fallback.translation.w = 1.0f;
+        animation_transform.fallback.rotation.w = 1.0f;
+        animation_transform.fallback.scale.x = 1.0f;
+        animation_transform.fallback.scale.y = 1.0f;
+        animation_transform.fallback.scale.z = 1.0f;
+        animation_visibility.fallback = true;
+        animation_clip.clip.transforms = &animation_transform;
+        animation_clip.clip.transform_count = 1;
+        animation_clip.clip.start_time = 0.0f;
+        animation_clip.clip.end_time = 1.0f;
+        animation_clip.clip.visibility = &animation_visibility;
+    }
     if(c_symbol) {
         if(prepare_c_output(c_output, c_symbol, &streams,
                             &vertex_temporary) < 0) {
@@ -2911,6 +3064,7 @@ int main(int argc, char **argv) {
                                 scene_root ? &scene : NULL,
                                 rigid_skin ? &rigid_skin_data : NULL,
                                 morph_target ? &morph_shapes : NULL,
+                                animation_offset_set ? &animation_clip : NULL,
                                 &vertex_temporary, &asset_bytes) < 0) {
             fprintf(stderr, "asset preparation failed: %s\n",
                     strerror(errno));
@@ -2961,6 +3115,13 @@ int main(int argc, char **argv) {
             printf("morph_targets=%zu\n", morph_shapes.target_count);
             printf("morph_deltas=%zu\n",
                    morph_shape_target.delta_count);
+        }
+        if(animation_offset_set) {
+            printf("animation_transforms=%zu\n",
+                   animation_clip.clip.transform_count);
+            printf("animation_tracks=1\n");
+            printf("animation_keys=%zu\n",
+                   animation_track.track.key_count);
         }
     }
     result = 0;
