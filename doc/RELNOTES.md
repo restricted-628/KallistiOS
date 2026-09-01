@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added pointer-free PCM2 per-model metadata. Checked `PMT1` APIs bind every
+  canonical vertex/polygon pair to exact local bounds and typed optional-
+  section ordinals, cross-validate the complete table against its asset, and
+  load any model without allocation. The host converter now emits and reopens
+  this table for every section-directory asset.
 * Extended PCM2 from one model to a checked nonzero set of ordinal-paired
   vertex and polygon streams. New workspace and load APIs admit any model
   ordinal without allocation; the established single-model calls remain

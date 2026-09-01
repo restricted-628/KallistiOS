@@ -14,9 +14,11 @@ CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
 LDLIBS += -lm
 
 TARGET = pvr-model-convert
-SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c cgltf.c \
+SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c \
+	  pvr-model-table-ir.c cgltf.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model_table.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_render.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache_asset.c \

@@ -322,19 +322,27 @@ f 1/1/1 2/2/1 3/3/1
         section_count, directory_offset, directory_size, directory_crc = (
             struct.unpack_from("<4I", directory_bytes, 32)
         )
-        assert (section_count, directory_offset, directory_size) == (3, 64, 96)
+        assert (section_count, directory_offset, directory_size) == (
+            4, 64, 128
+        )
         assert zlib.crc32(
             directory_bytes[directory_offset:directory_offset + directory_size]
         ) == directory_crc
         vertex_descriptor = struct.unpack_from("<7IHH", directory_bytes, 64)
         polygon_descriptor = struct.unpack_from("<7IHH", directory_bytes, 96)
         resource_descriptor = struct.unpack_from("<7IHH", directory_bytes, 128)
+        model_table_descriptor = struct.unpack_from(
+            "<7IHH", directory_bytes, 160
+        )
         assert vertex_descriptor[0] == 1 and vertex_descriptor[1] == 0
         assert polygon_descriptor[0] == 2 and polygon_descriptor[1] == 0
         assert resource_descriptor[0] == 3 and resource_descriptor[1] == 0
+        assert model_table_descriptor[0] == 12 and \
+               model_table_descriptor[1] == 0
         assert vertex_descriptor[7:] == (0, 4)
         assert polygon_descriptor[7:] == (0, 2)
         assert resource_descriptor[7:] == (0, 4)
+        assert model_table_descriptor[7:] == (0, 4)
         assert directory_bytes[
             vertex_descriptor[2]:vertex_descriptor[2] + vertex_descriptor[3]
         ] == vertices.read_bytes()
@@ -356,6 +364,24 @@ f 1/1/1 2/2/1 3/3/1
         assert zlib.crc32(resource[:44]) == struct.unpack_from(
             "<I", resource, 44
         )[0]
+        model_table = directory_bytes[
+            model_table_descriptor[2]:model_table_descriptor[2] +
+            model_table_descriptor[3]
+        ]
+        assert model_table[:4] == b"PMT1"
+        assert struct.unpack_from("<HHIIH", model_table, 4) == (
+            1, 32, 96, 1, 64
+        )
+        assert zlib.crc32(model_table[32:]) == struct.unpack_from(
+            "<I", model_table, 20
+        )[0]
+        assert zlib.crc32(model_table[:28]) == struct.unpack_from(
+            "<I", model_table, 28
+        )[0]
+        assert struct.unpack_from("<10I", model_table, 32) == (
+            0, 0, 0, 0xffffffff, 0xffffffff, 0xffffffff,
+            0xffffffff, 0xffffffff, 0xffffffff, 0,
+        )
         cooked_asset = root / "triangle-cooked.pcm"
         result = invoke(
             converter,
@@ -368,7 +394,7 @@ f 1/1/1 2/2/1 3/3/1
         )
         assert result.returncode == 0, result.stderr
         cooked_asset_bytes = cooked_asset.read_bytes()
-        assert struct.unpack_from("<I", cooked_asset_bytes, 32)[0] == 4
+        assert struct.unpack_from("<I", cooked_asset_bytes, 32)[0] == 5
         cooked_descriptor = struct.unpack_from(
             "<7IHH", cooked_asset_bytes, 64 + 3 * 32
         )
@@ -406,7 +432,7 @@ f 1/1/1 2/2/1 3/3/1
             "vertex_codec=raw\nasset_container=pcm2\n"
             "hierarchy_nodes=1\n"
         )
-        assert struct.unpack_from("<I", scene_bytes, 32)[0] == 4
+        assert struct.unpack_from("<I", scene_bytes, 32)[0] == 5
         hierarchy_descriptor = struct.unpack_from(
             "<7IHH", scene_bytes, 64 + 3 * 32
         )
@@ -465,7 +491,7 @@ f 1/1/1 2/2/1 3/3/1
             "animation_tracks=1\n"
             "animation_keys=2\n"
         )
-        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 8
+        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 9
         skin_descriptor = struct.unpack_from(
             "<7IHH", skin_asset_bytes, 64 + 4 * 32
         )
@@ -650,7 +676,7 @@ f 1/1/1 2/2/1 3/3/1
         assert "material_definitions=2\n" in result.stdout
         assert "hierarchy_nodes=2\n" in result.stdout
         gltf_asset_bytes = gltf_asset.read_bytes()
-        assert struct.unpack_from("<I", gltf_asset_bytes, 32)[0] == 3
+        assert struct.unpack_from("<I", gltf_asset_bytes, 32)[0] == 4
         gltf_hierarchy_descriptor = struct.unpack_from(
             "<7IHH", gltf_asset_bytes, 64 + 2 * 32
         )
@@ -765,7 +791,7 @@ f 1/1/1 2/2/1 3/3/1
         assert "general_skin_weights=4\n" in result.stdout
         assert "skeleton_joints=2\n" in result.stdout
         gltf_skin_asset_bytes = gltf_skin_asset.read_bytes()
-        assert struct.unpack_from("<I", gltf_skin_asset_bytes, 32)[0] == 5
+        assert struct.unpack_from("<I", gltf_skin_asset_bytes, 32)[0] == 6
         gltf_skin_descriptor = struct.unpack_from(
             "<7IHH", gltf_skin_asset_bytes, 64 + 3 * 32
         )
@@ -850,7 +876,7 @@ f 1/1/1 2/2/1 3/3/1
         assert "morph_targets=1\n" in result.stdout
         assert "morph_deltas=1\n" in result.stdout
         gltf_morph_asset_bytes = gltf_morph_asset.read_bytes()
-        assert struct.unpack_from("<I", gltf_morph_asset_bytes, 32)[0] == 4
+        assert struct.unpack_from("<I", gltf_morph_asset_bytes, 32)[0] == 5
         gltf_morph_descriptor = struct.unpack_from(
             "<7IHH", gltf_morph_asset_bytes, 64 + 3 * 32
         )
@@ -927,7 +953,7 @@ f 1/1/1 2/2/1 3/3/1
         assert "animation_tracks=1\n" in result.stdout
         assert "animation_keys=2\n" in result.stdout
         gltf_animation_asset_bytes = gltf_animation_asset.read_bytes()
-        assert struct.unpack_from("<I", gltf_animation_asset_bytes, 32)[0] == 4
+        assert struct.unpack_from("<I", gltf_animation_asset_bytes, 32)[0] == 5
         gltf_animation_descriptor = struct.unpack_from(
             "<7IHH", gltf_animation_asset_bytes, 64 + 3 * 32
         )

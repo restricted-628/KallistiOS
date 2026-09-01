@@ -3428,6 +3428,7 @@ static int build_asset_blob(const output_streams_t *streams,
     uint8_t *volume_raw = NULL;
     uint8_t *resource_raw = NULL;
     uint8_t *cooked_raw = NULL;
+    uint8_t *model_table_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
@@ -3441,6 +3442,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t volume_bytes = 0;
     size_t resource_bytes = 0;
     size_t cooked_bytes = 0;
+    size_t model_table_bytes = 0;
     size_t section_count;
     size_t directory_bytes;
     size_t vertex_offset;
@@ -3453,6 +3455,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t volume_offset = 0;
     size_t resource_offset = 0;
     size_t cooked_offset = 0;
+    size_t model_table_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
@@ -3501,6 +3504,29 @@ static int build_asset_blob(const output_streams_t *streams,
                          animation, &animation_raw,
                          &animation_bytes) < 0)
         goto fail;
+    if(section_directory) {
+        pvr_chunk_model_table_record_t record;
+
+        memset(&record, 0, sizeof(record));
+        record.resource_ordinal = resource_raw ? 0 :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record.volume_ordinal = volume_raw ? 0 :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record.skin4_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record.skin_general_ordinal = skin_raw ? 0 :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record.skeleton_ordinal = skeleton_raw ? 0 :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record.morph_ordinal = shape_raw ? 0 :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record.cooked_cache_ordinal = cooked_raw ? 0 :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        memcpy(record.center, streams->center, sizeof(record.center));
+        record.radius = streams->radius;
+        if(pvr_scene_ir_serialize_model_table(
+               &record, 1, &model_table_raw, &model_table_bytes) < 0)
+            goto fail;
+    }
     vertex_stored = vertex_raw;
     vertex_stored_bytes = vertex_bytes;
 
@@ -3540,7 +3566,8 @@ static int build_asset_blob(const output_streams_t *streams,
                     (skin_raw ? 1u : 0u) +
                     (skeleton_raw ? 1u : 0u) +
                     (shape_raw ? 1u : 0u) +
-                    (animation_raw ? 1u : 0u);
+                    (animation_raw ? 1u : 0u) +
+                    (model_table_raw ? 1u : 0u);
     if(section_count > SIZE_MAX / PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES) {
         errno = EOVERFLOW;
         goto fail;
@@ -3624,6 +3651,14 @@ static int build_asset_blob(const output_streams_t *streams,
         }
         file_bytes = animation_offset + animation_bytes;
     }
+    if(model_table_raw) {
+        if(align_size_32(file_bytes, &model_table_offset) < 0 ||
+           model_table_offset > SIZE_MAX - model_table_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = model_table_offset + model_table_bytes;
+    }
     if(file_bytes > UINT32_MAX) {
         errno = EOVERFLOW;
         goto fail;
@@ -3653,6 +3688,9 @@ static int build_asset_blob(const output_streams_t *streams,
         memcpy(blob + shape_offset, shape_raw, shape_bytes);
     if(animation_raw)
         memcpy(blob + animation_offset, animation_raw, animation_bytes);
+    if(model_table_raw)
+        memcpy(blob + model_table_offset, model_table_raw,
+               model_table_bytes);
 
     store_le32(blob + 8, (uint32_t)file_bytes);
     store_le32(blob + 16, float_word(streams->center[0]));
@@ -3758,6 +3796,15 @@ static int build_asset_blob(const output_streams_t *streams,
                 crc32_bytes(animation_raw, animation_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
+        if(model_table_raw) {
+            store_pcm2_section(
+                directory + descriptor_index++ *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_MODEL_TABLE,
+                model_table_offset, model_table_bytes, model_table_bytes,
+                crc32_bytes(model_table_raw, model_table_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
         if(descriptor_index != section_count) {
             errno = EILSEQ;
             goto fail;
@@ -3793,6 +3840,7 @@ static int build_asset_blob(const output_streams_t *streams,
     free(volume_raw);
     free(resource_raw);
     free(cooked_raw);
+    free(model_table_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -3811,6 +3859,7 @@ fail:
     free(volume_raw);
     free(resource_raw);
     free(cooked_raw);
+    free(model_table_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
@@ -3913,6 +3962,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_section_t volume_section;
     pvr_chunk_asset_section_t resource_section;
     pvr_chunk_asset_section_t cooked_section;
+    pvr_chunk_asset_section_t model_table_section;
     pvr_chunk_model_view_t model_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
@@ -3925,6 +3975,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_volume_section_view_t volume_view;
     pvr_chunk_resource_section_view_t resource_view;
     pvr_chunk_cache_section_view_t cooked_view;
+    pvr_chunk_model_table_view_t model_table_view;
     pvr_chunk_cache_section_requirements_t cooked_requirements;
     pvr_chunk_model_cache_t cooked_cache;
     anim_clip_view_t materialized_animation;
@@ -3948,6 +3999,7 @@ static int prepare_asset_output(const char *target,
     const void *volume_data = NULL;
     const void *resource_data = NULL;
     const void *cooked_data = NULL;
+    const void *model_table_data = NULL;
     void *workspace = NULL;
     void *cooked_storage = NULL;
     size_t workspace_allocation = 0;
@@ -3975,6 +4027,19 @@ static int prepare_asset_output(const char *target,
                             &model_view) < 0)
         goto out;
     if(section_directory) {
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_MODEL_TABLE,
+               &model_table_section, &model_table_data) < 0 ||
+           pvr_chunk_model_table_open(
+               model_table_data, model_table_section.decoded_bytes,
+               &model_table_view) < 0 ||
+           pvr_chunk_model_table_validate_asset(
+               &model_table_view, &asset_view) < 0 ||
+           pvr_chunk_model_table_load(
+               &model_table_view, &asset_view, 0,
+               pvr_chunk_asset_lz4_decode, NULL, workspace,
+               workspace_allocation, &model_view) < 0)
+            goto out;
         if(load_raw_section_type(
                &asset_view, PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE,
                &resource_section, &resource_data) == 0) {

@@ -132,6 +132,13 @@ larger than PCM1 and is intended as the host-pipeline base for optional
 resource, deformation, hierarchy, animation, collision, cache, or application
 sections; models which need none of those should keep PCM1.
 
+Every converter-produced PCM2 also carries one pointer-free `PMT1` model
+table. Each record associates a model ordinal with its exact local bounding
+sphere and the typed optional-section ordinals owned by that model. The
+converter reopens and cross-validates this table against the complete PCM2
+directory before publishing the asset. Target-side table query and load calls
+use caller-owned workspace and allocate nothing.
+
 `--cooked-cache` adds a pointer-free `PCC1` ordinary prepared-cache section to
 PCM2. The converter builds it through the target cache planner, serializes it,
 reopens it, and materializes it before publishing the asset. It is opt-in

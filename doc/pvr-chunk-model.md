@@ -208,6 +208,17 @@ sphere is conservative for every model, so multi-model loading is correct even
 before a pipeline supplies narrower per-model metadata. PCM1 exposes one model
 through the same contract.
 
+Host-produced PCM2 files additionally carry one pointer-free `PMT1` model
+table. Its fixed 64-byte record maps each model ordinal to the canonical
+vertex/polygon pair, exact finite local sphere, and zero-based ordinals for
+that model's optional resource, volume, compact skin, general skin, skeleton,
+morph, and cooked-cache sections. `UINT32_MAX` denotes an absent optional
+section. Header and payload CRCs, reserved fields, canonical pair ordinals,
+model count, bounds, and every referenced section type are admitted before a
+record can be used. `pvr_chunk_model_table_workspace_query()` and
+`pvr_chunk_model_table_load()` remain allocation-free and replace the
+container-wide conservative sphere with the selected model's exact bounds.
+
 Resource tables, volume data, compact or general skins, skeleton bindings,
 morph targets, hierarchies, animations, cooked caches, and application-defined
 sections are optional; repeatable types are addressed by zero-based ordinal
@@ -241,8 +252,9 @@ second loading path.
 The model converter continues emitting PCM1 by default because it is smaller
 for a model with only two streams. `--section-directory` emits an admitted
 PCM2 container when a content pipeline intends to append optional sections;
-it composes with raw or LZ4-framed vertex storage. The converter reopens and
-loads either output through the runtime parser before publishing the file.
+it composes with raw or LZ4-framed vertex storage and always writes the `PMT1`
+model table. The converter reopens, cross-validates, and loads either output
+through the runtime parser before publishing the file.
 When PCM2 input polygon data contains compact volume records, the converter
 also writes a `PVL1` volume-data section automatically. The host serializer
 copies the admitted records exactly, and the converter reloads the resulting
