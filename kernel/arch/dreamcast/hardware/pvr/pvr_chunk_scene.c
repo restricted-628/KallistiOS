@@ -69,13 +69,15 @@ static int ranges_overlap(const void *left, size_t left_bytes,
            right_start < left_start + left_bytes;
 }
 
-static int decode_node(const uint8_t *record, size_t index,
+static int decode_node(const uint8_t *record, size_t index, uint16_t version,
                        pvr_chunk_scene_node_t *node) {
     uint32_t parent = read_le32(record + NODE_PARENT_OFFSET);
     uint32_t model = read_le32(record + NODE_MODEL_OFFSET);
+    uint32_t flags = read_le32(record + NODE_FLAGS_OFFSET);
     size_t component;
 
-    if(read_le32(record + NODE_FLAGS_OFFSET) ||
+    if((version == PVR_CHUNK_SCENE_HIERARCHY_VERSION_1 && flags) ||
+       (flags & ~PVR_CHUNK_NODE_FLAGS_MASK) ||
        read_le32(record + NODE_RESERVED_OFFSET) ||
        (parent != UINT32_MAX && parent >= index)) {
         errno = EILSEQ;
@@ -85,6 +87,7 @@ static int decode_node(const uint8_t *record, size_t index,
     node->parent_index = parent == UINT32_MAX ? PVR_CHUNK_NODE_NONE : parent;
     node->model_ordinal = model == PVR_CHUNK_SCENE_MODEL_NONE ?
                           PVR_CHUNK_NODE_NONE : model;
+    node->flags = flags;
     for(component = 0; component < 16; ++component) {
         float value = read_le_float(
             record + NODE_MATRIX_OFFSET + component * sizeof(uint32_t));
@@ -106,6 +109,7 @@ int pvr_chunk_scene_hierarchy_open(
     pvr_chunk_scene_node_t node;
     uint32_t file_bytes;
     uint32_t node_count;
+    uint16_t version;
     uint16_t node_stride;
     size_t node_bytes;
     size_t index;
@@ -118,11 +122,17 @@ int pvr_chunk_scene_hierarchy_open(
     }
     if(size < PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES ||
        read_le32(bytes) != PVR_CHUNK_SCENE_HIERARCHY_MAGIC ||
-       read_le16(bytes + 4) != PVR_CHUNK_SCENE_HIERARCHY_VERSION ||
        read_le16(bytes + 6) != PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES ||
        read_le16(bytes + 18) || read_le32(bytes + 24) ||
        read_le32(bytes + HEADER_CRC_OFFSET) !=
            crc32_bytes(bytes, HEADER_CRC_BYTES)) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    version = read_le16(bytes + 4);
+    if(version != PVR_CHUNK_SCENE_HIERARCHY_VERSION_1 &&
+       version != PVR_CHUNK_SCENE_HIERARCHY_VERSION) {
         errno = EILSEQ;
         return -1;
     }
@@ -150,7 +160,7 @@ int pvr_chunk_scene_hierarchy_open(
     for(index = 0; index < node_count; ++index) {
         if(decode_node(bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES +
                            index * node_stride,
-                       index, &node) < 0)
+                       index, version, &node) < 0)
             return -1;
     }
 
@@ -160,7 +170,7 @@ int pvr_chunk_scene_hierarchy_open(
     parsed.nodes = bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES;
     parsed.node_count = node_count;
     parsed.node_stride = node_stride;
-    parsed.version = PVR_CHUNK_SCENE_HIERARCHY_VERSION;
+    parsed.version = version;
     *view = parsed;
     return 0;
 }
@@ -184,7 +194,7 @@ int pvr_chunk_scene_hierarchy_node_get(
     }
     return decode_node(
         (const uint8_t *)checked.nodes + index * checked.node_stride,
-        index, node);
+        index, checked.version, node);
 }
 
 int pvr_chunk_scene_hierarchy_bind(
@@ -229,7 +239,7 @@ int pvr_chunk_scene_hierarchy_bind(
 
         if(decode_node((const uint8_t *)checked.nodes +
                            index * checked.node_stride,
-                       index, &node) < 0)
+                       index, checked.version, &node) < 0)
             return -1;
         if(node.model_ordinal != PVR_CHUNK_NODE_NONE &&
            (node.model_ordinal >= model_count ||
@@ -244,7 +254,7 @@ int pvr_chunk_scene_hierarchy_bind(
 
         if(decode_node((const uint8_t *)checked.nodes +
                            index * checked.node_stride,
-                       index, &node) < 0)
+                       index, checked.version, &node) < 0)
             return -1;
         nodes[index].model = node.model_ordinal == PVR_CHUNK_NODE_NONE ?
                              NULL : models[node.model_ordinal];
@@ -252,6 +262,7 @@ int pvr_chunk_scene_hierarchy_bind(
                sizeof(matrix_t));
         nodes[index].parent_index = node.parent_index;
         nodes[index].user_data = NULL;
+        nodes[index].flags = node.flags;
     }
     hierarchy->nodes = nodes;
     hierarchy->node_count = checked.node_count;

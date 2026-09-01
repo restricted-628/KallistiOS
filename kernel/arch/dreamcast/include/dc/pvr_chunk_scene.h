@@ -32,8 +32,11 @@ __BEGIN_DECLS
 /** \brief Little-endian bytes `PCH1` at the start of a hierarchy section. */
 #define PVR_CHUNK_SCENE_HIERARCHY_MAGIC UINT32_C(0x31484350)
 
-/** \brief Current serialized hierarchy-section version. */
-#define PVR_CHUNK_SCENE_HIERARCHY_VERSION 1u
+/** \brief Legacy hierarchy version with a reserved zero flags word. */
+#define PVR_CHUNK_SCENE_HIERARCHY_VERSION_1 1u
+
+/** \brief Current hierarchy version with explicit node policy flags. */
+#define PVR_CHUNK_SCENE_HIERARCHY_VERSION 2u
 
 /** \brief Fixed hierarchy header size in bytes. */
 #define PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES 32u
@@ -59,13 +62,15 @@ typedef struct pvr_chunk_scene_node {
     size_t parent_index;   /**< PVR_CHUNK_NODE_NONE for a root. */
     size_t model_ordinal;  /**< PVR_CHUNK_NODE_NONE for transform-only. */
     matrix_t local_transform;
+    uint32_t flags;        /**< PVR_CHUNK_NODE_* evaluation policy. */
 } pvr_chunk_scene_node_t;
 
 /** \brief Parse and completely validate a serialized hierarchy section.
 
-    Nodes must be in parent-before-child order, reserved fields must be zero,
-    every matrix component must be finite, and both the header and node array
-    must match their checksums. The entire section is admitted before \a view
+    Nodes must be in parent-before-child order, every matrix component must be
+    finite, and both the header and node array must match their checksums.
+    Section version 1 requires a zero flags word; version 2 admits only
+    documented node-policy bits. The entire section is admitted before \a view
     is published.
 
     \retval 0 Success.

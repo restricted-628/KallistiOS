@@ -23,6 +23,7 @@ __BEGIN_DECLS
 #include <stddef.h>
 #include <stdint.h>
 
+#include <dc/animation.h>
 #include <dc/matrix.h>
 
 /** \defgroup pvr_chunk_model Compact PVR models
@@ -439,16 +440,41 @@ typedef struct pvr_chunk_volume_iterator {
 /** \brief Sentinel identifying a root node in a compact-model hierarchy. */
 #define PVR_CHUNK_NODE_NONE SIZE_MAX
 
+/** \brief Evaluation policy attached to one hierarchy node. */
+typedef enum pvr_chunk_hierarchy_node_flags {
+    /** Remove translation from caller-supplied TRS poses. */
+    PVR_CHUNK_NODE_SUPPRESS_TRANSLATION = 1u << 0,
+    /** Replace caller-supplied TRS rotation with identity. */
+    PVR_CHUNK_NODE_SUPPRESS_ROTATION = 1u << 1,
+    /** Replace caller-supplied TRS scale with one. */
+    PVR_CHUNK_NODE_SUPPRESS_SCALE = 1u << 2,
+    /** Compose the node but do not invoke the visit callback for it. */
+    PVR_CHUNK_NODE_HIDDEN = 1u << 3,
+    /** Compose and visit the node, but skip all of its descendants. */
+    PVR_CHUNK_NODE_PRUNE_CHILDREN = 1u << 4
+} pvr_chunk_hierarchy_node_flags_t;
+
+/** \brief Mask of every admitted hierarchy-node policy bit. */
+#define PVR_CHUNK_NODE_FLAGS_MASK \
+    (PVR_CHUNK_NODE_SUPPRESS_TRANSLATION | \
+     PVR_CHUNK_NODE_SUPPRESS_ROTATION | \
+     PVR_CHUNK_NODE_SUPPRESS_SCALE | PVR_CHUNK_NODE_HIDDEN | \
+     PVR_CHUNK_NODE_PRUNE_CHILDREN)
+
 /** \brief One caller-owned node in parent-before-child order.
 
     A NULL model creates a transform-only grouping node. Non-NULL model views
-    and their source streams must remain immutable during traversal.
+    and their source streams must remain immutable during traversal. Hidden
+    and prune-children flags apply to every traversal. Component-suppression
+    flags are applied by the TRS-pose traversal; static and matrix-override
+    producers must canonicalize those choices before supplying a matrix.
 */
 typedef struct pvr_chunk_hierarchy_node {
     const pvr_chunk_model_view_t *model;
     matrix_t local_transform;
     size_t parent_index;
     const void *user_data;
+    uint32_t flags;
 } pvr_chunk_hierarchy_node_t;
 
 /** \brief Bounded caller-owned hierarchy description. */
@@ -457,7 +483,11 @@ typedef struct pvr_chunk_hierarchy {
     size_t node_count;
 } pvr_chunk_hierarchy_t;
 
-/** \brief Traversal progress published on completion or callback stop. */
+/** \brief Traversal progress published on completion or callback stop.
+
+    This counts composed nodes. Hidden nodes count because their world matrix
+    is available to children; descendants suppressed by an ancestor do not.
+*/
 typedef struct pvr_chunk_hierarchy_result {
     size_t visited_nodes;
 } pvr_chunk_hierarchy_result_t;
@@ -683,6 +713,29 @@ int pvr_chunk_hierarchy_traverse(
 int pvr_chunk_hierarchy_traverse_transforms(
     const pvr_chunk_hierarchy_t *hierarchy,
     const matrix_t *local_transforms, size_t local_capacity,
+    const matrix_t *root_transform,
+    matrix_t *world_matrices, size_t world_capacity,
+    pvr_chunk_hierarchy_visit_t visit, void *data,
+    pvr_chunk_hierarchy_result_t *result);
+
+/** \brief Compose a hierarchy from caller-supplied TRS poses.
+
+    This path applies each node's translation, rotation, and scale suppression
+    bits before building its local matrix. Hidden nodes still publish a world
+    matrix for their children but do not invoke \p visit. A prune-children node
+    is composed and visited normally; every descendant is skipped regardless
+    of array adjacency, and its world-matrix slot remains unchanged.
+
+    The complete hierarchy and pose array are validated before the first
+    callback or workspace write. Pose and world arrays must not overlap.
+
+    \retval 0  Every non-pruned node was composed.
+    \retval 1  A callback requested a successful early stop.
+    \retval -1 Invalid input, arithmetic failure, or callback failure.
+*/
+int pvr_chunk_hierarchy_traverse_poses(
+    const pvr_chunk_hierarchy_t *hierarchy,
+    const anim_transform_t *local_poses, size_t local_capacity,
     const matrix_t *root_transform,
     matrix_t *world_matrices, size_t world_capacity,
     pvr_chunk_hierarchy_visit_t visit, void *data,

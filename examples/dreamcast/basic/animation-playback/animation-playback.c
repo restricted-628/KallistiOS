@@ -112,7 +112,7 @@ int main(int argc, char **argv) {
     anim_light_tracks_t light_tracks;
     pvr_chunk_hierarchy_node_t nodes[2];
     pvr_chunk_hierarchy_t hierarchy = { nodes, 2 };
-    alignas(32) matrix_t local[2];
+    anim_transform_t local[2];
     alignas(32) matrix_t world[2];
     alignas(32) matrix_t view_matrix;
     alignas(32) matrix_t projection_matrix;
@@ -189,9 +189,9 @@ int main(int argc, char **argv) {
         anim_playback_result_t advance;
         anim_event_result_t event_result;
 
-        assert(anim_clip_sample_matrices(&clip_view, playback.time,
-                                         local, 2, NULL) == 0);
-        assert(pvr_chunk_hierarchy_traverse_transforms(
+        assert(anim_clip_sample(&clip_view, playback.time,
+                                local, 2, NULL) == 0);
+        assert(pvr_chunk_hierarchy_traverse_poses(
                    &hierarchy, local, 2, NULL, world, 2,
                    NULL, NULL, NULL) == 0);
         assert(anim_clip_sample_visibility(&clip_view, playback.time,

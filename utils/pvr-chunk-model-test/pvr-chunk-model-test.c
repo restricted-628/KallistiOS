@@ -16,6 +16,12 @@
 
 #define VERTEX_HEADER(type, size) ((uint32_t)(type) | ((uint32_t)(size) << 16))
 
+#ifndef __DREAMCAST__
+void mat_apply(const matrix_t *matrix) {
+    (void)matrix;
+}
+#endif
+
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.00002f;
 }
@@ -763,6 +769,7 @@ typedef struct visit_log {
     size_t stop_after;
     size_t fail_after;
     int fail_errno;
+    size_t node_index[3];
     float translation[3][3];
 } visit_log_t;
 
@@ -771,8 +778,8 @@ static int log_visit(size_t node_index,
                      const matrix_t *world, void *data) {
     visit_log_t *log = data;
 
-    assert(node_index == log->count);
     assert(node->user_data == (const void *)(uintptr_t)(node_index + 1u));
+    log->node_index[log->count] = node_index;
     log->translation[log->count][0] = (*world)[3][0];
     log->translation[log->count][1] = (*world)[3][1];
     log->translation[log->count][2] = (*world)[3][2];
@@ -795,6 +802,7 @@ static void test_hierarchy(void) {
     alignas(32) matrix_t animated[3];
     alignas(32) matrix_t unchanged[3];
     alignas(32) matrix_t root;
+    anim_transform_t poses[3];
     pvr_chunk_hierarchy_result_t result;
     visit_log_t log = { 0 };
 
@@ -843,6 +851,55 @@ static void test_hierarchy(void) {
     assert(log.translation[2][0] == 10.0f &&
            log.translation[2][1] == 0.0f &&
            log.translation[2][2] == 34.0f);
+
+    memset(poses, 0, sizeof(poses));
+    for(size_t i = 0; i < 3; ++i) {
+        poses[i].rotation.w = 1.0f;
+        poses[i].scale.x = 1.0f;
+        poses[i].scale.y = 1.0f;
+        poses[i].scale.z = 1.0f;
+    }
+    poses[0].translation.x = 10.0f;
+    poses[1].translation.y = 20.0f;
+    poses[1].scale.x = 3.0f;
+    poses[1].scale.y = 3.0f;
+    poses[1].scale.z = 3.0f;
+    poses[2].translation.z = 30.0f;
+    poses[2].rotation.w = 0.0f;
+    poses[2].rotation.z = 1.0f;
+    nodes[0].flags = PVR_CHUNK_NODE_SUPPRESS_TRANSLATION;
+    nodes[1].flags = PVR_CHUNK_NODE_SUPPRESS_SCALE;
+    nodes[2].flags = PVR_CHUNK_NODE_SUPPRESS_ROTATION;
+    memset(&log, 0, sizeof(log));
+    assert(pvr_chunk_hierarchy_traverse_poses(
+               &hierarchy, poses, 3, &root, world, 3,
+               log_visit, &log, &result) == 0);
+    assert(result.visited_nodes == 3 && log.count == 3);
+    assert(log.translation[0][0] == 0.0f &&
+           log.translation[0][2] == 4.0f);
+    assert(log.translation[1][0] == 0.0f &&
+           log.translation[1][1] == 20.0f &&
+           world[1][0][0] == 1.0f);
+    assert(log.translation[2][0] == 0.0f &&
+           log.translation[2][2] == 34.0f &&
+           world[2][0][0] == 1.0f && world[2][1][1] == 1.0f);
+    nodes[0].flags = 0;
+    nodes[1].flags = 0;
+    nodes[2].flags = 0;
+
+    nodes[1].flags = PVR_CHUNK_NODE_HIDDEN |
+                     PVR_CHUNK_NODE_PRUNE_CHILDREN;
+    nodes[2].parent_index = 1;
+    memset(world, 0x5a, sizeof(world));
+    memset(&log, 0, sizeof(log));
+    assert(pvr_chunk_hierarchy_traverse(
+               &hierarchy, NULL, world, 3, log_visit, &log, &result) == 0);
+    assert(result.visited_nodes == 2 && log.count == 1 &&
+           log.node_index[0] == 0);
+    for(size_t byte = 0; byte < sizeof(world[2]); ++byte)
+        assert(((const uint8_t *)&world[2])[byte] == UINT8_C(0x5a));
+    nodes[1].flags = 0;
+    nodes[2].parent_index = 0;
 
     /* Exact in-place composition is useful when the sampled local pose no
        longer needs to be retained after hierarchy evaluation. */
@@ -902,6 +959,13 @@ static void test_hierarchy(void) {
     assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 2,
                                         NULL, NULL, &result) == -1);
     assert(errno == ENOSPC && result.visited_nodes == 0);
+
+    nodes[2].flags = UINT32_C(0x80000000);
+    errno = 0;
+    assert(pvr_chunk_hierarchy_traverse(&hierarchy, NULL, world, 3,
+                                        NULL, NULL, &result) == -1);
+    assert(errno == EILSEQ && result.visited_nodes == 0);
+    nodes[2].flags = 0;
 
     nodes[1].local_transform[0][0] = NAN;
     errno = 0;

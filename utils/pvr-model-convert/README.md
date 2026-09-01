@@ -169,10 +169,11 @@ The converter reloads the section and proves it exactly matches the admitted
 model. Paths, material names, surfaces, and VRAM addresses remain outside the
 runtime asset, and an untextured model receives no resource section.
 
-`--scene-root` adds one admitted hierarchy section to PCM2. Its root has an
-identity local transform and references model ordinal zero, proving the same
-host-IR, serialization, generic section-loading, and target binding path that
-multi-node scene importers use without inventing a second runtime hierarchy.
+`--scene-root` adds one admitted PCH1 version 2 hierarchy section to PCM2. Its
+root has an identity local transform and references model ordinal zero, proving
+the same host-IR, serialization, generic section-loading, and target binding
+path that multi-node scene importers use without inventing a second runtime
+hierarchy.
 The option deliberately requires `--section-directory`; it is a pipeline
 integration primitive, not an implicit scene graph wrapped around ordinary
 PCM1 output.

@@ -40,6 +40,11 @@ static void write_le32(uint8_t *bytes, uint32_t value) {
     bytes[3] = (uint8_t)(value >> 24);
 }
 
+static void write_le16(uint8_t *bytes, uint16_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+}
+
 static void refresh_checksums(uint8_t *bytes, size_t size) {
     write_le32(bytes + 20, crc32_bytes(
         bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES,
@@ -66,25 +71,35 @@ static void test_round_trip(void) {
     size_t size = 0;
 
     assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
-    assert(pvr_scene_ir_add_node(&scene, 0, UINT32_MAX,
-                                 child_transform) == 0);
-    assert(pvr_scene_ir_add_node(&scene, 1, 1, child_transform) == 0);
+    assert(pvr_scene_ir_add_node_flags(
+               &scene, 0, UINT32_MAX, PVR_CHUNK_NODE_HIDDEN,
+               child_transform) == 0);
+    assert(pvr_scene_ir_add_node_flags(
+               &scene, 1, 1,
+               PVR_CHUNK_NODE_SUPPRESS_TRANSLATION |
+               PVR_CHUNK_NODE_PRUNE_CHILDREN,
+               child_transform) == 0);
     assert(pvr_scene_ir_serialize_hierarchy(&scene, &bytes, &size) == 0);
     assert(size == PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES +
                    3u * PVR_CHUNK_SCENE_HIERARCHY_NODE_BYTES);
     assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == 0);
-    assert(view.node_count == 3 &&
+    assert(view.version == PVR_CHUNK_SCENE_HIERARCHY_VERSION &&
+           view.node_count == 3 &&
            view.node_stride == PVR_CHUNK_SCENE_HIERARCHY_NODE_BYTES);
     assert(pvr_chunk_scene_hierarchy_node_get(&view, 1, &decoded) == 0);
     assert(decoded.parent_index == 0 &&
            decoded.model_ordinal == PVR_CHUNK_NODE_NONE &&
+           decoded.flags == PVR_CHUNK_NODE_HIDDEN &&
            ((float *)decoded.local_transform)[12] == 2.0f);
     assert(pvr_chunk_scene_hierarchy_bind(
                &view, models, 2, nodes, 3, &hierarchy) == 0);
     assert(hierarchy.nodes == nodes && hierarchy.node_count == 3);
     assert(nodes[0].model == &model0 &&
            nodes[1].model == NULL && nodes[2].model == &model1);
-    assert(nodes[2].parent_index == 1 && nodes[2].user_data == NULL);
+    assert(nodes[1].flags == PVR_CHUNK_NODE_HIDDEN &&
+           nodes[2].parent_index == 1 && nodes[2].user_data == NULL &&
+           nodes[2].flags == (PVR_CHUNK_NODE_SUPPRESS_TRANSLATION |
+                              PVR_CHUNK_NODE_PRUNE_CHILDREN));
 
     free(bytes);
     pvr_scene_ir_free(&scene);
@@ -102,6 +117,19 @@ static void test_rejections(void) {
 
     assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
     assert(pvr_scene_ir_serialize_hierarchy(&scene, &bytes, &size) == 0);
+
+    write_le16(bytes + 4, PVR_CHUNK_SCENE_HIERARCHY_VERSION_1);
+    refresh_checksums(bytes, size);
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == 0);
+    assert(view.version == PVR_CHUNK_SCENE_HIERARCHY_VERSION_1);
+    write_le32(bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES + 8,
+               PVR_CHUNK_NODE_HIDDEN);
+    refresh_checksums(bytes, size);
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == -1);
+    assert(errno == EILSEQ);
+    write_le32(bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES + 8, 0);
+    write_le16(bytes + 4, PVR_CHUNK_SCENE_HIERARCHY_VERSION);
+    refresh_checksums(bytes, size);
 
     bytes[32] ^= 1u;
     assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == -1);
@@ -153,6 +181,10 @@ static void test_ir_rejections(void) {
     assert(pvr_scene_ir_add_node(
                &scene, UINT32_MAX, 0, invalid) == -1);
     assert(errno == EDOM);
+    assert(pvr_scene_ir_add_node_flags(
+               &scene, UINT32_MAX, 0, UINT32_C(0x80000000),
+               identity) == -1);
+    assert(errno == EINVAL);
     pvr_scene_ir_free(&scene);
 }
 

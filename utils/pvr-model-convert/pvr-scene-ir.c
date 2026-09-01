@@ -409,15 +409,17 @@ void pvr_scene_ir_free(pvr_scene_ir_t *scene) {
     memset(scene, 0, sizeof(*scene));
 }
 
-int pvr_scene_ir_add_node(pvr_scene_ir_t *scene, uint32_t parent_index,
-                          uint32_t model_ordinal,
-                          const float local_transform[16]) {
+int pvr_scene_ir_add_node_flags(pvr_scene_ir_t *scene,
+                                uint32_t parent_index,
+                                uint32_t model_ordinal, uint32_t flags,
+                                const float local_transform[16]) {
     pvr_scene_ir_node_t *resized;
     size_t component;
     size_t capacity;
 
     if(!scene || !local_transform || scene->node_count >= UINT32_MAX ||
-       (parent_index != UINT32_MAX && parent_index >= scene->node_count)) {
+       (parent_index != UINT32_MAX && parent_index >= scene->node_count) ||
+       (flags & ~PVR_CHUNK_NODE_FLAGS_MASK)) {
         errno = EINVAL;
         return -1;
     }
@@ -445,10 +447,18 @@ int pvr_scene_ir_add_node(pvr_scene_ir_t *scene, uint32_t parent_index,
 
     scene->nodes[scene->node_count].parent_index = parent_index;
     scene->nodes[scene->node_count].model_ordinal = model_ordinal;
+    scene->nodes[scene->node_count].flags = flags;
     memcpy(scene->nodes[scene->node_count].local_transform,
            local_transform, 16u * sizeof(float));
     ++scene->node_count;
     return 0;
+}
+
+int pvr_scene_ir_add_node(pvr_scene_ir_t *scene, uint32_t parent_index,
+                          uint32_t model_ordinal,
+                          const float local_transform[16]) {
+    return pvr_scene_ir_add_node_flags(scene, parent_index, model_ordinal, 0,
+                                       local_transform);
 }
 
 int pvr_scene_ir_add_root_model(pvr_scene_ir_t *scene,
@@ -475,7 +485,9 @@ int pvr_scene_ir_validate(const pvr_scene_ir_t *scene) {
         const pvr_scene_ir_node_t *node = scene->nodes + index;
         size_t component;
 
-        if(node->parent_index != UINT32_MAX && node->parent_index >= index) {
+        if((node->parent_index != UINT32_MAX &&
+            node->parent_index >= index) ||
+           (node->flags & ~PVR_CHUNK_NODE_FLAGS_MASK)) {
             errno = EILSEQ;
             return -1;
         }
@@ -533,6 +545,7 @@ int pvr_scene_ir_serialize_hierarchy(const pvr_scene_ir_t *scene,
 
         store_le32(record, node->parent_index);
         store_le32(record + 4, node->model_ordinal);
+        store_le32(record + 8, node->flags);
         for(component = 0; component < 16; ++component)
             store_float(record + 16 + component * sizeof(uint32_t),
                         node->local_transform[component]);

@@ -445,7 +445,7 @@ f 1/1/1 2/2/1 3/3/1
         ]
         assert hierarchy[:4] == b"PCH1"
         assert struct.unpack_from("<HHIIH", hierarchy, 4) == (
-            1, 32, 112, 1, 80
+            2, 32, 112, 1, 80
         )
         assert zlib.crc32(hierarchy[32:]) == struct.unpack_from(
             "<I", hierarchy, 20
@@ -688,6 +688,7 @@ f 1/1/1 2/2/1 3/3/1
             gltf_hierarchy_offset + gltf_hierarchy_size
         ]
         assert gltf_hierarchy[:4] == b"PCH1"
+        assert struct.unpack_from("<H", gltf_hierarchy, 4)[0] == 2
         assert struct.unpack_from("<I", gltf_hierarchy, 12)[0] == 2
         assert struct.unpack_from("<II", gltf_hierarchy, 32) == (
             0xffffffff, 0xffffffff

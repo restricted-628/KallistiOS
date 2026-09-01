@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Extended pointer-free compact hierarchies with backward-readable PCH1 v2 node
+  policy. Caller-owned nodes now preserve translation/rotation/scale
+  suppression, hidden evaluation, and descendant pruning. A new pose
+  traversal applies component suppression before matrix construction and uses
+  the established animation and hierarchy paths without allocation or matrix
+  decomposition.
+
 * Added pointer-free PCM2 morph-weight animation. Checked `PMW1` APIs bind one
   scalar track per sparse target to a specific hierarchy-node instance,
   cross-validate node/model/shape ownership, and materialize directly into the

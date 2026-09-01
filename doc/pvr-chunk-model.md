@@ -380,8 +380,21 @@ Dreamcast the composition path reaches SH4ZAM through `mat_compose()`; host
 tests retain the portable scalar implementation. A callback may continue,
 request a successful early stop, or report failure with errno.
 
-PCM2 hierarchy sections use a fixed little-endian, pointer-free `PCH1` record.
-Every node stores one parent index, model ordinal, and 4x4 local transform.
+Node policy remains explicit in the same caller-owned array. Hidden nodes are
+composed so their children retain the correct parent transform, but they do
+not invoke the visit callback. A prune-children node is composed and visited;
+all descendants are skipped even when the topological array does not store a
+subtree contiguously. Translation, rotation, and scale suppression applies to
+TRS poses through `pvr_chunk_hierarchy_traverse_poses()` before matrix
+construction. Static or already-built matrix inputs must have those component
+choices canonicalized by their producer, avoiding an ambiguous matrix
+decomposition for reflection, negative scale, or shear.
+
+PCM2 hierarchy sections use fixed little-endian, pointer-free `PCH1` records.
+Every node stores one parent index, model ordinal, policy word, and 4x4 local
+transform. Section version 1 remains readable and requires its legacy policy
+word to be zero; new host output uses version 2 and admits only documented
+policy bits.
 `pvr_chunk_scene_hierarchy_open()` verifies framing, reserved fields, header
 and node checksums, finite matrices, and parent-before-child order before
 publishing a view. `pvr_chunk_scene_hierarchy_bind()` then resolves ordinals
