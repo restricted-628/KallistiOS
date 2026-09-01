@@ -212,6 +212,11 @@ lifecycle and naming conventions.
   vertex and polygon sections, bounded workspace queries, header and decoded-
   stream CRCs, raw zero-copy loading, and optional codec callbacks. The model
   converter can emit raw assets or LZ4 Frame-compressed vertex partitions.
+* Added pointer-free PCM2 texture-resource manifests with sorted stable
+  identifiers, primary/secondary usage, complete model-integrity validation,
+  checked texture-table admission, and direct preparation through the existing
+  fixed-slot residency adapter. The converter emits and round-trips the
+  section automatically without storing paths, pointers, or VRAM ownership.
 * Bundled the unmodified BSD-2-Clause LZ4 1.10.0 library as an optional static
   addon, including its Frame and dictionary APIs and a strict compact-asset
   decoder callback. Applications that do not link it incur no runtime cost.

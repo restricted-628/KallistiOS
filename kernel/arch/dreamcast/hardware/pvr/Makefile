@@ -27,7 +27,8 @@ OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
 	pvr_chunk_model.o pvr_chunk_asset.o pvr_chunk_asset_io.o \
 	pvr_chunk_hierarchy.o pvr_chunk_scene.o pvr_chunk_render.o \
 	pvr_chunk_cache.o pvr_chunk_animation_asset.o \
-	pvr_chunk_volume_asset.o \
+	pvr_chunk_volume_asset.o pvr_chunk_resource_asset.o \
+	pvr_chunk_resource_binding.o \
 	pvr_chunk_skin.o pvr_chunk_skin_asset.o pvr_chunk_shape.o \
 	pvr_chunk_shape_asset.o \
 	pvr_chunk_binding.o pvr_lighting.o pvr_toon.o pvr_chunk_toon.o \

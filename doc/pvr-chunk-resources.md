@@ -26,6 +26,27 @@ immutable while a compact-model emission uses the view. Releasing or rebinding
 a surface first invalidates the application contract; KOS does not retain the
 surface or hide a reference-counted texture manager.
 
+## PCM2 resource manifests
+
+PCM2 assets may carry a pointer-free `PRT1` resource section. Its strictly
+sorted entries contain only the same stable 13-bit texture identifiers used by
+the polygon stream plus primary/secondary usage bits. It deliberately stores
+no path, live pointer, VRAM address, palette policy, or allocator state.
+
+`pvr_chunk_resource_section_open()` checks framing, reserved bytes, ordering,
+identifier ranges, and both checksums. The indexed accessor and binary search
+then allow loaders to enumerate requirements before model rendering.
+`pvr_chunk_resource_section_validate_model()` proves that the manifest exactly
+matches every texture record, while `validate_table()` proves that a caller's
+already-admitted surface table covers the manifest.
+
+Fixed-slot users can pass the same view to
+`pvr_chunk_resource_section_prepare_residency()`. It pins each identifier
+through the existing residency adapter and palette callback rather than
+creating another cache. Successful pins remain caller-owned and are released
+with `pvr_chunk_residency_binding_release()`. Applications which omit the
+section continue to use model scanning and pay no manifest storage or work.
+
 ## Material resolution
 
 `pvr_chunk_material_resolve()` copies an application-supplied polygon context,

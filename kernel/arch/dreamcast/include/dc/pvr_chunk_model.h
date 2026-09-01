@@ -69,6 +69,9 @@ typedef enum pvr_chunk_texture_type {
     PVR_CHUNK_TEXTURE_TWO_VOLUME = 9
 } pvr_chunk_texture_type_t;
 
+/** \brief Maximum texture identifier encoded by compact model records. */
+#define PVR_CHUNK_TEXTURE_IDENTIFIER_MAX UINT16_C(0x1fff)
+
 /** \brief Material record types. */
 typedef enum pvr_chunk_material_type {
     PVR_CHUNK_MATERIAL_DIFFUSE = 17,

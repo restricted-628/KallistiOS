@@ -320,22 +320,40 @@ f 1/1/1 2/2/1 3/3/1
         section_count, directory_offset, directory_size, directory_crc = (
             struct.unpack_from("<4I", directory_bytes, 32)
         )
-        assert (section_count, directory_offset, directory_size) == (2, 64, 64)
+        assert (section_count, directory_offset, directory_size) == (3, 64, 96)
         assert zlib.crc32(
             directory_bytes[directory_offset:directory_offset + directory_size]
         ) == directory_crc
         vertex_descriptor = struct.unpack_from("<7IHH", directory_bytes, 64)
         polygon_descriptor = struct.unpack_from("<7IHH", directory_bytes, 96)
+        resource_descriptor = struct.unpack_from("<7IHH", directory_bytes, 128)
         assert vertex_descriptor[0] == 1 and vertex_descriptor[1] == 0
         assert polygon_descriptor[0] == 2 and polygon_descriptor[1] == 0
+        assert resource_descriptor[0] == 3 and resource_descriptor[1] == 0
         assert vertex_descriptor[7:] == (0, 4)
         assert polygon_descriptor[7:] == (0, 2)
+        assert resource_descriptor[7:] == (0, 4)
         assert directory_bytes[
             vertex_descriptor[2]:vertex_descriptor[2] + vertex_descriptor[3]
         ] == vertices.read_bytes()
         assert directory_bytes[
             polygon_descriptor[2]:polygon_descriptor[2] + polygon_descriptor[3]
         ] == polygons.read_bytes()
+        resource = directory_bytes[
+            resource_descriptor[2]:resource_descriptor[2] +
+            resource_descriptor[3]
+        ]
+        assert resource[:4] == b"PRT1"
+        assert struct.unpack_from("<HHIIHHI", resource, 4) == (
+            1, 48, 56, 1, 8, 0, 8
+        )
+        assert struct.unpack_from("<HHI", resource, 48) == (7, 1, 0)
+        assert zlib.crc32(resource[48:]) == struct.unpack_from(
+            "<I", resource, 24
+        )[0]
+        assert zlib.crc32(resource[:44]) == struct.unpack_from(
+            "<I", resource, 44
+        )[0]
 
         scene_asset = root / "triangle-scene.pcm"
         result = invoke(
@@ -354,9 +372,9 @@ f 1/1/1 2/2/1 3/3/1
             "vertex_codec=raw\nasset_container=pcm2\n"
             "hierarchy_nodes=1\n"
         )
-        assert struct.unpack_from("<I", scene_bytes, 32)[0] == 3
+        assert struct.unpack_from("<I", scene_bytes, 32)[0] == 4
         hierarchy_descriptor = struct.unpack_from(
-            "<7IHH", scene_bytes, 64 + 2 * 32
+            "<7IHH", scene_bytes, 64 + 3 * 32
         )
         assert hierarchy_descriptor[0] == 8
         assert hierarchy_descriptor[7:] == (0, 4)
@@ -412,9 +430,9 @@ f 1/1/1 2/2/1 3/3/1
             "animation_tracks=1\n"
             "animation_keys=2\n"
         )
-        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 6
+        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 7
         skin_descriptor = struct.unpack_from(
-            "<7IHH", skin_asset_bytes, 64 + 3 * 32
+            "<7IHH", skin_asset_bytes, 64 + 4 * 32
         )
         assert skin_descriptor[0] == 6
         assert skin_descriptor[7:] == (0, 4)
@@ -441,7 +459,7 @@ f 1/1/1 2/2/1 3/3/1
         ) == ((0, 65535), (0, 65535), (0, 65535))
 
         shape_descriptor = struct.unpack_from(
-            "<7IHH", skin_asset_bytes, 64 + 4 * 32
+            "<7IHH", skin_asset_bytes, 64 + 5 * 32
         )
         assert shape_descriptor[0] == 7
         assert shape_descriptor[7:] == (0, 4)
@@ -464,7 +482,7 @@ f 1/1/1 2/2/1 3/3/1
         )
 
         animation_descriptor = struct.unpack_from(
-            "<7IHH", skin_asset_bytes, 64 + 5 * 32
+            "<7IHH", skin_asset_bytes, 64 + 6 * 32
         )
         assert animation_descriptor[0] == 9
         assert animation_descriptor[7:] == (0, 4)

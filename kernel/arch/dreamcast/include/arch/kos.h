@@ -72,6 +72,7 @@ __BEGIN_DECLS
 #include <dc/pvr_chunk_shape.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_chunk_volume_asset.h>
+#include <dc/pvr_chunk_resource_asset.h>
 #include <dc/pvr_deform.h>
 #include <dc/pvr_lighting.h>
 #include <dc/pvr_toon.h>

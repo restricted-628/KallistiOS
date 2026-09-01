@@ -769,6 +769,11 @@ static void test_residency_binding(void) {
         &binding, &cache, textures, handles, 2, NULL, NULL, &context,
         PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
     assert(binding.count == 0);
+    assert(pvr_chunk_residency_binding_prepare_identifier(&binding, 5) == 0);
+    assert(pvr_chunk_residency_binding_prepare_identifier(&binding, 5) == 0);
+    assert(binding.count == 1 && textures[0].identifier == 5 &&
+           slots[0].pin_count == 1);
+    assert(pvr_chunk_residency_binding_release(&binding) == 0);
     assert(pvr_chunk_residency_binding_prepare_model(&binding, &model) == 0);
     assert(binding.count == 2 && textures[0].identifier == 1
            && textures[1].identifier == 5);

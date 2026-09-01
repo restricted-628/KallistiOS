@@ -3,7 +3,9 @@
 This example converts a small OBJ at build time into one PCM2 compact-model
 asset. Its vertex partition is stored as a checksummed LZ4 Frame while the
 polygon/state partition remains raw and independently addressable. A portable
-hierarchy section carries one identity root referencing model ordinal zero,
+resource manifest lists texture identifier 7 and validates it against the
+admitted polygon stream before any surface is bound. A portable hierarchy
+section carries one identity root referencing model ordinal zero,
 with caller-owned general-skin, sparse-morph, and animation sections exercising
 the same generic directory loader.
 `bin2c` embeds the resulting asset only to keep the example self-contained.

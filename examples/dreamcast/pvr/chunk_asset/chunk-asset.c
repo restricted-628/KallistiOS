@@ -51,10 +51,13 @@ int main(void) {
     pvr_chunk_asset_view_t asset;
     pvr_chunk_asset_workspace_requirements_t requirements;
     pvr_chunk_asset_section_t hierarchy_section;
+    pvr_chunk_asset_section_t resource_section;
     pvr_chunk_asset_section_t skin_section;
     pvr_chunk_asset_section_t shape_section;
     pvr_chunk_asset_section_t animation_section;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
+    pvr_chunk_resource_section_view_t resource_view;
+    pvr_chunk_resource_entry_t resource_entry;
     pvr_chunk_skin_general_section_view_t skin_view;
     pvr_chunk_skin_span_t skin_spans[3];
     pvr_chunk_skin_weight_t skin_weights[3];
@@ -76,6 +79,7 @@ int main(void) {
     pvr_chunk_model_view_t model;
     const pvr_chunk_model_view_t *models[1];
     const void *hierarchy_data = NULL;
+    const void *resource_data = NULL;
     const void *skin_data = NULL;
     const void *shape_data = NULL;
     const void *animation_data = NULL;
@@ -133,9 +137,21 @@ int main(void) {
     models[0] = &model;
     if(pvr_chunk_asset_load(&asset, use_predecoded_section, &decoded,
                             workspace, allocation, &model) == 0 &&
-       pvr_chunk_asset_section_get(&asset, 2, &hierarchy_section) == 0 &&
-       hierarchy_section.type == PVR_CHUNK_ASSET_SECTION_HIERARCHY &&
+       pvr_chunk_asset_section_get(&asset, 2, &resource_section) == 0 &&
+       resource_section.type == PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE &&
        pvr_chunk_asset_section_load(&asset, 2, NULL, NULL, NULL, 0,
+                                    &resource_data) == 0 &&
+       pvr_chunk_resource_section_open(
+           resource_data, resource_section.decoded_bytes,
+           &resource_view) == 0 &&
+       pvr_chunk_resource_section_validate_model(
+           &resource_view, &model) == 0 &&
+       pvr_chunk_resource_section_find(
+           &resource_view, 7, &resource_entry) == 0 &&
+       resource_entry.usage == PVR_CHUNK_RESOURCE_PRIMARY &&
+       pvr_chunk_asset_section_get(&asset, 3, &hierarchy_section) == 0 &&
+       hierarchy_section.type == PVR_CHUNK_ASSET_SECTION_HIERARCHY &&
+       pvr_chunk_asset_section_load(&asset, 3, NULL, NULL, NULL, 0,
                                     &hierarchy_data) == 0 &&
        pvr_chunk_scene_hierarchy_open(
            hierarchy_data, hierarchy_section.decoded_bytes,
@@ -143,9 +159,9 @@ int main(void) {
        pvr_chunk_scene_hierarchy_bind(
            &hierarchy_view, models, 1, &hierarchy_node, 1,
            &hierarchy) == 0 &&
-       pvr_chunk_asset_section_get(&asset, 3, &skin_section) == 0 &&
+       pvr_chunk_asset_section_get(&asset, 4, &skin_section) == 0 &&
        skin_section.type == PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL &&
-       pvr_chunk_asset_section_load(&asset, 3, NULL, NULL, NULL, 0,
+       pvr_chunk_asset_section_load(&asset, 4, NULL, NULL, NULL, 0,
                                     &skin_data) == 0 &&
        pvr_chunk_skin_general_section_open(
            skin_data, skin_section.decoded_bytes, &skin_view) == 0 &&
@@ -156,9 +172,9 @@ int main(void) {
        hierarchy_node.parent_index == PVR_CHUNK_NODE_NONE &&
        skin.span_count == 3 && skin.weight_count == 3 &&
        skin.joint_count == 1 &&
-       pvr_chunk_asset_section_get(&asset, 4, &shape_section) == 0 &&
+       pvr_chunk_asset_section_get(&asset, 5, &shape_section) == 0 &&
        shape_section.type == PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS &&
-       pvr_chunk_asset_section_load(&asset, 4, NULL, NULL, NULL, 0,
+       pvr_chunk_asset_section_load(&asset, 5, NULL, NULL, NULL, 0,
                                     &shape_data) == 0 &&
        pvr_chunk_shape_section_open(
            shape_data, shape_section.decoded_bytes, &shape_view) == 0 &&
@@ -167,9 +183,9 @@ int main(void) {
        shapes.target_count == 1 && shape_target.delta_count == 1 &&
        shape_delta.vertex_index == 0 &&
        shape_delta.delta.position.x == 1.0f &&
-       pvr_chunk_asset_section_get(&asset, 5, &animation_section) == 0 &&
+       pvr_chunk_asset_section_get(&asset, 6, &animation_section) == 0 &&
        animation_section.type == PVR_CHUNK_ASSET_SECTION_ANIMATION &&
-       pvr_chunk_asset_section_load(&asset, 5, NULL, NULL, NULL, 0,
+       pvr_chunk_asset_section_load(&asset, 6, NULL, NULL, NULL, 0,
                                     &animation_data) == 0 &&
        pvr_chunk_animation_section_open(
            animation_data, animation_section.decoded_bytes,
@@ -185,11 +201,12 @@ int main(void) {
        animation_pose.translation.y == 2.0f &&
        animation_pose.translation.z == 3.0f) {
         printf("KOSPVRASSET loaded=1 service=1 vertices=%lu triangles=%lu "
-               "hierarchy=%lu skin=%lu morph=%lu animation=%lu "
+               "resources=%lu hierarchy=%lu skin=%lu morph=%lu animation=%lu "
                "workspace=%lu "
                "decoded=%lu\n",
                (unsigned long)model.info.vertex_entries,
                (unsigned long)model.info.triangles,
+               (unsigned long)resource_view.entry_count,
                (unsigned long)hierarchy.node_count,
                (unsigned long)skin.span_count,
                (unsigned long)shapes.target_count,

@@ -116,6 +116,13 @@ original triangle, quad, strip, winding, and user-word representation, reloads
 it through the target parser, and verifies every index against the model. No
 section is emitted when the model has no volumes.
 
+When a polygon stream references textures, PCM2 automatically receives a
+pointer-free `PRT1` resource manifest. It contains the unique sorted 13-bit
+identifiers and whether each appears in primary or secondary texture state.
+The converter reloads the section and proves it exactly matches the admitted
+model. Paths, material names, surfaces, and VRAM addresses remain outside the
+runtime asset, and an untextured model receives no resource section.
+
 `--scene-root` adds one admitted hierarchy section to PCM2. Its root has an
 identity local transform and references model ordinal zero, proving the same
 host-IR, serialization, generic section-loading, and target binding path that

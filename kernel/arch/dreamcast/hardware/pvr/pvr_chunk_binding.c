@@ -1250,6 +1250,17 @@ int pvr_chunk_residency_binding_prepare_model(
     return rv < 0 ? -1 : 0;
 }
 
+int pvr_chunk_residency_binding_prepare_identifier(
+        pvr_chunk_residency_binding_t *binding, uint16_t identifier) {
+    if(identifier > PVR_CHUNK_TEXTURE_IDENTIFIER_MAX) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(!residency_binding_entries_valid(binding))
+        return -1;
+    return residency_binding_acquire(binding, identifier);
+}
+
 int pvr_chunk_residency_binding_begin_strip(
         const pvr_chunk_render_state_t *state,
         const pvr_chunk_strip_view_t *strip, void *data) {

@@ -28,9 +28,6 @@ __BEGIN_DECLS
     @{
 */
 
-/** \brief Maximum asset texture identifier encoded by compact models. */
-#define PVR_CHUNK_TEXTURE_IDENTIFIER_MAX UINT16_C(0x1fff)
-
 /** \brief One caller-owned texture binding for compact-model material state.
 
     Bindings map an asset identifier to an existing checked PVR texture
@@ -358,6 +355,16 @@ int pvr_chunk_residency_binding_init(
 int pvr_chunk_residency_binding_prepare_model(
     pvr_chunk_residency_binding_t *binding,
     const pvr_chunk_model_view_t *view);
+
+/** \brief Pin one stable texture identifier in a residency adapter.
+
+    Repeated identifiers are no-ops. Successful acquisition preserves sorted
+    table order and uses the configured palette resolver. This small primitive
+    lets checked external manifests share the same acquisition path as model
+    scanning without duplicating residency policy.
+*/
+int pvr_chunk_residency_binding_prepare_identifier(
+    pvr_chunk_residency_binding_t *binding, uint16_t identifier);
 
 /** \brief Resolve and submit one strip using pre-acquired resident textures.
 

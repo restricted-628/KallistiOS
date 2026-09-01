@@ -16,6 +16,7 @@ TARGET = pvr-model-convert
 SOURCES = pvr-model-convert.c pvr-scene-ir.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_resource_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \

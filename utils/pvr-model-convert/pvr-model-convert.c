@@ -24,6 +24,7 @@
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_chunk_animation_asset.h>
 #include <dc/pvr_chunk_volume_asset.h>
+#include <dc/pvr_chunk_resource_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -1755,6 +1756,118 @@ static void store_pcm2_section(uint8_t *descriptor, uint32_t type,
     store_le16(descriptor + 30, alignment);
 }
 
+static int serialize_resource_manifest(
+        const pvr_chunk_model_view_t *model, uint8_t **bytes_out,
+        size_t *size_out) {
+    uint8_t *usage = NULL;
+    uint8_t *bytes = NULL;
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    size_t count = 0;
+    size_t identifier;
+    size_t output_index = 0;
+    size_t file_bytes;
+    int rv;
+
+    if(!model || !bytes_out || !size_out) {
+        errno = EINVAL;
+        return -1;
+    }
+    *bytes_out = NULL;
+    *size_out = 0;
+    usage = calloc(PVR_CHUNK_TEXTURE_IDENTIFIER_MAX + 1u, sizeof(*usage));
+    if(!usage) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if(pvr_chunk_polygon_iterator_init(&iterator,
+                                       model->model.polygon_words,
+                                       model->model.polygon_word_count) < 0)
+        goto fail;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        uint16_t texture_identifier;
+        uint8_t use;
+
+        if(record.record_class != PVR_CHUNK_RECORD_TEXTURE)
+            continue;
+        if(record.payload_word_count != 1u || !record.payload) {
+            errno = EILSEQ;
+            goto fail;
+        }
+        texture_identifier = *(const uint16_t *)record.payload &
+                             PVR_CHUNK_TEXTURE_IDENTIFIER_MAX;
+        use = record.type == PVR_CHUNK_TEXTURE_TWO_VOLUME ?
+              PVR_CHUNK_RESOURCE_SECONDARY :
+              PVR_CHUNK_RESOURCE_PRIMARY;
+        if(!usage[texture_identifier])
+            ++count;
+        usage[texture_identifier] |= use;
+    }
+    if(rv < 0)
+        goto fail;
+    if(!count) {
+        free(usage);
+        return 0;
+    }
+    if(count > (SIZE_MAX - PVR_CHUNK_RESOURCE_SECTION_HEADER_BYTES) /
+                   PVR_CHUNK_RESOURCE_SECTION_ENTRY_BYTES) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    file_bytes = PVR_CHUNK_RESOURCE_SECTION_HEADER_BYTES +
+                 count * PVR_CHUNK_RESOURCE_SECTION_ENTRY_BYTES;
+    if(file_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    for(identifier = 0;
+        identifier <= PVR_CHUNK_TEXTURE_IDENTIFIER_MAX; ++identifier) {
+        uint8_t *entry;
+
+        if(!usage[identifier])
+            continue;
+        entry = bytes + PVR_CHUNK_RESOURCE_SECTION_HEADER_BYTES +
+                output_index++ * PVR_CHUNK_RESOURCE_SECTION_ENTRY_BYTES;
+        store_le16(entry, (uint16_t)identifier);
+        store_le16(entry + 2, usage[identifier]);
+    }
+    if(output_index != count) {
+        errno = EPROTO;
+        goto fail;
+    }
+    store_le32(bytes, PVR_CHUNK_RESOURCE_SECTION_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_RESOURCE_SECTION_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_RESOURCE_SECTION_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)count);
+    store_le16(bytes + 16, PVR_CHUNK_RESOURCE_SECTION_ENTRY_BYTES);
+    store_le32(bytes + 20, (uint32_t)(file_bytes -
+                                      PVR_CHUNK_RESOURCE_SECTION_HEADER_BYTES));
+    store_le32(bytes + 24, crc32_bytes(
+        bytes + PVR_CHUNK_RESOURCE_SECTION_HEADER_BYTES,
+        file_bytes - PVR_CHUNK_RESOURCE_SECTION_HEADER_BYTES));
+    store_le32(bytes + 44, crc32_bytes(bytes, 44));
+    free(usage);
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
+
+fail:
+    {
+        int saved_errno = errno ? errno : EIO;
+
+        free(bytes);
+        free(usage);
+        errno = saved_errno;
+    }
+    return -1;
+}
+
 static int build_asset_blob(const output_streams_t *streams,
                             int lz4_vertices, int section_directory,
                             const pvr_scene_ir_t *scene,
@@ -1771,6 +1884,7 @@ static int build_asset_blob(const output_streams_t *streams,
     uint8_t *shape_raw = NULL;
     uint8_t *animation_raw = NULL;
     uint8_t *volume_raw = NULL;
+    uint8_t *resource_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
@@ -1781,6 +1895,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t shape_bytes = 0;
     size_t animation_bytes = 0;
     size_t volume_bytes = 0;
+    size_t resource_bytes = 0;
     size_t section_count;
     size_t directory_bytes;
     size_t vertex_offset;
@@ -1790,6 +1905,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t shape_offset = 0;
     size_t animation_offset = 0;
     size_t volume_offset = 0;
+    size_t resource_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
@@ -1812,6 +1928,8 @@ static int build_asset_blob(const output_streams_t *streams,
         pvr_chunk_model_view_t source_view;
 
         if(pvr_chunk_model_open(&source_model, &source_view) < 0 ||
+           serialize_resource_manifest(
+               &source_view, &resource_raw, &resource_bytes) < 0 ||
            pvr_scene_ir_serialize_volumes(
                &source_view, &volume_raw, &volume_bytes) < 0)
             goto fail;
@@ -1861,7 +1979,8 @@ static int build_asset_blob(const output_streams_t *streams,
         vertex_stored_bytes = compressed;
     }
 
-    section_count = 2u + (volume_raw ? 1u : 0u) +
+    section_count = 2u + (resource_raw ? 1u : 0u) +
+                    (volume_raw ? 1u : 0u) +
                     (hierarchy_raw ? 1u : 0u) +
                     (skin_raw ? 1u : 0u) +
                     (shape_raw ? 1u : 0u) +
@@ -1885,6 +2004,14 @@ static int build_asset_blob(const output_streams_t *streams,
         goto fail;
     }
     file_bytes = polygon_offset + polygon_bytes;
+    if(resource_raw) {
+        if(align_size_32(file_bytes, &resource_offset) < 0 ||
+           resource_offset > SIZE_MAX - resource_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = resource_offset + resource_bytes;
+    }
     if(volume_raw) {
         if(align_size_32(file_bytes, &volume_offset) < 0 ||
            volume_offset > SIZE_MAX - volume_bytes) {
@@ -1938,6 +2065,8 @@ static int build_asset_blob(const output_streams_t *streams,
     memcpy(blob + vertex_offset, vertex_stored,
            vertex_stored_bytes);
     memcpy(blob + polygon_offset, polygon_raw, polygon_bytes);
+    if(resource_raw)
+        memcpy(blob + resource_offset, resource_raw, resource_bytes);
     if(volume_raw)
         memcpy(blob + volume_offset, volume_raw, volume_bytes);
     if(hierarchy_raw)
@@ -1981,6 +2110,15 @@ static int build_asset_blob(const output_streams_t *streams,
             polygon_offset, polygon_bytes, polygon_bytes,
             crc32_bytes(polygon_raw, polygon_bytes),
             PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint16_t));
+        if(resource_raw) {
+            store_pcm2_section(
+                directory + descriptor_index++ *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE,
+                resource_offset, resource_bytes, resource_bytes,
+                crc32_bytes(resource_raw, resource_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
         if(volume_raw) {
             store_pcm2_section(
                 directory + descriptor_index++ *
@@ -2058,6 +2196,7 @@ static int build_asset_blob(const output_streams_t *streams,
     free(shape_raw);
     free(animation_raw);
     free(volume_raw);
+    free(resource_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -2073,6 +2212,7 @@ fail:
     free(shape_raw);
     free(animation_raw);
     free(volume_raw);
+    free(resource_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
@@ -2170,6 +2310,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_section_t shape_section;
     pvr_chunk_asset_section_t animation_section;
     pvr_chunk_asset_section_t volume_section;
+    pvr_chunk_asset_section_t resource_section;
     pvr_chunk_model_view_t model_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
@@ -2178,6 +2319,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_shape_set_t materialized_shapes;
     pvr_chunk_animation_section_view_t animation_view;
     pvr_chunk_volume_section_view_t volume_view;
+    pvr_chunk_resource_section_view_t resource_view;
     anim_clip_view_t materialized_animation;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
@@ -2195,6 +2337,7 @@ static int prepare_asset_output(const char *target,
     const void *shape_data = NULL;
     const void *animation_data = NULL;
     const void *volume_data = NULL;
+    const void *resource_data = NULL;
     void *workspace = NULL;
     size_t workspace_allocation = 0;
     int result = -1;
@@ -2219,6 +2362,18 @@ static int prepare_asset_output(const char *target,
                             &model_view) < 0)
         goto out;
     if(section_directory) {
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE,
+               &resource_section, &resource_data) == 0) {
+            if(pvr_chunk_resource_section_open(
+                   resource_data, resource_section.decoded_bytes,
+                   &resource_view) < 0 ||
+               pvr_chunk_resource_section_validate_model(
+                   &resource_view, &model_view) < 0)
+                goto out;
+        }
+        else if(errno != ENOENT)
+            goto out;
         if(load_raw_section_type(
                &asset_view, PVR_CHUNK_ASSET_SECTION_VOLUME_DATA,
                &volume_section, &volume_data) == 0) {

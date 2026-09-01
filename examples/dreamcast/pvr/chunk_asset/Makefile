@@ -29,7 +29,8 @@ $(BIN2C):
 	$(MAKE) -C $(KOS_BASE)/utils/bin2c
 
 $(MODEL_ASSET): $(MODEL_SOURCE) $(MODEL_CONVERTER)
-	$(MODEL_CONVERTER) --join-strips --emit-asset --section-directory \
+	$(MODEL_CONVERTER) --join-strips --texture-id 7 --emit-asset \
+		--section-directory \
 		--scene-root --rigid-skin --morph-target 1 0 0 \
 		--animation-offset 2 4 6 --lz4-vertices \
 		$(MODEL_SOURCE) $@
