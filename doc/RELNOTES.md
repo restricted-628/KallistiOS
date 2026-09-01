@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added portable PCM2 cooked-cache sections for ordinary, two-volume, and
+  modifier compact geometry. Fixed-width `PCC1` records round-trip into the
+  existing caller-owned prepared-cache objects without serializing pointers,
+  host-sized fields, or VRAM addresses. With `--cooked-cache`, the model
+  converter emits and validates an ordinary cooked cache for PCM2 output.
+
 * Added a portable PCM2 volume-data section. It retains exact compact
   triangle, quad, and strip records in a checked pointer-free directory,
   preserves zero-to-three per-triangle user words, and delegates expansion to

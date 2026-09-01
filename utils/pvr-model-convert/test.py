@@ -354,6 +354,38 @@ f 1/1/1 2/2/1 3/3/1
         assert zlib.crc32(resource[:44]) == struct.unpack_from(
             "<I", resource, 44
         )[0]
+        cooked_asset = root / "triangle-cooked.pcm"
+        result = invoke(
+            converter,
+            "--texture-id", "7",
+            "--emit-asset",
+            "--section-directory",
+            "--cooked-cache",
+            source,
+            cooked_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        cooked_asset_bytes = cooked_asset.read_bytes()
+        assert struct.unpack_from("<I", cooked_asset_bytes, 32)[0] == 4
+        cooked_descriptor = struct.unpack_from(
+            "<7IHH", cooked_asset_bytes, 64 + 3 * 32
+        )
+        assert cooked_descriptor[0] == 10
+        assert cooked_descriptor[1] == 0
+        assert cooked_descriptor[7:] == (0, 4)
+        cooked = cooked_asset_bytes[
+            cooked_descriptor[2]:cooked_descriptor[2] + cooked_descriptor[3]
+        ]
+        assert cooked[:4] == b"PCC1"
+        assert struct.unpack_from("<HHIHH4I", cooked, 4) == (
+            1, 128, len(cooked), 1, 0, 1, 3, 3, 0
+        )
+        assert zlib.crc32(cooked[128:]) == struct.unpack_from(
+            "<I", cooked, 84
+        )[0]
+        assert zlib.crc32(cooked[:124]) == struct.unpack_from(
+            "<I", cooked, 124
+        )[0]
 
         scene_asset = root / "triangle-scene.pcm"
         result = invoke(
@@ -578,6 +610,14 @@ f 1/1/1 2/2/1 3/3/1
         )
         assert result.returncode == 2
         assert result.stderr == "--lz4-vertices requires --emit-asset\n"
+
+        result = invoke(
+            converter, "--emit-asset", "--cooked-cache", source, raw_asset
+        )
+        assert result.returncode == 2
+        assert result.stderr == (
+            "--cooked-cache requires --emit-asset --section-directory\n"
+        )
 
         result = invoke(
             converter, "--emit-asset", "--scene-root", source, raw_asset

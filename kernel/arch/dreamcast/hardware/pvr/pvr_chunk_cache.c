@@ -1919,6 +1919,11 @@ static int modifier_cache_valid(const pvr_chunk_modifier_cache_t *cache) {
     return 0;
 }
 
+int pvr_chunk_model_modifier_cache_validate(
+    const pvr_chunk_modifier_cache_t *cache) {
+    return modifier_cache_valid(cache);
+}
+
 static int modifier_cache_emit_preflight(
     const pvr_chunk_modifier_cache_t *cache, const matrix_t *matrix,
     const pvr_chunk_modifier_config_t *config,

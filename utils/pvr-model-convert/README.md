@@ -110,6 +110,15 @@ larger than PCM1 and is intended as the host-pipeline base for optional
 resource, deformation, hierarchy, animation, collision, cache, or application
 sections; models which need none of those should keep PCM1.
 
+`--cooked-cache` adds a pointer-free `PCC1` ordinary prepared-cache section to
+PCM2. The converter builds it through the target cache planner, serializes it,
+reopens it, and materializes it before publishing the asset. It is opt-in
+because it trades additional file size for avoiding compact-stream traversal
+and indexed vertex assembly after loading. Runtime storage remains caller-owned
+and texture identifiers are rebound normally; no host pointer, `size_t`, or
+VRAM address is stored. The option requires both `--emit-asset` and
+`--section-directory`.
+
 If an admitted polygon stream contains compact volume records, PCM2 also
 receives a pointer-free `PVL1` volume-data section. The host tool preserves the
 original triangle, quad, strip, winding, and user-word representation, reloads

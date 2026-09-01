@@ -404,6 +404,10 @@ int pvr_chunk_model_modifier_cache_build(
     pvr_chunk_render_prepare_modifier_t prepare_triangle, void *data,
     pvr_chunk_modifier_cache_t *cache);
 
+/** \brief Revalidate one published modifier-volume draw-cache descriptor. */
+int pvr_chunk_model_modifier_cache_validate(
+    const pvr_chunk_modifier_cache_t *cache);
+
 /** \brief Project and emit a completed modifier-volume draw cache.
 
     The existing modifier configuration determines list, culling, and final

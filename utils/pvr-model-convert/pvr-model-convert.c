@@ -18,6 +18,8 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <dc/pvr_chunk_asset.h>
+#include <dc/pvr_chunk_cache.h>
+#include <dc/pvr_chunk_cache_asset.h>
 #include <dc/pvr_chunk_model.h>
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_skin_asset.h>
@@ -54,6 +56,29 @@
 #define MATERIAL_AMBIENT  (1u << 1)
 #define MATERIAL_SPECULAR (1u << 2)
 #define MATERIAL_EXPONENT (1u << 3)
+
+/* The host compiler links the target cache builder but never submits PVR
+   packets. These unreachable publication hooks satisfy that shared object's
+   host link without introducing a second cache implementation. */
+void pvr_mod_compile(pvr_mod_hdr_t *destination, pvr_list_t list,
+                     uint32_t mode, uint32_t culling) {
+    (void)destination;
+    (void)list;
+    (void)mode;
+    (void)culling;
+}
+
+int pvr_prim(const void *data, size_t size) {
+    (void)data;
+    (void)size;
+    errno = ENOTSUP;
+    return -1;
+}
+
+int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
+    (void)list;
+    return pvr_prim(data, size);
+}
 
 typedef struct source_position {
     float value[3];
@@ -163,7 +188,8 @@ static void usage(FILE *stream, const char *program) {
             "--material NAME=ID ...] [--material-library FILE ...] "
             "[--join-strips] [--emit-c SYMBOL | --emit-asset "
             "[--section-directory [--scene-root] [--rigid-skin] "
-            "[--morph-target DX DY DZ] [--animation-offset DX DY DZ]] "
+            "[--morph-target DX DY DZ] [--animation-offset DX DY DZ] "
+            "[--cooked-cache]] "
             "[--lz4-vertices]] "
             "[--] INPUT.obj "
             "{VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}\n",
@@ -1868,8 +1894,71 @@ fail:
     return -1;
 }
 
+static int serialize_cooked_cache(const pvr_chunk_model_view_t *view,
+                                  uint8_t **bytes_out, size_t *size_out) {
+    pvr_chunk_model_plan_requirements_t plan_requirements;
+    pvr_chunk_vertex_index_entry_t *entries = NULL;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_cache_requirements_t cache_requirements;
+    pvr_chunk_model_cache_t cache;
+    void *storage = NULL;
+    uint8_t *bytes = NULL;
+    size_t serialized_bytes;
+    int saved_errno;
+
+    *bytes_out = NULL;
+    *size_out = 0;
+    if(pvr_chunk_model_plan_query(view, &plan_requirements) < 0)
+        goto fail;
+    entries = calloc(plan_requirements.vertex_index_entries,
+                     sizeof(*entries));
+    if(!entries) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    if(pvr_chunk_model_plan_build(
+           view, entries, plan_requirements.vertex_index_entries,
+           &plan) < 0 ||
+       pvr_chunk_model_cache_query(&plan, &cache_requirements) < 0)
+        goto fail;
+    storage = aligned_alloc(PVR_CHUNK_CACHE_ALIGNMENT,
+                            cache_requirements.bytes);
+    if(!storage) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    if(pvr_chunk_model_cache_build(
+           &plan, storage, cache_requirements.bytes,
+           NULL, NULL, &cache) < 0 ||
+       pvr_chunk_model_cache_section_query(
+           &cache, &serialized_bytes) < 0)
+        goto fail;
+    bytes = malloc(serialized_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    if(pvr_chunk_model_cache_section_serialize(
+           &cache, bytes, serialized_bytes) < 0)
+        goto fail;
+    free(storage);
+    free(entries);
+    *bytes_out = bytes;
+    *size_out = serialized_bytes;
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    free(bytes);
+    free(storage);
+    free(entries);
+    errno = saved_errno;
+    return -1;
+}
+
 static int build_asset_blob(const output_streams_t *streams,
                             int lz4_vertices, int section_directory,
+                            int include_cooked_cache,
                             const pvr_scene_ir_t *scene,
                             const pvr_chunk_skin_general_t *skin,
                             const pvr_chunk_shape_set_t *shapes,
@@ -1885,6 +1974,7 @@ static int build_asset_blob(const output_streams_t *streams,
     uint8_t *animation_raw = NULL;
     uint8_t *volume_raw = NULL;
     uint8_t *resource_raw = NULL;
+    uint8_t *cooked_raw = NULL;
     const uint8_t *vertex_stored;
     uint8_t *blob = NULL;
     size_t vertex_bytes;
@@ -1896,6 +1986,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t animation_bytes = 0;
     size_t volume_bytes = 0;
     size_t resource_bytes = 0;
+    size_t cooked_bytes = 0;
     size_t section_count;
     size_t directory_bytes;
     size_t vertex_offset;
@@ -1906,6 +1997,7 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t animation_offset = 0;
     size_t volume_offset = 0;
     size_t resource_offset = 0;
+    size_t cooked_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
@@ -1932,6 +2024,9 @@ static int build_asset_blob(const output_streams_t *streams,
                &source_view, &resource_raw, &resource_bytes) < 0 ||
            pvr_scene_ir_serialize_volumes(
                &source_view, &volume_raw, &volume_bytes) < 0)
+            goto fail;
+        if(include_cooked_cache && serialize_cooked_cache(
+               &source_view, &cooked_raw, &cooked_bytes) < 0)
             goto fail;
     }
     if(scene && pvr_scene_ir_serialize_hierarchy(
@@ -1980,6 +2075,7 @@ static int build_asset_blob(const output_streams_t *streams,
     }
 
     section_count = 2u + (resource_raw ? 1u : 0u) +
+                    (cooked_raw ? 1u : 0u) +
                     (volume_raw ? 1u : 0u) +
                     (hierarchy_raw ? 1u : 0u) +
                     (skin_raw ? 1u : 0u) +
@@ -2019,6 +2115,14 @@ static int build_asset_blob(const output_streams_t *streams,
             goto fail;
         }
         file_bytes = volume_offset + volume_bytes;
+    }
+    if(cooked_raw) {
+        if(align_size_32(file_bytes, &cooked_offset) < 0 ||
+           cooked_offset > SIZE_MAX - cooked_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = cooked_offset + cooked_bytes;
     }
     if(hierarchy_raw) {
         if(align_size_32(file_bytes, &hierarchy_offset) < 0 ||
@@ -2069,6 +2173,8 @@ static int build_asset_blob(const output_streams_t *streams,
         memcpy(blob + resource_offset, resource_raw, resource_bytes);
     if(volume_raw)
         memcpy(blob + volume_offset, volume_raw, volume_bytes);
+    if(cooked_raw)
+        memcpy(blob + cooked_offset, cooked_raw, cooked_bytes);
     if(hierarchy_raw)
         memcpy(blob + hierarchy_offset, hierarchy_raw, hierarchy_bytes);
     if(skin_raw)
@@ -2127,6 +2233,15 @@ static int build_asset_blob(const output_streams_t *streams,
                 volume_offset, volume_bytes, volume_bytes,
                 crc32_bytes(volume_raw, volume_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint16_t));
+        }
+        if(cooked_raw) {
+            store_pcm2_section(
+                directory + descriptor_index++ *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_COOKED_CACHE,
+                cooked_offset, cooked_bytes, cooked_bytes,
+                crc32_bytes(cooked_raw, cooked_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
         }
         if(hierarchy_raw) {
             store_pcm2_section(
@@ -2197,6 +2312,7 @@ static int build_asset_blob(const output_streams_t *streams,
     free(animation_raw);
     free(volume_raw);
     free(resource_raw);
+    free(cooked_raw);
     free(vertex_raw);
     free(polygon_raw);
     *blob_out = blob;
@@ -2213,6 +2329,7 @@ fail:
     free(animation_raw);
     free(volume_raw);
     free(resource_raw);
+    free(cooked_raw);
     free(vertex_raw);
     free(polygon_raw);
     errno = saved_errno;
@@ -2295,6 +2412,7 @@ fail:
 static int prepare_asset_output(const char *target,
                                 const output_streams_t *streams,
                                 int lz4_vertices, int section_directory,
+                                int include_cooked_cache,
                                 const pvr_scene_ir_t *scene,
                                 const pvr_chunk_skin_general_t *skin,
                                 const pvr_chunk_shape_set_t *shapes,
@@ -2311,6 +2429,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_section_t animation_section;
     pvr_chunk_asset_section_t volume_section;
     pvr_chunk_asset_section_t resource_section;
+    pvr_chunk_asset_section_t cooked_section;
     pvr_chunk_model_view_t model_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_skin_general_section_view_t skin_view;
@@ -2320,6 +2439,9 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_animation_section_view_t animation_view;
     pvr_chunk_volume_section_view_t volume_view;
     pvr_chunk_resource_section_view_t resource_view;
+    pvr_chunk_cache_section_view_t cooked_view;
+    pvr_chunk_cache_section_requirements_t cooked_requirements;
+    pvr_chunk_model_cache_t cooked_cache;
     anim_clip_view_t materialized_animation;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
@@ -2338,12 +2460,15 @@ static int prepare_asset_output(const char *target,
     const void *animation_data = NULL;
     const void *volume_data = NULL;
     const void *resource_data = NULL;
+    const void *cooked_data = NULL;
     void *workspace = NULL;
+    void *cooked_storage = NULL;
     size_t workspace_allocation = 0;
     int result = -1;
 
-    if(build_asset_blob(streams, lz4_vertices, section_directory, scene, skin,
-                        shapes, animation, &blob, &blob_bytes) < 0 ||
+    if(build_asset_blob(streams, lz4_vertices, section_directory,
+                        include_cooked_cache, scene, skin, shapes, animation,
+                        &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        pvr_chunk_asset_workspace_query(&asset_view, &requirements) < 0)
         goto out;
@@ -2374,6 +2499,34 @@ static int prepare_asset_output(const char *target,
         }
         else if(errno != ENOENT)
             goto out;
+        if(include_cooked_cache) {
+            if(load_raw_section_type(
+                   &asset_view, PVR_CHUNK_ASSET_SECTION_COOKED_CACHE,
+                   &cooked_section, &cooked_data) < 0 ||
+               pvr_chunk_cache_section_open(
+                   cooked_data, cooked_section.decoded_bytes,
+                   &cooked_view) < 0 ||
+               pvr_chunk_cache_section_workspace_query(
+                   &cooked_view, &cooked_requirements) < 0)
+                goto out;
+            cooked_storage = aligned_alloc(
+                cooked_requirements.alignment,
+                cooked_requirements.bytes);
+            if(!cooked_storage) {
+                errno = ENOMEM;
+                goto out;
+            }
+            if(pvr_chunk_cache_section_materialize_ordinary(
+                   &cooked_view, cooked_storage,
+                   cooked_requirements.bytes, &cooked_cache) < 0 ||
+               cooked_cache.vertex_count !=
+                   model_view.info.index_references ||
+               cooked_cache.strip_count != model_view.info.strips) {
+                if(!errno)
+                    errno = EILSEQ;
+                goto out;
+            }
+        }
         if(load_raw_section_type(
                &asset_view, PVR_CHUNK_ASSET_SECTION_VOLUME_DATA,
                &volume_section, &volume_data) == 0) {
@@ -2512,6 +2665,7 @@ static int prepare_asset_output(const char *target,
     result = 0;
 
 out:
+    free(cooked_storage);
     free(animation_visibility);
     free(animation_transforms);
     free(animation_tracks);
@@ -2864,6 +3018,7 @@ int main(int argc, char **argv) {
     int emit_asset = 0;
     int lz4_vertices = 0;
     int section_directory = 0;
+    int cooked_cache = 0;
     int scene_root = 0;
     int rigid_skin = 0;
     int morph_target = 0;
@@ -2978,6 +3133,15 @@ int main(int argc, char **argv) {
             }
             section_directory = 1;
         }
+        else if(!strcmp(argv[argument], "--cooked-cache")) {
+            if(cooked_cache) {
+                usage(stderr, argv[0]);
+                material_table_free(&materials);
+                material_library_free(&library);
+                return 2;
+            }
+            cooked_cache = 1;
+        }
         else if(!strcmp(argv[argument], "--scene-root")) {
             if(scene_root) {
                 usage(stderr, argv[0]);
@@ -3043,6 +3207,14 @@ int main(int argc, char **argv) {
     }
     if(section_directory && !emit_asset) {
         fprintf(stderr, "--section-directory requires --emit-asset\n");
+        material_table_free(&materials);
+        material_library_free(&library);
+        return 2;
+    }
+    if(cooked_cache && !section_directory) {
+        fprintf(stderr,
+                "--cooked-cache requires --emit-asset "
+                "--section-directory\n");
         material_table_free(&materials);
         material_library_free(&library);
         return 2;
@@ -3274,7 +3446,7 @@ int main(int argc, char **argv) {
     }
     else if(emit_asset) {
         if(prepare_asset_output(asset_output, &streams, lz4_vertices,
-                                section_directory,
+                                section_directory, cooked_cache,
                                 scene_root ? &scene : NULL,
                                 rigid_skin ? &rigid_skin_data : NULL,
                                 morph_target ? &morph_shapes : NULL,

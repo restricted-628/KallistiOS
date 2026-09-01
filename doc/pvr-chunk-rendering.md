@@ -356,12 +356,11 @@ The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
 1. Extend the now-established canonical host scene IR beyond its admitted
-   hierarchy, general-skin, and sparse morph sections and populate the
-   completed PCM2 directory with optional cooked-cache sections. Include
-   modern scene import,
+   hierarchy, general-skin, and sparse morph sections. Include modern scene
+   import,
    lossless authored general-skin and morph population,
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
-   of deferred polygon controls, optional cooked caches, and
+   of deferred polygon controls and
    repeatable round-trip conformance fixtures for seams and deformation.
 2. Add exact imported hierarchy policies only where conversion proves they are
    observable: translation/rotation/scale suppression, child-pruning, and
@@ -387,6 +386,20 @@ residency preparation, retained bounds and clipping, environment-map UV
 generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy
 traversal, ordinary/two-volume/modifier prepared caches, prepared-cache
 inverted-shell outlines, and strip-topology wireframe drawing.
+
+PCM2 cooked-cache sections are also complete. `PCC1` encodes ordinary,
+two-volume, or modifier prepared geometry without host pointers or host-sized
+fields. Every section has canonical offsets, fixed-width descriptors, separate
+payload/header CRCs, finite packet and deformation checks, and exact topology
+validation. Loading materializes the section into the existing caller-owned
+cache objects, so all established emitters, filters, deformation resolvers,
+toon, outline, and wireframe policies remain the only runtime paths. Texture
+identifiers remain stable asset references and are rebound through the
+existing material callbacks rather than baking VRAM addresses. The host
+converter emits and round-trip validates the ordinary cooked section when
+`--cooked-cache` is selected; the public serializer supports all three cache
+families for specialized content pipelines. Omitting the option keeps the
+portable source streams without paying the cooked-cache storage cost.
 
 The signed encodings use distinct record types, so existing unsigned streams
 remain unambiguous without adding a version field to the borrowed raw-model

@@ -11,6 +11,7 @@ SOURCES = pvr-chunk-cache-test.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_render.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_toon.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_wire.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum.c \

@@ -52,12 +52,16 @@ int main(void) {
     pvr_chunk_asset_workspace_requirements_t requirements;
     pvr_chunk_asset_section_t hierarchy_section;
     pvr_chunk_asset_section_t resource_section;
+    pvr_chunk_asset_section_t cooked_section;
     pvr_chunk_asset_section_t skin_section;
     pvr_chunk_asset_section_t shape_section;
     pvr_chunk_asset_section_t animation_section;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_resource_section_view_t resource_view;
     pvr_chunk_resource_entry_t resource_entry;
+    pvr_chunk_cache_section_view_t cooked_view;
+    pvr_chunk_cache_section_requirements_t cooked_requirements;
+    pvr_chunk_model_cache_t cooked_cache;
     pvr_chunk_skin_general_section_view_t skin_view;
     pvr_chunk_skin_span_t skin_spans[3];
     pvr_chunk_skin_weight_t skin_weights[3];
@@ -80,6 +84,7 @@ int main(void) {
     const pvr_chunk_model_view_t *models[1];
     const void *hierarchy_data = NULL;
     const void *resource_data = NULL;
+    const void *cooked_data = NULL;
     const void *skin_data = NULL;
     const void *shape_data = NULL;
     const void *animation_data = NULL;
@@ -89,6 +94,7 @@ int main(void) {
     fiber_service_executor_t *executor = NULL;
     decoded_section_t decoded;
     void *workspace = NULL;
+    void *cooked_storage = NULL;
     size_t allocation = 0;
     int result = 1;
 
@@ -134,10 +140,26 @@ int main(void) {
        status.state != PVR_CHUNK_ASSET_LZ4_JOB_COMPLETE)
         goto out;
 
-    models[0] = &model;
     if(pvr_chunk_asset_load(&asset, use_predecoded_section, &decoded,
-                            workspace, allocation, &model) == 0 &&
-       pvr_chunk_asset_section_get(&asset, 2, &resource_section) == 0 &&
+                            workspace, allocation, &model) < 0 ||
+       pvr_chunk_asset_section_get(&asset, 3, &cooked_section) < 0 ||
+       cooked_section.type != PVR_CHUNK_ASSET_SECTION_COOKED_CACHE ||
+       pvr_chunk_asset_section_load(&asset, 3, NULL, NULL, NULL, 0,
+                                    &cooked_data) < 0 ||
+       pvr_chunk_cache_section_open(
+           cooked_data, cooked_section.decoded_bytes, &cooked_view) < 0 ||
+       pvr_chunk_cache_section_workspace_query(
+           &cooked_view, &cooked_requirements) < 0)
+        goto loaded_fail;
+    cooked_storage = aligned_alloc(cooked_requirements.alignment,
+                                   cooked_requirements.bytes);
+    if(!cooked_storage || pvr_chunk_cache_section_materialize_ordinary(
+           &cooked_view, cooked_storage, cooked_requirements.bytes,
+           &cooked_cache) < 0)
+        goto loaded_fail;
+
+    models[0] = &model;
+    if(pvr_chunk_asset_section_get(&asset, 2, &resource_section) == 0 &&
        resource_section.type == PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE &&
        pvr_chunk_asset_section_load(&asset, 2, NULL, NULL, NULL, 0,
                                     &resource_data) == 0 &&
@@ -149,9 +171,9 @@ int main(void) {
        pvr_chunk_resource_section_find(
            &resource_view, 7, &resource_entry) == 0 &&
        resource_entry.usage == PVR_CHUNK_RESOURCE_PRIMARY &&
-       pvr_chunk_asset_section_get(&asset, 3, &hierarchy_section) == 0 &&
+       pvr_chunk_asset_section_get(&asset, 4, &hierarchy_section) == 0 &&
        hierarchy_section.type == PVR_CHUNK_ASSET_SECTION_HIERARCHY &&
-       pvr_chunk_asset_section_load(&asset, 3, NULL, NULL, NULL, 0,
+       pvr_chunk_asset_section_load(&asset, 4, NULL, NULL, NULL, 0,
                                     &hierarchy_data) == 0 &&
        pvr_chunk_scene_hierarchy_open(
            hierarchy_data, hierarchy_section.decoded_bytes,
@@ -159,9 +181,9 @@ int main(void) {
        pvr_chunk_scene_hierarchy_bind(
            &hierarchy_view, models, 1, &hierarchy_node, 1,
            &hierarchy) == 0 &&
-       pvr_chunk_asset_section_get(&asset, 4, &skin_section) == 0 &&
+       pvr_chunk_asset_section_get(&asset, 5, &skin_section) == 0 &&
        skin_section.type == PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL &&
-       pvr_chunk_asset_section_load(&asset, 4, NULL, NULL, NULL, 0,
+       pvr_chunk_asset_section_load(&asset, 5, NULL, NULL, NULL, 0,
                                     &skin_data) == 0 &&
        pvr_chunk_skin_general_section_open(
            skin_data, skin_section.decoded_bytes, &skin_view) == 0 &&
@@ -172,9 +194,11 @@ int main(void) {
        hierarchy_node.parent_index == PVR_CHUNK_NODE_NONE &&
        skin.span_count == 3 && skin.weight_count == 3 &&
        skin.joint_count == 1 &&
-       pvr_chunk_asset_section_get(&asset, 5, &shape_section) == 0 &&
+       cooked_cache.strip_count == model.info.strips &&
+       cooked_cache.vertex_count == model.info.index_references &&
+       pvr_chunk_asset_section_get(&asset, 6, &shape_section) == 0 &&
        shape_section.type == PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS &&
-       pvr_chunk_asset_section_load(&asset, 5, NULL, NULL, NULL, 0,
+       pvr_chunk_asset_section_load(&asset, 6, NULL, NULL, NULL, 0,
                                     &shape_data) == 0 &&
        pvr_chunk_shape_section_open(
            shape_data, shape_section.decoded_bytes, &shape_view) == 0 &&
@@ -183,9 +207,9 @@ int main(void) {
        shapes.target_count == 1 && shape_target.delta_count == 1 &&
        shape_delta.vertex_index == 0 &&
        shape_delta.delta.position.x == 1.0f &&
-       pvr_chunk_asset_section_get(&asset, 6, &animation_section) == 0 &&
+       pvr_chunk_asset_section_get(&asset, 7, &animation_section) == 0 &&
        animation_section.type == PVR_CHUNK_ASSET_SECTION_ANIMATION &&
-       pvr_chunk_asset_section_load(&asset, 6, NULL, NULL, NULL, 0,
+       pvr_chunk_asset_section_load(&asset, 7, NULL, NULL, NULL, 0,
                                     &animation_data) == 0 &&
        pvr_chunk_animation_section_open(
            animation_data, animation_section.decoded_bytes,
@@ -201,12 +225,14 @@ int main(void) {
        animation_pose.translation.y == 2.0f &&
        animation_pose.translation.z == 3.0f) {
         printf("KOSPVRASSET loaded=1 service=1 vertices=%lu triangles=%lu "
-               "resources=%lu hierarchy=%lu skin=%lu morph=%lu animation=%lu "
+               "resources=%lu cache=%lu hierarchy=%lu skin=%lu morph=%lu "
+               "animation=%lu "
                "workspace=%lu "
                "decoded=%lu\n",
                (unsigned long)model.info.vertex_entries,
                (unsigned long)model.info.triangles,
                (unsigned long)resource_view.entry_count,
+               (unsigned long)cooked_cache.vertex_count,
                (unsigned long)hierarchy.node_count,
                (unsigned long)skin.span_count,
                (unsigned long)shapes.target_count,
@@ -215,9 +241,12 @@ int main(void) {
                (unsigned long)status.output_bytes);
         result = 0;
     }
-    else {
-        printf("KOSPVRASSET loaded=0 errno=%d\n", errno);
-    }
+    else
+        goto loaded_fail;
+    goto out;
+
+loaded_fail:
+    printf("KOSPVRASSET loaded=0 errno=%d\n", errno);
 
 out:
     if(executor)
@@ -226,6 +255,7 @@ out:
         pvr_chunk_asset_lz4_service_destroy(decode_service);
     if(job)
         pvr_chunk_asset_lz4_job_destroy(job);
+    free(cooked_storage);
     free(workspace);
     return result;
 }

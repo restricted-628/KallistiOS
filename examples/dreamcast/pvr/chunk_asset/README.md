@@ -4,7 +4,11 @@ This example converts a small OBJ at build time into one PCM2 compact-model
 asset. Its vertex partition is stored as a checksummed LZ4 Frame while the
 polygon/state partition remains raw and independently addressable. A portable
 resource manifest lists texture identifier 7 and validates it against the
-admitted polygon stream before any surface is bound. A portable hierarchy
+admitted polygon stream before any surface is bound. The host compiler also
+stores a pointer-free cooked ordinary-strip cache. The example validates and
+materializes that section into the same caller-owned cache type used by the
+prepared renderer, while texture identifiers remain dynamically bound at draw
+time. A portable hierarchy
 section carries one identity root referencing model ordinal zero,
 with caller-owned general-skin, sparse-morph, and animation sections exercising
 the same generic directory loader.
@@ -16,6 +20,9 @@ executor. Its deliberately tiny test budget publishes at most 16 bytes between
 cooperative yields, making the example exercise multiple decode steps. The
 normal asset loader then checks both decoded CRCs and passes the streams through
 compact-model admission without decoding the vertex partition twice.
+The cooked section avoids repeating compact stream traversal and indexed
+vertex assembly after loading. Its exact-sized, 32-byte-aligned native cache
+storage is caller-owned and independently disposable.
 The example separately loads the raw hierarchy section, admits it, and binds
 its stable model ordinal into the existing caller-owned compact hierarchy. It
 also materializes the animation section and samples its translation through

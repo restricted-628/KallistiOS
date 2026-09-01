@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_cache.h>
+#include <dc/pvr_chunk_cache_asset.h>
 #include <dc/pvr_chunk_toon.h>
 #include <dc/pvr_chunk_wire.h>
 
@@ -359,6 +360,102 @@ static pvr_chunk_model_t make_model(const uint16_t *polygon_words,
     };
 
     return model;
+}
+
+alignas(32) static uint8_t cooked_section_bytes[16384];
+alignas(32) static uint8_t cooked_cache_storage[8192];
+
+static void test_ordinary_cooked_section(
+    const pvr_chunk_model_cache_t *source) {
+    pvr_chunk_cache_section_view_t view;
+    pvr_chunk_cache_section_requirements_t requirements;
+    pvr_chunk_model_cache_t cache;
+    size_t bytes;
+
+    assert(pvr_chunk_model_cache_section_query(source, &bytes) == 0);
+    assert(bytes <= sizeof(cooked_section_bytes));
+    errno = 0;
+    assert(pvr_chunk_model_cache_section_serialize(
+        source, (void *)source->storage, source->storage_bytes) == -1);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_model_cache_section_serialize(
+        source, cooked_section_bytes, sizeof(cooked_section_bytes)) == 0);
+    assert(pvr_chunk_cache_section_open(
+        cooked_section_bytes, bytes, &view) == 0);
+    assert(view.kind == PVR_CHUNK_CACHE_SECTION_ORDINARY);
+    assert(pvr_chunk_cache_section_workspace_query(
+        &view, &requirements) == 0);
+    assert(requirements.bytes <= sizeof(cooked_cache_storage));
+    assert(pvr_chunk_cache_section_materialize_ordinary(
+        &view, cooked_cache_storage, sizeof(cooked_cache_storage),
+        &cache) == 0);
+    assert(cache.strip_count == source->strip_count);
+    assert(cache.vertex_count == source->vertex_count);
+    assert(memcmp(cache.vertices, source->vertices,
+                  cache.vertex_count * sizeof(*cache.vertices)) == 0);
+    assert(memcmp(cache.deform_vertices, source->deform_vertices,
+                  cache.vertex_count * sizeof(*cache.deform_vertices)) == 0);
+
+    cooked_section_bytes[bytes - 1u] ^= 1u;
+    errno = 0;
+    assert(pvr_chunk_cache_section_open(
+        cooked_section_bytes, bytes, &view) == -1);
+    assert(errno == EILSEQ);
+    cooked_section_bytes[bytes - 1u] ^= 1u;
+}
+
+static void test_two_volume_cooked_section(
+    const pvr_chunk_two_volume_cache_t *source) {
+    pvr_chunk_cache_section_view_t view;
+    pvr_chunk_cache_section_requirements_t requirements;
+    pvr_chunk_two_volume_cache_t cache;
+    size_t bytes;
+
+    assert(pvr_chunk_two_volume_cache_section_query(source, &bytes) == 0);
+    assert(bytes <= sizeof(cooked_section_bytes));
+    assert(pvr_chunk_two_volume_cache_section_serialize(
+        source, cooked_section_bytes, sizeof(cooked_section_bytes)) == 0);
+    assert(pvr_chunk_cache_section_open(
+        cooked_section_bytes, bytes, &view) == 0);
+    assert(view.kind == PVR_CHUNK_CACHE_SECTION_TWO_VOLUME);
+    assert(pvr_chunk_cache_section_workspace_query(
+        &view, &requirements) == 0);
+    assert(requirements.bytes <= sizeof(cooked_cache_storage));
+    assert(pvr_chunk_cache_section_materialize_two_volume(
+        &view, cooked_cache_storage, sizeof(cooked_cache_storage),
+        &cache) == 0);
+    assert(cache.format == source->format);
+    assert(cache.vertex_count == source->vertex_count);
+    assert(memcmp(cache.vertices, source->vertices,
+                  cache.vertex_count * cache.vertex_size) == 0);
+}
+
+static void test_modifier_cooked_section(
+    const pvr_chunk_modifier_cache_t *source) {
+    pvr_chunk_cache_section_view_t view;
+    pvr_chunk_cache_section_requirements_t requirements;
+    pvr_chunk_modifier_cache_t cache;
+    size_t bytes;
+
+    assert(pvr_chunk_modifier_cache_section_query(source, &bytes) == 0);
+    assert(bytes <= sizeof(cooked_section_bytes));
+    assert(pvr_chunk_modifier_cache_section_serialize(
+        source, cooked_section_bytes, sizeof(cooked_section_bytes)) == 0);
+    assert(pvr_chunk_cache_section_open(
+        cooked_section_bytes, bytes, &view) == 0);
+    assert(view.kind == PVR_CHUNK_CACHE_SECTION_MODIFIER);
+    assert(pvr_chunk_cache_section_workspace_query(
+        &view, &requirements) == 0);
+    assert(requirements.bytes <= sizeof(cooked_cache_storage));
+    assert(pvr_chunk_cache_section_materialize_modifier(
+        &view, cooked_cache_storage, sizeof(cooked_cache_storage),
+        &cache) == 0);
+    assert(cache.volume_count == source->volume_count);
+    assert(cache.triangle_count == source->triangle_count);
+    assert(memcmp(cache.packets, source->packets,
+                  cache.triangle_count * sizeof(*cache.packets)) == 0);
+    assert(memcmp(cache.user_words, source->user_words,
+                  cache.user_word_count * sizeof(*cache.user_words)) == 0);
 }
 
 static void test_float_uv_caches(void) {
@@ -838,6 +935,7 @@ static void test_two_volume_cache(void) {
            cache.strips[0].maximum.x == 2.0f);
     assert(cache.source_indices[0] == 1 && cache.source_indices[1] == 0 &&
            cache.source_indices[2] == 2);
+    test_two_volume_cooked_section(&cache);
 
     identity(&matrix);
     memset(&callbacks, 0, sizeof(callbacks));
@@ -961,6 +1059,7 @@ static void test_modifier_cache(void) {
            cache.source_indices[8] == 2);
     assert(cache.source_indices[9] == 2 && cache.source_indices[10] == 1 &&
            cache.source_indices[11] == 3);
+    test_modifier_cooked_section(&cache);
 
     identity(&matrix);
     memset(&callbacks, 0, sizeof(callbacks));
@@ -1092,6 +1191,7 @@ int main(void) {
     assert(cache.strips[0].maximum.z == 0.0f);
 
     assert(pvr_chunk_model_cache_validate(&cache) == 0);
+    test_ordinary_cooked_section(&cache);
     test_toon_cache(&cache);
     test_outline_cache(&cache);
     test_wire_cache(&cache);
