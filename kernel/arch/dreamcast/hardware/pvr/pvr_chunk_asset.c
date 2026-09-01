@@ -187,6 +187,7 @@ static int open_pcm1(const void *data, size_t size,
     parsed.version = PVR_CHUNK_ASSET_VERSION;
     parsed.header_bytes = PVR_CHUNK_ASSET_HEADER_BYTES;
     parsed.section_count = 2;
+    parsed.model_count = 1;
     parsed.center[0] = read_le_float(bytes + 16);
     parsed.center[1] = read_le_float(bytes + 20);
     parsed.center[2] = read_le_float(bytes + 24);
@@ -359,26 +360,31 @@ static int open_pcm2(const void *data, size_t size,
         previous_end = section_end;
 
         if(section.type == PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM) {
-            if(++vertex_count != 1 || section.alignment < sizeof(uint32_t) ||
+            if(section.alignment < sizeof(uint32_t) ||
                section.decoded_bytes % sizeof(uint32_t)) {
                 errno = EILSEQ;
                 return -1;
             }
-            parsed.vertex = section;
+            if(!vertex_count)
+                parsed.vertex = section;
+            ++vertex_count;
         }
         else if(section.type == PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM) {
-            if(++polygon_count != 1 || section.alignment < sizeof(uint16_t) ||
+            if(section.alignment < sizeof(uint16_t) ||
                section.decoded_bytes % sizeof(uint16_t)) {
                 errno = EILSEQ;
                 return -1;
             }
-            parsed.polygon = section;
+            if(!polygon_count)
+                parsed.polygon = section;
+            ++polygon_count;
         }
     }
-    if(vertex_count != 1 || polygon_count != 1) {
+    if(!vertex_count || vertex_count != polygon_count) {
         errno = EILSEQ;
         return -1;
     }
+    parsed.model_count = vertex_count;
 
     *view = parsed;
     return 0;
@@ -496,10 +502,12 @@ static int section_needs_copy(const pvr_chunk_asset_section_t *section,
            ((uintptr_t)section->stored_data & (natural_alignment - 1u));
 }
 
-int pvr_chunk_asset_workspace_query(
-    const pvr_chunk_asset_view_t *view,
+int pvr_chunk_asset_model_workspace_query(
+    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
     pvr_chunk_asset_workspace_requirements_t *requirements) {
     pvr_chunk_asset_view_t checked;
+    pvr_chunk_asset_section_t vertex;
+    pvr_chunk_asset_section_t polygon;
     pvr_chunk_asset_workspace_requirements_t result;
     size_t cursor = 0;
 
@@ -511,28 +519,44 @@ int pvr_chunk_asset_workspace_query(
     }
     if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0)
         return -1;
+    if(model_ordinal >= checked.model_count) {
+        errno = ENOENT;
+        return -1;
+    }
+    if(pvr_chunk_asset_section_find(
+           &checked, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+           model_ordinal, &vertex) < 0 ||
+       pvr_chunk_asset_section_find(
+           &checked, PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+           model_ordinal, &polygon) < 0)
+        return -1;
 
     memset(&result, 0, sizeof(result));
     result.alignment = PVR_CHUNK_ASSET_ALIGNMENT;
-    result.copies_vertex = section_needs_copy(&checked.vertex,
-                                              checked.vertex.alignment);
-    result.copies_polygon = section_needs_copy(&checked.polygon,
-                                               checked.polygon.alignment);
+    result.copies_vertex = section_needs_copy(&vertex, vertex.alignment);
+    result.copies_polygon = section_needs_copy(&polygon, polygon.alignment);
     if(result.copies_vertex) {
         if(align_size(cursor, result.alignment, &result.vertex_offset) < 0 ||
-           add_size(result.vertex_offset, checked.vertex.decoded_bytes,
+           add_size(result.vertex_offset, vertex.decoded_bytes,
                     &cursor) < 0)
             return -1;
     }
     if(result.copies_polygon) {
         if(align_size(cursor, result.alignment, &result.polygon_offset) < 0 ||
-           add_size(result.polygon_offset, checked.polygon.decoded_bytes,
+           add_size(result.polygon_offset, polygon.decoded_bytes,
                     &cursor) < 0)
             return -1;
     }
     result.bytes = cursor;
     *requirements = result;
     return 0;
+}
+
+int pvr_chunk_asset_workspace_query(
+    const pvr_chunk_asset_view_t *view,
+    pvr_chunk_asset_workspace_requirements_t *requirements) {
+    return pvr_chunk_asset_model_workspace_query(
+        view, 0, requirements);
 }
 
 static int load_section(const pvr_chunk_asset_section_t *section,
@@ -630,13 +654,15 @@ int pvr_chunk_asset_section_load(
     return 0;
 }
 
-int pvr_chunk_asset_load(const pvr_chunk_asset_view_t *view,
-                         pvr_chunk_asset_decoder_t decoder,
-                         void *decoder_data, void *workspace,
-                         size_t workspace_bytes,
-                         pvr_chunk_model_view_t *model_view) {
+int pvr_chunk_asset_model_load(
+    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *model_view) {
     pvr_chunk_asset_workspace_requirements_t requirements;
     pvr_chunk_asset_view_t checked;
+    pvr_chunk_asset_section_t vertex_section;
+    pvr_chunk_asset_section_t polygon_section;
     pvr_chunk_model_t model;
     const void *vertex;
     const void *polygon;
@@ -648,7 +674,14 @@ int pvr_chunk_asset_load(const pvr_chunk_asset_view_t *view,
         return -1;
     }
     if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0 ||
-       pvr_chunk_asset_workspace_query(&checked, &requirements) < 0)
+       pvr_chunk_asset_model_workspace_query(
+           &checked, model_ordinal, &requirements) < 0 ||
+       pvr_chunk_asset_section_find(
+           &checked, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+           model_ordinal, &vertex_section) < 0 ||
+       pvr_chunk_asset_section_find(
+           &checked, PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+           model_ordinal, &polygon_section) < 0)
         return -1;
     if(requirements.bytes &&
        (!workspace || workspace_bytes < requirements.bytes ||
@@ -664,19 +697,31 @@ int pvr_chunk_asset_load(const pvr_chunk_asset_view_t *view,
         return -1;
     }
 
-    if(load_section(&checked.vertex, requirements.copies_vertex,
+    if(load_section(&vertex_section, requirements.copies_vertex,
                     requirements.vertex_offset, decoder, decoder_data,
                     workspace, &vertex) < 0 ||
-       load_section(&checked.polygon, requirements.copies_polygon,
+       load_section(&polygon_section, requirements.copies_polygon,
                     requirements.polygon_offset, decoder, decoder_data,
                     workspace, &polygon) < 0)
         return -1;
 
     model.vertex_words = vertex;
-    model.vertex_word_count = checked.vertex.decoded_bytes / sizeof(uint32_t);
+    model.vertex_word_count = vertex_section.decoded_bytes /
+                              sizeof(uint32_t);
     model.polygon_words = polygon;
-    model.polygon_word_count = checked.polygon.decoded_bytes / sizeof(uint16_t);
+    model.polygon_word_count = polygon_section.decoded_bytes /
+                               sizeof(uint16_t);
     memcpy(model.center, checked.center, sizeof(model.center));
     model.radius = checked.radius;
     return pvr_chunk_model_open(&model, model_view);
+}
+
+int pvr_chunk_asset_load(const pvr_chunk_asset_view_t *view,
+                         pvr_chunk_asset_decoder_t decoder,
+                         void *decoder_data, void *workspace,
+                         size_t workspace_bytes,
+                         pvr_chunk_model_view_t *model_view) {
+    return pvr_chunk_asset_model_load(
+        view, 0, decoder, decoder_data, workspace, workspace_bytes,
+        model_view);
 }

@@ -64,7 +64,8 @@ typedef enum pvr_chunk_asset_codec {
 
 /** \brief Stable semantic identifiers for section-directory entries.
 
-    Vertex and polygon streams are required exactly once. Other section types
+    PCM2 requires the same nonzero number of vertex and polygon streams. Their
+    type-local directory ordinals form stable model pairs. Other section types
     are optional and may appear more than once. Unknown nonzero identifiers
     remain queryable so newer host tools do not make older loaders reject an
     otherwise usable model.
@@ -110,6 +111,7 @@ typedef struct pvr_chunk_asset_view {
     const void *section_directory; /**< NULL for synthetic PCM1 sections. */
     size_t section_directory_bytes;
     size_t section_count;          /**< Includes required model streams. */
+    size_t model_count;            /**< Paired vertex/polygon stream count. */
     uint16_t version;              /**< 1 for PCM1 or 2 for PCM2. */
     uint16_t header_bytes;
 } pvr_chunk_asset_view_t;
@@ -207,6 +209,17 @@ int pvr_chunk_asset_workspace_query(
     const pvr_chunk_asset_view_t *view,
     pvr_chunk_asset_workspace_requirements_t *requirements);
 
+/** \brief Query workspace required to materialize one model ordinal.
+
+    PCM1 provides only ordinal zero. In PCM2, each ordinal pairs the Nth vertex
+    stream with the Nth polygon stream. The asset bounds are conservative for
+    every model in the container; a future optional metadata section may
+    narrow them without changing this loading contract.
+*/
+int pvr_chunk_asset_model_workspace_query(
+    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
+    pvr_chunk_asset_workspace_requirements_t *requirements);
+
 /** \brief Materialize and fully admit a compact model from an asset.
 
     Workspace may be NULL only when the query reports zero bytes. It must be
@@ -220,6 +233,18 @@ int pvr_chunk_asset_load(const pvr_chunk_asset_view_t *view,
                          void *decoder_data, void *workspace,
                          size_t workspace_bytes,
                          pvr_chunk_model_view_t *model_view);
+
+/** \brief Materialize and fully admit one model ordinal from an asset.
+
+    This has the same decoder, workspace, CRC, ownership, and no-allocation
+    contract as pvr_chunk_asset_load(). The original API remains an
+    ordinal-zero convenience wrapper.
+*/
+int pvr_chunk_asset_model_load(
+    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *model_view);
 
 /** @} */
 

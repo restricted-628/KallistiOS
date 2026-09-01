@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Extended PCM2 from one model to a checked nonzero set of ordinal-paired
+  vertex and polygon streams. New workspace and load APIs admit any model
+  ordinal without allocation; the established single-model calls remain
+  ordinal-zero wrappers, and mismatched stream counts fail container
+  admission before either stream is published.
 * Added bounded host-side glTF 2.0 and GLB input to the compact-model
   converter. One selected scene and unique instanced mesh can populate PCM2
   geometry, hierarchy, deterministic PBR-derived material state, exact
@@ -60,7 +65,8 @@ lifecycle and naming conventions.
   system.
 * Added a backward-compatible PCM2 compact-model asset directory beside PCM1.
   It validates checksummed, offset-ordered, nonoverlapping section descriptors;
-  requires exactly one vertex and polygon stream; and exposes repeatable
+  requires equally many nonzero vertex and polygon streams; and exposes
+  ordinal-addressable models plus repeatable
   optional typed or application sections through checked lookup and
   allocation-free materialization APIs. Raw aligned data remains zero-copy,
   while compressed or unaligned sections use exact caller-owned workspace.

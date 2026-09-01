@@ -27,6 +27,15 @@ static const uint32_t vertices[] = {
     UINT32_C(0x000000ff)
 };
 
+static const uint32_t vertices_second[] = {
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10),
+    UINT32_C(0x00030000),
+    UINT32_C(0xc0000000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0x40000000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0x40000000), UINT32_C(0),
+    UINT32_C(0x000000ff)
+};
+
 static const uint16_t polygons[] = {
     PVR_CHUNK_MATERIAL_DIFFUSE, UINT16_C(2),
     UINT16_C(0xffff), UINT16_C(0xffff),
@@ -141,6 +150,57 @@ static size_t build_directory_asset(uint8_t *asset, size_t capacity) {
     return file_bytes;
 }
 
+static size_t build_multi_model_asset(uint8_t *asset, size_t capacity) {
+    const size_t section_count = 4;
+    const size_t directory_offset = PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
+    const size_t directory_bytes = section_count *
+        PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+    size_t vertex0_offset = align32(directory_offset + directory_bytes);
+    size_t polygon0_offset = align32(vertex0_offset + sizeof(vertices));
+    size_t vertex1_offset = align32(polygon0_offset + sizeof(polygons));
+    size_t polygon1_offset = align32(vertex1_offset +
+                                     sizeof(vertices_second));
+    size_t file_bytes = polygon1_offset + sizeof(polygons);
+    uint8_t *directory;
+
+    assert(file_bytes <= capacity);
+    memset(asset, 0, capacity);
+    memcpy(asset + vertex0_offset, vertices, sizeof(vertices));
+    memcpy(asset + polygon0_offset, polygons, sizeof(polygons));
+    memcpy(asset + vertex1_offset, vertices_second, sizeof(vertices_second));
+    memcpy(asset + polygon1_offset, polygons, sizeof(polygons));
+
+    directory = asset + directory_offset;
+    write_pcm2_section(
+        directory, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+        (uint32_t)vertex0_offset, vertices, sizeof(vertices), 4);
+    write_pcm2_section(
+        directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+        PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+        (uint32_t)polygon0_offset, polygons, sizeof(polygons), 2);
+    write_pcm2_section(
+        directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 2u,
+        PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+        (uint32_t)vertex1_offset, vertices_second,
+        sizeof(vertices_second), 4);
+    write_pcm2_section(
+        directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 3u,
+        PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+        (uint32_t)polygon1_offset, polygons, sizeof(polygons), 2);
+
+    write_le32(asset, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
+    write_le16(asset + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
+    write_le16(asset + 6, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    write_le32(asset + 8, (uint32_t)file_bytes);
+    write_float(asset + 28, 3.0f);
+    write_le32(asset + 32, (uint32_t)section_count);
+    write_le32(asset + 36, (uint32_t)directory_offset);
+    write_le32(asset + 40, (uint32_t)directory_bytes);
+    write_le32(asset + 44, crc32_bytes(directory, directory_bytes));
+    write_le32(asset + 60, crc32_bytes(asset, 60));
+    return file_bytes;
+}
+
 static void refresh_directory_checksums(uint8_t *asset) {
     uint32_t directory_offset =
         (uint32_t)asset[36] | (uint32_t)asset[37] << 8 |
@@ -223,6 +283,7 @@ static void test_raw_borrow(void) {
     size_t bytes = build_asset(asset, sizeof(asset), 0);
 
     assert(pvr_chunk_asset_open(asset, bytes, &asset_view) == 0);
+    assert(asset_view.model_count == 1);
     assert(pvr_chunk_asset_workspace_query(&asset_view, &requirements) == 0);
     assert(requirements.bytes == 0);
     assert(!requirements.copies_vertex && !requirements.copies_polygon);
@@ -256,6 +317,7 @@ static void test_directory_asset(void) {
 
     assert(pvr_chunk_asset_open(asset, bytes, &view) == 0);
     assert(view.version == PVR_CHUNK_ASSET_DIRECTORY_VERSION);
+    assert(view.model_count == 1);
     assert(view.header_bytes == PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
     assert(view.section_count == 4 &&
            view.section_directory_bytes ==
@@ -296,6 +358,66 @@ static void test_directory_asset(void) {
     assert(pvr_chunk_asset_section_find(
         &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, 2, &section) == -1);
     assert(errno == ENOENT && section.stored_data == NULL);
+}
+
+static void test_multi_model_asset(void) {
+    alignas(32) uint8_t asset[2080];
+    alignas(32) uint8_t workspace[2048];
+    pvr_chunk_asset_view_t view;
+    pvr_chunk_asset_workspace_requirements_t requirements;
+    pvr_chunk_asset_section_t section;
+    pvr_chunk_model_view_t first;
+    pvr_chunk_model_view_t second;
+    size_t bytes = build_multi_model_asset(asset, sizeof(asset));
+
+    assert(pvr_chunk_asset_open(asset, bytes, &view) == 0);
+    assert(view.model_count == 2 && view.section_count == 4);
+    assert(pvr_chunk_asset_model_workspace_query(
+        &view, 1, &requirements) == 0);
+    assert(!requirements.bytes && !requirements.copies_vertex &&
+           !requirements.copies_polygon);
+    assert(pvr_chunk_asset_load(
+        &view, NULL, NULL, NULL, 0, &first) == 0);
+    assert(pvr_chunk_asset_model_load(
+        &view, 1, NULL, NULL, NULL, 0, &second) == 0);
+    assert(first.model.vertex_words == view.vertex.stored_data);
+    assert(second.model.vertex_words != first.model.vertex_words);
+    assert(!memcmp(second.model.vertex_words, vertices_second,
+                   sizeof(vertices_second)));
+    assert(first.info.vertex_entries == 3 && second.info.vertex_entries == 3);
+    assert(pvr_chunk_asset_section_find(
+        &view, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM, 1, &section) == 0);
+    assert(section.stored_data == second.model.vertex_words);
+
+    memset(&requirements, 0x5a, sizeof(requirements));
+    errno = 0;
+    assert(pvr_chunk_asset_model_workspace_query(
+        &view, 2, &requirements) == -1);
+    assert(errno == ENOENT && !requirements.bytes);
+    memset(&second, 0x5a, sizeof(second));
+    errno = 0;
+    assert(pvr_chunk_asset_model_load(
+        &view, 2, NULL, NULL, NULL, 0, &second) == -1);
+    assert(errno == ENOENT && !second.model.vertex_words);
+
+    memmove(asset + 1, asset, bytes);
+    assert(pvr_chunk_asset_open(asset + 1, bytes, &view) == 0);
+    assert(pvr_chunk_asset_model_workspace_query(
+        &view, 1, &requirements) == 0);
+    assert(requirements.copies_vertex && requirements.copies_polygon);
+    assert(pvr_chunk_asset_model_load(
+        &view, 1, NULL, NULL, workspace, sizeof(workspace), &second) == 0);
+    assert(!memcmp(second.model.vertex_words, vertices_second,
+                   sizeof(vertices_second)));
+
+    bytes = build_multi_model_asset(asset, sizeof(asset));
+    write_le32(asset + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES +
+               PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 3u,
+               PVR_CHUNK_ASSET_SECTION_APPLICATION);
+    refresh_directory_checksums(asset);
+    errno = 0;
+    assert(pvr_chunk_asset_open(asset, bytes, &view) == -1);
+    assert(errno == EILSEQ);
 }
 
 static void test_unaligned_directory_asset(void) {
@@ -493,6 +615,7 @@ static void test_corrupt_headers(void) {
 int main(void) {
     test_raw_borrow();
     test_directory_asset();
+    test_multi_model_asset();
     test_unaligned_directory_asset();
     test_corrupt_directory();
     test_lz4_vertex();

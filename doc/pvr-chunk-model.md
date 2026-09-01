@@ -199,14 +199,20 @@ model admission boundary. The core container API allocates nothing and does
 not create a thread, fiber, callback worker, or decompression dependency.
 
 PCM2 preserves that contract while replacing header growth with a fixed
-64-byte header and a checksummed directory of 32-byte descriptors. Exactly one
-vertex stream and one polygon stream are required. Resource tables, volume
-data, compact or general skins, skeleton bindings, morph targets, hierarchies,
-animations, cooked caches, and application-defined sections are optional;
-repeatable types are
-addressed by zero-based ordinal rather than by adding pointers to the fixed
-asset view. Unknown nonzero section identifiers remain queryable for forward
-compatibility.
+64-byte header and a checksummed directory of 32-byte descriptors. The same
+nonzero number of vertex and polygon streams is required. The Nth stream of
+each type forms model ordinal N; the original workspace and load calls remain
+ordinal-zero wrappers, while `pvr_chunk_asset_model_workspace_query()` and
+`pvr_chunk_asset_model_load()` address every pair explicitly. The container's
+sphere is conservative for every model, so multi-model loading is correct even
+before a pipeline supplies narrower per-model metadata. PCM1 exposes one model
+through the same contract.
+
+Resource tables, volume data, compact or general skins, skeleton bindings,
+morph targets, hierarchies, animations, cooked caches, and application-defined
+sections are optional; repeatable types are addressed by zero-based ordinal
+rather than by adding pointers to the fixed asset view. Unknown nonzero section
+identifiers remain queryable for forward compatibility.
 
 Volume data uses a pointer-free little-endian `PVL1` section containing exact
 compact triangle, quad, or strip volume records. The descriptor table only
