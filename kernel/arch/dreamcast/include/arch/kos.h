@@ -87,6 +87,7 @@ __BEGIN_DECLS
 #include <dc/pvr_particle.h>
 #include <dc/pvr_sprite_geometry.h>
 #include <dc/pvr_cell.h>
+#include <dc/pvr_cell_asset.h>
 #include <dc/scif.h>
 #include <dc/sci.h>
 #include <dc/sd.h>

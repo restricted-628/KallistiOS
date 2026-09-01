@@ -751,6 +751,13 @@ pvr_material_submit_list
 pvr_sprite_batch_compile_2d
 pvr_sprite_batch_compile_3d
 pvr_cell_stream_open
+pvr_cell_asset_measure
+pvr_cell_asset_encode
+pvr_cell_asset_open
+pvr_cell_asset_state_get
+pvr_cell_asset_stream_get
+pvr_cell_asset_key_get
+pvr_cell_asset_materialize
 pvr_cell_stream_sample
 pvr_cell_stream_list_sample
 pvr_cell_stream_collect_events

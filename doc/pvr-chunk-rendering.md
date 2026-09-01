@@ -367,10 +367,12 @@ format, deformation, or tooling gaps:
    evaluation, and noncontiguous descendant pruning; PAT1 version 2 supplies
    exact XYZ/ZXY Euler sampling beside the preferred quaternion path. Do not
    replace either with pointer trees or deferred polygon execution.
-3. Extend the separate cell-sprite layer with host authoring support. Its core
-   timestamped stream/list sampling and events, generic whole-motion binding,
-   signed priority, material/color metadata, and compact or colored 2D/3D
-   geometry paths are complete and remain outside the 3D compact mesh grammar.
+3. Extend the separate cell-sprite host pipeline beyond its completed PCA1
+   pointer-free encoder, checked loader, and caller-owned materialization with
+   declarative atlas/image import. Its core timestamped stream/list sampling
+   and events, generic whole-motion binding, signed priority, material/color
+   metadata, and compact or colored 2D/3D geometry paths are complete and
+   remain outside the 3D compact mesh grammar.
 
 Already completed and not to be reimplemented are distinct signed UV8/UV10
 records with automatic host-side selection and a finite float-UV escape for

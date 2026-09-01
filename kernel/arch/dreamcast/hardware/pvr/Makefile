@@ -36,7 +36,7 @@ OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
 	pvr_chunk_shape_asset.o \
 	pvr_chunk_binding.o pvr_lighting.o pvr_toon.o pvr_chunk_toon.o \
 	pvr_chunk_wire.o pvr_deform.o \
-	pvr_sprite_geometry.o pvr_cell.o \
+	pvr_sprite_geometry.o pvr_cell.o pvr_cell_asset.o \
 	pvr_particle.o
 
 # Texture handling

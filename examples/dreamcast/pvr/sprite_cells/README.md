@@ -9,6 +9,8 @@ into the existing compact textured PVR sprite packet.
 The example deliberately keeps each ownership boundary visible:
 
 - `pvr_cell_stream_list_sample()` combines independent timestamped streams;
+- `pvr_cell_asset_open()` and `pvr_cell_asset_materialize()` can supply the
+  same base cells and stream list from a checked pointer-free asset;
 - `pvr_cell_sprite_resolve()` composes local cells under one transform;
 - `pvr_cell_resolved_sort()` applies explicit signed-priority order;
 - `pvr_cell_sprite_compile_2d()` owns no memory and changes no PVR state;

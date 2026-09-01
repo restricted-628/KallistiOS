@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added pointer-free PCA1 cell-sprite assets. Checked APIs measure and encode
+  existing base cells and independently timed streams, validate fixed-width
+  records and two CRCs, decode individual records, and materialize directly
+  into caller-owned cell runtime arrays. Canonical zeroed partial keys prevent
+  uninitialized fields from becoming hidden authored data.
+
 * Extended the bounded glTF/GLB importer with normalized VEC3/VEC4 `COLOR_0`.
   Vertex color is multiplied by the primitive base-color factor and emitted as
   compact ARGB vertex data that coexists with per-reference UVs and normals.

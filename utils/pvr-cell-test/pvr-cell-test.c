@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_cell.h>
+#include <dc/pvr_cell_asset.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -12,6 +13,7 @@
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef __DREAMCAST__
@@ -31,6 +33,37 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
 
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.0001f;
+}
+
+static uint32_t crc32_bytes(const void *data, size_t size) {
+    const uint8_t *bytes = data;
+    uint32_t crc = UINT32_MAX;
+    size_t index;
+
+    for(index = 0; index < size; ++index) {
+        unsigned bit;
+
+        crc ^= bytes[index];
+        for(bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^
+                  (UINT32_C(0xedb88320) &
+                   (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return ~crc;
+}
+
+static void store_le32(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+static void refresh_asset_crc(uint8_t *bytes, size_t size) {
+    store_le32(bytes + 44, crc32_bytes(
+        bytes + PVR_CELL_ASSET_HEADER_BYTES,
+        size - PVR_CELL_ASSET_HEADER_BYTES));
+    store_le32(bytes + 60, crc32_bytes(bytes, 60));
 }
 
 static pvr_cell_state_t make_state(size_t atlas_cell, float x, float y,
@@ -55,6 +88,158 @@ static pvr_cell_state_t make_state(size_t atlas_cell, float x, float y,
     };
 
     return state;
+}
+
+static void test_cell_asset(void) {
+    pvr_cell_state_t base[2] = {
+        make_state(0, 1.0f, 2.0f, -2, 4),
+        make_state(1, 3.0f, 4.0f, 5, 6)
+    };
+    pvr_cell_key_t keys[2] = {
+        {
+            .time = 0.25f,
+            .slot_index = 0,
+            .fields = PVR_CELL_KEY_ATLAS_CELL | PVR_CELL_KEY_OFFSET |
+                      PVR_CELL_KEY_DIFFUSE,
+            .value = {
+                .atlas_cell_index = 7,
+                .offset = { 8.0f, 9.0f, 10.0f, 0.0f },
+                .argb = {
+                    UINT32_C(0xff102030), UINT32_C(0xff405060),
+                    UINT32_C(0xff708090), UINT32_C(0xffa0b0c0)
+                }
+            }
+        },
+        {
+            .time = 0.75f,
+            .slot_index = 1,
+            .fields = PVR_CELL_KEY_FLAGS,
+            .value = { .flags = PVR_CELL_HIDDEN }
+        }
+    };
+    pvr_cell_stream_t source_streams[2] = {
+        { keys, 2, 0.125f, 1.0f, 1 },
+        { NULL, 0, -0.25f, 2.0f, 0 }
+    };
+    pvr_cell_asset_view_t view;
+    pvr_cell_asset_stream_t stream;
+    pvr_cell_asset_runtime_t runtime;
+    pvr_cell_state_t decoded_cells[2];
+    pvr_cell_key_t decoded_keys[2];
+    pvr_cell_stream_view_t decoded_streams[2];
+    pvr_cell_state_t sampled[2];
+    pvr_cell_state_t workspace[2];
+    pvr_cell_sprite_t sprite;
+    pvr_cell_key_t key;
+    uint8_t *asset;
+    uint8_t *corrupt;
+    uint8_t base_only[PVR_CELL_ASSET_HEADER_BYTES +
+                      PVR_CELL_ASSET_STATE_BYTES];
+    pvr_cell_asset_view_t base_only_view;
+    pvr_cell_asset_runtime_t base_only_runtime;
+    pvr_cell_state_t base_only_cell;
+    size_t required;
+    size_t written = 0;
+
+    assert(pvr_cell_asset_measure(base, 2, source_streams, 2,
+                                  &required) == 0);
+    assert(required == PVR_CELL_ASSET_HEADER_BYTES +
+                       2 * PVR_CELL_ASSET_STATE_BYTES +
+                       2 * PVR_CELL_ASSET_STREAM_BYTES +
+                       2 * PVR_CELL_ASSET_KEY_BYTES);
+    asset = malloc(required);
+    corrupt = malloc(required);
+    assert(asset && corrupt);
+    assert(pvr_cell_asset_encode(base, 2, source_streams, 2,
+                                 asset, required, &written) == 0);
+    assert(written == required);
+    assert(pvr_cell_asset_open(asset, required, &view) == 0);
+    assert(view.cell_count == 2 && view.stream_count == 2 &&
+           view.key_count == 2);
+
+    assert(pvr_cell_asset_state_get(&view, 1, &decoded_cells[1]) == 0);
+    assert(decoded_cells[1].atlas_cell_index == 1 &&
+           close_enough(decoded_cells[1].offset.y, 4.0f) &&
+           decoded_cells[1].priority == 5 &&
+           decoded_cells[1].material_id == 6);
+    assert(pvr_cell_asset_stream_get(&view, 1, &stream) == 0);
+    assert(stream.first_key == 2 && stream.key_count == 0 &&
+           close_enough(stream.time_offset, -0.25f) &&
+           close_enough(stream.time_max, 2.0f) && !stream.repeat);
+    assert(pvr_cell_asset_key_get(&view, 0, &key) == 0);
+    assert(key.slot_index == 0 &&
+           key.fields == (PVR_CELL_KEY_ATLAS_CELL | PVR_CELL_KEY_OFFSET |
+                          PVR_CELL_KEY_DIFFUSE) &&
+           key.value.atlas_cell_index == 7 &&
+           close_enough(key.value.offset.z, 10.0f) &&
+           key.value.argb[3] == UINT32_C(0xffa0b0c0) &&
+           key.value.scale_x == 0.0f);
+
+    memset(&runtime, 0x5a, sizeof(runtime));
+    {
+        pvr_cell_asset_runtime_t unchanged = runtime;
+
+        errno = 0;
+        assert(pvr_cell_asset_materialize(
+            &view, decoded_cells, 1, decoded_keys, 2,
+            decoded_streams, 2, &runtime) == -1);
+        assert(errno == ENOSPC &&
+               !memcmp(&runtime, &unchanged, sizeof(runtime)));
+    }
+    assert(pvr_cell_asset_materialize(
+        &view, decoded_cells, 2, decoded_keys, 2,
+        decoded_streams, 2, &runtime) == 0);
+    assert(runtime.base_cells == decoded_cells && runtime.cell_count == 2 &&
+           runtime.stream_list.streams == decoded_streams &&
+           runtime.stream_list.stream_count == 2);
+
+    sprite.base_cells = runtime.base_cells;
+    sprite.cell_count = runtime.cell_count;
+    sprite.position = (point_t){ 0.0f, 0.0f, 0.0f, 1.0f };
+    sprite.rotation = 0.0f;
+    sprite.scale_x = 1.0f;
+    sprite.scale_y = 1.0f;
+    sprite.argb = UINT32_MAX;
+    sprite.oargb = UINT32_MAX;
+    assert(pvr_cell_stream_list_sample(
+        &sprite, &runtime.stream_list, 0.5f, sampled, workspace, 2,
+        NULL) == 0);
+    assert(sampled[0].atlas_cell_index == 7 &&
+           close_enough(sampled[0].offset.x, 8.0f) &&
+           sampled[0].argb[0] == UINT32_C(0xff102030) &&
+           !(sampled[1].flags & PVR_CELL_HIDDEN));
+
+    errno = 0;
+    assert(pvr_cell_asset_encode(base, 2, source_streams, 2,
+                                 base, required, NULL) == -1);
+    assert(errno == EINVAL);
+    memcpy(corrupt, asset, required);
+    corrupt[required - 1u] ^= UINT8_C(0x80);
+    errno = 0;
+    assert(pvr_cell_asset_open(corrupt, required, &view) == -1);
+    assert(errno == EILSEQ);
+    memcpy(corrupt, asset, required);
+    corrupt[PVR_CELL_ASSET_HEADER_BYTES +
+            2 * PVR_CELL_ASSET_STATE_BYTES +
+            2 * PVR_CELL_ASSET_STREAM_BYTES + 16 + 20] = 1;
+    refresh_asset_crc(corrupt, required);
+    errno = 0;
+    assert(pvr_cell_asset_open(corrupt, required, &view) == -1);
+    assert(errno == EILSEQ);
+
+    assert(pvr_cell_asset_encode(base, 1, NULL, 0, base_only,
+                                 sizeof(base_only), NULL) == 0);
+    assert(pvr_cell_asset_open(base_only, sizeof(base_only),
+                               &base_only_view) == 0);
+    assert(pvr_cell_asset_materialize(
+        &base_only_view, &base_only_cell, 1, NULL, 0, NULL, 0,
+        &base_only_runtime) == 0);
+    assert(base_only_runtime.cell_count == 1 &&
+           base_only_runtime.stream_list.streams == NULL &&
+           base_only_runtime.stream_list.stream_count == 0);
+
+    free(corrupt);
+    free(asset);
 }
 
 static void test_streams_and_composition(void) {
@@ -375,6 +560,7 @@ static void test_motion_and_events(void) {
 }
 
 int main(void) {
+    test_cell_asset();
     test_streams_and_composition();
     test_stream_time_policy();
     test_compile_and_failures();

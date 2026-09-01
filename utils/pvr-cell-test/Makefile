@@ -9,6 +9,7 @@ TARGET = pvr-cell-test
 DREAMCAST_TARGET = pvr-cell-test.elf
 SOURCES = pvr-cell-test.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_cell.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_cell_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_sprite_geometry.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c
 
