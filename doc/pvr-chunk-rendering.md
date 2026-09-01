@@ -357,10 +357,11 @@ format, deformation, or tooling gaps:
 
 1. Extend the now-established canonical host scene IR beyond its admitted
    hierarchy, general-skin, sparse morph, and instance morph-animation
-   sections. Include wider modern scene import,
+   sections. `COLOR_0` VEC3/VEC4 import and exact colored-vertex round trips
+   are complete. Continue wider modern scene import,
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
-   of deferred polygon controls and
-   repeatable round-trip conformance fixtures for seams and deformation.
+   of deferred polygon controls, and repeatable round-trip conformance fixtures
+   for UV/normal seams and deformation.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose
    deformation. PCH1 version 2 supplies component suppression, hidden-node
    evaluation, and noncontiguous descendant pruning; PAT1 version 2 supplies

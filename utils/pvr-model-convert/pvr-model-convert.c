@@ -94,6 +94,10 @@ typedef struct source_normal {
     float value[3];
 } source_normal_t;
 
+typedef struct source_color {
+    float value[4];
+} source_color_t;
+
 typedef struct source_corner {
     size_t position;
     size_t texcoord;
@@ -146,6 +150,10 @@ typedef struct source_model {
     source_normal_t *normals;
     size_t normal_count;
     size_t normal_capacity;
+    source_color_t *colors;
+    size_t color_count;
+    size_t color_capacity;
+    int has_colors;
     source_triangle_t *triangles;
     size_t triangle_count;
     size_t triangle_capacity;
@@ -238,6 +246,7 @@ static void source_model_free(source_model_t *model) {
     free(model->positions);
     free(model->texcoords);
     free(model->normals);
+    free(model->colors);
     free(model->triangles);
     memset(model, 0, sizeof(*model));
 }
@@ -1133,6 +1142,29 @@ static int gltf_append_position_value(source_model_t *model,
     return 0;
 }
 
+static int gltf_append_color_value(source_model_t *model,
+                                   const float value[4]) {
+    void *allocation = model->colors;
+    source_color_t color;
+    size_t component;
+
+    for(component = 0; component < 4u; ++component) {
+        if(!isfinite(value[component]) || value[component] < 0.0f ||
+           value[component] > 1.0f) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    memcpy(color.value, value, sizeof(color.value));
+    if(reserve_array(&allocation, &model->color_capacity,
+                     model->color_count + 1u,
+                     sizeof(*model->colors)) < 0)
+        return -1;
+    model->colors = allocation;
+    model->colors[model->color_count++] = color;
+    return 0;
+}
+
 static int gltf_append_texcoord_value(source_model_t *model,
                                       const float value[2], int flip_v) {
     void *allocation = model->texcoords;
@@ -1239,6 +1271,8 @@ static int gltf_append_primitive(const cgltf_data *data,
         primitive, cgltf_attribute_type_texcoord, 0);
     const cgltf_accessor *normals = gltf_attribute(
         primitive, cgltf_attribute_type_normal, 0);
+    const cgltf_accessor *colors = gltf_attribute(
+        primitive, cgltf_attribute_type_color, 0);
     size_t position_base = model->position_count;
     size_t texcoord_base = model->texcoord_count;
     size_t normal_base = model->normal_count;
@@ -1257,11 +1291,13 @@ static int gltf_append_primitive(const cgltf_data *data,
         if(candidate->index < 0 ||
            ((candidate->type == cgltf_attribute_type_position ||
              candidate->type == cgltf_attribute_type_normal ||
-             candidate->type == cgltf_attribute_type_texcoord) &&
+             candidate->type == cgltf_attribute_type_texcoord ||
+             candidate->type == cgltf_attribute_type_color) &&
             candidate->index != 0) ||
            (candidate->type != cgltf_attribute_type_position &&
             candidate->type != cgltf_attribute_type_normal &&
             candidate->type != cgltf_attribute_type_texcoord &&
+            candidate->type != cgltf_attribute_type_color &&
             candidate->type != cgltf_attribute_type_joints &&
             candidate->type != cgltf_attribute_type_weights)) {
             errno = ENOTSUP;
@@ -1276,6 +1312,9 @@ static int gltf_append_primitive(const cgltf_data *data,
                       texcoords->count != positions->count)) ||
        (normals && (normals->type != cgltf_type_vec3 ||
                     normals->count != positions->count)) ||
+       (colors && ((colors->type != cgltf_type_vec3 &&
+                    colors->type != cgltf_type_vec4) ||
+                   colors->count != positions->count)) ||
        positions->count > MAX_POSITION_COUNT - model->position_count) {
         errno = ENOTSUP;
         return -1;
@@ -1294,6 +1333,12 @@ static int gltf_append_primitive(const cgltf_data *data,
         float position[3];
         float texcoord[2];
         float normal[3];
+        float color[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+        const float *base = primitive->material &&
+            primitive->material->has_pbr_metallic_roughness ?
+            primitive->material->pbr_metallic_roughness.base_color_factor :
+            NULL;
+        size_t component;
 
         if(!cgltf_accessor_read_float(positions, vertex, position, 3) ||
            gltf_append_position_value(model, position) < 0)
@@ -1306,6 +1351,18 @@ static int gltf_append_primitive(const cgltf_data *data,
            (!cgltf_accessor_read_float(normals, vertex, normal, 3) ||
             gltf_append_normal_value(model, normal) < 0))
             return -1;
+        if(model->has_colors) {
+            if(colors && !cgltf_accessor_read_float(
+                             colors, vertex, color,
+                             colors->type == cgltf_type_vec3 ? 3u : 4u)) {
+                errno = EILSEQ;
+                return -1;
+            }
+            for(component = 0; component < 4u; ++component)
+                color[component] *= base ? base[component] : 1.0f;
+            if(gltf_append_color_value(model, color) < 0)
+                return -1;
+        }
     }
 
     element_count = primitive->indices ?
@@ -2427,6 +2484,16 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
     for(model = 0; model < mesh_count; ++model) {
         const cgltf_mesh *mesh = meshes[model];
 
+        /* A model uses one vertex-record family. Scan first so an uncolored
+           primitive preceding a colored one receives the material base color
+           instead of being emitted without a color attribute. */
+        for(primitive = 0; primitive < mesh->primitives_count; ++primitive) {
+            if(gltf_attribute(&mesh->primitives[primitive],
+                              cgltf_attribute_type_color, 0)) {
+                models->models[model].has_colors = 1;
+                break;
+            }
+        }
         for(primitive = 0; primitive < mesh->primitives_count;
             ++primitive) {
             if(gltf_append_primitive(
@@ -2763,7 +2830,8 @@ static int validate_references(const source_model_t *model) {
     size_t triangle;
     size_t corner;
 
-    if(!model->position_count || !model->triangle_count) {
+    if(!model->position_count || !model->triangle_count ||
+       (model->has_colors && model->color_count != model->position_count)) {
         errno = EILSEQ;
         return -1;
     }
@@ -3079,17 +3147,20 @@ static int calculate_sizes(const source_model_t *model,
                            output_streams_t *streams) {
     size_t vertex_batches =
         (model->position_count + MAX_VERTEX_BATCH - 1u) / MAX_VERTEX_BATCH;
+    size_t vertex_stride = model->has_colors ? 4u : 3u;
     size_t vertex_words;
     size_t polygon_words = 1u;
     size_t first = 0;
     int active_texture = -1;
     size_t active_material = SIZE_MAX;
 
-    if(model->position_count > (SIZE_MAX - 1u - 2u * vertex_batches) / 3u) {
+    if(model->position_count >
+       (SIZE_MAX - 1u - 2u * vertex_batches) / vertex_stride) {
         errno = EOVERFLOW;
         return -1;
     }
-    vertex_words = 1u + 2u * vertex_batches + 3u * model->position_count;
+    vertex_words = 1u + 2u * vertex_batches +
+                   vertex_stride * model->position_count;
 
     if(!library->count) {
         polygon_words += 4u;
@@ -3183,6 +3254,15 @@ static uint32_t quantize_color(const float color[3]) {
     uint32_t blue = (uint32_t)lroundf(color[2] * 255.0f);
 
     return UINT32_C(0xff000000) | (red << 16) | (green << 8) | blue;
+}
+
+static uint32_t quantize_argb(const float color[4]) {
+    uint32_t alpha = (uint32_t)lroundf(color[3] * 255.0f);
+    uint32_t red = (uint32_t)lroundf(color[0] * 255.0f);
+    uint32_t green = (uint32_t)lroundf(color[1] * 255.0f);
+    uint32_t blue = (uint32_t)lroundf(color[2] * 255.0f);
+
+    return (alpha << 24) | (red << 16) | (green << 8) | blue;
 }
 
 static void emit_u32(uint16_t **output, uint32_t value) {
@@ -3326,13 +3406,16 @@ static int generate_streams(const source_model_t *model,
     first = 0;
     while(first < model->position_count) {
         size_t count = model->position_count - first;
+        size_t vertex_stride = model->has_colors ? 4u : 3u;
         size_t payload_words;
         size_t position;
 
         if(count > MAX_VERTEX_BATCH)
             count = MAX_VERTEX_BATCH;
-        payload_words = 1u + 3u * count;
-        *vertex_output++ = PVR_CHUNK_VERTEX_XYZ |
+        payload_words = 1u + vertex_stride * count;
+        *vertex_output++ = (model->has_colors ?
+                            PVR_CHUNK_VERTEX_XYZ_ARGB :
+                            PVR_CHUNK_VERTEX_XYZ) |
                            ((uint32_t)payload_words << 16);
         *vertex_output++ = ((uint32_t)count << 16) | (uint32_t)first;
         for(position = 0; position < count; ++position) {
@@ -3342,6 +3425,9 @@ static int generate_streams(const source_model_t *model,
                 *vertex_output++ = float_word(
                     model->positions[first + position].value[component]);
             }
+            if(model->has_colors)
+                *vertex_output++ = quantize_argb(
+                    model->colors[first + position].value);
         }
         first += count;
     }

@@ -21,7 +21,8 @@ glTF and GLB input require `--emit-asset --section-directory`. The host-only
 importer uses cgltf and adds no parser, allocation, or code to a Dreamcast
 program. It accepts one selected scene and any nonzero set of unique
 meshes, including repeated instances, triangle primitives, indexed or non-
-indexed positions, optional normals and UV set zero, stable base-color texture
+indexed positions, optional normals, UV set zero, and `COLOR_0`, stable
+base-color texture
 ordinals, parent-before-child node transforms, and one STEP/LINEAR translation,
 rotation, scale, or morph-weight animation. Each unique mesh becomes one PCM2
 model ordinal
@@ -31,9 +32,16 @@ Different meshes may use different skins; repeated instances of one mesh must
 agree on that mesh's skin. General-N weights are normalized exactly to 65535;
 no four-influence reduction is performed.
 
+`COLOR_0` accepts normalized `VEC3` or `VEC4` values. RGB is multiplied by the
+primitive material's base-color factor before conversion to `0xAARRGGBB`; a
+missing VEC3 alpha is one. If any primitive in a mesh is colored, uncolored
+primitives receive their material base color so the complete mesh can use one
+compact colored-vertex family without changing appearance. Indexed attribute
+seams remain distinct because the importer does not merge source vertices.
+
 Unsupported authored meaning is rejected rather than dropped. Current explicit
 boundaries include required extensions, GPU instancing, non-triangle primitives,
-tangent/color/custom vertex attributes, texture
+tangent/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
 materials, detached skin joints, conflicting skins on repeated mesh instances,
 multiple animations, matrix-authored nodes in an animated scene, and

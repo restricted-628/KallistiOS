@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Extended the bounded glTF/GLB importer with normalized VEC3/VEC4 `COLOR_0`.
+  Vertex color is multiplied by the primitive base-color factor and emitted as
+  compact ARGB vertex data that coexists with per-reference UVs and normals.
+  Mesh-wide preflight gives uncolored primitives the correct material base
+  color when another primitive is colored, while indexed seams remain intact.
+
 * Added explicit XYZ and ZXY Euler rotation-track modes beside the preferred
   quaternion path. Euler keys retain their authored representation through
   PAT1 version 2, interpolate over shortest angular arcs, and convert to the

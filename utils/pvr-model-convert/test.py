@@ -701,6 +701,126 @@ f 1/1/1 2/2/1 3/3/1
             0.0, 3.0, 0.0, 1.0
         )
 
+        color_binary = (
+            struct.pack(
+                "<9f",
+                -1.0, -1.0, 0.0,
+                1.0, -1.0, 0.0,
+                0.0, 1.0, 0.0,
+            ) +
+            struct.pack("<12f",
+                        1.0, 0.0, 0.0, 0.5,
+                        0.0, 1.0, 0.0, 1.0,
+                        0.0, 0.0, 1.0, 1.0) +
+            struct.pack("<9f", *(0.0, 0.0, 1.0) * 3) +
+            struct.pack("<3H", 0, 1, 2) + b"\0\0"
+        )
+        color_source = root / "triangle-color.gltf"
+        color_document = {
+            "asset": {"version": "2.0"},
+            "buffers": [{
+                "byteLength": len(color_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(color_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 48,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 84, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 120, "byteLength": 6,
+                 "target": 34963},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 2, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 3, "componentType": 5123, "count": 3,
+                 "type": "SCALAR"},
+            ],
+            "materials": [{
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": [0.5, 0.5, 0.5, 1.0]
+                },
+            }],
+            "meshes": [{"primitives": [{
+                "attributes": {
+                    "POSITION": 0, "COLOR_0": 1, "NORMAL": 2
+                },
+                "indices": 3,
+                "material": 0,
+            }]}],
+            "nodes": [{"mesh": 0}],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0,
+        }
+        color_source.write_text(json.dumps(color_document), encoding="utf-8")
+        color_asset = root / "triangle-color.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            color_source, color_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        color_asset_bytes = color_asset.read_bytes()
+        color_vertex_descriptor = struct.unpack_from(
+            "<7IHH", color_asset_bytes, 64
+        )
+        color_vertices = color_asset_bytes[
+            color_vertex_descriptor[2]:
+            color_vertex_descriptor[2] + color_vertex_descriptor[3]
+        ]
+        assert len(color_vertices) == 60
+        assert struct.unpack_from("<I", color_vertices, 0)[0] == (
+            35 | (13 << 16)
+        )
+        assert struct.unpack_from("<I", color_vertices, 20)[0] == 0x80800000
+        assert struct.unpack_from("<I", color_vertices, 36)[0] == 0xff008000
+        assert struct.unpack_from("<I", color_vertices, 52)[0] == 0xff000080
+
+        color3_binary = (
+            color_binary[:36] +
+            struct.pack("<9f",
+                        1.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0,
+                        0.0, 0.0, 1.0) +
+            struct.pack("<9f", *(0.0, 0.0, 1.0) * 3) +
+            struct.pack("<3H", 0, 1, 2) + b"\0\0"
+        )
+        color3_document = json.loads(json.dumps(color_document))
+        color3_document["buffers"][0]["byteLength"] = len(color3_binary)
+        color3_document["buffers"][0]["uri"] = (
+            "data:application/octet-stream;base64," +
+            base64.b64encode(color3_binary).decode("ascii")
+        )
+        color3_document["bufferViews"][1]["byteLength"] = 36
+        color3_document["bufferViews"][2]["byteOffset"] = 72
+        color3_document["bufferViews"][3]["byteOffset"] = 108
+        color3_document["accessors"][1]["type"] = "VEC3"
+        color3_source = root / "triangle-color3.gltf"
+        color3_source.write_text(
+            json.dumps(color3_document), encoding="utf-8"
+        )
+        color3_asset = root / "triangle-color3.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            color3_source, color3_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        color3_bytes = color3_asset.read_bytes()
+        color3_vertex_descriptor = struct.unpack_from(
+            "<7IHH", color3_bytes, 64
+        )
+        color3_vertices = color3_bytes[
+            color3_vertex_descriptor[2]:
+            color3_vertex_descriptor[2] + color3_vertex_descriptor[3]
+        ]
+        assert struct.unpack_from("<I", color3_vertices, 20)[0] == 0xff800000
+
         multi_gltf_binary = (
             gltf_binary +
             struct.pack("<6f", 0.0, 0.0, 1.0, 0.0, 0.5, 1.0) +
