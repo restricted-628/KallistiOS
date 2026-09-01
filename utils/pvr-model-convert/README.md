@@ -19,17 +19,21 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
 
 glTF and GLB input require `--emit-asset --section-directory`. The host-only
 importer uses cgltf and adds no parser, allocation, or code to a Dreamcast
-program. It currently accepts one selected scene and one unique mesh, including
-repeated instances of that mesh, triangle primitives, indexed or non-indexed
-positions, optional normals and UV set zero, stable base-color texture ordinals,
-parent-before-child node transforms, one consistent skin with any number of
-weight sets, inverse-bind matrices, sparse position/normal morph targets, and
-one STEP/LINEAR translation/rotation/scale animation. General-N weights are
-normalized exactly to 65535; no four-influence reduction is performed.
+program. It accepts one selected scene and any nonzero set of unique rigid
+meshes, including repeated instances, triangle primitives, indexed or non-
+indexed positions, optional normals and UV set zero, stable base-color texture
+ordinals, parent-before-child node transforms, and one STEP/LINEAR translation,
+rotation, or scale animation. Each unique mesh becomes one PCM2 model ordinal
+with exact local bounds and its own resource manifest. When the scene uses one
+unique mesh, the importer additionally accepts one consistent skin with any
+number of weight sets, inverse-bind matrices, and sparse position/normal morph
+targets. General-N weights are normalized exactly to 65535; no four-influence
+reduction is performed.
 
 Unsupported authored meaning is rejected rather than dropped. Current explicit
-boundaries include multiple unique meshes, required extensions, instancing,
-non-triangle primitives, tangent/color/custom vertex attributes, texture
+boundaries include per-model skin or morph sections in a multi-mesh scene,
+multi-model cooked caches, required extensions, GPU instancing, non-triangle
+primitives, tangent/color/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
 materials, detached skin joints, multiple skins or animations, morph-weight
 animation, matrix-authored nodes in an animated scene, and cubic-spline tracks.

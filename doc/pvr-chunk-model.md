@@ -268,6 +268,14 @@ implementation before publishing the PCM2 file. The OBJ boundary has only one
 model and therefore emits only this explicit root; the glTF/GLB importer
 populates the same IR for an authored selected scene rather than defining
 another target format.
+Every unique rigid mesh in that selected scene becomes a separate PCM2 model
+ordinal; repeated instances share the ordinal, while hierarchy nodes retain
+their distinct local transforms. Each model receives exact `PMT1` bounds and
+its own optional resource-manifest ordinal. Multi-model raw and LZ4-framed
+outputs are reloaded with persistent nonoverlapping decode workspace before
+publication. Per-model skin, morph, and cooked-cache sections remain a later
+host-pipeline extension; those authored combinations are rejected rather than
+flattened.
 With `--rigid-skin`, the same host pipeline writes one `PSG1` section whose
 vertices are each fully weighted to joint zero, then reloads and materializes
 it through the target implementation before publishing. This deliberately

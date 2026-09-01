@@ -1,6 +1,6 @@
 /* KallistiOS ##version##
 
-   Host-side OBJ to compact PVR model converter.
+   Host-side source to compact PVR model converter.
    Copyright (C) 2026 Joseph Black
 
    The source boundary is intentionally narrower than OBJ as a whole. Vertex
@@ -151,6 +151,11 @@ typedef struct source_model {
     size_t triangle_capacity;
 } source_model_t;
 
+typedef struct source_model_set {
+    source_model_t *models;
+    size_t count;
+} source_model_set_t;
+
 typedef struct gltf_asset_metadata {
     pvr_chunk_skin_span_t *skin_spans;
     pvr_chunk_skin_weight_t *skin_weights;
@@ -223,6 +228,17 @@ static void source_model_free(source_model_t *model) {
     free(model->normals);
     free(model->triangles);
     memset(model, 0, sizeof(*model));
+}
+
+static void source_model_set_free(source_model_set_t *set) {
+    size_t model;
+
+    if(!set)
+        return;
+    for(model = 0; model < set->count; ++model)
+        source_model_free(&set->models[model]);
+    free(set->models);
+    memset(set, 0, sizeof(*set));
 }
 
 static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
@@ -816,12 +832,26 @@ static int gltf_array_index(const void *base, size_t count,
     return 0;
 }
 
-static int gltf_scene_find_mesh(const cgltf_node *node,
-                                const cgltf_mesh **mesh,
-                                const cgltf_skin **skin,
-                                int *skin_initialized,
-                                size_t *visited, size_t node_limit) {
+static size_t gltf_mesh_ordinal(const cgltf_mesh *const *meshes,
+                                size_t mesh_count,
+                                const cgltf_mesh *mesh) {
+    size_t index;
+
+    for(index = 0; index < mesh_count; ++index) {
+        if(meshes[index] == mesh)
+            return index;
+    }
+    return SIZE_MAX;
+}
+
+static int gltf_scene_collect_meshes(const cgltf_node *node,
+                                     const cgltf_mesh **meshes,
+                                     const cgltf_skin **skins,
+                                     size_t *mesh_count,
+                                     size_t mesh_capacity,
+                                     size_t *visited, size_t node_limit) {
     cgltf_size child;
+    size_t ordinal;
 
     if(++*visited > node_limit) {
         errno = EILSEQ;
@@ -832,28 +862,35 @@ static int gltf_scene_find_mesh(const cgltf_node *node,
         return -1;
     }
     if(node->mesh) {
-        if(*mesh && *mesh != node->mesh) {
+        ordinal = gltf_mesh_ordinal(meshes, *mesh_count, node->mesh);
+        if(ordinal == SIZE_MAX) {
+            /* First selected-scene traversal order is the stable model
+               ordinal used by both hierarchy nodes and PCM2 stream pairs. */
+            if(*mesh_count >= mesh_capacity) {
+                errno = EILSEQ;
+                return -1;
+            }
+            ordinal = (*mesh_count)++;
+            meshes[ordinal] = node->mesh;
+            skins[ordinal] = node->skin;
+        }
+        else if(skins[ordinal] != node->skin) {
             errno = ENOTSUP;
             return -1;
         }
-        *mesh = node->mesh;
-        if(*skin_initialized && *skin != node->skin) {
-            errno = ENOTSUP;
-            return -1;
-        }
-        *skin = node->skin;
-        *skin_initialized = 1;
     }
     for(child = 0; child < node->children_count; ++child) {
-        if(gltf_scene_find_mesh(node->children[child], mesh, skin,
-                                skin_initialized, visited, node_limit) < 0)
+        if(gltf_scene_collect_meshes(
+               node->children[child], meshes, skins, mesh_count,
+               mesh_capacity, visited, node_limit) < 0)
             return -1;
     }
     return 0;
 }
 
 static int gltf_scene_append_node(const cgltf_node *node,
-                                  const cgltf_mesh *mesh,
+                                  const cgltf_mesh *const *meshes,
+                                  size_t mesh_count,
                                   uint32_t parent_index,
                                   pvr_scene_ir_t *scene,
                                   const cgltf_data *data,
@@ -862,6 +899,7 @@ static int gltf_scene_append_node(const cgltf_node *node,
     float local[16];
     uint32_t node_index;
     size_t node_ordinal;
+    size_t model_ordinal;
     cgltf_size child;
 
     if(++*visited > node_limit || scene->node_count >= UINT32_MAX) {
@@ -874,14 +912,23 @@ static int gltf_scene_append_node(const cgltf_node *node,
                         sizeof(*data->nodes), node, &node_ordinal) < 0)
         return -1;
     node_to_scene[node_ordinal] = node_index;
+    model_ordinal = node->mesh ?
+        gltf_mesh_ordinal(meshes, mesh_count, node->mesh) : SIZE_MAX;
+    if(node->mesh && (model_ordinal == SIZE_MAX ||
+                      model_ordinal >= UINT32_MAX)) {
+        errno = EILSEQ;
+        return -1;
+    }
     if(pvr_scene_ir_add_node(
-           scene, parent_index, node->mesh == mesh ? 0u :
-               PVR_CHUNK_SCENE_MODEL_NONE, local) < 0)
+           scene, parent_index,
+           node->mesh ? (uint32_t)model_ordinal :
+                        PVR_CHUNK_SCENE_MODEL_NONE,
+           local) < 0)
         return -1;
     for(child = 0; child < node->children_count; ++child) {
-        if(gltf_scene_append_node(node->children[child], mesh, node_index,
-                                  scene, data, node_to_scene, visited,
-                                  node_limit) < 0)
+        if(gltf_scene_append_node(
+               node->children[child], meshes, mesh_count, node_index,
+               scene, data, node_to_scene, visited, node_limit) < 0)
             return -1;
     }
     return 0;
@@ -889,33 +936,33 @@ static int gltf_scene_append_node(const cgltf_node *node,
 
 static int gltf_build_scene(const cgltf_data *data,
                             const cgltf_scene *source_scene,
-                            const cgltf_mesh **mesh,
-                            const cgltf_skin **skin,
+                            const cgltf_mesh **meshes,
+                            const cgltf_skin **skins,
+                            size_t *mesh_count,
                             pvr_scene_ir_t *scene,
                             size_t *node_to_scene) {
     size_t visited = 0;
-    int skin_initialized = 0;
     cgltf_size root;
 
-    *mesh = NULL;
-    *skin = NULL;
+    *mesh_count = 0;
     for(root = 0; root < data->nodes_count; ++root)
         node_to_scene[root] = SIZE_MAX;
     for(root = 0; root < source_scene->nodes_count; ++root) {
-        if(gltf_scene_find_mesh(source_scene->nodes[root], mesh, skin,
-                                &skin_initialized, &visited,
-                                data->nodes_count) < 0)
+        if(gltf_scene_collect_meshes(
+               source_scene->nodes[root], meshes, skins, mesh_count,
+               data->meshes_count, &visited, data->nodes_count) < 0)
             return -1;
     }
-    if(!*mesh) {
+    if(!*mesh_count) {
         errno = EILSEQ;
         return -1;
     }
     visited = 0;
     for(root = 0; root < source_scene->nodes_count; ++root) {
         if(gltf_scene_append_node(
-               source_scene->nodes[root], *mesh, UINT32_MAX, scene,
-               data, node_to_scene, &visited, data->nodes_count) < 0)
+               source_scene->nodes[root], meshes, *mesh_count,
+               UINT32_MAX, scene, data, node_to_scene, &visited,
+               data->nodes_count) < 0)
             return -1;
     }
     if(visited != data->nodes_count) {
@@ -925,7 +972,9 @@ static int gltf_build_scene(const cgltf_data *data,
         size_t node;
 
         for(node = 0; node < data->nodes_count; ++node) {
-            if(data->nodes[node].skin || data->nodes[node].mesh == *mesh) {
+            if(data->nodes[node].skin ||
+               gltf_mesh_ordinal(meshes, *mesh_count,
+                                 data->nodes[node].mesh) != SIZE_MAX) {
                 const cgltf_node *cursor = &data->nodes[node];
                 int belongs = 0;
 
@@ -2069,7 +2118,7 @@ static int gltf_build_animation(const cgltf_data *data,
     return 0;
 }
 
-static int load_gltf_source(const char *path, source_model_t *model,
+static int load_gltf_source(const char *path, source_model_set_t *models,
                             int flip_winding, int flip_v,
                             int texture_identifier,
                             material_library_t *library,
@@ -2078,12 +2127,16 @@ static int load_gltf_source(const char *path, source_model_t *model,
     cgltf_options options = { 0 };
     cgltf_data *data = NULL;
     const cgltf_scene *source_scene;
-    const cgltf_mesh *mesh;
-    const cgltf_skin *skin;
+    const cgltf_mesh **meshes = NULL;
+    const cgltf_skin **skins = NULL;
     size_t *node_to_scene = NULL;
+    size_t mesh_count = 0;
     cgltf_result result;
+    size_t model;
     cgltf_size primitive;
     int saved_errno;
+
+    memset(models, 0, sizeof(*models));
 
     result = cgltf_parse_file(&options, path, &data);
     if(result != cgltf_result_success) {
@@ -2106,35 +2159,64 @@ static int load_gltf_source(const char *path, source_model_t *model,
         goto fail;
     }
     node_to_scene = malloc(data->nodes_count * sizeof(*node_to_scene));
-    if(!node_to_scene) {
+    meshes = calloc(data->meshes_count, sizeof(*meshes));
+    skins = calloc(data->meshes_count, sizeof(*skins));
+    if(!node_to_scene || !meshes || !skins) {
         errno = ENOMEM;
         goto fail;
     }
     source_scene = data->scene ? data->scene : &data->scenes[0];
-    if(gltf_build_scene(data, source_scene, &mesh, &skin, scene,
-                        node_to_scene) < 0 ||
+    if(gltf_build_scene(data, source_scene, meshes, skins, &mesh_count,
+                        scene, node_to_scene) < 0 ||
        gltf_add_materials(data, library) < 0)
         goto fail;
-    for(primitive = 0; primitive < mesh->primitives_count; ++primitive) {
-        if(gltf_append_primitive(
-               data, &mesh->primitives[primitive], model, flip_winding,
-               flip_v, texture_identifier) < 0)
+    models->models = calloc(mesh_count, sizeof(*models->models));
+    if(!models->models) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    models->count = mesh_count;
+    for(model = 0; model < mesh_count; ++model) {
+        const cgltf_mesh *mesh = meshes[model];
+
+        if(mesh_count > 1u && skins[model]) {
+            errno = ENOTSUP;
+            goto fail;
+        }
+        for(primitive = 0; primitive < mesh->primitives_count;
+            ++primitive) {
+            if(mesh_count > 1u &&
+               mesh->primitives[primitive].targets_count) {
+                errno = ENOTSUP;
+                goto fail;
+            }
+            if(gltf_append_primitive(
+                   data, &mesh->primitives[primitive],
+                   &models->models[model], flip_winding, flip_v,
+                   texture_identifier) < 0)
+                goto fail;
+        }
+        if(validate_references(&models->models[model]) < 0)
             goto fail;
     }
-    if(validate_references(model) < 0)
-        goto fail;
-    if(gltf_build_skin(data, mesh, skin, node_to_scene, scene,
-                       metadata) < 0 ||
-       gltf_build_shapes(mesh, metadata) < 0)
-        goto fail;
+    if(mesh_count == 1u &&
+       (gltf_build_skin(data, meshes[0], skins[0], node_to_scene, scene,
+                        metadata) < 0 ||
+        gltf_build_shapes(meshes[0], metadata) < 0))
+            goto fail;
     if(gltf_build_animation(data, node_to_scene, scene, metadata) < 0)
         goto fail;
+    free(skins);
+    free(meshes);
     free(node_to_scene);
     cgltf_free(data);
     return 0;
 
 fail:
     saved_errno = errno ? errno : EIO;
+    source_model_set_free(models);
+    free(skins);
+    free(meshes);
     free(node_to_scene);
     cgltf_free(data);
     errno = saved_errno;
@@ -3866,10 +3948,349 @@ fail:
     return -1;
 }
 
-static int load_raw_section_type(
+typedef struct pcm2_host_section {
+    uint32_t type;
+    uint8_t *decoded;
+    const uint8_t *stored;
+    uint8_t *compressed;
+    size_t decoded_bytes;
+    size_t stored_bytes;
+    size_t offset;
+    pvr_chunk_asset_codec_t codec;
+    uint16_t alignment;
+} pcm2_host_section_t;
+
+static void pcm2_host_sections_free(pcm2_host_section_t *sections,
+                                    size_t count) {
+    size_t index;
+
+    for(index = 0; index < count; ++index) {
+        free(sections[index].compressed);
+        free(sections[index].decoded);
+    }
+    free(sections);
+}
+
+static int pcm2_host_section_add(pcm2_host_section_t *sections,
+                                 size_t capacity, size_t *count,
+                                 uint32_t type, uint8_t *decoded,
+                                 size_t decoded_bytes,
+                                 uint16_t alignment,
+                                 int compress) {
+    pcm2_host_section_t *section;
+
+    if(*count >= capacity || !decoded || !decoded_bytes) {
+        errno = EINVAL;
+        return -1;
+    }
+    section = &sections[(*count)++];
+    memset(section, 0, sizeof(*section));
+    section->type = type;
+    section->decoded = decoded;
+    section->stored = decoded;
+    section->decoded_bytes = decoded_bytes;
+    section->stored_bytes = decoded_bytes;
+    section->alignment = alignment;
+    section->codec = PVR_CHUNK_ASSET_CODEC_RAW;
+    if(compress) {
+        LZ4F_preferences_t preferences = LZ4F_INIT_PREFERENCES;
+        size_t bound;
+        size_t compressed_bytes;
+
+        preferences.frameInfo.blockSizeID = LZ4F_max64KB;
+        preferences.frameInfo.blockMode = LZ4F_blockIndependent;
+        preferences.frameInfo.contentChecksumFlag =
+            LZ4F_contentChecksumEnabled;
+        preferences.frameInfo.blockChecksumFlag = LZ4F_blockChecksumEnabled;
+        preferences.frameInfo.contentSize = decoded_bytes;
+        preferences.autoFlush = 1;
+        preferences.favorDecSpeed = 1;
+        bound = LZ4F_compressFrameBound(decoded_bytes, &preferences);
+        section->compressed = malloc(bound);
+        if(!section->compressed) {
+            errno = ENOMEM;
+            return -1;
+        }
+        compressed_bytes = LZ4F_compressFrame(
+            section->compressed, bound, decoded, decoded_bytes,
+            &preferences);
+        if(LZ4F_isError(compressed_bytes)) {
+            errno = EIO;
+            return -1;
+        }
+        section->stored = section->compressed;
+        section->stored_bytes = compressed_bytes;
+        section->codec = PVR_CHUNK_ASSET_CODEC_LZ4_FRAME;
+    }
+    return 0;
+}
+
+static int multi_asset_bounds(const output_streams_t *streams,
+                              size_t model_count, float center[3],
+                              float *radius) {
+    double minimum[3];
+    double maximum[3];
+    double radius_squared = 0.0;
+    size_t model;
+    size_t component;
+
+    /* The PCM2 header needs one conservative fallback sphere even though
+       PMT1 supplies the exact local sphere used after table admission. */
+    for(component = 0; component < 3; ++component) {
+        minimum[component] = (double)streams[0].center[component] -
+                             streams[0].radius;
+        maximum[component] = (double)streams[0].center[component] +
+                             streams[0].radius;
+    }
+    for(model = 1; model < model_count; ++model) {
+        for(component = 0; component < 3; ++component) {
+            double low = (double)streams[model].center[component] -
+                         streams[model].radius;
+            double high = (double)streams[model].center[component] +
+                          streams[model].radius;
+
+            if(low < minimum[component])
+                minimum[component] = low;
+            if(high > maximum[component])
+                maximum[component] = high;
+        }
+    }
+    for(component = 0; component < 3; ++component) {
+        double half = (maximum[component] - minimum[component]) * 0.5;
+        double value = minimum[component] + half;
+
+        if(!isfinite(value) || fabs(value) > FLT_MAX ||
+           !isfinite(half)) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        center[component] = (float)value;
+        radius_squared += half * half;
+    }
+    if(!isfinite(radius_squared) || sqrt(radius_squared) > FLT_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *radius = (float)sqrt(radius_squared);
+    return 0;
+}
+
+static int build_multi_asset_blob(const output_streams_t *streams,
+                                  size_t model_count, int lz4_vertices,
+                                  const pvr_scene_ir_t *scene,
+                                  const anim_clip_view_t *animation,
+                                  uint8_t **blob_out,
+                                  size_t *blob_bytes_out) {
+    pcm2_host_section_t *sections = NULL;
+    pvr_chunk_model_table_record_t *records = NULL;
+    uint8_t *blob = NULL;
+    size_t section_capacity;
+    size_t section_count = 0;
+    size_t resource_ordinal = 0;
+    size_t directory_bytes;
+    size_t file_bytes;
+    float center[3];
+    float radius;
+    size_t model;
+    size_t index;
+    int saved_errno;
+
+    if(blob_out)
+        *blob_out = NULL;
+    if(blob_bytes_out)
+        *blob_bytes_out = 0;
+    if(!streams || model_count < 2u || !scene || !blob_out ||
+       !blob_bytes_out || model_count > UINT32_MAX ||
+       model_count > (SIZE_MAX - 3u) / 3u) {
+        errno = EINVAL;
+        return -1;
+    }
+    section_capacity = model_count * 3u + 3u;
+    sections = calloc(section_capacity, sizeof(*sections));
+    records = calloc(model_count, sizeof(*records));
+    if(!sections || !records) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    for(model = 0; model < model_count; ++model) {
+        pvr_chunk_model_t source_model = {
+            streams[model].vertex_words,
+            streams[model].vertex_word_count,
+            streams[model].polygon_words,
+            streams[model].polygon_word_count,
+            { streams[model].center[0], streams[model].center[1],
+              streams[model].center[2] },
+            streams[model].radius
+        };
+        pvr_chunk_model_view_t source_view;
+        uint8_t *vertex = NULL;
+        uint8_t *polygon = NULL;
+        uint8_t *resource = NULL;
+        size_t vertex_bytes = 0;
+        size_t polygon_bytes = 0;
+        size_t resource_bytes = 0;
+        pvr_chunk_model_table_record_t *record = &records[model];
+
+        /* Interleaving each pair with its optional manifest keeps file data
+           sequential; model pairing remains ordinal-by-section-type. */
+        if(serialize_words(
+               streams[model].vertex_words,
+               streams[model].vertex_word_count, sizeof(uint32_t),
+               &vertex, &vertex_bytes) < 0 ||
+           pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM, vertex,
+               vertex_bytes, sizeof(uint32_t), lz4_vertices) < 0)
+            goto fail;
+        vertex = NULL;
+        if(serialize_words(
+               streams[model].polygon_words,
+               streams[model].polygon_word_count, sizeof(uint16_t),
+               &polygon, &polygon_bytes) < 0 ||
+           pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM, polygon,
+               polygon_bytes, sizeof(uint16_t), 0) < 0)
+            goto fail;
+        polygon = NULL;
+        if(pvr_chunk_model_open(&source_model, &source_view) < 0 ||
+           serialize_resource_manifest(
+               &source_view, &resource, &resource_bytes) < 0)
+            goto fail;
+
+        memset(record, 0, sizeof(*record));
+        record->vertex_ordinal = model;
+        record->polygon_ordinal = model;
+        record->resource_ordinal = resource ? resource_ordinal++ :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record->volume_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record->skin4_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record->skin_general_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record->skeleton_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record->morph_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record->cooked_cache_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        memcpy(record->center, streams[model].center,
+               sizeof(record->center));
+        record->radius = streams[model].radius;
+        if(resource && pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE, resource,
+               resource_bytes, sizeof(uint32_t), 0) < 0)
+            goto fail;
+    }
+    {
+        uint8_t *hierarchy = NULL;
+        size_t hierarchy_bytes = 0;
+
+        if(pvr_scene_ir_serialize_hierarchy(
+               scene, &hierarchy, &hierarchy_bytes) < 0 ||
+           pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_HIERARCHY, hierarchy,
+               hierarchy_bytes, sizeof(uint32_t), 0) < 0)
+            goto fail;
+    }
+    if(animation) {
+        uint8_t *animation_bytes_data = NULL;
+        size_t animation_bytes = 0;
+
+        if(pvr_scene_ir_serialize_animation(
+               animation, &animation_bytes_data, &animation_bytes) < 0 ||
+           pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_ANIMATION,
+               animation_bytes_data, animation_bytes,
+               sizeof(uint32_t), 0) < 0)
+            goto fail;
+    }
+    {
+        uint8_t *table = NULL;
+        size_t table_bytes = 0;
+
+        if(pvr_scene_ir_serialize_model_table(
+               records, model_count, &table, &table_bytes) < 0 ||
+           pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_MODEL_TABLE, table,
+               table_bytes, sizeof(uint32_t), 0) < 0)
+            goto fail;
+    }
+    if(section_count > UINT32_MAX ||
+       section_count > SIZE_MAX /
+           PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES ||
+       multi_asset_bounds(streams, model_count, center, &radius) < 0)
+        goto fail;
+    directory_bytes = section_count *
+        PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+    file_bytes = PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES + directory_bytes;
+    for(index = 0; index < section_count; ++index) {
+        if(align_size_32(file_bytes, &sections[index].offset) < 0 ||
+           sections[index].offset > SIZE_MAX -
+               sections[index].stored_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = sections[index].offset + sections[index].stored_bytes;
+    }
+    if(file_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    blob = calloc(1, file_bytes);
+    if(!blob) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    store_le32(blob, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
+    store_le16(blob + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
+    store_le16(blob + 6, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    store_le32(blob + 8, (uint32_t)file_bytes);
+    store_le32(blob + 16, float_word(center[0]));
+    store_le32(blob + 20, float_word(center[1]));
+    store_le32(blob + 24, float_word(center[2]));
+    store_le32(blob + 28, float_word(radius));
+    store_le32(blob + 32, (uint32_t)section_count);
+    store_le32(blob + 36, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    store_le32(blob + 40, (uint32_t)directory_bytes);
+    for(index = 0; index < section_count; ++index) {
+        pcm2_host_section_t *section = &sections[index];
+        uint8_t *descriptor = blob +
+            PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES +
+            index * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+
+        memcpy(blob + section->offset, section->stored,
+               section->stored_bytes);
+        store_pcm2_section(
+            descriptor, section->type, section->offset,
+            section->stored_bytes, section->decoded_bytes,
+            crc32_bytes(section->decoded, section->decoded_bytes),
+            section->codec, section->alignment);
+    }
+    store_le32(blob + 44, crc32_bytes(
+        blob + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES,
+        directory_bytes));
+    store_le32(blob + 60, crc32_bytes(blob, 60));
+    free(records);
+    pcm2_host_sections_free(sections, section_count);
+    *blob_out = blob;
+    *blob_bytes_out = file_bytes;
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    free(blob);
+    free(records);
+    pcm2_host_sections_free(sections, section_count);
+    errno = saved_errno;
+    return -1;
+}
+
+static int load_raw_section_ordinal(
     const pvr_chunk_asset_view_t *view, uint32_t type,
+    size_t ordinal,
     pvr_chunk_asset_section_t *section, const void **decoded) {
     size_t index;
+    size_t found = 0;
 
     if(decoded)
         *decoded = NULL;
@@ -3882,11 +4303,19 @@ static int load_raw_section_type(
             return -1;
         if(section->type != type)
             continue;
-        return pvr_chunk_asset_section_load(
-            view, index, NULL, NULL, NULL, 0, decoded);
+        if(found++ == ordinal)
+            return pvr_chunk_asset_section_load(
+                view, index, NULL, NULL, NULL, 0, decoded);
     }
     errno = ENOENT;
     return -1;
+}
+
+static int load_raw_section_type(
+    const pvr_chunk_asset_view_t *view, uint32_t type,
+    pvr_chunk_asset_section_t *section, const void **decoded) {
+    return load_raw_section_ordinal(
+        view, type, 0, section, decoded);
 }
 
 static int prepare_blob_output(const char *target, const void *data,
@@ -4261,6 +4690,165 @@ out:
     return result;
 }
 
+static int prepare_multi_asset_output(
+    const char *target, const output_streams_t *streams,
+    size_t model_count, int lz4_vertices, const pvr_scene_ir_t *scene,
+    const anim_clip_view_t *animation, temporary_output_t *temporary,
+    size_t *asset_bytes) {
+    uint8_t *blob = NULL;
+    size_t blob_bytes = 0;
+    pvr_chunk_asset_view_t asset_view;
+    pvr_chunk_asset_section_t table_section;
+    pvr_chunk_model_table_view_t table_view;
+    pvr_chunk_asset_workspace_requirements_t *requirements = NULL;
+    pvr_chunk_model_view_t *model_views = NULL;
+    const pvr_chunk_model_view_t **model_pointers = NULL;
+    size_t *workspace_offsets = NULL;
+    pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
+    void *workspace = NULL;
+    const void *table_data = NULL;
+    size_t workspace_bytes = 0;
+    size_t model;
+    int result = -1;
+
+    if(build_multi_asset_blob(
+           streams, model_count, lz4_vertices, scene, animation,
+           &blob, &blob_bytes) < 0 ||
+       pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
+       load_raw_section_type(
+           &asset_view, PVR_CHUNK_ASSET_SECTION_MODEL_TABLE,
+           &table_section, &table_data) < 0 ||
+       pvr_chunk_model_table_open(
+           table_data, table_section.decoded_bytes, &table_view) < 0 ||
+       pvr_chunk_model_table_validate_asset(
+           &table_view, &asset_view) < 0)
+        goto out;
+    requirements = calloc(model_count, sizeof(*requirements));
+    model_views = calloc(model_count, sizeof(*model_views));
+    model_pointers = calloc(model_count, sizeof(*model_pointers));
+    workspace_offsets = calloc(model_count, sizeof(*workspace_offsets));
+    if(!requirements || !model_views || !model_pointers ||
+       !workspace_offsets) {
+        errno = ENOMEM;
+        goto out;
+    }
+    for(model = 0; model < model_count; ++model) {
+        size_t aligned;
+
+        if(pvr_chunk_model_table_workspace_query(
+               &table_view, &asset_view, model,
+               &requirements[model]) < 0 ||
+           align_size_32(workspace_bytes, &aligned) < 0 ||
+           aligned > SIZE_MAX - requirements[model].bytes) {
+            if(!errno)
+                errno = EOVERFLOW;
+            goto out;
+        }
+        workspace_offsets[model] = aligned;
+        workspace_bytes = aligned + requirements[model].bytes;
+    }
+    /* Every loaded view must survive hierarchy binding. Compressed models
+       therefore receive disjoint persistent slices rather than one reused
+       scratch buffer. */
+    if(workspace_bytes) {
+        size_t allocation;
+
+        if(align_size_32(workspace_bytes, &allocation) < 0)
+            goto out;
+        workspace = aligned_alloc(PVR_CHUNK_ASSET_ALIGNMENT, allocation);
+        if(!workspace) {
+            errno = ENOMEM;
+            goto out;
+        }
+    }
+    for(model = 0; model < model_count; ++model) {
+        pvr_chunk_model_table_record_t record;
+        void *model_workspace = requirements[model].bytes ?
+            (uint8_t *)workspace + workspace_offsets[model] : NULL;
+
+        if(pvr_chunk_model_table_load(
+               &table_view, &asset_view, model,
+               pvr_chunk_asset_lz4_decode, NULL, model_workspace,
+               requirements[model].bytes, &model_views[model]) < 0 ||
+           pvr_chunk_model_table_record_get(
+               &table_view, model, &record) < 0)
+            goto out;
+        model_pointers[model] = &model_views[model];
+        if(record.resource_ordinal != PVR_CHUNK_MODEL_SECTION_NONE) {
+            pvr_chunk_asset_section_t resource_section;
+            pvr_chunk_resource_section_view_t resource_view;
+            const void *resource_data;
+
+            if(load_raw_section_ordinal(
+                   &asset_view, PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE,
+                   record.resource_ordinal, &resource_section,
+                   &resource_data) < 0 ||
+               pvr_chunk_resource_section_open(
+                   resource_data, resource_section.decoded_bytes,
+                   &resource_view) < 0 ||
+               pvr_chunk_resource_section_validate_model(
+                   &resource_view, &model_views[model]) < 0)
+                goto out;
+        }
+    }
+    {
+        pvr_chunk_asset_section_t hierarchy_section;
+        pvr_chunk_scene_hierarchy_view_t hierarchy_view;
+        pvr_chunk_hierarchy_t hierarchy;
+        const void *hierarchy_data;
+
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_HIERARCHY,
+               &hierarchy_section, &hierarchy_data) < 0 ||
+           pvr_chunk_scene_hierarchy_open(
+               hierarchy_data, hierarchy_section.decoded_bytes,
+               &hierarchy_view) < 0)
+            goto out;
+        hierarchy_nodes = calloc(hierarchy_view.node_count,
+                                 sizeof(*hierarchy_nodes));
+        if(!hierarchy_nodes) {
+            errno = ENOMEM;
+            goto out;
+        }
+        if(pvr_chunk_scene_hierarchy_bind(
+               &hierarchy_view, model_pointers, model_count,
+               hierarchy_nodes, hierarchy_view.node_count,
+               &hierarchy) < 0)
+            goto out;
+    }
+    if(animation) {
+        pvr_chunk_asset_section_t animation_section;
+        pvr_chunk_animation_section_view_t animation_view;
+        const void *animation_data;
+
+        if(load_raw_section_type(
+               &asset_view, PVR_CHUNK_ASSET_SECTION_ANIMATION,
+               &animation_section, &animation_data) < 0 ||
+           pvr_chunk_animation_section_open(
+               animation_data, animation_section.decoded_bytes,
+               &animation_view) < 0 ||
+           animation_view.transform_count != scene->node_count) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+    }
+    if(prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
+        goto out;
+    *asset_bytes = blob_bytes;
+    result = 0;
+
+out:
+    free(hierarchy_nodes);
+    free(workspace);
+    free(workspace_offsets);
+    free(model_pointers);
+    free(model_views);
+    free(requirements);
+    free(blob);
+    return result;
+}
+
 static int prepare_output(const char *target, const void *words,
                           size_t word_count, size_t word_size,
                           temporary_output_t *temporary) {
@@ -4530,6 +5118,75 @@ static void print_report(const source_model_t *source,
     printf("radius=%.9g\n", streams->radius);
 }
 
+static void print_model_set_report(
+    const source_model_t *sources, const output_streams_t *streams,
+    const pvr_chunk_model_info_t *info, size_t model_count,
+    const material_table_t *materials,
+    const material_library_t *library) {
+    size_t positions = 0;
+    size_t texcoords = 0;
+    size_t normals = 0;
+    size_t triangles = 0;
+    size_t strips_before = 0;
+    size_t strips_after = 0;
+    size_t strip_records = 0;
+    size_t maximum_strip_vertices = 0;
+    size_t texture_records = 0;
+    size_t material_records = 0;
+    size_t vertex_words = 0;
+    size_t polygon_words = 0;
+    float center[3];
+    float radius;
+    size_t model;
+
+    if(model_count == 1u) {
+        print_report(sources, streams, info, materials, library);
+        return;
+    }
+    for(model = 0; model < model_count; ++model) {
+        positions += sources[model].position_count;
+        texcoords += sources[model].texcoord_count;
+        normals += sources[model].normal_count;
+        triangles += sources[model].triangle_count;
+        strips_before += streams[model].source_strip_count;
+        strips_after += streams[model].output_strip_count;
+        strip_records += info[model].strip_records;
+        if(info[model].maximum_strip_vertices > maximum_strip_vertices)
+            maximum_strip_vertices = info[model].maximum_strip_vertices;
+        texture_records += streams[model].texture_record_count;
+        material_records += streams[model].material_record_count;
+        vertex_words += streams[model].vertex_word_count;
+        polygon_words += streams[model].polygon_word_count;
+    }
+    if(multi_asset_bounds(
+           streams, model_count, center, &radius) < 0) {
+        center[0] = center[1] = center[2] = 0.0f;
+        radius = 0.0f;
+    }
+    printf("converted=%zu\n", model_count);
+    printf("models=%zu\n", model_count);
+    printf("positions=%zu\n", positions);
+    printf("texcoords=%zu\n", texcoords);
+    printf("normals=%zu\n", normals);
+    printf("triangles=%zu\n", triangles);
+    printf("strips_before=%zu\n", strips_before);
+    printf("strips_after=%zu\n", strips_after);
+    printf("triangles_joined=%zu\n", strips_before - strips_after);
+    printf("strip_records=%zu\n", strip_records);
+    printf("maximum_strip_vertices=%zu\n", maximum_strip_vertices);
+    printf("texture_records=%zu\n", texture_records);
+    printf("material_records=%zu\n", material_records);
+    printf("material_bindings=%zu\n", materials->count);
+    printf("material_libraries=%zu\n", library->file_count);
+    printf("material_definitions=%zu\n", library->count);
+    printf("vertex_words=%zu\n", vertex_words);
+    printf("polygon_words=%zu\n", polygon_words);
+    printf("center_x=%.9g\n", center[0]);
+    printf("center_y=%.9g\n", center[1]);
+    printf("center_z=%.9g\n", center[2]);
+    printf("radius=%.9g\n", radius);
+}
+
 static int same_existing_file(const char *left, const char *right) {
     struct stat left_status;
     struct stat right_status;
@@ -4567,9 +5224,12 @@ static int output_target_admissible(const char *path) {
 
 int main(int argc, char **argv) {
     source_model_t source = { 0 };
+    source_model_set_t gltf_sources = { 0 };
+    source_model_t *source_models = &source;
     material_table_t materials = { 0 };
     material_library_t library = { 0 };
     output_streams_t streams = { 0 };
+    output_streams_t *model_streams = &streams;
     pvr_scene_ir_t scene = { 0 };
     gltf_asset_metadata_t gltf_metadata = { 0 };
     pvr_chunk_skin_general_t rigid_skin_data = { 0 };
@@ -4584,6 +5244,7 @@ int main(int argc, char **argv) {
     anim_visibility_tracks_t animation_visibility = { 0 };
     anim_clip_view_t animation_clip = { 0 };
     pvr_chunk_model_info_t info;
+    pvr_chunk_model_info_t *model_info = &info;
     temporary_output_t vertex_temporary = { 0 };
     temporary_output_t polygon_temporary = { 0 };
     const char *input;
@@ -4593,6 +5254,7 @@ int main(int argc, char **argv) {
     const char *asset_output = NULL;
     const char *c_symbol = NULL;
     size_t asset_bytes = 0;
+    size_t model_count = 1;
     size_t error_line = 0;
     pvr_chunk_skin_span_t *rigid_spans = NULL;
     pvr_chunk_skin_weight_t *rigid_weights = NULL;
@@ -4924,7 +5586,7 @@ int main(int argc, char **argv) {
     }
 
     if((gltf_input ?
-        load_gltf_source(input, &source, flip_winding, flip_v,
+        load_gltf_source(input, &gltf_sources, flip_winding, flip_v,
                          texture_identifier, &library, &scene,
                          &gltf_metadata) :
         load_obj_source(input, &source, flip_winding, flip_v,
@@ -4941,24 +5603,50 @@ int main(int argc, char **argv) {
                  (load_errno == ENOENT || load_errno == EACCES) ? 2 : 1;
         goto out;
     }
-    if(validate_texture_policy(&source) < 0) {
-        fprintf(stderr,
-                "textured faces require a resolved texture ID and cannot "
-                "be mixed with untextured faces\n");
-        result = 1;
-        goto out;
+    if(gltf_input) {
+        source_models = gltf_sources.models;
+        model_count = gltf_sources.count;
+        if(model_count > 1u) {
+            model_streams = calloc(model_count, sizeof(*model_streams));
+            model_info = calloc(model_count, sizeof(*model_info));
+            if(!model_streams || !model_info) {
+                errno = ENOMEM;
+                fprintf(stderr, "conversion failed: %s\n",
+                        strerror(errno));
+                goto out;
+            }
+        }
     }
-    if(validate_material_policy(&source, &library) < 0) {
-        fprintf(stderr,
-                "every face requires one complete selected material when "
-                "a material library is supplied\n");
-        result = 1;
-        goto out;
-    }
-    if(generate_streams(&source, &library, join_strips, &streams) < 0 ||
-       validate_generated(&source, &streams, &info) < 0) {
-        fprintf(stderr, "conversion failed: %s\n", strerror(errno));
-        goto out;
+    {
+        size_t model;
+
+        for(model = 0; model < model_count; ++model) {
+            if(validate_texture_policy(&source_models[model]) < 0) {
+                fprintf(stderr,
+                        "textured faces require a resolved texture ID and "
+                        "cannot be mixed with untextured faces\n");
+                result = 1;
+                goto out;
+            }
+            if(validate_material_policy(
+                   &source_models[model], &library) < 0) {
+                fprintf(stderr,
+                        "every face requires one complete selected material "
+                        "when a material library is supplied\n");
+                result = 1;
+                goto out;
+            }
+            if(generate_streams(
+                   &source_models[model], &library, join_strips,
+                   &model_streams[model]) < 0 ||
+               validate_generated(
+                   &source_models[model], &model_streams[model],
+                   &model_info[model]) < 0) {
+                fprintf(stderr, "conversion failed: %s\n",
+                        strerror(errno));
+                goto out;
+            }
+        }
     }
     if(scene_root && pvr_scene_ir_add_root_model(&scene, 0) < 0) {
         fprintf(stderr, "scene construction failed: %s\n", strerror(errno));
@@ -4967,22 +5655,25 @@ int main(int argc, char **argv) {
     if(rigid_skin) {
         size_t vertex;
 
-        if(!info.vertex_entries || info.vertex_entries > UINT16_MAX + 1u ||
-           info.vertex_entries > UINT32_MAX) {
+        if(!model_info[0].vertex_entries ||
+           model_info[0].vertex_entries > UINT16_MAX + 1u ||
+           model_info[0].vertex_entries > UINT32_MAX) {
             errno = EOVERFLOW;
             fprintf(stderr, "rigid skin construction failed: %s\n",
                     strerror(errno));
             goto out;
         }
-        rigid_spans = calloc(info.vertex_entries, sizeof(*rigid_spans));
-        rigid_weights = calloc(info.vertex_entries, sizeof(*rigid_weights));
+        rigid_spans = calloc(model_info[0].vertex_entries,
+                             sizeof(*rigid_spans));
+        rigid_weights = calloc(model_info[0].vertex_entries,
+                               sizeof(*rigid_weights));
         if(!rigid_spans || !rigid_weights) {
             errno = ENOMEM;
             fprintf(stderr, "rigid skin construction failed: %s\n",
                     strerror(errno));
             goto out;
         }
-        for(vertex = 0; vertex < info.vertex_entries; ++vertex) {
+        for(vertex = 0; vertex < model_info[0].vertex_entries; ++vertex) {
             rigid_spans[vertex].vertex_index = (uint16_t)vertex;
             rigid_spans[vertex].weight_count = 1;
             rigid_spans[vertex].first_weight = (uint32_t)vertex;
@@ -4990,9 +5681,9 @@ int main(int argc, char **argv) {
             rigid_weights[vertex].weight = UINT16_MAX;
         }
         rigid_skin_data.spans = rigid_spans;
-        rigid_skin_data.span_count = info.vertex_entries;
+        rigid_skin_data.span_count = model_info[0].vertex_entries;
         rigid_skin_data.weights = rigid_weights;
-        rigid_skin_data.weight_count = info.vertex_entries;
+        rigid_skin_data.weight_count = model_info[0].vertex_entries;
         rigid_skin_data.joint_count = 1;
         if(scene_root) {
             rigid_skeleton_joint.node_index = 0;
@@ -5006,7 +5697,7 @@ int main(int argc, char **argv) {
         }
     }
     if(morph_target) {
-        if(!info.vertex_entries) {
+        if(!model_info[0].vertex_entries) {
             errno = EILSEQ;
             fprintf(stderr, "morph construction failed: %s\n",
                     strerror(errno));
@@ -5050,7 +5741,7 @@ int main(int argc, char **argv) {
         animation_clip.clip.visibility = &animation_visibility;
     }
     if(c_symbol) {
-        if(prepare_c_output(c_output, c_symbol, &streams,
+        if(prepare_c_output(c_output, c_symbol, &model_streams[0],
                             &vertex_temporary) < 0) {
             fprintf(stderr, "output preparation failed: %s\n",
                     strerror(errno));
@@ -5062,24 +5753,40 @@ int main(int argc, char **argv) {
         }
     }
     else if(emit_asset) {
-        if(prepare_asset_output(asset_output, &streams, lz4_vertices,
-                                section_directory, cooked_cache,
-                                scene.node_count ? &scene : NULL,
-                                gltf_metadata.skin.span_count ?
-                                    &gltf_metadata.skin :
-                                    (rigid_skin ? &rigid_skin_data : NULL),
-                                gltf_metadata.skeleton.joint_count ?
-                                    &gltf_metadata.skeleton :
-                                    (rigid_skin && scene_root ?
-                                        &rigid_skeleton_data : NULL),
-                                gltf_metadata.shapes.target_count ?
-                                    &gltf_metadata.shapes :
-                                    (morph_target ? &morph_shapes : NULL),
-                                gltf_metadata.animation_track_count ?
-                                    &gltf_metadata.animation :
-                                    (animation_offset_set ?
-                                        &animation_clip : NULL),
-                                &vertex_temporary, &asset_bytes) < 0) {
+        int prepare_result;
+
+        if(model_count > 1u && cooked_cache) {
+            errno = ENOTSUP;
+            prepare_result = -1;
+        }
+        else if(model_count > 1u) {
+            prepare_result = prepare_multi_asset_output(
+                asset_output, model_streams, model_count, lz4_vertices,
+                &scene, gltf_metadata.animation_track_count ?
+                    &gltf_metadata.animation : NULL,
+                &vertex_temporary, &asset_bytes);
+        }
+        else {
+            prepare_result = prepare_asset_output(
+                asset_output, &model_streams[0], lz4_vertices,
+                section_directory, cooked_cache,
+                scene.node_count ? &scene : NULL,
+                gltf_metadata.skin.span_count ?
+                    &gltf_metadata.skin :
+                    (rigid_skin ? &rigid_skin_data : NULL),
+                gltf_metadata.skeleton.joint_count ?
+                    &gltf_metadata.skeleton :
+                    (rigid_skin && scene_root ?
+                        &rigid_skeleton_data : NULL),
+                gltf_metadata.shapes.target_count ?
+                    &gltf_metadata.shapes :
+                    (morph_target ? &morph_shapes : NULL),
+                gltf_metadata.animation_track_count ?
+                    &gltf_metadata.animation :
+                    (animation_offset_set ? &animation_clip : NULL),
+                &vertex_temporary, &asset_bytes);
+        }
+        if(prepare_result < 0) {
             fprintf(stderr, "asset preparation failed: %s\n",
                     strerror(errno));
             goto out;
@@ -5090,11 +5797,13 @@ int main(int argc, char **argv) {
         }
     }
     else {
-        if(prepare_output(vertex_output, streams.vertex_words,
-                          streams.vertex_word_count, sizeof(uint32_t),
+        if(prepare_output(vertex_output, model_streams[0].vertex_words,
+                          model_streams[0].vertex_word_count,
+                          sizeof(uint32_t),
                           &vertex_temporary) < 0 ||
-           prepare_output(polygon_output, streams.polygon_words,
-                          streams.polygon_word_count, sizeof(uint16_t),
+           prepare_output(polygon_output, model_streams[0].polygon_words,
+                          model_streams[0].polygon_word_count,
+                          sizeof(uint16_t),
                           &polygon_temporary) < 0) {
             fprintf(stderr, "output preparation failed: %s\n",
                     strerror(errno));
@@ -5110,7 +5819,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    print_report(&source, &streams, &info, &materials, &library);
+    print_model_set_report(
+        source_models, model_streams, model_info, model_count,
+        &materials, &library);
     if(c_symbol)
         printf("c_symbol=%s\n", c_symbol);
     if(emit_asset) {
@@ -5177,10 +5888,23 @@ out:
     free(rigid_spans);
     discard_output(&vertex_temporary);
     discard_output(&polygon_temporary);
-    output_streams_free(&streams);
+    if(model_streams == &streams)
+        output_streams_free(&streams);
+    else if(model_streams) {
+        size_t model;
+
+        for(model = 0; model < model_count; ++model)
+            output_streams_free(&model_streams[model]);
+        free(model_streams);
+    }
+    if(model_info != &info)
+        free(model_info);
     pvr_scene_ir_free(&scene);
     gltf_asset_metadata_free(&gltf_metadata);
-    source_model_free(&source);
+    if(gltf_input)
+        source_model_set_free(&gltf_sources);
+    else
+        source_model_free(&source);
     material_table_free(&materials);
     material_library_free(&library);
     return result;

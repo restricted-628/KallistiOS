@@ -700,6 +700,119 @@ f 1/1/1 2/2/1 3/3/1
             0.0, 3.0, 0.0, 1.0
         )
 
+        multi_gltf_binary = gltf_binary + struct.pack(
+            "<6f", 0.0, 0.0, 1.0, 0.0, 0.5, 1.0
+        )
+        multi_gltf_source = root / "two-meshes.gltf"
+        multi_gltf_source.write_text(json.dumps({
+            "asset": {"version": "2.0"},
+            "buffers": [{
+                "byteLength": len(multi_gltf_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(multi_gltf_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 72, "byteLength": 6,
+                 "target": 34963},
+                {"buffer": 0, "byteOffset": 80, "byteLength": 24,
+                 "target": 34962},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5123, "count": 3,
+                 "type": "SCALAR"},
+                {"bufferView": 3, "componentType": 5126, "count": 3,
+                 "type": "VEC2"},
+            ],
+            "images": [{
+                "uri": "data:application/octet-stream;base64,AA=="
+            }],
+            "textures": [{"source": 0}],
+            "materials": [{
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": [0.25, 0.5, 0.75, 1.0],
+                    "baseColorTexture": {"index": 0},
+                },
+            }],
+            "meshes": [
+                {"primitives": [{
+                    "attributes": {
+                        "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 3
+                    },
+                    "indices": 2, "material": 0,
+                }]},
+                {"primitives": [{
+                    "attributes": {
+                        "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 3
+                    },
+                    "indices": 2, "material": 0,
+                }]},
+            ],
+            "nodes": [
+                {"children": [1, 2]},
+                {"mesh": 0, "translation": [-2.0, 0.0, 0.0]},
+                {"mesh": 1, "translation": [2.0, 0.0, 0.0]},
+            ],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0,
+        }), encoding="utf-8")
+        multi_gltf_asset = root / "two-meshes.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            multi_gltf_source, multi_gltf_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "models=2\n" in result.stdout
+        assert "hierarchy_nodes=3\n" in result.stdout
+        multi_bytes = multi_gltf_asset.read_bytes()
+        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 8
+        multi_descriptors = [
+            struct.unpack_from("<7IHH", multi_bytes, 64 + i * 32)
+            for i in range(8)
+        ]
+        assert [descriptor[0] for descriptor in multi_descriptors] == [
+            1, 2, 3, 1, 2, 3, 8, 12,
+        ]
+        multi_table = multi_bytes[
+            multi_descriptors[7][2]:
+            multi_descriptors[7][2] + multi_descriptors[7][3]
+        ]
+        assert multi_table[:4] == b"PMT1"
+        assert struct.unpack_from("<I", multi_table, 12)[0] == 2
+        assert struct.unpack_from("<3I", multi_table, 32) == (
+            0, 0, 0
+        )
+        assert struct.unpack_from("<3I", multi_table, 96) == (
+            1, 1, 1
+        )
+        multi_hierarchy = multi_bytes[
+            multi_descriptors[6][2]:
+            multi_descriptors[6][2] + multi_descriptors[6][3]
+        ]
+        assert struct.unpack_from("<I", multi_hierarchy, 12)[0] == 3
+        assert struct.unpack_from("<II", multi_hierarchy, 112) == (0, 0)
+        assert struct.unpack_from("<II", multi_hierarchy, 192) == (0, 1)
+
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            "--lz4-vertices", multi_gltf_source, multi_gltf_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        multi_lz4 = multi_gltf_asset.read_bytes()
+        multi_lz4_descriptors = [
+            struct.unpack_from("<7IHH", multi_lz4, 64 + i * 32)
+            for i in range(8)
+        ]
+        assert multi_lz4_descriptors[0][7] == 1
+        assert multi_lz4_descriptors[3][7] == 1
+
         result = invoke(converter, "--emit-asset", gltf_source, gltf_asset)
         assert result.returncode == 2
         assert result.stderr == (
