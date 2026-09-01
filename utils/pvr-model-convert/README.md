@@ -207,8 +207,11 @@ PCM2. A two-key linear vector track moves the explicit scene root from zero to
 the supplied finite offset over the clip interval `[0, 1]`. The target parser
 materializes the clip into the existing animation track, transform, visibility,
 sampling, blending, and playback runtime; the container adds no second clock
-or interpolation engine. This bounded fixture requires `--scene-root`, while
-scene importers supply wider authored clips to the same serializer.
+or interpolation engine. New output uses PAT1 version 2, which retains
+quaternion, XYZ Euler, or ZXY Euler rotation tracks; the target also reads
+quaternion-only version 1 sections. This bounded fixture requires
+`--scene-root`, while scene importers supply wider authored clips to the same
+serializer.
 
 Authored glTF morph-weight channels use a separate pointer-free `PMW1`
 section. Each hierarchy-node binding identifies the instanced model and owns

@@ -20,6 +20,9 @@ static int finite4(float x, float y, float z, float w) {
     return isfinite(x) && isfinite(y) && isfinite(z) && isfinite(w);
 }
 
+#define ANIM_PI 3.14159265358979323846f
+#define ANIM_TAU (2.0f * ANIM_PI)
+
 static size_t key_size(anim_value_kind_t kind) {
     switch(kind) {
         case ANIM_VALUE_SCALAR:
@@ -443,6 +446,101 @@ int anim_track_sample_vector(const anim_track_view_t *view, float time,
     return 0;
 }
 
+static float shortest_angle_delta(float from, float to) {
+    float delta = fmodf(to - from, ANIM_TAU);
+
+    if(delta > ANIM_PI)
+        delta -= ANIM_TAU;
+    else if(delta < -ANIM_PI)
+        delta += ANIM_TAU;
+    return delta;
+}
+
+static float vector_component(const vector_t *value, size_t component) {
+    switch(component) {
+        case 0:
+            return value->x;
+        case 1:
+            return value->y;
+        default:
+            return value->z;
+    }
+}
+
+static int sample_euler_component(const anim_track_view_t *view,
+                                  size_t lower, size_t upper, float factor,
+                                  size_t component, float *output) {
+    const anim_track_t *track = &view->track;
+    const vector_t *lower_value = &((const anim_vector_key_t *)
+        key_at(track, lower))->value;
+    float value = vector_component(lower_value, component);
+
+    if(upper != lower) {
+        const vector_t *upper_value = &((const anim_vector_key_t *)
+            key_at(track, upper))->value;
+        float next = value + shortest_angle_delta(
+            value, vector_component(upper_value, component));
+
+        if(track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
+            size_t previous_index;
+            size_t next_index;
+            float previous_time;
+            float next_time;
+            const vector_t *previous_value;
+            const vector_t *following_value;
+            float previous;
+            float following;
+
+            catmull_indices(view, lower, upper, &previous_index,
+                            &next_index, &previous_time, &next_time);
+            previous_value = &((const anim_vector_key_t *)
+                key_at(track, previous_index))->value;
+            following_value = &((const anim_vector_key_t *)
+                key_at(track, next_index))->value;
+            previous = value - shortest_angle_delta(
+                vector_component(previous_value, component), value);
+            following = next + shortest_angle_delta(
+                vector_component(upper_value, component),
+                vector_component(following_value, component));
+            if(catmull_component(previous, value, next, following,
+                                 previous_time, key_time(track, lower),
+                                 key_time(track, upper), next_time, factor,
+                                 &value) < 0)
+                return -1;
+        }
+        else
+            value += (next - value) * factor;
+    }
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = value;
+    return 0;
+}
+
+int anim_track_sample_euler(const anim_track_view_t *view, float time,
+                            vector_t *output, anim_sample_info_t *info) {
+    vector_t value;
+    size_t lower;
+    size_t upper;
+    float factor;
+
+    if(!output || !view_valid(view, ANIM_VALUE_VECTOR)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sample_interval(view, time, &lower, &upper, &factor, info) < 0)
+        return -1;
+    if(sample_euler_component(view, lower, upper, factor, 0, &value.x) < 0 ||
+       sample_euler_component(view, lower, upper, factor, 1, &value.y) < 0 ||
+       sample_euler_component(view, lower, upper, factor, 2, &value.z) < 0)
+        return -1;
+    value.w = 0.0f;
+    *output = value;
+    return 0;
+}
+
 int anim_track_sample_boolean(const anim_track_view_t *view, float time,
                               bool *output, anim_sample_info_t *info) {
     const anim_boolean_key_t *key;
@@ -569,6 +667,91 @@ static int quaternion_normalize(const anim_quaternion_t *source,
     return 0;
 }
 
+static anim_quaternion_t quaternion_multiply(anim_quaternion_t lhs,
+                                             anim_quaternion_t rhs) {
+    anim_quaternion_t product;
+
+#ifdef __DREAMCAST__
+    {
+        shz_quat_t value = shz_quat_mult(
+            shz_quat_init(lhs.w, lhs.x, lhs.y, lhs.z),
+            shz_quat_init(rhs.w, rhs.x, rhs.y, rhs.z));
+
+        product.w = value.w;
+        product.x = value.x;
+        product.y = value.y;
+        product.z = value.z;
+    }
+#else
+    product.w = lhs.w * rhs.w - lhs.x * rhs.x -
+                lhs.y * rhs.y - lhs.z * rhs.z;
+    product.x = lhs.w * rhs.x + lhs.x * rhs.w +
+                lhs.y * rhs.z - lhs.z * rhs.y;
+    product.y = lhs.w * rhs.y - lhs.x * rhs.z +
+                lhs.y * rhs.w + lhs.z * rhs.x;
+    product.z = lhs.w * rhs.z + lhs.x * rhs.y -
+                lhs.y * rhs.x + lhs.z * rhs.w;
+#endif
+    return product;
+}
+
+int anim_euler_to_quaternion(const vector_t *angles,
+                             anim_rotation_mode_t mode,
+                             anim_quaternion_t *output) {
+    anim_quaternion_t axis_x;
+    anim_quaternion_t axis_y;
+    anim_quaternion_t axis_z;
+    anim_quaternion_t rotation;
+    float sin_x;
+    float cos_x;
+    float sin_y;
+    float cos_y;
+    float sin_z;
+    float cos_z;
+
+    if(!angles || !output ||
+       !finite4(angles->x, angles->y, angles->z, 0.0f) ||
+       (mode != ANIM_ROTATION_EULER_XYZ &&
+        mode != ANIM_ROTATION_EULER_ZXY)) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef __DREAMCAST__
+    {
+        shz_sincos_t x = shz_sincosf(angles->x * 0.5f);
+        shz_sincos_t y = shz_sincosf(angles->y * 0.5f);
+        shz_sincos_t z = shz_sincosf(angles->z * 0.5f);
+
+        sin_x = x.sin;
+        cos_x = x.cos;
+        sin_y = y.sin;
+        cos_y = y.cos;
+        sin_z = z.sin;
+        cos_z = z.cos;
+    }
+#else
+    sin_x = sinf(angles->x * 0.5f);
+    cos_x = cosf(angles->x * 0.5f);
+    sin_y = sinf(angles->y * 0.5f);
+    cos_y = cosf(angles->y * 0.5f);
+    sin_z = sinf(angles->z * 0.5f);
+    cos_z = cosf(angles->z * 0.5f);
+#endif
+    axis_x = (anim_quaternion_t){ cos_x, sin_x, 0.0f, 0.0f };
+    axis_y = (anim_quaternion_t){ cos_y, 0.0f, sin_y, 0.0f };
+    axis_z = (anim_quaternion_t){ cos_z, 0.0f, 0.0f, sin_z };
+    if(mode == ANIM_ROTATION_EULER_XYZ)
+        rotation = quaternion_multiply(
+            quaternion_multiply(axis_x, axis_y), axis_z);
+    else
+        rotation = quaternion_multiply(
+            quaternion_multiply(axis_z, axis_x), axis_y);
+    if(quaternion_normalize(&rotation, &rotation) < 0)
+        return -1;
+    *output = rotation;
+    return 0;
+}
+
 static int quaternion_slerp(const anim_quaternion_t *from,
                             const anim_quaternion_t *to, float factor,
                             anim_quaternion_t *output) {
@@ -683,6 +866,8 @@ int anim_transform_sample(const anim_transform_tracks_t *tracks, float time,
     anim_transform_t sampled;
 
     if(!tracks || !output || !isfinite(time) ||
+       tracks->rotation_mode < ANIM_ROTATION_QUATERNION ||
+       tracks->rotation_mode > ANIM_ROTATION_EULER_ZXY ||
        !transform_valid(&tracks->fallback)) {
         errno = EINVAL;
         return -1;
@@ -692,9 +877,22 @@ int anim_transform_sample(const anim_transform_tracks_t *tracks, float time,
     if(tracks->translation && anim_track_sample_vector(
            tracks->translation, time, &sampled.translation, NULL) < 0)
         return -1;
-    if(tracks->rotation && anim_track_sample_quaternion(
-           tracks->rotation, time, &sampled.rotation, NULL) < 0)
-        return -1;
+    if(tracks->rotation) {
+        if(tracks->rotation_mode == ANIM_ROTATION_QUATERNION) {
+            if(anim_track_sample_quaternion(
+                   tracks->rotation, time, &sampled.rotation, NULL) < 0)
+                return -1;
+        }
+        else {
+            vector_t angles;
+
+            if(anim_track_sample_euler(
+                   tracks->rotation, time, &angles, NULL) < 0 ||
+               anim_euler_to_quaternion(
+                   &angles, tracks->rotation_mode, &sampled.rotation) < 0)
+                return -1;
+        }
+    }
     if(tracks->scale && anim_track_sample_vector(
            tracks->scale, time, &sampled.scale, NULL) < 0)
         return -1;
@@ -857,11 +1055,18 @@ static int clip_shallow_valid(const anim_clip_view_t *view) {
 }
 
 static int transform_tracks_valid(const anim_transform_tracks_t *tracks) {
-    return tracks && transform_valid(&tracks->fallback) &&
+    anim_value_kind_t rotation_kind;
+
+    if(!tracks || tracks->rotation_mode < ANIM_ROTATION_QUATERNION ||
+       tracks->rotation_mode > ANIM_ROTATION_EULER_ZXY)
+        return 0;
+    rotation_kind = tracks->rotation_mode == ANIM_ROTATION_QUATERNION ?
+                    ANIM_VALUE_QUATERNION : ANIM_VALUE_VECTOR;
+    return transform_valid(&tracks->fallback) &&
            (!tracks->translation ||
             view_valid(tracks->translation, ANIM_VALUE_VECTOR)) &&
            (!tracks->rotation ||
-            view_valid(tracks->rotation, ANIM_VALUE_QUATERNION)) &&
+            view_valid(tracks->rotation, rotation_kind)) &&
            (!tracks->scale ||
             view_valid(tracks->scale, ANIM_VALUE_VECTOR));
 }

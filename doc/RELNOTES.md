@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added explicit XYZ and ZXY Euler rotation-track modes beside the preferred
+  quaternion path. Euler keys retain their authored representation through
+  PAT1 version 2, interpolate over shortest angular arcs, and convert to the
+  established normalized quaternion pipeline only after sampling. PAT1
+  version 1 remains readable as quaternion-only data.
+
 * Extended pointer-free compact hierarchies with backward-readable PCH1 v2 node
   policy. Caller-owned nodes now preserve translation/rotation/scale
   suppression, hidden evaluation, and descendant pruning. A new pose
@@ -73,9 +79,11 @@ lifecycle and naming conventions.
 * Added a portable PCM2 animation section. Checked APIs validate pointer-free
   transform bindings, channel types, gapless finite keys, canonical values,
   fallbacks, and checksums, then materialize caller-owned keys, track views,
-  transform/visibility bindings, and an existing animation clip. The host
-  pipeline emits and reopens an explicit root-translation fixture without
-  introducing a container clock or a second interpolation engine.
+  transform/visibility bindings, rotation modes, and an existing animation
+  clip. Version 2 retains quaternion, XYZ Euler, or ZXY Euler rotation tracks;
+  version 1 remains readable as quaternion-only data. The host pipeline emits
+  and reopens an explicit root-translation fixture without introducing a
+  container clock or a second interpolation engine.
 * Added a portable PCM2 sparse morph-target section. Checked target APIs
   validate pointer-free target spans and finite indexed deltas, expose
   individual records, and materialize directly into the existing compact

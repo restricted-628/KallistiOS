@@ -34,7 +34,7 @@ enum {
     TRANSFORM_FALLBACK_ROTATION_OFFSET = 28,
     TRANSFORM_FALLBACK_SCALE_OFFSET = 44,
     TRANSFORM_FALLBACK_VISIBLE_OFFSET = 56,
-    TRANSFORM_RESERVED_OFFSET = 60,
+    TRANSFORM_ROTATION_MODE_OFFSET = 60,
     TRACK_KIND_OFFSET = 0,
     TRACK_INTERPOLATION_OFFSET = 2,
     TRACK_FIRST_KEY_OFFSET = 4,
@@ -213,6 +213,7 @@ static int decode_key(const uint8_t *record, anim_value_kind_t kind,
 
 static int decode_transform(
     const uint8_t *record,
+    uint16_t version,
     pvr_chunk_animation_section_transform_t *transform) {
     transform->translation_track = read_le32(
         record + TRANSFORM_TRANSLATION_OFFSET);
@@ -245,7 +246,12 @@ static int decode_transform(
     transform->fallback.scale.w = 0.0f;
     transform->fallback_visible = read_le32(
         record + TRANSFORM_FALLBACK_VISIBLE_OFFSET);
-    if(read_le32(record + TRANSFORM_RESERVED_OFFSET) ||
+    transform->rotation_mode = (anim_rotation_mode_t)read_le32(
+        record + TRANSFORM_ROTATION_MODE_OFFSET);
+    if((version == PVR_CHUNK_ANIMATION_SECTION_VERSION_1 &&
+        transform->rotation_mode != ANIM_ROTATION_QUATERNION) ||
+       transform->rotation_mode < ANIM_ROTATION_QUATERNION ||
+       transform->rotation_mode > ANIM_ROTATION_EULER_ZXY ||
        transform->fallback_visible > 1u ||
        !transform_fallback_valid(&transform->fallback)) {
         errno = EILSEQ;
@@ -284,6 +290,7 @@ int pvr_chunk_animation_section_open(
     uint32_t transform_bytes;
     uint32_t track_bytes;
     uint32_t key_bytes;
+    uint16_t version;
     uint64_t encoded_payload_bytes;
     size_t payload_bytes;
     size_t next_key = 0;
@@ -295,7 +302,6 @@ int pvr_chunk_animation_section_open(
     }
     if(size < PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES ||
        read_le32(bytes) != PVR_CHUNK_ANIMATION_SECTION_MAGIC ||
-       read_le16(bytes + 4) != PVR_CHUNK_ANIMATION_SECTION_VERSION ||
        read_le16(bytes + 6) != PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES ||
        read_le16(bytes + 24) !=
            PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES ||
@@ -305,6 +311,13 @@ int pvr_chunk_animation_section_open(
        read_le32(bytes + HEADER_RESERVED_OFFSET) ||
        read_le32(bytes + HEADER_CRC_OFFSET) !=
            crc32_bytes(bytes, HEADER_CRC_BYTES)) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    version = read_le16(bytes + 4);
+    if(version != PVR_CHUNK_ANIMATION_SECTION_VERSION_1 &&
+       version != PVR_CHUNK_ANIMATION_SECTION_VERSION) {
         errno = EILSEQ;
         return -1;
     }
@@ -359,7 +372,7 @@ int pvr_chunk_animation_section_open(
     parsed.key_count = key_count;
     parsed.start_time = read_float(bytes + 44);
     parsed.end_time = read_float(bytes + 48);
-    parsed.version = PVR_CHUNK_ANIMATION_SECTION_VERSION;
+    parsed.version = version;
     if(!isfinite(parsed.start_time) || !isfinite(parsed.end_time) ||
        parsed.start_time >= parsed.end_time) {
         errno = EILSEQ;
@@ -401,14 +414,19 @@ int pvr_chunk_animation_section_open(
 
     for(index = 0; index < parsed.transform_count; ++index) {
         pvr_chunk_animation_section_transform_t transform;
+        anim_value_kind_t rotation_kind;
 
         if(decode_transform((const uint8_t *)parsed.transforms + index *
                                 PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES,
-                            &transform) < 0 ||
-           !track_reference_valid(transform.translation_track,
+                            parsed.version, &transform) < 0)
+            return -1;
+        rotation_kind =
+            transform.rotation_mode == ANIM_ROTATION_QUATERNION ?
+                ANIM_VALUE_QUATERNION : ANIM_VALUE_VECTOR;
+        if(!track_reference_valid(transform.translation_track,
                                   ANIM_VALUE_VECTOR, &parsed) ||
            !track_reference_valid(transform.rotation_track,
-                                  ANIM_VALUE_QUATERNION, &parsed) ||
+                                  rotation_kind, &parsed) ||
            !track_reference_valid(transform.scale_track,
                                   ANIM_VALUE_VECTOR, &parsed) ||
            !track_reference_valid(transform.visibility_track,
@@ -441,7 +459,7 @@ int pvr_chunk_animation_section_transform_get(
     return decode_transform(
         (const uint8_t *)checked.transforms + index *
             PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES,
-        transform);
+        checked.version, transform);
 }
 
 int pvr_chunk_animation_section_track_get(
@@ -568,7 +586,7 @@ int pvr_chunk_animation_section_materialize(
 
         decode_transform((const uint8_t *)checked.transforms + index *
                              PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES,
-                         &transform);
+                         checked.version, &transform);
         transforms[index].translation =
             transform.translation_track == PVR_CHUNK_ANIMATION_TRACK_NONE ?
                 NULL : tracks + transform.translation_track;
@@ -579,6 +597,7 @@ int pvr_chunk_animation_section_materialize(
             transform.scale_track == PVR_CHUNK_ANIMATION_TRACK_NONE ?
                 NULL : tracks + transform.scale_track;
         transforms[index].fallback = transform.fallback;
+        transforms[index].rotation_mode = transform.rotation_mode;
         visibility[index].visible =
             transform.visibility_track == PVR_CHUNK_ANIMATION_TRACK_NONE ?
                 NULL : tracks + transform.visibility_track;

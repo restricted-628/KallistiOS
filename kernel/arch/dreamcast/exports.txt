@@ -504,7 +504,9 @@ mat_lookat_apply
 anim_track_open
 anim_track_sample_scalar
 anim_track_sample_vector
+anim_track_sample_euler
 anim_track_sample_quaternion
+anim_euler_to_quaternion
 anim_track_sample_boolean
 anim_event_track_open
 anim_transform_sample

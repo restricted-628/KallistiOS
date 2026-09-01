@@ -24,6 +24,12 @@ static const anim_vector_key_t child_keys[] = {
     { 2.0f, { 0.0f, 3.0f, 0.0f, 1.0f } }
 };
 
+static const anim_vector_key_t child_rotation_keys[] = {
+    { 0.0f, { 0.0f, 0.0f, 6.10865238198f, 0.0f } },
+    { 2.0f, { 0.78539816340f, 0.52359877560f,
+              0.17453292520f, 0.0f } }
+};
+
 static const anim_vector_key_t camera_keys[] = {
     { 0.0f, { 0.0f, 2.0f, 8.0f, 1.0f } },
     { 2.0f, { 2.0f, 3.0f, 8.0f, 1.0f } }
@@ -86,6 +92,10 @@ int main(int argc, char **argv) {
         ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_LINEAR,
         camera_keys, 2, sizeof(camera_keys[0])
     };
+    const anim_track_t child_rotation_track = {
+        ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_LINEAR,
+        child_rotation_keys, 2, sizeof(child_rotation_keys[0])
+    };
     const anim_track_t visibility_track = {
         ANIM_VALUE_BOOLEAN, ANIM_INTERPOLATION_STEP,
         visibility_keys, 3, sizeof(visibility_keys[0])
@@ -100,6 +110,7 @@ int main(int argc, char **argv) {
     anim_track_view_t parent_view;
     anim_track_view_t child_view;
     anim_track_view_t camera_view;
+    anim_track_view_t child_rotation_view;
     anim_track_view_t visibility_view;
     anim_track_view_t morph_weight_view;
     anim_event_track_view_t event_view;
@@ -134,6 +145,8 @@ int main(int argc, char **argv) {
     assert(anim_track_open(&parent_track, &parent_view) == 0);
     assert(anim_track_open(&child_track, &child_view) == 0);
     assert(anim_track_open(&camera_track, &camera_view) == 0);
+    assert(anim_track_open(
+               &child_rotation_track, &child_rotation_view) == 0);
     assert(anim_track_open(&visibility_track, &visibility_view) == 0);
     assert(anim_track_open(&morph_weight_track, &morph_weight_view) == 0);
     assert(anim_event_track_open(&event_track, &event_view) == 0);
@@ -142,6 +155,8 @@ int main(int argc, char **argv) {
     transforms[0].translation = &parent_view;
     transforms[0].fallback = identity_transform();
     transforms[1].translation = &child_view;
+    transforms[1].rotation = &child_rotation_view;
+    transforms[1].rotation_mode = ANIM_ROTATION_EULER_ZXY;
     transforms[1].fallback = identity_transform();
     visibility[0].visible = NULL;
     visibility[0].fallback = true;

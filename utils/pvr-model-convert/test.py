@@ -582,7 +582,7 @@ f 1/1/1 2/2/1 3/3/1
         ]
         assert animation[:4] == b"PAT1"
         assert struct.unpack_from("<HHIIII", animation, 4) == (
-            1, 64, 192, 1, 1, 2
+        2, 64, 192, 1, 1, 2
         )
         assert struct.unpack_from("<HHHHIIIff", animation, 24) == (
             64, 16, 24, 0, 64, 16, 48, 0.0, 1.0

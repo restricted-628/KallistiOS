@@ -948,12 +948,17 @@ static int animation_clip_valid(const anim_clip_t *clip) {
         const anim_visibility_tracks_t *visibility =
             clip->visibility ? clip->visibility + index : NULL;
         const anim_quaternion_t *rotation = &transform->fallback.rotation;
+        anim_value_kind_t rotation_kind =
+            transform->rotation_mode == ANIM_ROTATION_QUATERNION ?
+                ANIM_VALUE_QUATERNION : ANIM_VALUE_VECTOR;
         float magnitude_squared = rotation->w * rotation->w +
                                   rotation->x * rotation->x +
                                   rotation->y * rotation->y +
                                   rotation->z * rotation->z;
 
-        if(!isfinite(transform->fallback.translation.x) ||
+        if(transform->rotation_mode < ANIM_ROTATION_QUATERNION ||
+           transform->rotation_mode > ANIM_ROTATION_EULER_ZXY ||
+           !isfinite(transform->fallback.translation.x) ||
            !isfinite(transform->fallback.translation.y) ||
            !isfinite(transform->fallback.translation.z) ||
            !isfinite(transform->fallback.scale.x) ||
@@ -965,7 +970,7 @@ static int animation_clip_valid(const anim_clip_t *clip) {
            !animation_track_valid(transform->translation,
                                   ANIM_VALUE_VECTOR) ||
            !animation_track_valid(transform->rotation,
-                                  ANIM_VALUE_QUATERNION) ||
+                                  rotation_kind) ||
            !animation_track_valid(transform->scale, ANIM_VALUE_VECTOR) ||
            !animation_track_valid(visibility ? visibility->visible : NULL,
                                   ANIM_VALUE_BOOLEAN))
@@ -1109,6 +1114,7 @@ int pvr_scene_ir_serialize_animation(
         store_float(record + 52, transform->fallback.scale.z);
         store_le32(record + 56,
                    visibility ? (uint32_t)visibility->fallback : 1u);
+        store_le32(record + 60, (uint32_t)transform->rotation_mode);
     }
 
     key_count = 0;

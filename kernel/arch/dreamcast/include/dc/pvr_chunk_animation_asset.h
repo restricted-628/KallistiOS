@@ -32,8 +32,11 @@ __BEGIN_DECLS
 /** \brief Little-endian bytes `PAT1` at the start of an animation section. */
 #define PVR_CHUNK_ANIMATION_SECTION_MAGIC UINT32_C(0x31544150)
 
+/** \brief Original quaternion-only animation-section version. */
+#define PVR_CHUNK_ANIMATION_SECTION_VERSION_1 1u
+
 /** \brief Current serialized animation-section version. */
-#define PVR_CHUNK_ANIMATION_SECTION_VERSION 1u
+#define PVR_CHUNK_ANIMATION_SECTION_VERSION 2u
 
 /** \brief Fixed serialized animation header size. */
 #define PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES 64u
@@ -66,6 +69,7 @@ typedef struct pvr_chunk_animation_section_transform {
     uint32_t visibility_track;
     anim_transform_t fallback;
     uint32_t fallback_visible;
+    anim_rotation_mode_t rotation_mode;
 } pvr_chunk_animation_section_transform_t;
 
 /** \brief Canonical caller-owned key storage accepted by anim_track_open(). */
@@ -85,7 +89,9 @@ typedef struct pvr_chunk_animation_key {
 /** \brief Checked immutable view of one serialized animation clip.
 
     The source byte image must remain immutable and accessible for the view's
-    lifetime and while any materialized runtime objects are being used.
+    lifetime and while any materialized runtime objects are being used. Section
+    version 1 admits quaternion rotation tracks only; version 2 additionally
+    preserves XYZ and ZXY Euler rotation-track modes.
 */
 typedef struct pvr_chunk_animation_section_view {
     const void *data;

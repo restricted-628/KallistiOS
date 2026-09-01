@@ -56,6 +56,17 @@ typedef struct anim_quaternion {
     float z;
 } anim_quaternion_t;
 
+/** \brief Rotation representation and Euler application order.
+
+    Euler modes store XYZ angles in a vector track, in radians. The named
+    order is the order in which the three axis rotations are multiplied.
+*/
+typedef enum anim_rotation_mode {
+    ANIM_ROTATION_QUATERNION = 0,
+    ANIM_ROTATION_EULER_XYZ,
+    ANIM_ROTATION_EULER_ZXY
+} anim_rotation_mode_t;
+
 /** \brief Scalar keyframe. */
 typedef struct anim_scalar_key {
     float time;
@@ -148,6 +159,7 @@ typedef struct anim_transform_tracks {
     const anim_track_view_t *rotation;
     const anim_track_view_t *scale;
     anim_transform_t fallback;
+    anim_rotation_mode_t rotation_mode;
 } anim_transform_tracks_t;
 
 /** \brief Optional step visibility channel and its fallback. */
@@ -315,6 +327,15 @@ int anim_track_sample_scalar(const anim_track_view_t *track, float time,
 int anim_track_sample_vector(const anim_track_view_t *track, float time,
                              vector_t *output, anim_sample_info_t *info);
 
+/** \brief Sample an XYZ Euler-angle vector over shortest angular arcs.
+
+    Angles are in radians. Step, linear, and time-aware Catmull-Rom tracks are
+    supported. For spline sampling, neighboring control points are unwrapped
+    around the active interval before interpolation. The output W is zero.
+*/
+int anim_track_sample_euler(const anim_track_view_t *track, float time,
+                            vector_t *output, anim_sample_info_t *info);
+
 /** \brief Sample a quaternion track with shortest-path interpolation.
 
     Step keys are normalized before publication. Linear interpolation uses a
@@ -323,6 +344,15 @@ int anim_track_sample_vector(const anim_track_view_t *track, float time,
 int anim_track_sample_quaternion(const anim_track_view_t *track, float time,
                                  anim_quaternion_t *output,
                                  anim_sample_info_t *info);
+
+/** \brief Convert finite XYZ Euler angles to a normalized quaternion.
+
+    Angles are in radians. \a mode must be ANIM_ROTATION_EULER_XYZ or
+    ANIM_ROTATION_EULER_ZXY. Failure leaves \p output unchanged.
+*/
+int anim_euler_to_quaternion(const vector_t *angles,
+                             anim_rotation_mode_t mode,
+                             anim_quaternion_t *output);
 
 /** \brief Sample a step-only Boolean track, clamping to its endpoints. */
 int anim_track_sample_boolean(const anim_track_view_t *track, float time,
@@ -335,8 +365,10 @@ int anim_event_track_open(const anim_event_track_t *track,
 /** \brief Sample the available tracks of one object.
 
     Missing channels retain their fallback values. Translation and scale tracks
-    must be vector tracks; rotation must be a quaternion track. Failure leaves
-    \p output unchanged.
+    must be vector tracks. Rotation is a quaternion track in quaternion mode
+    and an XYZ-angle vector track in either Euler mode. Euler tracks are sampled
+    before conversion to the published quaternion. Failure leaves \p output
+    unchanged.
 */
 int anim_transform_sample(const anim_transform_tracks_t *tracks, float time,
                           anim_transform_t *output);

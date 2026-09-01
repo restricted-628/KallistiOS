@@ -315,16 +315,21 @@ With `--animation-offset DX DY DZ`, the converter writes one pointer-free
 `PAT1` section containing a two-key linear translation track for the explicit
 scene root. The section carries a finite clip interval, canonical scalar,
 vector, quaternion, or Boolean keys, typed channel ordinals, transform
-fallbacks, and visibility fallback state. `pvr_chunk_animation_section_open()`
-admits the whole section before publication; indexed accessors expose its
-transform and track records, and `pvr_chunk_animation_section_materialize()`
-fills caller-owned canonical keys and existing animation runtime bindings.
-Sampling, blending, events, and playback remain the responsibility of
-`dc/animation.h`; the asset layer owns no clock, worker, or alternate evaluator.
-The glTF/GLB importer uses the same section for one authored STEP/LINEAR TRS
-clip. Quaternion keys are normalized. Authored morph-weight channels use the
-separate `PMW1` instance-binding section described above; cubic Hermite tracks
-remain rejected rather than being misidentified as Catmull-Rom.
+fallbacks, rotation modes, and visibility fallback state.
+`pvr_chunk_animation_section_open()` admits the whole section before
+publication; indexed accessors expose its transform and track records, and
+`pvr_chunk_animation_section_materialize()` fills caller-owned canonical keys
+and existing animation runtime bindings. Version 1 remains readable with
+quaternion-only rotation; version 2 retains quaternion, XYZ Euler, or ZXY Euler
+tracks. Euler values stay as radians through interpolation over shortest
+angular arcs and become normalized quaternions only at the sampled-pose
+boundary. Sampling, blending, events, and playback remain the responsibility
+of `dc/animation.h`; the asset layer owns no clock, worker, or alternate
+evaluator. The glTF/GLB importer uses the same section for one authored
+STEP/LINEAR TRS clip. Quaternion keys are normalized. Authored morph-weight
+channels use the separate `PMW1` instance-binding section described above;
+cubic Hermite tracks remain rejected rather than being misidentified as
+Catmull-Rom.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The

@@ -48,6 +48,11 @@ static void store_le32(uint8_t *bytes, uint32_t value) {
     bytes[3] = (uint8_t)(value >> 24);
 }
 
+static void store_le16(uint8_t *bytes, uint16_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+}
+
 static void store_float(uint8_t *bytes, float value) {
     uint32_t word;
 
@@ -202,9 +207,9 @@ int main(void) {
         { 0.0f, { 0.0f, 0.0f, 0.0f, 1.0f } },
         { 1.0f, { 10.0f, 2.0f, -4.0f, 1.0f } }
     };
-    const anim_quaternion_key_t rotation_keys[] = {
-        { 0.0f, { 1.0f, 0.0f, 0.0f, 0.0f } },
-        { 1.0f, { 0.0f, 0.0f, 1.0f, 0.0f } }
+    const anim_vector_key_t rotation_keys[] = {
+        { 0.0f, { 0.0f, 0.0f, 6.10865238198f, 0.0f } },
+        { 1.0f, { 0.0f, 0.0f, 0.17453292520f, 0.0f } }
     };
     const anim_vector_key_t scale_keys[] = {
         { 0.0f, { 2.0f, 3.0f, 4.0f, 0.0f } }
@@ -238,7 +243,7 @@ int main(void) {
         ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_LINEAR,
         translation_keys, 2, sizeof(translation_keys[0]));
     source_tracks[1] = open_track(
-        ANIM_VALUE_QUATERNION, ANIM_INTERPOLATION_LINEAR,
+        ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_LINEAR,
         rotation_keys, 2, sizeof(rotation_keys[0]));
     source_tracks[2] = open_track(
         ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_STEP,
@@ -250,6 +255,7 @@ int main(void) {
     source_transform.translation = source_tracks + 0;
     source_transform.rotation = source_tracks + 1;
     source_transform.scale = source_tracks + 2;
+    source_transform.rotation_mode = ANIM_ROTATION_EULER_ZXY;
     source_transform.fallback.translation.w = 1.0f;
     source_transform.fallback.rotation.w = 1.0f;
     source_transform.fallback.scale.x = 1.0f;
@@ -273,7 +279,8 @@ int main(void) {
            7 * PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES);
     assert(pvr_chunk_animation_section_open(
         serialized, serialized_bytes, &section_view) == 0);
-    assert(section_view.transform_count == 1 &&
+    assert(section_view.version == PVR_CHUNK_ANIMATION_SECTION_VERSION &&
+           section_view.transform_count == 1 &&
            section_view.track_count == 4 && section_view.key_count == 7 &&
            section_view.start_time == 0.0f && section_view.end_time == 1.0f);
     assert(pvr_chunk_animation_section_transform_get(
@@ -282,7 +289,8 @@ int main(void) {
            section_transform.rotation_track == 1 &&
            section_transform.scale_track == 2 &&
            section_transform.visibility_track == 3 &&
-           section_transform.fallback_visible == 1);
+           section_transform.fallback_visible == 1 &&
+           section_transform.rotation_mode == ANIM_ROTATION_EULER_ZXY);
     assert(pvr_chunk_animation_section_track_get(
         &section_view, 3, &section_track) == 0);
     assert(section_track.kind == ANIM_VALUE_BOOLEAN &&
@@ -318,7 +326,8 @@ int main(void) {
            close_enough(sampled.translation.y, 1.0f) &&
            close_enough(sampled.translation.z, -2.0f) &&
            sampled.scale.x == 2.0f && sampled.scale.y == 3.0f &&
-           sampled.scale.z == 4.0f);
+           sampled.scale.z == 4.0f &&
+           close_enough(fabsf(sampled.rotation.w), 1.0f));
 
     {
         anim_transform_tracks_t fallback_transform = { 0 };
@@ -349,14 +358,55 @@ int main(void) {
         assert(decoded_transform.translation == NULL &&
                decoded_transform.rotation == NULL &&
                decoded_transform.scale == NULL &&
+               decoded_transform.rotation_mode ==
+                   ANIM_ROTATION_QUATERNION &&
                decoded_visibility.visible == NULL &&
                decoded_visibility.fallback);
+
+        store_le16(fallback_serialized + 4,
+                   PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
+        refresh_crc(fallback_serialized, fallback_serialized_bytes);
+        assert(pvr_chunk_animation_section_open(
+            fallback_serialized, fallback_serialized_bytes,
+            &section_view) == 0);
+        assert(section_view.version ==
+               PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
+        store_le32(fallback_serialized +
+                       PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + 60,
+                   ANIM_ROTATION_EULER_XYZ);
+        refresh_crc(fallback_serialized, fallback_serialized_bytes);
+        errno = 0;
+        assert(pvr_chunk_animation_section_open(
+            fallback_serialized, fallback_serialized_bytes,
+            &section_view) == -1);
+        assert(errno == EILSEQ);
     }
 
     corrupt = malloc(serialized_bytes);
     assert(corrupt);
     memcpy(corrupt, serialized, serialized_bytes);
+    store_le16(corrupt + 4, PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
+    store_le32(corrupt + PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + 60,
+               ANIM_ROTATION_QUATERNION);
+    store_le16(corrupt + PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES +
+                   PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES +
+                   PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
+               ANIM_VALUE_QUATERNION);
+    refresh_crc(corrupt, serialized_bytes);
+    assert(pvr_chunk_animation_section_open(
+        corrupt, serialized_bytes, &section_view) == 0);
+    assert(section_view.version == PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
+
+    memcpy(corrupt, serialized, serialized_bytes);
     corrupt[serialized_bytes - 1u] ^= UINT8_C(0x80);
+    errno = 0;
+    assert(pvr_chunk_animation_section_open(
+        corrupt, serialized_bytes, &section_view) == -1);
+    assert(errno == EILSEQ);
+    memcpy(corrupt, serialized, serialized_bytes);
+    store_le32(corrupt + PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + 60,
+               UINT32_C(99));
+    refresh_crc(corrupt, serialized_bytes);
     errno = 0;
     assert(pvr_chunk_animation_section_open(
         corrupt, serialized_bytes, &section_view) == -1);

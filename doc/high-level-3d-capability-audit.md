@@ -240,9 +240,11 @@ engine-owned runtime:
   increasing time, complete address ranges, and supported interpolation;
 - admitted immutable views clamp outside times to their endpoints and use a
   binary interval search, avoiding a full key scan on every frame;
-- scalar and vector tracks provide step or linear interpolation, while
-  quaternion tracks normalize inputs and use shortest-path spherical
-  interpolation;
+- scalar and vector tracks provide step, linear, or time-aware Catmull-Rom
+  interpolation. Quaternion tracks normalize inputs and use shortest-path
+  spherical interpolation; explicit XYZ/ZXY Euler vector tracks unwrap each
+  active interval over the shortest angular arcs before converting to the
+  existing quaternion result;
 - `anim_transform_sample()` combines optional translation, rotation, and scale
   channels with caller-owned fallback state; `anim_transform_blend()` blends
   two complete object transforms;

@@ -361,12 +361,11 @@ format, deformation, or tooling gaps:
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
    of deferred polygon controls and
    repeatable round-trip conformance fixtures for seams and deformation.
-2. Add explicit XYZ/ZXY Euler sampling beside the preferred quaternion path
-   where conversion proves the interpolation mode is observable. Component
-   suppression, hidden-node evaluation, and noncontiguous descendant pruning
-   are complete through PCH1 version 2 and the caller-owned pose traversal. Do
-   not replace the current flat parent-before-child hierarchy or complete-pose
-   deformation with pointer trees or deferred polygon execution.
+2. Preserve the current flat parent-before-child hierarchy and complete-pose
+   deformation. PCH1 version 2 supplies component suppression, hidden-node
+   evaluation, and noncontiguous descendant pruning; PAT1 version 2 supplies
+   exact XYZ/ZXY Euler sampling beside the preferred quaternion path. Do not
+   replace either with pointer trees or deferred polygon execution.
 3. Extend the separate cell-sprite layer with host authoring support. Its core
    timestamped stream/list sampling and events, generic whole-motion binding,
    signed priority, material/color metadata, and compact or colored 2D/3D

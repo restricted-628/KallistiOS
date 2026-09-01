@@ -234,6 +234,83 @@ static void test_vector_and_quaternion_tracks(void) {
            close_enough(quaternion.z, 0.0f));
 }
 
+static void test_euler_tracks(void) {
+    const float degrees = 3.14159265358979323846f / 180.0f;
+    const anim_vector_key_t wrapped[] = {
+        { 0.0f, { 0.0f, 0.0f, 350.0f * degrees, 0.0f } },
+        { 1.0f, { 0.0f, 0.0f, 10.0f * degrees, 0.0f } }
+    };
+    const anim_vector_key_t wrapped_spline[] = {
+        { 0.0f, { 0.0f, 0.0f, 340.0f * degrees, 0.0f } },
+        { 1.0f, { 0.0f, 0.0f, 350.0f * degrees, 0.0f } },
+        { 2.0f, { 0.0f, 0.0f, 10.0f * degrees, 0.0f } },
+        { 3.0f, { 0.0f, 0.0f, 20.0f * degrees, 0.0f } }
+    };
+    anim_track_view_t track = open_track(
+        ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_LINEAR,
+        wrapped, 2, sizeof(wrapped[0]));
+    anim_track_view_t spline = open_track(
+        ANIM_VALUE_VECTOR, ANIM_INTERPOLATION_CATMULL_ROM,
+        wrapped_spline, 4, sizeof(wrapped_spline[0]));
+    vector_t sampled;
+    vector_t angles = {
+        0.5f * 3.14159265358979323846f,
+        0.0f,
+        0.5f * 3.14159265358979323846f,
+        0.0f
+    };
+    anim_quaternion_t xyz;
+    anim_quaternion_t zxy;
+    anim_transform_tracks_t tracks = {
+        .rotation = &track,
+        .fallback = {
+            .translation = { 0.0f, 0.0f, 0.0f, 1.0f },
+            .rotation = { 1.0f, 0.0f, 0.0f, 0.0f },
+            .scale = { 1.0f, 1.0f, 1.0f, 0.0f }
+        },
+        .rotation_mode = ANIM_ROTATION_EULER_ZXY
+    };
+    anim_transform_t transform;
+
+    assert(anim_track_sample_euler(&track, 0.5f, &sampled, NULL) == 0);
+    assert(close_enough(sampled.x, 0.0f) &&
+           close_enough(sampled.y, 0.0f) &&
+           close_enough(sampled.z, 2.0f * 3.14159265358979323846f) &&
+           sampled.w == 0.0f);
+    assert(anim_track_sample_euler(&spline, 1.5f, &sampled, NULL) == 0);
+    assert(close_enough(sampled.z,
+                        2.0f * 3.14159265358979323846f));
+
+    assert(anim_euler_to_quaternion(
+               &angles, ANIM_ROTATION_EULER_XYZ, &xyz) == 0);
+    assert(anim_euler_to_quaternion(
+               &angles, ANIM_ROTATION_EULER_ZXY, &zxy) == 0);
+    assert(close_enough(xyz.w, 0.5f) && close_enough(xyz.x, 0.5f) &&
+           close_enough(xyz.y, -0.5f) && close_enough(xyz.z, 0.5f));
+    assert(close_enough(zxy.w, 0.5f) && close_enough(zxy.x, 0.5f) &&
+           close_enough(zxy.y, 0.5f) && close_enough(zxy.z, 0.5f));
+    {
+        anim_quaternion_t unchanged = xyz;
+
+        errno = 0;
+        assert(anim_euler_to_quaternion(
+                   &angles, ANIM_ROTATION_QUATERNION, &xyz) == -1);
+        assert(errno == EINVAL &&
+               !memcmp(&xyz, &unchanged, sizeof(xyz)));
+    }
+
+    assert(anim_transform_sample(&tracks, 0.5f, &transform) == 0);
+    assert(close_enough(fabsf(transform.rotation.w), 1.0f) &&
+           close_enough(transform.rotation.x, 0.0f) &&
+           close_enough(transform.rotation.y, 0.0f) &&
+           close_enough(transform.rotation.z, 0.0f));
+    tracks.rotation_mode = (anim_rotation_mode_t)99;
+    tracks.rotation = NULL;
+    errno = 0;
+    assert(anim_transform_sample(&tracks, 0.5f, &transform) == -1);
+    assert(errno == EINVAL);
+}
+
 static anim_transform_t identity_transform(void) {
     anim_transform_t transform = {
         .translation = { 0.0f, 0.0f, 0.0f, 1.0f },
@@ -908,6 +985,7 @@ int main(void) {
     test_catmull_rom_tracks();
     test_track_rejection();
     test_vector_and_quaternion_tracks();
+    test_euler_tracks();
     test_transforms();
     test_clips_and_playback();
     test_camera_and_light_binding();
