@@ -32,8 +32,8 @@ reduction is performed.
 
 Unsupported authored meaning is rejected rather than dropped. Current explicit
 boundaries include per-model skin or morph sections in a multi-mesh scene,
-multi-model cooked caches, required extensions, GPU instancing, non-triangle
-primitives, tangent/color/custom vertex attributes, texture
+required extensions, GPU instancing, non-triangle primitives,
+tangent/color/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
 materials, detached skin joints, multiple skins or animations, morph-weight
 animation, matrix-authored nodes in an animated scene, and cubic-spline tracks.

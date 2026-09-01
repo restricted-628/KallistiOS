@@ -4077,6 +4077,7 @@ static int multi_asset_bounds(const output_streams_t *streams,
 
 static int build_multi_asset_blob(const output_streams_t *streams,
                                   size_t model_count, int lz4_vertices,
+                                  int include_cooked_cache,
                                   const pvr_scene_ir_t *scene,
                                   const anim_clip_view_t *animation,
                                   uint8_t **blob_out,
@@ -4087,6 +4088,7 @@ static int build_multi_asset_blob(const output_streams_t *streams,
     size_t section_capacity;
     size_t section_count = 0;
     size_t resource_ordinal = 0;
+    size_t cooked_ordinal = 0;
     size_t directory_bytes;
     size_t file_bytes;
     float center[3];
@@ -4101,11 +4103,11 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         *blob_bytes_out = 0;
     if(!streams || model_count < 2u || !scene || !blob_out ||
        !blob_bytes_out || model_count > UINT32_MAX ||
-       model_count > (SIZE_MAX - 3u) / 3u) {
+       model_count > (SIZE_MAX - 3u) / 4u) {
         errno = EINVAL;
         return -1;
     }
-    section_capacity = model_count * 3u + 3u;
+    section_capacity = model_count * 4u + 3u;
     sections = calloc(section_capacity, sizeof(*sections));
     records = calloc(model_count, sizeof(*records));
     if(!sections || !records) {
@@ -4126,9 +4128,11 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         uint8_t *vertex = NULL;
         uint8_t *polygon = NULL;
         uint8_t *resource = NULL;
+        uint8_t *cooked = NULL;
         size_t vertex_bytes = 0;
         size_t polygon_bytes = 0;
         size_t resource_bytes = 0;
+        size_t cooked_bytes = 0;
         pvr_chunk_model_table_record_t *record = &records[model];
 
         /* Interleaving each pair with its optional manifest keeps file data
@@ -4157,6 +4161,9 @@ static int build_multi_asset_blob(const output_streams_t *streams,
            serialize_resource_manifest(
                &source_view, &resource, &resource_bytes) < 0)
             goto fail;
+        if(include_cooked_cache && serialize_cooked_cache(
+               &source_view, &cooked, &cooked_bytes) < 0)
+            goto fail;
 
         memset(record, 0, sizeof(*record));
         record->vertex_ordinal = model;
@@ -4168,7 +4175,8 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         record->skin_general_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
         record->skeleton_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
         record->morph_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
-        record->cooked_cache_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record->cooked_cache_ordinal = cooked ? cooked_ordinal++ :
+            PVR_CHUNK_MODEL_SECTION_NONE;
         memcpy(record->center, streams[model].center,
                sizeof(record->center));
         record->radius = streams[model].radius;
@@ -4176,6 +4184,11 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                sections, section_capacity, &section_count,
                PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE, resource,
                resource_bytes, sizeof(uint32_t), 0) < 0)
+            goto fail;
+        if(cooked && pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_COOKED_CACHE, cooked,
+               cooked_bytes, sizeof(uint32_t), 0) < 0)
             goto fail;
     }
     {
@@ -4692,7 +4705,8 @@ out:
 
 static int prepare_multi_asset_output(
     const char *target, const output_streams_t *streams,
-    size_t model_count, int lz4_vertices, const pvr_scene_ir_t *scene,
+    size_t model_count, int lz4_vertices, int include_cooked_cache,
+    const pvr_scene_ir_t *scene,
     const anim_clip_view_t *animation, temporary_output_t *temporary,
     size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -4712,7 +4726,8 @@ static int prepare_multi_asset_output(
     int result = -1;
 
     if(build_multi_asset_blob(
-           streams, model_count, lz4_vertices, scene, animation,
+           streams, model_count, lz4_vertices, include_cooked_cache,
+           scene, animation,
            &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        load_raw_section_type(
@@ -4789,6 +4804,46 @@ static int prepare_multi_asset_output(
                pvr_chunk_resource_section_validate_model(
                    &resource_view, &model_views[model]) < 0)
                 goto out;
+        }
+        if(record.cooked_cache_ordinal != PVR_CHUNK_MODEL_SECTION_NONE) {
+            pvr_chunk_asset_section_t cooked_section;
+            pvr_chunk_cache_section_view_t cooked_view;
+            pvr_chunk_cache_section_requirements_t cooked_requirements;
+            pvr_chunk_model_cache_t cooked_cache;
+            const void *cooked_data;
+            void *cooked_storage;
+
+            if(load_raw_section_ordinal(
+                   &asset_view, PVR_CHUNK_ASSET_SECTION_COOKED_CACHE,
+                   record.cooked_cache_ordinal, &cooked_section,
+                   &cooked_data) < 0 ||
+               pvr_chunk_cache_section_open(
+                   cooked_data, cooked_section.decoded_bytes,
+                   &cooked_view) < 0 ||
+               pvr_chunk_cache_section_workspace_query(
+                   &cooked_view, &cooked_requirements) < 0)
+                goto out;
+            cooked_storage = aligned_alloc(
+                cooked_requirements.alignment,
+                cooked_requirements.bytes);
+            if(!cooked_storage) {
+                errno = ENOMEM;
+                goto out;
+            }
+            if(pvr_chunk_cache_section_materialize_ordinary(
+                   &cooked_view, cooked_storage,
+                   cooked_requirements.bytes, &cooked_cache) < 0 ||
+               cooked_cache.vertex_count !=
+                   model_views[model].info.index_references ||
+               cooked_cache.strip_count !=
+                   model_views[model].info.strips) {
+                int cache_errno = errno ? errno : EILSEQ;
+
+                free(cooked_storage);
+                errno = cache_errno;
+                goto out;
+            }
+            free(cooked_storage);
         }
     }
     {
@@ -5755,14 +5810,11 @@ int main(int argc, char **argv) {
     else if(emit_asset) {
         int prepare_result;
 
-        if(model_count > 1u && cooked_cache) {
-            errno = ENOTSUP;
-            prepare_result = -1;
-        }
-        else if(model_count > 1u) {
+        if(model_count > 1u) {
             prepare_result = prepare_multi_asset_output(
                 asset_output, model_streams, model_count, lz4_vertices,
-                &scene, gltf_metadata.animation_track_count ?
+                cooked_cache, &scene,
+                gltf_metadata.animation_track_count ?
                     &gltf_metadata.animation : NULL,
                 &vertex_temporary, &asset_bytes);
         }

@@ -15,7 +15,8 @@ lifecycle and naming conventions.
   in the selected scene as an independent PCM2 model ordinal. Scene nodes bind
   the corresponding model, repeated instances share it, exact local bounds
   and resource ownership remain per-model, and raw or LZ4-framed streams are
-  reloaded together before publication.
+  reloaded together before publication. Optional cooked caches are built,
+  assigned, materialized, and checked independently for every model.
 * Added pointer-free PCM2 per-model metadata. Checked `PMT1` APIs bind every
   canonical vertex/polygon pair to exact local bounds and typed optional-
   section ordinals, cross-validate the complete table against its asset, and

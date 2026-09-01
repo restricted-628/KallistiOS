@@ -766,23 +766,24 @@ f 1/1/1 2/2/1 3/3/1
         multi_gltf_asset = root / "two-meshes.pcm"
         result = invoke(
             converter, "--emit-asset", "--section-directory",
+            "--cooked-cache",
             multi_gltf_source, multi_gltf_asset,
         )
         assert result.returncode == 0, result.stderr
         assert "models=2\n" in result.stdout
         assert "hierarchy_nodes=3\n" in result.stdout
         multi_bytes = multi_gltf_asset.read_bytes()
-        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 8
+        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 10
         multi_descriptors = [
             struct.unpack_from("<7IHH", multi_bytes, 64 + i * 32)
-            for i in range(8)
+            for i in range(10)
         ]
         assert [descriptor[0] for descriptor in multi_descriptors] == [
-            1, 2, 3, 1, 2, 3, 8, 12,
+            1, 2, 3, 10, 1, 2, 3, 10, 8, 12,
         ]
         multi_table = multi_bytes[
-            multi_descriptors[7][2]:
-            multi_descriptors[7][2] + multi_descriptors[7][3]
+            multi_descriptors[9][2]:
+            multi_descriptors[9][2] + multi_descriptors[9][3]
         ]
         assert multi_table[:4] == b"PMT1"
         assert struct.unpack_from("<I", multi_table, 12)[0] == 2
@@ -792,9 +793,11 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<3I", multi_table, 96) == (
             1, 1, 1
         )
+        assert struct.unpack_from("<I", multi_table, 64)[0] == 0
+        assert struct.unpack_from("<I", multi_table, 128)[0] == 1
         multi_hierarchy = multi_bytes[
-            multi_descriptors[6][2]:
-            multi_descriptors[6][2] + multi_descriptors[6][3]
+            multi_descriptors[8][2]:
+            multi_descriptors[8][2] + multi_descriptors[8][3]
         ]
         assert struct.unpack_from("<I", multi_hierarchy, 12)[0] == 3
         assert struct.unpack_from("<II", multi_hierarchy, 112) == (0, 0)
