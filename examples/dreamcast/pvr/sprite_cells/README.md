@@ -27,5 +27,9 @@ The application retains texture, material, scene, list, clock, sampled state,
 workspace, and submission ownership. No cell function allocates memory or
 starts a worker.
 
+Production data can be authored with `utils/pvr-cell-convert`, which checks
+pixel regions against the real atlas image and emits the same runtime state as
+this deliberately explicit C example.
+
 The program renders 180 frames, checks the PVR fault record, prints a PASS
 line, and leaves a green diagnostic screen.

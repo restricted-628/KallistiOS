@@ -15,7 +15,10 @@ lifecycle and naming conventions.
   existing base cells and independently timed streams, validate fixed-width
   records and two CRCs, decode individual records, and materialize directly
   into caller-owned cell runtime arrays. Canonical zeroed partial keys prevent
-  uninitialized fields from becoming hidden authored data.
+  uninitialized fields from becoming hidden authored data. The host-only
+  `pvr-cell-convert` utility compiles a strict declarative manifest against an
+  inspected atlas image, emits PCA1, and generates exact normalized KOS atlas
+  geometry without embedding source paths or image data.
 
 * Extended the bounded glTF/GLB importer with normalized VEC3/VEC4 `COLOR_0`.
   Vertex color is multiplied by the primitive base-color factor and emitted as

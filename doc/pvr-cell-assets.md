@@ -36,10 +36,18 @@ uninitialized storage.
 
 ## Authoring and loading
 
-Host tools can construct ordinary `pvr_cell_state_t` and `pvr_cell_stream_t`
-arrays, call `pvr_cell_asset_measure()`, allocate exactly that many bytes, and
-call `pvr_cell_asset_encode()`. The same encoder is available on target, but
-unused code remains removable by section garbage collection.
+The host-only `pvr-cell-convert` utility consumes a strict declarative manifest
+and an atlas image. It checks pixel regions against the inspected image,
+normalizes their UV coordinates, writes PCA1 through the same public encoder,
+reopens that result through the target validator, and emits a C
+`pvr_sprite_atlas_t`. The image itself and its path are not stored. See
+`utils/pvr-cell-convert/README.md` for the complete grammar.
+
+Specialized host tools can instead construct ordinary `pvr_cell_state_t` and
+`pvr_cell_stream_t` arrays, call `pvr_cell_asset_measure()`, allocate exactly
+that many bytes, and call `pvr_cell_asset_encode()`. The same encoder is
+available on target, but unused code remains removable by section garbage
+collection.
 
 After opening an asset, allocate arrays using `view.cell_count`,
 `view.key_count`, and `view.stream_count`. Materialization checks all capacity,
