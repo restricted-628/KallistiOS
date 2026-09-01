@@ -193,6 +193,17 @@ arrays only after complete capacity, alignment, and overlap validation. The
 result still passes through `pvr_chunk_shape_bind()`, which remains the sole
 authority for proving every sparse index exists in the selected model.
 
+Scene-instance morph weights are stored separately in pointer-free
+little-endian `PMW1`. Ordered bindings name a hierarchy node and its model,
+then own one finite STEP/LINEAR scalar channel per target. Admission checks
+gapless channel and key spans, strict key times, CRCs, and the exact aggregate
+interval. `pvr_chunk_morph_animation_section_validate_scene()` proves each
+node/model association against `PCH1` and `PMT1`, then proves the referenced
+`PMS1` target count matches the binding. Materialization fills caller-owned
+`anim_scalar_key_t`, `anim_track_view_t`, and
+`pvr_chunk_shape_channel_t` arrays, so the existing shape-motion sampler and
+deformation kernel remain the only runtime path.
+
 ## Versioned asset containers and optional compression
 
 `pvr_chunk_asset_open()` admits a bounded, versioned container whose vertex
@@ -311,8 +322,9 @@ fills caller-owned canonical keys and existing animation runtime bindings.
 Sampling, blending, events, and playback remain the responsibility of
 `dc/animation.h`; the asset layer owns no clock, worker, or alternate evaluator.
 The glTF/GLB importer uses the same section for one authored STEP/LINEAR TRS
-clip. Quaternion keys are normalized; cubic Hermite and morph-weight channels
-are rejected until their distinct runtime contracts are represented.
+clip. Quaternion keys are normalized. Authored morph-weight channels use the
+separate `PMW1` instance-binding section described above; cubic Hermite tracks
+remain rejected rather than being misidentified as Catmull-Rom.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The

@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include <dc/animation.h>
+#include <dc/pvr_chunk_morph_animation_asset.h>
 #include <dc/pvr_chunk_model_table.h>
 #include <dc/pvr_chunk_skeleton_asset.h>
 #include <dc/pvr_chunk_skin.h>
@@ -61,6 +62,10 @@ int pvr_scene_ir_serialize_shapes(
 
 int pvr_scene_ir_serialize_animation(
     const anim_clip_view_t *clip,
+    uint8_t **bytes_out, size_t *size_out);
+
+int pvr_scene_ir_serialize_morph_animation(
+    const pvr_chunk_morph_animation_t *animation,
     uint8_t **bytes_out, size_t *size_out);
 
 int pvr_scene_ir_serialize_volumes(

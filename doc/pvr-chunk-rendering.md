@@ -356,9 +356,8 @@ The remaining work is deliberately tracked here so renderer work cannot hide
 format, deformation, or tooling gaps:
 
 1. Extend the now-established canonical host scene IR beyond its admitted
-   hierarchy, general-skin, and sparse morph sections. Include modern scene
-   import,
-   lossless authored general-skin and morph population,
+   hierarchy, general-skin, sparse morph, and instance morph-animation
+   sections. Include wider modern scene import,
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
    of deferred polygon controls and
    repeatable round-trip conformance fixtures for seams and deformation.
@@ -380,7 +379,9 @@ pointer-free checked hierarchy section/binder, variable-count skin influences
 beside the four-weight fast path, the pointer-free checked general-skin
 section/parser/materializer, shape-to-morph binding, the pointer-free checked
 sparse morph section/parser/materializer, the pointer-free checked animation
-section/parser/materializer, volume iteration/collision reuse, the pointer-free
+section/parser/materializer, the pointer-free checked morph-weight animation
+section/parser/materializer and scene cross-validation,
+volume iteration/collision reuse, the pointer-free
 checked texture-resource manifest with exact model/table admission and
 residency preparation, retained bounds and clipping, environment-map UV
 generation, signed diffuse/specular lighting, Catmull-Rom tracks, hierarchy

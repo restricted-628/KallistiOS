@@ -82,7 +82,8 @@ typedef enum pvr_chunk_asset_section_type {
     PVR_CHUNK_ASSET_SECTION_ANIMATION = 9,
     PVR_CHUNK_ASSET_SECTION_COOKED_CACHE = 10,
     PVR_CHUNK_ASSET_SECTION_SKELETON = 11,
-    PVR_CHUNK_ASSET_SECTION_MODEL_TABLE = 12
+    PVR_CHUNK_ASSET_SECTION_MODEL_TABLE = 12,
+    PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION = 13
 } pvr_chunk_asset_section_type_t;
 
 /** \brief First section identifier reserved for application-defined data. */

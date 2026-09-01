@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_morph_animation_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -61,6 +62,13 @@ static void refresh_crc(uint8_t *bytes, size_t size) {
     store_le32(bytes + 60, crc32_bytes(bytes, 60));
 }
 
+static void refresh_morph_crc(uint8_t *bytes, size_t size) {
+    store_le32(bytes + 36, crc32_bytes(
+        bytes + PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES,
+        size - PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES));
+    store_le32(bytes + 40, crc32_bytes(bytes, 40));
+}
+
 static anim_track_view_t open_track(anim_value_kind_t kind,
                                     anim_interpolation_t interpolation,
                                     const void *keys, size_t key_count,
@@ -76,6 +84,117 @@ static anim_track_view_t open_track(anim_value_kind_t kind,
 
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.00003f;
+}
+
+static void test_morph_animation(void) {
+    const anim_scalar_key_t source_keys[] = {
+        { 0.0f, 0.0f }, { 2.0f, 1.0f },
+        { 0.0f, 0.25f }, { 2.0f, 0.75f }
+    };
+    anim_track_view_t source_tracks[2];
+    pvr_chunk_shape_channel_t source_channels[2];
+    pvr_chunk_morph_animation_binding_t source_binding;
+    pvr_chunk_morph_animation_t source_animation;
+    pvr_chunk_morph_animation_section_view_t section;
+    pvr_chunk_morph_animation_section_binding_t decoded_binding;
+    pvr_chunk_morph_animation_section_track_t decoded_track;
+    anim_scalar_key_t decoded_keys[4];
+    anim_track_view_t decoded_tracks[2];
+    pvr_chunk_shape_channel_t decoded_channels[2];
+    pvr_chunk_morph_animation_binding_t decoded_bindings[1];
+    pvr_chunk_morph_animation_t decoded_animation;
+    uint8_t *serialized = NULL;
+    uint8_t *corrupt = NULL;
+    size_t serialized_bytes = 0;
+    float sampled;
+
+    source_tracks[0] = open_track(
+        ANIM_VALUE_SCALAR, ANIM_INTERPOLATION_LINEAR,
+        source_keys, 2, sizeof(source_keys[0]));
+    source_tracks[1] = open_track(
+        ANIM_VALUE_SCALAR, ANIM_INTERPOLATION_STEP,
+        source_keys + 2, 2, sizeof(source_keys[0]));
+    source_channels[0].weight = source_tracks + 0;
+    source_channels[0].fallback_weight = 0.0f;
+    source_channels[1].weight = source_tracks + 1;
+    source_channels[1].fallback_weight = 0.25f;
+    source_binding.node_index = 3;
+    source_binding.model_ordinal = 1;
+    source_binding.channels = source_channels;
+    source_binding.channel_count = 2;
+    source_animation.bindings = &source_binding;
+    source_animation.binding_count = 1;
+    source_animation.start_time = 0.0f;
+    source_animation.end_time = 2.0f;
+
+    assert(pvr_scene_ir_serialize_morph_animation(
+        &source_animation, &serialized, &serialized_bytes) == 0);
+    assert(serialized_bytes ==
+           PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES +
+           PVR_CHUNK_MORPH_ANIMATION_BINDING_BYTES +
+           2 * PVR_CHUNK_MORPH_ANIMATION_CHANNEL_BYTES +
+           2 * PVR_CHUNK_MORPH_ANIMATION_TRACK_BYTES +
+           4 * PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES);
+    assert(pvr_chunk_morph_animation_section_open(
+        serialized, serialized_bytes, &section) == 0);
+    assert(section.binding_count == 1 && section.channel_count == 2 &&
+           section.track_count == 2 && section.key_count == 4 &&
+           section.start_time == 0.0f && section.end_time == 2.0f);
+    assert(pvr_chunk_morph_animation_section_binding_get(
+        &section, 0, &decoded_binding) == 0);
+    assert(decoded_binding.node_index == 3 &&
+           decoded_binding.model_ordinal == 1 &&
+           decoded_binding.first_channel == 0 &&
+           decoded_binding.channel_count == 2);
+    assert(pvr_chunk_morph_animation_section_track_get(
+        &section, 1, &decoded_track) == 0);
+    assert(decoded_track.interpolation == ANIM_INTERPOLATION_STEP &&
+           decoded_track.first_key == 2 && decoded_track.key_count == 2);
+
+    memset(&decoded_animation, 0x5a, sizeof(decoded_animation));
+    {
+        pvr_chunk_morph_animation_t unchanged = decoded_animation;
+
+        errno = 0;
+        assert(pvr_chunk_morph_animation_section_materialize(
+            &section, decoded_keys, 3, decoded_tracks, 2,
+            decoded_channels, 2, decoded_bindings, 1,
+            &decoded_animation) == -1);
+        assert(errno == ENOSPC &&
+               !memcmp(&decoded_animation, &unchanged,
+                       sizeof(decoded_animation)));
+    }
+    assert(pvr_chunk_morph_animation_section_materialize(
+        &section, decoded_keys, 4, decoded_tracks, 2,
+        decoded_channels, 2, decoded_bindings, 1,
+        &decoded_animation) == 0);
+    assert(decoded_animation.binding_count == 1 &&
+           decoded_bindings[0].channels == decoded_channels &&
+           decoded_channels[1].weight == decoded_tracks + 1);
+    assert(anim_track_sample_scalar(decoded_channels[0].weight, 1.0f,
+                                    &sampled, NULL) == 0);
+    assert(close_enough(sampled, 0.5f));
+
+    corrupt = malloc(serialized_bytes);
+    assert(corrupt);
+    memcpy(corrupt, serialized, serialized_bytes);
+    corrupt[serialized_bytes - 1u] ^= UINT8_C(0x80);
+    errno = 0;
+    assert(pvr_chunk_morph_animation_section_open(
+        corrupt, serialized_bytes, &section) == -1);
+    assert(errno == EILSEQ);
+    memcpy(corrupt, serialized, serialized_bytes);
+    store_le32(corrupt + PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES +
+                   PVR_CHUNK_MORPH_ANIMATION_BINDING_BYTES + 4,
+               UINT32_C(0x7fc00000));
+    refresh_morph_crc(corrupt, serialized_bytes);
+    errno = 0;
+    assert(pvr_chunk_morph_animation_section_open(
+        corrupt, serialized_bytes, &section) == -1);
+    assert(errno == EILSEQ);
+
+    free(corrupt);
+    free(serialized);
 }
 
 int main(void) {
@@ -265,6 +384,7 @@ int main(void) {
     free(corrupt);
     free(fallback_serialized);
     free(serialized);
+    test_morph_animation();
     puts("pvr-chunk-animation-test: PASS");
     return 0;
 }

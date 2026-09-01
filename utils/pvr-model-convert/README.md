@@ -23,7 +23,8 @@ program. It accepts one selected scene and any nonzero set of unique
 meshes, including repeated instances, triangle primitives, indexed or non-
 indexed positions, optional normals and UV set zero, stable base-color texture
 ordinals, parent-before-child node transforms, and one STEP/LINEAR translation,
-rotation, or scale animation. Each unique mesh becomes one PCM2 model ordinal
+rotation, scale, or morph-weight animation. Each unique mesh becomes one PCM2
+model ordinal
 with exact local bounds and its own resource manifest, general-N skin,
 inverse-bind skeleton, and sparse position/normal morph sections when authored.
 Different meshes may use different skins; repeated instances of one mesh must
@@ -35,8 +36,8 @@ boundaries include required extensions, GPU instancing, non-triangle primitives,
 tangent/color/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
 materials, detached skin joints, conflicting skins on repeated mesh instances,
-multiple animations, morph-weight
-animation, matrix-authored nodes in an animated scene, and cubic-spline tracks.
+multiple animations, matrix-authored nodes in an animated scene, and
+cubic-spline tracks.
 The latter use Hermite tangents and are not silently mapped to the runtime's
 Catmull-Rom interpolation. PBR base color, metallic, and roughness are converted
 deterministically into compact diffuse, ambient, specular, and exponent state;
@@ -207,6 +208,15 @@ materializes the clip into the existing animation track, transform, visibility,
 sampling, blending, and playback runtime; the container adds no second clock
 or interpolation engine. This bounded fixture requires `--scene-root`, while
 scene importers supply wider authored clips to the same serializer.
+
+Authored glTF morph-weight channels use a separate pointer-free `PMW1`
+section. Each hierarchy-node binding identifies the instanced model and owns
+one scalar STEP/LINEAR track per sparse `PMS1` target. This keeps independently
+animated instances distinct even when they share one model ordinal. The
+converter cross-validates every node, model, morph-section ordinal, and target
+count before publication; the target materializer reuses the existing scalar
+track and `pvr_chunk_shape_channel_t` runtime with caller-owned arrays. `PMW1`
+adds no clock, evaluator, or retained pose.
 
 Compile the generated file normally in the application build to produce the
 target object; the converter does not invoke or choose a compiler. Each output

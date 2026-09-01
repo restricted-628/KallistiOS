@@ -11,8 +11,11 @@ MATH_DIR = ../../kernel/arch/dreamcast/math
 SOURCES = pvr-chunk-animation-test.c \
 	../pvr-model-convert/pvr-scene-ir.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_morph_animation_asset.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model_table.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \

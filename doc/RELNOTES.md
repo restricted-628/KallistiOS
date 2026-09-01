@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added pointer-free PCM2 morph-weight animation. Checked `PMW1` APIs bind one
+  scalar track per sparse target to a specific hierarchy-node instance,
+  cross-validate node/model/shape ownership, and materialize directly into the
+  existing caller-owned animation and compact-shape runtime. The glTF/GLB host
+  importer now preserves STEP/LINEAR weight channels without overloading
+  transform animation or sharing one pose across repeated model instances.
+
 * Added allocation-free current-pose bounds for morphed or skinned vertex
   streams. The new checked operation publishes an exact AABB and a conservative
   enclosing sphere, allowing existing frustum classification to reject a

@@ -1006,7 +1006,9 @@ f 1/1/1 2/2/1 3/3/1
                 0.0, 0.0, 0.0,
                 0.5, 0.0, 0.0,
                 0.0, 0.0, 0.0,
-            )
+            ) +
+            struct.pack("<2f", 0.0, 1.0) +
+            struct.pack("<2f", 0.0, 1.0)
         )
         gltf_morph_source = root / "triangle-morph.gltf"
         gltf_morph_source.write_text(json.dumps({
@@ -1025,6 +1027,8 @@ f 1/1/1 2/2/1 3/3/1
                  "target": 34963},
                 {"buffer": 0, "byteOffset": 80, "byteLength": 36,
                  "target": 34962},
+                {"buffer": 0, "byteOffset": 116, "byteLength": 8},
+                {"buffer": 0, "byteOffset": 124, "byteLength": 8},
             ],
             "accessors": [
                 {"bufferView": 0, "componentType": 5126, "count": 3,
@@ -1035,13 +1039,24 @@ f 1/1/1 2/2/1 3/3/1
                  "type": "SCALAR"},
                 {"bufferView": 3, "componentType": 5126, "count": 3,
                  "type": "VEC3"},
+                {"bufferView": 4, "componentType": 5126, "count": 2,
+                 "type": "SCALAR"},
+                {"bufferView": 5, "componentType": 5126, "count": 2,
+                 "type": "SCALAR"},
             ],
             "meshes": [{"primitives": [{
                 "attributes": {"POSITION": 0, "NORMAL": 1},
                 "indices": 2,
                 "targets": [{"POSITION": 3}],
-            }]}],
+            }], "weights": [0.25]}],
             "nodes": [{"mesh": 0}],
+            "animations": [{
+                "samplers": [{"input": 4, "output": 5,
+                              "interpolation": "LINEAR"}],
+                "channels": [{"sampler": 0,
+                              "target": {"node": 0,
+                                         "path": "weights"}}],
+            }],
             "scenes": [{"nodes": [0]}],
             "scene": 0,
         }), encoding="utf-8")
@@ -1053,8 +1068,11 @@ f 1/1/1 2/2/1 3/3/1
         assert result.returncode == 0, result.stderr
         assert "morph_targets=1\n" in result.stdout
         assert "morph_deltas=1\n" in result.stdout
+        assert "morph_animation_bindings=1\n" in result.stdout
+        assert "morph_animation_tracks=1\n" in result.stdout
+        assert "morph_animation_keys=2\n" in result.stdout
         gltf_morph_asset_bytes = gltf_morph_asset.read_bytes()
-        assert struct.unpack_from("<I", gltf_morph_asset_bytes, 32)[0] == 5
+        assert struct.unpack_from("<I", gltf_morph_asset_bytes, 32)[0] == 6
         gltf_morph_descriptor = struct.unpack_from(
             "<7IHH", gltf_morph_asset_bytes, 64 + 3 * 32
         )
@@ -1067,6 +1085,35 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<II", gltf_morph, 12) == (1, 1)
         assert struct.unpack_from("<HH6f", gltf_morph, 56) == (
             1, 0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0
+        )
+        gltf_morph_animation_descriptor = struct.unpack_from(
+            "<7IHH", gltf_morph_asset_bytes, 64 + 4 * 32
+        )
+        assert gltf_morph_animation_descriptor[0] == 13
+        gltf_morph_animation_offset = gltf_morph_animation_descriptor[2]
+        gltf_morph_animation_size = gltf_morph_animation_descriptor[3]
+        gltf_morph_animation = gltf_morph_asset_bytes[
+            gltf_morph_animation_offset:
+            gltf_morph_animation_offset + gltf_morph_animation_size
+        ]
+        assert gltf_morph_animation[:4] == b"PMW1"
+        assert struct.unpack_from("<4I", gltf_morph_animation, 12) == (
+            1, 1, 1, 2
+        )
+        assert struct.unpack_from("<ff", gltf_morph_animation, 28) == (
+            0.0, 1.0
+        )
+        assert struct.unpack_from("<4I", gltf_morph_animation, 64) == (
+            0, 0, 0, 1
+        )
+        assert struct.unpack_from("<If", gltf_morph_animation, 80) == (
+            0, 0.25
+        )
+        assert struct.unpack_from("<HHIII", gltf_morph_animation, 88) == (
+            1, 0, 0, 2, 0
+        )
+        assert struct.unpack_from("<4f", gltf_morph_animation, 104) == (
+            0.0, 0.0, 1.0, 1.0
         )
 
         animation_binary = (

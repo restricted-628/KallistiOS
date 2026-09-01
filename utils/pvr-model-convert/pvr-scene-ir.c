@@ -10,6 +10,7 @@
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_morph_animation_asset.h>
 #include <dc/pvr_chunk_volume_asset.h>
 
 #include <errno.h>
@@ -53,6 +54,214 @@ static void store_float(uint8_t *bytes, float value) {
 
     memcpy(&word, &value, sizeof(word));
     store_le32(bytes, word);
+}
+
+int pvr_scene_ir_serialize_morph_animation(
+    const pvr_chunk_morph_animation_t *animation,
+    uint8_t **bytes_out, size_t *size_out) {
+    uint8_t *bytes = NULL;
+    size_t channel_count = 0;
+    size_t key_count = 0;
+    size_t binding_bytes;
+    size_t channel_bytes;
+    size_t track_bytes;
+    size_t key_bytes;
+    size_t payload_bytes;
+    size_t file_bytes;
+    size_t channel_cursor = 0;
+    size_t key_cursor = 0;
+    size_t binding_index;
+    float observed_start = 0.0f;
+    float observed_end = 0.0f;
+    int observed_key = 0;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!animation || !bytes_out || !size_out || !animation->bindings ||
+       !animation->binding_count || !isfinite(animation->start_time) ||
+       !isfinite(animation->end_time) ||
+       animation->start_time >= animation->end_time) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(binding_index = 0; binding_index < animation->binding_count;
+        ++binding_index) {
+        const pvr_chunk_morph_animation_binding_t *binding =
+            animation->bindings + binding_index;
+        size_t channel_index;
+
+        if(binding->node_index > UINT32_MAX ||
+           binding->model_ordinal > UINT32_MAX ||
+           binding->model_ordinal == UINT32_MAX || !binding->channels ||
+           !binding->channel_count ||
+           (binding_index && binding->node_index <=
+                                animation->bindings[binding_index - 1u]
+                                    .node_index) ||
+           binding->channel_count > UINT32_MAX - channel_count) {
+            errno = EINVAL;
+            return -1;
+        }
+        for(channel_index = 0; channel_index < binding->channel_count;
+            ++channel_index) {
+            const pvr_chunk_shape_channel_t *channel =
+                binding->channels + channel_index;
+            const anim_track_view_t *track = channel->weight;
+            const anim_scalar_key_t *keys;
+            size_t key;
+
+            if(!track || !isfinite(channel->fallback_weight) ||
+               track->track.kind != ANIM_VALUE_SCALAR ||
+               (track->track.interpolation != ANIM_INTERPOLATION_STEP &&
+                track->track.interpolation != ANIM_INTERPOLATION_LINEAR) ||
+               !track->track.keys || !track->track.key_count ||
+               track->track.stride != sizeof(anim_scalar_key_t) ||
+               track->track.key_count > UINT32_MAX - key_count) {
+                errno = EINVAL;
+                return -1;
+            }
+            keys = track->track.keys;
+            for(key = 0; key < track->track.key_count; ++key) {
+                if(!isfinite(keys[key].time) ||
+                   !isfinite(keys[key].value) ||
+                   (key && keys[key].time <= keys[key - 1u].time)) {
+                    errno = EINVAL;
+                    return -1;
+                }
+                if(!observed_key) {
+                    observed_start = keys[key].time;
+                    observed_end = keys[key].time;
+                    observed_key = 1;
+                }
+                else {
+                    if(keys[key].time < observed_start)
+                        observed_start = keys[key].time;
+                    if(keys[key].time > observed_end)
+                        observed_end = keys[key].time;
+                }
+            }
+            key_count += track->track.key_count;
+            ++channel_count;
+        }
+    }
+    if(!channel_count || !key_count || channel_count > UINT32_MAX ||
+       key_count > UINT32_MAX ||
+       animation->binding_count > UINT32_MAX ||
+       observed_start != animation->start_time ||
+       observed_end != animation->end_time) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(animation->binding_count >
+           SIZE_MAX / PVR_CHUNK_MORPH_ANIMATION_BINDING_BYTES ||
+       channel_count >
+           SIZE_MAX / PVR_CHUNK_MORPH_ANIMATION_CHANNEL_BYTES ||
+       channel_count >
+           SIZE_MAX / PVR_CHUNK_MORPH_ANIMATION_TRACK_BYTES ||
+       key_count > SIZE_MAX / PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    binding_bytes = animation->binding_count *
+                    PVR_CHUNK_MORPH_ANIMATION_BINDING_BYTES;
+    channel_bytes = channel_count *
+                    PVR_CHUNK_MORPH_ANIMATION_CHANNEL_BYTES;
+    track_bytes = channel_count * PVR_CHUNK_MORPH_ANIMATION_TRACK_BYTES;
+    key_bytes = key_count * PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES;
+    if(binding_bytes > SIZE_MAX - channel_bytes ||
+       binding_bytes + channel_bytes > SIZE_MAX - track_bytes ||
+       binding_bytes + channel_bytes + track_bytes > SIZE_MAX - key_bytes) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    payload_bytes = binding_bytes + channel_bytes + track_bytes + key_bytes;
+    if(payload_bytes >
+       SIZE_MAX - PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    file_bytes = PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES + payload_bytes;
+    if(file_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    for(binding_index = 0; binding_index < animation->binding_count;
+        ++binding_index) {
+        const pvr_chunk_morph_animation_binding_t *binding =
+            animation->bindings + binding_index;
+        uint8_t *binding_record = bytes +
+            PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES + binding_index *
+                PVR_CHUNK_MORPH_ANIMATION_BINDING_BYTES;
+        size_t channel_index;
+
+        store_le32(binding_record + 0, (uint32_t)binding->node_index);
+        store_le32(binding_record + 4, (uint32_t)binding->model_ordinal);
+        store_le32(binding_record + 8, (uint32_t)channel_cursor);
+        store_le32(binding_record + 12,
+                   (uint32_t)binding->channel_count);
+        for(channel_index = 0; channel_index < binding->channel_count;
+            ++channel_index) {
+            const pvr_chunk_shape_channel_t *channel =
+                binding->channels + channel_index;
+            const anim_track_view_t *track = channel->weight;
+            const anim_scalar_key_t *keys = track->track.keys;
+            uint8_t *channel_record = bytes +
+                PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES + binding_bytes +
+                channel_cursor * PVR_CHUNK_MORPH_ANIMATION_CHANNEL_BYTES;
+            uint8_t *track_record = bytes +
+                PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES + binding_bytes +
+                channel_bytes + channel_cursor *
+                    PVR_CHUNK_MORPH_ANIMATION_TRACK_BYTES;
+            size_t key;
+
+            store_le32(channel_record + 0, (uint32_t)channel_cursor);
+            store_float(channel_record + 4, channel->fallback_weight);
+            store_le16(track_record + 0,
+                       (uint16_t)track->track.interpolation);
+            store_le32(track_record + 4, (uint32_t)key_cursor);
+            store_le32(track_record + 8,
+                       (uint32_t)track->track.key_count);
+            for(key = 0; key < track->track.key_count; ++key) {
+                uint8_t *key_record = bytes +
+                    PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES + binding_bytes +
+                    channel_bytes + track_bytes + key_cursor *
+                        PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES;
+
+                store_float(key_record + 0, keys[key].time);
+                store_float(key_record + 4, keys[key].value);
+                ++key_cursor;
+            }
+            ++channel_cursor;
+        }
+    }
+    if(channel_cursor != channel_count || key_cursor != key_count) {
+        free(bytes);
+        errno = EPROTO;
+        return -1;
+    }
+    store_le32(bytes + 0, PVR_CHUNK_MORPH_ANIMATION_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_MORPH_ANIMATION_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)animation->binding_count);
+    store_le32(bytes + 16, (uint32_t)channel_count);
+    store_le32(bytes + 20, (uint32_t)channel_count);
+    store_le32(bytes + 24, (uint32_t)key_count);
+    store_float(bytes + 28, animation->start_time);
+    store_float(bytes + 32, animation->end_time);
+    store_le32(bytes + 36, crc32_bytes(
+        bytes + PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES, payload_bytes));
+    store_le32(bytes + 40, crc32_bytes(bytes, 40));
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
 }
 
 int pvr_scene_ir_serialize_volumes(
