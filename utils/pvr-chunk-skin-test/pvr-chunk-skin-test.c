@@ -6,6 +6,7 @@
 
 #include <dc/pvr_chunk_skin.h>
 #include <dc/pvr_chunk_skin_asset.h>
+#include <dc/pvr_chunk_skeleton_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -93,6 +94,13 @@ static void refresh_skin_crc(uint8_t *bytes, size_t size) {
     store_le32(bytes + 36, crc32_bytes(
         bytes + PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES,
         size - PVR_CHUNK_SKIN_GENERAL_HEADER_BYTES));
+    store_le32(bytes + 44, crc32_bytes(bytes, 44));
+}
+
+static void refresh_skeleton_crc(uint8_t *bytes, size_t size) {
+    store_le32(bytes + 28, crc32_bytes(
+        bytes + PVR_CHUNK_SKELETON_SECTION_HEADER_BYTES,
+        size - PVR_CHUNK_SKELETON_SECTION_HEADER_BYTES));
     store_le32(bytes + 44, crc32_bytes(bytes, 44));
 }
 
@@ -362,6 +370,110 @@ int main(void) {
                    general_lookup[0] == UINT32_C(0x5a5a5a5a));
         }
         free(serialized_skin);
+    }
+
+    {
+        pvr_chunk_skeleton_joint_t skeleton_joints[2];
+        const pvr_chunk_skeleton_t skeleton = {
+            skeleton_joints, 2, 3
+        };
+        pvr_chunk_skeleton_section_view_t section_view;
+        pvr_chunk_skeleton_joint_t decoded_joints[2];
+        pvr_chunk_skeleton_t decoded_skeleton;
+        pvr_chunk_skeleton_joint_t decoded_joint;
+        alignas(8) matrix_t worlds[3];
+        alignas(8) matrix_t built_positions[2];
+        pvr_normal_matrix_t built_normals[2];
+        pvr_skin_palette_t built_palette;
+        uint8_t *serialized = NULL;
+        uint8_t *corrupt = NULL;
+        size_t serialized_bytes = 0;
+        matrix_t unchanged_position;
+
+        identity(&skeleton_joints[0].inverse_bind);
+        identity(&skeleton_joints[1].inverse_bind);
+        skeleton_joints[0].node_index = 0;
+        skeleton_joints[1].node_index = 2;
+        skeleton_joints[1].inverse_bind[3][0] = -2.0f;
+
+        assert(pvr_scene_ir_serialize_skeleton(
+            &skeleton, &serialized, &serialized_bytes) == 0);
+        assert(serialized_bytes ==
+               PVR_CHUNK_SKELETON_SECTION_HEADER_BYTES +
+               2 * PVR_CHUNK_SKELETON_SECTION_JOINT_BYTES);
+        assert(pvr_chunk_skeleton_section_open(
+            serialized, serialized_bytes, &section_view) == 0);
+        assert(section_view.joint_count == 2 &&
+               section_view.node_count == 3);
+        assert(pvr_chunk_skeleton_section_joint_get(
+            &section_view, 1, &decoded_joint) == 0);
+        assert(decoded_joint.node_index == 2 &&
+               close_enough(decoded_joint.inverse_bind[3][0], -2.0f));
+
+        memset(decoded_joints, 0x5a, sizeof(decoded_joints));
+        memset(&decoded_skeleton, 0x5a, sizeof(decoded_skeleton));
+        {
+            pvr_chunk_skeleton_t unchanged = decoded_skeleton;
+            pvr_chunk_skeleton_joint_t unchanged_joints[2];
+
+            memcpy(unchanged_joints, decoded_joints,
+                   sizeof(unchanged_joints));
+
+            errno = 0;
+            assert(pvr_chunk_skeleton_section_materialize(
+                &section_view, decoded_joints, 1,
+                &decoded_skeleton) == -1);
+            assert(errno == ENOSPC &&
+                   !memcmp(decoded_joints, unchanged_joints,
+                           sizeof(decoded_joints)) &&
+                   !memcmp(&decoded_skeleton, &unchanged,
+                           sizeof(decoded_skeleton)));
+        }
+        assert(pvr_chunk_skeleton_section_materialize(
+            &section_view, decoded_joints, 2, &decoded_skeleton) == 0);
+        assert(decoded_skeleton.joints == decoded_joints &&
+               decoded_skeleton.node_count == 3);
+
+        identity(&worlds[0]);
+        identity(&worlds[1]);
+        identity(&worlds[2]);
+        worlds[0][3][0] = 3.0f;
+        worlds[2][3][0] = 7.0f;
+        assert(pvr_chunk_skeleton_palette_build(
+            &decoded_skeleton, worlds, 3, built_positions, 2,
+            built_normals, 2, &built_palette) == 0);
+        assert(built_palette.position_matrices == built_positions &&
+               built_palette.normal_matrices == built_normals &&
+               built_palette.joint_count == 2);
+        assert(close_enough(built_positions[0][3][0], 3.0f) &&
+               close_enough(built_positions[1][3][0], 5.0f) &&
+               close_enough(built_normals[1].column[2][2], 1.0f));
+
+        memcpy(&unchanged_position, &built_positions[0],
+               sizeof(unchanged_position));
+        memset(&worlds[2], 0, sizeof(worlds[2]));
+        errno = 0;
+        assert(pvr_chunk_skeleton_palette_build(
+            &decoded_skeleton, worlds, 3, built_positions, 2,
+            built_normals, 2, &built_palette) == -1);
+        assert(errno == ERANGE && !memcmp(&built_positions[0],
+                                         &unchanged_position,
+                                         sizeof(unchanged_position)) &&
+               built_palette.position_matrices == NULL);
+
+        corrupt = malloc(serialized_bytes);
+        assert(corrupt);
+        memcpy(corrupt, serialized, serialized_bytes);
+        store_le32(corrupt + PVR_CHUNK_SKELETON_SECTION_HEADER_BYTES +
+                       PVR_CHUNK_SKELETON_SECTION_JOINT_BYTES,
+                   0);
+        refresh_skeleton_crc(corrupt, serialized_bytes);
+        errno = 0;
+        assert(pvr_chunk_skeleton_section_open(
+            corrupt, serialized_bytes, &section_view) == -1);
+        assert(errno == EILSEQ);
+        free(corrupt);
+        free(serialized);
     }
 
     lookup[1] = PVR_CHUNK_SKIN_INDEX_NONE;

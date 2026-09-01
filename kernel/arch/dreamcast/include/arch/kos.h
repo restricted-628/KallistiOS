@@ -70,6 +70,7 @@ __BEGIN_DECLS
 #include <dc/pvr_chunk_cache_asset.h>
 #include <dc/pvr_chunk_skin.h>
 #include <dc/pvr_chunk_skin_asset.h>
+#include <dc/pvr_chunk_skeleton_asset.h>
 #include <dc/pvr_chunk_shape.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_chunk_volume_asset.h>

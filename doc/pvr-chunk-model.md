@@ -129,6 +129,21 @@ The resulting `pvr_chunk_skin_general_t` goes through the existing model-aware
 query and bind path; the section parser does not duplicate or weaken that
 authority. Applications that do not load a skin section allocate nothing.
 
+An optional pointer-free `PSK1` skeleton section completes the authored skin
+contract without embedding target pointers. Each fixed record binds one skin
+joint ordinal to one unique hierarchy-node ordinal and carries its finite
+column-major inverse-bind matrix. The parser validates both CRCs, exact sizes,
+reserved bytes, node bounds, duplicate bindings, and every matrix component
+before publishing a borrowed view. Materialization fills caller-owned joint
+records only after all capacities, alignments, and overlaps are preflighted.
+
+`pvr_chunk_skeleton_palette_build()` composes each completed hierarchy world
+matrix with its inverse bind and derives the matching inverse-transpose normal
+matrix. It proves every input and every nonsingular result in a first pass,
+then publishes both caller-owned arrays in a second pass. This directly feeds
+the existing Skin4 or general-N deformation kernels; no skeleton object,
+temporary palette, worker, or allocator is hidden inside the PVR runtime.
+
 ## Explicit shape motion
 
 `pvr_chunk_shape_bind()` associates one or more sparse morph targets with a
@@ -186,8 +201,9 @@ not create a thread, fiber, callback worker, or decompression dependency.
 PCM2 preserves that contract while replacing header growth with a fixed
 64-byte header and a checksummed directory of 32-byte descriptors. Exactly one
 vertex stream and one polygon stream are required. Resource tables, volume
-data, compact or general skins, morph targets, hierarchies, animations, cooked
-caches, and application-defined sections are optional; repeatable types are
+data, compact or general skins, skeleton bindings, morph targets, hierarchies,
+animations, cooked caches, and application-defined sections are optional;
+repeatable types are
 addressed by zero-based ordinal rather than by adding pointers to the fixed
 asset view. Unknown nonzero section identifiers remain queryable for forward
 compatibility.
@@ -230,20 +246,23 @@ runtime-memory cost.
 With `--scene-root`, the host-side canonical scene IR writes one `PCH1`
 hierarchy section containing an identity root bound to model ordinal zero.
 The converter then loads, admits, and binds that section through the target
-implementation before publishing the PCM2 file. The current OBJ boundary has
-only one model and therefore emits only this explicit root; future scene
-importers populate the same IR rather than defining another target format.
+implementation before publishing the PCM2 file. The OBJ boundary has only one
+model and therefore emits only this explicit root; the glTF/GLB importer
+populates the same IR for an authored selected scene rather than defining
+another target format.
 With `--rigid-skin`, the same host pipeline writes one `PSG1` section whose
 vertices are each fully weighted to joint zero, then reloads and materializes
 it through the target implementation before publishing. This deliberately
 tests the section contract without claiming that the bounded OBJ source can
-express an authored rig; a future scene importer supplies real spans and
-weights to the same serializer.
+express an authored rig. When paired with `--scene-root`, it also emits an
+identity `PSK1` joint binding. The glTF/GLB importer supplies exact general-N
+spans, weights, hierarchy-node bindings, and inverse-bind matrices to those
+same serializers.
 With `--morph-target DX DY DZ`, it writes one `PMS1` section containing a
 single position delta for model vertex zero, then reloads and materializes it
 through the target implementation. This gives bounded OBJ builds an explicit
 round-trip fixture without inventing morph semantics that OBJ cannot express;
-future scene importers populate the same sparse target representation.
+the glTF/GLB importer populates the same sparse target representation.
 
 With `--animation-offset DX DY DZ`, the converter writes one pointer-free
 `PAT1` section containing a two-key linear translation track for the explicit
@@ -255,6 +274,9 @@ transform and track records, and `pvr_chunk_animation_section_materialize()`
 fills caller-owned canonical keys and existing animation runtime bindings.
 Sampling, blending, events, and playback remain the responsibility of
 `dc/animation.h`; the asset layer owns no clock, worker, or alternate evaluator.
+The glTF/GLB importer uses the same section for one authored STEP/LINEAR TRS
+clip. Quaternion keys are normalized; cubic Hermite and morph-weight channels
+are rejected until their distinct runtime contracts are represented.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The

@@ -9,14 +9,18 @@ LDLIBS += -lm
 TARGET = pvr-chunk-skin-test
 SOURCES = pvr-chunk-skin-test.c \
 	../pvr-model-convert/pvr-scene-ir.c \
+	../pvr-model-convert/pvr-skeleton-ir.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skeleton_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
-	../../kernel/arch/dreamcast/hardware/pvr/pvr_deform.c
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_deform.c \
+	../../kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c \
+	../../kernel/arch/dreamcast/math/matrix_compose.c
 
 .PHONY: all clean test
 

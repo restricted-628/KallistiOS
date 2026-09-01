@@ -11,6 +11,16 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added bounded host-side glTF 2.0 and GLB input to the compact-model
+  converter. One selected scene and unique instanced mesh can populate PCM2
+  geometry, hierarchy, deterministic PBR-derived material state, exact
+  general-N skin weights, inverse-bind skeleton bindings, sparse morph targets,
+  and one STEP/LINEAR TRS animation. Unsupported semantics are rejected rather
+  than silently flattened, and the parser remains host-only.
+* Added portable pointer-free PCM2 skeleton bindings. Checked `PSK1` APIs
+  validate unique hierarchy-node mappings and finite inverse-bind matrices,
+  materialize into caller-owned records, and build existing position/normal
+  skin palettes from completed hierarchy world matrices without allocation.
 * Added portable PCM2 cooked-cache sections for ordinary, two-volume, and
   modifier compact geometry. Fixed-width `PCC1` records round-trip into the
   existing caller-owned prepared-cache objects without serializing pointers,

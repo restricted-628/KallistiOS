@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include <dc/animation.h>
+#include <dc/pvr_chunk_skeleton_asset.h>
 #include <dc/pvr_chunk_skin.h>
 #include <dc/pvr_chunk_shape.h>
 
@@ -43,6 +44,10 @@ int pvr_scene_ir_serialize_hierarchy(const pvr_scene_ir_t *scene,
 
 int pvr_scene_ir_serialize_general_skin(
     const pvr_chunk_skin_general_t *skin,
+    uint8_t **bytes_out, size_t *size_out);
+
+int pvr_scene_ir_serialize_skeleton(
+    const pvr_chunk_skeleton_t *skeleton,
     uint8_t **bytes_out, size_t *size_out);
 
 int pvr_scene_ir_serialize_shapes(

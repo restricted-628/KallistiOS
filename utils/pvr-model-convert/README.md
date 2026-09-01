@@ -1,9 +1,9 @@
 # Compact PVR Model Converter
 
-`pvr-model-convert` converts a deliberately bounded Wavefront OBJ subset into
-the two little-endian streams consumed by KOS's compact-model runtime. The
-generated model is admitted by the exact runtime validator before either
-temporary output is published.
+`pvr-model-convert` converts a deliberately bounded Wavefront OBJ or glTF 2.0
+source into the little-endian streams consumed by KOS's compact-model runtime.
+The generated model and every optional section are admitted by the exact
+runtime validators before temporary output is published.
 
 ```text
 pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
@@ -13,8 +13,30 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
      [--scene-root] [--rigid-skin] [--morph-target DX DY DZ] \
      [--animation-offset DX DY DZ]] \
      [--lz4-vertices]] [--] \
-    INPUT.obj {VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}
+    INPUT.{obj,gltf,glb} \
+    {VERTICES.bin POLYGONS.bin | MODEL.c | MODEL.pcm}
 ```
+
+glTF and GLB input require `--emit-asset --section-directory`. The host-only
+importer uses cgltf and adds no parser, allocation, or code to a Dreamcast
+program. It currently accepts one selected scene and one unique mesh, including
+repeated instances of that mesh, triangle primitives, indexed or non-indexed
+positions, optional normals and UV set zero, stable base-color texture ordinals,
+parent-before-child node transforms, one consistent skin with any number of
+weight sets, inverse-bind matrices, sparse position/normal morph targets, and
+one STEP/LINEAR translation/rotation/scale animation. General-N weights are
+normalized exactly to 65535; no four-influence reduction is performed.
+
+Unsupported authored meaning is rejected rather than dropped. Current explicit
+boundaries include multiple unique meshes, required extensions, instancing,
+non-triangle primitives, tangent/color/custom vertex attributes, texture
+coordinate sets other than zero, texture transforms, transparent or advanced
+materials, detached skin joints, multiple skins or animations, morph-weight
+animation, matrix-authored nodes in an animated scene, and cubic-spline tracks.
+The latter use Hermite tangents and are not silently mapped to the runtime's
+Catmull-Rom interpolation. PBR base color, metallic, and roughness are converted
+deterministically into compact diffuse, ambient, specular, and exponent state;
+texture images and VRAM placement remain application resource policy.
 
 The admitted source subset is:
 
@@ -147,6 +169,13 @@ target parser/materializer, and existing variable-influence runtime binder. It
 does not infer an authored skeleton from OBJ and is not a replacement for a
 scene importer that owns real joint and weight data. The option likewise
 requires `--section-directory`.
+
+When that fixture is paired with `--scene-root`, PCM2 also receives a `PSK1`
+skeleton section mapping joint zero to the hierarchy root with an identity
+inverse bind. Authored glTF skins use the same section for every joint. The
+runtime materializes those bindings into caller-owned records and builds the
+existing position/normal skin palette from completed hierarchy world matrices;
+the asset format owns no pose, allocator, clock, or hidden matrix storage.
 
 `--morph-target DX DY DZ` adds one admitted `PMS1` sparse morph-target
 section to PCM2. The target applies the supplied finite position delta to

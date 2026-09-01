@@ -14,7 +14,7 @@ CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
 LDLIBS += -lm
 
 TARGET = pvr-model-convert
-SOURCES = pvr-model-convert.c pvr-scene-ir.c \
+SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c cgltf.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_render.c \
@@ -26,8 +26,11 @@ SOURCES = pvr-model-convert.c pvr-scene-ir.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skeleton_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c \
+          ../../kernel/arch/dreamcast/math/matrix_compose.c \
           ../../addons/liblz4/pvr_chunk_asset_lz4.c \
           ../../addons/liblz4/lz4.c ../../addons/liblz4/lz4frame.c \
           ../../addons/liblz4/lz4hc.c ../../addons/liblz4/xxhash.c

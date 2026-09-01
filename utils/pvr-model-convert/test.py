@@ -5,6 +5,8 @@ Copyright (C) 2026 Joseph Black
 """
 
 import os
+import base64
+import json
 import pathlib
 import shlex
 import struct
@@ -456,13 +458,14 @@ f 1/1/1 2/2/1 3/3/1
             "hierarchy_nodes=1\n"
             "general_skin_spans=3\n"
             "general_skin_weights=3\n"
+            "skeleton_joints=1\n"
             "morph_targets=1\n"
             "morph_deltas=1\n"
             "animation_transforms=1\n"
             "animation_tracks=1\n"
             "animation_keys=2\n"
         )
-        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 7
+        assert struct.unpack_from("<I", skin_asset_bytes, 32)[0] == 8
         skin_descriptor = struct.unpack_from(
             "<7IHH", skin_asset_bytes, 64 + 4 * 32
         )
@@ -490,8 +493,36 @@ f 1/1/1 2/2/1 3/3/1
             for index in range(3)
         ) == ((0, 65535), (0, 65535), (0, 65535))
 
-        shape_descriptor = struct.unpack_from(
+        skeleton_descriptor = struct.unpack_from(
             "<7IHH", skin_asset_bytes, 64 + 5 * 32
+        )
+        assert skeleton_descriptor[0] == 11
+        assert skeleton_descriptor[7:] == (0, 4)
+        skeleton_offset = skeleton_descriptor[2]
+        skeleton_size = skeleton_descriptor[3]
+        skeleton = skin_asset_bytes[
+            skeleton_offset:skeleton_offset + skeleton_size
+        ]
+        assert skeleton[:4] == b"PSK1"
+        assert struct.unpack_from("<HHIIIHHI", skeleton, 4) == (
+            1, 48, 128, 1, 1, 80, 64, 80
+        )
+        assert zlib.crc32(skeleton[48:]) == struct.unpack_from(
+            "<I", skeleton, 28
+        )[0]
+        assert zlib.crc32(skeleton[:44]) == struct.unpack_from(
+            "<I", skeleton, 44
+        )[0]
+        assert struct.unpack_from("<4I", skeleton, 48) == (0, 0, 0, 0)
+        assert struct.unpack_from("<16f", skeleton, 64) == (
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        )
+
+        shape_descriptor = struct.unpack_from(
+            "<7IHH", skin_asset_bytes, 64 + 6 * 32
         )
         assert shape_descriptor[0] == 7
         assert shape_descriptor[7:] == (0, 4)
@@ -514,7 +545,7 @@ f 1/1/1 2/2/1 3/3/1
         )
 
         animation_descriptor = struct.unpack_from(
-            "<7IHH", skin_asset_bytes, 64 + 6 * 32
+            "<7IHH", skin_asset_bytes, 64 + 7 * 32
         )
         assert animation_descriptor[0] == 9
         assert animation_descriptor[7:] == (0, 4)
@@ -551,6 +582,372 @@ f 1/1/1 2/2/1 3/3/1
         )
         assert struct.unpack_from("<5fI", animation, 168) == (
             1.0, 3.0, 4.0, 5.0, 1.0, 0
+        )
+
+        gltf_binary = (
+            struct.pack(
+                "<9f",
+                -1.0, -1.0, 0.0,
+                1.0, -1.0, 0.0,
+                0.0, 1.0, 0.0,
+            ) +
+            struct.pack("<9f", *(0.0, 0.0, 1.0) * 3) +
+            struct.pack("<3H", 0, 1, 2) + b"\0\0"
+        )
+        gltf_source = root / "triangle.gltf"
+        gltf_source.write_text(json.dumps({
+            "asset": {"version": "2.0"},
+            "buffers": [{
+                "byteLength": len(gltf_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(gltf_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 72, "byteLength": 6,
+                 "target": 34963},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5123, "count": 3,
+                 "type": "SCALAR"},
+            ],
+            "materials": [{
+                "name": "mat",
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": [0.25, 0.5, 0.75, 1.0]
+                },
+            }],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": 0, "NORMAL": 1},
+                "indices": 2,
+                "material": 0,
+            }]}],
+            "nodes": [
+                {"name": "root", "translation": [2.0, 0.0, 0.0],
+                 "children": [1]},
+                {"name": "mesh", "mesh": 0,
+                 "translation": [0.0, 3.0, 0.0]},
+            ],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0,
+        }), encoding="utf-8")
+        gltf_asset = root / "triangle-gltf.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            gltf_source, gltf_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "positions=3\n" in result.stdout
+        assert "normals=3\n" in result.stdout
+        assert "triangles=1\n" in result.stdout
+        assert "material_definitions=2\n" in result.stdout
+        assert "hierarchy_nodes=2\n" in result.stdout
+        gltf_asset_bytes = gltf_asset.read_bytes()
+        assert struct.unpack_from("<I", gltf_asset_bytes, 32)[0] == 3
+        gltf_hierarchy_descriptor = struct.unpack_from(
+            "<7IHH", gltf_asset_bytes, 64 + 2 * 32
+        )
+        assert gltf_hierarchy_descriptor[0] == 8
+        gltf_hierarchy_offset = gltf_hierarchy_descriptor[2]
+        gltf_hierarchy_size = gltf_hierarchy_descriptor[3]
+        gltf_hierarchy = gltf_asset_bytes[
+            gltf_hierarchy_offset:
+            gltf_hierarchy_offset + gltf_hierarchy_size
+        ]
+        assert gltf_hierarchy[:4] == b"PCH1"
+        assert struct.unpack_from("<I", gltf_hierarchy, 12)[0] == 2
+        assert struct.unpack_from("<II", gltf_hierarchy, 32) == (
+            0xffffffff, 0xffffffff
+        )
+        assert struct.unpack_from("<II", gltf_hierarchy, 112) == (0, 0)
+        assert struct.unpack_from("<4f", gltf_hierarchy, 96) == (
+            2.0, 0.0, 0.0, 1.0
+        )
+        assert struct.unpack_from("<4f", gltf_hierarchy, 176) == (
+            0.0, 3.0, 0.0, 1.0
+        )
+
+        result = invoke(converter, "--emit-asset", gltf_source, gltf_asset)
+        assert result.returncode == 2
+        assert result.stderr == (
+            "glTF input requires --emit-asset --section-directory\n"
+        )
+
+        skin_joints = bytes((0, 0, 0, 0,
+                             1, 0, 0, 0,
+                             0, 1, 0, 0))
+        skin_weights = struct.pack(
+            "<12f",
+            1.0, 0.0, 0.0, 0.0,
+            1.0, 0.0, 0.0, 0.0,
+            0.25, 0.75, 0.0, 0.0,
+        )
+        identity_matrix = (
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        )
+        gltf_skin_binary = (
+            gltf_binary[:72] + skin_joints + skin_weights +
+            struct.pack("<3H", 0, 1, 2) + b"\0\0" +
+            struct.pack("<32f", *(identity_matrix * 2))
+        )
+        gltf_skin_source = root / "triangle-skin.gltf"
+        gltf_skin_source.write_text(json.dumps({
+            "asset": {"version": "2.0"},
+            "buffers": [{
+                "byteLength": len(gltf_skin_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(gltf_skin_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 72, "byteLength": 12,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 84, "byteLength": 48,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 132, "byteLength": 6,
+                 "target": 34963},
+                {"buffer": 0, "byteOffset": 140, "byteLength": 128},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5121, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 3, "componentType": 5126, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 4, "componentType": 5123, "count": 3,
+                 "type": "SCALAR"},
+                {"bufferView": 5, "componentType": 5126, "count": 2,
+                 "type": "MAT4"},
+            ],
+            "meshes": [{"primitives": [{
+                "attributes": {
+                    "POSITION": 0,
+                    "NORMAL": 1,
+                    "JOINTS_0": 2,
+                    "WEIGHTS_0": 3,
+                },
+                "indices": 4,
+            }]}],
+            "skins": [{"joints": [1, 2], "inverseBindMatrices": 5}],
+            "nodes": [
+                {"name": "root", "children": [1, 3]},
+                {"name": "joint-0", "children": [2]},
+                {"name": "joint-1"},
+                {"name": "mesh", "mesh": 0, "skin": 0},
+            ],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0,
+        }), encoding="utf-8")
+        gltf_skin_asset = root / "triangle-gltf-skin.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            gltf_skin_source, gltf_skin_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "hierarchy_nodes=4\n" in result.stdout
+        assert "general_skin_spans=3\n" in result.stdout
+        assert "general_skin_weights=4\n" in result.stdout
+        assert "skeleton_joints=2\n" in result.stdout
+        gltf_skin_asset_bytes = gltf_skin_asset.read_bytes()
+        assert struct.unpack_from("<I", gltf_skin_asset_bytes, 32)[0] == 5
+        gltf_skin_descriptor = struct.unpack_from(
+            "<7IHH", gltf_skin_asset_bytes, 64 + 3 * 32
+        )
+        assert gltf_skin_descriptor[0] == 6
+        gltf_skin_offset = gltf_skin_descriptor[2]
+        gltf_skin_size = gltf_skin_descriptor[3]
+        gltf_skin_section = gltf_skin_asset_bytes[
+            gltf_skin_offset:gltf_skin_offset + gltf_skin_size
+        ]
+        assert struct.unpack_from("<III", gltf_skin_section, 12) == (
+            3, 4, 2
+        )
+        assert tuple(
+            struct.unpack_from("<HH", gltf_skin_section, 72 + index * 4)
+            for index in range(4)
+        ) == ((0, 65535), (1, 65535), (0, 16384), (1, 49151))
+        gltf_skeleton_descriptor = struct.unpack_from(
+            "<7IHH", gltf_skin_asset_bytes, 64 + 4 * 32
+        )
+        assert gltf_skeleton_descriptor[0] == 11
+        gltf_skeleton_offset = gltf_skeleton_descriptor[2]
+        gltf_skeleton_size = gltf_skeleton_descriptor[3]
+        gltf_skeleton = gltf_skin_asset_bytes[
+            gltf_skeleton_offset:gltf_skeleton_offset + gltf_skeleton_size
+        ]
+        assert struct.unpack_from("<II", gltf_skeleton, 12) == (2, 4)
+        assert struct.unpack_from("<I", gltf_skeleton, 48)[0] == 1
+        assert struct.unpack_from("<I", gltf_skeleton, 128)[0] == 2
+
+        morph_binary = (
+            gltf_binary +
+            struct.pack(
+                "<9f",
+                0.0, 0.0, 0.0,
+                0.5, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+            )
+        )
+        gltf_morph_source = root / "triangle-morph.gltf"
+        gltf_morph_source.write_text(json.dumps({
+            "asset": {"version": "2.0"},
+            "buffers": [{
+                "byteLength": len(morph_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(morph_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 72, "byteLength": 6,
+                 "target": 34963},
+                {"buffer": 0, "byteOffset": 80, "byteLength": 36,
+                 "target": 34962},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5123, "count": 3,
+                 "type": "SCALAR"},
+                {"bufferView": 3, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+            ],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": 0, "NORMAL": 1},
+                "indices": 2,
+                "targets": [{"POSITION": 3}],
+            }]}],
+            "nodes": [{"mesh": 0}],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0,
+        }), encoding="utf-8")
+        gltf_morph_asset = root / "triangle-gltf-morph.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            gltf_morph_source, gltf_morph_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "morph_targets=1\n" in result.stdout
+        assert "morph_deltas=1\n" in result.stdout
+        gltf_morph_asset_bytes = gltf_morph_asset.read_bytes()
+        assert struct.unpack_from("<I", gltf_morph_asset_bytes, 32)[0] == 4
+        gltf_morph_descriptor = struct.unpack_from(
+            "<7IHH", gltf_morph_asset_bytes, 64 + 3 * 32
+        )
+        assert gltf_morph_descriptor[0] == 7
+        gltf_morph_offset = gltf_morph_descriptor[2]
+        gltf_morph_size = gltf_morph_descriptor[3]
+        gltf_morph = gltf_morph_asset_bytes[
+            gltf_morph_offset:gltf_morph_offset + gltf_morph_size
+        ]
+        assert struct.unpack_from("<II", gltf_morph, 12) == (1, 1)
+        assert struct.unpack_from("<HH6f", gltf_morph, 56) == (
+            1, 0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.0
+        )
+
+        animation_binary = (
+            gltf_binary + struct.pack("<2f", 0.0, 2.0) +
+            struct.pack("<6f", 0.0, 3.0, 0.0, 0.0, 5.0, 0.0)
+        )
+        gltf_animation_source = root / "triangle-animation.gltf"
+        gltf_animation_source.write_text(json.dumps({
+            "asset": {"version": "2.0"},
+            "buffers": [{
+                "byteLength": len(animation_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(animation_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 72, "byteLength": 6,
+                 "target": 34963},
+                {"buffer": 0, "byteOffset": 80, "byteLength": 8},
+                {"buffer": 0, "byteOffset": 88, "byteLength": 24},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5123, "count": 3,
+                 "type": "SCALAR"},
+                {"bufferView": 3, "componentType": 5126, "count": 2,
+                 "type": "SCALAR"},
+                {"bufferView": 4, "componentType": 5126, "count": 2,
+                 "type": "VEC3"},
+            ],
+            "meshes": [{"primitives": [{
+                "attributes": {"POSITION": 0, "NORMAL": 1},
+                "indices": 2,
+            }]}],
+            "nodes": [
+                {"translation": [2.0, 0.0, 0.0], "children": [1]},
+                {"mesh": 0, "translation": [0.0, 3.0, 0.0]},
+            ],
+            "animations": [{
+                "samplers": [{"input": 3, "output": 4,
+                              "interpolation": "LINEAR"}],
+                "channels": [{"sampler": 0,
+                              "target": {"node": 1,
+                                         "path": "translation"}}],
+            }],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0,
+        }), encoding="utf-8")
+        gltf_animation_asset = root / "triangle-gltf-animation.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            gltf_animation_source, gltf_animation_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "animation_transforms=2\n" in result.stdout
+        assert "animation_tracks=1\n" in result.stdout
+        assert "animation_keys=2\n" in result.stdout
+        gltf_animation_asset_bytes = gltf_animation_asset.read_bytes()
+        assert struct.unpack_from("<I", gltf_animation_asset_bytes, 32)[0] == 4
+        gltf_animation_descriptor = struct.unpack_from(
+            "<7IHH", gltf_animation_asset_bytes, 64 + 3 * 32
+        )
+        assert gltf_animation_descriptor[0] == 9
+        gltf_animation_offset = gltf_animation_descriptor[2]
+        gltf_animation_size = gltf_animation_descriptor[3]
+        gltf_animation = gltf_animation_asset_bytes[
+            gltf_animation_offset:
+            gltf_animation_offset + gltf_animation_size
+        ]
+        assert struct.unpack_from("<III", gltf_animation, 12) == (2, 1, 2)
+        assert struct.unpack_from("<ff", gltf_animation, 44) == (0.0, 2.0)
+        assert struct.unpack_from("<4I", gltf_animation, 128) == (
+            0, 0xffffffff, 0xffffffff, 0xffffffff
+        )
+        assert struct.unpack_from("<5fI", gltf_animation, 208) == (
+            0.0, 0.0, 3.0, 0.0, 1.0, 0
+        )
+        assert struct.unpack_from("<5fI", gltf_animation, 232) == (
+            2.0, 0.0, 5.0, 0.0, 1.0, 0
         )
 
         directory_lz4 = root / "triangle-directory-lz4.pcm"

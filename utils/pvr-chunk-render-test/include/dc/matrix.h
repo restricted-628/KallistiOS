@@ -3,4 +3,6 @@
 
 #include <dc/vector.h>
 
+int mat_compose(matrix_t *out, const matrix_t *lhs, const matrix_t *rhs);
+
 #endif
