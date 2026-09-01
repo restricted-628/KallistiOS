@@ -19,23 +19,23 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
 
 glTF and GLB input require `--emit-asset --section-directory`. The host-only
 importer uses cgltf and adds no parser, allocation, or code to a Dreamcast
-program. It accepts one selected scene and any nonzero set of unique rigid
+program. It accepts one selected scene and any nonzero set of unique
 meshes, including repeated instances, triangle primitives, indexed or non-
 indexed positions, optional normals and UV set zero, stable base-color texture
 ordinals, parent-before-child node transforms, and one STEP/LINEAR translation,
 rotation, or scale animation. Each unique mesh becomes one PCM2 model ordinal
-with exact local bounds and its own resource manifest. When the scene uses one
-unique mesh, the importer additionally accepts one consistent skin with any
-number of weight sets, inverse-bind matrices, and sparse position/normal morph
-targets. General-N weights are normalized exactly to 65535; no four-influence
-reduction is performed.
+with exact local bounds and its own resource manifest, general-N skin,
+inverse-bind skeleton, and sparse position/normal morph sections when authored.
+Different meshes may use different skins; repeated instances of one mesh must
+agree on that mesh's skin. General-N weights are normalized exactly to 65535;
+no four-influence reduction is performed.
 
 Unsupported authored meaning is rejected rather than dropped. Current explicit
-boundaries include per-model skin or morph sections in a multi-mesh scene,
-required extensions, GPU instancing, non-triangle primitives,
+boundaries include required extensions, GPU instancing, non-triangle primitives,
 tangent/color/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
-materials, detached skin joints, multiple skins or animations, morph-weight
+materials, detached skin joints, conflicting skins on repeated mesh instances,
+multiple animations, morph-weight
 animation, matrix-authored nodes in an animated scene, and cubic-spline tracks.
 The latter use Hermite tangents and are not silently mapped to the runtime's
 Catmull-Rom interpolation. PBR base color, metallic, and roughness are converted
@@ -140,8 +140,11 @@ Every converter-produced PCM2 also carries one pointer-free `PMT1` model
 table. Each record associates a model ordinal with its exact local bounding
 sphere and the typed optional-section ordinals owned by that model. The
 converter reopens and cross-validates this table against the complete PCM2
-directory before publishing the asset. Target-side table query and load calls
-use caller-owned workspace and allocate nothing.
+directory before publishing the asset. Optional resource, cooked-cache,
+general-skin, skeleton, and morph sections are resolved independently per
+model; section ordinals remain correct when only some models own a given
+section type. Target-side table query and load calls use caller-owned workspace
+and allocate nothing.
 
 `--cooked-cache` adds a pointer-free `PCC1` ordinary prepared-cache section to
 PCM2. The converter builds it through the target cache planner, serializes it,

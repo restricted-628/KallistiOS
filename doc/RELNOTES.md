@@ -11,12 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
-* Extended the bounded glTF/GLB host importer to emit every unique rigid mesh
+* Extended the bounded glTF/GLB host importer to emit every unique mesh
   in the selected scene as an independent PCM2 model ordinal. Scene nodes bind
   the corresponding model, repeated instances share it, exact local bounds
   and resource ownership remain per-model, and raw or LZ4-framed streams are
   reloaded together before publication. Optional cooked caches are built,
-  assigned, materialized, and checked independently for every model.
+  assigned, materialized, and checked independently for every model. Authored
+  general-N skins, inverse-bind skeletons, and sparse morph targets now follow
+  the same per-model ownership and type-ordinal rules.
 * Added pointer-free PCM2 per-model metadata. Checked `PMT1` APIs bind every
   canonical vertex/polygon pair to exact local bounds and typed optional-
   section ordinals, cross-validate the complete table against its asset, and

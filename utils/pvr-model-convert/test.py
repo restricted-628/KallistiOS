@@ -700,8 +700,31 @@ f 1/1/1 2/2/1 3/3/1
             0.0, 3.0, 0.0, 1.0
         )
 
-        multi_gltf_binary = gltf_binary + struct.pack(
-            "<6f", 0.0, 0.0, 1.0, 0.0, 0.5, 1.0
+        multi_gltf_binary = (
+            gltf_binary +
+            struct.pack("<6f", 0.0, 0.0, 1.0, 0.0, 0.5, 1.0) +
+            struct.pack(
+                "<9f", 0.0, 0.0, 0.0, 0.25, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+            ) +
+            struct.pack(
+                "<9f", 0.0, 0.0, 0.0, 0.0, 0.5, 0.0,
+                0.0, 0.0, 0.0,
+            ) +
+            bytes((0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0)) +
+            struct.pack(
+                "<12f", 1.0, 0.0, 0.0, 0.0,
+                1.0, 0.0, 0.0, 0.0,
+                0.25, 0.75, 0.0, 0.0,
+            ) +
+            struct.pack(
+                "<32f", *(
+                    (1.0, 0.0, 0.0, 0.0,
+                     0.0, 1.0, 0.0, 0.0,
+                     0.0, 0.0, 1.0, 0.0,
+                     0.0, 0.0, 0.0, 1.0) * 2
+                ),
+            )
         )
         multi_gltf_source = root / "two-meshes.gltf"
         multi_gltf_source.write_text(json.dumps({
@@ -720,6 +743,15 @@ f 1/1/1 2/2/1 3/3/1
                  "target": 34963},
                 {"buffer": 0, "byteOffset": 80, "byteLength": 24,
                  "target": 34962},
+                {"buffer": 0, "byteOffset": 104, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 140, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 176, "byteLength": 12,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 188, "byteLength": 48,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 236, "byteLength": 128},
             ],
             "accessors": [
                 {"bufferView": 0, "componentType": 5126, "count": 3,
@@ -730,6 +762,16 @@ f 1/1/1 2/2/1 3/3/1
                  "type": "SCALAR"},
                 {"bufferView": 3, "componentType": 5126, "count": 3,
                  "type": "VEC2"},
+                {"bufferView": 4, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 5, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 6, "componentType": 5121, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 7, "componentType": 5126, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 8, "componentType": 5126, "count": 2,
+                 "type": "MAT4"},
             ],
             "images": [{
                 "uri": "data:application/octet-stream;base64,AA=="
@@ -744,21 +786,30 @@ f 1/1/1 2/2/1 3/3/1
             "meshes": [
                 {"primitives": [{
                     "attributes": {
-                        "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 3
+                        "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 3,
+                        "JOINTS_0": 6, "WEIGHTS_0": 7,
                     },
                     "indices": 2, "material": 0,
+                    "targets": [{"POSITION": 4}],
                 }]},
                 {"primitives": [{
                     "attributes": {
-                        "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 3
+                        "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 3,
+                        "JOINTS_0": 6, "WEIGHTS_0": 7,
                     },
                     "indices": 2, "material": 0,
+                    "targets": [{"POSITION": 5}],
                 }]},
             ],
+            "skins": [{"joints": [3, 4], "inverseBindMatrices": 8}],
             "nodes": [
-                {"children": [1, 2]},
-                {"mesh": 0, "translation": [-2.0, 0.0, 0.0]},
-                {"mesh": 1, "translation": [2.0, 0.0, 0.0]},
+                {"children": [1, 2, 3]},
+                {"mesh": 0, "skin": 0,
+                 "translation": [-2.0, 0.0, 0.0]},
+                {"mesh": 1, "skin": 0,
+                 "translation": [2.0, 0.0, 0.0]},
+                {"children": [4]},
+                {},
             ],
             "scenes": [{"nodes": [0]}],
             "scene": 0,
@@ -771,19 +822,26 @@ f 1/1/1 2/2/1 3/3/1
         )
         assert result.returncode == 0, result.stderr
         assert "models=2\n" in result.stdout
-        assert "hierarchy_nodes=3\n" in result.stdout
+        assert "hierarchy_nodes=5\n" in result.stdout
+        assert "general_skin_spans=6\n" in result.stdout
+        assert "general_skin_weights=8\n" in result.stdout
+        assert "skeleton_joints=4\n" in result.stdout
+        assert "morph_targets=2\n" in result.stdout
+        assert "morph_deltas=2\n" in result.stdout
         multi_bytes = multi_gltf_asset.read_bytes()
-        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 10
+        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 16
         multi_descriptors = [
             struct.unpack_from("<7IHH", multi_bytes, 64 + i * 32)
-            for i in range(10)
+            for i in range(16)
         ]
         assert [descriptor[0] for descriptor in multi_descriptors] == [
-            1, 2, 3, 10, 1, 2, 3, 10, 8, 12,
+            1, 2, 3, 10, 6, 11, 7,
+            1, 2, 3, 10, 6, 11, 7,
+            8, 12,
         ]
         multi_table = multi_bytes[
-            multi_descriptors[9][2]:
-            multi_descriptors[9][2] + multi_descriptors[9][3]
+            multi_descriptors[15][2]:
+            multi_descriptors[15][2] + multi_descriptors[15][3]
         ]
         assert multi_table[:4] == b"PMT1"
         assert struct.unpack_from("<I", multi_table, 12)[0] == 2
@@ -795,11 +853,15 @@ f 1/1/1 2/2/1 3/3/1
         )
         assert struct.unpack_from("<I", multi_table, 64)[0] == 0
         assert struct.unpack_from("<I", multi_table, 128)[0] == 1
+        assert struct.unpack_from("<I", multi_table, 60)[0] == 0
+        assert struct.unpack_from("<I", multi_table, 124)[0] == 1
+        assert struct.unpack_from("<II", multi_table, 52) == (0, 0)
+        assert struct.unpack_from("<II", multi_table, 116) == (1, 1)
         multi_hierarchy = multi_bytes[
-            multi_descriptors[8][2]:
-            multi_descriptors[8][2] + multi_descriptors[8][3]
+            multi_descriptors[14][2]:
+            multi_descriptors[14][2] + multi_descriptors[14][3]
         ]
-        assert struct.unpack_from("<I", multi_hierarchy, 12)[0] == 3
+        assert struct.unpack_from("<I", multi_hierarchy, 12)[0] == 5
         assert struct.unpack_from("<II", multi_hierarchy, 112) == (0, 0)
         assert struct.unpack_from("<II", multi_hierarchy, 192) == (0, 1)
 
@@ -811,10 +873,10 @@ f 1/1/1 2/2/1 3/3/1
         multi_lz4 = multi_gltf_asset.read_bytes()
         multi_lz4_descriptors = [
             struct.unpack_from("<7IHH", multi_lz4, 64 + i * 32)
-            for i in range(8)
+            for i in range(14)
         ]
         assert multi_lz4_descriptors[0][7] == 1
-        assert multi_lz4_descriptors[3][7] == 1
+        assert multi_lz4_descriptors[6][7] == 1
 
         result = invoke(converter, "--emit-asset", gltf_source, gltf_asset)
         assert result.returncode == 2

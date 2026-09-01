@@ -156,7 +156,7 @@ typedef struct source_model_set {
     size_t count;
 } source_model_set_t;
 
-typedef struct gltf_asset_metadata {
+typedef struct gltf_model_metadata {
     pvr_chunk_skin_span_t *skin_spans;
     pvr_chunk_skin_weight_t *skin_weights;
     pvr_chunk_skin_general_t skin;
@@ -165,6 +165,11 @@ typedef struct gltf_asset_metadata {
     pvr_chunk_shape_target_t *shape_targets;
     pvr_chunk_shape_delta_t *shape_deltas;
     pvr_chunk_shape_set_t shapes;
+} gltf_model_metadata_t;
+
+typedef struct gltf_asset_metadata {
+    gltf_model_metadata_t *models;
+    size_t model_count;
     anim_vector_key_t *animation_vector_keys;
     anim_quaternion_key_t *animation_quaternion_keys;
     anim_track_view_t *animation_tracks;
@@ -241,7 +246,7 @@ static void source_model_set_free(source_model_set_t *set) {
     memset(set, 0, sizeof(*set));
 }
 
-static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
+static void gltf_model_metadata_free(gltf_model_metadata_t *metadata) {
     if(!metadata)
         return;
     free(metadata->skin_spans);
@@ -249,6 +254,17 @@ static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
     free(metadata->skeleton_joints);
     free(metadata->shape_targets);
     free(metadata->shape_deltas);
+    memset(metadata, 0, sizeof(*metadata));
+}
+
+static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
+    size_t model;
+
+    if(!metadata)
+        return;
+    for(model = 0; model < metadata->model_count; ++model)
+        gltf_model_metadata_free(&metadata->models[model]);
+    free(metadata->models);
     free(metadata->animation_vector_keys);
     free(metadata->animation_quaternion_keys);
     free(metadata->animation_tracks);
@@ -1517,7 +1533,7 @@ static int gltf_build_skin(const cgltf_data *data,
                            const cgltf_skin *skin,
                            const size_t *node_to_scene,
                            const pvr_scene_ir_t *scene,
-                           gltf_asset_metadata_t *metadata) {
+                           gltf_model_metadata_t *metadata) {
     size_t span_capacity = 0;
     size_t weight_capacity = 0;
     size_t source_vertex = 0;
@@ -1695,7 +1711,7 @@ static int gltf_target_delta(const cgltf_morph_target *target,
 }
 
 static int gltf_build_shapes(const cgltf_mesh *mesh,
-                             gltf_asset_metadata_t *metadata) {
+                             gltf_model_metadata_t *metadata) {
     size_t *counts = NULL;
     size_t target_count;
     size_t total_deltas = 0;
@@ -2171,39 +2187,30 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
        gltf_add_materials(data, library) < 0)
         goto fail;
     models->models = calloc(mesh_count, sizeof(*models->models));
-    if(!models->models) {
+    metadata->models = calloc(mesh_count, sizeof(*metadata->models));
+    if(!models->models || !metadata->models) {
         errno = ENOMEM;
         goto fail;
     }
     models->count = mesh_count;
+    metadata->model_count = mesh_count;
     for(model = 0; model < mesh_count; ++model) {
         const cgltf_mesh *mesh = meshes[model];
 
-        if(mesh_count > 1u && skins[model]) {
-            errno = ENOTSUP;
-            goto fail;
-        }
         for(primitive = 0; primitive < mesh->primitives_count;
             ++primitive) {
-            if(mesh_count > 1u &&
-               mesh->primitives[primitive].targets_count) {
-                errno = ENOTSUP;
-                goto fail;
-            }
             if(gltf_append_primitive(
                    data, &mesh->primitives[primitive],
                    &models->models[model], flip_winding, flip_v,
                    texture_identifier) < 0)
                 goto fail;
         }
-        if(validate_references(&models->models[model]) < 0)
+        if(validate_references(&models->models[model]) < 0 ||
+           gltf_build_skin(data, mesh, skins[model], node_to_scene, scene,
+                           &metadata->models[model]) < 0 ||
+           gltf_build_shapes(mesh, &metadata->models[model]) < 0)
             goto fail;
     }
-    if(mesh_count == 1u &&
-       (gltf_build_skin(data, meshes[0], skins[0], node_to_scene, scene,
-                        metadata) < 0 ||
-        gltf_build_shapes(meshes[0], metadata) < 0))
-            goto fail;
     if(gltf_build_animation(data, node_to_scene, scene, metadata) < 0)
         goto fail;
     free(skins);
@@ -4079,6 +4086,7 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                                   size_t model_count, int lz4_vertices,
                                   int include_cooked_cache,
                                   const pvr_scene_ir_t *scene,
+                                  const gltf_model_metadata_t *metadata,
                                   const anim_clip_view_t *animation,
                                   uint8_t **blob_out,
                                   size_t *blob_bytes_out) {
@@ -4089,6 +4097,9 @@ static int build_multi_asset_blob(const output_streams_t *streams,
     size_t section_count = 0;
     size_t resource_ordinal = 0;
     size_t cooked_ordinal = 0;
+    size_t skin_ordinal = 0;
+    size_t skeleton_ordinal = 0;
+    size_t morph_ordinal = 0;
     size_t directory_bytes;
     size_t file_bytes;
     float center[3];
@@ -4103,11 +4114,11 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         *blob_bytes_out = 0;
     if(!streams || model_count < 2u || !scene || !blob_out ||
        !blob_bytes_out || model_count > UINT32_MAX ||
-       model_count > (SIZE_MAX - 3u) / 4u) {
+       !metadata || model_count > (SIZE_MAX - 3u) / 7u) {
         errno = EINVAL;
         return -1;
     }
-    section_capacity = model_count * 4u + 3u;
+    section_capacity = model_count * 7u + 3u;
     sections = calloc(section_capacity, sizeof(*sections));
     records = calloc(model_count, sizeof(*records));
     if(!sections || !records) {
@@ -4129,10 +4140,17 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         uint8_t *polygon = NULL;
         uint8_t *resource = NULL;
         uint8_t *cooked = NULL;
+        uint8_t *skin = NULL;
+        uint8_t *skeleton = NULL;
+        uint8_t *morph = NULL;
         size_t vertex_bytes = 0;
         size_t polygon_bytes = 0;
         size_t resource_bytes = 0;
         size_t cooked_bytes = 0;
+        size_t skin_bytes = 0;
+        size_t skeleton_bytes = 0;
+        size_t morph_bytes = 0;
+        const gltf_model_metadata_t *model_metadata = &metadata[model];
         pvr_chunk_model_table_record_t *record = &records[model];
 
         /* Interleaving each pair with its optional manifest keeps file data
@@ -4164,6 +4182,19 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         if(include_cooked_cache && serialize_cooked_cache(
                &source_view, &cooked, &cooked_bytes) < 0)
             goto fail;
+        if(model_metadata->skin.span_count &&
+           pvr_scene_ir_serialize_general_skin(
+               &model_metadata->skin, &skin, &skin_bytes) < 0)
+            goto fail;
+        if(model_metadata->skeleton.joint_count &&
+           pvr_scene_ir_serialize_skeleton(
+               &model_metadata->skeleton, &skeleton,
+               &skeleton_bytes) < 0)
+            goto fail;
+        if(model_metadata->shapes.target_count &&
+           pvr_scene_ir_serialize_shapes(
+               &model_metadata->shapes, &morph, &morph_bytes) < 0)
+            goto fail;
 
         memset(record, 0, sizeof(*record));
         record->vertex_ordinal = model;
@@ -4172,9 +4203,12 @@ static int build_multi_asset_blob(const output_streams_t *streams,
             PVR_CHUNK_MODEL_SECTION_NONE;
         record->volume_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
         record->skin4_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
-        record->skin_general_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
-        record->skeleton_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
-        record->morph_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+        record->skin_general_ordinal = skin ? skin_ordinal++ :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record->skeleton_ordinal = skeleton ? skeleton_ordinal++ :
+            PVR_CHUNK_MODEL_SECTION_NONE;
+        record->morph_ordinal = morph ? morph_ordinal++ :
+            PVR_CHUNK_MODEL_SECTION_NONE;
         record->cooked_cache_ordinal = cooked ? cooked_ordinal++ :
             PVR_CHUNK_MODEL_SECTION_NONE;
         memcpy(record->center, streams[model].center,
@@ -4189,6 +4223,21 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                sections, section_capacity, &section_count,
                PVR_CHUNK_ASSET_SECTION_COOKED_CACHE, cooked,
                cooked_bytes, sizeof(uint32_t), 0) < 0)
+            goto fail;
+        if(skin && pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL, skin,
+               skin_bytes, sizeof(uint32_t), 0) < 0)
+            goto fail;
+        if(skeleton && pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_SKELETON, skeleton,
+               skeleton_bytes, sizeof(uint32_t), 0) < 0)
+            goto fail;
+        if(morph && pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS, morph,
+               morph_bytes, sizeof(uint32_t), 0) < 0)
             goto fail;
     }
     {
@@ -4703,10 +4752,139 @@ out:
     return result;
 }
 
+static int validate_multi_model_metadata(
+    const pvr_chunk_asset_view_t *asset,
+    const pvr_chunk_model_table_record_t *record,
+    const gltf_model_metadata_t *expected) {
+    pvr_chunk_skin_span_t *skin_spans = NULL;
+    pvr_chunk_skin_weight_t *skin_weights = NULL;
+    pvr_chunk_skeleton_joint_t *skeleton_joints = NULL;
+    pvr_chunk_shape_target_t *shape_targets = NULL;
+    pvr_chunk_shape_delta_t *shape_deltas = NULL;
+    int result = -1;
+
+    if((record->skin_general_ordinal != PVR_CHUNK_MODEL_SECTION_NONE) !=
+           (expected->skin.span_count != 0) ||
+       (record->skeleton_ordinal != PVR_CHUNK_MODEL_SECTION_NONE) !=
+           (expected->skeleton.joint_count != 0) ||
+       (record->morph_ordinal != PVR_CHUNK_MODEL_SECTION_NONE) !=
+           (expected->shapes.target_count != 0)) {
+        errno = EILSEQ;
+        goto out;
+    }
+    if(expected->skin.span_count) {
+        pvr_chunk_asset_section_t section;
+        pvr_chunk_skin_general_section_view_t view;
+        pvr_chunk_skin_general_t materialized;
+        const void *data;
+
+        if(load_raw_section_ordinal(
+               asset, PVR_CHUNK_ASSET_SECTION_SKIN_GENERAL,
+               record->skin_general_ordinal, &section, &data) < 0 ||
+           pvr_chunk_skin_general_section_open(
+               data, section.decoded_bytes, &view) < 0)
+            goto out;
+        skin_spans = calloc(view.span_count, sizeof(*skin_spans));
+        skin_weights = calloc(view.weight_count, sizeof(*skin_weights));
+        if(!skin_spans || !skin_weights) {
+            errno = ENOMEM;
+            goto out;
+        }
+        if(pvr_chunk_skin_general_section_materialize(
+               &view, skin_spans, view.span_count, skin_weights,
+               view.weight_count, &materialized) < 0 ||
+           materialized.span_count != expected->skin.span_count ||
+           materialized.weight_count != expected->skin.weight_count ||
+           materialized.joint_count != expected->skin.joint_count) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+    }
+    if(expected->skeleton.joint_count) {
+        pvr_chunk_asset_section_t section;
+        pvr_chunk_skeleton_section_view_t view;
+        pvr_chunk_skeleton_t materialized;
+        const void *data;
+
+        if(load_raw_section_ordinal(
+               asset, PVR_CHUNK_ASSET_SECTION_SKELETON,
+               record->skeleton_ordinal, &section, &data) < 0 ||
+           pvr_chunk_skeleton_section_open(
+               data, section.decoded_bytes, &view) < 0)
+            goto out;
+        skeleton_joints = calloc(view.joint_count,
+                                 sizeof(*skeleton_joints));
+        if(!skeleton_joints) {
+            errno = ENOMEM;
+            goto out;
+        }
+        if(pvr_chunk_skeleton_section_materialize(
+               &view, skeleton_joints, view.joint_count,
+               &materialized) < 0 ||
+           materialized.joint_count != expected->skeleton.joint_count ||
+           materialized.node_count != expected->skeleton.node_count) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+    }
+    if(expected->shapes.target_count) {
+        pvr_chunk_asset_section_t section;
+        pvr_chunk_shape_section_view_t view;
+        pvr_chunk_shape_set_t materialized;
+        const void *data;
+        size_t expected_deltas = 0;
+        size_t target;
+
+        for(target = 0; target < expected->shapes.target_count; ++target) {
+            if(expected_deltas > SIZE_MAX -
+                   expected->shapes.targets[target].delta_count) {
+                errno = EOVERFLOW;
+                goto out;
+            }
+            expected_deltas +=
+                expected->shapes.targets[target].delta_count;
+        }
+
+        if(load_raw_section_ordinal(
+               asset, PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS,
+               record->morph_ordinal, &section, &data) < 0 ||
+           pvr_chunk_shape_section_open(
+               data, section.decoded_bytes, &view) < 0)
+            goto out;
+        shape_targets = calloc(view.target_count, sizeof(*shape_targets));
+        shape_deltas = calloc(view.delta_count, sizeof(*shape_deltas));
+        if(!shape_targets || !shape_deltas) {
+            errno = ENOMEM;
+            goto out;
+        }
+        if(pvr_chunk_shape_section_materialize(
+               &view, shape_targets, view.target_count, shape_deltas,
+               view.delta_count, &materialized) < 0 ||
+           materialized.target_count != expected->shapes.target_count ||
+           view.delta_count != expected_deltas) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
+    }
+    result = 0;
+
+out:
+    free(shape_deltas);
+    free(shape_targets);
+    free(skeleton_joints);
+    free(skin_weights);
+    free(skin_spans);
+    return result;
+}
+
 static int prepare_multi_asset_output(
     const char *target, const output_streams_t *streams,
     size_t model_count, int lz4_vertices, int include_cooked_cache,
     const pvr_scene_ir_t *scene,
+    const gltf_model_metadata_t *metadata,
     const anim_clip_view_t *animation, temporary_output_t *temporary,
     size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -4727,7 +4905,7 @@ static int prepare_multi_asset_output(
 
     if(build_multi_asset_blob(
            streams, model_count, lz4_vertices, include_cooked_cache,
-           scene, animation,
+           scene, metadata, animation,
            &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        load_raw_section_type(
@@ -4789,6 +4967,9 @@ static int prepare_multi_asset_output(
                &table_view, model, &record) < 0)
             goto out;
         model_pointers[model] = &model_views[model];
+        if(validate_multi_model_metadata(
+               &asset_view, &record, &metadata[model]) < 0)
+            goto out;
         if(record.resource_ordinal != PVR_CHUNK_MODEL_SECTION_NONE) {
             pvr_chunk_asset_section_t resource_section;
             pvr_chunk_resource_section_view_t resource_view;
@@ -5814,6 +5995,7 @@ int main(int argc, char **argv) {
             prepare_result = prepare_multi_asset_output(
                 asset_output, model_streams, model_count, lz4_vertices,
                 cooked_cache, &scene,
+                gltf_metadata.models,
                 gltf_metadata.animation_track_count ?
                     &gltf_metadata.animation : NULL,
                 &vertex_temporary, &asset_bytes);
@@ -5823,15 +6005,18 @@ int main(int argc, char **argv) {
                 asset_output, &model_streams[0], lz4_vertices,
                 section_directory, cooked_cache,
                 scene.node_count ? &scene : NULL,
-                gltf_metadata.skin.span_count ?
-                    &gltf_metadata.skin :
+                gltf_metadata.model_count &&
+                    gltf_metadata.models[0].skin.span_count ?
+                    &gltf_metadata.models[0].skin :
                     (rigid_skin ? &rigid_skin_data : NULL),
-                gltf_metadata.skeleton.joint_count ?
-                    &gltf_metadata.skeleton :
+                gltf_metadata.model_count &&
+                    gltf_metadata.models[0].skeleton.joint_count ?
+                    &gltf_metadata.models[0].skeleton :
                     (rigid_skin && scene_root ?
                         &rigid_skeleton_data : NULL),
-                gltf_metadata.shapes.target_count ?
-                    &gltf_metadata.shapes :
+                gltf_metadata.model_count &&
+                    gltf_metadata.models[0].shapes.target_count ?
+                    &gltf_metadata.models[0].shapes :
                     (morph_target ? &morph_shapes : NULL),
                 gltf_metadata.animation_track_count ?
                     &gltf_metadata.animation :
@@ -5891,31 +6076,48 @@ int main(int argc, char **argv) {
                 printf("skeleton_joints=%zu\n",
                        rigid_skeleton_data.joint_count);
         }
-        if(gltf_metadata.skin.span_count) {
-            printf("general_skin_spans=%zu\n",
-                   gltf_metadata.skin.span_count);
-            printf("general_skin_weights=%zu\n",
-                   gltf_metadata.skin.weight_count);
-            printf("skeleton_joints=%zu\n",
-                   gltf_metadata.skeleton.joint_count);
+        if(gltf_metadata.model_count) {
+            size_t model;
+            size_t span_count = 0;
+            size_t weight_count = 0;
+            size_t joint_count = 0;
+
+            for(model = 0; model < gltf_metadata.model_count; ++model) {
+                span_count += gltf_metadata.models[model].skin.span_count;
+                weight_count +=
+                    gltf_metadata.models[model].skin.weight_count;
+                joint_count +=
+                    gltf_metadata.models[model].skeleton.joint_count;
+            }
+            if(span_count) {
+                printf("general_skin_spans=%zu\n", span_count);
+                printf("general_skin_weights=%zu\n", weight_count);
+                printf("skeleton_joints=%zu\n", joint_count);
+            }
         }
         if(morph_target) {
             printf("morph_targets=%zu\n", morph_shapes.target_count);
             printf("morph_deltas=%zu\n",
                    morph_shape_target.delta_count);
         }
-        if(gltf_metadata.shapes.target_count) {
-            size_t target;
+        if(gltf_metadata.model_count) {
+            size_t model;
+            size_t target_count = 0;
             size_t delta_count = 0;
 
-            for(target = 0; target < gltf_metadata.shapes.target_count;
-                ++target) {
-                delta_count +=
-                    gltf_metadata.shapes.targets[target].delta_count;
+            for(model = 0; model < gltf_metadata.model_count; ++model) {
+                const pvr_chunk_shape_set_t *shapes =
+                    &gltf_metadata.models[model].shapes;
+                size_t target;
+
+                target_count += shapes->target_count;
+                for(target = 0; target < shapes->target_count; ++target)
+                    delta_count += shapes->targets[target].delta_count;
             }
-            printf("morph_targets=%zu\n",
-                   gltf_metadata.shapes.target_count);
-            printf("morph_deltas=%zu\n", delta_count);
+            if(target_count) {
+                printf("morph_targets=%zu\n", target_count);
+                printf("morph_deltas=%zu\n", delta_count);
+            }
         }
         if(animation_offset_set) {
             printf("animation_transforms=%zu\n",
