@@ -724,6 +724,7 @@ pvr_chunk_residency_binding_prepare_identifier
 pvr_chunk_residency_binding_begin_strip
 pvr_chunk_residency_binding_release
 pvr_morph_apply
+pvr_deform_bounds_calculate
 pvr_skin_apply
 pvr_skin_apply_spans
 pvr_normal_matrix_build

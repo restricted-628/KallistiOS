@@ -59,6 +59,86 @@ static int vertex_finite(const pvr_deform_vertex_t *vertex) {
            finite3(vertex->normal.x, vertex->normal.y, vertex->normal.z);
 }
 
+int pvr_deform_bounds_calculate(const pvr_deform_stream_t *vertices,
+                                pvr_deform_bounds_t *bounds) {
+    pvr_deform_bounds_t calculated;
+    const pvr_deform_vertex_t *vertex;
+    size_t bytes;
+    size_t index;
+    size_t component;
+    double radius_squared = 0.0;
+
+    if(!vertices || !bounds || !vertices->vertices ||
+       !vertices->vertex_count ||
+       ((uintptr_t)vertices->vertices &
+        (_Alignof(pvr_deform_vertex_t) - 1u)) ||
+       vertices->stride < sizeof(pvr_deform_vertex_t) ||
+       (vertices->stride & 3u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(range_size(vertices->vertex_count, vertices->stride,
+                  sizeof(pvr_deform_vertex_t), &bytes) < 0 ||
+       !address_range(vertices->vertices, bytes)) {
+        errno = ERANGE;
+        return -1;
+    }
+    vertex = vertices->vertices;
+    if(!finite3(vertex->position.x, vertex->position.y,
+                vertex->position.z)) {
+        errno = EDOM;
+        return -1;
+    }
+    calculated.minimum = vertex->position;
+    calculated.maximum = vertex->position;
+    for(index = 1; index < vertices->vertex_count; ++index) {
+        const float *position;
+        float *minimum = &calculated.minimum.x;
+        float *maximum = &calculated.maximum.x;
+
+        vertex = (const pvr_deform_vertex_t *)((const uint8_t *)
+            vertices->vertices + index * vertices->stride);
+        if(!finite3(vertex->position.x, vertex->position.y,
+                    vertex->position.z)) {
+            errno = EDOM;
+            return -1;
+        }
+        position = &vertex->position.x;
+        for(component = 0; component < 3; ++component) {
+            if(position[component] < minimum[component])
+                minimum[component] = position[component];
+            if(position[component] > maximum[component])
+                maximum[component] = position[component];
+        }
+    }
+    calculated.minimum.w = 1.0f;
+    calculated.maximum.w = 1.0f;
+    for(component = 0; component < 3; ++component) {
+        const float *minimum = &calculated.minimum.x;
+        const float *maximum = &calculated.maximum.x;
+        float *center = &calculated.center.x;
+        double half = ((double)maximum[component] -
+                       (double)minimum[component]) * 0.5;
+        double midpoint = (double)minimum[component] + half;
+
+        if(!isfinite(half) || !isfinite(midpoint) ||
+           fabs(midpoint) > FLT_MAX) {
+            errno = ERANGE;
+            return -1;
+        }
+        center[component] = (float)midpoint;
+        radius_squared += half * half;
+    }
+    if(!isfinite(radius_squared) || sqrt(radius_squared) > FLT_MAX) {
+        errno = ERANGE;
+        return -1;
+    }
+    calculated.center.w = 1.0f;
+    calculated.radius = (float)sqrt(radius_squared);
+    *bounds = calculated;
+    return 0;
+}
+
 static int normalize(float *x, float *y, float *z) {
     float length_squared = *x * *x + *y * *y + *z * *z;
     float reciprocal;

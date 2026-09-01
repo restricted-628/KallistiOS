@@ -35,6 +35,48 @@ static void normal_identity(pvr_normal_matrix_t *matrix) {
     matrix->column[2][2] = 1.0f;
 }
 
+static void test_bounds(void) {
+    struct extended_vertex {
+        pvr_deform_vertex_t vertex;
+        uint32_t ignored;
+    } vertices[3] = {
+        { { { -2.0f, 3.0f, 1.0f, 1.0f },
+            { NAN, NAN, NAN, NAN } }, 1 },
+        { { { 4.0f, -1.0f, 5.0f, 1.0f },
+            { NAN, NAN, NAN, NAN } }, 2 },
+        { { { 1.0f, 7.0f, -3.0f, 1.0f },
+            { NAN, NAN, NAN, NAN } }, 3 },
+    };
+    pvr_deform_stream_t stream = {
+        vertices, 3, sizeof(vertices[0])
+    };
+    pvr_deform_bounds_t bounds;
+    pvr_deform_bounds_t unchanged;
+
+    assert(pvr_deform_bounds_calculate(&stream, &bounds) == 0);
+    assert(bounds.minimum.x == -2.0f && bounds.minimum.y == -1.0f &&
+           bounds.minimum.z == -3.0f && bounds.minimum.w == 1.0f);
+    assert(bounds.maximum.x == 4.0f && bounds.maximum.y == 7.0f &&
+           bounds.maximum.z == 5.0f && bounds.maximum.w == 1.0f);
+    assert(bounds.center.x == 1.0f && bounds.center.y == 3.0f &&
+           bounds.center.z == 1.0f && bounds.center.w == 1.0f);
+    assert(close_enough(bounds.radius, sqrtf(41.0f)));
+
+    memset(&bounds, 0x5a, sizeof(bounds));
+    unchanged = bounds;
+    vertices[2].vertex.position.x = INFINITY;
+    errno = 0;
+    assert(pvr_deform_bounds_calculate(&stream, &bounds) == -1);
+    assert(errno == EDOM);
+    assert(!memcmp(&bounds, &unchanged, sizeof(bounds)));
+
+    stream.vertex_count = 0;
+    errno = 0;
+    assert(pvr_deform_bounds_calculate(&stream, &bounds) == -1);
+    assert(errno == EINVAL);
+    assert(!memcmp(&bounds, &unchanged, sizeof(bounds)));
+}
+
 static void test_morph(void) {
     pvr_deform_vertex_t base[2] = {
         { { 1.0f, 0.0f, 0.0f, 1.0f }, { 0.0f, 0.0f, 1.0f, 0.0f } },
@@ -203,6 +245,7 @@ static void test_skin_spans(void) {
 }
 
 int main(void) {
+    test_bounds();
     test_morph();
     test_skin();
     test_skin_spans();

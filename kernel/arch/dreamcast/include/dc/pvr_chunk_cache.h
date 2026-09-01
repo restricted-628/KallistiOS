@@ -199,7 +199,8 @@ typedef int (*pvr_chunk_cache_begin_strip_t)(
 
     The cached bounds describe the reference pose. A resolver may move
     vertices beyond them, so dynamically deformed models must either provide
-    a conservative current-pose decision or elect to emit.
+    a conservative current-pose decision, such as one built by
+    pvr_deform_bounds_calculate(), or elect to emit.
 */
 typedef int (*pvr_chunk_cache_filter_strip_t)(
     const pvr_chunk_cached_strip_t *strip, void *data);

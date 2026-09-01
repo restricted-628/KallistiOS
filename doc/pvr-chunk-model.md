@@ -118,6 +118,15 @@ and pose-resolution contracts as Skin4, then feed
 weights when the error budget permits it and preserve every influence when it
 does not, without introducing draw-order-dependent accumulation.
 
+`pvr_deform_bounds_calculate()` closes the culling contract after either
+morphing or skinning. It scans any strided canonical deformation stream once,
+publishes its exact current-pose AABB, and derives a conservative sphere around
+that box. The sphere can be passed directly to
+`pvr_frustum_classify_sphere()` before rendering; it may be looser than a
+minimum enclosing sphere, but cannot reject visible deformed geometry. The
+operation allocates nothing, ignores normals, and leaves output unchanged on
+empty, malformed, overflowing, or nonfinite input.
+
 PCM2 can carry that same representation in a pointer-free little-endian `PSG1`
 section. `pvr_chunk_skin_general_section_open()` verifies its framing,
 checksums, reserved fields, ordered gapless spans, joint bounds, nonzero
@@ -425,17 +434,19 @@ projecting vertices, or publishing output. Static models can classify the
 retained box directly with `pvr_chunk_cached_strip_classify()`. A skin, morph,
 or other resolver may move vertices beyond the retained reference bound, so
 dynamic callers must use a conservative current-pose decision or emit the
-strip. This adds useful sub-model culling without hiding a scene, frustum, pose,
-or traversal owner inside the cache.
+strip. `pvr_deform_bounds_calculate()` supplies a whole-pose sphere for model-
+level policy; strip-level deformation bounds remain caller policy. This adds
+useful sub-model culling without hiding a scene, frustum, pose, or traversal
+owner inside the cache.
 
 The model-level `center` and `radius` are consumed by
 `pvr_chunk_model_classify()`. It transforms all six homogeneous frustum planes
 back into model space and classifies the retained sphere before any stream
 walk, vertex lookup, material callback, or projection. `PVR_FRUSTUM_OUTSIDE`
 therefore rejects a static model immediately, while `PVR_FRUSTUM_INSIDE`
-allows a later renderer to omit per-triangle clipping. Deformed content must
-provide a bound that encloses the complete current pose before relying on
-either optimization.
+allows a later renderer to omit per-triangle clipping. Deformed content can
+calculate a bound that encloses the complete current pose with
+`pvr_deform_bounds_calculate()` before relying on either optimization.
 
 Modifier-volume models use `pvr_chunk_model_modifier_cache_query()`,
 `pvr_chunk_model_modifier_cache_build()`, and

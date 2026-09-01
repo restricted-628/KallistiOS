@@ -103,6 +103,28 @@ typedef struct pvr_deform_result {
     size_t deformed_vertices;
 } pvr_deform_result_t;
 
+/** \brief Conservative bounds for one current deformation pose. */
+typedef struct pvr_deform_bounds {
+    point_t minimum; /**< Axis-aligned minimum; W is one. */
+    point_t maximum; /**< Axis-aligned maximum; W is one. */
+    point_t center;  /**< Center of the enclosing box; W is one. */
+    float radius;    /**< Radius enclosing the complete box. */
+} pvr_deform_bounds_t;
+
+/** \brief Calculate conservative current-pose bounds.
+
+    The source may be a canonical base, morphed, or skinned stream. Positions
+    are scanned once to produce an exact axis-aligned box and a sphere around
+    that box. The sphere may be looser than a minimum enclosing sphere, but it
+    is guaranteed to contain every admitted position and is safe for whole-
+    model frustum rejection. Normals are not read.
+
+    The operation allocates nothing. Empty streams and nonfinite positions are
+    rejected, and \p bounds remains unchanged on every failure.
+*/
+int pvr_deform_bounds_calculate(const pvr_deform_stream_t *vertices,
+                                pvr_deform_bounds_t *bounds);
+
 /** \brief Blend additive morph targets over a bounded base stream.
 
     Base and delta positions/normals must be finite. Result normals are

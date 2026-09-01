@@ -112,6 +112,8 @@ typedef enum pvr_chunk_clip_policy {
     This is an allocation-free whole-model visibility test. A dynamic
     deformation path must ensure the retained center and radius conservatively
     enclose the current pose before using an OUTSIDE result to skip rendering.
+    pvr_deform_bounds_calculate() produces a safe current-pose sphere for
+    direct use with pvr_frustum_classify_sphere().
 */
 int pvr_chunk_model_classify(
     const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,

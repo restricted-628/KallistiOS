@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added allocation-free current-pose bounds for morphed or skinned vertex
+  streams. The new checked operation publishes an exact AABB and a conservative
+  enclosing sphere, allowing existing frustum classification to reject a
+  deformed model without trusting its reference-pose bounds.
+
 * Extended the bounded glTF/GLB host importer to emit every unique mesh
   in the selected scene as an independent PCM2 model ordinal. Scene nodes bind
   the corresponding model, repeated instances share it, exact local bounds
