@@ -30,7 +30,11 @@ with exact local bounds and its own resource manifest, general-N skin,
 inverse-bind skeleton, and sparse position/normal morph sections when authored.
 Different meshes may use different skins; repeated instances of one mesh must
 agree on that mesh's skin. General-N weights are normalized exactly to 65535;
-no four-influence reduction is performed.
+no four-influence reduction is performed. Matching `JOINTS_n`/`WEIGHTS_n`
+sets are merged by joint across every set, so vertices with more than four
+authored influences remain general-N rather than being truncated. Skin
+attributes without a skin binding are rejected instead of silently producing
+a rigid mesh.
 
 `COLOR_0` accepts normalized `VEC3` or `VEC4` values. RGB is multiplied by the
 primitive material's base-color factor before conversion to `0xAARRGGBB`; a
@@ -38,6 +42,8 @@ missing VEC3 alpha is one. If any primitive in a mesh is colored, uncolored
 primitives receive their material base color so the complete mesh can use one
 compact colored-vertex family without changing appearance. Indexed attribute
 seams remain distinct because the importer does not merge source vertices.
+OBJ's independently indexed per-reference attributes likewise preserve UV and
+hard-normal discontinuities without duplicating the canonical position batch.
 
 Unsupported authored meaning is rejected rather than dropped. Current explicit
 boundaries include required extensions, GPU instancing, non-triangle primitives,

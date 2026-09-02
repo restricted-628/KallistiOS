@@ -1264,7 +1264,8 @@ static int gltf_texture_index(const cgltf_data *data,
 static int gltf_append_primitive(const cgltf_data *data,
                                  const cgltf_primitive *primitive,
                                  source_model_t *model, int flip_winding,
-                                 int flip_v, int texture_override) {
+                                 int flip_v, int texture_override,
+                                 int has_skin) {
     const cgltf_accessor *positions = gltf_attribute(
         primitive, cgltf_attribute_type_position, 0);
     const cgltf_accessor *texcoords = gltf_attribute(
@@ -1300,6 +1301,14 @@ static int gltf_append_primitive(const cgltf_data *data,
             candidate->type != cgltf_attribute_type_color &&
             candidate->type != cgltf_attribute_type_joints &&
             candidate->type != cgltf_attribute_type_weights)) {
+            errno = ENOTSUP;
+            return -1;
+        }
+        if(!has_skin &&
+           (candidate->type == cgltf_attribute_type_joints ||
+            candidate->type == cgltf_attribute_type_weights)) {
+            /* Deformation attributes are authored meaning, not optional
+               metadata. Never turn an unbound skin into a rigid mesh. */
             errno = ENOTSUP;
             return -1;
         }
@@ -2499,7 +2508,7 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
             if(gltf_append_primitive(
                    data, &mesh->primitives[primitive],
                    &models->models[model], flip_winding, flip_v,
-                   texture_identifier) < 0)
+                   texture_identifier, skins[model] != NULL) < 0)
                 goto fail;
         }
         if(validate_references(&models->models[model]) < 0 ||

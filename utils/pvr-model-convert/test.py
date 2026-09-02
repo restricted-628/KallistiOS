@@ -185,6 +185,43 @@ f 1/1 2/2 3/3
         assert signed_words[11:13] == ((-2560) & 0xFFFF, 0)
         assert signed_words[14:16] == (32256, 0)
 
+        seam_source = root / "attribute-seam.obj"
+        seam_vertices = root / "attribute-seam-vertices.bin"
+        seam_polygons = root / "attribute-seam-polygons.bin"
+        write_text(
+            seam_source,
+            """v 0 0 0
+v 1 0 0
+v 1 1 0
+v 0 1 0
+vt 0 0
+vt 1 0
+vt 1 1
+vt 0.5 0.25
+vt 0.25 0.5
+vt 0 1
+vn 0 0 1
+vn 0 1 0
+f 1/1/1 2/2/1 3/3/1
+f 1/4/2 3/5/2 4/6/2
+""",
+        )
+        result = invoke(
+            converter, "--texture-id", "7", seam_source,
+            seam_vertices, seam_polygons,
+        )
+        assert result.returncode == 0, result.stderr
+        seam_words = struct.unpack(
+            f"<{len(seam_polygons.read_bytes()) // 2}H",
+            seam_polygons.read_bytes(),
+        )
+        assert seam_words[6:10] == (79, 39, 2, 3)
+        assert seam_words[10] == seam_words[29] == 0
+        assert seam_words[11:13] == (0, 0)
+        assert seam_words[30:32] == (512, 256)
+        assert seam_words[13:16] == (0, 0, 0x7FFF)
+        assert seam_words[32:35] == (0, 0x7FFF, 0)
+
         wide_source = root / "wide-uv.obj"
         wide_vertices = root / "wide-uv-vertices.bin"
         wide_polygons = root / "wide-uv-polygons.bin"
@@ -1119,6 +1156,141 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<II", gltf_skeleton, 12) == (2, 4)
         assert struct.unpack_from("<I", gltf_skeleton, 48)[0] == 1
         assert struct.unpack_from("<I", gltf_skeleton, 128)[0] == 2
+
+        many_joints_0 = bytes((
+            0, 1, 2, 3,
+            0, 0, 0, 0,
+            0, 1, 0, 0,
+        ))
+        many_weights_0 = struct.pack(
+            "<12f",
+            0.2, 0.2, 0.2, 0.2,
+            1.0, 0.0, 0.0, 0.0,
+            0.25, 0.75, 0.0, 0.0,
+        )
+        many_joints_1 = bytes((
+            4, 5, 0, 0,
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+        ))
+        many_weights_1 = struct.pack(
+            "<12f",
+            0.1, 0.1, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0,
+        )
+        many_skin_binary = (
+            gltf_binary[:72] + many_joints_0 + many_weights_0 +
+            many_joints_1 + many_weights_1 +
+            struct.pack("<3H", 0, 1, 2) + b"\0\0" +
+            struct.pack("<96f", *(identity_matrix * 6))
+        )
+        many_skin_document = {
+            "asset": {"version": "2.0"},
+            "buffers": [{
+                "byteLength": len(many_skin_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(many_skin_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 36, "byteLength": 36,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 72, "byteLength": 12,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 84, "byteLength": 48,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 132, "byteLength": 12,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 144, "byteLength": 48,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 192, "byteLength": 6,
+                 "target": 34963},
+                {"buffer": 0, "byteOffset": 200, "byteLength": 384},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 3,
+                 "type": "VEC3"},
+                {"bufferView": 2, "componentType": 5121, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 3, "componentType": 5126, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 4, "componentType": 5121, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 5, "componentType": 5126, "count": 3,
+                 "type": "VEC4"},
+                {"bufferView": 6, "componentType": 5123, "count": 3,
+                 "type": "SCALAR"},
+                {"bufferView": 7, "componentType": 5126, "count": 6,
+                 "type": "MAT4"},
+            ],
+            "meshes": [{"primitives": [{
+                "attributes": {
+                    "POSITION": 0, "NORMAL": 1,
+                    "JOINTS_0": 2, "WEIGHTS_0": 3,
+                    "JOINTS_1": 4, "WEIGHTS_1": 5,
+                },
+                "indices": 6,
+            }]}],
+            "skins": [{
+                "joints": [1, 2, 3, 4, 5, 6],
+                "inverseBindMatrices": 7,
+            }],
+            "nodes": [
+                {"children": [1, 2, 3, 4, 5, 6, 7]},
+                {}, {}, {}, {}, {}, {},
+                {"mesh": 0, "skin": 0},
+            ],
+            "scenes": [{"nodes": [0]}],
+            "scene": 0,
+        }
+        many_skin_source = root / "many-influence-skin.gltf"
+        many_skin_source.write_text(
+            json.dumps(many_skin_document), encoding="utf-8"
+        )
+        many_skin_asset = root / "many-influence-skin.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            many_skin_source, many_skin_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "hierarchy_nodes=8\n" in result.stdout
+        assert "general_skin_spans=3\n" in result.stdout
+        assert "general_skin_weights=9\n" in result.stdout
+        assert "skeleton_joints=6\n" in result.stdout
+        many_skin_bytes = many_skin_asset.read_bytes()
+        many_skin_descriptor = struct.unpack_from(
+            "<7IHH", many_skin_bytes, 64 + 3 * 32
+        )
+        many_skin_section = many_skin_bytes[
+            many_skin_descriptor[2]:
+            many_skin_descriptor[2] + many_skin_descriptor[3]
+        ]
+        assert struct.unpack_from("<III", many_skin_section, 12) == (
+            3, 9, 6
+        )
+        first_vertex_weights = [
+            struct.unpack_from("<HH", many_skin_section, 72 + index * 4)
+            for index in range(6)
+        ]
+        assert [joint for joint, _ in first_vertex_weights] == list(range(6))
+        assert sum(weight for _, weight in first_vertex_weights) == 65535
+
+        unbound_document = json.loads(json.dumps(many_skin_document))
+        del unbound_document["skins"]
+        del unbound_document["nodes"][7]["skin"]
+        unbound_source = root / "unbound-skin-attributes.gltf"
+        unbound_source.write_text(
+            json.dumps(unbound_document), encoding="utf-8"
+        )
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            unbound_source, root / "unbound-skin-attributes.pcm",
+        )
+        assert result.returncode != 0
 
         morph_binary = (
             gltf_binary +

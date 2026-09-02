@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added explicit Compact Model discontinuity and general-N skin conformance.
+  Golden host fixtures prove that shared position indices retain independent
+  per-reference UVs and hard normals, and that multiple glTF joint/weight sets
+  preserve more than four influences with an exact normalized weight sum.
+  Unbound skin attributes are now rejected instead of being discarded into a
+  rigid mesh.
+
 * Added pointer-free PCA1 cell-sprite assets. Checked APIs measure and encode
   existing base cells and independently timed streams, validate fixed-width
   records and two CRCs, decode individual records, and materialize directly
