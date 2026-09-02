@@ -363,7 +363,9 @@ format, deformation, or tooling gaps:
    matrix nodes now retain exact signed-scale fallback transforms in animated
    scenes, while shear remains an explicit boundary. PAC1 now supplies the
    pointer-free logical-clip catalog needed to pair repeated PAT1 and PMW1
-   sections without placeholders. Continue wider modern scene import,
+   sections without placeholders, and the host importer emits mixed
+   transform-only, morph-only, and combined glTF clips through it. Continue
+   wider modern scene import,
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
    of deferred polygon controls, and repeatable scene-level conformance.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose

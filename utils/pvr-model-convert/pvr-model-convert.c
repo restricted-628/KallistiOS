@@ -175,9 +175,8 @@ typedef struct gltf_model_metadata {
     pvr_chunk_shape_set_t shapes;
 } gltf_model_metadata_t;
 
-typedef struct gltf_asset_metadata {
-    gltf_model_metadata_t *models;
-    size_t model_count;
+typedef struct gltf_animation_metadata {
+    char *name;
     anim_vector_key_t *animation_vector_keys;
     anim_quaternion_key_t *animation_quaternion_keys;
     anim_track_view_t *animation_tracks;
@@ -193,6 +192,13 @@ typedef struct gltf_asset_metadata {
     pvr_chunk_morph_animation_t morph_animation;
     size_t morph_animation_track_count;
     size_t morph_animation_key_count;
+} gltf_animation_metadata_t;
+
+typedef struct gltf_asset_metadata {
+    gltf_model_metadata_t *models;
+    size_t model_count;
+    gltf_animation_metadata_t *animations;
+    size_t animation_count;
 } gltf_asset_metadata_t;
 
 typedef struct source_strip {
@@ -273,14 +279,11 @@ static void gltf_model_metadata_free(gltf_model_metadata_t *metadata) {
     memset(metadata, 0, sizeof(*metadata));
 }
 
-static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
-    size_t model;
-
+static void gltf_animation_metadata_free(
+    gltf_animation_metadata_t *metadata) {
     if(!metadata)
         return;
-    for(model = 0; model < metadata->model_count; ++model)
-        gltf_model_metadata_free(&metadata->models[model]);
-    free(metadata->models);
+    free(metadata->name);
     free(metadata->animation_vector_keys);
     free(metadata->animation_quaternion_keys);
     free(metadata->animation_tracks);
@@ -290,6 +293,21 @@ static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
     free(metadata->morph_animation_tracks);
     free(metadata->morph_animation_channels);
     free(metadata->morph_animation_bindings);
+    memset(metadata, 0, sizeof(*metadata));
+}
+
+static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
+    size_t model;
+    size_t animation;
+
+    if(!metadata)
+        return;
+    for(model = 0; model < metadata->model_count; ++model)
+        gltf_model_metadata_free(&metadata->models[model]);
+    for(animation = 0; animation < metadata->animation_count; ++animation)
+        gltf_animation_metadata_free(&metadata->animations[animation]);
+    free(metadata->models);
+    free(metadata->animations);
     memset(metadata, 0, sizeof(*metadata));
 }
 
@@ -2083,7 +2101,7 @@ static int gltf_matrix_fallback(const float matrix[16],
 
 static int gltf_animation_fallbacks(
     const cgltf_data *data, const size_t *node_to_scene,
-    const pvr_scene_ir_t *scene, gltf_asset_metadata_t *metadata) {
+    const pvr_scene_ir_t *scene, gltf_animation_metadata_t *metadata) {
     size_t node;
 
     for(node = 0; node < data->nodes_count; ++node) {
@@ -2154,10 +2172,11 @@ static int gltf_animation_fallbacks(
 }
 
 static int gltf_build_animation(const cgltf_data *data,
+                                const cgltf_animation *animation,
                                 const size_t *node_to_scene,
                                 const pvr_scene_ir_t *scene,
-                                gltf_asset_metadata_t *metadata) {
-    const cgltf_animation *animation;
+                                const gltf_asset_metadata_t *asset_metadata,
+                                gltf_animation_metadata_t *metadata) {
     size_t vector_key_count = 0;
     size_t quaternion_key_count = 0;
     size_t scalar_key_count = 0;
@@ -2176,14 +2195,9 @@ static int gltf_build_animation(const cgltf_data *data,
     float morph_end = -FLT_MAX;
     cgltf_size channel;
 
-    if(!data->animations_count)
-        return 0;
-    if(data->animations_count != 1 || !scene->node_count) {
-        errno = ENOTSUP;
-        return -1;
-    }
-    animation = &data->animations[0];
-    if(!animation->channels_count) {
+    if(!data || !animation || !node_to_scene || !scene ||
+       !asset_metadata || !metadata || !scene->node_count ||
+       !animation->channels_count) {
         errno = EILSEQ;
         return -1;
     }
@@ -2238,8 +2252,8 @@ static int gltf_build_animation(const cgltf_data *data,
             }
             model_ordinal = scene->nodes[scene_index].model_ordinal;
             if(model_ordinal == PVR_CHUNK_SCENE_MODEL_NONE ||
-               model_ordinal >= metadata->model_count ||
-               metadata->models[model_ordinal].shapes.target_count !=
+               model_ordinal >= asset_metadata->model_count ||
+               asset_metadata->models[model_ordinal].shapes.target_count !=
                    target_count) {
                 errno = EILSEQ;
                 return -1;
@@ -2619,6 +2633,65 @@ static int gltf_build_animation(const cgltf_data *data,
     return 0;
 }
 
+static int gltf_build_animations(const cgltf_data *data,
+                                 const size_t *node_to_scene,
+                                 const pvr_scene_ir_t *scene,
+                                 gltf_asset_metadata_t *metadata) {
+    size_t animation;
+
+    if(!data->animations_count)
+        return 0;
+    if(!scene->node_count) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if(data->animations_count > UINT32_MAX ||
+       data->animations_count > SIZE_MAX /
+           sizeof(*metadata->animations)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    metadata->animations = calloc(data->animations_count,
+                                  sizeof(*metadata->animations));
+    if(!metadata->animations) {
+        errno = ENOMEM;
+        return -1;
+    }
+    metadata->animation_count = data->animations_count;
+    for(animation = 0; animation < metadata->animation_count; ++animation) {
+        const cgltf_animation *source = &data->animations[animation];
+        size_t matching_names = 0;
+        size_t candidate;
+
+        if(gltf_build_animation(data, source, node_to_scene, scene,
+                                metadata,
+                                &metadata->animations[animation]) < 0)
+            return -1;
+        if(!source->name || !source->name[0])
+            continue;
+        for(candidate = 0; candidate < data->animations_count; ++candidate) {
+            const char *name = data->animations[candidate].name;
+
+            if(name && !strcmp(name, source->name))
+                ++matching_names;
+        }
+        /* A catalog name is an exact unique lookup key. Legal duplicate glTF
+           names remain addressable by source order instead of being changed. */
+        if(matching_names == 1) {
+            size_t name_bytes = strlen(source->name) + 1u;
+
+            metadata->animations[animation].name = malloc(name_bytes);
+            if(!metadata->animations[animation].name) {
+                errno = ENOMEM;
+                return -1;
+            }
+            memcpy(metadata->animations[animation].name, source->name,
+                   name_bytes);
+        }
+    }
+    return 0;
+}
+
 static int load_gltf_source(const char *path, source_model_set_t *models,
                             int flip_winding, int flip_v,
                             int texture_identifier,
@@ -2706,7 +2779,7 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
            gltf_build_shapes(mesh, &metadata->models[model]) < 0)
             goto fail;
     }
-    if(gltf_build_animation(data, node_to_scene, scene, metadata) < 0)
+    if(gltf_build_animations(data, node_to_scene, scene, metadata) < 0)
         goto fail;
     free(skins);
     free(meshes);
@@ -4634,13 +4707,13 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                                   int include_cooked_cache,
                                   const pvr_scene_ir_t *scene,
                                   const gltf_model_metadata_t *metadata,
-                                  const anim_clip_view_t *animation,
-                                  const pvr_chunk_morph_animation_t *
-                                      morph_animation,
+                                  const gltf_animation_metadata_t *animations,
+                                  size_t animation_count,
                                   uint8_t **blob_out,
                                   size_t *blob_bytes_out) {
     pcm2_host_section_t *sections = NULL;
     pvr_chunk_model_table_record_t *records = NULL;
+    pvr_scene_ir_animation_clip_t *catalog_clips = NULL;
     uint8_t *blob = NULL;
     size_t section_capacity;
     size_t section_count = 0;
@@ -4661,16 +4734,25 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         *blob_out = NULL;
     if(blob_bytes_out)
         *blob_bytes_out = 0;
-    if(!streams || model_count < 2u || !scene || !blob_out ||
+    if(!streams || !model_count || !scene || !blob_out ||
        !blob_bytes_out || model_count > UINT32_MAX ||
-       !metadata || model_count > (SIZE_MAX - 4u) / 7u) {
+       !metadata || (animation_count && !animations) ||
+       animation_count > UINT32_MAX ||
+       model_count > (SIZE_MAX - 3u) / 7u) {
         errno = EINVAL;
         return -1;
     }
-    section_capacity = model_count * 7u + 4u;
+    section_capacity = model_count * 7u + 3u;
+    if(animation_count > (SIZE_MAX - section_capacity) / 2u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    section_capacity += animation_count * 2u;
     sections = calloc(section_capacity, sizeof(*sections));
     records = calloc(model_count, sizeof(*records));
-    if(!sections || !records) {
+    catalog_clips = animation_count ?
+        calloc(animation_count, sizeof(*catalog_clips)) : NULL;
+    if(!sections || !records || (animation_count && !catalog_clips)) {
         errno = ENOMEM;
         goto fail;
     }
@@ -4801,32 +4883,81 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                hierarchy_bytes, sizeof(uint32_t), 0) < 0)
             goto fail;
     }
-    if(animation) {
-        uint8_t *animation_bytes_data = NULL;
-        size_t animation_bytes = 0;
+    if(animation_count) {
+        uint32_t transform_ordinal = 0;
+        uint32_t morph_animation_ordinal = 0;
+        size_t animation;
 
-        if(pvr_scene_ir_serialize_animation(
-               animation, &animation_bytes_data, &animation_bytes) < 0 ||
-           pcm2_host_section_add(
-               sections, section_capacity, &section_count,
-               PVR_CHUNK_ASSET_SECTION_ANIMATION,
-               animation_bytes_data, animation_bytes,
-               sizeof(uint32_t), 0) < 0)
-            goto fail;
-    }
-    if(morph_animation) {
-        uint8_t *morph_animation_data = NULL;
-        size_t morph_animation_bytes = 0;
+        for(animation = 0; animation < animation_count; ++animation) {
+            const gltf_animation_metadata_t *source =
+                &animations[animation];
+            pvr_scene_ir_animation_clip_t *catalog =
+                &catalog_clips[animation];
 
-        if(pvr_scene_ir_serialize_morph_animation(
-               morph_animation, &morph_animation_data,
-               &morph_animation_bytes) < 0 ||
-           pcm2_host_section_add(
-               sections, section_capacity, &section_count,
-               PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION,
-               morph_animation_data, morph_animation_bytes,
-               sizeof(uint32_t), 0) < 0)
-            goto fail;
+            catalog->name = source->name;
+            catalog->transform_ordinal =
+                PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE;
+            catalog->morph_ordinal =
+                PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE;
+            catalog->start_time = FLT_MAX;
+            catalog->end_time = -FLT_MAX;
+            if(source->animation_track_count) {
+                uint8_t *data = NULL;
+                size_t bytes = 0;
+
+                if(pvr_scene_ir_serialize_animation(
+                       &source->animation, &data, &bytes) < 0)
+                    goto fail;
+                if(pcm2_host_section_add(
+                       sections, section_capacity, &section_count,
+                       PVR_CHUNK_ASSET_SECTION_ANIMATION, data, bytes,
+                       sizeof(uint32_t), 0) < 0) {
+                    free(data);
+                    goto fail;
+                }
+                catalog->transform_ordinal = transform_ordinal++;
+                catalog->start_time = source->animation.clip.start_time;
+                catalog->end_time = source->animation.clip.end_time;
+            }
+            if(source->morph_animation.binding_count) {
+                uint8_t *data = NULL;
+                size_t bytes = 0;
+
+                if(pvr_scene_ir_serialize_morph_animation(
+                       &source->morph_animation, &data, &bytes) < 0)
+                    goto fail;
+                if(pcm2_host_section_add(
+                       sections, section_capacity, &section_count,
+                       PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION,
+                       data, bytes, sizeof(uint32_t), 0) < 0) {
+                    free(data);
+                    goto fail;
+                }
+                catalog->morph_ordinal = morph_animation_ordinal++;
+                if(source->morph_animation.start_time <
+                   catalog->start_time)
+                    catalog->start_time =
+                        source->morph_animation.start_time;
+                if(source->morph_animation.end_time > catalog->end_time)
+                    catalog->end_time = source->morph_animation.end_time;
+            }
+        }
+        {
+            uint8_t *catalog = NULL;
+            size_t catalog_bytes = 0;
+
+            if(pvr_scene_ir_serialize_animation_catalog(
+                   catalog_clips, animation_count, &catalog,
+                   &catalog_bytes) < 0)
+                goto fail;
+            if(pcm2_host_section_add(
+                   sections, section_capacity, &section_count,
+                   PVR_CHUNK_ASSET_SECTION_ANIMATION_CATALOG,
+                   catalog, catalog_bytes, sizeof(uint32_t), 0) < 0) {
+                free(catalog);
+                goto fail;
+            }
+        }
     }
     {
         uint8_t *table = NULL;
@@ -4896,6 +5027,7 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         directory_bytes));
     store_le32(blob + 60, crc32_bytes(blob, 60));
     free(records);
+    free(catalog_clips);
     pcm2_host_sections_free(sections, section_count);
     *blob_out = blob;
     *blob_bytes_out = file_bytes;
@@ -4905,6 +5037,7 @@ fail:
     saved_errno = errno ? errno : EIO;
     free(blob);
     free(records);
+    free(catalog_clips);
     pcm2_host_sections_free(sections, section_count);
     errno = saved_errno;
     return -1;
@@ -5510,13 +5643,66 @@ out:
     return result;
 }
 
+static int validate_multi_morph_animation(
+    const pvr_chunk_asset_view_t *asset, size_t ordinal,
+    const pvr_chunk_scene_hierarchy_view_t *hierarchy,
+    const pvr_chunk_model_table_view_t *table,
+    const pvr_chunk_shape_section_view_t *const *shape_views,
+    size_t shape_view_count,
+    const pvr_chunk_morph_animation_t *expected) {
+    pvr_chunk_asset_section_t section;
+    pvr_chunk_morph_animation_section_view_t view;
+    const void *data;
+    anim_scalar_key_t *keys = NULL;
+    anim_track_view_t *tracks = NULL;
+    pvr_chunk_shape_channel_t *channels = NULL;
+    pvr_chunk_morph_animation_binding_t *bindings = NULL;
+    pvr_chunk_morph_animation_t materialized;
+    int result = -1;
+
+    if(load_raw_section_ordinal(
+           asset, PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION,
+           ordinal, &section, &data) < 0 ||
+       pvr_chunk_morph_animation_section_open(
+           data, section.decoded_bytes, &view) < 0 ||
+       pvr_chunk_morph_animation_section_validate_scene(
+           &view, hierarchy, table, shape_views,
+           shape_view_count) < 0)
+        goto out;
+    keys = calloc(view.key_count, sizeof(*keys));
+    tracks = calloc(view.track_count, sizeof(*tracks));
+    channels = calloc(view.channel_count, sizeof(*channels));
+    bindings = calloc(view.binding_count, sizeof(*bindings));
+    if(!keys || !tracks || !channels || !bindings) {
+        errno = ENOMEM;
+        goto out;
+    }
+    if(pvr_chunk_morph_animation_section_materialize(
+           &view, keys, view.key_count, tracks, view.track_count,
+           channels, view.channel_count, bindings, view.binding_count,
+           &materialized) < 0 ||
+       materialized.binding_count != expected->binding_count) {
+        if(!errno)
+            errno = EILSEQ;
+        goto out;
+    }
+    result = 0;
+
+out:
+    free(bindings);
+    free(channels);
+    free(tracks);
+    free(keys);
+    return result;
+}
+
 static int prepare_multi_asset_output(
     const char *target, const output_streams_t *streams,
     size_t model_count, int lz4_vertices, int include_cooked_cache,
     const pvr_scene_ir_t *scene,
     const gltf_model_metadata_t *metadata,
-    const anim_clip_view_t *animation,
-    const pvr_chunk_morph_animation_t *morph_animation,
+    const gltf_animation_metadata_t *animations,
+    size_t animation_count,
     temporary_output_t *temporary,
     size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -5541,7 +5727,7 @@ static int prepare_multi_asset_output(
 
     if(build_multi_asset_blob(
            streams, model_count, lz4_vertices, include_cooked_cache,
-           scene, metadata, animation, morph_animation,
+           scene, metadata, animations, animation_count,
            &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        load_raw_section_type(
@@ -5705,81 +5891,88 @@ static int prepare_multi_asset_output(
                &hierarchy) < 0)
             goto out;
     }
-    if(animation) {
-        pvr_chunk_asset_section_t animation_section;
-        pvr_chunk_animation_section_view_t animation_view;
-        const void *animation_data;
+    if(animation_count) {
+        pvr_chunk_asset_section_t catalog_section;
+        pvr_chunk_animation_catalog_view_t catalog_view;
+        const void *catalog_data;
+        uint32_t transform_ordinal = 0;
+        uint32_t morph_ordinal = 0;
+        size_t animation;
 
         if(load_raw_section_type(
-               &asset_view, PVR_CHUNK_ASSET_SECTION_ANIMATION,
-               &animation_section, &animation_data) < 0 ||
-           pvr_chunk_animation_section_open(
-               animation_data, animation_section.decoded_bytes,
-               &animation_view) < 0 ||
-           animation_view.transform_count != scene->node_count) {
+               &asset_view, PVR_CHUNK_ASSET_SECTION_ANIMATION_CATALOG,
+               &catalog_section, &catalog_data) < 0 ||
+           pvr_chunk_animation_catalog_open(
+               catalog_data, catalog_section.decoded_bytes,
+               &catalog_view) < 0 ||
+           catalog_view.clip_count != animation_count ||
+           pvr_chunk_animation_catalog_validate_asset(
+               &catalog_view, &asset_view) < 0) {
             if(!errno)
                 errno = EILSEQ;
             goto out;
         }
-    }
-    if(morph_animation) {
-        pvr_chunk_asset_section_t morph_animation_section;
-        pvr_chunk_morph_animation_section_view_t morph_animation_view;
-        const void *morph_animation_data;
-        anim_scalar_key_t *keys = NULL;
-        anim_track_view_t *tracks = NULL;
-        pvr_chunk_shape_channel_t *channels = NULL;
-        pvr_chunk_morph_animation_binding_t *bindings = NULL;
-        pvr_chunk_morph_animation_t materialized;
-        int morph_result = -1;
+        for(animation = 0; animation < animation_count; ++animation) {
+            const gltf_animation_metadata_t *expected =
+                &animations[animation];
+            pvr_chunk_animation_catalog_clip_t clip;
+            size_t expected_name_bytes = expected->name ?
+                strlen(expected->name) : 0;
+            uint32_t expected_transform =
+                PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE;
+            uint32_t expected_morph =
+                PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE;
+            float expected_start = FLT_MAX;
+            float expected_end = -FLT_MAX;
 
-        if(load_raw_section_type(
-               &asset_view, PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION,
-               &morph_animation_section, &morph_animation_data) < 0 ||
-           pvr_chunk_morph_animation_section_open(
-               morph_animation_data,
-               morph_animation_section.decoded_bytes,
-               &morph_animation_view) < 0 ||
-           pvr_chunk_morph_animation_section_validate_scene(
-               &morph_animation_view, &hierarchy_view, &table_view,
-               shape_view_pointers, model_count) < 0)
-            goto morph_out;
-        keys = calloc(morph_animation_view.key_count, sizeof(*keys));
-        tracks = calloc(morph_animation_view.track_count,
-                        sizeof(*tracks));
-        channels = calloc(morph_animation_view.channel_count,
-                          sizeof(*channels));
-        bindings = calloc(morph_animation_view.binding_count,
-                          sizeof(*bindings));
-        if(!keys || !tracks || !channels || !bindings) {
-            errno = ENOMEM;
-            goto morph_out;
-        }
-        if(pvr_chunk_morph_animation_section_materialize(
-               &morph_animation_view, keys,
-               morph_animation_view.key_count, tracks,
-               morph_animation_view.track_count, channels,
-               morph_animation_view.channel_count, bindings,
-               morph_animation_view.binding_count, &materialized) < 0 ||
-           materialized.binding_count != morph_animation->binding_count) {
-            if(!errno)
-                errno = EILSEQ;
-            goto morph_out;
-        }
-        morph_result = 0;
+            if(expected->animation_track_count) {
+                expected_transform = transform_ordinal++;
+                expected_start = expected->animation.clip.start_time;
+                expected_end = expected->animation.clip.end_time;
+            }
+            if(expected->morph_animation.binding_count) {
+                expected_morph = morph_ordinal++;
+                if(expected->morph_animation.start_time < expected_start)
+                    expected_start = expected->morph_animation.start_time;
+                if(expected->morph_animation.end_time > expected_end)
+                    expected_end = expected->morph_animation.end_time;
+            }
 
-morph_out:
-        {
-            int morph_errno = errno;
-
-            free(bindings);
-            free(channels);
-            free(tracks);
-            free(keys);
-            if(morph_result < 0) {
-                errno = morph_errno ? morph_errno : EILSEQ;
+            if(pvr_chunk_animation_catalog_clip_get(
+                   &catalog_view, animation, &clip) < 0 ||
+               clip.name_bytes != expected_name_bytes ||
+               (expected_name_bytes && memcmp(
+                   clip.name, expected->name, expected_name_bytes)) ||
+               clip.transform_ordinal != expected_transform ||
+               clip.morph_ordinal != expected_morph ||
+               clip.start_time != expected_start ||
+               clip.end_time != expected_end) {
+                if(!errno)
+                    errno = EILSEQ;
                 goto out;
             }
+            if(expected->animation_track_count) {
+                pvr_chunk_asset_section_t section;
+                pvr_chunk_animation_section_view_t view;
+                const void *data;
+
+                if(load_raw_section_ordinal(
+                       &asset_view, PVR_CHUNK_ASSET_SECTION_ANIMATION,
+                       clip.transform_ordinal, &section, &data) < 0 ||
+                   pvr_chunk_animation_section_open(
+                       data, section.decoded_bytes, &view) < 0 ||
+                   view.transform_count != scene->node_count) {
+                    if(!errno)
+                        errno = EILSEQ;
+                    goto out;
+                }
+            }
+            if(expected->morph_animation.binding_count &&
+               validate_multi_morph_animation(
+                   &asset_view, clip.morph_ordinal, &hierarchy_view,
+                   &table_view, shape_view_pointers, model_count,
+                   &expected->morph_animation) < 0)
+                goto out;
         }
     }
     if(prepare_blob_output(target, blob, blob_bytes, temporary) < 0)
@@ -6706,15 +6899,14 @@ int main(int argc, char **argv) {
     else if(emit_asset) {
         int prepare_result;
 
-        if(model_count > 1u) {
+        if(gltf_input && (model_count > 1u ||
+                          gltf_metadata.animation_count > 1u)) {
             prepare_result = prepare_multi_asset_output(
                 asset_output, model_streams, model_count, lz4_vertices,
                 cooked_cache, &scene,
                 gltf_metadata.models,
-                gltf_metadata.animation_track_count ?
-                    &gltf_metadata.animation : NULL,
-                gltf_metadata.morph_animation.binding_count ?
-                    &gltf_metadata.morph_animation : NULL,
+                gltf_metadata.animations,
+                gltf_metadata.animation_count,
                 &vertex_temporary, &asset_bytes);
         }
         else {
@@ -6735,11 +6927,13 @@ int main(int argc, char **argv) {
                     gltf_metadata.models[0].shapes.target_count ?
                     &gltf_metadata.models[0].shapes :
                     (morph_target ? &morph_shapes : NULL),
-                gltf_metadata.animation_track_count ?
-                    &gltf_metadata.animation :
+                gltf_metadata.animation_count &&
+                    gltf_metadata.animations[0].animation_track_count ?
+                    &gltf_metadata.animations[0].animation :
                     (animation_offset_set ? &animation_clip : NULL),
-                gltf_metadata.morph_animation.binding_count ?
-                    &gltf_metadata.morph_animation : NULL,
+                gltf_metadata.animation_count &&
+                    gltf_metadata.animations[0].morph_animation.binding_count ?
+                    &gltf_metadata.animations[0].morph_animation : NULL,
                 &vertex_temporary, &asset_bytes);
         }
         if(prepare_result < 0) {
@@ -6845,21 +7039,43 @@ int main(int argc, char **argv) {
             printf("animation_keys=%zu\n",
                    animation_track.track.key_count);
         }
-        if(gltf_metadata.animation_track_count) {
-            printf("animation_transforms=%zu\n",
-                   gltf_metadata.animation.clip.transform_count);
-            printf("animation_tracks=%zu\n",
-                   gltf_metadata.animation_track_count);
-            printf("animation_keys=%zu\n",
-                   gltf_metadata.animation_key_count);
-        }
-        if(gltf_metadata.morph_animation.binding_count) {
-            printf("morph_animation_bindings=%zu\n",
-                   gltf_metadata.morph_animation.binding_count);
-            printf("morph_animation_tracks=%zu\n",
-                   gltf_metadata.morph_animation_track_count);
-            printf("morph_animation_keys=%zu\n",
-                   gltf_metadata.morph_animation_key_count);
+        if(gltf_metadata.animation_count) {
+            size_t animation;
+            size_t transform_count = 0;
+            size_t animation_track_count = 0;
+            size_t animation_key_count = 0;
+            size_t morph_binding_count = 0;
+            size_t morph_track_count = 0;
+            size_t morph_key_count = 0;
+
+            for(animation = 0;
+                animation < gltf_metadata.animation_count; ++animation) {
+                const gltf_animation_metadata_t *clip =
+                    &gltf_metadata.animations[animation];
+
+                if(clip->animation_track_count)
+                    transform_count += clip->animation.clip.transform_count;
+                animation_track_count += clip->animation_track_count;
+                animation_key_count += clip->animation_key_count;
+                morph_binding_count +=
+                    clip->morph_animation.binding_count;
+                morph_track_count += clip->morph_animation_track_count;
+                morph_key_count += clip->morph_animation_key_count;
+            }
+            printf("animation_clips=%zu\n",
+                   gltf_metadata.animation_count);
+            if(animation_track_count) {
+                printf("animation_transforms=%zu\n", transform_count);
+                printf("animation_tracks=%zu\n", animation_track_count);
+                printf("animation_keys=%zu\n", animation_key_count);
+            }
+            if(morph_binding_count) {
+                printf("morph_animation_bindings=%zu\n",
+                       morph_binding_count);
+                printf("morph_animation_tracks=%zu\n",
+                       morph_track_count);
+                printf("morph_animation_keys=%zu\n", morph_key_count);
+            }
         }
     }
     result = 0;

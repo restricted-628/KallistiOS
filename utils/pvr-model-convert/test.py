@@ -1495,6 +1495,137 @@ f 1/1/1 2/2/1 3/3/1
             2.0, 0.0, 5.0, 0.0, 1.0, 0
         )
 
+        multi_animation_binary = morph_binary + struct.pack(
+            "<6f", 0.0, 0.0, 0.0, 2.0, 0.0, 0.0
+        )
+        multi_animation_document = json.loads(
+            gltf_morph_source.read_text(encoding="utf-8")
+        )
+        multi_animation_document["buffers"][0] = {
+            "byteLength": len(multi_animation_binary),
+            "uri": "data:application/octet-stream;base64," +
+                   base64.b64encode(multi_animation_binary).decode("ascii"),
+        }
+        multi_animation_document["bufferViews"].append({
+            "buffer": 0, "byteOffset": 132, "byteLength": 24,
+        })
+        multi_animation_document["accessors"].append({
+            "bufferView": 6, "componentType": 5126, "count": 2,
+            "type": "VEC3",
+        })
+        multi_animation_document["animations"] = [
+            {
+                "name": "move",
+                "samplers": [{"input": 4, "output": 6,
+                              "interpolation": "LINEAR"}],
+                "channels": [{"sampler": 0,
+                              "target": {"node": 0,
+                                         "path": "translation"}}],
+            },
+            {
+                "samplers": [{"input": 4, "output": 5,
+                              "interpolation": "LINEAR"}],
+                "channels": [{"sampler": 0,
+                              "target": {"node": 0,
+                                         "path": "weights"}}],
+            },
+            {
+                "name": "combo",
+                "samplers": [
+                    {"input": 4, "output": 6,
+                     "interpolation": "LINEAR"},
+                    {"input": 4, "output": 5,
+                     "interpolation": "LINEAR"},
+                ],
+                "channels": [
+                    {"sampler": 0,
+                     "target": {"node": 0, "path": "translation"}},
+                    {"sampler": 1,
+                     "target": {"node": 0, "path": "weights"}},
+                ],
+            },
+        ]
+        multi_animation_source = root / "multi-animation.gltf"
+        multi_animation_source.write_text(
+            json.dumps(multi_animation_document), encoding="utf-8"
+        )
+        multi_animation_asset = root / "multi-animation.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            multi_animation_source, multi_animation_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "animation_clips=3\n" in result.stdout
+        assert "animation_transforms=2\n" in result.stdout
+        assert "animation_tracks=2\n" in result.stdout
+        assert "animation_keys=4\n" in result.stdout
+        assert "morph_animation_bindings=2\n" in result.stdout
+        assert "morph_animation_tracks=2\n" in result.stdout
+        assert "morph_animation_keys=4\n" in result.stdout
+        multi_animation_bytes = multi_animation_asset.read_bytes()
+        assert struct.unpack_from("<I", multi_animation_bytes, 32)[0] == 10
+        section_types = [
+            struct.unpack_from(
+                "<I", multi_animation_bytes, 64 + index * 32
+            )[0]
+            for index in range(10)
+        ]
+        assert section_types == [
+            1, 2, 7, 8, 9, 13, 9, 13, 14, 12
+        ]
+        catalog_descriptor = struct.unpack_from(
+            "<7IHH", multi_animation_bytes, 64 + 8 * 32
+        )
+        catalog = multi_animation_bytes[
+            catalog_descriptor[2]:
+            catalog_descriptor[2] + catalog_descriptor[3]
+        ]
+        assert catalog[:4] == b"PAC1"
+        assert struct.unpack_from("<II", catalog, 8) == (169, 3)
+        assert struct.unpack_from("<H", catalog, 16)[0] == 32
+        assert struct.unpack_from("<II", catalog, 20) == (96, 9)
+        assert struct.unpack_from("<4I2f2I", catalog, 64) == (
+            0, 0xffffffff, 0, 4, 0.0, 1.0, 0, 0
+        )
+        assert struct.unpack_from("<4I2f2I", catalog, 96) == (
+            0xffffffff, 0, 4, 0, 0.0, 1.0, 0, 0
+        )
+        assert struct.unpack_from("<4I2f2I", catalog, 128) == (
+            1, 1, 4, 5, 0.0, 1.0, 0, 0
+        )
+        assert catalog[160:] == b"movecombo"
+
+        duplicate_name_document = json.loads(
+            json.dumps(multi_animation_document)
+        )
+        duplicate_name_document["animations"][2]["name"] = "move"
+        duplicate_name_source = root / "duplicate-animation-names.gltf"
+        duplicate_name_source.write_text(
+            json.dumps(duplicate_name_document), encoding="utf-8"
+        )
+        duplicate_name_asset = root / "duplicate-animation-names.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            duplicate_name_source, duplicate_name_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        duplicate_name_bytes = duplicate_name_asset.read_bytes()
+        duplicate_catalog_descriptor = struct.unpack_from(
+            "<7IHH", duplicate_name_bytes, 64 + 8 * 32
+        )
+        duplicate_catalog = duplicate_name_bytes[
+            duplicate_catalog_descriptor[2]:
+            duplicate_catalog_descriptor[2] +
+            duplicate_catalog_descriptor[3]
+        ]
+        assert struct.unpack_from("<II", duplicate_catalog, 8) == (160, 3)
+        assert struct.unpack_from("<I", duplicate_catalog, 24)[0] == 0
+        assert [
+            struct.unpack_from("<II", duplicate_catalog,
+                               64 + index * 32 + 8)
+            for index in range(3)
+        ] == [(0, 0), (0, 0), (0, 0)]
+
         matrix_animation_document = json.loads(
             gltf_animation_source.read_text(encoding="utf-8")
         )

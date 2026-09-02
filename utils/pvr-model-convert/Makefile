@@ -32,6 +32,7 @@ SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_morph_animation_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_catalog.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c \
           ../../kernel/arch/dreamcast/math/matrix_compose.c \
           ../../addons/liblz4/pvr_chunk_asset_lz4.c \

@@ -22,10 +22,11 @@ importer uses cgltf and adds no parser, allocation, or code to a Dreamcast
 program. It accepts one selected scene and any nonzero set of unique
 meshes, including repeated instances, triangle primitives, indexed or non-
 indexed positions, optional normals, UV set zero, and `COLOR_0`, stable
-base-color texture
-ordinals, parent-before-child node transforms, and one STEP/LINEAR translation,
-rotation, scale, or morph-weight animation. Each unique mesh becomes one PCM2
-model ordinal
+base-color texture ordinals, parent-before-child node transforms, and
+STEP/LINEAR translation, rotation, scale, or morph-weight channels. Multiple
+animations retain source order and may independently contain transform-only,
+morph-only, or combined channels. Each unique mesh becomes one PCM2 model
+ordinal
 with exact local bounds and its own resource manifest, general-N skin,
 inverse-bind skeleton, and sparse position/normal morph sections when authored.
 Different meshes may use different skins; repeated instances of one mesh must
@@ -50,7 +51,7 @@ boundaries include required extensions, GPU instancing, non-triangle primitives,
 tangent/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
 materials, detached skin joints, conflicting skins on repeated mesh instances,
-multiple animations, matrix-authored animation targets, and cubic-spline
+matrix-authored animation targets, and cubic-spline
 tracks. Static matrix-authored nodes in an animated scene are admitted when
 their affine transform decomposes exactly into translation, quaternion
 rotation, and signed scale; shear and degenerate axes are rejected.
@@ -237,6 +238,15 @@ converter cross-validates every node, model, morph-section ordinal, and target
 count before publication; the target materializer reuses the existing scalar
 track and `pvr_chunk_shape_channel_t` runtime with caller-owned arrays. `PMW1`
 adds no clock, evaluator, or retained pose.
+
+When glTF supplies multiple animations, the converter emits one pointer-free
+`PAC1` catalog plus only the `PAT1` and `PMW1` sections each clip actually
+needs. Catalog records map source order and optional unique names to independent
+section ordinals and a combined time range, so transform-only and morph-only
+clips require no empty placeholders. Unnamed clips and legal duplicate source
+names remain addressable by source index; duplicate names are not rewritten
+into invented identifiers. Single-animation assets retain their established
+section layout.
 
 Compile the generated file normally in the application build to produce the
 target object; the converter does not invoke or choose a compiler. Each output

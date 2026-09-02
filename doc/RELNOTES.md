@@ -15,7 +15,9 @@ lifecycle and naming conventions.
   source order and optional unique name to independent PAT1 transform and PMW1
   morph-section ordinals, avoiding empty placeholder sections when a clip uses
   only one channel family. Checked APIs open, index, find, and validate catalog
-  relationships against the enclosing compact asset.
+  relationships against the enclosing compact asset. The bounded glTF/GLB
+  importer now emits mixed transform-only, morph-only, and combined clips in
+  source order, while preserving the established single-animation layout.
 
 * Added exact affine matrix fallback decomposition to glTF animation import.
   Static matrix-authored nodes can now coexist with animated TRS nodes when
