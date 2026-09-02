@@ -389,11 +389,11 @@ format, deformation, or tooling gaps:
    pointer-free logical-clip catalog needed to pair repeated PAT1 and PMW1
    sections without placeholders, and the host importer emits mixed
    transform-only, morph-only, and combined glTF clips through it. Continue
-   wider modern scene import,
-   parent-result canonicalization, elimination of deferred polygon controls,
-   and repeatable scene-level conformance. Target-side loading of the canonical
-   PCM2 model table and hierarchy is now one coherent allocation-free operation
-   over caller-owned model, node, and persistent decode storage.
+   wider modern scene import, parent-result canonicalization, and elimination
+   of deferred polygon controls. Target-side loading of the canonical PCM2
+   model table and hierarchy is now one coherent allocation-free operation
+   over caller-owned model, node, and persistent decode storage; multi-model
+   host output is round-tripped through that same path before publication.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose
    deformation. PCH1 version 2 supplies component suppression, hidden-node
    evaluation, and noncontiguous descendant pruning; PAT1 version 3 supplies
