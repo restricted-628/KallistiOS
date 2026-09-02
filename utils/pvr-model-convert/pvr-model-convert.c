@@ -28,9 +28,11 @@
 #include <dc/pvr_chunk_animation_asset.h>
 #include <dc/pvr_chunk_volume_asset.h>
 #include <dc/pvr_chunk_resource_asset.h>
+#include <dc/pvr_chunk_texture_asset.h>
 
 #include "pvr-scene-ir.h"
 #include "third_party/cgltf.h"
+#include "stb_image.h"
 
 #include <kos/pvr_chunk_asset_lz4.h>
 
@@ -40,6 +42,7 @@
 #include <errno.h>
 #include <float.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <math.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -199,7 +202,13 @@ typedef struct gltf_asset_metadata {
     size_t model_count;
     gltf_animation_metadata_t *animations;
     size_t animation_count;
+    uint8_t *texture_section;
+    size_t texture_section_bytes;
 } gltf_asset_metadata_t;
+
+static int serialize_gltf_textures(
+    const cgltf_data *data, const char *source_path,
+    int texture_override, uint8_t **bytes_out, size_t *size_out);
 
 typedef struct source_strip {
     size_t first_triangle;
@@ -308,6 +317,7 @@ static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
         gltf_animation_metadata_free(&metadata->animations[animation]);
     free(metadata->models);
     free(metadata->animations);
+    free(metadata->texture_section);
     memset(metadata, 0, sizeof(*metadata));
 }
 
@@ -2869,7 +2879,10 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
            gltf_build_shapes(mesh, &metadata->models[model]) < 0)
             goto fail;
     }
-    if(gltf_build_animations(data, node_to_scene, scene, metadata) < 0)
+    if(gltf_build_animations(data, node_to_scene, scene, metadata) < 0 ||
+       serialize_gltf_textures(
+           data, path, texture_identifier, &metadata->texture_section,
+           &metadata->texture_section_bytes) < 0)
         goto fail;
     free(skins);
     free(meshes);
@@ -3952,6 +3965,388 @@ static int align_size_32(size_t value, size_t *result) {
     return 0;
 }
 
+typedef struct compiled_texture_image {
+    uint16_t identifier;
+    uint16_t width;
+    uint16_t height;
+    pvr_txr_surface_format_t format;
+    uint8_t *data;
+    size_t data_size;
+} compiled_texture_image_t;
+
+static int texture_dimension_valid(int value) {
+    return value >= 8 && value <= 1024 &&
+           !(value & (value - 1));
+}
+
+static size_t twiddle_bits(size_t value) {
+    size_t spread = 0;
+    unsigned bit;
+
+    for(bit = 0; bit < 10; ++bit)
+        spread |= ((value >> bit) & 1u) << (bit * 2u);
+    return spread;
+}
+
+static size_t twiddled_index(size_t x, size_t y,
+                             size_t width, size_t height) {
+    size_t minimum = width < height ? width : height;
+    size_t mask = minimum - 1u;
+
+    return (twiddle_bits(y & mask) | (twiddle_bits(x & mask) << 1u)) +
+           (x / minimum + y / minimum) * minimum * minimum;
+}
+
+static int data_uri_decode(const char *uri, uint8_t **data,
+                           size_t *data_size) {
+    cgltf_options options = { 0 };
+    const char *comma = strchr(uri, ',');
+    const char *encoded;
+    size_t encoded_size;
+    size_t padding = 0;
+    size_t decoded_size;
+    cgltf_result result;
+
+    *data = NULL;
+    *data_size = 0;
+    if(!comma || comma - uri < 7 ||
+       strncmp(comma - 7, ";base64", 7)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    encoded = comma + 1;
+    encoded_size = strlen(encoded);
+    if(!encoded_size || (encoded_size & 3u)) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if(encoded[encoded_size - 1u] == '=')
+        ++padding;
+    if(encoded_size > 1u && encoded[encoded_size - 2u] == '=')
+        ++padding;
+    if(encoded_size / 4u > (SIZE_MAX - 2u) / 3u) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    decoded_size = encoded_size / 4u * 3u - padding;
+    result = cgltf_load_buffer_base64(
+        &options, decoded_size, encoded, (void **)data);
+    if(result != cgltf_result_success) {
+        errno = cgltf_errno(result);
+        return -1;
+    }
+    *data_size = decoded_size;
+    return 0;
+}
+
+static char *image_path_resolve(const char *source_path,
+                                const char *uri) {
+    const char *forward = strrchr(source_path, '/');
+    const char *backward = strrchr(source_path, '\\');
+    const char *separator = forward && backward ?
+        (forward > backward ? forward : backward) :
+        (forward ? forward : backward);
+    size_t prefix = separator ? (size_t)(separator - source_path) + 1u : 0u;
+    size_t uri_size = strlen(uri);
+    char *path;
+
+    if(prefix > SIZE_MAX - uri_size - 1u) {
+        errno = EOVERFLOW;
+        return NULL;
+    }
+    path = malloc(prefix + uri_size + 1u);
+    if(!path) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    if(prefix)
+        memcpy(path, source_path, prefix);
+    memcpy(path + prefix, uri, uri_size + 1u);
+    cgltf_decode_uri(path + prefix);
+    return path;
+}
+
+static int gltf_image_rgba_load(const cgltf_image *image,
+                                const char *source_path,
+                                stbi_uc **pixels, int *width, int *height) {
+    const uint8_t *encoded = NULL;
+    uint8_t *owned_encoded = NULL;
+    size_t encoded_size = 0;
+    char *path = NULL;
+    int components;
+
+    *pixels = NULL;
+    *width = 0;
+    *height = 0;
+    if(!image) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if(image->buffer_view) {
+        encoded = cgltf_buffer_view_data(image->buffer_view);
+        encoded_size = image->buffer_view->size;
+        if(!encoded) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    else if(image->uri && !strncmp(image->uri, "data:", 5)) {
+        if(data_uri_decode(image->uri, &owned_encoded,
+                           &encoded_size) < 0)
+            return -1;
+        encoded = owned_encoded;
+    }
+    else if(image->uri) {
+        path = image_path_resolve(source_path, image->uri);
+        if(!path)
+            return -1;
+        *pixels = stbi_load(path, width, height, &components, 4);
+    }
+    else {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    if(encoded) {
+        if(encoded_size > INT_MAX) {
+            free(owned_encoded);
+            errno = EOVERFLOW;
+            return -1;
+        }
+        *pixels = stbi_load_from_memory(
+            encoded, (int)encoded_size, width, height, &components, 4);
+    }
+    free(path);
+    free(owned_encoded);
+    if(!*pixels) {
+        errno = EILSEQ;
+        return -1;
+    }
+    return 0;
+}
+
+static int compile_texture_image(const cgltf_image *source,
+                                 const char *source_path,
+                                 uint16_t identifier,
+                                 compiled_texture_image_t *image) {
+    stbi_uc *rgba = NULL;
+    uint8_t *encoded = NULL;
+    int width;
+    int height;
+    size_t pixel_count;
+    size_t pixel;
+    int has_alpha = 0;
+    int has_partial_alpha = 0;
+
+    memset(image, 0, sizeof(*image));
+    if(gltf_image_rgba_load(source, source_path, &rgba,
+                            &width, &height) < 0)
+        return -1;
+    if(!texture_dimension_valid(width) ||
+       !texture_dimension_valid(height)) {
+        stbi_image_free(rgba);
+        errno = ENOTSUP;
+        return -1;
+    }
+    pixel_count = (size_t)width * (size_t)height;
+    if(pixel_count > SIZE_MAX / 2u) {
+        stbi_image_free(rgba);
+        errno = EOVERFLOW;
+        return -1;
+    }
+    for(pixel = 0; pixel < pixel_count; ++pixel) {
+        uint8_t alpha = rgba[pixel * 4u + 3u];
+
+        if(alpha != UINT8_MAX)
+            has_alpha = 1;
+        if(alpha && alpha != UINT8_MAX)
+            has_partial_alpha = 1;
+    }
+    encoded = malloc(pixel_count * 2u);
+    if(!encoded) {
+        stbi_image_free(rgba);
+        errno = ENOMEM;
+        return -1;
+    }
+    for(pixel = 0; pixel < pixel_count; ++pixel) {
+        size_t x = pixel % (size_t)width;
+        size_t y = pixel / (size_t)width;
+        size_t output = twiddled_index(
+            x, y, (size_t)width, (size_t)height) * 2u;
+        uint8_t red = rgba[pixel * 4u];
+        uint8_t green = rgba[pixel * 4u + 1u];
+        uint8_t blue = rgba[pixel * 4u + 2u];
+        uint8_t alpha = rgba[pixel * 4u + 3u];
+        uint16_t texel;
+
+        if(!has_alpha)
+            texel = (uint16_t)((uint16_t)(red >> 3) << 11) |
+                    (uint16_t)((uint16_t)(green >> 2) << 5) |
+                    (uint16_t)(blue >> 3);
+        else if(!has_partial_alpha)
+            texel = (uint16_t)((uint16_t)(alpha >= 128u) << 15) |
+                    (uint16_t)((uint16_t)(red >> 3) << 10) |
+                    (uint16_t)((uint16_t)(green >> 3) << 5) |
+                    (uint16_t)(blue >> 3);
+        else
+            texel = (uint16_t)((uint16_t)(alpha >> 4) << 12) |
+                    (uint16_t)((uint16_t)(red >> 4) << 8) |
+                    (uint16_t)((uint16_t)(green >> 4) << 4) |
+                    (uint16_t)(blue >> 4);
+        store_le16(encoded + output, texel);
+    }
+    stbi_image_free(rgba);
+    image->identifier = identifier;
+    image->width = (uint16_t)width;
+    image->height = (uint16_t)height;
+    image->format = !has_alpha ? PVR_TXR_SURFACE_RGB565 :
+                    (!has_partial_alpha ? PVR_TXR_SURFACE_ARGB1555 :
+                                          PVR_TXR_SURFACE_ARGB4444);
+    image->data = encoded;
+    image->data_size = pixel_count * 2u;
+    return 0;
+}
+
+static int serialize_gltf_textures(
+        const cgltf_data *data, const char *source_path,
+        int texture_override, uint8_t **bytes_out, size_t *size_out) {
+    uint8_t *used = NULL;
+    compiled_texture_image_t *images = NULL;
+    uint8_t *bytes = NULL;
+    size_t image_count = 0;
+    size_t data_offset;
+    size_t file_bytes;
+    size_t material;
+    size_t texture;
+    size_t output = 0;
+    pvr_chunk_texture_section_view_t checked;
+    int saved_errno;
+
+    *bytes_out = NULL;
+    *size_out = 0;
+    if(texture_override >= 0 || !data->textures_count)
+        return 0;
+    used = calloc(data->textures_count, sizeof(*used));
+    if(!used) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    for(material = 0; material < data->materials_count; ++material) {
+        const cgltf_material *source = &data->materials[material];
+        const cgltf_texture *texture_pointer =
+            source->has_pbr_metallic_roughness ?
+            source->pbr_metallic_roughness.base_color_texture.texture : NULL;
+        size_t ordinal;
+
+        if(!texture_pointer)
+            continue;
+        if(gltf_array_index(data->textures, data->textures_count,
+                           sizeof(*data->textures), texture_pointer,
+                           &ordinal) < 0)
+            goto fail;
+        if(!used[ordinal]) {
+            used[ordinal] = 1;
+            ++image_count;
+        }
+    }
+    if(!image_count) {
+        free(used);
+        return 0;
+    }
+    images = calloc(image_count, sizeof(*images));
+    if(!images) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    for(texture = 0; texture < data->textures_count; ++texture) {
+        if(!used[texture])
+            continue;
+        if(texture > PVR_CHUNK_TEXTURE_IDENTIFIER_MAX ||
+           compile_texture_image(data->textures[texture].image,
+                                 source_path, (uint16_t)texture,
+                                 &images[output++]) < 0)
+            goto fail;
+    }
+    if(output != image_count ||
+       image_count > (SIZE_MAX - PVR_CHUNK_TEXTURE_SECTION_HEADER_BYTES) /
+                         PVR_CHUNK_TEXTURE_SECTION_ENTRY_BYTES ||
+       align_size_32(PVR_CHUNK_TEXTURE_SECTION_HEADER_BYTES +
+                     image_count * PVR_CHUNK_TEXTURE_SECTION_ENTRY_BYTES,
+                     &data_offset) < 0)
+        goto fail;
+    file_bytes = data_offset;
+    for(texture = 0; texture < image_count; ++texture) {
+        if(align_size_32(file_bytes, &file_bytes) < 0 ||
+           file_bytes > SIZE_MAX - images[texture].data_size)
+            goto fail;
+        file_bytes += images[texture].data_size;
+    }
+    if(file_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    file_bytes = data_offset;
+    for(texture = 0; texture < image_count; ++texture) {
+        uint8_t *entry = bytes + PVR_CHUNK_TEXTURE_SECTION_HEADER_BYTES +
+            texture * PVR_CHUNK_TEXTURE_SECTION_ENTRY_BYTES;
+
+        if(align_size_32(file_bytes, &file_bytes) < 0)
+            goto fail;
+        memcpy(bytes + file_bytes, images[texture].data,
+               images[texture].data_size);
+        store_le16(entry, images[texture].identifier);
+        entry[2] = (uint8_t)images[texture].format;
+        entry[3] = PVR_TXR_SURFACE_TWIDDLED;
+        store_le16(entry + 4, images[texture].width);
+        store_le16(entry + 6, images[texture].height);
+        store_le32(entry + 12, (uint32_t)file_bytes);
+        store_le32(entry + 16, (uint32_t)images[texture].data_size);
+        store_le32(entry + 20, crc32_bytes(
+            images[texture].data, images[texture].data_size));
+        file_bytes += images[texture].data_size;
+    }
+    store_le32(bytes, PVR_CHUNK_TEXTURE_SECTION_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_TEXTURE_SECTION_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_TEXTURE_SECTION_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)image_count);
+    store_le16(bytes + 16, PVR_CHUNK_TEXTURE_SECTION_ENTRY_BYTES);
+    store_le32(bytes + 20, (uint32_t)data_offset);
+    store_le32(bytes + 24, crc32_bytes(
+        bytes + PVR_CHUNK_TEXTURE_SECTION_HEADER_BYTES,
+        image_count * PVR_CHUNK_TEXTURE_SECTION_ENTRY_BYTES));
+    store_le32(bytes + 28, crc32_bytes(
+        bytes + data_offset, file_bytes - data_offset));
+    store_le32(bytes + 60, crc32_bytes(bytes, 60));
+    if(pvr_chunk_texture_section_open(bytes, file_bytes, &checked) < 0)
+        goto fail;
+
+    for(texture = 0; texture < image_count; ++texture)
+        free(images[texture].data);
+    free(images);
+    free(used);
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    if(images) {
+        for(texture = 0; texture < image_count; ++texture)
+            free(images[texture].data);
+    }
+    free(bytes);
+    free(images);
+    free(used);
+    errno = saved_errno;
+    return -1;
+}
+
 static int serialize_words(const void *words, size_t word_count,
                            size_t word_size, uint8_t **bytes_out,
                            size_t *size_out) {
@@ -4182,6 +4577,8 @@ static int build_asset_blob(const output_streams_t *streams,
                             const pvr_chunk_shape_set_t *shapes,
                             const anim_clip_view_t *animation,
                             const pvr_chunk_morph_animation_t *morph_animation,
+                            const void *texture_section,
+                            size_t texture_section_bytes,
                             uint8_t **blob_out,
                             size_t *blob_bytes_out) {
     uint8_t *vertex_raw = NULL;
@@ -4224,14 +4621,19 @@ static int build_asset_blob(const output_streams_t *streams,
     size_t morph_animation_offset = 0;
     size_t volume_offset = 0;
     size_t resource_offset = 0;
+    size_t texture_offset = 0;
     size_t cooked_offset = 0;
     size_t model_table_offset = 0;
     size_t file_bytes;
     int saved_errno;
 
     if((scene || skin || skeleton || shapes || animation ||
-        morph_animation) &&
+        morph_animation || texture_section) &&
        !section_directory) {
+        errno = EINVAL;
+        goto fail;
+    }
+    if((texture_section == NULL) != (texture_section_bytes == 0)) {
         errno = EINVAL;
         goto fail;
     }
@@ -4335,6 +4737,7 @@ static int build_asset_blob(const output_streams_t *streams,
     }
 
     section_count = 2u + (resource_raw ? 1u : 0u) +
+                    (texture_section ? 1u : 0u) +
                     (cooked_raw ? 1u : 0u) +
                     (volume_raw ? 1u : 0u) +
                     (hierarchy_raw ? 1u : 0u) +
@@ -4370,6 +4773,14 @@ static int build_asset_blob(const output_streams_t *streams,
             goto fail;
         }
         file_bytes = resource_offset + resource_bytes;
+    }
+    if(texture_section) {
+        if(align_size_32(file_bytes, &texture_offset) < 0 ||
+           texture_offset > SIZE_MAX - texture_section_bytes) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        file_bytes = texture_offset + texture_section_bytes;
     }
     if(volume_raw) {
         if(align_size_32(file_bytes, &volume_offset) < 0 ||
@@ -4458,6 +4869,9 @@ static int build_asset_blob(const output_streams_t *streams,
     memcpy(blob + polygon_offset, polygon_raw, polygon_bytes);
     if(resource_raw)
         memcpy(blob + resource_offset, resource_raw, resource_bytes);
+    if(texture_section)
+        memcpy(blob + texture_offset, texture_section,
+               texture_section_bytes);
     if(volume_raw)
         memcpy(blob + volume_offset, volume_raw, volume_bytes);
     if(cooked_raw)
@@ -4519,6 +4933,16 @@ static int build_asset_blob(const output_streams_t *streams,
                 resource_offset, resource_bytes, resource_bytes,
                 crc32_bytes(resource_raw, resource_bytes),
                 PVR_CHUNK_ASSET_CODEC_RAW, sizeof(uint32_t));
+        }
+        if(texture_section) {
+            store_pcm2_section(
+                directory + descriptor_index++ *
+                    PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES,
+                texture_offset, texture_section_bytes,
+                texture_section_bytes,
+                crc32_bytes(texture_section, texture_section_bytes),
+                PVR_CHUNK_ASSET_CODEC_RAW, PVR_CHUNK_ASSET_ALIGNMENT);
         }
         if(volume_raw) {
             store_pcm2_section(
@@ -4799,6 +5223,8 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                                   const gltf_model_metadata_t *metadata,
                                   const gltf_animation_metadata_t *animations,
                                   size_t animation_count,
+                                  const void *texture_section,
+                                  size_t texture_section_bytes,
                                   uint8_t **blob_out,
                                   size_t *blob_bytes_out) {
     pcm2_host_section_t *sections = NULL;
@@ -4828,11 +5254,12 @@ static int build_multi_asset_blob(const output_streams_t *streams,
        !blob_bytes_out || model_count > UINT32_MAX ||
        !metadata || (animation_count && !animations) ||
        animation_count > UINT32_MAX ||
-       model_count > (SIZE_MAX - 3u) / 7u) {
+       model_count > (SIZE_MAX - 4u) / 7u ||
+       ((texture_section == NULL) != (texture_section_bytes == 0))) {
         errno = EINVAL;
         return -1;
     }
-    section_capacity = model_count * 7u + 3u;
+    section_capacity = model_count * 7u + 4u;
     if(animation_count > (SIZE_MAX - section_capacity) / 2u) {
         errno = EOVERFLOW;
         return -1;
@@ -5061,6 +5488,22 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                table_bytes, sizeof(uint32_t), 0) < 0)
             goto fail;
     }
+    if(texture_section) {
+        uint8_t *texture_copy = malloc(texture_section_bytes);
+
+        if(!texture_copy) {
+            errno = ENOMEM;
+            goto fail;
+        }
+        memcpy(texture_copy, texture_section, texture_section_bytes);
+        if(pcm2_host_section_add(
+               sections, section_capacity, &section_count,
+               PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES, texture_copy,
+               texture_section_bytes, PVR_CHUNK_ASSET_ALIGNMENT, 0) < 0) {
+            free(texture_copy);
+            goto fail;
+        }
+    }
     if(section_count > UINT32_MAX ||
        section_count > SIZE_MAX /
            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES ||
@@ -5227,6 +5670,8 @@ static int prepare_asset_output(const char *target,
                                 const anim_clip_view_t *animation,
                                 const pvr_chunk_morph_animation_t *
                                     morph_animation,
+                                const void *texture_section,
+                                size_t texture_section_bytes,
                                 temporary_output_t *temporary,
                                 size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -5241,6 +5686,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_asset_section_t morph_animation_section;
     pvr_chunk_asset_section_t volume_section;
     pvr_chunk_asset_section_t resource_section;
+    pvr_chunk_asset_section_t texture_image_section;
     pvr_chunk_asset_section_t cooked_section;
     pvr_chunk_asset_section_t model_table_section;
     pvr_chunk_model_view_t model_view;
@@ -5255,6 +5701,7 @@ static int prepare_asset_output(const char *target,
     pvr_chunk_morph_animation_section_view_t morph_animation_view;
     pvr_chunk_volume_section_view_t volume_view;
     pvr_chunk_resource_section_view_t resource_view;
+    pvr_chunk_texture_section_view_t texture_image_view;
     pvr_chunk_cache_section_view_t cooked_view;
     pvr_chunk_model_table_view_t model_table_view;
     pvr_chunk_cache_section_requirements_t cooked_requirements;
@@ -5285,6 +5732,7 @@ static int prepare_asset_output(const char *target,
     const void *morph_animation_data = NULL;
     const void *volume_data = NULL;
     const void *resource_data = NULL;
+    const void *texture_image_data = NULL;
     const void *cooked_data = NULL;
     const void *model_table_data = NULL;
     void *workspace = NULL;
@@ -5294,7 +5742,8 @@ static int prepare_asset_output(const char *target,
 
     if(build_asset_blob(streams, lz4_vertices, section_directory,
                         include_cooked_cache, scene, skin, skeleton, shapes,
-                        animation, morph_animation,
+                        animation, morph_animation, texture_section,
+                        texture_section_bytes,
                         &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        pvr_chunk_asset_workspace_query(&asset_view, &requirements) < 0)
@@ -5339,6 +5788,18 @@ static int prepare_asset_output(const char *target,
         }
         else if(errno != ENOENT)
             goto out;
+        if(texture_section &&
+           (load_raw_section_type(
+                &asset_view, PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES,
+                &texture_image_section, &texture_image_data) < 0 ||
+            pvr_chunk_texture_section_open(
+                texture_image_data, texture_image_section.decoded_bytes,
+                &texture_image_view) < 0 ||
+            texture_image_view.entry_count == 0)) {
+            if(!errno)
+                errno = EILSEQ;
+            goto out;
+        }
         if(include_cooked_cache) {
             if(load_raw_section_type(
                    &asset_view, PVR_CHUNK_ASSET_SECTION_COOKED_CACHE,
@@ -5793,14 +6254,17 @@ static int prepare_multi_asset_output(
     const gltf_model_metadata_t *metadata,
     const gltf_animation_metadata_t *animations,
     size_t animation_count,
+    const void *texture_section, size_t texture_section_bytes,
     temporary_output_t *temporary,
     size_t *asset_bytes) {
     uint8_t *blob = NULL;
     size_t blob_bytes = 0;
     pvr_chunk_asset_view_t asset_view;
     pvr_chunk_asset_section_t table_section;
+    pvr_chunk_asset_section_t texture_image_section;
     pvr_chunk_model_table_view_t table_view;
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
+    pvr_chunk_texture_section_view_t texture_image_view;
     pvr_chunk_shape_section_view_t *shape_views = NULL;
     const pvr_chunk_shape_section_view_t **shape_view_pointers = NULL;
     pvr_chunk_asset_workspace_requirements_t *requirements = NULL;
@@ -5810,6 +6274,7 @@ static int prepare_multi_asset_output(
     pvr_chunk_hierarchy_node_t *hierarchy_nodes = NULL;
     void *workspace = NULL;
     const void *table_data = NULL;
+    const void *texture_image_data = NULL;
     const void *hierarchy_data = NULL;
     size_t workspace_bytes = 0;
     size_t model;
@@ -5818,6 +6283,7 @@ static int prepare_multi_asset_output(
     if(build_multi_asset_blob(
            streams, model_count, lz4_vertices, include_cooked_cache,
            scene, metadata, animations, animation_count,
+           texture_section, texture_section_bytes,
            &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        load_raw_section_type(
@@ -5828,6 +6294,18 @@ static int prepare_multi_asset_output(
        pvr_chunk_model_table_validate_asset(
            &table_view, &asset_view) < 0)
         goto out;
+    if(texture_section &&
+       (load_raw_section_type(
+            &asset_view, PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES,
+            &texture_image_section, &texture_image_data) < 0 ||
+        pvr_chunk_texture_section_open(
+            texture_image_data, texture_image_section.decoded_bytes,
+            &texture_image_view) < 0 ||
+        texture_image_view.entry_count == 0)) {
+        if(!errno)
+            errno = EILSEQ;
+        goto out;
+    }
     requirements = calloc(model_count, sizeof(*requirements));
     model_views = calloc(model_count, sizeof(*model_views));
     model_pointers = calloc(model_count, sizeof(*model_pointers));
@@ -6997,6 +7475,8 @@ int main(int argc, char **argv) {
                 gltf_metadata.models,
                 gltf_metadata.animations,
                 gltf_metadata.animation_count,
+                gltf_metadata.texture_section,
+                gltf_metadata.texture_section_bytes,
                 &vertex_temporary, &asset_bytes);
         }
         else {
@@ -7024,6 +7504,8 @@ int main(int argc, char **argv) {
                 gltf_metadata.animation_count &&
                     gltf_metadata.animations[0].morph_animation.binding_count ?
                     &gltf_metadata.animations[0].morph_animation : NULL,
+                gltf_metadata.texture_section,
+                gltf_metadata.texture_section_bytes,
                 &vertex_temporary, &asset_bytes);
         }
         if(prepare_result < 0) {

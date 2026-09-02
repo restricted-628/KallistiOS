@@ -10,7 +10,7 @@ include ../Makefile.host-test
 CFLAGS += $(HOST_LZ4_WARNINGS)
 CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
             -I../../kernel/arch/dreamcast/include \
-            -I../../addons/include
+            -I../../addons/include -I../pvrtex
 LDLIBS += -lm
 
 TARGET = pvr-model-convert
@@ -25,6 +25,7 @@ SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_resource_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_texture_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
@@ -37,7 +38,8 @@ SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c \
           ../../kernel/arch/dreamcast/math/matrix_compose.c \
           ../../addons/liblz4/pvr_chunk_asset_lz4.c \
           ../../addons/liblz4/lz4.c ../../addons/liblz4/lz4frame.c \
-          ../../addons/liblz4/lz4hc.c ../../addons/liblz4/xxhash.c
+          ../../addons/liblz4/lz4hc.c ../../addons/liblz4/xxhash.c \
+          ../pvrtex/stb_image_impl.c
 
 .PHONY: all clean install test
 

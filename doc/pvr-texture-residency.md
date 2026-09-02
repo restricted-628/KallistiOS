@@ -65,6 +65,13 @@ pinned it can be used with normal polygon contexts, compact-model texture
 binding tables, compact VQ sampling addresses, synchronous transfers, or the
 existing interrupt-driven asynchronous DMA requests.
 
+A PCM2 `PTX1` image can initialize the same surface description with
+`pvr_chunk_texture_image_surface_init()`. Homogeneous image sets can use that
+descriptor as the residency prototype, then reserve, upload the admitted image
+bytes, and publish through the existing two-phase contract. Mixed dimensions
+or formats remain separate caches or individually allocated surfaces; the
+serialized asset does not weaken the cache's fixed-layout guarantee.
+
 The cache uses identical slot layouts intentionally. Fixed-size slices avoid
 runtime VRAM fragmentation and make replacement deterministic. Applications
 which need mixed texture sizes can create several residency caches for size or

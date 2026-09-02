@@ -282,6 +282,28 @@ copies the admitted records exactly, and the converter reloads the resulting
 section and binds every expanded triangle back to the model before publishing
 the file. Models without volume records gain no section and pay no file or
 runtime-memory cost.
+
+For glTF/GLB input, base-color images referenced by imported materials are
+compiled into one pointer-free `PTX1` texture-image section. The host tool
+decodes external, buffer-view, or base64 image sources, requires exact
+power-of-two dimensions from 8 through 1024, selects RGB565 for opaque images,
+ARGB1555 for binary alpha, or ARGB4444 for graduated alpha, and writes
+pre-twiddled 16-bit storage bytes. Each stable texture ordinal has independent
+metadata and a payload CRC; the section also checksums its entry table, full
+data span, and header. Images not referenced as base color are not retained,
+and an explicit `--texture-id` continues to mean application-owned texture
+content, so neither case adds a section.
+
+`pvr_chunk_texture_section_open()` admits the complete section without
+allocation. Indexed and identifier lookups return borrowed immutable image
+views. `pvr_chunk_texture_image_surface_init()` derives an unbound checked
+surface, after which the application may allocate or bind VRAM and use
+`pvr_chunk_texture_image_upload()` with the normal CPU, store-queue, or DMA
+transfer policy. This closes image compilation and binding without making the
+model container own VRAM, residency, transfer workers, or frame lifetime. VQ,
+mip generation, palette assignment, resizing, and non-base-color material
+roles remain explicit host-pipeline extensions rather than silent conversion.
+
 With `--scene-root`, the host-side canonical scene IR writes one `PCH1`
 hierarchy section containing an identity root bound to model ordinal zero.
 The converter then loads, admits, and binds that section through the target

@@ -74,6 +74,25 @@ def write_text(path, text):
     path.write_text(text, encoding="ascii")
 
 
+def png_rgba(width, height, pixels):
+    assert len(pixels) == width * height * 4
+
+    def chunk(kind, payload):
+        body = kind + payload
+        return (struct.pack(">I", len(payload)) + body +
+                struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF))
+
+    rows = b"".join(
+        b"\0" + pixels[row * width * 4:(row + 1) * width * 4]
+        for row in range(height)
+    )
+    return (b"\x89PNG\r\n\x1a\n" +
+            chunk(b"IHDR", struct.pack(">IIBBBBB", width, height,
+                                        8, 6, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(rows)) +
+            chunk(b"IEND", b""))
+
+
 def compile_embedded(generated, root):
     repository = pathlib.Path(__file__).resolve().parents[2]
     verifier_source = root / "embedded-verifier.c"
@@ -885,6 +904,14 @@ f 1/1/1 2/2/1 3/3/1
                 ),
             )
         )
+        texture_pixels = bytes(
+            channel
+            for y in range(8)
+            for x in range(8)
+            for channel in ((255, 0, 0, 255) if (x + y) & 1
+                            else (0, 255, 0, 255))
+        )
+        texture_png = png_rgba(8, 8, texture_pixels)
         multi_gltf_source = root / "two-meshes.gltf"
         multi_gltf_source.write_text(json.dumps({
             "asset": {"version": "2.0"},
@@ -933,7 +960,8 @@ f 1/1/1 2/2/1 3/3/1
                  "type": "MAT4"},
             ],
             "images": [{
-                "uri": "data:application/octet-stream;base64,AA=="
+                "uri": "data:image/png;base64," +
+                       base64.b64encode(texture_png).decode("ascii")
             }],
             "textures": [{"source": 0}],
             "materials": [{
@@ -988,15 +1016,15 @@ f 1/1/1 2/2/1 3/3/1
         assert "morph_targets=2\n" in result.stdout
         assert "morph_deltas=2\n" in result.stdout
         multi_bytes = multi_gltf_asset.read_bytes()
-        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 16
+        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 17
         multi_descriptors = [
             struct.unpack_from("<7IHH", multi_bytes, 64 + i * 32)
-            for i in range(16)
+            for i in range(17)
         ]
         assert [descriptor[0] for descriptor in multi_descriptors] == [
             1, 2, 3, 10, 6, 11, 7,
             1, 2, 3, 10, 6, 11, 7,
-            8, 12,
+            8, 12, 15,
         ]
         multi_table = multi_bytes[
             multi_descriptors[15][2]:
@@ -1023,6 +1051,19 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<I", multi_hierarchy, 12)[0] == 5
         assert struct.unpack_from("<II", multi_hierarchy, 112) == (0, 0)
         assert struct.unpack_from("<II", multi_hierarchy, 192) == (0, 1)
+        multi_texture = multi_bytes[
+            multi_descriptors[16][2]:
+            multi_descriptors[16][2] + multi_descriptors[16][3]
+        ]
+        assert multi_texture[:4] == b"PTX1"
+        assert struct.unpack_from("<HHIIHHI", multi_texture, 4) == (
+            1, 64, len(multi_texture), 1, 32, 0, 96
+        )
+        assert struct.unpack_from("<HBBHHHHIII", multi_texture, 64) == (
+            0, 1, 0, 8, 8, 0, 0, 96, 128,
+            zlib.crc32(multi_texture[96:224]) & 0xFFFFFFFF,
+        )
+        assert multi_texture[96:100] == struct.pack("<HH", 0x07E0, 0xF800)
 
         result = invoke(
             converter, "--emit-asset", "--section-directory",
@@ -1032,7 +1073,7 @@ f 1/1/1 2/2/1 3/3/1
         multi_lz4 = multi_gltf_asset.read_bytes()
         multi_lz4_descriptors = [
             struct.unpack_from("<7IHH", multi_lz4, 64 + i * 32)
-            for i in range(14)
+            for i in range(15)
         ]
         assert multi_lz4_descriptors[0][7] == 1
         assert multi_lz4_descriptors[6][7] == 1
