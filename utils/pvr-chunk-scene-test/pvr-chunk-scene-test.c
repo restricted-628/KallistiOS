@@ -44,6 +44,13 @@ static const uint16_t scene_polygons[] = {
     UINT16_C(0x00ff)
 };
 
+static const uint16_t deferred_scene_polygons[] = {
+    (UINT16_C(1) << 8) | PVR_CHUNK_CONTROL_CACHE_POLYGONS,
+    (UINT16_C(1) << 8) | PVR_CHUNK_CONTROL_DRAW_CACHED_POLYGONS,
+    UINT16_C(0), UINT16_C(0), UINT16_C(0), UINT16_C(0), UINT16_C(0),
+    UINT16_C(0x00ff)
+};
+
 static uint32_t crc32_bytes(const void *data, size_t size) {
     const uint8_t *bytes = data;
     uint32_t crc = UINT32_MAX;
@@ -66,6 +73,11 @@ static void write_le32(uint8_t *bytes, uint32_t value) {
     bytes[1] = (uint8_t)(value >> 8);
     bytes[2] = (uint8_t)(value >> 16);
     bytes[3] = (uint8_t)(value >> 24);
+}
+
+static uint32_t read_le32(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
 }
 
 static void write_le16(uint8_t *bytes, uint16_t value) {
@@ -404,6 +416,46 @@ static void test_scene_asset(void) {
     assert(pvr_chunk_scene_asset_load(
                &scene_view, NULL, NULL, workspace, sizeof(workspace),
                models, 2, nodes, 2, &hierarchy) == -1);
+    assert(errno == ENOTSUP && hierarchy.nodes == NULL &&
+           hierarchy.node_count == 0);
+    {
+        const uint8_t *model_bytes = (const uint8_t *)models;
+        const uint8_t *node_bytes = (const uint8_t *)nodes;
+        size_t index;
+
+        for(index = 0; index < sizeof(models); ++index)
+            assert(model_bytes[index] == 0);
+        for(index = 0; index < sizeof(nodes); ++index)
+            assert(node_bytes[index] == 0);
+    }
+
+    {
+        uint8_t *directory = asset +
+            PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
+        uint8_t *polygon_descriptor = directory +
+            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+        size_t polygon_offset = read_le32(polygon_descriptor + 8);
+
+        assert(sizeof(deferred_scene_polygons) == sizeof(scene_polygons));
+        memcpy(asset + polygon_offset, deferred_scene_polygons,
+               sizeof(deferred_scene_polygons));
+        write_le32(polygon_descriptor + 20,
+                   crc32_bytes(deferred_scene_polygons,
+                               sizeof(deferred_scene_polygons)));
+        write_le32(asset + 44,
+                   crc32_bytes(directory,
+                               6u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES));
+        write_le32(asset + 60, crc32_bytes(asset, 60));
+    }
+    assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+    assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+    memset(models, 0xa5, sizeof(models));
+    memset(nodes, 0xa5, sizeof(nodes));
+    memset(&hierarchy, 0xa5, sizeof(hierarchy));
+    assert(pvr_chunk_scene_asset_load(
+               &scene_view, copy_decoder, NULL,
+               workspace, sizeof(workspace), models, 2, nodes, 2,
+               &hierarchy) == -1);
     assert(errno == ENOTSUP && hierarchy.nodes == NULL &&
            hierarchy.node_count == 0);
     {

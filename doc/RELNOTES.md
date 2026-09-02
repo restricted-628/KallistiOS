@@ -19,7 +19,9 @@ lifecycle and naming conventions.
   temporary model-pointer table or per-model workspace reconstruction, while
   ownership of memory, animation, rendering, and scene lifetime stays explicit.
   Multi-model host output is round-tripped through this same coherent loader,
-  including independently compressed model streams.
+  including independently compressed model streams. Canonical scene loading
+  rejects import-only cross-hierarchy execution controls before publishing any
+  model or node, leaving their resolution solely to host compilation.
 
 * Completed the authored cell-sprite integration path with a build-generated
   PCA1 example spanning independent streams, priority sorting, per-corner

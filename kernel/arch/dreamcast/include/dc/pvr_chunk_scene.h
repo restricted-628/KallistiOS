@@ -171,10 +171,12 @@ int pvr_chunk_scene_asset_workspace_query(
     The caller supplies one model view per model and one node per hierarchy
     record. Decoded model bytes remain in \p workspace for as long as any
     published model or hierarchy is used. A zero-byte workspace requirement
-    permits NULL workspace. On failure, no hierarchy is published and both
-    output arrays are cleared if a model decode or hierarchy bind fails after
-    loading begins; decoder writes to workspace may remain. Argument,
-    capacity, and workspace preflight failures do not modify the arrays.
+    permits NULL workspace. Every loaded model must be runtime-ready; streams
+    that still require host canonicalization are rejected with ENOTSUP. On
+    failure, no hierarchy is published and both output arrays are cleared if a
+    model decode or hierarchy bind fails after loading begins; decoder writes
+    to workspace may remain. Argument, capacity, and workspace preflight
+    failures do not modify the arrays.
 
     No allocation, clock, renderer, list, or scene lifecycle is introduced.
 */

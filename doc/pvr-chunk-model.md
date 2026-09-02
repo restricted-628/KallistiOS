@@ -451,10 +451,12 @@ hierarchy model ordinal before publishing a coherent view.
 `pvr_chunk_scene_asset_workspace_query()` combines all persistent model decode
 requirements into one aligned nonoverlapping span, while
 `pvr_chunk_scene_asset_load()` fills caller-owned contiguous model and node
-arrays and binds the final hierarchy atomically. The helper owns no allocation,
-decoder, animation state, renderer, list, or scene lifecycle; applications
-that need encoded scene metadata can continue using the individual generic
-section APIs.
+arrays and binds the final hierarchy atomically. Models that still report a
+host-canonicalization requirement are rejected before publication, so a
+canonical scene never retains import-only cross-hierarchy execution state.
+The helper owns no allocation, decoder, animation state, renderer, list, or
+scene lifecycle; applications that need encoded scene metadata can continue
+using the individual generic section APIs.
 
 ## Rendering boundary
 

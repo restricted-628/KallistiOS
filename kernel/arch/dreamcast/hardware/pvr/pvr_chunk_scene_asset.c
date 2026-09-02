@@ -281,6 +281,13 @@ int pvr_chunk_scene_asset_load(
                decoder, decoder_data, model_workspace,
                model_requirements.bytes, &models[model]) < 0)
             goto fail;
+        /* Canonical scene assets publish only runtime-ready model streams.
+           Import-only execution controls must be resolved by the host before
+           a hierarchy can retain the model view. */
+        if(models[model].info.requirements) {
+            errno = ENOTSUP;
+            goto fail;
+        }
         cursor = offset + model_requirements.bytes;
     }
     if(cursor != requirements.bytes) {
