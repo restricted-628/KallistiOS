@@ -158,6 +158,9 @@ This page serves as an index for all KallistiOS examples.
   - [**chunk_asset_disc**](pvr/chunk_asset_disc/): Reads a compact-model asset
     through direct GD-DMA and optionally a leased GAPS/G2 staging path, then
     verifies LZ4 decoding and reports separate transport and decode timings
+  - [**chunk_opacity**](pvr/chunk_opacity/): Compiles one glTF mesh with
+    opaque, masked, and blended materials, then routes its prepared strips to
+    the matching PVR lists without duplicating model storage
   - [**chunk_resources**](pvr/chunk_resources/): Converts and embeds a compact
     model, then resolves its texture identifiers through a pre-acquired
     fixed-slot residency set, checked materials, and an admitted signed-light

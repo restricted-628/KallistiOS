@@ -1,0 +1,70 @@
+{
+  "asset": { "version": "2.0" },
+  "buffers": [
+    {
+      "byteLength": 244,
+      "uri": "data:application/octet-stream;base64,AAAgQgAADEMAAIA/AABIQwAADEMAAIA/AAAgQgAAqkMAAIA/AABIQwAAqkMAAIA/AAABAAIAAgABAAMAAABwQwAADEMAAIA/AADIQwAADEMAAIA/AABwQwAAqkMAAIA/AADIQwAAqkMAAIA/AACAPwAAgD8AAIA/AAAAAAAAgD8AAIA/AACAPwAAgD8AAIA/AACAPwAAgD8AAAAAAACAPwAAgD8AAIA/AACAPwAAAQACAAIAAQADAAAA3EMAAAxDAACAPwAAFkQAAAxDAACAPwAA3EMAAKpDAACAPwAAFkQAAKpDAACAPwAAAQACAAIAAQADAA=="
+    }
+  ],
+  "bufferViews": [
+    { "buffer": 0, "byteOffset": 0, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 48, "byteLength": 12, "target": 34963 },
+    { "buffer": 0, "byteOffset": 60, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 108, "byteLength": 64, "target": 34962 },
+    { "buffer": 0, "byteOffset": 172, "byteLength": 12, "target": 34963 },
+    { "buffer": 0, "byteOffset": 184, "byteLength": 48, "target": 34962 },
+    { "buffer": 0, "byteOffset": 232, "byteLength": 12, "target": 34963 }
+  ],
+  "accessors": [
+    { "bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 1, "componentType": 5123, "count": 6, "type": "SCALAR" },
+    { "bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 3, "componentType": 5126, "count": 4, "type": "VEC4" },
+    { "bufferView": 4, "componentType": 5123, "count": 6, "type": "SCALAR" },
+    { "bufferView": 5, "componentType": 5126, "count": 4, "type": "VEC3" },
+    { "bufferView": 6, "componentType": 5123, "count": 6, "type": "SCALAR" }
+  ],
+  "materials": [
+    {
+      "name": "opaque",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [1.0, 0.2, 0.1, 1.0]
+      },
+      "alphaMode": "OPAQUE"
+    },
+    {
+      "name": "masked",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.2, 1.0, 0.2, 1.0]
+      },
+      "alphaMode": "MASK",
+      "alphaCutoff": 0.5,
+      "doubleSided": true
+    },
+    {
+      "name": "blended",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [0.2, 0.4, 1.0, 0.5]
+      },
+      "alphaMode": "BLEND",
+      "doubleSided": true
+    }
+  ],
+  "meshes": [
+    {
+      "name": "opacity-panels",
+      "primitives": [
+        { "attributes": { "POSITION": 0 }, "indices": 1, "material": 0 },
+        {
+          "attributes": { "POSITION": 2, "COLOR_0": 3 },
+          "indices": 4,
+          "material": 1
+        },
+        { "attributes": { "POSITION": 5 }, "indices": 6, "material": 2 }
+      ]
+    }
+  ],
+  "nodes": [{ "mesh": 0 }],
+  "scenes": [{ "nodes": [0] }],
+  "scene": 0
+}
