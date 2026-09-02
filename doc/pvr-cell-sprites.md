@@ -95,11 +95,21 @@ the optimized implementation. Tiny mask application, color packing, and
 priority comparisons remain scalar because converting those operations into
 vector math would add overhead without useful parallel work.
 
-## Remaining cell work
+## Authoring and material-routing closure
 
 The core stream/list, transform, priority, material metadata, color, and 2D/3D
-geometry paths are complete. The remaining optional integration work is:
+geometry paths are complete. `pvr-cell-convert` provides host-side declarative
+authoring for atlas regions, base cell tables, independent stream lists, and
+every partial key field. It emits checked PCA1 state plus normalized atlas
+geometry rather than introducing a target-side content parser.
 
-- host-side scene/compiler support for authoring stream lists and cell tables;
-- an integration example that routes multiple materials through one resolved
-  cell sprite.
+`examples/dreamcast/pvr/cell_asset` exercises that production path end to end.
+It materializes one authored asset, samples and priority-sorts one resolved
+sprite, then filters its material identifiers into opaque, punch-through, and
+translucent passes. The example also exercises per-corner colored quads; their
+rectangle-order A/B/C/D attributes are reordered to the A/B/D/C topology
+required by a complete triangle strip.
+
+Texture conversion and general scene-editor import remain separate host-tool
+concerns. They do not require another cell runtime or changes to the PCA1
+contract.

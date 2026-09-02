@@ -1,0 +1,40 @@
+# Authored cell-sprite fixture with three independently routed materials.
+pvr-cell 1
+
+region 0 0 16 16 8 8
+region 16 0 16 16 8 8
+region 32 0 16 16 8 8
+region 48 0 16 16 8 8
+region 0 16 16 16 8 8
+region 16 16 16 16 8 8
+
+cell 0 -180 -60 0 0 5 5 0 0 0 0xffffffff 0xffffc0c0 0xffff8080 0xffffffff 0 0 0 0
+cell 1 -180 60 0 0 5 5 1 0 0 0xffffffff 0xffffff80 0xffffc040 0xffffffff 0 0 0 0
+cell 2 0 -60 0 0 5 5 2 0 1 0xffffffff 0xff80ff80 0xff40c040 0xffffffff 0 0 0 0
+cell 3 0 60 0 0 5 5 3 0 1 0xffffffff 0xff80ffff 0xff40c0c0 0xffffffff 0 0 0 0
+cell 4 180 -60 0 0 5 5 4 0 2 0xffffffff 0xff8080ff 0xff4040c0 0xffffffff 0 0 0 0
+cell 5 180 60 0 0 5 5 5 0 2 0xffffffff 0xffff80ff 0xffc040c0 0xffffffff 0 0 0 0
+
+stream 0 3 repeat
+key-atlas 0 0 0
+key-rotation 0 1 0
+key-atlas 1 0 1
+key-rotation 1 1 0.25
+key-atlas 2 0 0
+key-rotation 2 1 -0.25
+end-stream
+
+stream 0.4 3 repeat
+key-flags 0 3 0
+key-flags 1 3 1
+key-flags 2 3 2
+end-stream
+
+stream 0.8 3 repeat
+key-scale 0 5 5 5
+key-diffuse 0 4 0xffffffff 0xff8080ff 0xff4040c0 0xffffffff
+key-scale 1 5 6 4
+key-diffuse 1 4 0xffc0c0ff 0xff6060ff 0xff303080 0xffc0c0ff
+key-scale 2 5 4 6
+key-diffuse 2 4 0xff8080ff 0xff4040c0 0xff202060 0xff8080ff
+end-stream

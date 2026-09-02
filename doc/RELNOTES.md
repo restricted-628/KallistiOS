@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Completed the authored cell-sprite integration path with a build-generated
+  PCA1 example spanning independent streams, priority sorting, per-corner
+  color, and opaque/punch-through/translucent material routing. Corrected the
+  colored-cell quad compiler to map rectangle-order A/B/C/D corners into the
+  A/B/D/C order required by a complete triangle strip; the previous order
+  overlapped two upper triangles and left part of each cell uncovered.
+
 * Added exact cubic Hermite animation throughout the generic runtime and
   pointer-free Compact asset pipeline. Scalar, vector, and quaternion tracks
   preserve independent incoming and outgoing time derivatives; quaternion

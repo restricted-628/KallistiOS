@@ -891,6 +891,11 @@ static int build_colored_quad(const pvr_sprite_cell_t *cell,
                               const pvr_cell_resolved_t *resolved,
                               const pvr_sprite_billboard_basis_t *basis,
                               pvr_vertex_t output[4]) {
+    /* Cell colors and hardware sprite corners use rectangle order A/B/C/D:
+       bottom-left, top-left, top-right, bottom-right. A four-vertex triangle
+       strip instead needs A/B/D/C so its shared edge is the rectangle's
+       diagonal rather than its top edge. */
+    static const uint8_t strip_order[4] = { 0u, 1u, 3u, 2u };
     const pvr_sprite_instance_t *instance = &resolved->instance;
     float left = -cell->origin_x * cell->width * instance->scale_x;
     float right = (1.0f - cell->origin_x) * cell->width * instance->scale_x;
@@ -937,8 +942,11 @@ static int build_colored_quad(const pvr_sprite_cell_t *cell,
 
     memset(output, 0, 4u * sizeof(*output));
     for(i = 0; i < 4u; ++i) {
-        float rotated_x = local_x[i] * cosine - local_y[i] * sine;
-        float rotated_y = local_x[i] * sine + local_y[i] * cosine;
+        size_t corner = strip_order[i];
+        float rotated_x = local_x[corner] * cosine -
+                          local_y[corner] * sine;
+        float rotated_y = local_x[corner] * sine +
+                          local_y[corner] * cosine;
 
         output[i].x = instance->position.x +
                       basis->x_axis.x * rotated_x +
@@ -950,8 +958,8 @@ static int build_colored_quad(const pvr_sprite_cell_t *cell,
                       basis->x_axis.z * rotated_x +
                       basis->y_axis.z * rotated_y;
         output[i].flags = i == 3u ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
-        output[i].argb = resolved->argb[i];
-        output[i].oargb = resolved->oargb[i];
+        output[i].argb = resolved->argb[corner];
+        output[i].oargb = resolved->oargb[corner];
         if(!finite3(output[i].x, output[i].y, output[i].z)) {
             errno = ERANGE;
             return -1;
@@ -962,9 +970,9 @@ static int build_colored_quad(const pvr_sprite_cell_t *cell,
     output[1].u = u_left;
     output[1].v = v_top;
     output[2].u = u_right;
-    output[2].v = v_top;
+    output[2].v = v_bottom;
     output[3].u = u_right;
-    output[3].v = v_bottom;
+    output[3].v = v_top;
     return 0;
 }
 

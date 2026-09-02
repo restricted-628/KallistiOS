@@ -151,6 +151,9 @@ This page serves as an index for all KallistiOS examples.
 - pvr
   - background_plane
   - bumpmap
+  - [**cell_asset**](pvr/cell_asset/): Compiles a declarative cell manifest
+    into PCA1, then materializes, animates, priority-sorts, and routes one
+    resolved cell sprite across opaque, punch-through, and translucent lists
   - cheap_shadow
   - [**chunk_asset**](pvr/chunk_asset/): Generates a versioned compact-model
     asset, LZ4-compresses its vertex partition, and loads it through exact

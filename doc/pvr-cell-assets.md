@@ -58,3 +58,8 @@ runtime views borrow the decoded arrays rather than serialized storage.
 Atlas-cell indices and material identifiers are deliberately opaque. They are
 resolved by the same application atlas and pass-routing policy used for cells
 authored directly in C.
+
+`examples/dreamcast/pvr/cell_asset` is the complete build and runtime example:
+it creates an atlas fixture, compiles a declarative manifest, embeds PCA1,
+materializes it into fixed caller-owned arrays, samples three streams, and
+routes the resolved cells across three PVR polygon lists.

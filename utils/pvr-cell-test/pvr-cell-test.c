@@ -444,18 +444,28 @@ static void test_compile_and_failures(void) {
     assert(close_enough(colored[0].y, 84.0f));
     assert(colored[0].argb == UINT32_C(0xff112233));
     assert(colored[1].argb == UINT32_C(0xff445566));
-    assert(colored[2].argb == UINT32_C(0xff778899));
-    assert(colored[3].argb == UINT32_C(0xffaabbcc));
+    assert(colored[2].argb == UINT32_C(0xffaabbcc));
+    assert(colored[3].argb == UINT32_C(0xff778899));
     assert(colored[0].flags == PVR_CMD_VERTEX);
     assert(colored[3].flags == PVR_CMD_VERTEX_EOL);
     assert(close_enough(colored[0].u, 0.0f));
     assert(close_enough(colored[0].v, 1.0f));
+    assert(close_enough(colored[2].x, 108.0f));
+    assert(close_enough(colored[2].y, 84.0f));
+    assert(close_enough(colored[2].u, 0.5f));
+    assert(close_enough(colored[2].v, 1.0f));
+    assert(close_enough(colored[3].x, 108.0f));
+    assert(close_enough(colored[3].y, 76.0f));
+    assert(close_enough(colored[3].u, 0.5f));
+    assert(close_enough(colored[3].v, 0.0f));
 
     assert(pvr_cell_sprite_compile_colored_3d(colored, 8, &atlas, resolved,
                                               2, &basis, &identity,
                                               &result) == 0);
     assert(result.produced_sprites == 1);
     assert(colored[0].argb == UINT32_C(0xff112233));
+    assert(colored[2].argb == UINT32_C(0xffaabbcc));
+    assert(colored[3].argb == UINT32_C(0xff778899));
 
     memset(&unchanged, 0x5a, sizeof(unchanged));
     before = unchanged;

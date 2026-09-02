@@ -256,6 +256,8 @@ int pvr_cell_sprite_compile_3d(
     use uniform material color should prefer pvr_cell_sprite_compile_2d(),
     whose hardware sprite packet uses half as much vertex storage. Material
     identifiers remain in the resolved records for caller-owned pass routing.
+    Rectangle-order A/B/C/D attributes are mapped internally to the A/B/D/C
+    vertex order required by a complete four-vertex triangle strip.
 */
 int pvr_cell_sprite_compile_colored_2d(
     pvr_vertex_t *output, size_t output_capacity,
