@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added exact affine matrix fallback decomposition to glTF animation import.
+  Static matrix-authored nodes can now coexist with animated TRS nodes when
+  their transforms are losslessly expressible as translation, quaternion
+  rotation, and signed scale. Shear, degenerate axes, and matrix-authored TRS
+  animation targets remain explicit errors rather than changing semantics.
+
 * Added explicit Compact Model discontinuity and general-N skin conformance.
   Golden host fixtures prove that shared position indices retain independent
   per-reference UVs and hard normals, and that multiple glTF joint/weight sets

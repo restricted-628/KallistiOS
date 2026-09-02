@@ -1904,6 +1904,183 @@ fail:
     return -1;
 }
 
+static int gltf_matrix_fallback(const float matrix[16],
+                                anim_transform_t *fallback) {
+    /* PCH1 retains an arbitrary local matrix, but PAT1 evaluates TRS. Accept
+       a static matrix in an animated scene only when its column axes are
+       orthogonal, preserve a reflection as signed X scale, and rebuild the
+       matrix before publishing the fallback. */
+    double axis[3][3];
+    double scale[3];
+    double rotation[9];
+    double quaternion[4];
+    double determinant;
+    double magnitude;
+    double value;
+    size_t column;
+    size_t row;
+    size_t component;
+
+    for(component = 0; component < 16; ++component) {
+        if(!isfinite(matrix[component])) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    if(fabs((double)matrix[3]) > 64.0 * FLT_EPSILON ||
+       fabs((double)matrix[7]) > 64.0 * FLT_EPSILON ||
+       fabs((double)matrix[11]) > 64.0 * FLT_EPSILON ||
+       fabs((double)matrix[15] - 1.0) > 64.0 * FLT_EPSILON) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    for(column = 0; column < 3; ++column) {
+        magnitude = 0.0;
+        for(row = 0; row < 3; ++row) {
+            value = matrix[column * 4u + row];
+            magnitude += value * value;
+        }
+        scale[column] = sqrt(magnitude);
+        if(!(scale[column] > FLT_MIN) || !isfinite(scale[column])) {
+            errno = ENOTSUP;
+            return -1;
+        }
+        for(row = 0; row < 3; ++row)
+            axis[column][row] =
+                matrix[column * 4u + row] / scale[column];
+    }
+    for(column = 0; column < 3; ++column) {
+        size_t other;
+
+        for(other = column + 1u; other < 3; ++other) {
+            double dot = axis[column][0] * axis[other][0] +
+                         axis[column][1] * axis[other][1] +
+                         axis[column][2] * axis[other][2];
+
+            if(fabs(dot) > 128.0 * FLT_EPSILON) {
+                errno = ENOTSUP;
+                return -1;
+            }
+        }
+    }
+    determinant =
+        axis[0][0] * (axis[1][1] * axis[2][2] -
+                      axis[1][2] * axis[2][1]) -
+        axis[1][0] * (axis[0][1] * axis[2][2] -
+                      axis[0][2] * axis[2][1]) +
+        axis[2][0] * (axis[0][1] * axis[1][2] -
+                      axis[0][2] * axis[1][1]);
+    if(determinant < 0.0) {
+        scale[0] = -scale[0];
+        for(row = 0; row < 3; ++row)
+            axis[0][row] = -axis[0][row];
+        determinant = -determinant;
+    }
+    if(fabs(determinant - 1.0) > 256.0 * FLT_EPSILON) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    value = axis[0][0] + axis[1][1] + axis[2][2];
+    if(value > 0.0) {
+        magnitude = sqrt(value + 1.0) * 2.0;
+        quaternion[0] = 0.25 * magnitude;
+        quaternion[1] = (axis[1][2] - axis[2][1]) / magnitude;
+        quaternion[2] = (axis[2][0] - axis[0][2]) / magnitude;
+        quaternion[3] = (axis[0][1] - axis[1][0]) / magnitude;
+    }
+    else if(axis[0][0] > axis[1][1] &&
+            axis[0][0] > axis[2][2]) {
+        magnitude = sqrt(1.0 + axis[0][0] - axis[1][1] -
+                         axis[2][2]) * 2.0;
+        quaternion[0] = (axis[1][2] - axis[2][1]) / magnitude;
+        quaternion[1] = 0.25 * magnitude;
+        quaternion[2] = (axis[1][0] + axis[0][1]) / magnitude;
+        quaternion[3] = (axis[2][0] + axis[0][2]) / magnitude;
+    }
+    else if(axis[1][1] > axis[2][2]) {
+        magnitude = sqrt(1.0 + axis[1][1] - axis[0][0] -
+                         axis[2][2]) * 2.0;
+        quaternion[0] = (axis[2][0] - axis[0][2]) / magnitude;
+        quaternion[1] = (axis[1][0] + axis[0][1]) / magnitude;
+        quaternion[2] = 0.25 * magnitude;
+        quaternion[3] = (axis[2][1] + axis[1][2]) / magnitude;
+    }
+    else {
+        magnitude = sqrt(1.0 + axis[2][2] - axis[0][0] -
+                         axis[1][1]) * 2.0;
+        quaternion[0] = (axis[0][1] - axis[1][0]) / magnitude;
+        quaternion[1] = (axis[2][0] + axis[0][2]) / magnitude;
+        quaternion[2] = (axis[2][1] + axis[1][2]) / magnitude;
+        quaternion[3] = 0.25 * magnitude;
+    }
+    magnitude = sqrt(quaternion[0] * quaternion[0] +
+                     quaternion[1] * quaternion[1] +
+                     quaternion[2] * quaternion[2] +
+                     quaternion[3] * quaternion[3]);
+    if(!(magnitude > 0.0) || !isfinite(magnitude)) {
+        errno = EILSEQ;
+        return -1;
+    }
+    for(component = 0; component < 4; ++component)
+        quaternion[component] /= magnitude;
+
+    rotation[0] = 1.0 - 2.0 *
+        (quaternion[2] * quaternion[2] +
+         quaternion[3] * quaternion[3]);
+    rotation[1] = 2.0 *
+        (quaternion[1] * quaternion[2] +
+         quaternion[3] * quaternion[0]);
+    rotation[2] = 2.0 *
+        (quaternion[1] * quaternion[3] -
+         quaternion[2] * quaternion[0]);
+    rotation[3] = 2.0 *
+        (quaternion[1] * quaternion[2] -
+         quaternion[3] * quaternion[0]);
+    rotation[4] = 1.0 - 2.0 *
+        (quaternion[1] * quaternion[1] +
+         quaternion[3] * quaternion[3]);
+    rotation[5] = 2.0 *
+        (quaternion[2] * quaternion[3] +
+         quaternion[1] * quaternion[0]);
+    rotation[6] = 2.0 *
+        (quaternion[1] * quaternion[3] +
+         quaternion[2] * quaternion[0]);
+    rotation[7] = 2.0 *
+        (quaternion[2] * quaternion[3] -
+         quaternion[1] * quaternion[0]);
+    rotation[8] = 1.0 - 2.0 *
+        (quaternion[1] * quaternion[1] +
+         quaternion[2] * quaternion[2]);
+    for(column = 0; column < 3; ++column) {
+        for(row = 0; row < 3; ++row) {
+            double source = matrix[column * 4u + row];
+            double rebuilt = rotation[column * 3u + row] * scale[column];
+            double tolerance = 256.0 * FLT_EPSILON *
+                               fmax(1.0, fabs(source));
+
+            if(fabs(rebuilt - source) > tolerance) {
+                errno = ENOTSUP;
+                return -1;
+            }
+        }
+    }
+
+    fallback->translation.x = matrix[12];
+    fallback->translation.y = matrix[13];
+    fallback->translation.z = matrix[14];
+    fallback->translation.w = 1.0f;
+    fallback->rotation.w = (float)quaternion[0];
+    fallback->rotation.x = (float)quaternion[1];
+    fallback->rotation.y = (float)quaternion[2];
+    fallback->rotation.z = (float)quaternion[3];
+    fallback->scale.x = (float)scale[0];
+    fallback->scale.y = (float)scale[1];
+    fallback->scale.z = (float)scale[2];
+    fallback->scale.w = 0.0f;
+    return 0;
+}
+
 static int gltf_animation_fallbacks(
     const cgltf_data *data, const size_t *node_to_scene,
     const pvr_scene_ir_t *scene, gltf_asset_metadata_t *metadata) {
@@ -1919,12 +2096,19 @@ static int gltf_animation_fallbacks(
 
         if(scene_index == SIZE_MAX)
             continue;
-        if(scene_index >= scene->node_count || source->has_matrix) {
-            errno = ENOTSUP;
+        if(scene_index >= scene->node_count) {
+            errno = EILSEQ;
             return -1;
         }
         transform = &metadata->animation_transforms[scene_index];
         visibility = &metadata->animation_visibility[scene_index];
+        if(source->has_matrix) {
+            if(gltf_matrix_fallback(source->matrix,
+                                    &transform->fallback) < 0)
+                return -1;
+            visibility->fallback = true;
+            continue;
+        }
         transform->fallback.translation.x = source->has_translation ?
             source->translation[0] : 0.0f;
         transform->fallback.translation.y = source->has_translation ?
@@ -2015,6 +2199,11 @@ static int gltf_build_animation(const cgltf_data *data,
                 cgltf_interpolation_type_linear) ||
            source->sampler->input->type != cgltf_type_scalar ||
            !source->sampler->input->count) {
+            errno = ENOTSUP;
+            return -1;
+        }
+        if(source->target_path != cgltf_animation_path_type_weights &&
+           source->target_node->has_matrix) {
             errno = ENOTSUP;
             return -1;
         }

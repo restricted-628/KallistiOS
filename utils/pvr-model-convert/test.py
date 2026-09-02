@@ -7,6 +7,7 @@ Copyright (C) 2026 Joseph Black
 import os
 import base64
 import json
+import math
 import pathlib
 import shlex
 import struct
@@ -1493,6 +1494,62 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<5fI", gltf_animation, 232) == (
             2.0, 0.0, 5.0, 0.0, 1.0, 0
         )
+
+        matrix_animation_document = json.loads(
+            gltf_animation_source.read_text(encoding="utf-8")
+        )
+        matrix_animation_document["nodes"][0] = {
+            "matrix": [
+                2.0, 0.0, 0.0, 0.0,
+                0.0, 3.0, 0.0, 0.0,
+                0.0, 0.0, -4.0, 0.0,
+                2.0, 4.0, 6.0, 1.0,
+            ],
+            "children": [1],
+        }
+        matrix_animation_source = root / "matrix-animation.gltf"
+        matrix_animation_source.write_text(
+            json.dumps(matrix_animation_document), encoding="utf-8"
+        )
+        matrix_animation_asset = root / "matrix-animation.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            matrix_animation_source, matrix_animation_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        matrix_animation_bytes = matrix_animation_asset.read_bytes()
+        matrix_animation_descriptor = struct.unpack_from(
+            "<7IHH", matrix_animation_bytes, 64 + 3 * 32
+        )
+        matrix_animation = matrix_animation_bytes[
+            matrix_animation_descriptor[2]:
+            matrix_animation_descriptor[2] + matrix_animation_descriptor[3]
+        ]
+        matrix_fallback = struct.unpack_from(
+            "<4I3f4f3f2I", matrix_animation, 64
+        )
+        assert matrix_fallback[:4] == (0xffffffff,) * 4
+        assert matrix_fallback[4:7] == (2.0, 4.0, 6.0)
+        assert math.isclose(matrix_fallback[7], 0.0, abs_tol=1e-6)
+        assert math.isclose(matrix_fallback[8], 0.0, abs_tol=1e-6)
+        assert math.isclose(abs(matrix_fallback[9]), 1.0, abs_tol=1e-6)
+        assert math.isclose(matrix_fallback[10], 0.0, abs_tol=1e-6)
+        assert matrix_fallback[11:14] == (-2.0, 3.0, 4.0)
+        assert matrix_fallback[14:] == (1, 0)
+
+        sheared_animation_document = json.loads(
+            json.dumps(matrix_animation_document)
+        )
+        sheared_animation_document["nodes"][0]["matrix"][4] = 0.25
+        sheared_animation_source = root / "sheared-animation.gltf"
+        sheared_animation_source.write_text(
+            json.dumps(sheared_animation_document), encoding="utf-8"
+        )
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            sheared_animation_source, root / "sheared-animation.pcm",
+        )
+        assert result.returncode != 0
 
         directory_lz4 = root / "triangle-directory-lz4.pcm"
         result = invoke(

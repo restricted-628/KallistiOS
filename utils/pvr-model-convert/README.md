@@ -50,8 +50,10 @@ boundaries include required extensions, GPU instancing, non-triangle primitives,
 tangent/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
 materials, detached skin joints, conflicting skins on repeated mesh instances,
-multiple animations, matrix-authored nodes in an animated scene, and
-cubic-spline tracks.
+multiple animations, matrix-authored animation targets, and cubic-spline
+tracks. Static matrix-authored nodes in an animated scene are admitted when
+their affine transform decomposes exactly into translation, quaternion
+rotation, and signed scale; shear and degenerate axes are rejected.
 The latter use Hermite tangents and are not silently mapped to the runtime's
 Catmull-Rom interpolation. PBR base color, metallic, and roughness are converted
 deterministically into compact diffuse, ambient, specular, and exponent state;
