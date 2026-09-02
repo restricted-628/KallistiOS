@@ -11,6 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added coherent allocation-free PCM2 scene loading. A checked scene-asset
+  view joins the unique model table and hierarchy, validates their
+  cross-section ordinals, computes one persistent decode span for every model,
+  materializes the complete model set, and binds hierarchy nodes directly to
+  contiguous caller-owned model views. Applications no longer need a
+  temporary model-pointer table or per-model workspace reconstruction, while
+  ownership of memory, animation, rendering, and scene lifetime stays explicit.
+
 * Completed the authored cell-sprite integration path with a build-generated
   PCA1 example spanning independent streams, priority sorting, per-corner
   color, and opaque/punch-through/translucent material routing. Corrected the

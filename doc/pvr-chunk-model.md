@@ -443,6 +443,19 @@ Transform-only nodes are represented by the stable no-model ordinal. The
 binding path allocates nothing, retains no hidden state, and rejects output
 overlap with the serialized source.
 
+Canonical PCM2 scene assets can join those pieces without application-side
+pointer reconstruction. `pvr_chunk_scene_asset_open()` requires one directly
+readable model table and hierarchy, verifies both payload CRCs, validates every
+typed model-table ordinal against the enclosing container, and checks every
+hierarchy model ordinal before publishing a coherent view.
+`pvr_chunk_scene_asset_workspace_query()` combines all persistent model decode
+requirements into one aligned nonoverlapping span, while
+`pvr_chunk_scene_asset_load()` fills caller-owned contiguous model and node
+arrays and binds the final hierarchy atomically. The helper owns no allocation,
+decoder, animation state, renderer, list, or scene lifecycle; applications
+that need encoded scene metadata can continue using the individual generic
+section APIs.
+
 ## Rendering boundary
 
 The stream layer describes and validates model data; it does not own PVR scene

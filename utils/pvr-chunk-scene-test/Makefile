@@ -9,9 +9,13 @@ LDLIBS += -lm
 TARGET = pvr-chunk-scene-test
 SOURCES = pvr-chunk-scene-test.c \
           ../pvr-model-convert/pvr-scene-ir.c \
+          ../pvr-model-convert/pvr-model-table-ir.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model_table.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_volume_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c

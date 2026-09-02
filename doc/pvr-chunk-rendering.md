@@ -390,8 +390,10 @@ format, deformation, or tooling gaps:
    sections without placeholders, and the host importer emits mixed
    transform-only, morph-only, and combined glTF clips through it. Continue
    wider modern scene import,
-   hierarchy/evaluation metadata, parent-result canonicalization, elimination
-   of deferred polygon controls, and repeatable scene-level conformance.
+   parent-result canonicalization, elimination of deferred polygon controls,
+   and repeatable scene-level conformance. Target-side loading of the canonical
+   PCM2 model table and hierarchy is now one coherent allocation-free operation
+   over caller-owned model, node, and persistent decode storage.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose
    deformation. PCH1 version 2 supplies component suppression, hidden-node
    evaluation, and noncontiguous descendant pruning; PAT1 version 3 supplies

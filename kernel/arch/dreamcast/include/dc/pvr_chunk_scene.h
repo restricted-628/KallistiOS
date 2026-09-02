@@ -24,6 +24,7 @@ __BEGIN_DECLS
 #include <stdint.h>
 
 #include <dc/pvr_chunk_asset.h>
+#include <dc/pvr_chunk_model_table.h>
 
 /** \addtogroup pvr_chunk_model
     @{
@@ -65,6 +66,26 @@ typedef struct pvr_chunk_scene_node {
     uint32_t flags;        /**< PVR_CHUNK_NODE_* evaluation policy. */
 } pvr_chunk_scene_node_t;
 
+/** \brief Coherent checked view of one canonical PCM2 scene asset.
+
+    The view joins the container, its unique model table, and its unique
+    hierarchy section. Metadata remains borrowed from the immutable asset;
+    model streams are materialized separately into caller-owned storage.
+*/
+typedef struct pvr_chunk_scene_asset_view {
+    pvr_chunk_asset_view_t asset;
+    pvr_chunk_model_table_view_t model_table;
+    pvr_chunk_scene_hierarchy_view_t hierarchy;
+    size_t model_count;
+    size_t node_count;
+} pvr_chunk_scene_asset_view_t;
+
+/** \brief Persistent decode workspace for every model in one scene asset. */
+typedef struct pvr_chunk_scene_asset_workspace_requirements {
+    size_t alignment;
+    size_t bytes;
+} pvr_chunk_scene_asset_workspace_requirements_t;
+
 /** \brief Parse and completely validate a serialized hierarchy section.
 
     Nodes must be in parent-before-child order, every matrix component must be
@@ -104,6 +125,64 @@ int pvr_chunk_scene_hierarchy_node_get(
 int pvr_chunk_scene_hierarchy_bind(
     const pvr_chunk_scene_hierarchy_view_t *view,
     const pvr_chunk_model_view_t *const *models, size_t model_count,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy);
+
+/** \brief Bind scene nodes directly to a contiguous model-view array.
+
+    This form avoids constructing an intermediate pointer table after loading
+    every model in a scene asset. All validation, ownership, and publication
+    rules match pvr_chunk_scene_hierarchy_bind().
+*/
+int pvr_chunk_scene_hierarchy_bind_models(
+    const pvr_chunk_scene_hierarchy_view_t *view,
+    const pvr_chunk_model_view_t *models, size_t model_count,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy);
+
+/** \brief Open and cross-validate a canonical PCM2 scene asset.
+
+    The asset must contain exactly one raw, naturally aligned model-table
+    section and one raw, naturally aligned hierarchy section. Both metadata
+    payloads are CRC-checked, and every hierarchy model ordinal is checked
+    against the table before \p view is published. Model streams may use any
+    codec supported by the caller's later decoder.
+
+    Keeping scene metadata directly readable makes opening allocation-free.
+    Noncanonical assets may still materialize and use the individual section
+    APIs directly.
+*/
+int pvr_chunk_scene_asset_open(
+    const pvr_chunk_asset_view_t *asset,
+    pvr_chunk_scene_asset_view_t *view);
+
+/** \brief Query persistent decode storage for all scene models.
+
+    The returned span combines the exact per-model requirements with
+    nonoverlapping aligned slices. It excludes the caller-owned model-view and
+    hierarchy-node arrays.
+*/
+int pvr_chunk_scene_asset_workspace_query(
+    const pvr_chunk_scene_asset_view_t *view,
+    pvr_chunk_scene_asset_workspace_requirements_t *requirements);
+
+/** \brief Load every scene model and bind its hierarchy coherently.
+
+    The caller supplies one model view per model and one node per hierarchy
+    record. Decoded model bytes remain in \p workspace for as long as any
+    published model or hierarchy is used. A zero-byte workspace requirement
+    permits NULL workspace. On failure, no hierarchy is published and both
+    output arrays are cleared if a model decode or hierarchy bind fails after
+    loading begins; decoder writes to workspace may remain. Argument,
+    capacity, and workspace preflight failures do not modify the arrays.
+
+    No allocation, clock, renderer, list, or scene lifecycle is introduced.
+*/
+int pvr_chunk_scene_asset_load(
+    const pvr_chunk_scene_asset_view_t *view,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *models, size_t model_capacity,
     pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
     pvr_chunk_hierarchy_t *hierarchy);
 

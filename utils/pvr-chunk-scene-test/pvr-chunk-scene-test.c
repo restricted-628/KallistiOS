@@ -11,10 +11,38 @@
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
+#include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define VERTEX_HEADER(type, size) \
+    ((uint32_t)(type) | ((uint32_t)(size) << 16))
+
+static const uint32_t scene_vertices0[] = {
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10),
+    UINT32_C(0x00030000),
+    UINT32_C(0xbf800000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0x3f800000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0x3f800000), UINT32_C(0),
+    UINT32_C(0x000000ff)
+};
+
+static const uint32_t scene_vertices1[] = {
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10),
+    UINT32_C(0x00030000),
+    UINT32_C(0xc0000000), UINT32_C(0xc0000000), UINT32_C(0),
+    UINT32_C(0x40000000), UINT32_C(0xc0000000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0x40000000), UINT32_C(0),
+    UINT32_C(0x000000ff)
+};
+
+static const uint16_t scene_polygons[] = {
+    PVR_CHUNK_STRIP_INDEX, UINT16_C(5), UINT16_C(1),
+    UINT16_C(3), UINT16_C(0), UINT16_C(1), UINT16_C(2),
+    UINT16_C(0x00ff)
+};
 
 static uint32_t crc32_bytes(const void *data, size_t size) {
     const uint8_t *bytes = data;
@@ -45,6 +73,128 @@ static void write_le16(uint8_t *bytes, uint16_t value) {
     bytes[1] = (uint8_t)(value >> 8);
 }
 
+static void write_float(uint8_t *bytes, float value) {
+    uint32_t word;
+
+    memcpy(&word, &value, sizeof(word));
+    write_le32(bytes, word);
+}
+
+static size_t align32(size_t value) {
+    return (value + 31u) & ~(size_t)31u;
+}
+
+static void write_section(uint8_t *descriptor, uint32_t type,
+                          size_t offset, const void *stored,
+                          size_t stored_bytes, size_t decoded_bytes,
+                          uint16_t codec, uint16_t alignment) {
+    write_le32(descriptor, type);
+    write_le32(descriptor + 8, (uint32_t)offset);
+    write_le32(descriptor + 12, (uint32_t)stored_bytes);
+    write_le32(descriptor + 16, (uint32_t)decoded_bytes);
+    write_le32(descriptor + 20, crc32_bytes(stored, decoded_bytes));
+    write_le16(descriptor + 28, codec);
+    write_le16(descriptor + 30, alignment);
+}
+
+static void init_model_record(pvr_chunk_model_table_record_t *record,
+                              size_t ordinal, float center,
+                              float radius) {
+    memset(record, 0, sizeof(*record));
+    record->vertex_ordinal = ordinal;
+    record->polygon_ordinal = ordinal;
+    record->resource_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->volume_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->skin4_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->skin_general_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->skeleton_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->morph_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->cooked_cache_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->center[0] = center;
+    record->radius = radius;
+}
+
+static size_t build_scene_asset(uint8_t *asset, size_t capacity,
+                                const void *table, size_t table_bytes,
+                                const void *hierarchy,
+                                size_t hierarchy_bytes) {
+    const size_t section_count = 6;
+    const size_t directory_bytes = section_count *
+        PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+    size_t vertex0_offset = align32(
+        PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES + directory_bytes);
+    size_t polygon0_offset = align32(
+        vertex0_offset + sizeof(scene_vertices0));
+    size_t vertex1_offset = align32(
+        polygon0_offset + sizeof(scene_polygons));
+    size_t polygon1_offset = align32(
+        vertex1_offset + sizeof(scene_vertices1));
+    size_t table_offset = align32(
+        polygon1_offset + sizeof(scene_polygons));
+    size_t hierarchy_offset = align32(table_offset + table_bytes);
+    size_t file_bytes = hierarchy_offset + hierarchy_bytes;
+    uint8_t *directory = asset + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
+
+    assert(file_bytes <= capacity);
+    memset(asset, 0, capacity);
+    memcpy(asset + vertex0_offset, scene_vertices0,
+           sizeof(scene_vertices0));
+    memcpy(asset + polygon0_offset, scene_polygons,
+           sizeof(scene_polygons));
+    memcpy(asset + vertex1_offset, scene_vertices1,
+           sizeof(scene_vertices1));
+    memcpy(asset + polygon1_offset, scene_polygons,
+           sizeof(scene_polygons));
+    memcpy(asset + table_offset, table, table_bytes);
+    memcpy(asset + hierarchy_offset, hierarchy, hierarchy_bytes);
+
+    write_section(directory, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+                  vertex0_offset, scene_vertices0, sizeof(scene_vertices0),
+                  sizeof(scene_vertices0), PVR_CHUNK_ASSET_CODEC_RAW, 4);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                  PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+                  polygon0_offset, scene_polygons, sizeof(scene_polygons),
+                  sizeof(scene_polygons), PVR_CHUNK_ASSET_CODEC_RAW, 2);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 2u,
+                  PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+                  vertex1_offset, scene_vertices1, sizeof(scene_vertices1),
+                  sizeof(scene_vertices1),
+                  PVR_CHUNK_ASSET_CODEC_LZ4_FRAME, 4);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 3u,
+                  PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+                  polygon1_offset, scene_polygons, sizeof(scene_polygons),
+                  sizeof(scene_polygons), PVR_CHUNK_ASSET_CODEC_RAW, 2);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 4u,
+                  PVR_CHUNK_ASSET_SECTION_MODEL_TABLE,
+                  table_offset, table, table_bytes, table_bytes,
+                  PVR_CHUNK_ASSET_CODEC_RAW, 4);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 5u,
+                  PVR_CHUNK_ASSET_SECTION_HIERARCHY,
+                  hierarchy_offset, hierarchy, hierarchy_bytes,
+                  hierarchy_bytes, PVR_CHUNK_ASSET_CODEC_RAW, 4);
+
+    write_le32(asset, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
+    write_le16(asset + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
+    write_le16(asset + 6, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    write_le32(asset + 8, (uint32_t)file_bytes);
+    write_float(asset + 28, 4.0f);
+    write_le32(asset + 32, (uint32_t)section_count);
+    write_le32(asset + 36, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    write_le32(asset + 40, (uint32_t)directory_bytes);
+    write_le32(asset + 44, crc32_bytes(directory, directory_bytes));
+    write_le32(asset + 60, crc32_bytes(asset, 60));
+    return file_bytes;
+}
+
+static int copy_decoder(const pvr_chunk_asset_section_t *section,
+                        void *destination, size_t destination_bytes,
+                        void *data) {
+    (void)data;
+    assert(destination_bytes == section->decoded_bytes);
+    memcpy(destination, section->stored_data, destination_bytes);
+    return 0;
+}
+
 static void refresh_checksums(uint8_t *bytes, size_t size) {
     write_le32(bytes + 20, crc32_bytes(
         bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES,
@@ -62,9 +212,10 @@ static void test_round_trip(void) {
     pvr_scene_ir_t scene = { 0 };
     pvr_chunk_scene_hierarchy_view_t view;
     pvr_chunk_scene_node_t decoded;
-    pvr_chunk_model_view_t model0 = { 0 };
-    pvr_chunk_model_view_t model1 = { 0 };
-    const pvr_chunk_model_view_t *models[] = { &model0, &model1 };
+    pvr_chunk_model_view_t model_views[2] = { 0 };
+    const pvr_chunk_model_view_t *models[] = {
+        &model_views[0], &model_views[1]
+    };
     pvr_chunk_hierarchy_node_t nodes[3];
     pvr_chunk_hierarchy_t hierarchy;
     uint8_t *bytes = NULL;
@@ -94,12 +245,17 @@ static void test_round_trip(void) {
     assert(pvr_chunk_scene_hierarchy_bind(
                &view, models, 2, nodes, 3, &hierarchy) == 0);
     assert(hierarchy.nodes == nodes && hierarchy.node_count == 3);
-    assert(nodes[0].model == &model0 &&
-           nodes[1].model == NULL && nodes[2].model == &model1);
+    assert(nodes[0].model == &model_views[0] &&
+           nodes[1].model == NULL && nodes[2].model == &model_views[1]);
     assert(nodes[1].flags == PVR_CHUNK_NODE_HIDDEN &&
            nodes[2].parent_index == 1 && nodes[2].user_data == NULL &&
            nodes[2].flags == (PVR_CHUNK_NODE_SUPPRESS_TRANSLATION |
                               PVR_CHUNK_NODE_PRUNE_CHILDREN));
+    memset(nodes, 0, sizeof(nodes));
+    assert(pvr_chunk_scene_hierarchy_bind_models(
+               &view, model_views, 2, nodes, 3, &hierarchy) == 0);
+    assert(nodes[0].model == &model_views[0] &&
+           nodes[1].model == NULL && nodes[2].model == &model_views[1]);
 
     free(bytes);
     pvr_scene_ir_free(&scene);
@@ -188,10 +344,101 @@ static void test_ir_rejections(void) {
     pvr_scene_ir_free(&scene);
 }
 
+static void test_scene_asset(void) {
+    static const float child_transform[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        3.0f, 0.0f, 0.0f, 1.0f
+    };
+    pvr_chunk_model_table_record_t records[2];
+    pvr_scene_ir_t scene = { 0 };
+    pvr_chunk_asset_view_t asset_view;
+    pvr_chunk_scene_asset_view_t scene_view;
+    pvr_chunk_scene_asset_workspace_requirements_t requirements;
+    pvr_chunk_model_view_t models[2];
+    pvr_chunk_hierarchy_node_t nodes[2];
+    pvr_chunk_hierarchy_t hierarchy;
+    alignas(32) uint8_t asset[4096];
+    alignas(32) uint8_t workspace[sizeof(scene_vertices1)];
+    uint8_t *table = NULL;
+    uint8_t *hierarchy_bytes = NULL;
+    size_t table_bytes = 0;
+    size_t hierarchy_size = 0;
+    size_t asset_bytes;
+
+    init_model_record(&records[0], 0, 1.0f, 2.0f);
+    init_model_record(&records[1], 1, 3.0f, 4.0f);
+    assert(pvr_scene_ir_serialize_model_table(
+               records, 2, &table, &table_bytes) == 0);
+    assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
+    assert(pvr_scene_ir_add_node(
+               &scene, 0, 1, child_transform) == 0);
+    assert(pvr_scene_ir_serialize_hierarchy(
+               &scene, &hierarchy_bytes, &hierarchy_size) == 0);
+    asset_bytes = build_scene_asset(
+        asset, sizeof(asset), table, table_bytes,
+        hierarchy_bytes, hierarchy_size);
+
+    assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+    assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+    assert(scene_view.model_count == 2 && scene_view.node_count == 2);
+    assert(pvr_chunk_scene_asset_workspace_query(
+               &scene_view, &requirements) == 0);
+    assert(requirements.alignment == PVR_CHUNK_ASSET_ALIGNMENT &&
+           requirements.bytes == sizeof(scene_vertices1));
+    assert(pvr_chunk_scene_asset_load(
+               &scene_view, copy_decoder, NULL,
+               workspace, sizeof(workspace), models, 2, nodes, 2,
+               &hierarchy) == 0);
+    assert(hierarchy.nodes == nodes && hierarchy.node_count == 2);
+    assert(nodes[0].model == &models[0] &&
+           nodes[1].model == &models[1] && nodes[1].parent_index == 0);
+    assert(models[0].model.center[0] == 1.0f &&
+           models[0].model.radius == 2.0f &&
+           models[1].model.center[0] == 3.0f &&
+           models[1].model.radius == 4.0f);
+    memset(models, 0xa5, sizeof(models));
+    memset(nodes, 0xa5, sizeof(nodes));
+    memset(&hierarchy, 0xa5, sizeof(hierarchy));
+    assert(pvr_chunk_scene_asset_load(
+               &scene_view, NULL, NULL, workspace, sizeof(workspace),
+               models, 2, nodes, 2, &hierarchy) == -1);
+    assert(errno == ENOTSUP && hierarchy.nodes == NULL &&
+           hierarchy.node_count == 0);
+    {
+        const uint8_t *model_bytes = (const uint8_t *)models;
+        const uint8_t *node_bytes = (const uint8_t *)nodes;
+        size_t index;
+
+        for(index = 0; index < sizeof(models); ++index)
+            assert(model_bytes[index] == 0);
+        for(index = 0; index < sizeof(nodes); ++index)
+            assert(node_bytes[index] == 0);
+    }
+
+    scene.nodes[1].model_ordinal = 2;
+    free(hierarchy_bytes);
+    hierarchy_bytes = NULL;
+    assert(pvr_scene_ir_serialize_hierarchy(
+               &scene, &hierarchy_bytes, &hierarchy_size) == 0);
+    asset_bytes = build_scene_asset(
+        asset, sizeof(asset), table, table_bytes,
+        hierarchy_bytes, hierarchy_size);
+    assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+    assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == -1);
+    assert(errno == EILSEQ);
+
+    free(table);
+    free(hierarchy_bytes);
+    pvr_scene_ir_free(&scene);
+}
+
 int main(void) {
     test_round_trip();
     test_rejections();
     test_ir_rejections();
+    test_scene_asset();
     puts("pvr chunk scene tests passed");
     return 0;
 }

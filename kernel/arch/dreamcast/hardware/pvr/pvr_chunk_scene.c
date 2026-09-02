@@ -197,9 +197,10 @@ int pvr_chunk_scene_hierarchy_node_get(
         index, checked.version, node);
 }
 
-int pvr_chunk_scene_hierarchy_bind(
+static int hierarchy_bind(
     const pvr_chunk_scene_hierarchy_view_t *view,
-    const pvr_chunk_model_view_t *const *models, size_t model_count,
+    const pvr_chunk_model_view_t *const *model_pointers,
+    const pvr_chunk_model_view_t *model_array, size_t model_count,
     pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
     pvr_chunk_hierarchy_t *hierarchy) {
     pvr_chunk_scene_hierarchy_view_t checked;
@@ -209,7 +210,7 @@ int pvr_chunk_scene_hierarchy_bind(
     if(hierarchy)
         memset(hierarchy, 0, sizeof(*hierarchy));
     if(!view || !hierarchy || !view->data ||
-       (model_count && !models)) {
+       (model_count && !model_pointers && !model_array)) {
         errno = EINVAL;
         return -1;
     }
@@ -243,7 +244,7 @@ int pvr_chunk_scene_hierarchy_bind(
             return -1;
         if(node.model_ordinal != PVR_CHUNK_NODE_NONE &&
            (node.model_ordinal >= model_count ||
-            !models[node.model_ordinal])) {
+            (!model_array && !model_pointers[node.model_ordinal]))) {
             errno = EILSEQ;
             return -1;
         }
@@ -257,7 +258,9 @@ int pvr_chunk_scene_hierarchy_bind(
                        index, checked.version, &node) < 0)
             return -1;
         nodes[index].model = node.model_ordinal == PVR_CHUNK_NODE_NONE ?
-                             NULL : models[node.model_ordinal];
+                             NULL : (model_array ?
+                                 &model_array[node.model_ordinal] :
+                                 model_pointers[node.model_ordinal]);
         memcpy(&nodes[index].local_transform, &node.local_transform,
                sizeof(matrix_t));
         nodes[index].parent_index = node.parent_index;
@@ -267,4 +270,22 @@ int pvr_chunk_scene_hierarchy_bind(
     hierarchy->nodes = nodes;
     hierarchy->node_count = checked.node_count;
     return 0;
+}
+
+int pvr_chunk_scene_hierarchy_bind(
+    const pvr_chunk_scene_hierarchy_view_t *view,
+    const pvr_chunk_model_view_t *const *models, size_t model_count,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy) {
+    return hierarchy_bind(view, models, NULL, model_count, nodes,
+                          node_capacity, hierarchy);
+}
+
+int pvr_chunk_scene_hierarchy_bind_models(
+    const pvr_chunk_scene_hierarchy_view_t *view,
+    const pvr_chunk_model_view_t *models, size_t model_count,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy) {
+    return hierarchy_bind(view, NULL, models, model_count, nodes,
+                          node_capacity, hierarchy);
 }

@@ -23,10 +23,12 @@ compact-model admission without decoding the vertex partition twice.
 The cooked section avoids repeating compact stream traversal and indexed
 vertex assembly after loading. Its exact-sized, 32-byte-aligned native cache
 storage is caller-owned and independently disposable.
-The example separately loads the raw hierarchy section, admits it, and binds
-its stable model ordinal into the existing caller-owned compact hierarchy. It
-also materializes the animation section and samples its translation through
-the existing animation runtime rather than through container-specific code.
+The coherent scene-asset loader cross-validates the model table and hierarchy,
+loads the complete model set into one persistent decode span, and binds stable
+model ordinals directly to caller-owned nodes without a temporary pointer
+table. The example also materializes the animation section and samples its
+translation through the existing animation runtime rather than through
+container-specific code.
 
 The service is an explicit example choice. The same asset can instead use the
 synchronous decoder or its manually stepped state, and applications that use
