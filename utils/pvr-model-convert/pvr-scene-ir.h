@@ -11,6 +11,7 @@
 #include <stdint.h>
 
 #include <dc/animation.h>
+#include <dc/pvr_chunk_animation_catalog.h>
 #include <dc/pvr_chunk_morph_animation_asset.h>
 #include <dc/pvr_chunk_model_table.h>
 #include <dc/pvr_chunk_skeleton_asset.h>
@@ -29,6 +30,14 @@ typedef struct pvr_scene_ir {
     size_t node_count;
     size_t node_capacity;
 } pvr_scene_ir_t;
+
+typedef struct pvr_scene_ir_animation_clip {
+    const char *name;
+    uint32_t transform_ordinal;
+    uint32_t morph_ordinal;
+    float start_time;
+    float end_time;
+} pvr_scene_ir_animation_clip_t;
 
 void pvr_scene_ir_free(pvr_scene_ir_t *scene);
 
@@ -72,6 +81,10 @@ int pvr_scene_ir_serialize_animation(
 
 int pvr_scene_ir_serialize_morph_animation(
     const pvr_chunk_morph_animation_t *animation,
+    uint8_t **bytes_out, size_t *size_out);
+
+int pvr_scene_ir_serialize_animation_catalog(
+    const pvr_scene_ir_animation_clip_t *clips, size_t clip_count,
     uint8_t **bytes_out, size_t *size_out);
 
 int pvr_scene_ir_serialize_volumes(

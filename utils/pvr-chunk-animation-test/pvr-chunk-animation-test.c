@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_animation_catalog.h>
 #include <dc/pvr_chunk_morph_animation_asset.h>
 
 #include "pvr-scene-ir.h"
@@ -74,6 +75,13 @@ static void refresh_morph_crc(uint8_t *bytes, size_t size) {
     store_le32(bytes + 40, crc32_bytes(bytes, 40));
 }
 
+static void refresh_catalog_crc(uint8_t *bytes, size_t size) {
+    store_le32(bytes + 28, crc32_bytes(
+        bytes + PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES,
+        size - PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES));
+    store_le32(bytes + 60, crc32_bytes(bytes, 60));
+}
+
 static anim_track_view_t open_track(anim_value_kind_t kind,
                                     anim_interpolation_t interpolation,
                                     const void *keys, size_t key_count,
@@ -89,6 +97,188 @@ static anim_track_view_t open_track(anim_value_kind_t kind,
 
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.00003f;
+}
+
+static void store_asset_section(uint8_t *descriptor, uint32_t type,
+                                uint32_t offset, uint32_t bytes,
+                                uint16_t alignment,
+                                const uint8_t *payload) {
+    store_le32(descriptor, type);
+    store_le32(descriptor + 8, offset);
+    store_le32(descriptor + 12, bytes);
+    store_le32(descriptor + 16, bytes);
+    store_le32(descriptor + 20, crc32_bytes(payload, bytes));
+    store_le16(descriptor + 30, alignment);
+}
+
+static uint8_t *build_catalog_asset(size_t *size_out) {
+    enum {
+        SECTION_COUNT = 6,
+        DIRECTORY_BYTES = SECTION_COUNT *
+            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+        VERTEX_OFFSET = 256,
+        POLYGON_OFFSET = 288,
+        ANIMATION0_OFFSET = 320,
+        MORPH0_OFFSET = 352,
+        ANIMATION1_OFFSET = 384,
+        MORPH1_OFFSET = 416,
+        FILE_BYTES = 417
+    };
+    uint8_t *bytes = calloc(1, FILE_BYTES);
+    uint8_t *directory;
+
+    assert(bytes && size_out);
+    directory = bytes + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
+    store_asset_section(
+        directory, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+        VERTEX_OFFSET, 4, 4, bytes + VERTEX_OFFSET);
+    store_asset_section(
+        directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+        PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+        POLYGON_OFFSET, 2, 2, bytes + POLYGON_OFFSET);
+    store_asset_section(
+        directory + 2 * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+        PVR_CHUNK_ASSET_SECTION_ANIMATION,
+        ANIMATION0_OFFSET, 1, 4, bytes + ANIMATION0_OFFSET);
+    store_asset_section(
+        directory + 3 * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+        PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION,
+        MORPH0_OFFSET, 1, 4, bytes + MORPH0_OFFSET);
+    store_asset_section(
+        directory + 4 * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+        PVR_CHUNK_ASSET_SECTION_ANIMATION,
+        ANIMATION1_OFFSET, 1, 4, bytes + ANIMATION1_OFFSET);
+    store_asset_section(
+        directory + 5 * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+        PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION,
+        MORPH1_OFFSET, 1, 4, bytes + MORPH1_OFFSET);
+    store_le32(bytes, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    store_le32(bytes + 8, FILE_BYTES);
+    store_le32(bytes + 32, SECTION_COUNT);
+    store_le32(bytes + 36, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    store_le32(bytes + 40, DIRECTORY_BYTES);
+    store_le32(bytes + 44, crc32_bytes(directory, DIRECTORY_BYTES));
+    store_le32(bytes + 60, crc32_bytes(bytes, 60));
+    *size_out = FILE_BYTES;
+    return bytes;
+}
+
+static void test_animation_catalog(void) {
+    const pvr_scene_ir_animation_clip_t source[] = {
+        {
+            "walk", 0,
+            PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE,
+            0.0f, 1.0f
+        },
+        {
+            NULL, PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE, 0,
+            0.0f, 2.0f
+        },
+        { "attack", 1, 1, 0.25f, 0.75f }
+    };
+    pvr_chunk_animation_catalog_view_t view;
+    pvr_chunk_animation_catalog_clip_t clip;
+    uint8_t *serialized = NULL;
+    uint8_t *corrupt;
+    uint8_t *asset_bytes;
+    size_t serialized_bytes = 0;
+    size_t asset_size = 0;
+    size_t index = SIZE_MAX;
+    pvr_chunk_asset_view_t asset;
+
+    assert(pvr_scene_ir_serialize_animation_catalog(
+        source, 3, &serialized, &serialized_bytes) == 0);
+    assert(serialized_bytes ==
+           PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES +
+           3 * PVR_CHUNK_ANIMATION_CATALOG_RECORD_BYTES + 10);
+    assert(pvr_chunk_animation_catalog_open(
+        serialized, serialized_bytes, &view) == 0);
+    assert(view.clip_count == 3 && view.string_bytes == 10);
+    assert(pvr_chunk_animation_catalog_clip_get(&view, 0, &clip) == 0);
+    assert(clip.transform_ordinal == 0 &&
+           clip.morph_ordinal ==
+               PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE &&
+           clip.name_bytes == 4 && !memcmp(clip.name, "walk", 4) &&
+           clip.start_time == 0.0f && clip.end_time == 1.0f);
+    assert(pvr_chunk_animation_catalog_clip_get(&view, 1, &clip) == 0);
+    assert(clip.transform_ordinal ==
+               PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE &&
+           clip.morph_ordinal == 0 && !clip.name_bytes &&
+           clip.start_time == 0.0f && clip.end_time == 2.0f);
+    assert(pvr_chunk_animation_catalog_find(
+        &view, "attack", 6, &index, &clip) == 0);
+    assert(index == 2 && clip.transform_ordinal == 1 &&
+           clip.morph_ordinal == 1 && clip.start_time == 0.25f &&
+           clip.end_time == 0.75f);
+    errno = 0;
+    assert(pvr_chunk_animation_catalog_find(
+        &view, "missing", 7, NULL, &clip) == -1);
+    assert(errno == ENOENT);
+
+    asset_bytes = build_catalog_asset(&asset_size);
+    assert(pvr_chunk_asset_open(asset_bytes, asset_size, &asset) == 0);
+    assert(pvr_chunk_animation_catalog_validate_asset(
+        &view, &asset) == 0);
+    errno = 0;
+    assert(pvr_chunk_animation_catalog_clip_get(&view, 3, &clip) == -1);
+    assert(errno == ENOENT);
+
+    {
+        pvr_scene_ir_animation_clip_t invalid[2] = {
+            source[0], source[0]
+        };
+        uint8_t *unchanged = (uint8_t *)(uintptr_t)1;
+        size_t unchanged_bytes = 1;
+
+        errno = 0;
+        assert(pvr_scene_ir_serialize_animation_catalog(
+            invalid, 2, &unchanged, &unchanged_bytes) == -1);
+        assert(errno == EEXIST && unchanged == NULL &&
+               unchanged_bytes == 0);
+        invalid[1].name = "idle";
+        invalid[1].transform_ordinal =
+            PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE;
+        invalid[1].morph_ordinal =
+            PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE;
+        errno = 0;
+        assert(pvr_scene_ir_serialize_animation_catalog(
+            invalid, 2, &unchanged, &unchanged_bytes) == -1);
+        assert(errno == EINVAL && unchanged == NULL &&
+               unchanged_bytes == 0);
+    }
+
+    corrupt = malloc(serialized_bytes);
+    assert(corrupt);
+    memcpy(corrupt, serialized, serialized_bytes);
+    corrupt[serialized_bytes - 1u] ^= UINT8_C(0x80);
+    errno = 0;
+    assert(pvr_chunk_animation_catalog_open(
+        corrupt, serialized_bytes, &view) == -1);
+    assert(errno == EILSEQ);
+    memcpy(corrupt, serialized, serialized_bytes);
+    store_le32(corrupt + PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES +
+                   PVR_CHUNK_ANIMATION_CATALOG_RECORD_BYTES + 8,
+               1);
+    refresh_catalog_crc(corrupt, serialized_bytes);
+    errno = 0;
+    assert(pvr_chunk_animation_catalog_open(
+        corrupt, serialized_bytes, &view) == -1);
+    assert(errno == EILSEQ);
+    memcpy(corrupt, serialized, serialized_bytes);
+    store_le32(corrupt + PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES, 2);
+    refresh_catalog_crc(corrupt, serialized_bytes);
+    assert(pvr_chunk_animation_catalog_open(
+        corrupt, serialized_bytes, &view) == 0);
+    errno = 0;
+    assert(pvr_chunk_animation_catalog_validate_asset(
+        &view, &asset) == -1);
+    assert(errno == EILSEQ);
+
+    free(asset_bytes);
+    free(corrupt);
+    free(serialized);
 }
 
 static void test_morph_animation(void) {
@@ -435,6 +625,7 @@ int main(void) {
     free(fallback_serialized);
     free(serialized);
     test_morph_animation();
+    test_animation_catalog();
     puts("pvr-chunk-animation-test: PASS");
     return 0;
 }

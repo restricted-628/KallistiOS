@@ -10,6 +10,7 @@
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_animation_catalog.h>
 #include <dc/pvr_chunk_morph_animation_asset.h>
 #include <dc/pvr_chunk_volume_asset.h>
 
@@ -259,6 +260,116 @@ int pvr_scene_ir_serialize_morph_animation(
     store_le32(bytes + 36, crc32_bytes(
         bytes + PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES, payload_bytes));
     store_le32(bytes + 40, crc32_bytes(bytes, 40));
+    *bytes_out = bytes;
+    *size_out = file_bytes;
+    return 0;
+}
+
+int pvr_scene_ir_serialize_animation_catalog(
+    const pvr_scene_ir_animation_clip_t *clips, size_t clip_count,
+    uint8_t **bytes_out, size_t *size_out) {
+    uint8_t *bytes = NULL;
+    size_t records_bytes;
+    size_t string_bytes = 0;
+    size_t file_bytes;
+    size_t string_offset = 0;
+    size_t index;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!clips || !clip_count || !bytes_out || !size_out ||
+       clip_count > UINT32_MAX ||
+       clip_count > SIZE_MAX /
+           PVR_CHUNK_ANIMATION_CATALOG_RECORD_BYTES) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(index = 0; index < clip_count; ++index) {
+        size_t name_bytes = clips[index].name ?
+            strlen(clips[index].name) : 0;
+        size_t previous;
+
+        if((clips[index].transform_ordinal ==
+                PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE &&
+            clips[index].morph_ordinal ==
+                PVR_CHUNK_ANIMATION_CATALOG_SECTION_NONE) ||
+           !isfinite(clips[index].start_time) ||
+           !isfinite(clips[index].end_time) ||
+           clips[index].start_time >= clips[index].end_time ||
+           name_bytes > UINT32_MAX - string_bytes) {
+            errno = EINVAL;
+            return -1;
+        }
+        for(previous = 0; name_bytes && previous < index; ++previous) {
+            if(clips[previous].name &&
+               strlen(clips[previous].name) == name_bytes &&
+               !memcmp(clips[previous].name, clips[index].name,
+                       name_bytes)) {
+                errno = EEXIST;
+                return -1;
+            }
+        }
+        string_bytes += name_bytes;
+    }
+    records_bytes = clip_count *
+        PVR_CHUNK_ANIMATION_CATALOG_RECORD_BYTES;
+    if(records_bytes > SIZE_MAX -
+           PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES ||
+       string_bytes > SIZE_MAX -
+           PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES - records_bytes) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    file_bytes = PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES +
+                 records_bytes + string_bytes;
+    if(file_bytes > UINT32_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    bytes = calloc(1, file_bytes);
+    if(!bytes) {
+        errno = ENOMEM;
+        return -1;
+    }
+    for(index = 0; index < clip_count; ++index) {
+        const pvr_scene_ir_animation_clip_t *clip = clips + index;
+        uint8_t *record = bytes +
+            PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES + index *
+                PVR_CHUNK_ANIMATION_CATALOG_RECORD_BYTES;
+        size_t name_bytes = clip->name ? strlen(clip->name) : 0;
+
+        store_le32(record, clip->transform_ordinal);
+        store_le32(record + 4, clip->morph_ordinal);
+        store_le32(record + 8, (uint32_t)string_offset);
+        store_le32(record + 12, (uint32_t)name_bytes);
+        store_float(record + 16, clip->start_time);
+        store_float(record + 20, clip->end_time);
+        if(name_bytes) {
+            memcpy(bytes + PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES +
+                       records_bytes + string_offset,
+                   clip->name, name_bytes);
+            string_offset += name_bytes;
+        }
+    }
+    if(string_offset != string_bytes) {
+        free(bytes);
+        errno = EPROTO;
+        return -1;
+    }
+    store_le32(bytes, PVR_CHUNK_ANIMATION_CATALOG_MAGIC);
+    store_le16(bytes + 4, PVR_CHUNK_ANIMATION_CATALOG_VERSION);
+    store_le16(bytes + 6, PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES);
+    store_le32(bytes + 8, (uint32_t)file_bytes);
+    store_le32(bytes + 12, (uint32_t)clip_count);
+    store_le16(bytes + 16, PVR_CHUNK_ANIMATION_CATALOG_RECORD_BYTES);
+    store_le32(bytes + 20, (uint32_t)records_bytes);
+    store_le32(bytes + 24, (uint32_t)string_bytes);
+    store_le32(bytes + 28, crc32_bytes(
+        bytes + PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES,
+        file_bytes - PVR_CHUNK_ANIMATION_CATALOG_HEADER_BYTES));
+    store_le32(bytes + 60, crc32_bytes(bytes, 60));
     *bytes_out = bytes;
     *size_out = file_bytes;
     return 0;

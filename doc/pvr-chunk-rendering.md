@@ -361,8 +361,9 @@ format, deformation, or tooling gaps:
    are complete. Per-reference UV/normal seam fixtures and general-N glTF skin
    round trips beyond four influences are also complete. Decomposable static
    matrix nodes now retain exact signed-scale fallback transforms in animated
-   scenes, while shear remains an explicit boundary. Continue wider modern
-   scene import,
+   scenes, while shear remains an explicit boundary. PAC1 now supplies the
+   pointer-free logical-clip catalog needed to pair repeated PAT1 and PMW1
+   sections without placeholders. Continue wider modern scene import,
    hierarchy/evaluation metadata, parent-result canonicalization, elimination
    of deferred polygon controls, and repeatable scene-level conformance.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose

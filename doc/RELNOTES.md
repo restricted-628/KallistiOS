@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added pointer-free PAC1 animation catalogs for PCM2. Logical clips map by
+  source order and optional unique name to independent PAT1 transform and PMW1
+  morph-section ordinals, avoiding empty placeholder sections when a clip uses
+  only one channel family. Checked APIs open, index, find, and validate catalog
+  relationships against the enclosing compact asset.
+
 * Added exact affine matrix fallback decomposition to glTF animation import.
   Static matrix-authored nodes can now coexist with animated TRS nodes when
   their transforms are losslessly expressible as translation, quaternion
