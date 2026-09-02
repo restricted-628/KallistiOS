@@ -42,11 +42,41 @@ enum {
     TRACK_RESERVED_OFFSET = 12,
     KEY_TIME_OFFSET = 0,
     KEY_VALUE_OFFSET = 4,
-    KEY_RESERVED_OFFSET = 20
+    KEY_IN_TANGENT_OFFSET = 20,
+    KEY_OUT_TANGENT_OFFSET = 36,
+    KEY_RESERVED_OFFSET_V2 = 20,
+    KEY_RESERVED_OFFSET = 52
 };
 
 _Static_assert(offsetof(pvr_chunk_animation_key_t, value) == sizeof(float),
                "canonical animation key layout");
+_Static_assert(offsetof(pvr_chunk_animation_key_t, in_tangent) ==
+                   offsetof(anim_scalar_hermite_key_t, in_tangent),
+               "canonical animation scalar incoming tangent layout");
+_Static_assert(offsetof(pvr_chunk_animation_key_t, in_tangent) ==
+                   offsetof(anim_vector_hermite_key_t, in_tangent),
+               "canonical animation vector incoming tangent layout");
+_Static_assert(offsetof(pvr_chunk_animation_key_t, in_tangent) ==
+                   offsetof(anim_quaternion_hermite_key_t, in_tangent),
+               "canonical animation incoming tangent layout");
+_Static_assert(offsetof(pvr_chunk_animation_key_t, out_tangent) ==
+                   offsetof(anim_scalar_hermite_key_t, out_tangent),
+               "canonical animation scalar outgoing tangent layout");
+_Static_assert(offsetof(pvr_chunk_animation_key_t, out_tangent) ==
+                   offsetof(anim_vector_hermite_key_t, out_tangent),
+               "canonical animation vector outgoing tangent layout");
+_Static_assert(offsetof(pvr_chunk_animation_key_t, out_tangent) ==
+                   offsetof(anim_quaternion_hermite_key_t, out_tangent),
+               "canonical animation outgoing tangent layout");
+_Static_assert(sizeof(pvr_chunk_animation_key_t) ==
+                   sizeof(anim_scalar_hermite_key_t),
+               "canonical animation scalar key size");
+_Static_assert(sizeof(pvr_chunk_animation_key_t) ==
+                   sizeof(anim_vector_hermite_key_t),
+               "canonical animation vector key size");
+_Static_assert(sizeof(pvr_chunk_animation_key_t) ==
+                   sizeof(anim_quaternion_hermite_key_t),
+               "canonical animation quaternion key size");
 _Static_assert((sizeof(pvr_chunk_animation_key_t) & 3u) == 0,
                "canonical animation key stride");
 
@@ -120,14 +150,16 @@ static int transform_fallback_valid(const anim_transform_t *fallback) {
            isfinite(fallback->scale.z);
 }
 
-static int decode_track(const uint8_t *record,
+static int decode_track(const uint8_t *record, uint16_t version,
                         pvr_chunk_animation_section_track_t *track) {
     uint16_t kind = read_le16(record + TRACK_KIND_OFFSET);
     uint16_t interpolation = read_le16(
         record + TRACK_INTERPOLATION_OFFSET);
 
     if(kind > ANIM_VALUE_BOOLEAN ||
-       interpolation > ANIM_INTERPOLATION_CATMULL_ROM ||
+       interpolation > ANIM_INTERPOLATION_CUBIC_HERMITE ||
+       (interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE &&
+        version < PVR_CHUNK_ANIMATION_SECTION_VERSION) ||
        (kind == ANIM_VALUE_BOOLEAN &&
         interpolation != ANIM_INTERPOLATION_STEP) ||
        ((kind == ANIM_VALUE_QUATERNION || kind == ANIM_VALUE_BOOLEAN) &&
@@ -144,10 +176,16 @@ static int decode_track(const uint8_t *record,
 }
 
 static int decode_key(const uint8_t *record, anim_value_kind_t kind,
+                      anim_interpolation_t interpolation,
+                      uint16_t version,
                       pvr_chunk_animation_key_t *key) {
     float time = read_float(record + KEY_TIME_OFFSET);
+    size_t reserved_offset = version >=
+                                 PVR_CHUNK_ANIMATION_SECTION_VERSION ?
+                                 KEY_RESERVED_OFFSET :
+                                 KEY_RESERVED_OFFSET_V2;
 
-    if(!isfinite(time) || read_le32(record + KEY_RESERVED_OFFSET)) {
+    if(!isfinite(time) || read_le32(record + reserved_offset)) {
         errno = EILSEQ;
         return -1;
     }
@@ -207,6 +245,70 @@ static int decode_key(const uint8_t *record, anim_value_kind_t kind,
         default:
             errno = EILSEQ;
             return -1;
+    }
+    if(interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+        pvr_chunk_animation_key_value_t *tangents[2] = {
+            &key->in_tangent, &key->out_tangent
+        };
+        const size_t offsets[2] = {
+            KEY_IN_TANGENT_OFFSET, KEY_OUT_TANGENT_OFFSET
+        };
+        size_t tangent;
+
+        for(tangent = 0; tangent < 2; ++tangent) {
+            const uint8_t *source = record + offsets[tangent];
+
+            if(kind == ANIM_VALUE_SCALAR) {
+                tangents[tangent]->scalar = read_float(source);
+                if(!isfinite(tangents[tangent]->scalar) ||
+                   read_le32(source + 4) || read_le32(source + 8) ||
+                   read_le32(source + 12)) {
+                    errno = EILSEQ;
+                    return -1;
+                }
+            }
+            else if(kind == ANIM_VALUE_VECTOR) {
+                tangents[tangent]->vector.x = read_float(source);
+                tangents[tangent]->vector.y = read_float(source + 4);
+                tangents[tangent]->vector.z = read_float(source + 8);
+                tangents[tangent]->vector.w = read_float(source + 12);
+                if(!isfinite(tangents[tangent]->vector.x) ||
+                   !isfinite(tangents[tangent]->vector.y) ||
+                   !isfinite(tangents[tangent]->vector.z) ||
+                   !isfinite(tangents[tangent]->vector.w)) {
+                    errno = EILSEQ;
+                    return -1;
+                }
+            }
+            else if(kind == ANIM_VALUE_QUATERNION) {
+                tangents[tangent]->quaternion.w = read_float(source);
+                tangents[tangent]->quaternion.x = read_float(source + 4);
+                tangents[tangent]->quaternion.y = read_float(source + 8);
+                tangents[tangent]->quaternion.z = read_float(source + 12);
+                if(!isfinite(tangents[tangent]->quaternion.w) ||
+                   !isfinite(tangents[tangent]->quaternion.x) ||
+                   !isfinite(tangents[tangent]->quaternion.y) ||
+                   !isfinite(tangents[tangent]->quaternion.z)) {
+                    errno = EILSEQ;
+                    return -1;
+                }
+            }
+            else {
+                errno = EILSEQ;
+                return -1;
+            }
+        }
+    }
+    else if(version >= PVR_CHUNK_ANIMATION_SECTION_VERSION) {
+        size_t offset;
+
+        for(offset = KEY_IN_TANGENT_OFFSET;
+            offset < KEY_RESERVED_OFFSET; offset += 4) {
+            if(read_le32(record + offset)) {
+                errno = EILSEQ;
+                return -1;
+            }
+        }
     }
     return 0;
 }
@@ -270,6 +372,7 @@ static int track_reference_valid(
     if(ordinal >= view->track_count ||
        decode_track((const uint8_t *)view->tracks + ordinal *
                         PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
+                    view->version,
                     &track) < 0 || track.kind != expected)
         return 0;
     if(expected == ANIM_VALUE_BOOLEAN &&
@@ -291,6 +394,7 @@ int pvr_chunk_animation_section_open(
     uint32_t track_bytes;
     uint32_t key_bytes;
     uint16_t version;
+    uint16_t serialized_key_bytes;
     uint64_t encoded_payload_bytes;
     size_t payload_bytes;
     size_t next_key = 0;
@@ -306,7 +410,6 @@ int pvr_chunk_animation_section_open(
        read_le16(bytes + 24) !=
            PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES ||
        read_le16(bytes + 26) != PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES ||
-       read_le16(bytes + 28) != PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES ||
        read_le16(bytes + 30) ||
        read_le32(bytes + HEADER_RESERVED_OFFSET) ||
        read_le32(bytes + HEADER_CRC_OFFSET) !=
@@ -317,7 +420,16 @@ int pvr_chunk_animation_section_open(
 
     version = read_le16(bytes + 4);
     if(version != PVR_CHUNK_ANIMATION_SECTION_VERSION_1 &&
+       version != PVR_CHUNK_ANIMATION_SECTION_VERSION_2 &&
        version != PVR_CHUNK_ANIMATION_SECTION_VERSION) {
+        errno = EILSEQ;
+        return -1;
+    }
+    serialized_key_bytes = read_le16(bytes + 28);
+    if(serialized_key_bytes !=
+           (version >= PVR_CHUNK_ANIMATION_SECTION_VERSION ?
+                PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES :
+                PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2)) {
         errno = EILSEQ;
         return -1;
     }
@@ -334,11 +446,11 @@ int pvr_chunk_animation_section_open(
        transform_count >
            UINT32_MAX / PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES ||
        track_count > UINT32_MAX / PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES ||
-       key_count > UINT32_MAX / PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES ||
+       key_count > UINT32_MAX / serialized_key_bytes ||
        transform_bytes != transform_count *
            PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES ||
        track_bytes != track_count * PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES ||
-       key_bytes != key_count * PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES) {
+       key_bytes != key_count * serialized_key_bytes) {
         errno = EILSEQ;
         return -1;
     }
@@ -373,6 +485,7 @@ int pvr_chunk_animation_section_open(
     parsed.start_time = read_float(bytes + 44);
     parsed.end_time = read_float(bytes + 48);
     parsed.version = version;
+    parsed.key_bytes = serialized_key_bytes;
     if(!isfinite(parsed.start_time) || !isfinite(parsed.end_time) ||
        parsed.start_time >= parsed.end_time) {
         errno = EILSEQ;
@@ -386,6 +499,7 @@ int pvr_chunk_animation_section_open(
 
         if(decode_track((const uint8_t *)parsed.tracks + index *
                             PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
+                        parsed.version,
                         &track) < 0 || !track.key_count ||
            track.first_key != next_key ||
            track.key_count > parsed.key_count - next_key) {
@@ -397,8 +511,9 @@ int pvr_chunk_animation_section_open(
 
             if(decode_key((const uint8_t *)parsed.keys +
                               (next_key + key_index) *
-                                  PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES,
-                          track.kind, &key) < 0 ||
+                                  parsed.key_bytes,
+                          track.kind, track.interpolation,
+                          parsed.version, &key) < 0 ||
                (key_index && key.time <= previous_time)) {
                 errno = EILSEQ;
                 return -1;
@@ -480,6 +595,7 @@ int pvr_chunk_animation_section_track_get(
     }
     return decode_track((const uint8_t *)checked.tracks + index *
                             PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
+                        checked.version,
                         track);
 }
 
@@ -565,12 +681,14 @@ int pvr_chunk_animation_section_materialize(
 
         decode_track((const uint8_t *)checked.tracks + index *
                          PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
+                     checked.version,
                      &track);
         for(key_index = 0; key_index < track.key_count; ++key_index)
             decode_key((const uint8_t *)checked.keys +
                            (track.first_key + key_index) *
-                               PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES,
-                       track.kind, keys + track.first_key + key_index);
+                               checked.key_bytes,
+                       track.kind, track.interpolation, checked.version,
+                       keys + track.first_key + key_index);
         tracks[index].track.kind = track.kind;
         tracks[index].track.interpolation = track.interpolation;
         tracks[index].track.keys = keys + track.first_key;

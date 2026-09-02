@@ -620,10 +620,10 @@ f 1/1/1 2/2/1 3/3/1
         ]
         assert animation[:4] == b"PAT1"
         assert struct.unpack_from("<HHIIII", animation, 4) == (
-        2, 64, 192, 1, 1, 2
+            3, 64, 256, 1, 1, 2
         )
         assert struct.unpack_from("<HHHHIIIff", animation, 24) == (
-            64, 16, 24, 0, 64, 16, 48, 0.0, 1.0
+            64, 16, 56, 0, 64, 16, 112, 0.0, 1.0
         )
         assert zlib.crc32(animation[64:]) == struct.unpack_from(
             "<I", animation, 52
@@ -644,7 +644,7 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<5fI", animation, 144) == (
             0.0, 0.0, 0.0, 0.0, 1.0, 0
         )
-        assert struct.unpack_from("<5fI", animation, 168) == (
+        assert struct.unpack_from("<5fI", animation, 200) == (
             1.0, 3.0, 4.0, 5.0, 1.0, 0
         )
 
@@ -1391,6 +1391,7 @@ f 1/1/1 2/2/1 3/3/1
             gltf_morph_animation_offset + gltf_morph_animation_size
         ]
         assert gltf_morph_animation[:4] == b"PMW1"
+        assert struct.unpack_from("<H", gltf_morph_animation, 4) == (2,)
         assert struct.unpack_from("<4I", gltf_morph_animation, 12) == (
             1, 1, 1, 2
         )
@@ -1407,7 +1408,52 @@ f 1/1/1 2/2/1 3/3/1
             1, 0, 0, 2, 0
         )
         assert struct.unpack_from("<4f", gltf_morph_animation, 104) == (
-            0.0, 0.0, 1.0, 1.0
+            0.0, 0.0, 0.0, 0.0
+        )
+        assert struct.unpack_from("<4f", gltf_morph_animation, 120) == (
+            1.0, 1.0, 0.0, 0.0
+        )
+
+        cubic_morph_binary = morph_binary[:124] + struct.pack(
+            "<6f", 0.0, 0.0, 2.0, 0.0, 4.0, 0.0
+        )
+        cubic_morph_document = json.loads(
+            gltf_morph_source.read_text(encoding="utf-8")
+        )
+        cubic_morph_document["buffers"][0] = {
+            "byteLength": len(cubic_morph_binary),
+            "uri": "data:application/octet-stream;base64," +
+                   base64.b64encode(cubic_morph_binary).decode("ascii"),
+        }
+        cubic_morph_document["bufferViews"][5]["byteLength"] = 24
+        cubic_morph_document["accessors"][5]["count"] = 6
+        cubic_morph_document["animations"][0]["samplers"][0][
+            "interpolation"
+        ] = "CUBICSPLINE"
+        cubic_morph_source = root / "triangle-cubic-morph.gltf"
+        cubic_morph_source.write_text(
+            json.dumps(cubic_morph_document), encoding="utf-8"
+        )
+        cubic_morph_asset = root / "triangle-cubic-morph.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            cubic_morph_source, cubic_morph_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        cubic_morph_bytes = cubic_morph_asset.read_bytes()
+        cubic_morph_descriptor = struct.unpack_from(
+            "<7IHH", cubic_morph_bytes, 64 + 4 * 32
+        )
+        cubic_morph_animation = cubic_morph_bytes[
+            cubic_morph_descriptor[2]:
+            cubic_morph_descriptor[2] + cubic_morph_descriptor[3]
+        ]
+        assert struct.unpack_from("<H", cubic_morph_animation, 88) == (3,)
+        assert struct.unpack_from("<4f", cubic_morph_animation, 104) == (
+            0.0, 0.0, 0.0, 2.0
+        )
+        assert struct.unpack_from("<4f", cubic_morph_animation, 120) == (
+            1.0, 4.0, 0.0, 0.0
         )
 
         animation_binary = (
@@ -1491,8 +1537,122 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<5fI", gltf_animation, 208) == (
             0.0, 0.0, 3.0, 0.0, 1.0, 0
         )
-        assert struct.unpack_from("<5fI", gltf_animation, 232) == (
+        assert struct.unpack_from("<5fI", gltf_animation, 264) == (
             2.0, 0.0, 5.0, 0.0, 1.0, 0
+        )
+
+        cubic_animation_binary = (
+            gltf_binary + struct.pack("<2f", 0.0, 2.0) +
+            struct.pack(
+                "<18f",
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                2.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                4.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+            )
+        )
+        cubic_animation_document = json.loads(
+            gltf_animation_source.read_text(encoding="utf-8")
+        )
+        cubic_animation_document["buffers"][0] = {
+            "byteLength": len(cubic_animation_binary),
+            "uri": "data:application/octet-stream;base64," +
+                   base64.b64encode(cubic_animation_binary).decode("ascii"),
+        }
+        cubic_animation_document["bufferViews"][4]["byteLength"] = 72
+        cubic_animation_document["accessors"][4]["count"] = 6
+        cubic_animation_document["animations"][0]["samplers"][0][
+            "interpolation"
+        ] = "CUBICSPLINE"
+        cubic_animation_source = root / "triangle-cubic-animation.gltf"
+        cubic_animation_source.write_text(
+            json.dumps(cubic_animation_document), encoding="utf-8"
+        )
+        cubic_animation_asset = root / "triangle-cubic-animation.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            cubic_animation_source, cubic_animation_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        cubic_asset_bytes = cubic_animation_asset.read_bytes()
+        cubic_descriptor = struct.unpack_from(
+            "<7IHH", cubic_asset_bytes, 64 + 3 * 32
+        )
+        cubic_animation = cubic_asset_bytes[
+            cubic_descriptor[2]:cubic_descriptor[2] + cubic_descriptor[3]
+        ]
+        assert struct.unpack_from("<HH", cubic_animation, 192) == (1, 3)
+        assert struct.unpack_from("<4f", cubic_animation, 208) == (
+            0.0, 0.0, 0.0, 0.0
+        )
+        assert struct.unpack_from("<4f", cubic_animation, 244) == (
+            2.0, 0.0, 0.0, 0.0
+        )
+        assert struct.unpack_from("<4f", cubic_animation, 264) == (
+            2.0, 4.0, 0.0, 0.0
+        )
+
+        cubic_rotation_binary = (
+            gltf_binary + struct.pack("<2f", 0.0, 2.0) +
+            struct.pack(
+                "<24f",
+                0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0,
+            )
+        )
+        cubic_rotation_document = json.loads(
+            gltf_animation_source.read_text(encoding="utf-8")
+        )
+        cubic_rotation_document["buffers"][0] = {
+            "byteLength": len(cubic_rotation_binary),
+            "uri": "data:application/octet-stream;base64," +
+                   base64.b64encode(cubic_rotation_binary).decode("ascii"),
+        }
+        cubic_rotation_document["bufferViews"][4]["byteLength"] = 96
+        cubic_rotation_document["accessors"][4]["count"] = 6
+        cubic_rotation_document["accessors"][4]["type"] = "VEC4"
+        cubic_rotation_document["animations"][0]["samplers"][0][
+            "interpolation"
+        ] = "CUBICSPLINE"
+        cubic_rotation_document["animations"][0]["channels"][0][
+            "target"
+        ]["path"] = "rotation"
+        cubic_rotation_source = root / "triangle-cubic-rotation.gltf"
+        cubic_rotation_source.write_text(
+            json.dumps(cubic_rotation_document), encoding="utf-8"
+        )
+        cubic_rotation_asset = root / "triangle-cubic-rotation.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            cubic_rotation_source, cubic_rotation_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        cubic_rotation_bytes = cubic_rotation_asset.read_bytes()
+        cubic_rotation_descriptor = struct.unpack_from(
+            "<7IHH", cubic_rotation_bytes, 64 + 3 * 32
+        )
+        cubic_rotation = cubic_rotation_bytes[
+            cubic_rotation_descriptor[2]:
+            cubic_rotation_descriptor[2] + cubic_rotation_descriptor[3]
+        ]
+        assert struct.unpack_from("<HH", cubic_rotation, 192) == (2, 3)
+        assert struct.unpack_from("<4f", cubic_rotation, 212) == (
+            1.0, 0.0, 0.0, 0.0
+        )
+        assert struct.unpack_from("<4f", cubic_rotation, 244) == (
+            0.0, 0.0, 1.0, 0.0
+        )
+        assert struct.unpack_from("<4f", cubic_rotation, 268) == (
+            0.0, 1.0, 0.0, 0.0
+        )
+        assert struct.unpack_from("<4f", cubic_rotation, 284) == (
+            0.0, 0.0, 0.0, 1.0
         )
 
         multi_animation_binary = morph_binary + struct.pack(

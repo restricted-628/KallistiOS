@@ -177,15 +177,15 @@ typedef struct gltf_model_metadata {
 
 typedef struct gltf_animation_metadata {
     char *name;
-    anim_vector_key_t *animation_vector_keys;
-    anim_quaternion_key_t *animation_quaternion_keys;
+    anim_vector_hermite_key_t *animation_vector_keys;
+    anim_quaternion_hermite_key_t *animation_quaternion_keys;
     anim_track_view_t *animation_tracks;
     anim_transform_tracks_t *animation_transforms;
     anim_visibility_tracks_t *animation_visibility;
     anim_clip_view_t animation;
     size_t animation_track_count;
     size_t animation_key_count;
-    anim_scalar_key_t *morph_animation_keys;
+    anim_scalar_hermite_key_t *morph_animation_keys;
     anim_track_view_t *morph_animation_tracks;
     pvr_chunk_shape_channel_t *morph_animation_channels;
     pvr_chunk_morph_animation_binding_t *morph_animation_bindings;
@@ -2210,7 +2210,9 @@ static int gltf_build_animation(const cgltf_data *data,
            (source->sampler->interpolation !=
                 cgltf_interpolation_type_step &&
             source->sampler->interpolation !=
-                cgltf_interpolation_type_linear) ||
+                cgltf_interpolation_type_linear &&
+            source->sampler->interpolation !=
+                cgltf_interpolation_type_cubic_spline) ||
            source->sampler->input->type != cgltf_type_scalar ||
            !source->sampler->input->count) {
             errno = ENOTSUP;
@@ -2224,6 +2226,9 @@ static int gltf_build_animation(const cgltf_data *data,
         if(source->target_path == cgltf_animation_path_type_weights) {
             const cgltf_node *target = source->target_node;
             size_t target_count;
+            size_t output_factor = source->sampler->interpolation ==
+                                       cgltf_interpolation_type_cubic_spline ?
+                                       3u : 1u;
             size_t node_ordinal;
             size_t scene_index;
             uint32_t model_ordinal;
@@ -2236,9 +2241,12 @@ static int gltf_build_animation(const cgltf_data *data,
             target_count = target->mesh->primitives[0].targets_count;
             if(!target_count || source->sampler->output->type !=
                                     cgltf_type_scalar ||
-               target_count > SIZE_MAX / source->sampler->input->count ||
+               target_count > SIZE_MAX /
+                                  source->sampler->input->count /
+                                  output_factor ||
                source->sampler->output->count !=
-                   source->sampler->input->count * target_count ||
+                   source->sampler->input->count * target_count *
+                       output_factor ||
                gltf_array_index(data->nodes, data->nodes_count,
                                 sizeof(*data->nodes), target,
                                 &node_ordinal) < 0) {
@@ -2278,8 +2286,14 @@ static int gltf_build_animation(const cgltf_data *data,
                                 target_count;
             ++morph_binding_count;
         }
-        else if(source->sampler->input->count !=
-                    source->sampler->output->count) {
+        else if(source->sampler->input->count > SIZE_MAX /
+                    (source->sampler->interpolation ==
+                         cgltf_interpolation_type_cubic_spline ? 3u : 1u) ||
+                source->sampler->output->count !=
+                    source->sampler->input->count *
+                        (source->sampler->interpolation ==
+                             cgltf_interpolation_type_cubic_spline ?
+                             3u : 1u)) {
             errno = EILSEQ;
             return -1;
         }
@@ -2407,7 +2421,7 @@ static int gltf_build_animation(const cgltf_data *data,
                 anim_track_view_t *destination_track =
                     metadata->morph_animation_tracks +
                     morph_channel_cursor + target_index;
-                anim_scalar_key_t *destination_keys =
+                anim_scalar_hermite_key_t *destination_keys =
                     metadata->morph_animation_keys + scalar_cursor;
 
                 destination_channel->fallback_weight = fallbacks ?
@@ -2421,7 +2435,11 @@ static int gltf_build_animation(const cgltf_data *data,
                 destination_track->track.interpolation =
                     source->sampler->interpolation ==
                         cgltf_interpolation_type_step ?
-                        ANIM_INTERPOLATION_STEP : ANIM_INTERPOLATION_LINEAR;
+                        ANIM_INTERPOLATION_STEP :
+                    source->sampler->interpolation ==
+                        cgltf_interpolation_type_cubic_spline ?
+                        ANIM_INTERPOLATION_CUBIC_HERMITE :
+                        ANIM_INTERPOLATION_LINEAR;
                 destination_track->track.keys = destination_keys;
                 destination_track->track.key_count =
                     source->sampler->input->count;
@@ -2430,20 +2448,41 @@ static int gltf_build_animation(const cgltf_data *data,
                 previous_time = -FLT_MAX;
                 for(key = 0; key < source->sampler->input->count; ++key) {
                     float time;
-                    float value;
+                    float values[3] = { 0.0f, 0.0f, 0.0f };
+                    size_t output = key * target_count + target_index;
+                    int cubic = source->sampler->interpolation ==
+                                cgltf_interpolation_type_cubic_spline;
 
                     if(!cgltf_accessor_read_float(source->sampler->input,
                                                   key, &time, 1) ||
                        !cgltf_accessor_read_float(
                            source->sampler->output,
-                           key * target_count + target_index, &value, 1) ||
-                       !isfinite(time) || !isfinite(value) ||
+                           cubic ? (key * 3u) * target_count + target_index :
+                                   output,
+                           &values[0], 1) ||
+                       (cubic &&
+                        (!cgltf_accessor_read_float(
+                             source->sampler->output,
+                             (key * 3u + 1u) * target_count + target_index,
+                             &values[1], 1) ||
+                         !cgltf_accessor_read_float(
+                             source->sampler->output,
+                             (key * 3u + 2u) * target_count + target_index,
+                             &values[2], 1))) ||
+                       !isfinite(time) || !isfinite(values[0]) ||
+                       (cubic && (!isfinite(values[1]) ||
+                                  !isfinite(values[2]))) ||
                        (key && time <= previous_time)) {
                         errno = EILSEQ;
                         return -1;
                     }
                     destination_keys[key].time = time;
-                    destination_keys[key].value = value;
+                    destination_keys[key].value = cubic ? values[1] :
+                                                         values[0];
+                    destination_keys[key].in_tangent = cubic ? values[0] :
+                                                               0.0f;
+                    destination_keys[key].out_tangent = cubic ? values[2] :
+                                                                0.0f;
                     previous_time = time;
                 }
                 destination_track->start_time = destination_keys[0].time;
@@ -2465,7 +2504,11 @@ static int gltf_build_animation(const cgltf_data *data,
         track->track.interpolation =
             source->sampler->interpolation ==
                 cgltf_interpolation_type_step ?
-                ANIM_INTERPOLATION_STEP : ANIM_INTERPOLATION_LINEAR;
+                ANIM_INTERPOLATION_STEP :
+            source->sampler->interpolation ==
+                cgltf_interpolation_type_cubic_spline ?
+                ANIM_INTERPOLATION_CUBIC_HERMITE :
+                ANIM_INTERPOLATION_LINEAR;
         if(source->target_path == cgltf_animation_path_type_rotation) {
             if(transform->rotation) {
                 errno = EILSEQ;
@@ -2474,7 +2517,7 @@ static int gltf_build_animation(const cgltf_data *data,
             track->track.kind = ANIM_VALUE_QUATERNION;
             track->track.keys = metadata->animation_quaternion_keys +
                                 quaternion_cursor;
-            track->track.stride = sizeof(anim_quaternion_key_t);
+            track->track.stride = sizeof(anim_quaternion_hermite_key_t);
             transform->rotation = track;
         }
         else {
@@ -2489,7 +2532,7 @@ static int gltf_build_animation(const cgltf_data *data,
             track->track.kind = ANIM_VALUE_VECTOR;
             track->track.keys = metadata->animation_vector_keys +
                                 vector_cursor;
-            track->track.stride = sizeof(anim_vector_key_t);
+            track->track.stride = sizeof(anim_vector_hermite_key_t);
             if(source->target_path ==
                cgltf_animation_path_type_translation)
                 transform->translation = track;
@@ -2510,22 +2553,34 @@ static int gltf_build_animation(const cgltf_data *data,
             previous_time = time;
             if(source->target_path ==
                cgltf_animation_path_type_rotation) {
-                anim_quaternion_key_t *destination =
+                anim_quaternion_hermite_key_t *destination =
                     &metadata->animation_quaternion_keys[
                         quaternion_cursor + key];
-                float value[4];
+                float sample[3][4] = { { 0 } };
+                size_t value_index =
+                    source->sampler->interpolation ==
+                        cgltf_interpolation_type_cubic_spline ?
+                        key * 3u + 1u : key;
+                int cubic = source->sampler->interpolation ==
+                            cgltf_interpolation_type_cubic_spline;
                 double length_squared;
                 double inverse_length;
 
-                if(!cgltf_accessor_read_float(source->sampler->output, key,
-                                              value, 4)) {
+                if(!cgltf_accessor_read_float(source->sampler->output,
+                                              value_index, sample[1], 4) ||
+                   (cubic &&
+                    (!cgltf_accessor_read_float(source->sampler->output,
+                                                key * 3u, sample[0], 4) ||
+                     !cgltf_accessor_read_float(source->sampler->output,
+                                                key * 3u + 2u,
+                                                sample[2], 4)))) {
                     errno = EILSEQ;
                     return -1;
                 }
-                length_squared = (double)value[0] * value[0] +
-                                 (double)value[1] * value[1] +
-                                 (double)value[2] * value[2] +
-                                 (double)value[3] * value[3];
+                length_squared = (double)sample[1][0] * sample[1][0] +
+                                 (double)sample[1][1] * sample[1][1] +
+                                 (double)sample[1][2] * sample[1][2] +
+                                 (double)sample[1][3] * sample[1][3];
                 if(!(length_squared > 0.0) ||
                    !isfinite(length_squared)) {
                     errno = EILSEQ;
@@ -2533,40 +2588,75 @@ static int gltf_build_animation(const cgltf_data *data,
                 }
                 inverse_length = 1.0 / sqrt(length_squared);
                 destination->time = time;
-                destination->value.w = value[3] * (float)inverse_length;
-                destination->value.x = value[0] * (float)inverse_length;
-                destination->value.y = value[1] * (float)inverse_length;
-                destination->value.z = value[2] * (float)inverse_length;
+                destination->value.w = sample[1][3] * (float)inverse_length;
+                destination->value.x = sample[1][0] * (float)inverse_length;
+                destination->value.y = sample[1][1] * (float)inverse_length;
+                destination->value.z = sample[1][2] * (float)inverse_length;
+                if(cubic) {
+                    destination->in_tangent = (anim_quaternion_t) {
+                        sample[0][3], sample[0][0], sample[0][1],
+                        sample[0][2]
+                    };
+                    destination->out_tangent = (anim_quaternion_t) {
+                        sample[2][3], sample[2][0], sample[2][1],
+                        sample[2][2]
+                    };
+                }
             }
             else {
-                anim_vector_key_t *destination =
+                anim_vector_hermite_key_t *destination =
                     &metadata->animation_vector_keys[vector_cursor + key];
-                float value[3];
+                float sample[3][3] = { { 0 } };
+                size_t value_index =
+                    source->sampler->interpolation ==
+                        cgltf_interpolation_type_cubic_spline ?
+                        key * 3u + 1u : key;
+                int cubic = source->sampler->interpolation ==
+                            cgltf_interpolation_type_cubic_spline;
 
-                if(!cgltf_accessor_read_float(source->sampler->output, key,
-                                              value, 3) ||
-                   !isfinite(value[0]) || !isfinite(value[1]) ||
-                   !isfinite(value[2])) {
+                if(!cgltf_accessor_read_float(source->sampler->output,
+                                              value_index, sample[1], 3) ||
+                   (cubic &&
+                    (!cgltf_accessor_read_float(source->sampler->output,
+                                                key * 3u, sample[0], 3) ||
+                     !cgltf_accessor_read_float(source->sampler->output,
+                                                key * 3u + 2u,
+                                                sample[2], 3))) ||
+                   !isfinite(sample[1][0]) || !isfinite(sample[1][1]) ||
+                   !isfinite(sample[1][2]) ||
+                   (cubic &&
+                    (!isfinite(sample[0][0]) || !isfinite(sample[0][1]) ||
+                     !isfinite(sample[0][2]) || !isfinite(sample[2][0]) ||
+                     !isfinite(sample[2][1]) ||
+                     !isfinite(sample[2][2])))) {
                     errno = EILSEQ;
                     return -1;
                 }
                 destination->time = time;
-                destination->value.x = value[0];
-                destination->value.y = value[1];
-                destination->value.z = value[2];
+                destination->value.x = sample[1][0];
+                destination->value.y = sample[1][1];
+                destination->value.z = sample[1][2];
                 destination->value.w =
                     source->target_path ==
                         cgltf_animation_path_type_translation ? 1.0f : 0.0f;
+                if(cubic) {
+                    destination->in_tangent = (vector_t) {
+                        sample[0][0], sample[0][1], sample[0][2], 0.0f
+                    };
+                    destination->out_tangent = (vector_t) {
+                        sample[2][0], sample[2][1], sample[2][2], 0.0f
+                    };
+                }
             }
         }
         if(source->target_path == cgltf_animation_path_type_rotation) {
-            const anim_quaternion_key_t *keys = track->track.keys;
+            const anim_quaternion_hermite_key_t *keys = track->track.keys;
 
             track->start_time = keys[0].time;
             track->end_time = keys[track->track.key_count - 1u].time;
         }
         else {
-            const anim_vector_key_t *keys = track->track.keys;
+            const anim_vector_hermite_key_t *keys = track->track.keys;
 
             track->start_time = keys[0].time;
             track->end_time = keys[track->track.key_count - 1u].time;
@@ -5182,7 +5272,7 @@ static int prepare_asset_output(const char *target,
     anim_track_view_t *animation_tracks = NULL;
     anim_transform_tracks_t *animation_transforms = NULL;
     anim_visibility_tracks_t *animation_visibility = NULL;
-    anim_scalar_key_t *morph_animation_keys = NULL;
+    anim_scalar_hermite_key_t *morph_animation_keys = NULL;
     anim_track_view_t *morph_animation_tracks = NULL;
     pvr_chunk_shape_channel_t *morph_animation_channels = NULL;
     pvr_chunk_morph_animation_binding_t *morph_animation_bindings = NULL;
@@ -5653,7 +5743,7 @@ static int validate_multi_morph_animation(
     pvr_chunk_asset_section_t section;
     pvr_chunk_morph_animation_section_view_t view;
     const void *data;
-    anim_scalar_key_t *keys = NULL;
+    anim_scalar_hermite_key_t *keys = NULL;
     anim_track_view_t *tracks = NULL;
     pvr_chunk_shape_channel_t *channels = NULL;
     pvr_chunk_morph_animation_binding_t *bindings = NULL;

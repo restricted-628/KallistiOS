@@ -195,12 +195,13 @@ authority for proving every sparse index exists in the selected model.
 
 Scene-instance morph weights are stored separately in pointer-free
 little-endian `PMW1`. Ordered bindings name a hierarchy node and its model,
-then own one finite STEP/LINEAR scalar channel per target. Admission checks
+then own one finite STEP, LINEAR, or explicit cubic Hermite scalar channel per
+target. Admission checks
 gapless channel and key spans, strict key times, CRCs, and the exact aggregate
 interval. `pvr_chunk_morph_animation_section_validate_scene()` proves each
 node/model association against `PCH1` and `PMT1`, then proves the referenced
 `PMS1` target count matches the binding. Materialization fills caller-owned
-`anim_scalar_key_t`, `anim_track_view_t`, and
+`anim_scalar_hermite_key_t`, `anim_track_view_t`, and
 `pvr_chunk_shape_channel_t` arrays, so the existing shape-motion sampler and
 deformation kernel remain the only runtime path.
 
@@ -321,15 +322,15 @@ publication; indexed accessors expose its transform and track records, and
 `pvr_chunk_animation_section_materialize()` fills caller-owned canonical keys
 and existing animation runtime bindings. Version 1 remains readable with
 quaternion-only rotation; version 2 retains quaternion, XYZ Euler, or ZXY Euler
-tracks. Euler values stay as radians through interpolation over shortest
+tracks, and version 3 adds explicit incoming and outgoing cubic Hermite
+tangents. Euler values stay as radians through interpolation over shortest
 angular arcs and become normalized quaternions only at the sampled-pose
 boundary. Sampling, blending, events, and playback remain the responsibility
 of `dc/animation.h`; the asset layer owns no clock, worker, or alternate
-evaluator. The glTF/GLB importer uses the same section for one authored
-STEP/LINEAR TRS clip. Quaternion keys are normalized. Authored morph-weight
-channels use the separate `PMW1` instance-binding section described above;
-cubic Hermite tracks remain rejected rather than being misidentified as
-Catmull-Rom.
+evaluator. The glTF/GLB importer uses the same section for authored STEP,
+LINEAR, and CUBICSPLINE TRS clips. Quaternion values are normalized while
+their derivative tangents remain unnormalized. Authored morph-weight channels
+use the separate `PMW1` instance-binding section described above.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The

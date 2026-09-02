@@ -109,37 +109,62 @@ int pvr_scene_ir_serialize_morph_animation(
             const pvr_chunk_shape_channel_t *channel =
                 binding->channels + channel_index;
             const anim_track_view_t *track = channel->weight;
-            const anim_scalar_key_t *keys;
+            const uint8_t *keys;
             size_t key;
 
             if(!track || !isfinite(channel->fallback_weight) ||
                track->track.kind != ANIM_VALUE_SCALAR ||
                (track->track.interpolation != ANIM_INTERPOLATION_STEP &&
-                track->track.interpolation != ANIM_INTERPOLATION_LINEAR) ||
+                track->track.interpolation != ANIM_INTERPOLATION_LINEAR &&
+                track->track.interpolation !=
+                    ANIM_INTERPOLATION_CUBIC_HERMITE) ||
                !track->track.keys || !track->track.key_count ||
-               track->track.stride != sizeof(anim_scalar_key_t) ||
+               (track->track.interpolation ==
+                    ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                    track->track.stride !=
+                        sizeof(anim_scalar_hermite_key_t) :
+                    (track->track.stride != sizeof(anim_scalar_key_t) &&
+                     track->track.stride !=
+                         sizeof(anim_scalar_hermite_key_t))) ||
                track->track.key_count > UINT32_MAX - key_count) {
                 errno = EINVAL;
                 return -1;
             }
             keys = track->track.keys;
             for(key = 0; key < track->track.key_count; ++key) {
-                if(!isfinite(keys[key].time) ||
-                   !isfinite(keys[key].value) ||
-                   (key && keys[key].time <= keys[key - 1u].time)) {
+                anim_scalar_hermite_key_t decoded = { 0 };
+                const uint8_t *source = keys + key * track->track.stride;
+                size_t source_bytes = track->track.interpolation ==
+                                          ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                                          sizeof(decoded) :
+                                          sizeof(anim_scalar_key_t);
+                float previous_time = 0.0f;
+
+                memcpy(&decoded, source, source_bytes);
+                if(key)
+                    memcpy(&previous_time,
+                           keys + (key - 1u) * track->track.stride,
+                           sizeof(previous_time));
+                if(!isfinite(decoded.time) ||
+                   !isfinite(decoded.value) ||
+                   (track->track.interpolation ==
+                        ANIM_INTERPOLATION_CUBIC_HERMITE &&
+                    (!isfinite(decoded.in_tangent) ||
+                     !isfinite(decoded.out_tangent))) ||
+                   (key && decoded.time <= previous_time)) {
                     errno = EINVAL;
                     return -1;
                 }
                 if(!observed_key) {
-                    observed_start = keys[key].time;
-                    observed_end = keys[key].time;
+                    observed_start = decoded.time;
+                    observed_end = decoded.time;
                     observed_key = 1;
                 }
                 else {
-                    if(keys[key].time < observed_start)
-                        observed_start = keys[key].time;
-                    if(keys[key].time > observed_end)
-                        observed_end = keys[key].time;
+                    if(decoded.time < observed_start)
+                        observed_start = decoded.time;
+                    if(decoded.time > observed_end)
+                        observed_end = decoded.time;
                 }
             }
             key_count += track->track.key_count;
@@ -212,7 +237,7 @@ int pvr_scene_ir_serialize_morph_animation(
             const pvr_chunk_shape_channel_t *channel =
                 binding->channels + channel_index;
             const anim_track_view_t *track = channel->weight;
-            const anim_scalar_key_t *keys = track->track.keys;
+            const uint8_t *keys = track->track.keys;
             uint8_t *channel_record = bytes +
                 PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES + binding_bytes +
                 channel_cursor * PVR_CHUNK_MORPH_ANIMATION_CHANNEL_BYTES;
@@ -230,13 +255,23 @@ int pvr_scene_ir_serialize_morph_animation(
             store_le32(track_record + 8,
                        (uint32_t)track->track.key_count);
             for(key = 0; key < track->track.key_count; ++key) {
+                anim_scalar_hermite_key_t decoded = { 0 };
                 uint8_t *key_record = bytes +
                     PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES + binding_bytes +
                     channel_bytes + track_bytes + key_cursor *
                         PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES;
 
-                store_float(key_record + 0, keys[key].time);
-                store_float(key_record + 4, keys[key].value);
+                memcpy(&decoded, keys + key * track->track.stride,
+                       track->track.interpolation ==
+                           ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                           sizeof(decoded) : sizeof(anim_scalar_key_t));
+                store_float(key_record + 0, decoded.time);
+                store_float(key_record + 4, decoded.value);
+                if(track->track.interpolation ==
+                   ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                    store_float(key_record + 8, decoded.in_tangent);
+                    store_float(key_record + 12, decoded.out_tangent);
+                }
                 ++key_cursor;
             }
             ++channel_cursor;
@@ -993,7 +1028,20 @@ static uint32_t animation_track_ordinal(
     return PVR_CHUNK_ANIMATION_TRACK_NONE;
 }
 
-static size_t animation_key_size(anim_value_kind_t kind) {
+static size_t animation_key_size(anim_value_kind_t kind,
+                                 anim_interpolation_t interpolation) {
+    if(interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+        switch(kind) {
+            case ANIM_VALUE_SCALAR:
+                return sizeof(anim_scalar_hermite_key_t);
+            case ANIM_VALUE_VECTOR:
+                return sizeof(anim_vector_hermite_key_t);
+            case ANIM_VALUE_QUATERNION:
+                return sizeof(anim_quaternion_hermite_key_t);
+            default:
+                return 0;
+        }
+    }
     switch(kind) {
         case ANIM_VALUE_SCALAR:
             return sizeof(anim_scalar_key_t);
@@ -1018,16 +1066,15 @@ static int animation_track_valid(const anim_track_view_t *view,
     if((uintptr_t)view & (_Alignof(anim_track_view_t) - 1u))
         return 0;
     track = &view->track;
-    minimum_size = animation_key_size(expected);
+    minimum_size = animation_key_size(expected, track->interpolation);
     return track->kind == expected && track->keys && track->key_count &&
            !((uintptr_t)track->keys & 3u) && minimum_size &&
            track->stride >= minimum_size && !(track->stride & 3u) &&
            track->interpolation >= ANIM_INTERPOLATION_STEP &&
-           track->interpolation <= ANIM_INTERPOLATION_CATMULL_ROM &&
+           track->interpolation <= ANIM_INTERPOLATION_CUBIC_HERMITE &&
            !(expected == ANIM_VALUE_BOOLEAN &&
              track->interpolation != ANIM_INTERPOLATION_STEP) &&
-           !((expected == ANIM_VALUE_QUATERNION ||
-              expected == ANIM_VALUE_BOOLEAN) &&
+           !(expected == ANIM_VALUE_QUATERNION &&
              track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) &&
            track->key_count - 1u <=
                (SIZE_MAX - minimum_size) / track->stride &&
@@ -1253,32 +1300,74 @@ int pvr_scene_ir_serialize_animation(
             store_float(key_record, time);
             switch(track->kind) {
                 case ANIM_VALUE_SCALAR: {
-                    anim_scalar_key_t key;
+                    if(track->interpolation ==
+                       ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                        anim_scalar_hermite_key_t key;
 
-                    memcpy(&key, source, sizeof(key));
-                    store_float(key_record + 4, key.value);
+                        memcpy(&key, source, sizeof(key));
+                        store_float(key_record + 4, key.value);
+                        store_float(key_record + 20, key.in_tangent);
+                        store_float(key_record + 36, key.out_tangent);
+                    }
+                    else {
+                        anim_scalar_key_t key;
+
+                        memcpy(&key, source, sizeof(key));
+                        store_float(key_record + 4, key.value);
+                    }
                     break;
                 }
 
                 case ANIM_VALUE_VECTOR: {
-                    anim_vector_key_t key;
+                    anim_vector_hermite_key_t key;
 
-                    memcpy(&key, source, sizeof(key));
+                    memset(&key, 0, sizeof(key));
+                    memcpy(&key, source,
+                           track->interpolation ==
+                               ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                               sizeof(key) : sizeof(anim_vector_key_t));
                     store_float(key_record + 4, key.value.x);
                     store_float(key_record + 8, key.value.y);
                     store_float(key_record + 12, key.value.z);
                     store_float(key_record + 16, key.value.w);
+                    if(track->interpolation ==
+                       ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                        store_float(key_record + 20, key.in_tangent.x);
+                        store_float(key_record + 24, key.in_tangent.y);
+                        store_float(key_record + 28, key.in_tangent.z);
+                        store_float(key_record + 32, key.in_tangent.w);
+                        store_float(key_record + 36, key.out_tangent.x);
+                        store_float(key_record + 40, key.out_tangent.y);
+                        store_float(key_record + 44, key.out_tangent.z);
+                        store_float(key_record + 48, key.out_tangent.w);
+                    }
                     break;
                 }
 
                 case ANIM_VALUE_QUATERNION: {
-                    anim_quaternion_key_t key;
+                    anim_quaternion_hermite_key_t key;
 
-                    memcpy(&key, source, sizeof(key));
+                    memset(&key, 0, sizeof(key));
+                    memcpy(&key, source,
+                           track->interpolation ==
+                               ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                               sizeof(key) :
+                               sizeof(anim_quaternion_key_t));
                     store_float(key_record + 4, key.value.w);
                     store_float(key_record + 8, key.value.x);
                     store_float(key_record + 12, key.value.y);
                     store_float(key_record + 16, key.value.z);
+                    if(track->interpolation ==
+                       ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                        store_float(key_record + 20, key.in_tangent.w);
+                        store_float(key_record + 24, key.in_tangent.x);
+                        store_float(key_record + 28, key.in_tangent.y);
+                        store_float(key_record + 32, key.in_tangent.z);
+                        store_float(key_record + 36, key.out_tangent.w);
+                        store_float(key_record + 40, key.out_tangent.x);
+                        store_float(key_record + 44, key.out_tangent.y);
+                        store_float(key_record + 48, key.out_tangent.z);
+                    }
                     break;
                 }
 

@@ -23,7 +23,8 @@ program. It accepts one selected scene and any nonzero set of unique
 meshes, including repeated instances, triangle primitives, indexed or non-
 indexed positions, optional normals, UV set zero, and `COLOR_0`, stable
 base-color texture ordinals, parent-before-child node transforms, and
-STEP/LINEAR translation, rotation, scale, or morph-weight channels. Multiple
+STEP, LINEAR, or CUBICSPLINE translation, rotation, scale, and morph-weight
+channels. Multiple
 animations retain source order and may independently contain transform-only,
 morph-only, or combined channels. Each unique mesh becomes one PCM2 model
 ordinal
@@ -51,12 +52,13 @@ boundaries include required extensions, GPU instancing, non-triangle primitives,
 tangent/custom vertex attributes, texture
 coordinate sets other than zero, texture transforms, transparent or advanced
 materials, detached skin joints, conflicting skins on repeated mesh instances,
-matrix-authored animation targets, and cubic-spline
-tracks. Static matrix-authored nodes in an animated scene are admitted when
+matrix-authored animation targets. Static matrix-authored nodes in an animated
+scene are admitted when
 their affine transform decomposes exactly into translation, quaternion
 rotation, and signed scale; shear and degenerate axes are rejected.
-The latter use Hermite tangents and are not silently mapped to the runtime's
-Catmull-Rom interpolation. PBR base color, metallic, and roughness are converted
+Explicit cubic-spline tangents retain their time-derivative meaning and are not
+silently mapped to Catmull-Rom interpolation. PBR base color, metallic, and
+roughness are converted
 deterministically into compact diffuse, ambient, specular, and exponent state;
 texture images and VRAM placement remain application resource policy.
 
@@ -224,15 +226,17 @@ PCM2. A two-key linear vector track moves the explicit scene root from zero to
 the supplied finite offset over the clip interval `[0, 1]`. The target parser
 materializes the clip into the existing animation track, transform, visibility,
 sampling, blending, and playback runtime; the container adds no second clock
-or interpolation engine. New output uses PAT1 version 2, which retains
-quaternion, XYZ Euler, or ZXY Euler rotation tracks; the target also reads
-quaternion-only version 1 sections. This bounded fixture requires
+or interpolation engine. New output uses PAT1 version 3, which retains
+quaternion, XYZ Euler, or ZXY Euler rotation tracks and explicit cubic Hermite
+tangents; the target also reads value-only versions 1 and 2. This bounded
+fixture requires
 `--scene-root`, while scene importers supply wider authored clips to the same
 serializer.
 
 Authored glTF morph-weight channels use a separate pointer-free `PMW1`
 section. Each hierarchy-node binding identifies the instanced model and owns
-one scalar STEP/LINEAR track per sparse `PMS1` target. This keeps independently
+one scalar STEP, LINEAR, or CUBICSPLINE track per sparse `PMS1` target. This
+keeps independently
 animated instances distinct even when they share one model ordinal. The
 converter cross-validates every node, model, morph-section ordinal, and target
 count before publication; the target materializer reuses the existing scalar

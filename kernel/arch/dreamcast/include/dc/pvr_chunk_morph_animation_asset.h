@@ -34,8 +34,11 @@ __BEGIN_DECLS
 /** \brief Little-endian bytes `PMW1` at the start of the section. */
 #define PVR_CHUNK_MORPH_ANIMATION_MAGIC UINT32_C(0x31574d50)
 
+/** \brief Original value-only morph-animation version. */
+#define PVR_CHUNK_MORPH_ANIMATION_VERSION_1 1u
+
 /** \brief Current serialized morph-animation version. */
-#define PVR_CHUNK_MORPH_ANIMATION_VERSION 1u
+#define PVR_CHUNK_MORPH_ANIMATION_VERSION 2u
 
 /** \brief Fixed section header size. */
 #define PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES 64u
@@ -49,8 +52,11 @@ __BEGIN_DECLS
 /** \brief Fixed serialized scalar-track size. */
 #define PVR_CHUNK_MORPH_ANIMATION_TRACK_BYTES 16u
 
-/** \brief Fixed serialized scalar-key size. */
-#define PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES 8u
+/** \brief Legacy serialized scalar-key size. */
+#define PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1 8u
+
+/** \brief Current serialized scalar-key size. */
+#define PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES 16u
 
 /** \brief Pointer-free node binding decoded from one section record. */
 typedef struct pvr_chunk_morph_animation_section_binding {
@@ -98,13 +104,15 @@ typedef struct pvr_chunk_morph_animation_section_view {
     float start_time;
     float end_time;
     uint16_t version;
+    uint16_t key_bytes;
 } pvr_chunk_morph_animation_section_view_t;
 
 /** \brief Parse and completely validate one morph-animation section.
 
     Bindings must be ordered by unique hierarchy-node index. Channel and key
-    spans are gapless, every channel has one scalar STEP or LINEAR track, and
-    all finite keys are strictly ordered. The complete image and both CRCs are
+    spans are gapless, every channel has one scalar STEP, LINEAR, or explicit
+    cubic Hermite track, and all finite keys are strictly ordered. The complete
+    image and both CRCs are
     admitted before \p view changes.
 */
 int pvr_chunk_morph_animation_section_open(
@@ -129,7 +137,7 @@ int pvr_chunk_morph_animation_section_track_get(
 /** \brief Decode one admitted scalar key by packed index. */
 int pvr_chunk_morph_animation_section_key_get(
     const pvr_chunk_morph_animation_section_view_t *view, size_t index,
-    anim_scalar_key_t *key);
+    anim_scalar_hermite_key_t *key);
 
 /** \brief Cross-check instance bindings against scene and model metadata.
 
@@ -152,7 +160,7 @@ int pvr_chunk_morph_animation_section_validate_scene(
 */
 int pvr_chunk_morph_animation_section_materialize(
     const pvr_chunk_morph_animation_section_view_t *view,
-    anim_scalar_key_t *keys, size_t key_capacity,
+    anim_scalar_hermite_key_t *keys, size_t key_capacity,
     anim_track_view_t *tracks, size_t track_capacity,
     pvr_chunk_shape_channel_t *channels, size_t channel_capacity,
     pvr_chunk_morph_animation_binding_t *bindings,

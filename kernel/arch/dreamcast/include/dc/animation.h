@@ -45,7 +45,9 @@ typedef enum anim_interpolation {
     ANIM_INTERPOLATION_STEP = 0,
     ANIM_INTERPOLATION_LINEAR,
     /** Time-aware Catmull-Rom spline for scalar and vector tracks. */
-    ANIM_INTERPOLATION_CATMULL_ROM
+    ANIM_INTERPOLATION_CATMULL_ROM,
+    /** Cubic Hermite interpolation with explicit per-key tangents. */
+    ANIM_INTERPOLATION_CUBIC_HERMITE
 } anim_interpolation_t;
 
 /** \brief Quaternion components in scalar-first WXYZ order. */
@@ -84,6 +86,38 @@ typedef struct anim_quaternion_key {
     float time;
     anim_quaternion_t value;
 } anim_quaternion_key_t;
+
+/** \brief Scalar keyframe with incoming and outgoing time derivatives.
+
+    Reserved words keep value and tangent slots layout-compatible with the
+    canonical four-component Hermite keys used by heterogeneous asset arrays.
+    They must be zero.
+*/
+typedef struct anim_scalar_hermite_key {
+    float time;
+    float value;
+    float value_reserved[3];
+    float in_tangent;
+    float in_tangent_reserved[3];
+    float out_tangent;
+    float out_tangent_reserved[3];
+} anim_scalar_hermite_key_t;
+
+/** \brief Vector keyframe with incoming and outgoing time derivatives. */
+typedef struct anim_vector_hermite_key {
+    float time;
+    vector_t value;
+    vector_t in_tangent;
+    vector_t out_tangent;
+} anim_vector_hermite_key_t;
+
+/** \brief Quaternion keyframe with component-wise time derivatives. */
+typedef struct anim_quaternion_hermite_key {
+    float time;
+    anim_quaternion_t value;
+    anim_quaternion_t in_tangent;
+    anim_quaternion_t out_tangent;
+} anim_quaternion_hermite_key_t;
 
 /** \brief Step-only Boolean keyframe. Value must be zero or one. */
 typedef struct anim_boolean_key {
@@ -314,7 +348,9 @@ int anim_track_open(const anim_track_t *track, anim_track_view_t *output);
 
     Catmull-Rom tracks use adjacent key times when deriving their tangents, so
     unevenly spaced keys retain a consistent time-domain slope. Endpoint keys
-    are repeated as the missing outer control point.
+    are repeated as the missing outer control point. Cubic Hermite tracks use
+    the lower key's outgoing derivative and upper key's incoming derivative,
+    scaled by the active key interval.
 */
 int anim_track_sample_scalar(const anim_track_view_t *track, float time,
                              float *output, anim_sample_info_t *info);
@@ -322,16 +358,18 @@ int anim_track_sample_scalar(const anim_track_view_t *track, float time,
 /** \brief Sample a vector track, clamping time to its endpoints.
 
     Catmull-Rom interpolation applies independently to XYZW with the same
-    time-aware tangent and endpoint rules as scalar tracks.
+    time-aware tangent and endpoint rules as scalar tracks. Cubic Hermite
+    interpolation applies the explicit derivative slots independently.
 */
 int anim_track_sample_vector(const anim_track_view_t *track, float time,
                              vector_t *output, anim_sample_info_t *info);
 
 /** \brief Sample an XYZ Euler-angle vector over shortest angular arcs.
 
-    Angles are in radians. Step, linear, and time-aware Catmull-Rom tracks are
-    supported. For spline sampling, neighboring control points are unwrapped
-    around the active interval before interpolation. The output W is zero.
+    Angles are in radians. Step, linear, time-aware Catmull-Rom, and explicit
+    cubic Hermite tracks are supported. For Catmull-Rom sampling, neighboring
+    control points are unwrapped around the active interval before
+    interpolation. The output W is zero.
 */
 int anim_track_sample_euler(const anim_track_view_t *track, float time,
                             vector_t *output, anim_sample_info_t *info);
@@ -339,7 +377,9 @@ int anim_track_sample_euler(const anim_track_view_t *track, float time,
 /** \brief Sample a quaternion track with shortest-path interpolation.
 
     Step keys are normalized before publication. Linear interpolation uses a
-    normalized shortest-path spherical interpolation.
+    normalized shortest-path spherical interpolation. Cubic Hermite performs
+    component-wise interpolation with explicit derivatives and normalizes the
+    sampled result before publication.
 */
 int anim_track_sample_quaternion(const anim_track_view_t *track, float time,
                                  anim_quaternion_t *output,

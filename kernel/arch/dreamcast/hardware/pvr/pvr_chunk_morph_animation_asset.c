@@ -34,7 +34,9 @@ enum {
     TRACK_KEY_COUNT_OFFSET = 8,
     TRACK_RESERVED1_OFFSET = 12,
     KEY_TIME_OFFSET = 0,
-    KEY_VALUE_OFFSET = 4
+    KEY_VALUE_OFFSET = 4,
+    KEY_IN_TANGENT_OFFSET = 8,
+    KEY_OUT_TANGENT_OFFSET = 12
 };
 
 static uint16_t read_le16(const uint8_t *bytes) {
@@ -105,9 +107,15 @@ static void decode_track(
     track->key_count = read_le32(record + TRACK_KEY_COUNT_OFFSET);
 }
 
-static void decode_key(const uint8_t *record, anim_scalar_key_t *key) {
+static void decode_key(const uint8_t *record, uint16_t version,
+                       anim_scalar_hermite_key_t *key) {
+    memset(key, 0, sizeof(*key));
     key->time = read_float(record + KEY_TIME_OFFSET);
     key->value = read_float(record + KEY_VALUE_OFFSET);
+    if(version >= PVR_CHUNK_MORPH_ANIMATION_VERSION) {
+        key->in_tangent = read_float(record + KEY_IN_TANGENT_OFFSET);
+        key->out_tangent = read_float(record + KEY_OUT_TANGENT_OFFSET);
+    }
 }
 
 int pvr_chunk_morph_animation_section_open(
@@ -119,6 +127,8 @@ int pvr_chunk_morph_animation_section_open(
     uint32_t channel_count;
     uint32_t track_count;
     uint32_t key_count;
+    uint16_t version;
+    uint16_t serialized_key_bytes;
     uint64_t encoded_binding_bytes;
     uint64_t encoded_channel_bytes;
     uint64_t encoded_track_bytes;
@@ -138,7 +148,6 @@ int pvr_chunk_morph_animation_section_open(
     }
     if(size < PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES ||
        read_le32(bytes) != PVR_CHUNK_MORPH_ANIMATION_MAGIC ||
-       read_le16(bytes + 4) != PVR_CHUNK_MORPH_ANIMATION_VERSION ||
        read_le16(bytes + 6) != PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES ||
        read_le32(bytes + 8) != size ||
        read_le32(bytes + HEADER_CRC_OFFSET) !=
@@ -146,6 +155,16 @@ int pvr_chunk_morph_animation_section_open(
         errno = EILSEQ;
         return -1;
     }
+    version = read_le16(bytes + 4);
+    if(version != PVR_CHUNK_MORPH_ANIMATION_VERSION_1 &&
+       version != PVR_CHUNK_MORPH_ANIMATION_VERSION) {
+        errno = EILSEQ;
+        return -1;
+    }
+    serialized_key_bytes =
+        version == PVR_CHUNK_MORPH_ANIMATION_VERSION_1 ?
+            PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1 :
+            PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES;
     for(index = HEADER_RESERVED_OFFSET;
         index < PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES; ++index) {
         if(bytes[index]) {
@@ -171,7 +190,7 @@ int pvr_chunk_morph_animation_section_open(
     payload_bytes = encoded_binding_bytes + encoded_channel_bytes +
                     encoded_track_bytes +
                     (uint64_t)key_count *
-                        PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES;
+                        serialized_key_bytes;
     if(payload_bytes > SIZE_MAX ||
        payload_bytes != size - PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES ||
        read_le32(bytes + HEADER_PAYLOAD_CRC_OFFSET) != crc32_bytes(
@@ -197,7 +216,8 @@ int pvr_chunk_morph_animation_section_open(
     parsed.key_count = key_count;
     parsed.start_time = read_float(bytes + HEADER_START_TIME_OFFSET);
     parsed.end_time = read_float(bytes + HEADER_END_TIME_OFFSET);
-    parsed.version = PVR_CHUNK_MORPH_ANIMATION_VERSION;
+    parsed.version = version;
+    parsed.key_bytes = serialized_key_bytes;
     if(!isfinite(parsed.start_time) || !isfinite(parsed.end_time) ||
        parsed.start_time >= parsed.end_time) {
         errno = EILSEQ;
@@ -254,19 +274,27 @@ int pvr_chunk_morph_animation_section_open(
         if(read_le16(record + TRACK_RESERVED0_OFFSET) ||
            read_le32(record + TRACK_RESERVED1_OFFSET) ||
            (track.interpolation != ANIM_INTERPOLATION_STEP &&
-            track.interpolation != ANIM_INTERPOLATION_LINEAR) ||
+            track.interpolation != ANIM_INTERPOLATION_LINEAR &&
+            (version < PVR_CHUNK_MORPH_ANIMATION_VERSION ||
+             track.interpolation !=
+                 ANIM_INTERPOLATION_CUBIC_HERMITE)) ||
            !track.key_count || track.first_key != next_key ||
            track.key_count > parsed.key_count - next_key) {
             errno = EILSEQ;
             return -1;
         }
         for(key = 0; key < track.key_count; ++key) {
-            anim_scalar_key_t decoded;
+            anim_scalar_hermite_key_t decoded;
 
             decode_key((const uint8_t *)parsed.keys + (next_key + key) *
-                           PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES,
+                           parsed.key_bytes,
+                       parsed.version,
                        &decoded);
             if(!isfinite(decoded.time) || !isfinite(decoded.value) ||
+               (track.interpolation ==
+                    ANIM_INTERPOLATION_CUBIC_HERMITE &&
+                (!isfinite(decoded.in_tangent) ||
+                 !isfinite(decoded.out_tangent))) ||
                (key && decoded.time <= previous_time)) {
                 errno = EILSEQ;
                 return -1;
@@ -362,7 +390,7 @@ int pvr_chunk_morph_animation_section_track_get(
 
 int pvr_chunk_morph_animation_section_key_get(
     const pvr_chunk_morph_animation_section_view_t *view, size_t index,
-    anim_scalar_key_t *key) {
+    anim_scalar_hermite_key_t *key) {
     pvr_chunk_morph_animation_section_view_t checked;
 
     if(!view || !key || !view->data) {
@@ -377,7 +405,8 @@ int pvr_chunk_morph_animation_section_key_get(
         return -1;
     }
     decode_key((const uint8_t *)checked.keys + index *
-                   PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES,
+                   checked.key_bytes,
+               checked.version,
                key);
     return 0;
 }
@@ -434,7 +463,7 @@ int pvr_chunk_morph_animation_section_validate_scene(
 
 int pvr_chunk_morph_animation_section_materialize(
     const pvr_chunk_morph_animation_section_view_t *view,
-    anim_scalar_key_t *keys, size_t key_capacity,
+    anim_scalar_hermite_key_t *keys, size_t key_capacity,
     anim_track_view_t *tracks, size_t track_capacity,
     pvr_chunk_shape_channel_t *channels, size_t channel_capacity,
     pvr_chunk_morph_animation_binding_t *bindings,
@@ -450,7 +479,7 @@ int pvr_chunk_morph_animation_section_materialize(
 
     if(!view || !keys || !tracks || !channels || !bindings || !animation ||
        !view->data ||
-       ((uintptr_t)keys & (_Alignof(anim_scalar_key_t) - 1u)) ||
+       ((uintptr_t)keys & (_Alignof(anim_scalar_hermite_key_t) - 1u)) ||
        ((uintptr_t)tracks & (_Alignof(anim_track_view_t) - 1u)) ||
        ((uintptr_t)channels &
         (_Alignof(pvr_chunk_shape_channel_t) - 1u)) ||
@@ -506,7 +535,8 @@ int pvr_chunk_morph_animation_section_materialize(
 
     for(index = 0; index < checked.key_count; ++index)
         decode_key((const uint8_t *)checked.keys + index *
-                       PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES,
+                       checked.key_bytes,
+                   checked.version,
                    keys + index);
     for(index = 0; index < checked.track_count; ++index) {
         pvr_chunk_morph_animation_section_track_t track;

@@ -21,8 +21,11 @@ scalar and vector tracks use adjacent key times to derive time-domain tangents,
 so uneven key spacing does not silently become uniform parameter spacing. A
 missing outer endpoint is represented by repeating the endpoint value one
 current interval beyond the track. Quaternion tracks normalize their inputs
-and take the shortest spherical path; cubic quaternion and Boolean tracks are
-rejected rather than being assigned misleading component-wise semantics.
+and linear tracks take the shortest spherical path. Explicit cubic Hermite
+tracks preserve independent incoming and outgoing time derivatives; scalar,
+vector, and quaternion components use the standard Hermite basis, with the
+quaternion result normalized before publication. Boolean tracks remain
+step-only.
 
 Individual tracks clamp rather than wrap. An admitted `anim_clip_view_t`
 collects object tracks under an explicit positive-duration play interval.

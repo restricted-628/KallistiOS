@@ -370,8 +370,9 @@ format, deformation, or tooling gaps:
    of deferred polygon controls, and repeatable scene-level conformance.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose
    deformation. PCH1 version 2 supplies component suppression, hidden-node
-   evaluation, and noncontiguous descendant pruning; PAT1 version 2 supplies
-   exact XYZ/ZXY Euler sampling beside the preferred quaternion path. Do not
+   evaluation, and noncontiguous descendant pruning; PAT1 version 3 supplies
+   exact XYZ/ZXY Euler sampling and cubic Hermite tangents beside the preferred
+   quaternion path. Do not
    replace either with pointer trees or deferred polygon execution.
 3. Keep the separate cell-sprite system outside the 3D compact mesh grammar.
    Its timestamped stream/list sampling and events, whole-motion binding,

@@ -135,6 +135,75 @@ static void test_catmull_rom_tracks(void) {
     assert(scalar_value == 8.0f);
 }
 
+static void test_cubic_hermite_tracks(void) {
+    anim_scalar_hermite_key_t scalars[2] = { 0 };
+    anim_vector_hermite_key_t vectors[2] = { 0 };
+    anim_quaternion_hermite_key_t rotations[2] = { 0 };
+    anim_track_view_t scalar;
+    anim_track_view_t vector;
+    anim_track_view_t rotation;
+    anim_sample_info_t info;
+    anim_quaternion_t quaternion;
+    vector_t vector_value;
+    float scalar_value;
+
+    scalars[0].time = 0.0f;
+    scalars[0].value = 0.0f;
+    scalars[0].out_tangent = 2.0f;
+    scalars[1].time = 2.0f;
+    scalars[1].value = 4.0f;
+    scalar = open_track(ANIM_VALUE_SCALAR,
+                        ANIM_INTERPOLATION_CUBIC_HERMITE,
+                        scalars, 2, sizeof(scalars[0]));
+    assert(anim_track_sample_scalar(&scalar, 1.0f, &scalar_value,
+                                    &info) == 0);
+    assert(close_enough(scalar_value, 2.5f) && info.lower_key == 0 &&
+           info.upper_key == 1 && info.factor == 0.5f);
+
+    vectors[0].time = 0.0f;
+    vectors[0].value = (vector_t){ 0.0f, 2.0f, 4.0f, 1.0f };
+    vectors[0].out_tangent =
+        (vector_t){ 2.0f, 0.0f, -2.0f, 0.0f };
+    vectors[1].time = 2.0f;
+    vectors[1].value = (vector_t){ 4.0f, 6.0f, 8.0f, 1.0f };
+    vector = open_track(ANIM_VALUE_VECTOR,
+                        ANIM_INTERPOLATION_CUBIC_HERMITE,
+                        vectors, 2, sizeof(vectors[0]));
+    assert(anim_track_sample_vector(&vector, 1.0f, &vector_value,
+                                    NULL) == 0);
+    assert(close_enough(vector_value.x, 2.5f) &&
+           close_enough(vector_value.y, 4.0f) &&
+           close_enough(vector_value.z, 5.5f) &&
+           close_enough(vector_value.w, 1.0f));
+
+    rotations[0].time = 0.0f;
+    rotations[0].value.w = 1.0f;
+    rotations[1].time = 1.0f;
+    rotations[1].value.x = 1.0f;
+    rotation = open_track(ANIM_VALUE_QUATERNION,
+                          ANIM_INTERPOLATION_CUBIC_HERMITE,
+                          rotations, 2, sizeof(rotations[0]));
+    assert(anim_track_sample_quaternion(&rotation, 0.5f, &quaternion,
+                                        NULL) == 0);
+    assert(close_enough(quaternion.w, 0.70710678f) &&
+           close_enough(quaternion.x, 0.70710678f) &&
+           close_enough(quaternion.y, 0.0f) &&
+           close_enough(quaternion.z, 0.0f));
+
+    scalars[1].in_tangent = NAN;
+    {
+        anim_track_t invalid = {
+            ANIM_VALUE_SCALAR, ANIM_INTERPOLATION_CUBIC_HERMITE,
+            scalars, 2, sizeof(scalars[0])
+        };
+        anim_track_view_t unchanged = scalar;
+
+        errno = 0;
+        assert(anim_track_open(&invalid, &scalar) == -1 && errno == EDOM &&
+               !memcmp(&scalar, &unchanged, sizeof(scalar)));
+    }
+}
+
 static void test_track_rejection(void) {
     anim_scalar_key_t scalar[] = {
         { 0.0f, 1.0f }, { 0.0f, 2.0f }
@@ -983,6 +1052,7 @@ static void test_events_and_morph_binding(void) {
 int main(void) {
     test_scalar_tracks();
     test_catmull_rom_tracks();
+    test_cubic_hermite_tracks();
     test_track_rejection();
     test_vector_and_quaternion_tracks();
     test_euler_tracks();

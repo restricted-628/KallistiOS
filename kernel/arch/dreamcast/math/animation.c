@@ -38,6 +38,19 @@ static size_t key_size(anim_value_kind_t kind) {
     }
 }
 
+static size_t hermite_key_size(anim_value_kind_t kind) {
+    switch(kind) {
+        case ANIM_VALUE_SCALAR:
+            return sizeof(anim_scalar_hermite_key_t);
+        case ANIM_VALUE_VECTOR:
+            return sizeof(anim_vector_hermite_key_t);
+        case ANIM_VALUE_QUATERNION:
+            return sizeof(anim_quaternion_hermite_key_t);
+        default:
+            return 0;
+    }
+}
+
 static const void *key_at(const anim_track_t *track, size_t index) {
     return (const uint8_t *)track->keys + index * track->stride;
 }
@@ -68,18 +81,64 @@ static int key_value_valid(const anim_track_t *track, size_t index) {
     switch(track->kind) {
         case ANIM_VALUE_SCALAR: {
             const anim_scalar_key_t *scalar = key;
-            return isfinite(scalar->value);
+
+            if(!isfinite(scalar->value))
+                return 0;
+            if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                const anim_scalar_hermite_key_t *hermite = key;
+
+                return isfinite(hermite->in_tangent) &&
+                       isfinite(hermite->out_tangent) &&
+                       hermite->value_reserved[0] == 0.0f &&
+                       hermite->value_reserved[1] == 0.0f &&
+                       hermite->value_reserved[2] == 0.0f &&
+                       hermite->in_tangent_reserved[0] == 0.0f &&
+                       hermite->in_tangent_reserved[1] == 0.0f &&
+                       hermite->in_tangent_reserved[2] == 0.0f &&
+                       hermite->out_tangent_reserved[0] == 0.0f &&
+                       hermite->out_tangent_reserved[1] == 0.0f &&
+                       hermite->out_tangent_reserved[2] == 0.0f;
+            }
+            return 1;
         }
 
         case ANIM_VALUE_VECTOR: {
             const anim_vector_key_t *vector = key;
-            return finite4(vector->value.x, vector->value.y,
-                           vector->value.z, vector->value.w);
+            if(!finite4(vector->value.x, vector->value.y,
+                        vector->value.z, vector->value.w))
+                return 0;
+            if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                const anim_vector_hermite_key_t *hermite = key;
+
+                return finite4(hermite->in_tangent.x,
+                               hermite->in_tangent.y,
+                               hermite->in_tangent.z,
+                               hermite->in_tangent.w) &&
+                       finite4(hermite->out_tangent.x,
+                               hermite->out_tangent.y,
+                               hermite->out_tangent.z,
+                               hermite->out_tangent.w);
+            }
+            return 1;
         }
 
         case ANIM_VALUE_QUATERNION: {
             const anim_quaternion_key_t *quaternion = key;
-            return quaternion_valid(&quaternion->value);
+            if(!quaternion_valid(&quaternion->value))
+                return 0;
+            if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                const anim_quaternion_hermite_key_t *hermite = key;
+
+                return finite4(hermite->in_tangent.w,
+                               hermite->in_tangent.x,
+                               hermite->in_tangent.y,
+                               hermite->in_tangent.z) &&
+                       finite4(hermite->out_tangent.w,
+                               hermite->out_tangent.x,
+                               hermite->out_tangent.y,
+                               hermite->out_tangent.z);
+            }
+            return 1;
         }
 
         case ANIM_VALUE_BOOLEAN: {
@@ -102,18 +161,20 @@ int anim_track_open(const anim_track_t *track, anim_track_view_t *output) {
        ((uintptr_t)track->keys & 3u) ||
        (track->interpolation != ANIM_INTERPOLATION_STEP &&
         track->interpolation != ANIM_INTERPOLATION_LINEAR &&
-        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM)) {
+        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM &&
+        track->interpolation != ANIM_INTERPOLATION_CUBIC_HERMITE)) {
         errno = EINVAL;
         return -1;
     }
 
-    minimum_size = key_size(track->kind);
+    minimum_size = track->interpolation ==
+                       ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                       hermite_key_size(track->kind) : key_size(track->kind);
     if(!minimum_size || track->stride < minimum_size ||
        (track->stride & 3u) ||
        (track->kind == ANIM_VALUE_BOOLEAN &&
         track->interpolation != ANIM_INTERPOLATION_STEP) ||
-       ((track->kind == ANIM_VALUE_QUATERNION ||
-         track->kind == ANIM_VALUE_BOOLEAN) &&
+       (track->kind == ANIM_VALUE_QUATERNION &&
         track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM)) {
         errno = EINVAL;
         return -1;
@@ -156,14 +217,19 @@ static int view_valid(const anim_track_view_t *view,
     if(!view)
         return 0;
     track = &view->track;
-    minimum_size = key_size(expected_kind);
+    minimum_size = track->interpolation ==
+                       ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                       hermite_key_size(expected_kind) :
+                       key_size(expected_kind);
     if(track->kind != expected_kind || !track->keys || !track->key_count ||
        ((uintptr_t)track->keys & 3u) ||
        (track->interpolation != ANIM_INTERPOLATION_STEP &&
         track->interpolation != ANIM_INTERPOLATION_LINEAR &&
-        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM) ||
-       ((expected_kind == ANIM_VALUE_QUATERNION ||
-         expected_kind == ANIM_VALUE_BOOLEAN) &&
+        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM &&
+        track->interpolation != ANIM_INTERPOLATION_CUBIC_HERMITE) ||
+       (expected_kind == ANIM_VALUE_BOOLEAN &&
+        track->interpolation != ANIM_INTERPOLATION_STEP) ||
+       (expected_kind == ANIM_VALUE_QUATERNION &&
         track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) ||
        track->stride < minimum_size || (track->stride & 3u) ||
        !isfinite(view->start_time) || !isfinite(view->end_time) ||
@@ -288,6 +354,28 @@ static int catmull_component(float previous, float lower, float upper,
     return 0;
 }
 
+static int hermite_component(float lower, float upper,
+                             float lower_out_tangent,
+                             float upper_in_tangent, float interval,
+                             float factor, float *output) {
+    float factor_squared = factor * factor;
+    float factor_cubed = factor_squared * factor;
+    float value;
+
+    value = (2.0f * factor_cubed - 3.0f * factor_squared + 1.0f) * lower +
+            (factor_cubed - 2.0f * factor_squared + factor) *
+                interval * lower_out_tangent +
+            (-2.0f * factor_cubed + 3.0f * factor_squared) * upper +
+            (factor_cubed - factor_squared) *
+                interval * upper_in_tangent;
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = value;
+    return 0;
+}
+
 static void catmull_indices(const anim_track_view_t *view,
                             size_t lower, size_t upper,
                             size_t *previous, size_t *next,
@@ -332,7 +420,21 @@ int anim_track_sample_scalar(const anim_track_view_t *view, float time,
         float next = ((const anim_scalar_key_t *)
                       key_at(&view->track, upper))->value;
 
-        if(view->track.interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
+        if(view->track.interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+            const anim_scalar_hermite_key_t *lower_key =
+                key_at(&view->track, lower);
+            const anim_scalar_hermite_key_t *upper_key =
+                key_at(&view->track, upper);
+
+            if(hermite_component(value, next, lower_key->out_tangent,
+                                 upper_key->in_tangent,
+                                 key_time(&view->track, upper) -
+                                     key_time(&view->track, lower),
+                                 factor, &value) < 0)
+                return -1;
+        }
+        else if(view->track.interpolation ==
+                ANIM_INTERPOLATION_CATMULL_ROM) {
             size_t previous_index;
             size_t next_index;
             float previous_time;
@@ -382,7 +484,36 @@ int anim_track_sample_vector(const anim_track_view_t *view, float time,
     if(upper != lower) {
         const vector_t *next = &((const anim_vector_key_t *)
                                  key_at(&view->track, upper))->value;
-        if(view->track.interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
+        if(view->track.interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+            const anim_vector_hermite_key_t *lower_key =
+                key_at(&view->track, lower);
+            const anim_vector_hermite_key_t *upper_key =
+                key_at(&view->track, upper);
+            float interval = key_time(&view->track, upper) -
+                             key_time(&view->track, lower);
+            vector_t interpolated;
+
+            if(hermite_component(value.x, next->x,
+                                 lower_key->out_tangent.x,
+                                 upper_key->in_tangent.x, interval, factor,
+                                 &interpolated.x) < 0 ||
+               hermite_component(value.y, next->y,
+                                 lower_key->out_tangent.y,
+                                 upper_key->in_tangent.y, interval, factor,
+                                 &interpolated.y) < 0 ||
+               hermite_component(value.z, next->z,
+                                 lower_key->out_tangent.z,
+                                 upper_key->in_tangent.z, interval, factor,
+                                 &interpolated.z) < 0 ||
+               hermite_component(value.w, next->w,
+                                 lower_key->out_tangent.w,
+                                 upper_key->in_tangent.w, interval, factor,
+                                 &interpolated.w) < 0)
+                return -1;
+            value = interpolated;
+        }
+        else if(view->track.interpolation ==
+                ANIM_INTERPOLATION_CATMULL_ROM) {
             size_t previous_index;
             size_t next_index;
             float previous_time;
@@ -481,7 +612,23 @@ static int sample_euler_component(const anim_track_view_t *view,
         float next = value + shortest_angle_delta(
             value, vector_component(upper_value, component));
 
-        if(track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
+        if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+            const anim_vector_hermite_key_t *lower_key =
+                key_at(track, lower);
+            const anim_vector_hermite_key_t *upper_key =
+                key_at(track, upper);
+            float lower_tangent = vector_component(
+                &lower_key->out_tangent, component);
+            float upper_tangent = vector_component(
+                &upper_key->in_tangent, component);
+
+            if(hermite_component(value, next, lower_tangent, upper_tangent,
+                                 key_time(track, upper) -
+                                     key_time(track, lower),
+                                 factor, &value) < 0)
+                return -1;
+        }
+        else if(track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
             size_t previous_index;
             size_t next_index;
             float previous_time;
@@ -840,6 +987,34 @@ int anim_track_sample_quaternion(const anim_track_view_t *view, float time,
                     key_at(&view->track, lower))->value;
     if(lower == upper) {
         if(quaternion_normalize(lower_value, &sampled) < 0)
+            return -1;
+    }
+    else if(view->track.interpolation ==
+            ANIM_INTERPOLATION_CUBIC_HERMITE) {
+        const anim_quaternion_hermite_key_t *lower_key =
+            key_at(&view->track, lower);
+        const anim_quaternion_hermite_key_t *upper_key =
+            key_at(&view->track, upper);
+        float interval = key_time(&view->track, upper) -
+                         key_time(&view->track, lower);
+
+        if(hermite_component(lower_value->w, upper_key->value.w,
+                             lower_key->out_tangent.w,
+                             upper_key->in_tangent.w, interval, factor,
+                             &sampled.w) < 0 ||
+           hermite_component(lower_value->x, upper_key->value.x,
+                             lower_key->out_tangent.x,
+                             upper_key->in_tangent.x, interval, factor,
+                             &sampled.x) < 0 ||
+           hermite_component(lower_value->y, upper_key->value.y,
+                             lower_key->out_tangent.y,
+                             upper_key->in_tangent.y, interval, factor,
+                             &sampled.y) < 0 ||
+           hermite_component(lower_value->z, upper_key->value.z,
+                             lower_key->out_tangent.z,
+                             upper_key->in_tangent.z, interval, factor,
+                             &sampled.z) < 0 ||
+           quaternion_normalize(&sampled, &sampled) < 0)
             return -1;
     }
     else {

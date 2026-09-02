@@ -11,6 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added exact cubic Hermite animation throughout the generic runtime and
+  pointer-free Compact asset pipeline. Scalar, vector, and quaternion tracks
+  preserve independent incoming and outgoing time derivatives; quaternion
+  results are normalized after component-wise Hermite evaluation. PAT1 v3 and
+  PMW1 v2 retain those tangents while continuing to read their value-only
+  predecessors. The glTF/GLB importer now preserves CUBICSPLINE TRS and morph
+  channels rather than rejecting or relabeling them as Catmull-Rom.
+
 * Added pointer-free PAC1 animation catalogs for PCM2. Logical clips map by
   source order and optional unique name to independent PAT1 transform and PMW1
   morph-section ordinals, avoiding empty placeholder sections when a clip uses

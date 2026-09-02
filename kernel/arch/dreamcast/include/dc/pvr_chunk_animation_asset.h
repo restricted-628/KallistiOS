@@ -35,8 +35,11 @@ __BEGIN_DECLS
 /** \brief Original quaternion-only animation-section version. */
 #define PVR_CHUNK_ANIMATION_SECTION_VERSION_1 1u
 
+/** \brief Euler-capable fixed-value animation-section version. */
+#define PVR_CHUNK_ANIMATION_SECTION_VERSION_2 2u
+
 /** \brief Current serialized animation-section version. */
-#define PVR_CHUNK_ANIMATION_SECTION_VERSION 2u
+#define PVR_CHUNK_ANIMATION_SECTION_VERSION 3u
 
 /** \brief Fixed serialized animation header size. */
 #define PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES 64u
@@ -47,8 +50,11 @@ __BEGIN_DECLS
 /** \brief Fixed serialized track descriptor size. */
 #define PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES 16u
 
-/** \brief Fixed serialized canonical key size. */
-#define PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES 24u
+/** \brief Legacy serialized value-only key size. */
+#define PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2 24u
+
+/** \brief Current serialized value-and-tangent key size. */
+#define PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES 56u
 
 /** \brief Serialized ordinal for an absent channel. */
 #define PVR_CHUNK_ANIMATION_TRACK_NONE UINT32_MAX
@@ -84,14 +90,17 @@ typedef union pvr_chunk_animation_key_value {
 typedef struct pvr_chunk_animation_key {
     float time;
     pvr_chunk_animation_key_value_t value;
+    pvr_chunk_animation_key_value_t in_tangent;
+    pvr_chunk_animation_key_value_t out_tangent;
 } pvr_chunk_animation_key_t;
 
 /** \brief Checked immutable view of one serialized animation clip.
 
     The source byte image must remain immutable and accessible for the view's
     lifetime and while any materialized runtime objects are being used. Section
-    version 1 admits quaternion rotation tracks only; version 2 additionally
-    preserves XYZ and ZXY Euler rotation-track modes.
+    Version 1 admits quaternion rotation tracks only. Version 2 additionally
+    preserves XYZ and ZXY Euler rotation-track modes. Version 3 preserves
+    explicit incoming and outgoing cubic Hermite tangents.
 */
 typedef struct pvr_chunk_animation_section_view {
     const void *data;
@@ -105,6 +114,7 @@ typedef struct pvr_chunk_animation_section_view {
     float start_time;
     float end_time;
     uint16_t version;
+    uint16_t key_bytes;
 } pvr_chunk_animation_section_view_t;
 
 /** \brief Parse and completely validate one serialized animation clip.
