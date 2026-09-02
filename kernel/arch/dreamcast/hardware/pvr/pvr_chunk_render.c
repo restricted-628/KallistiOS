@@ -690,16 +690,32 @@ static int assemble_strip(const pvr_chunk_model_view_t *view,
     return 0;
 }
 
+static int strip_filter_apply(
+        pvr_chunk_render_filter_strip_t filter_strip,
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_strip_view_t *strip, void *data) {
+    int rv;
+
+    if(!filter_strip)
+        return 1;
+    errno = 0;
+    rv = filter_strip(state, strip, data);
+    if(rv < 0 && !errno)
+        errno = EIO;
+    return rv;
+}
+
 static int model_emit(
     const pvr_chunk_model_view_t *view,
     const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     pvr_geometry_sink_t *sink,
     pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result) {
-    pvr_chunk_render_result_t progress = { 0, 0, 0 };
+    pvr_chunk_render_result_t progress = { 0 };
     render_requirements_t requirements;
     pvr_chunk_render_state_t state;
     pvr_chunk_iterator_t iterator;
@@ -734,8 +750,15 @@ static int model_emit(
             while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
                                                              &strip)) > 0) {
                 pvr_geometry_stream_t geometry;
+                int filter_result;
 
                 state.strip_flags = strip.flags;
+                filter_result = strip_filter_apply(
+                    filter_strip, &state, &strip, data);
+                if(filter_result < 0)
+                    goto fail;
+                if(!filter_result)
+                    continue;
                 if(assemble_strip(view, plan, &state, &strip, workspace,
                                   prepare_vertex, data) < 0)
                     goto fail;
@@ -789,8 +812,22 @@ int pvr_chunk_model_emit(
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result) {
     return model_emit(view, NULL, object_to_screen, sink, workspace,
-                      workspace_count, begin_strip, prepare_vertex, data,
+                      workspace_count, NULL, begin_strip, prepare_vertex, data,
                       result);
+}
+
+int pvr_chunk_model_emit_filtered(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    return model_emit(view, NULL, object_to_screen, sink, workspace,
+                      workspace_count, filter_strip, begin_strip,
+                      prepare_vertex, data, result);
 }
 
 int pvr_chunk_model_emit_prepared(
@@ -806,8 +843,28 @@ int pvr_chunk_model_emit_prepared(
         return -1;
     }
     return model_emit(&plan->view, plan, object_to_screen, sink, workspace,
-                      workspace_count, begin_strip, prepare_vertex, data,
+                      workspace_count, NULL, begin_strip, prepare_vertex, data,
                       result);
+}
+
+int pvr_chunk_model_emit_prepared_filtered(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    if(!plan) {
+        if(result)
+            memset(result, 0, sizeof(*result));
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit(&plan->view, plan, object_to_screen, sink, workspace,
+                      workspace_count, filter_strip, begin_strip,
+                      prepare_vertex, data, result);
 }
 
 static int clipped_workspace_valid(
@@ -966,10 +1023,11 @@ static int model_emit_clipped(
     pvr_geometry_sink_t *sink, pvr_vertex_t *workspace,
     size_t workspace_count, pvr_vertex_t *clip_workspace,
     size_t clip_workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result) {
-    pvr_chunk_render_result_t progress = { 0, 0, 0 };
+    pvr_chunk_render_result_t progress = { 0 };
     pvr_frustum_classification_t model_classification;
     render_requirements_t requirements;
     pvr_chunk_render_state_t state;
@@ -992,7 +1050,8 @@ static int model_emit_clipped(
         return -1;
     if(policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE)
         return model_emit(view, plan, &frustum->object_to_screen, sink,
-                          workspace, workspace_count, begin_strip,
+                          workspace, workspace_count, filter_strip,
+                          begin_strip,
                           prepare_vertex, data, result);
 
     if(pvr_chunk_model_classify(view, frustum, &model_classification) < 0)
@@ -1001,7 +1060,8 @@ static int model_emit_clipped(
         return 0;
     if(model_classification == PVR_FRUSTUM_INSIDE)
         return model_emit(view, plan, &frustum->object_to_screen, sink,
-                          workspace, workspace_count, begin_strip,
+                          workspace, workspace_count, filter_strip,
+                          begin_strip,
                           prepare_vertex, data, result);
 
     if(preflight(view, plan, &frustum->object_to_screen, sink, workspace,
@@ -1033,9 +1093,16 @@ static int model_emit_clipped(
             while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
                                                              &strip)) > 0) {
                 int strip_started = 0;
+                int filter_result;
                 size_t triangle_index;
 
                 state.strip_flags = strip.flags;
+                filter_result = strip_filter_apply(
+                    filter_strip, &state, &strip, data);
+                if(filter_result < 0)
+                    goto fail;
+                if(!filter_result)
+                    continue;
                 if(assemble_strip(view, plan, &state, &strip, workspace,
                                   prepare_vertex, data) < 0)
                     goto fail;
@@ -1099,7 +1166,22 @@ int pvr_chunk_model_emit_clipped(
     void *data, pvr_chunk_render_result_t *result) {
     return model_emit_clipped(view, NULL, frustum, policy, sink, workspace,
                               workspace_count, clip_workspace,
-                              clip_workspace_count, begin_strip,
+                              clip_workspace_count, NULL, begin_strip,
+                              prepare_vertex, data, result);
+}
+
+int pvr_chunk_model_emit_clipped_filtered(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    return model_emit_clipped(view, NULL, frustum, policy, sink, workspace,
+                              workspace_count, clip_workspace,
+                              clip_workspace_count, filter_strip, begin_strip,
                               prepare_vertex, data, result);
 }
 
@@ -1119,7 +1201,28 @@ int pvr_chunk_model_emit_clipped_prepared(
     }
     return model_emit_clipped(&plan->view, plan, frustum, policy, sink,
                               workspace, workspace_count, clip_workspace,
-                              clip_workspace_count, begin_strip,
+                              clip_workspace_count, NULL, begin_strip,
+                              prepare_vertex, data, result);
+}
+
+int pvr_chunk_model_emit_clipped_prepared_filtered(
+    const pvr_chunk_model_plan_t *plan, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    if(!plan) {
+        if(result)
+            memset(result, 0, sizeof(*result));
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit_clipped(&plan->view, plan, frustum, policy, sink,
+                              workspace, workspace_count, clip_workspace,
+                              clip_workspace_count, filter_strip, begin_strip,
                               prepare_vertex, data, result);
 }
 
@@ -1427,10 +1530,11 @@ static int model_emit_two_volume(
     const matrix_t *object_to_screen,
     pvr_geometry_vertex_sink_t *sink,
     pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result) {
-    pvr_chunk_render_result_t progress = { 0, 0, 0 };
+    pvr_chunk_render_result_t progress = { 0 };
     render_requirements_t requirements;
     pvr_chunk_render_state_t state;
     pvr_chunk_iterator_t iterator;
@@ -1467,8 +1571,15 @@ static int model_emit_two_volume(
             while((strip_rv = pvr_chunk_strip_iterator_next(&strip_iterator,
                                                              &strip)) > 0) {
                 pvr_geometry_vertex_stream_t geometry;
+                int filter_result;
 
                 state.strip_flags = strip.flags;
+                filter_result = strip_filter_apply(
+                    filter_strip, &state, &strip, data);
+                if(filter_result < 0)
+                    goto fail;
+                if(!filter_result)
+                    continue;
                 if(assemble_two_volume_strip(view, plan, &state, &strip,
                                              sink->format, workspace,
                                              prepare_vertex, data) < 0)
@@ -1525,8 +1636,22 @@ int pvr_chunk_model_emit_two_volume(
     pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result) {
     return model_emit_two_volume(view, NULL, object_to_screen, sink,
-                                 workspace, workspace_count, begin_strip,
+                                 workspace, workspace_count, NULL, begin_strip,
                                  prepare_vertex, data, result);
+}
+
+int pvr_chunk_model_emit_two_volume_filtered(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    return model_emit_two_volume(view, NULL, object_to_screen, sink,
+                                 workspace, workspace_count, filter_strip,
+                                 begin_strip, prepare_vertex, data, result);
 }
 
 int pvr_chunk_model_emit_two_volume_prepared(
@@ -1542,8 +1667,28 @@ int pvr_chunk_model_emit_two_volume_prepared(
         return -1;
     }
     return model_emit_two_volume(&plan->view, plan, object_to_screen, sink,
-                                 workspace, workspace_count, begin_strip,
+                                 workspace, workspace_count, NULL, begin_strip,
                                  prepare_vertex, data, result);
+}
+
+int pvr_chunk_model_emit_two_volume_prepared_filtered(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    if(!plan) {
+        if(result)
+            memset(result, 0, sizeof(*result));
+        errno = EINVAL;
+        return -1;
+    }
+    return model_emit_two_volume(&plan->view, plan, object_to_screen, sink,
+                                 workspace, workspace_count, filter_strip,
+                                 begin_strip, prepare_vertex, data, result);
 }
 
 int pvr_chunk_render_modifier_sink_valid(

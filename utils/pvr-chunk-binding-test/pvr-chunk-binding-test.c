@@ -673,6 +673,7 @@ static void test_two_volume_and_submission(void) {
     pvr_chunk_material_binding_t binding;
     pvr_chunk_render_state_t state;
     pvr_chunk_strip_view_t strip;
+    pvr_chunk_cached_strip_t cached_strip;
     pvr_material_t material;
 
     assert(pvr_chunk_texture_table_open(&table, &view) == 0);
@@ -701,6 +702,13 @@ static void test_two_volume_and_submission(void) {
     current_submits = buffered_submits = 0;
     assert(pvr_chunk_material_binding_init(
         &binding, &context, &view, PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+    assert(pvr_chunk_material_binding_filter_strip(
+        &state, &strip, &binding) == 1);
+    memset(&cached_strip, 0, sizeof(cached_strip));
+    cached_strip.state = state;
+    cached_strip.source_flags = state.strip_flags;
+    assert(pvr_chunk_material_binding_filter_cached_strip(
+        &cached_strip, &binding) == 1);
     assert(pvr_chunk_material_binding_begin_strip(
         &state, &strip, &binding) == 0);
     assert(current_submits == 1 && buffered_submits == 0);
@@ -760,7 +768,9 @@ static void test_residency_binding(void) {
     pvr_poly_cxt_t context = make_context(0);
     pvr_chunk_render_state_t state;
     pvr_chunk_strip_view_t strip;
+    pvr_chunk_cached_strip_t cached_strip;
 
+    context.list_type = PVR_LIST_OP_POLY;
     init_residency(&cache, slots, surfaces);
     memset(&model, 0, sizeof(model));
     model.model.polygon_words = model_textures;
@@ -786,6 +796,13 @@ static void test_residency_binding(void) {
     state.texture.filter = PVR_FILTER_NEAREST;
     strip.type = PVR_CHUNK_STRIP_UV8;
     current_submits = 0;
+    assert(pvr_chunk_residency_binding_filter_strip(
+        &state, &strip, &binding) == 1);
+    memset(&cached_strip, 0, sizeof(cached_strip));
+    cached_strip.state = state;
+    cached_strip.source_flags = state.strip_flags;
+    assert(pvr_chunk_residency_binding_filter_cached_strip(
+        &cached_strip, &binding) == 1);
     assert(pvr_chunk_residency_binding_begin_strip(
         &state, &strip, &binding) == 0);
     assert(current_submits == 1);

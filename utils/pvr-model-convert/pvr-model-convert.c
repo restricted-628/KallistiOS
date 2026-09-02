@@ -61,6 +61,7 @@
 #define MATERIAL_AMBIENT  (1u << 1)
 #define MATERIAL_SPECULAR (1u << 2)
 #define MATERIAL_EXPONENT (1u << 3)
+#define MATERIAL_ALPHA    (1u << 4)
 
 /* The host compiler links the target cache builder but never submits PVR
    packets. These unreachable publication hooks satisfy that shared object's
@@ -131,8 +132,17 @@ typedef struct material_definition {
     float ambient[3];
     float specular[3];
     float exponent;
+    float alpha;
+    uint8_t alpha_mode;
+    uint8_t double_sided;
     unsigned int present;
 } material_definition_t;
+
+enum {
+    MATERIAL_ALPHA_OPAQUE = 0,
+    MATERIAL_ALPHA_MASK,
+    MATERIAL_ALPHA_BLEND
+};
 
 typedef struct material_library {
     material_definition_t *definitions;
@@ -612,6 +622,8 @@ static int material_definition_add(material_library_t *library,
         return -1;
     }
     errno = 0;
+    definition.alpha = 1.0f;
+    definition.alpha_mode = MATERIAL_ALPHA_OPAQUE;
     definition.name = strdup(name);
     if(!definition.name) {
         errno = ENOMEM;
@@ -661,6 +673,30 @@ static int parse_material_exponent(char *cursor, float *exponent) {
         errno = ENOTSUP;
         return -1;
     }
+    return 0;
+}
+
+static int parse_material_opacity(char *cursor, int inverted,
+                                  material_definition_t *definition) {
+    char *token = next_token(&cursor);
+    float opacity;
+
+    if(!token || parse_float_token(token, &opacity) < 0)
+        return -1;
+    if(opacity < 0.0f || opacity > 1.0f) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(next_token(&cursor)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if(inverted)
+        opacity = 1.0f - opacity;
+    definition->alpha = opacity;
+    definition->alpha_mode = opacity < 1.0f ?
+        MATERIAL_ALPHA_BLEND : MATERIAL_ALPHA_OPAQUE;
+    definition->present |= MATERIAL_ALPHA;
     return 0;
 }
 
@@ -731,6 +767,17 @@ static int load_material_library(const char *path,
                     if(!rv)
                         active->present |= property;
                 }
+            }
+            else if(!strcmp(directive, "d") ||
+                    !strcmp(directive, "Tr")) {
+                property = MATERIAL_ALPHA;
+                if(active->present & property) {
+                    errno = EILSEQ;
+                    rv = -1;
+                }
+                else
+                    rv = parse_material_opacity(
+                        cursor, !strcmp(directive, "Tr"), active);
             }
             else {
                 errno = ENOTSUP;
@@ -1078,8 +1125,7 @@ static int gltf_add_materials(const cgltf_data *data,
         float roughness = 1.0f;
         size_t component;
 
-        if(source && (source->alpha_mode != cgltf_alpha_mode_opaque ||
-                      source->has_transmission || source->has_volume ||
+        if(source && (source->has_transmission || source->has_volume ||
                       source->has_diffuse_transmission ||
                       source->has_pbr_specular_glossiness ||
                       source->normal_texture.texture ||
@@ -1088,7 +1134,7 @@ static int gltf_add_materials(const cgltf_data *data,
                       source->emissive_factor[0] != 0.0f ||
                       source->emissive_factor[1] != 0.0f ||
                       source->emissive_factor[2] != 0.0f ||
-                      source->double_sided || source->unlit ||
+                      source->unlit ||
                       source->extensions_count)) {
             errno = ENOTSUP;
             return -1;
@@ -1113,10 +1159,6 @@ static int gltf_add_materials(const cgltf_data *data,
                     errno = EILSEQ;
                     return -1;
                 }
-            }
-            if(base[3] != 1.0f) {
-                errno = ENOTSUP;
-                return -1;
             }
         }
         if(source && source->has_pbr_metallic_roughness) {
@@ -1145,8 +1187,34 @@ static int gltf_add_materials(const cgltf_data *data,
             fminf(1000.0f, 2.0f / powf(roughness, 4.0f) - 2.0f);
         if(definition->exponent < 0.0f)
             definition->exponent = 0.0f;
+        definition->double_sided = source && source->double_sided;
+        if(source) {
+            switch(source->alpha_mode) {
+                case cgltf_alpha_mode_opaque:
+                    definition->alpha_mode = MATERIAL_ALPHA_OPAQUE;
+                    definition->alpha = 1.0f;
+                    break;
+                case cgltf_alpha_mode_mask:
+                    if(source->alpha_cutoff != 0.5f) {
+                        errno = ENOTSUP;
+                        return -1;
+                    }
+                    definition->alpha_mode = MATERIAL_ALPHA_MASK;
+                    definition->alpha = base ? base[3] : 1.0f;
+                    break;
+                case cgltf_alpha_mode_blend:
+                    definition->alpha_mode = MATERIAL_ALPHA_BLEND;
+                    definition->alpha = base ? base[3] : 1.0f;
+                    break;
+                default:
+                    errno = EILSEQ;
+                    return -1;
+            }
+        }
         definition->present = MATERIAL_DIFFUSE | MATERIAL_AMBIENT |
                               MATERIAL_SPECULAR | MATERIAL_EXPONENT;
+        if(definition->alpha_mode != MATERIAL_ALPHA_OPAQUE)
+            definition->present |= MATERIAL_ALPHA;
     }
     return 0;
 }
@@ -3630,6 +3698,14 @@ static uint32_t quantize_color(const float color[3]) {
     return UINT32_C(0xff000000) | (red << 16) | (green << 8) | blue;
 }
 
+static uint32_t quantize_material_diffuse(
+    const material_definition_t *definition) {
+    uint32_t alpha = (uint32_t)lroundf(definition->alpha * 255.0f);
+
+    return (alpha << 24) |
+           (quantize_color(definition->diffuse) & UINT32_C(0x00ffffff));
+}
+
 static uint32_t quantize_argb(const float color[4]) {
     uint32_t alpha = (uint32_t)lroundf(color[3] * 255.0f);
     uint32_t red = (uint32_t)lroundf(color[0] * 255.0f);
@@ -3647,10 +3723,14 @@ static void emit_u32(uint16_t **output, uint32_t value) {
 static void emit_material(uint16_t **output,
                           const material_definition_t *definition) {
     size_t value_count = material_value_count(definition);
+    uint8_t blend = definition->alpha_mode == MATERIAL_ALPHA_BLEND ?
+        (uint8_t)((PVR_BLEND_SRCALPHA << 3) | PVR_BLEND_INVSRCALPHA) :
+        (uint8_t)((PVR_BLEND_ONE << 3) | PVR_BLEND_ZERO);
 
-    *(*output)++ = material_record_type(definition);
+    *(*output)++ = (uint16_t)material_record_type(definition) |
+                  (uint16_t)((uint16_t)blend << 8);
     *(*output)++ = (uint16_t)(value_count * 2u);
-    emit_u32(output, quantize_color(definition->diffuse));
+    emit_u32(output, quantize_material_diffuse(definition));
     if(definition->present & MATERIAL_AMBIENT)
         emit_u32(output, quantize_color(definition->ambient));
     if(definition->present & MATERIAL_SPECULAR) {
@@ -3811,7 +3891,8 @@ static int generate_streams(const source_model_t *model,
        diffuse state. Explicit definitions replace it at source transitions. */
     polygon_output = streams->polygon_words;
     if(!library->count) {
-        *polygon_output++ = PVR_CHUNK_MATERIAL_DIFFUSE;
+        *polygon_output++ = PVR_CHUNK_MATERIAL_DIFFUSE |
+            (uint16_t)(((PVR_BLEND_ONE << 3) | PVR_BLEND_ZERO) << 8);
         *polygon_output++ = 2u;
         *polygon_output++ = UINT16_MAX;
         *polygon_output++ = UINT16_MAX;
@@ -3843,7 +3924,21 @@ static int generate_streams(const source_model_t *model,
             active_texture = texture_identifier;
         }
 
-        *polygon_output++ = type;
+        {
+            uint8_t strip_flags = 0;
+
+            if(library->count) {
+                const material_definition_t *definition =
+                    &library->definitions[material_definition];
+
+                if(definition->alpha_mode != MATERIAL_ALPHA_OPAQUE)
+                    strip_flags |= PVR_CHUNK_STRIP_USE_ALPHA;
+                if(definition->double_sided)
+                    strip_flags |= PVR_CHUNK_STRIP_DOUBLE_SIDED;
+            }
+            *polygon_output++ = (uint16_t)type |
+                                (uint16_t)((uint16_t)strip_flags << 8);
+        }
         *polygon_output++ = (uint16_t)payload_words;
         *polygon_output++ = (uint16_t)count;
         for(strip = 0; strip < count; ++strip) {

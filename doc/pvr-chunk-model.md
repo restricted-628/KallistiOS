@@ -304,6 +304,18 @@ model container own VRAM, residency, transfer workers, or frame lifetime. VQ,
 mip generation, palette assignment, resizing, and non-base-color material
 roles remain explicit host-pipeline extensions rather than silent conversion.
 
+Authored glTF material opacity is retained as renderable compact state.
+`OPAQUE` materials use one/zero blending, `MASK` materials retain alpha and
+route to the punch-through list, and `BLEND` materials use source-alpha/
+inverse-source-alpha blending and route to the translucent list. `doubleSided`
+sets the compact double-sided strip policy. Because the hardware exposes one
+global punch-through threshold rather than a per-material threshold, imported
+`MASK` materials currently require the glTF default cutoff of 0.5; applications
+should set `pvr_set_punch_through_alpha(128)` for that pass. MTL `d` and `Tr`
+values are likewise preserved, with partial opacity using the translucent
+route. Unsupported alpha contracts fail conversion rather than silently
+changing authored semantics.
+
 With `--scene-root`, the host-side canonical scene IR writes one `PCH1`
 hierarchy section containing an identity root bound to model ordinal zero.
 The converter then loads, admits, and binds that section through the target

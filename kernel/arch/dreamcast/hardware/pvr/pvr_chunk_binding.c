@@ -29,12 +29,6 @@
      PVR_CHUNK_RENDER_DIFFUSE | PVR_CHUNK_RENDER_AMBIENT | \
      PVR_CHUNK_RENDER_SPECULAR)
 
-#define PVR_CHUNK_STRIP_FLAGS_ALL \
-    (PVR_CHUNK_STRIP_IGNORE_LIGHT | PVR_CHUNK_STRIP_IGNORE_SPECULAR | \
-     PVR_CHUNK_STRIP_IGNORE_AMBIENT | PVR_CHUNK_STRIP_USE_ALPHA | \
-     PVR_CHUNK_STRIP_DOUBLE_SIDED | PVR_CHUNK_STRIP_FLAT_SHADED | \
-     PVR_CHUNK_STRIP_ENVIRONMENT)
-
 #define PVR_CHUNK_RENDER_POLICY_FEATURES_ALL \
     (PVR_CHUNK_RENDER_POLICY_ENVIRONMENT_MAP | \
      PVR_CHUNK_RENDER_POLICY_DEPTH_CUE_ALPHA)
@@ -512,7 +506,7 @@ static int render_state_valid(const pvr_chunk_render_state_t *state,
                               const pvr_chunk_strip_view_t *strip) {
     if(!state || !strip || strip->type < PVR_CHUNK_STRIP_INDEX ||
        strip->type > PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME ||
-       (strip->flags & ~PVR_CHUNK_STRIP_FLAGS_ALL) ||
+       (strip->flags & ~PVR_CHUNK_STRIP_FLAGS_MASK) ||
        /* The callback state and view must describe the same decoded strip. */
        state->strip_flags != strip->flags ||
        (state->present & ~PVR_CHUNK_RENDER_STATE_ALL) ||
@@ -640,6 +634,53 @@ int pvr_chunk_material_binding_init(
     return 0;
 }
 
+static int context_list_matches(const pvr_poly_cxt_t *context,
+                                const pvr_chunk_render_state_t *state) {
+    pvr_list_t list;
+
+    if(!context || !state) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_render_state_list(state, &list) < 0)
+        return -1;
+    return list == context->list_type;
+}
+
+static int context_list_filter(const pvr_poly_cxt_t *context,
+                               const pvr_chunk_render_state_t *state,
+                               const pvr_chunk_strip_view_t *strip) {
+    if(!strip || !state || state->strip_flags != strip->flags) {
+        errno = EINVAL;
+        return -1;
+    }
+    return context_list_matches(context, state);
+}
+
+int pvr_chunk_material_binding_filter_strip(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_strip_view_t *strip, void *data) {
+    const pvr_chunk_material_binding_t *binding = data;
+
+    if(!binding) {
+        errno = EINVAL;
+        return -1;
+    }
+    return context_list_filter(&binding->context, state, strip);
+}
+
+int pvr_chunk_material_binding_filter_cached_strip(
+        const pvr_chunk_cached_strip_t *strip, void *data) {
+    const pvr_chunk_material_binding_t *binding = data;
+
+    if(!binding || !strip ||
+       strip->source_flags != strip->state.strip_flags) {
+        errno = EINVAL;
+        return -1;
+    }
+    return context_list_matches(&binding->context, &strip->state);
+}
+
 int pvr_chunk_material_binding_begin_strip(
         const pvr_chunk_render_state_t *state,
         const pvr_chunk_strip_view_t *strip, void *data) {
@@ -649,6 +690,16 @@ int pvr_chunk_material_binding_begin_strip(
     if(!binding) {
         errno = EINVAL;
         return -1;
+    }
+    {
+        int selected = context_list_filter(
+            &binding->context, state, strip);
+
+        if(selected <= 0) {
+            if(!selected)
+                errno = EPROTOTYPE;
+            return -1;
+        }
     }
     if(pvr_chunk_material_resolve(&material, &binding->context,
                                   &binding->textures, state, strip) < 0)
@@ -1261,6 +1312,29 @@ int pvr_chunk_residency_binding_prepare_identifier(
     return residency_binding_acquire(binding, identifier);
 }
 
+int pvr_chunk_residency_binding_filter_strip(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_strip_view_t *strip, void *data) {
+    const pvr_chunk_residency_binding_t *binding = data;
+
+    if(!residency_binding_layout_valid(binding))
+        return -1;
+    return context_list_filter(&binding->context, state, strip);
+}
+
+int pvr_chunk_residency_binding_filter_cached_strip(
+        const pvr_chunk_cached_strip_t *strip, void *data) {
+    const pvr_chunk_residency_binding_t *binding = data;
+
+    if(!residency_binding_layout_valid(binding))
+        return -1;
+    if(!strip || strip->source_flags != strip->state.strip_flags) {
+        errno = EINVAL;
+        return -1;
+    }
+    return context_list_matches(&binding->context, &strip->state);
+}
+
 int pvr_chunk_residency_binding_begin_strip(
         const pvr_chunk_render_state_t *state,
         const pvr_chunk_strip_view_t *strip, void *data) {
@@ -1273,6 +1347,16 @@ int pvr_chunk_residency_binding_begin_strip(
        every resident entry for every strip. */
     if(!residency_binding_layout_valid(binding))
         return -1;
+    {
+        int selected = context_list_filter(
+            &binding->context, state, strip);
+
+        if(selected <= 0) {
+            if(!selected)
+                errno = EPROTOTYPE;
+            return -1;
+        }
+    }
     if(state && (state->present & PVR_CHUNK_RENDER_TEXTURE)
        && !residency_binding_identifier_valid(binding,
                                                state->texture.identifier))

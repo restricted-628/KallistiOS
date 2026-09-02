@@ -50,7 +50,7 @@ VERTICES = [
 ]
 
 POLYGONS = [
-    17, 2, 0xFFFF, 0xFFFF,
+    17 | (8 << 8), 2, 0xFFFF, 0xFFFF,
     8, 7,
     79, 20, 1, 3,
     0, 0, 0, 0, 0, 0x7FFF,
@@ -109,7 +109,7 @@ int main(void) {
        test_model.polygon_word_count != 29u ||
        test_model.vertex_words[0] != (34u | (10u << 16)) ||
        test_model.vertex_words[11] != 0xffu ||
-       test_model.polygon_words[0] != 17u ||
+       test_model.polygon_words[0] != (17u | (8u << 8)) ||
        test_model.polygon_words[28] != 0xffu ||
        fabsf(test_model.radius - 1.41421354f) > 0.000001f)
         return 1;
@@ -966,9 +966,17 @@ f 1/1/1 2/2/1 3/3/1
             "textures": [{"source": 0}],
             "materials": [{
                 "pbrMetallicRoughness": {
+                    "baseColorFactor": [0.25, 0.5, 0.75, 0.5],
+                    "baseColorTexture": {"index": 0},
+                },
+                "alphaMode": "BLEND",
+                "doubleSided": True,
+            }, {
+                "pbrMetallicRoughness": {
                     "baseColorFactor": [0.25, 0.5, 0.75, 1.0],
                     "baseColorTexture": {"index": 0},
                 },
+                "alphaMode": "MASK",
             }],
             "meshes": [
                 {"primitives": [{
@@ -984,7 +992,7 @@ f 1/1/1 2/2/1 3/3/1
                         "POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 3,
                         "JOINTS_0": 6, "WEIGHTS_0": 7,
                     },
-                    "indices": 2, "material": 0,
+                    "indices": 2, "material": 1,
                     "targets": [{"POSITION": 5}],
                 }]},
             ],
@@ -1026,6 +1034,26 @@ f 1/1/1 2/2/1 3/3/1
             1, 2, 3, 10, 6, 11, 7,
             8, 12, 15,
         ]
+        first_polygon = multi_bytes[
+            multi_descriptors[1][2]:
+            multi_descriptors[1][2] + multi_descriptors[1][3]
+        ]
+        second_polygon = multi_bytes[
+            multi_descriptors[8][2]:
+            multi_descriptors[8][2] + multi_descriptors[8][3]
+        ]
+        first_polygon_words = struct.unpack(
+            f"<{len(first_polygon) // 2}H", first_polygon
+        )
+        second_polygon_words = struct.unpack(
+            f"<{len(second_polygon) // 2}H", second_polygon
+        )
+        assert first_polygon_words[0] == 23 | (0x25 << 8)
+        assert first_polygon_words[3] >> 8 == 0x80
+        assert first_polygon_words[10] == 79 | (0x18 << 8)
+        assert second_polygon_words[0] == 23 | (0x08 << 8)
+        assert second_polygon_words[3] >> 8 == 0xFF
+        assert second_polygon_words[10] == 79 | (0x08 << 8)
         multi_table = multi_bytes[
             multi_descriptors[15][2]:
             multi_descriptors[15][2] + multi_descriptors[15][3]
@@ -2067,7 +2095,7 @@ f 5 4 6
         assert "polygon_words=15\n" in result.stdout
         assert joined_polygons.read_bytes() == struct.pack(
             "<15H",
-            17, 2, 0xFFFF, 0xFFFF,
+            17 | (8 << 8), 2, 0xFFFF, 0xFFFF,
             64, 8, 1, 6, 0, 1, 2, 3, 4, 5,
             0xFF,
         )
@@ -2121,7 +2149,7 @@ f 2 4 3
         assert "strips_after=1\n" in result.stdout
         assert joined_flipped_polygons.read_bytes() == struct.pack(
             "<13H",
-            17, 2, 0xFFFF, 0xFFFF,
+            17 | (8 << 8), 2, 0xFFFF, 0xFFFF,
             64, 6, 1, 4, 0, 2, 1, 3,
             0xFF,
         )
@@ -2227,7 +2255,8 @@ f -3 -2 -1
         )
         assert result.returncode == 0, result.stderr
         assert relative_polygons.read_bytes() == struct.pack(
-            "<12H", 17, 2, 0xFFFF, 0xFFFF, 64, 5, 1, 3, 0, 1, 2, 0xFF
+            "<12H", 17 | (8 << 8), 2, 0xFFFF, 0xFFFF,
+            64, 5, 1, 3, 0, 1, 2, 0xFF
         )
         result = invoke(
             converter,
@@ -2383,7 +2412,7 @@ f 1/1 2/2 3/3
             "<60H", materials_polygons.read_bytes()
         )
         assert material_words[:9] == (
-            17, 2, 0xFFFF, 0xFFFF, 8, 2, 77, 21, 2
+            17 | (8 << 8), 2, 0xFFFF, 0xFFFF, 8, 2, 77, 21, 2
         )
         assert material_words[29:32] == (8, 9, 77)
         assert material_words[44:47] == (8, 2, 77)
@@ -2406,8 +2435,10 @@ Kd 1 0.5 0
 Ka 0.25 0.125 0
 Ks 0.1 0.2 0.3
 Ns 500
+d 0.5
 newmtl green
 Kd 0 1 0
+Tr 0
 """,
         )
         write_text(
@@ -2440,12 +2471,12 @@ f 3 2 4
         assert "polygon_words=27\n" in result.stdout
         assert property_polygons.read_bytes() == struct.pack(
             "<27H",
-            23, 6,
-            0x8000, 0xFFFF,
+            23 | (0x25 << 8), 6,
+            0x8000, 0x80FF,
             0x2000, 0xFF40,
             0x334D, 0x081A,
-            64, 5, 1, 3, 0, 1, 2,
-            17, 2, 0xFF00, 0xFF00,
+            64 | (8 << 8), 5, 1, 3, 0, 1, 2,
+            17 | (8 << 8), 2, 0xFF00, 0xFF00,
             64, 5, 1, 3, 2, 1, 3,
             0xFF,
         )

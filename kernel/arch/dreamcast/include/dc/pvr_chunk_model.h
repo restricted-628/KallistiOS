@@ -180,6 +180,16 @@ typedef enum pvr_chunk_strip_flags {
     PVR_CHUNK_STRIP_ENVIRONMENT = 0x40
 } pvr_chunk_strip_flags_t;
 
+/** \brief Mask of every admitted strip-policy flag. */
+#define PVR_CHUNK_STRIP_FLAGS_MASK \
+    (PVR_CHUNK_STRIP_IGNORE_LIGHT | \
+     PVR_CHUNK_STRIP_IGNORE_SPECULAR | \
+     PVR_CHUNK_STRIP_IGNORE_AMBIENT | \
+     PVR_CHUNK_STRIP_USE_ALPHA | \
+     PVR_CHUNK_STRIP_DOUBLE_SIDED | \
+     PVR_CHUNK_STRIP_FLAT_SHADED | \
+     PVR_CHUNK_STRIP_ENVIRONMENT)
+
 /** \brief A bounded compact model description.
 
     Counts are expressed in the natural word size of each stream. Both streams

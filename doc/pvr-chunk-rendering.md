@@ -35,6 +35,14 @@ page table in constant time. Both forms preserve identical state, callback,
 projection, sink, progress, and error behavior. Workspace and memory output
 must not overlap either the prepared plan or its borrowed index entries.
 
+The filtered immediate and prepared variants insert one caller-owned pass
+predicate after state decoding and before vertex assembly. The predicate can
+select an opaque, punch-through, or translucent pass without splitting or
+reparsing the model stream. Rejected strips incur only bounded stream traversal
+and do not invoke vertex or material callbacks or touch the sink. The existing
+result structure retains its ABI and reports only emitted work; a filter that
+needs rejection telemetry can count it in its caller-owned state.
+
 ## Material and texture boundary
 
 Compact texture records contain an asset identifier and sampling intent, not a
@@ -56,6 +64,22 @@ the callback is required and normally performs these application-owned steps:
 
 Memory sinks may omit the callback because no polygon header is submitted.
 They can also use it to capture state beside the emitted vertex array.
+
+`pvr_chunk_render_state_list()` supplies the standard route: one/zero blending
+without strip alpha is opaque, one/zero with strip alpha is punch-through, and
+every other blend equation is translucent. The material and residency binding
+filters apply exactly that rule to raw or prepared-cache strips. Their normal
+begin-strip callbacks also reject a context compiled for the wrong list, so a
+caller cannot silently submit a correctly decoded alpha material into an
+incompatible active list. Applications render mixed authored opacity as three
+explicit passes, each with a binding context compiled for its list.
+
+The compact stream deliberately does not override the caller's texture
+environment. A textured pass that expects material or vertex alpha to modulate
+texture alpha should compile its base context with an alpha-modulating texture
+environment; replacement and other environments remain valid explicit
+application policy. The punch-through threshold is likewise global hardware
+state and remains scene/pass ownership rather than model data.
 
 ## Default vertex policy
 

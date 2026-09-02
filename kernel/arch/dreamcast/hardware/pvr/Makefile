@@ -32,6 +32,7 @@ OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
 	pvr_chunk_volume_asset.o pvr_chunk_resource_asset.o \
 	pvr_chunk_resource_binding.o pvr_chunk_texture_asset.o \
 	pvr_chunk_texture_binding.o \
+	pvr_chunk_route.o \
 	pvr_chunk_skin.o pvr_chunk_skin_asset.o pvr_chunk_skeleton_asset.o \
 	pvr_chunk_shape.o \
 	pvr_chunk_shape_asset.o \

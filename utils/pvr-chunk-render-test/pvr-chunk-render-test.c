@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <string.h>
 
+_Static_assert(sizeof(pvr_chunk_render_result_t) == 3u * sizeof(size_t),
+               "pvr_chunk_render_result_t ABI changed");
+
 #define VERTEX_HEADER(type, size) ((uint32_t)(type) | ((uint32_t)(size) << 16))
 #define POLYGON_HEADER(type, flags) \
     ((uint16_t)(type) | ((uint16_t)(flags) << 8))
@@ -169,7 +172,10 @@ static const uint16_t index_polygons[] = {
 typedef struct callback_state {
     size_t begins;
     size_t prepares;
+    size_t filters;
     int begin_error;
+    int filter_error;
+    pvr_list_t desired_list;
     pvr_chunk_render_state_t state;
 } callback_state_t;
 
@@ -281,6 +287,23 @@ static int begin_strip(const pvr_chunk_render_state_t *state,
     return 0;
 }
 
+static int filter_strip(const pvr_chunk_render_state_t *state,
+                        const pvr_chunk_strip_view_t *strip, void *data) {
+    callback_state_t *callback = data;
+    pvr_list_t list;
+
+    assert(strip->vertex_count == 3);
+    ++callback->filters;
+    if(callback->filter_error < 0)
+        return -1;
+    if(callback->filter_error > 0) {
+        errno = callback->filter_error;
+        return -1;
+    }
+    assert(pvr_chunk_render_state_list(state, &list) == 0);
+    return list == callback->desired_list;
+}
+
 static int prepare_vertex(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_vertex_attributes_t *vertex_attributes,
@@ -357,6 +380,19 @@ static void test_clipped_emit(void) {
     assert(callback.begins == 1 && callback.prepares == 3);
     for(i = 0; i < sink.emitted_vertices; ++i)
         assert(output[i].x >= -0.50001f && output[i].x <= 0.50001f);
+
+    memset(&callback, 0, sizeof(callback));
+    callback.desired_list = PVR_LIST_OP_POLY;
+    assert(pvr_geometry_sink_init_memory(
+        &sink, output, PVR_FRUSTUM_CLIP_MAX_VERTICES) == 0);
+    assert(pvr_chunk_model_emit_clipped_filtered(
+               &view, &frustum, PVR_CHUNK_CLIP_SPLIT, &sink,
+               workspace, 3, clip_workspace,
+               PVR_FRUSTUM_CLIP_MAX_VERTICES, filter_strip, begin_strip,
+               prepare_vertex, &callback, &result) == 0);
+    assert(callback.filters == 1 && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+    assert(result.emitted_strips == 0 && result.emitted_vertices == 0);
 
     submitted_count = 0;
     memset(&callback, 0, sizeof(callback));
@@ -509,6 +545,64 @@ static void test_emit(void) {
     assert(result.consumed_records == 4 && result.emitted_strips == 1 &&
            result.emitted_vertices == 3);
     assert(callback.begins == 1 && callback.prepares == 3);
+
+    memset(output, 0, sizeof(output));
+    memset(&callback, 0, sizeof(callback));
+    callback.desired_list = PVR_LIST_TR_POLY;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_emit_filtered(
+               &view, &identity, &sink, workspace, 3, filter_strip,
+               begin_strip, prepare_vertex, &callback, &result) == 0);
+    assert(callback.filters == 1 && callback.begins == 1 &&
+           callback.prepares == 3);
+    assert(result.emitted_strips == 1 && result.emitted_vertices == 3 &&
+           result.emitted_strips == 1 && result.emitted_vertices == 3);
+
+    memset(output, 0, sizeof(output));
+    memset(&callback, 0, sizeof(callback));
+    callback.desired_list = PVR_LIST_OP_POLY;
+    assert(pvr_geometry_sink_init_memory(&sink, output, 3) == 0);
+    assert(pvr_chunk_model_emit_prepared_filtered(
+               &plan, &identity, &sink, workspace, 3, filter_strip,
+               begin_strip, prepare_vertex, &callback, &result) == 0);
+    assert(callback.filters == 1 && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+    assert(result.emitted_strips == 0 && result.emitted_vertices == 0 &&
+           result.emitted_strips == 0 && result.emitted_vertices == 0);
+}
+
+static void test_list_routing(void) {
+    pvr_chunk_render_state_t state = { 0 };
+    pvr_list_t list = PVR_LIST_TR_POLY;
+
+    assert(pvr_chunk_render_state_list(&state, &list) == 0);
+    assert(list == PVR_LIST_OP_POLY);
+
+    state.strip_flags = PVR_CHUNK_STRIP_USE_ALPHA;
+    assert(pvr_chunk_render_state_list(&state, &list) == 0);
+    assert(list == PVR_LIST_PT_POLY);
+
+    state.present = PVR_CHUNK_RENDER_BLEND;
+    state.blend_source = PVR_BLEND_SRCALPHA;
+    state.blend_destination = PVR_BLEND_INVSRCALPHA;
+    assert(pvr_chunk_render_state_list(&state, &list) == 0);
+    assert(list == PVR_LIST_TR_POLY);
+
+    state.strip_flags = 0;
+    state.blend_source = PVR_BLEND_ONE;
+    state.blend_destination = PVR_BLEND_ZERO;
+    assert(pvr_chunk_render_state_list(&state, &list) == 0);
+    assert(list == PVR_LIST_OP_POLY);
+
+    state.strip_flags = UINT8_C(0x80);
+    list = PVR_LIST_TR_POLY;
+    errno = 0;
+    assert(pvr_chunk_render_state_list(&state, &list) == -1);
+    assert(errno == EILSEQ && list == PVR_LIST_TR_POLY);
+
+    errno = 0;
+    assert(pvr_chunk_render_state_list(NULL, &list) == -1);
+    assert(errno == EINVAL);
 }
 
 static void test_float_uv_emit(void) {
@@ -839,6 +933,18 @@ static void test_two_volume_emit(void) {
     assert(!memcmp(output, immediate_output, sizeof(output)));
     assert(callback.begins == 1 && callback.prepares == 3);
 
+    memset(output, 0, sizeof(output));
+    memset(&callback, 0, sizeof(callback));
+    callback.desired_list = PVR_LIST_OP_POLY;
+    assert(pvr_geometry_vertex_sink_init_memory(
+        &sink, PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED, output, 3) == 0);
+    assert(pvr_chunk_model_emit_two_volume_prepared_filtered(
+        &plan, &identity, &sink, workspace, 3, filter_strip, begin_strip,
+        prepare_two_volume_vertex, &callback, &result) == 0);
+    assert(callback.filters == 1 && callback.begins == 0 &&
+           callback.prepares == 0 && sink.emitted_vertices == 0);
+    assert(result.emitted_strips == 0 && result.emitted_vertices == 0);
+
     memset(output, 0x5a, sizeof(output));
     memcpy(unchanged, output, sizeof(output));
     assert(pvr_geometry_vertex_sink_init_memory(
@@ -1132,6 +1238,7 @@ int main(void) {
     test_model_classification();
     test_clipped_emit();
     test_emit();
+    test_list_routing();
     test_float_uv_emit();
     test_preflight_and_prefix();
     test_unsupported();

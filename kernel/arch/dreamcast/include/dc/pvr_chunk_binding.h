@@ -18,6 +18,7 @@ __BEGIN_DECLS
 #include <stddef.h>
 #include <stdint.h>
 
+#include <dc/pvr_chunk_cache.h>
 #include <dc/pvr_chunk_render.h>
 #include <dc/pvr_lighting.h>
 #include <dc/pvr_material.h>
@@ -238,6 +239,21 @@ int pvr_chunk_material_binding_init(
     const pvr_chunk_texture_table_view_t *textures,
     pvr_geometry_sink_kind_t destination);
 
+/** \brief Select strips routed to this material binding's PVR list.
+
+    This function has the exact pvr_chunk_render_filter_strip_t signature and
+    composes with the filtered raw emitters. Opaque, punch-through, and
+    translucent passes can therefore reuse one admitted model without
+    reparsing or splitting its authored stream.
+*/
+int pvr_chunk_material_binding_filter_strip(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Cached-strip form of pvr_chunk_material_binding_filter_strip(). */
+int pvr_chunk_material_binding_filter_cached_strip(
+    const pvr_chunk_cached_strip_t *strip, void *data);
+
 /** \brief Resolve, compile, and submit a material for one compact strip.
 
     This function has the exact pvr_chunk_render_begin_strip_t signature. It
@@ -365,6 +381,15 @@ int pvr_chunk_residency_binding_prepare_model(
 */
 int pvr_chunk_residency_binding_prepare_identifier(
     pvr_chunk_residency_binding_t *binding, uint16_t identifier);
+
+/** \brief Select strips routed to this residency binding's PVR list. */
+int pvr_chunk_residency_binding_filter_strip(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Cached-strip form of the residency pass filter. */
+int pvr_chunk_residency_binding_filter_cached_strip(
+    const pvr_chunk_cached_strip_t *strip, void *data);
 
 /** \brief Resolve and submit one strip using pre-acquired resident textures.
 

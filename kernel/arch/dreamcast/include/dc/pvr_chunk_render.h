@@ -79,6 +79,17 @@ typedef struct pvr_chunk_render_state {
     uint32_t secondary_specular_argb;
 } pvr_chunk_render_state_t;
 
+/** \brief Resolve the PVR polygon list required by decoded strip state.
+
+    Opaque one/zero state routes to the opaque list. Alpha-enabled one/zero
+    state routes to punch-through, while every other blend equation routes to
+    the translucent list. The result lets raw and prepared render paths share
+    one authored-material routing rule without placing scene or list ownership
+    inside the model format.
+*/
+int pvr_chunk_render_state_list(const pvr_chunk_render_state_t *state,
+                                pvr_list_t *list);
+
 /** \brief Maximum-sized workspace entry for two-volume emission.
 
     Untextured strips use `color`; textured strips use `textured`. The emitter
@@ -143,6 +154,16 @@ typedef struct pvr_chunk_modifier_result {
     continue or negative to fail with errno set.
 */
 typedef int (*pvr_chunk_render_begin_strip_t)(
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Decide whether one decoded strip participates in this pass.
+
+    Return positive to emit, zero to skip, or negative to fail. Filtering runs
+    before vertex assembly, application vertex policy, projection, material
+    setup, or sink publication, so a skipped strip pays only stream traversal.
+*/
+typedef int (*pvr_chunk_render_filter_strip_t)(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip, void *data);
 
@@ -230,6 +251,21 @@ int pvr_chunk_model_emit(
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
 
+/** \brief Project and emit only strips accepted by a caller-owned pass filter.
+
+    All validation, prefix, workspace, and callback contracts match
+    pvr_chunk_model_emit(). A null filter emits every strip.
+*/
+int pvr_chunk_model_emit_filtered(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
 /** \brief Project and emit through a prepared constant-time vertex plan.
 
     Rendering, callback, workspace, sink, and failure semantics match
@@ -242,6 +278,17 @@ int pvr_chunk_model_emit_prepared(
     const matrix_t *object_to_screen,
     pvr_geometry_sink_t *sink,
     pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
+/** \brief Filtered ordinary emission through a prepared vertex plan. */
+int pvr_chunk_model_emit_prepared_filtered(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
@@ -268,12 +315,34 @@ int pvr_chunk_model_emit_clipped(
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
 
+/** \brief Clipped emission restricted by a caller-owned pass filter. */
+int pvr_chunk_model_emit_clipped_filtered(
+    const pvr_chunk_model_view_t *view, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
 /** \brief Emit a clipped model through a prepared vertex plan. */
 int pvr_chunk_model_emit_clipped_prepared(
     const pvr_chunk_model_plan_t *plan, const pvr_frustum_t *frustum,
     pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
     pvr_vertex_t *workspace, size_t workspace_count,
     pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
+/** \brief Filtered clipped emission through a prepared vertex plan. */
+int pvr_chunk_model_emit_clipped_prepared_filtered(
+    const pvr_chunk_model_plan_t *plan, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t policy, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
@@ -307,12 +376,34 @@ int pvr_chunk_model_emit_two_volume(
     pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
 
+/** \brief Emit only accepted two-volume strips. */
+int pvr_chunk_model_emit_two_volume_filtered(
+    const pvr_chunk_model_view_t *view,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
 /** \brief Emit two-volume strips through a prepared vertex plan. */
 int pvr_chunk_model_emit_two_volume_prepared(
     const pvr_chunk_model_plan_t *plan,
     const matrix_t *object_to_screen,
     pvr_geometry_vertex_sink_t *sink,
     pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result);
+
+/** \brief Filtered two-volume emission through a prepared vertex plan. */
+int pvr_chunk_model_emit_two_volume_prepared_filtered(
+    const pvr_chunk_model_plan_t *plan,
+    const matrix_t *object_to_screen,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_render_result_t *result);
