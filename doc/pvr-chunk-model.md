@@ -320,6 +320,14 @@ values are likewise preserved, with partial opacity using the translucent
 route. Unsupported alpha contracts fail conversion rather than silently
 changing authored semantics.
 
+The importer lowers authored triangle, triangle-strip, and triangle-fan
+primitives to the same canonical triangle stream. Alternating strip winding is
+resolved before the ordinary order-preserving strip optimizer runs. A base-
+color texture may select any present texture-coordinate set, and its finite
+offset, rotation, and nonuniform scale are baked on the host before signed
+UV8/UV10 or floating-point selection. Neither feature adds a target topology,
+texture-transform object, scene dependency, or per-frame calculation.
+
 With `--scene-root`, the host-side canonical scene IR writes one `PCH1`
 hierarchy section containing an identity root bound to model ordinal zero.
 The converter then loads, admits, and binds that section through the target

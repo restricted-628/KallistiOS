@@ -20,9 +20,11 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
 glTF and GLB input require `--emit-asset --section-directory`. The host-only
 importer uses cgltf and adds no parser, allocation, or code to a Dreamcast
 program. It accepts one selected scene and any nonzero set of unique
-meshes, including repeated instances, triangle primitives, indexed or non-
-indexed positions, optional normals, UV set zero, and `COLOR_0`, stable
-base-color texture ordinals, parent-before-child node transforms, and
+meshes, including repeated instances, triangle, triangle-strip, or triangle-
+fan primitives, indexed or non-indexed positions, optional normals, material-
+selected texture-coordinate sets, and `COLOR_0`. Base-color texture transforms
+are baked into those selected coordinates before compact encoding. Stable
+texture ordinals, parent-before-child node transforms, and
 STEP, LINEAR, or CUBICSPLINE translation, rotation, scale, and morph-weight
 channels. Multiple
 animations retain source order and may independently contain transform-only,
@@ -50,19 +52,19 @@ OBJ's independently indexed per-reference attributes likewise preserve UV and
 hard-normal discontinuities without duplicating the canonical position batch.
 
 Unsupported authored meaning is rejected rather than dropped. Current explicit
-boundaries include required extensions, GPU instancing, non-triangle primitives,
-tangent/custom vertex attributes, texture
-coordinate sets other than zero, texture transforms, transparent or advanced
-materials, detached skin joints, conflicting skins on repeated mesh instances,
-matrix-authored animation targets. Static matrix-authored nodes in an animated
-scene are admitted when
+boundaries include required extensions other than `KHR_texture_transform`, GPU
+instancing, point and line primitives, tangent/custom vertex attributes,
+non-base-color texture roles, advanced material models, detached skin joints,
+and conflicting skins on repeated mesh instances. Static matrix-authored nodes
+in an animated scene are admitted when
 their affine transform decomposes exactly into translation, quaternion
 rotation, and signed scale; shear and degenerate axes are rejected.
 Explicit cubic-spline tangents retain their time-derivative meaning and are not
 silently mapped to Catmull-Rom interpolation. PBR base color, metallic, and
-roughness are converted
-deterministically into compact diffuse, ambient, specular, and exponent state;
-texture images and VRAM placement remain application resource policy.
+roughness are converted deterministically into compact diffuse, ambient,
+specular, and exponent state. Referenced base-color images are compiled into
+the checked `PTX1` section; VRAM placement, residency, and non-base-color image
+roles remain application resource policy.
 
 The admitted source subset is:
 
@@ -109,8 +111,9 @@ Color components must be finite values in `[0, 1]` and are rounded to 8-bit
 channels. `Ns` must be in `[0, 1000]` and is rounded linearly into the compact
 runtime's `[0, 16]` specular-exponent field. Duplicate properties, duplicate
 names across supplied files, and every unsupported directive are rejected.
-Opacity, illumination-model selection, texture-map paths, blending, and render
-list choice therefore remain explicit application/content-pipeline policy.
+Opacity is retained as opaque or translucent compact state. Illumination-model
+selection, texture-map paths, and material roles beyond this bounded subset
+remain explicit application/content-pipeline policy.
 
 Supplying a material library requires every face to follow a `usemtl` selecting
 a complete loaded definition. Untextured models need no `--material` bindings;
@@ -120,8 +123,11 @@ Material records are emitted only when the selected definition changes. OBJ
 sole authority over host file access and library ordering.
 
 By default, arbitrary triangle topology is represented as three-vertex strips,
-preserving the converter's original byte stream. `--join-strips` performs a
-bounded, order-preserving optimization over adjacent source faces. A face joins
+preserving the converter's original byte stream. glTF triangle strips and fans
+are first expanded according to their defined winding, so they use the same
+checked path without adding topology modes to the target. `--join-strips`
+performs a bounded, order-preserving optimization over adjacent source faces.
+A face joins
 only when its complete position/UV/normal corner identities match the next edge
 required by alternating triangle-strip winding. The optimizer never reorders
 faces and never crosses an attribute form, selected material, or resolved

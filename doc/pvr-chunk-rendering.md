@@ -393,6 +393,9 @@ format, deformation, or tooling gaps:
    complete: unordered contributions from multiple hierarchy nodes are merged
    into deterministic, exactly normalized general-N skin spans and an
    inverse-bind skeleton, and the glTF importer uses that same path.
+   Triangle strips and fans, material-selected texture-coordinate sets, and
+   base-color texture transforms are also canonicalized by the host importer;
+   the target retains one triangle/UV vocabulary and pays no scene-import cost.
    The host scene IR now lowers resolved deferred capture/replay events into
    ordinary animated draw proxies, eliminating those controls from serialized
    hierarchy execution. PMT1 version two and the explicit PCM2 stream-pair

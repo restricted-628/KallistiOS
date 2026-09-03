@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* The compact-model host importer now lowers glTF triangle strips and fans,
+  material-selected texture-coordinate sets, and finite base-color texture
+  transforms into the existing canonical triangle and signed/float UV records.
+  This broadens authored-scene input without adding target-side topology,
+  transform state, allocations, or per-frame work.
+
 * Added host-side complete-pose deformation canonicalization. Importers can
   submit unordered, repeated vertex contributions from hierarchy nodes; the
   compiler validates inverse-bind sources, merges duplicate pairs, sorts

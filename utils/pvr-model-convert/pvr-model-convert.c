@@ -6,8 +6,9 @@
    The source boundary is intentionally narrower than OBJ as a whole. Vertex
    positions become indexed 32-bit records. Per-corner UVs and normals become
    16-bit strip attributes, so independently indexed OBJ attributes do not
-   require vertex duplication. Every input face is already one triangle; this
-   tool never guesses polygon triangulation or material-name policy.
+   require vertex duplication. OBJ faces must already be triangles; glTF's
+   explicitly defined triangle, strip, and fan topology is lowered without
+   guessing polygon triangulation or material-name policy.
 
    Emission is planned in memory, split before compact 16-bit fields overflow,
    and admitted by pvr_chunk_model_validate() before temporary files are
@@ -93,6 +94,15 @@ typedef struct source_position {
 typedef struct source_texcoord {
     float value[2];
 } source_texcoord_t;
+
+typedef struct gltf_texture_mapping {
+    int texture_identifier;
+    int texcoord_set;
+    float offset[2];
+    float scale[2];
+    float rotation;
+    int transformed;
+} gltf_texture_mapping_t;
 
 typedef struct source_normal {
     float value[3];
@@ -1261,13 +1271,37 @@ static int gltf_append_color_value(source_model_t *model,
     return 0;
 }
 
-static int gltf_append_texcoord_value(source_model_t *model,
-                                      const float value[2], int flip_v) {
+static int gltf_append_texcoord_value(
+    source_model_t *model, const float value[2],
+    const gltf_texture_mapping_t *mapping, int flip_v) {
     void *allocation = model->texcoords;
     source_texcoord_t texcoord;
+    double u = value[0];
+    double v = value[1];
 
-    texcoord.value[0] = value[0];
-    texcoord.value[1] = flip_v ? 1.0f - value[1] : value[1];
+    if(!isfinite(u) || !isfinite(v)) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if(mapping->transformed) {
+        double cosine = cos(mapping->rotation);
+        double sine = sin(mapping->rotation);
+        double scaled_u = u * mapping->scale[0];
+        double scaled_v = v * mapping->scale[1];
+
+        u = mapping->offset[0] + cosine * scaled_u - sine * scaled_v;
+        v = mapping->offset[1] + sine * scaled_u + cosine * scaled_v;
+    }
+    if(flip_v)
+        v = 1.0 - v;
+    if(!isfinite(u) || !isfinite(v) ||
+       u < -FLT_MAX || u > FLT_MAX || v < -FLT_MAX || v > FLT_MAX) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    texcoord.value[0] = (float)u;
+    texcoord.value[1] = (float)v;
     if(reserve_array(&allocation, &model->texcoord_capacity,
                      model->texcoord_count + 1u,
                      sizeof(*model->texcoords)) < 0)
@@ -1318,28 +1352,53 @@ static int gltf_material_index(const cgltf_data *data,
     return 0;
 }
 
-static int gltf_texture_index(const cgltf_data *data,
-                              const cgltf_material *material,
-                              int override, int *index) {
+static int gltf_texture_mapping(const cgltf_data *data,
+                                const cgltf_material *material,
+                                int override,
+                                gltf_texture_mapping_t *mapping) {
+    const cgltf_texture_view *view = NULL;
     const cgltf_texture *texture = NULL;
+    size_t component;
+
+    memset(mapping, 0, sizeof(*mapping));
+    mapping->texture_identifier = -1;
+    mapping->scale[0] = 1.0f;
+    mapping->scale[1] = 1.0f;
 
     if(override >= 0) {
-        *index = override;
+        mapping->texture_identifier = override;
         return 0;
     }
     if(material && material->has_pbr_metallic_roughness) {
-        const cgltf_texture_view *view =
-            &material->pbr_metallic_roughness.base_color_texture;
+        view = &material->pbr_metallic_roughness.base_color_texture;
+        texture = view->texture;
+    }
+    if(!texture)
+        return 0;
 
-        if(view->texture && (view->texcoord != 0 || view->has_transform)) {
-            errno = ENOTSUP;
+    mapping->texcoord_set = view->texcoord;
+    if(view->has_transform) {
+        if(view->transform.has_texcoord)
+            mapping->texcoord_set = view->transform.texcoord;
+        for(component = 0; component < 2; ++component) {
+            if(!isfinite(view->transform.offset[component]) ||
+               !isfinite(view->transform.scale[component])) {
+                errno = EILSEQ;
+                return -1;
+            }
+            mapping->offset[component] = view->transform.offset[component];
+            mapping->scale[component] = view->transform.scale[component];
+        }
+        if(!isfinite(view->transform.rotation)) {
+            errno = EILSEQ;
             return -1;
         }
-        texture = material->pbr_metallic_roughness.base_color_texture.texture;
+        mapping->rotation = view->transform.rotation;
+        mapping->transformed = 1;
     }
-    if(!texture) {
-        *index = -1;
-        return 0;
+    if(mapping->texcoord_set < 0) {
+        errno = EILSEQ;
+        return -1;
     }
     {
         size_t texture_ordinal;
@@ -1352,9 +1411,59 @@ static int gltf_texture_index(const cgltf_data *data,
             errno = EILSEQ;
             return -1;
         }
-        *index = (int)texture_ordinal;
+        mapping->texture_identifier = (int)texture_ordinal;
     }
     return 0;
+}
+
+static int gltf_required_extensions_supported(const cgltf_data *data) {
+    cgltf_size extension;
+
+    for(extension = 0; extension < data->extensions_required_count;
+        ++extension) {
+        if(strcmp(data->extensions_required[extension],
+                  "KHR_texture_transform")) {
+            errno = ENOTSUP;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int gltf_primitive_triangle_count(cgltf_primitive_type type,
+                                         cgltf_size element_count,
+                                         cgltf_size *triangle_count) {
+    switch(type) {
+        case cgltf_primitive_type_triangles:
+            if(!element_count || element_count % 3u) {
+                errno = EILSEQ;
+                return -1;
+            }
+            *triangle_count = element_count / 3u;
+            return 0;
+        case cgltf_primitive_type_triangle_strip:
+        case cgltf_primitive_type_triangle_fan:
+            if(element_count < 3u) {
+                errno = EILSEQ;
+                return -1;
+            }
+            *triangle_count = element_count - 2u;
+            return 0;
+        default:
+            errno = ENOTSUP;
+            return -1;
+    }
+}
+
+static cgltf_size gltf_primitive_corner_element(
+    cgltf_primitive_type type, cgltf_size triangle, size_t corner) {
+    if(type == cgltf_primitive_type_triangles)
+        return triangle * 3u + corner;
+    if(type == cgltf_primitive_type_triangle_fan)
+        return corner ? triangle + corner : 0;
+    if((triangle & 1u) && corner < 2u)
+        return triangle + 1u - corner;
+    return triangle + corner;
 }
 
 static int gltf_append_primitive(const cgltf_data *data,
@@ -1364,8 +1473,7 @@ static int gltf_append_primitive(const cgltf_data *data,
                                  int has_skin) {
     const cgltf_accessor *positions = gltf_attribute(
         primitive, cgltf_attribute_type_position, 0);
-    const cgltf_accessor *texcoords = gltf_attribute(
-        primitive, cgltf_attribute_type_texcoord, 0);
+    const cgltf_accessor *texcoords;
     const cgltf_accessor *normals = gltf_attribute(
         primitive, cgltf_attribute_type_normal, 0);
     const cgltf_accessor *colors = gltf_attribute(
@@ -1374,10 +1482,11 @@ static int gltf_append_primitive(const cgltf_data *data,
     size_t texcoord_base = model->texcoord_count;
     size_t normal_base = model->normal_count;
     size_t material_index;
-    int texture_index;
+    gltf_texture_mapping_t texture_mapping;
     cgltf_size vertex;
     cgltf_size element_count;
-    cgltf_size element;
+    cgltf_size triangle_count;
+    cgltf_size triangle_index;
     cgltf_size attribute;
 
     for(attribute = 0; attribute < primitive->attributes_count;
@@ -1388,7 +1497,6 @@ static int gltf_append_primitive(const cgltf_data *data,
         if(candidate->index < 0 ||
            ((candidate->type == cgltf_attribute_type_position ||
              candidate->type == cgltf_attribute_type_normal ||
-             candidate->type == cgltf_attribute_type_texcoord ||
              candidate->type == cgltf_attribute_type_color) &&
             candidate->index != 0) ||
            (candidate->type != cgltf_attribute_type_position &&
@@ -1410,8 +1518,16 @@ static int gltf_append_primitive(const cgltf_data *data,
         }
     }
 
-    if(primitive->type != cgltf_primitive_type_triangles ||
-       primitive->has_draco_mesh_compression || !positions ||
+    if(gltf_material_index(data, primitive->material,
+                           &material_index) < 0 ||
+       gltf_texture_mapping(data, primitive->material, texture_override,
+                            &texture_mapping) < 0)
+        return -1;
+    texcoords = texture_mapping.texture_identifier >= 0 ?
+        gltf_attribute(primitive, cgltf_attribute_type_texcoord,
+                       texture_mapping.texcoord_set) : NULL;
+
+    if(primitive->has_draco_mesh_compression || !positions ||
        positions->type != cgltf_type_vec3 || !positions->count ||
        (texcoords && (texcoords->type != cgltf_type_vec2 ||
                       texcoords->count != positions->count)) ||
@@ -1424,12 +1540,7 @@ static int gltf_append_primitive(const cgltf_data *data,
         errno = ENOTSUP;
         return -1;
     }
-    if(gltf_material_index(data, primitive->material,
-                           &material_index) < 0 ||
-       gltf_texture_index(data, primitive->material, texture_override,
-                          &texture_index) < 0)
-        return -1;
-    if(!!texcoords != (texture_index >= 0)) {
+    if(texture_mapping.texture_identifier >= 0 && !texcoords) {
         errno = EILSEQ;
         return -1;
     }
@@ -1450,7 +1561,8 @@ static int gltf_append_primitive(const cgltf_data *data,
             return -1;
         if(texcoords &&
            (!cgltf_accessor_read_float(texcoords, vertex, texcoord, 2) ||
-            gltf_append_texcoord_value(model, texcoord, flip_v) < 0))
+            gltf_append_texcoord_value(model, texcoord, &texture_mapping,
+                                       flip_v) < 0))
             return -1;
         if(normals &&
            (!cgltf_accessor_read_float(normals, vertex, normal, 3) ||
@@ -1472,22 +1584,24 @@ static int gltf_append_primitive(const cgltf_data *data,
 
     element_count = primitive->indices ?
                     primitive->indices->count : positions->count;
-    if(!element_count || element_count % 3u) {
-        errno = EILSEQ;
+    if(gltf_primitive_triangle_count(primitive->type, element_count,
+                                     &triangle_count) < 0)
         return -1;
-    }
-    for(element = 0; element < element_count; element += 3u) {
+    for(triangle_index = 0; triangle_index < triangle_count;
+        ++triangle_index) {
         source_triangle_t triangle;
         void *allocation = model->triangles;
         size_t corner;
 
         memset(&triangle, 0, sizeof(triangle));
         for(corner = 0; corner < 3; ++corner) {
-            cgltf_uint index = (cgltf_uint)(element + corner);
+            cgltf_size element = gltf_primitive_corner_element(
+                primitive->type, triangle_index, corner);
+            cgltf_uint index = (cgltf_uint)element;
 
             if(primitive->indices &&
                !cgltf_accessor_read_uint(primitive->indices,
-                                         element + corner, &index, 1)) {
+                                         element, &index, 1)) {
                 errno = EILSEQ;
                 return -1;
             }
@@ -1507,7 +1621,7 @@ static int gltf_append_primitive(const cgltf_data *data,
             triangle.corner[1] = triangle.corner[2];
             triangle.corner[2] = temporary;
         }
-        triangle.texture_identifier = texture_index;
+        triangle.texture_identifier = texture_mapping.texture_identifier;
         triangle.material_definition = material_index;
         if(triangle_type(model, &triangle) < 0 ||
            reserve_array(&allocation, &model->triangle_capacity,
@@ -2849,8 +2963,9 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
         errno = cgltf_errno(result);
         goto fail;
     }
-    if(data->extensions_required_count || !data->scenes_count ||
-       data->nodes_count > 65536u) {
+    if(gltf_required_extensions_supported(data) < 0)
+        goto fail;
+    if(!data->scenes_count || data->nodes_count > 65536u) {
         errno = ENOTSUP;
         goto fail;
     }

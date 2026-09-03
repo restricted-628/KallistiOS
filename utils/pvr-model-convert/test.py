@@ -1093,6 +1093,145 @@ f 1/1/1 2/2/1 3/3/1
         )
         assert multi_texture[96:100] == struct.pack("<HH", 0x07E0, 0xF800)
 
+        topology_binary = (
+            struct.pack(
+                "<12f",
+                -1.0, -1.0, 0.0,
+                1.0, -1.0, 0.0,
+                1.0, 1.0, 0.0,
+                -1.0, 1.0, 0.0,
+            ) +
+            struct.pack("<8f", *(9.0, 9.0) * 4) +
+            struct.pack(
+                "<8f",
+                0.25, 0.5,
+                0.75, 0.5,
+                0.75, 1.0,
+                0.25, 1.0,
+            ) +
+            struct.pack("<4H", 0, 1, 2, 3)
+        )
+        topology_source = root / "topology-and-uv-transform.gltf"
+        topology_source.write_text(json.dumps({
+            "asset": {"version": "2.0"},
+            "extensionsUsed": ["KHR_texture_transform"],
+            "extensionsRequired": ["KHR_texture_transform"],
+            "buffers": [{
+                "byteLength": len(topology_binary),
+                "uri": "data:application/octet-stream;base64," +
+                       base64.b64encode(topology_binary).decode("ascii"),
+            }],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": 48,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 48, "byteLength": 32,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 80, "byteLength": 32,
+                 "target": 34962},
+                {"buffer": 0, "byteOffset": 112, "byteLength": 8,
+                 "target": 34963},
+            ],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 4,
+                 "type": "VEC3"},
+                {"bufferView": 1, "componentType": 5126, "count": 4,
+                 "type": "VEC2"},
+                {"bufferView": 2, "componentType": 5126, "count": 4,
+                 "type": "VEC2"},
+                {"bufferView": 3, "componentType": 5123, "count": 4,
+                 "type": "SCALAR"},
+            ],
+            "images": [{
+                "uri": "data:image/png;base64," +
+                       base64.b64encode(texture_png).decode("ascii")
+            }],
+            "textures": [{"source": 0}],
+            "materials": [{
+                "pbrMetallicRoughness": {
+                    "baseColorTexture": {
+                        "index": 0,
+                        "texCoord": 0,
+                        "extensions": {
+                            "KHR_texture_transform": {
+                                "offset": [1.0, -1.0],
+                                "rotation": math.pi / 2.0,
+                                "scale": [2.0, 3.0],
+                                "texCoord": 1,
+                            }
+                        },
+                    }
+                }
+            }],
+            "meshes": [
+                {"primitives": [{
+                    "attributes": {
+                        "POSITION": 0, "TEXCOORD_0": 1,
+                        "TEXCOORD_1": 2,
+                    },
+                    "indices": 3, "material": 0, "mode": 5,
+                }]},
+                {"primitives": [{
+                    "attributes": {
+                        "POSITION": 0, "TEXCOORD_0": 1,
+                        "TEXCOORD_1": 2,
+                    },
+                    "indices": 3, "material": 0, "mode": 6,
+                }]},
+            ],
+            "nodes": [{"mesh": 0}, {"mesh": 1}],
+            "scenes": [{"nodes": [0, 1]}],
+            "scene": 0,
+        }), encoding="utf-8")
+        topology_asset = root / "topology-and-uv-transform.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            "--join-strips", topology_source, topology_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "positions=8\n" in result.stdout
+        assert "texcoords=8\n" in result.stdout
+        assert "triangles=4\n" in result.stdout
+        assert "strips_before=4\n" in result.stdout
+        assert "strips_after=3\n" in result.stdout
+        assert "triangles_joined=1\n" in result.stdout
+        topology_bytes = topology_asset.read_bytes()
+        topology_descriptor_count = struct.unpack_from(
+            "<I", topology_bytes, 32
+        )[0]
+        topology_descriptors = [
+            struct.unpack_from("<7IHH", topology_bytes, 64 + i * 32)
+            for i in range(topology_descriptor_count)
+        ]
+        topology_polygons = [
+            topology_bytes[descriptor[2]:descriptor[2] + descriptor[3]]
+            for descriptor in topology_descriptors if descriptor[0] == 2
+        ]
+        assert len(topology_polygons) == 2
+        for expected_uv in (
+            (-512, -512), (-512, 512), (-2048, 512), (-2048, -512)
+        ):
+            encoded = struct.pack("<hh", *expected_uv)
+            assert all(encoded in polygons for polygons in topology_polygons)
+        assert all(struct.pack("<hh", 9216, 9216) not in polygons
+                   for polygons in topology_polygons)
+
+        unsupported_extension = json.loads(
+            topology_source.read_text(encoding="utf-8")
+        )
+        unsupported_extension["extensionsUsed"].append("EXT_unknown")
+        unsupported_extension["extensionsRequired"].append("EXT_unknown")
+        unsupported_source = root / "unsupported-required-extension.gltf"
+        unsupported_source.write_text(
+            json.dumps(unsupported_extension), encoding="utf-8"
+        )
+        topology_asset.write_bytes(b"topology sentinel")
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            unsupported_source, topology_asset,
+        )
+        assert result.returncode == 1
+        assert topology_asset.read_bytes() == b"topology sentinel"
+
         result = invoke(
             converter, "--emit-asset", "--section-directory",
             "--lz4-vertices", multi_gltf_source, multi_gltf_asset,
