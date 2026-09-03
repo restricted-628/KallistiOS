@@ -405,7 +405,8 @@ format, deformation, or tooling gaps:
    loader permit the importer to split draw-order segments while sharing
    vertex data instead of copying it. Target-side loading of the
    canonical PCM2 model table and hierarchy is one coherent allocation-free
-   operation over caller-owned model, node, and persistent decode storage;
+   operation over caller-owned model, node, and unique-stream persistent
+   decode storage;
    multi-model host output is round-tripped through that same path before
    publication.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose

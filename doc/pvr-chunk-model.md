@@ -467,12 +467,14 @@ pointer reconstruction. `pvr_chunk_scene_asset_open()` requires one directly
 readable model table and hierarchy, verifies both payload CRCs, validates every
 typed model-table ordinal against the enclosing container, and checks every
 hierarchy model ordinal before publishing a coherent view.
-`pvr_chunk_scene_asset_workspace_query()` combines all persistent model decode
-requirements into one aligned nonoverlapping span, while
+`pvr_chunk_scene_asset_workspace_query()` combines all unique persistent stream
+decode requirements into one aligned nonoverlapping span, while
 `pvr_chunk_scene_asset_load()` fills caller-owned contiguous model and node
-arrays and binds the final hierarchy atomically. Models that still report a
-host-canonicalization requirement are rejected before publication, so a
-canonical scene never retains import-only cross-hierarchy execution state.
+arrays and binds the final hierarchy atomically. Model views selecting one
+compressed or unaligned stream share the same decoded workspace slice. Models
+that still report a host-canonicalization requirement are rejected before
+publication, so a canonical scene never retains import-only cross-hierarchy
+execution state.
 The helper owns no allocation, decoder, animation state, renderer, list, or
 scene lifecycle; applications that need encoded scene metadata can continue
 using the individual generic section APIs.

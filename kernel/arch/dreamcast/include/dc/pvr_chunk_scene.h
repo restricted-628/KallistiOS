@@ -80,7 +80,7 @@ typedef struct pvr_chunk_scene_asset_view {
     size_t node_count;
 } pvr_chunk_scene_asset_view_t;
 
-/** \brief Persistent decode workspace for every model in one scene asset. */
+/** \brief Persistent decode workspace for unique streams in one scene asset. */
 typedef struct pvr_chunk_scene_asset_workspace_requirements {
     size_t alignment;
     size_t bytes;
@@ -158,9 +158,11 @@ int pvr_chunk_scene_asset_open(
 
 /** \brief Query persistent decode storage for all scene models.
 
-    The returned span combines the exact per-model requirements with
-    nonoverlapping aligned slices. It excludes the caller-owned model-view and
-    hierarchy-node arrays.
+    The returned span combines the exact requirements of each uniquely
+    referenced vertex or polygon stream with nonoverlapping aligned slices.
+    Models selecting the same compressed or unaligned stream share one decoded
+    copy. The span excludes the caller-owned model-view and hierarchy-node
+    arrays.
 */
 int pvr_chunk_scene_asset_workspace_query(
     const pvr_chunk_scene_asset_view_t *view,
@@ -169,8 +171,9 @@ int pvr_chunk_scene_asset_workspace_query(
 /** \brief Load every scene model and bind its hierarchy coherently.
 
     The caller supplies one model view per model and one node per hierarchy
-    record. Decoded model bytes remain in \p workspace for as long as any
-    published model or hierarchy is used. A zero-byte workspace requirement
+    record. Decoded stream bytes remain in \p workspace for as long as any
+    published model or hierarchy is used; model views selecting the same
+    stream point to the same decoded bytes. A zero-byte workspace requirement
     permits NULL workspace. Every loaded model must be runtime-ready; streams
     that still require host canonicalization are rejected with ENOTSUP. On
     failure, no hierarchy is published and both output arrays are cleared if a

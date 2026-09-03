@@ -1550,6 +1550,7 @@ f 1/1/1 2/2/1 3/3/1
         specialized_asset = root / "mesh-skin-specializations.pcm"
         result = invoke(
             converter, "--emit-asset", "--section-directory",
+            "--lz4-vertices",
             specialized_source, specialized_asset,
         )
         assert result.returncode == 0, result.stderr
@@ -1566,6 +1567,8 @@ f 1/1/1 2/2/1 3/3/1
         ]
         assert sum(descriptor[0] == 1
                    for descriptor in specialized_descriptors) == 1
+        assert next(descriptor for descriptor in specialized_descriptors
+                    if descriptor[0] == 1)[7] == 1
         assert sum(descriptor[0] == 2
                    for descriptor in specialized_descriptors) == 1
         specialized_table_descriptor = next(

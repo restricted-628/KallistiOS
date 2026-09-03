@@ -130,7 +130,8 @@ static void init_model_record(pvr_chunk_model_table_record_t *record,
 static size_t build_scene_asset(uint8_t *asset, size_t capacity,
                                 const void *table, size_t table_bytes,
                                 const void *hierarchy,
-                                size_t hierarchy_bytes) {
+                                size_t hierarchy_bytes,
+                                int compress_first_vertex) {
     const size_t section_count = 6;
     const size_t directory_bytes = section_count *
         PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
@@ -163,7 +164,9 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
 
     write_section(directory, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
                   vertex0_offset, scene_vertices0, sizeof(scene_vertices0),
-                  sizeof(scene_vertices0), PVR_CHUNK_ASSET_CODEC_RAW, 4);
+                  sizeof(scene_vertices0), compress_first_vertex ?
+                      PVR_CHUNK_ASSET_CODEC_LZ4_FRAME :
+                      PVR_CHUNK_ASSET_CODEC_RAW, 4);
     write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
                   PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
                   polygon0_offset, scene_polygons, sizeof(scene_polygons),
@@ -199,11 +202,14 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
     return file_bytes;
 }
 
+static size_t decoder_calls;
+
 static int copy_decoder(const pvr_chunk_asset_section_t *section,
                         void *destination, size_t destination_bytes,
                         void *data) {
     (void)data;
     assert(destination_bytes == section->decoded_bytes);
+    ++decoder_calls;
     memcpy(destination, section->stored_data, destination_bytes);
     return 0;
 }
@@ -584,6 +590,7 @@ static void test_scene_asset(void) {
 
     init_model_record(&records[0], 0, 1.0f, 2.0f);
     init_model_record(&records[1], 1, 3.0f, 4.0f);
+    records[1].vertex_ordinal = 0;
     assert(pvr_scene_ir_serialize_model_table(
                records, 2, &table, &table_bytes) == 0);
     assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
@@ -593,7 +600,7 @@ static void test_scene_asset(void) {
                &scene, &hierarchy_bytes, &hierarchy_size) == 0);
     asset_bytes = build_scene_asset(
         asset, sizeof(asset), table, table_bytes,
-        hierarchy_bytes, hierarchy_size);
+        hierarchy_bytes, hierarchy_size, 1);
 
     assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
     assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
@@ -602,6 +609,7 @@ static void test_scene_asset(void) {
                &scene_view, &requirements) == 0);
     assert(requirements.alignment == PVR_CHUNK_ASSET_ALIGNMENT &&
            requirements.bytes == sizeof(scene_vertices1));
+    decoder_calls = 0;
     assert(pvr_chunk_scene_asset_load(
                &scene_view, copy_decoder, NULL,
                workspace, sizeof(workspace), models, 2, nodes, 2,
@@ -613,6 +621,8 @@ static void test_scene_asset(void) {
            models[0].model.radius == 2.0f &&
            models[1].model.center[0] == 3.0f &&
            models[1].model.radius == 4.0f);
+    assert(decoder_calls == 1);
+    assert(models[0].model.vertex_words == models[1].model.vertex_words);
     memset(models, 0xa5, sizeof(models));
     memset(nodes, 0xa5, sizeof(nodes));
     memset(&hierarchy, 0xa5, sizeof(hierarchy));
@@ -679,7 +689,7 @@ static void test_scene_asset(void) {
                &scene, &hierarchy_bytes, &hierarchy_size) == 0);
     asset_bytes = build_scene_asset(
         asset, sizeof(asset), table, table_bytes,
-        hierarchy_bytes, hierarchy_size);
+        hierarchy_bytes, hierarchy_size, 1);
     assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
     assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == -1);
     assert(errno == EILSEQ);

@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Kept shared PCM2 geometry shared after materialization. The coherent scene
+  workspace now budgets every uniquely referenced compressed or unaligned
+  vertex and polygon stream once, decodes it once, and points all selecting
+  model views at that persistent copy. Differently skinned model
+  specializations therefore avoid duplicate file payloads and duplicate target
+  workspace while retaining independent bounds and deformation bindings.
+
 * Completed the bounded glTF scene-instance import path. Static
   `EXT_mesh_gpu_instancing` TRS data lowers to ordinary animated hierarchy
   children; distinct mesh/skin pairs become independent model-table entries;
@@ -52,7 +59,8 @@ lifecycle and naming conventions.
 
 * Added coherent allocation-free PCM2 scene loading. A checked scene-asset
   view joins the unique model table and hierarchy, validates their
-  cross-section ordinals, computes one persistent decode span for every model,
+  cross-section ordinals, computes one persistent decode span for all unique
+  model streams,
   materializes the complete model set, and binds hierarchy nodes directly to
   contiguous caller-owned model views. Applications no longer need a
   temporary model-pointer table or per-model workspace reconstruction, while

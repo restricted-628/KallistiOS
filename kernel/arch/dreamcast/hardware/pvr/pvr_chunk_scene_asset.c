@@ -11,7 +11,9 @@
 #include <string.h>
 
 enum {
-    NODE_MODEL_OFFSET = 4
+    NODE_MODEL_OFFSET = 4,
+    MODEL_VERTEX_OFFSET = 0,
+    MODEL_POLYGON_OFFSET = 4
 };
 
 static uint32_t read_le32(const uint8_t *bytes) {
@@ -46,6 +48,84 @@ static int align_size(size_t value, size_t alignment, size_t *result) {
         return -1;
     }
     *result = (value + mask) & ~mask;
+    return 0;
+}
+
+static int stream_section_index(
+    const pvr_chunk_asset_view_t *asset, uint32_t type, size_t ordinal,
+    size_t *section_index, pvr_chunk_asset_section_t *section) {
+    size_t matched = 0;
+    size_t index;
+
+    for(index = 0; index < asset->section_count; ++index) {
+        pvr_chunk_asset_section_t candidate;
+
+        if(pvr_chunk_asset_section_get(asset, index, &candidate) < 0)
+            return -1;
+        if(candidate.type != type)
+            continue;
+        if(matched++ == ordinal) {
+            *section_index = index;
+            *section = candidate;
+            return 0;
+        }
+    }
+    errno = ENOENT;
+    return -1;
+}
+
+static int stream_first_model(
+    const pvr_chunk_model_table_view_t *table, size_t model,
+    uint32_t type, size_t ordinal, size_t *first_model) {
+    size_t field_offset =
+        type == PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM ?
+        MODEL_VERTEX_OFFSET : MODEL_POLYGON_OFFSET;
+    size_t previous;
+
+    /* Scene materialization is a one-shot, allocation-free operation. Walking
+       the already admitted fixed-width records avoids requiring a caller-owned
+       ordinal map or revalidating the complete table for every comparison. */
+    for(previous = 0; previous < model; ++previous) {
+        const uint8_t *record =
+            (const uint8_t *)table->records +
+            previous * table->record_stride;
+
+        if(read_le32(record + field_offset) == ordinal) {
+            *first_model = previous;
+            return 0;
+        }
+    }
+    *first_model = model;
+    return 0;
+}
+
+static int workspace_add_stream(
+    const pvr_chunk_scene_asset_view_t *view, size_t model,
+    uint32_t type, size_t ordinal, size_t *cursor) {
+    pvr_chunk_asset_section_workspace_requirements_t section_requirements;
+    pvr_chunk_asset_section_t section;
+    size_t section_index;
+    size_t first_model;
+    size_t offset;
+
+    if(stream_first_model(
+           &view->model_table, model, type, ordinal, &first_model) < 0)
+        return -1;
+    if(first_model != model)
+        return 0;
+    if(stream_section_index(
+           &view->asset, type, ordinal, &section_index, &section) < 0 ||
+       pvr_chunk_asset_section_workspace_query(
+           &view->asset, section_index, &section_requirements) < 0)
+        return -1;
+    if(!section_requirements.bytes)
+        return 0;
+    if(align_size(*cursor, section_requirements.alignment, &offset) < 0 ||
+       section_requirements.bytes > SIZE_MAX - offset) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *cursor = offset + section_requirements.bytes;
     return 0;
 }
 
@@ -175,25 +255,74 @@ int pvr_chunk_scene_asset_workspace_query(
     memset(&result, 0, sizeof(result));
     result.alignment = PVR_CHUNK_ASSET_ALIGNMENT;
     for(model = 0; model < checked.model_count; ++model) {
-        pvr_chunk_asset_workspace_requirements_t model_requirements;
-        size_t offset;
+        pvr_chunk_model_table_record_t record;
 
-        if(pvr_chunk_model_table_workspace_query(
-               &checked.model_table, &checked.asset, model,
-               &model_requirements) < 0)
+        if(pvr_chunk_model_table_record_get(
+               &checked.model_table, model, &record) < 0 ||
+           workspace_add_stream(
+               &checked, model, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+               record.vertex_ordinal, &cursor) < 0 ||
+           workspace_add_stream(
+               &checked, model, PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+               record.polygon_ordinal, &cursor) < 0)
             return -1;
-        if(!model_requirements.bytes)
-            continue;
-        if(align_size(cursor, model_requirements.alignment, &offset) < 0 ||
-           model_requirements.bytes > SIZE_MAX - offset) {
-            if(errno != EOVERFLOW)
-                errno = EOVERFLOW;
-            return -1;
-        }
-        cursor = offset + model_requirements.bytes;
     }
     result.bytes = cursor;
     *requirements = result;
+    return 0;
+}
+
+static int load_scene_stream(
+    const pvr_chunk_scene_asset_view_t *view,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    const pvr_chunk_model_view_t *models, size_t model,
+    uint32_t type, size_t ordinal, size_t *cursor,
+    const void **decoded, size_t *decoded_bytes) {
+    pvr_chunk_asset_section_workspace_requirements_t section_requirements;
+    pvr_chunk_asset_section_t section;
+    size_t section_index;
+    size_t first_model;
+    size_t offset = *cursor;
+    void *section_workspace = NULL;
+
+    if(stream_first_model(
+           &view->model_table, model, type, ordinal, &first_model) < 0)
+        return -1;
+    if(first_model != model) {
+        if(type == PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM) {
+            *decoded = models[first_model].model.vertex_words;
+            *decoded_bytes = models[first_model].model.vertex_word_count *
+                             sizeof(uint32_t);
+        }
+        else {
+            *decoded = models[first_model].model.polygon_words;
+            *decoded_bytes = models[first_model].model.polygon_word_count *
+                             sizeof(uint16_t);
+        }
+        return 0;
+    }
+    if(stream_section_index(
+           &view->asset, type, ordinal, &section_index, &section) < 0 ||
+       pvr_chunk_asset_section_workspace_query(
+           &view->asset, section_index, &section_requirements) < 0)
+        return -1;
+    if(section_requirements.bytes) {
+        if(align_size(*cursor, section_requirements.alignment, &offset) < 0 ||
+           offset > workspace_bytes ||
+           section_requirements.bytes > workspace_bytes - offset) {
+            errno = ENOSPC;
+            return -1;
+        }
+        section_workspace = (uint8_t *)workspace + offset;
+    }
+    if(pvr_chunk_asset_section_load(
+           &view->asset, section_index, decoder, decoder_data,
+           section_workspace, section_requirements.bytes, decoded) < 0)
+        return -1;
+    *decoded_bytes = section.decoded_bytes;
+    if(section_requirements.bytes)
+        *cursor = offset + section_requirements.bytes;
     return 0;
 }
 
@@ -262,24 +391,36 @@ int pvr_chunk_scene_asset_load(
     if(node_bytes)
         memset(nodes, 0, node_bytes);
     for(model = 0; model < checked.model_count; ++model) {
-        pvr_chunk_asset_workspace_requirements_t model_requirements;
-        void *model_workspace = NULL;
-        size_t offset = cursor;
+        pvr_chunk_model_table_record_t record;
+        pvr_chunk_model_t source;
+        const void *vertex;
+        const void *polygon;
+        size_t vertex_bytes;
+        size_t polygon_bytes;
 
-        if(pvr_chunk_model_table_workspace_query(
-               &checked.model_table, &checked.asset, model,
-               &model_requirements) < 0)
+        if(pvr_chunk_model_table_record_get(
+               &checked.model_table, model, &record) < 0 ||
+           load_scene_stream(
+               &checked, decoder, decoder_data, workspace,
+               workspace_bytes, models, model,
+               PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+               record.vertex_ordinal, &cursor,
+               &vertex, &vertex_bytes) < 0 ||
+           load_scene_stream(
+               &checked, decoder, decoder_data, workspace,
+               workspace_bytes, models, model,
+               PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+               record.polygon_ordinal, &cursor,
+               &polygon, &polygon_bytes) < 0)
             goto fail;
-        if(model_requirements.bytes) {
-            if(align_size(cursor, model_requirements.alignment,
-                          &offset) < 0)
-                goto fail;
-            model_workspace = (uint8_t *)workspace + offset;
-        }
-        if(pvr_chunk_model_table_load(
-               &checked.model_table, &checked.asset, model,
-               decoder, decoder_data, model_workspace,
-               model_requirements.bytes, &models[model]) < 0)
+        memset(&source, 0, sizeof(source));
+        source.vertex_words = vertex;
+        source.vertex_word_count = vertex_bytes / sizeof(uint32_t);
+        source.polygon_words = polygon;
+        source.polygon_word_count = polygon_bytes / sizeof(uint16_t);
+        memcpy(source.center, record.center, sizeof(source.center));
+        source.radius = record.radius;
+        if(pvr_chunk_model_open(&source, &models[model]) < 0)
             goto fail;
         /* Canonical scene assets publish only runtime-ready model streams.
            Import-only execution controls must be resolved by the host before
@@ -288,7 +429,6 @@ int pvr_chunk_scene_asset_load(
             errno = ENOTSUP;
             goto fail;
         }
-        cursor = offset + model_requirements.bytes;
     }
     if(cursor != requirements.bytes) {
         errno = EILSEQ;

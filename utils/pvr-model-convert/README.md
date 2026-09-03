@@ -42,8 +42,8 @@ sets are merged by joint across every set, so vertices with more than four
 authored influences remain general-N rather than being truncated. Skin
 attributes without a skin binding are rejected instead of silently producing
 a rigid mesh. Before publication, multi-model output is reopened and loaded
-through the coherent scene API, including persistent workspace for every
-compressed model stream.
+through the coherent scene API, including one persistent workspace slice for
+every uniquely referenced compressed stream.
 
 `COLOR_0` accepts normalized `VEC3` or `VEC4` values. RGB is multiplied by the
 primitive material's base-color factor before conversion to `0xAARRGGBB`; a
