@@ -11,6 +11,16 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added host-side canonical draw-schedule lowering. Importers can resolve
+  ordinary draws plus deferred capture/replay operations into one flat command
+  sequence, then emit a runtime hierarchy containing only transform anchors
+  and ordinary model draws. Identity draw proxies inherit animated source
+  poses without duplicating transform tracks. A matching animation serializer
+  pads identity proxy transforms and aliases each source visibility channel;
+  matching node/model morph bindings are remapped to every surviving proxy;
+  capture state is discarded, draw order is explicit, and static descendant
+  pruning is compiled into omitted draws.
+
 * Extended PCM2 model composition without duplicating geometry. `PMT1`
   version two selects vertex and polygon section ordinals independently, so
   several canonical draw-order segments can share one immutable vertex

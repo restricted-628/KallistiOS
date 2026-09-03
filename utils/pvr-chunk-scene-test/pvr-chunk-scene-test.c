@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_scene.h>
+#include <dc/pvr_chunk_animation_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -356,6 +357,208 @@ static void test_ir_rejections(void) {
     pvr_scene_ir_free(&scene);
 }
 
+static void test_draw_schedule_canonicalization(void) {
+    static const float identity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    static const float translated[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        9.0f, 8.0f, 7.0f, 1.0f
+    };
+    const pvr_scene_ir_draw_command_t commands[] = {
+        { PVR_SCENE_IR_CAPTURE_MODEL, 0, 5, 3 },
+        { PVR_SCENE_IR_DRAW_MODEL, 1, 6,
+          PVR_SCENE_IR_CAPTURE_NONE },
+        { PVR_SCENE_IR_DRAW_CAPTURED_MODEL, UINT32_MAX, UINT32_MAX, 3 },
+        { PVR_SCENE_IR_DRAW_MODEL, 2, 2,
+          PVR_SCENE_IR_CAPTURE_NONE },
+        { PVR_SCENE_IR_CAPTURE_MODEL, 2, 2, 3 },
+        { PVR_SCENE_IR_DRAW_CAPTURED_MODEL, UINT32_MAX, UINT32_MAX, 3 }
+    };
+    const pvr_scene_ir_draw_command_t invalid = {
+        PVR_SCENE_IR_DRAW_CAPTURED_MODEL, UINT32_MAX, UINT32_MAX, 99
+    };
+    pvr_scene_ir_t source = { 0 };
+    pvr_scene_ir_t canonical = { 0 };
+    pvr_scene_ir_t rejected = { 0 };
+    pvr_chunk_scene_hierarchy_view_t hierarchy;
+    pvr_chunk_animation_section_view_t animation_view;
+    pvr_chunk_animation_section_transform_t animation_transform;
+    pvr_chunk_morph_animation_section_view_t morph_view;
+    pvr_chunk_morph_animation_section_binding_t morph_decoded;
+    static const anim_scalar_key_t morph_keys[] = {
+        { 0.0f, 0.0f }, { 1.0f, 1.0f }
+    };
+    const anim_track_view_t morph_track = {
+        {
+            ANIM_VALUE_SCALAR, ANIM_INTERPOLATION_LINEAR,
+            morph_keys, 2, sizeof(morph_keys[0])
+        },
+        0.0f, 1.0f
+    };
+    const pvr_chunk_shape_channel_t morph_channel = {
+        &morph_track, 0.0f
+    };
+    pvr_chunk_morph_animation_binding_t morph_binding = {
+        2, 2, &morph_channel, 1
+    };
+    const pvr_chunk_morph_animation_t morph_animation = {
+        &morph_binding, 1, 0.0f, 1.0f
+    };
+    anim_transform_tracks_t transforms[3] = { 0 };
+    anim_visibility_tracks_t visibility[3] = { 0 };
+    anim_clip_view_t clip = { 0 };
+    uint8_t *serialized = NULL;
+    uint8_t *animation = NULL;
+    uint8_t *morph = NULL;
+    size_t serialized_bytes = 0;
+    size_t animation_bytes = 0;
+    size_t morph_bytes = 0;
+    size_t index;
+
+    assert(pvr_scene_ir_add_node_flags(
+        &source, UINT32_MAX, 0, PVR_CHUNK_NODE_PRUNE_CHILDREN,
+        identity) == 0);
+    assert(pvr_scene_ir_add_node(&source, 0, 1, translated) == 0);
+    assert(pvr_scene_ir_add_node_flags(
+        &source, UINT32_MAX, 2, PVR_CHUNK_NODE_HIDDEN,
+        translated) == 0);
+    assert(pvr_scene_ir_canonicalize_draw_schedule(
+        &source, commands, sizeof(commands) / sizeof(commands[0]),
+        &canonical) == 0);
+
+    assert(canonical.node_count == 6);
+    assert(canonical.nodes[0].model_ordinal ==
+               PVR_CHUNK_SCENE_MODEL_NONE &&
+           canonical.nodes[1].model_ordinal ==
+               PVR_CHUNK_SCENE_MODEL_NONE &&
+           canonical.nodes[2].model_ordinal ==
+               PVR_CHUNK_SCENE_MODEL_NONE);
+    assert(!(canonical.nodes[0].flags &
+             PVR_CHUNK_NODE_PRUNE_CHILDREN));
+    assert(canonical.nodes[3].parent_index == 0 &&
+           canonical.nodes[3].model_ordinal == 5 &&
+           canonical.nodes[3].local_transform[0] == 1.0f &&
+           canonical.nodes[3].local_transform[12] == 0.0f);
+    assert(canonical.nodes[4].parent_index == 2 &&
+           canonical.nodes[4].model_ordinal == 2 &&
+           canonical.nodes[4].flags == PVR_CHUNK_NODE_HIDDEN);
+    assert(canonical.nodes[5].parent_index == 2 &&
+           canonical.nodes[5].model_ordinal == 2 &&
+           canonical.nodes[5].flags == PVR_CHUNK_NODE_HIDDEN);
+
+    assert(pvr_scene_ir_serialize_hierarchy(
+        &canonical, &serialized, &serialized_bytes) == 0);
+    assert(pvr_chunk_scene_hierarchy_open(
+        serialized, serialized_bytes, &hierarchy) == 0);
+    assert(hierarchy.node_count == canonical.node_count);
+
+    for(index = 0; index < 3; ++index) {
+        transforms[index].fallback.rotation.w = 1.0f;
+        transforms[index].fallback.scale.x = 1.0f;
+        transforms[index].fallback.scale.y = 1.0f;
+        transforms[index].fallback.scale.z = 1.0f;
+        transforms[index].rotation_mode = ANIM_ROTATION_QUATERNION;
+        visibility[index].fallback = index == 1;
+    }
+    transforms[1].fallback.translation.x = 4.0f;
+    clip.clip.transforms = transforms;
+    clip.clip.transform_count = 3;
+    clip.clip.start_time = 0.0f;
+    clip.clip.end_time = 1.0f;
+    clip.clip.visibility = visibility;
+    assert(pvr_scene_ir_serialize_animation_for_scene(
+        &clip, &canonical, 3, &animation, &animation_bytes) == 0);
+    assert(pvr_chunk_animation_section_open(
+        animation, animation_bytes, &animation_view) == 0);
+    assert(animation_view.transform_count == canonical.node_count);
+    assert(pvr_chunk_animation_section_transform_get(
+        &animation_view, 3, &animation_transform) == 0);
+    assert(animation_transform.fallback.rotation.w == 1.0f &&
+           animation_transform.fallback.scale.x == 1.0f &&
+           animation_transform.fallback.translation.x == 0.0f &&
+           animation_transform.fallback_visible == 0);
+    assert(pvr_chunk_animation_section_transform_get(
+        &animation_view, 4, &animation_transform) == 0);
+    assert(animation_transform.fallback_visible == 0);
+    assert(pvr_chunk_animation_section_transform_get(
+        &animation_view, 5, &animation_transform) == 0);
+    assert(animation_transform.fallback_visible == 0);
+
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == 0);
+    assert(pvr_chunk_morph_animation_section_open(
+        morph, morph_bytes, &morph_view) == 0);
+    assert(morph_view.binding_count == 2);
+    assert(pvr_chunk_morph_animation_section_binding_get(
+        &morph_view, 0, &morph_decoded) == 0);
+    assert(morph_decoded.node_index == 4 &&
+           morph_decoded.model_ordinal == 2 &&
+           morph_decoded.channel_count == 1);
+    assert(pvr_chunk_morph_animation_section_binding_get(
+        &morph_view, 1, &morph_decoded) == 0);
+    assert(morph_decoded.node_index == 5 &&
+           morph_decoded.model_ordinal == 2 &&
+           morph_decoded.channel_count == 1);
+    free(morph);
+    morph = NULL;
+
+    morph_binding.model_ordinal = 3;
+    morph_bytes = 99;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == 0);
+    assert(morph == NULL && morph_bytes == 0);
+    morph_binding.model_ordinal = 2;
+    morph_binding.node_index = 1;
+    morph_bytes = 99;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == 0);
+    assert(morph == NULL && morph_bytes == 0);
+    morph_binding.channels = NULL;
+    errno = 0;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == -1);
+    assert(errno == EINVAL && morph == NULL && morph_bytes == 0);
+    morph_binding.channels = &morph_channel;
+    morph_binding.node_index = 3;
+    errno = 0;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == -1);
+    assert(errno == EILSEQ && morph == NULL && morph_bytes == 0);
+    morph_binding.node_index = 2;
+
+    free(animation);
+    animation = NULL;
+    canonical.nodes[4].parent_index = 3;
+    errno = 0;
+    assert(pvr_scene_ir_serialize_animation_for_scene(
+        &clip, &canonical, 3, &animation, &animation_bytes) == -1);
+    assert(errno == EILSEQ && animation == NULL && animation_bytes == 0);
+    canonical.nodes[4].parent_index = 2;
+
+    errno = 0;
+    assert(pvr_scene_ir_canonicalize_draw_schedule(
+        &source, &invalid, 1, &rejected) == -1);
+    assert(errno == EILSEQ && rejected.nodes == NULL &&
+           rejected.node_count == 0 && rejected.node_capacity == 0);
+    errno = 0;
+    assert(pvr_scene_ir_canonicalize_draw_schedule(
+        &source, commands, 1, &canonical) == -1);
+    assert(errno == EBUSY && canonical.node_count == 6);
+
+    free(animation);
+    free(morph);
+    free(serialized);
+    pvr_scene_ir_free(&rejected);
+    pvr_scene_ir_free(&canonical);
+    pvr_scene_ir_free(&source);
+}
+
 static void test_scene_asset(void) {
     static const float child_transform[16] = {
         1.0f, 0.0f, 0.0f, 0.0f,
@@ -490,6 +693,7 @@ int main(void) {
     test_round_trip();
     test_rejections();
     test_ir_rejections();
+    test_draw_schedule_canonicalization();
     test_scene_asset();
     puts("pvr chunk scene tests passed");
     return 0;

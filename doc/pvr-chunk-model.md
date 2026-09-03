@@ -462,6 +462,20 @@ The helper owns no allocation, decoder, animation state, renderer, list, or
 scene lifecycle; applications that need encoded scene metadata can continue
 using the individual generic section APIs.
 
+The host scene IR can lower an already resolved cross-hierarchy draw schedule
+before serialization. Source topology is retained as transform-only pose
+anchors, while ordinary draws become identity children appended in exact
+execution order. This keeps transform animation attached to one source node
+instead of cloning its tracks. The matching animation serializer appends
+identity transform bindings for those proxies and aliases each source node's
+visibility channel. A companion morph serializer remaps each source node/model
+binding to every matching surviving draw proxy. Capture/replay commands exist
+only while the importer resolves the schedule and are absent from PCM2. Static
+descendant pruning becomes omission of affected draw proxies, allowing a
+pruning node to retain its own scheduled model draw without reintroducing
+runtime deferred execution. PMT1 version-two records let those scheduled model
+segments share their source vertex stream.
+
 ## Rendering boundary
 
 The stream layer describes and validates model data; it does not own PVR scene

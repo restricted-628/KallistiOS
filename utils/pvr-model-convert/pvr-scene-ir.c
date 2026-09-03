@@ -647,6 +647,180 @@ int pvr_scene_ir_validate(const pvr_scene_ir_t *scene) {
     return 0;
 }
 
+typedef struct captured_draw {
+    uint32_t slot;
+    uint32_t node_index;
+    uint32_t model_ordinal;
+} captured_draw_t;
+
+static int source_node_is_pruned(const pvr_scene_ir_t *source,
+                                 size_t node_index) {
+    uint32_t parent = source->nodes[node_index].parent_index;
+
+    while(parent != UINT32_MAX) {
+        if(source->nodes[parent].flags & PVR_CHUNK_NODE_PRUNE_CHILDREN)
+            return 1;
+        parent = source->nodes[parent].parent_index;
+    }
+    return 0;
+}
+
+static int canonical_draw_append(const pvr_scene_ir_t *source,
+                                 uint32_t node_index,
+                                 uint32_t model_ordinal,
+                                 pvr_scene_ir_t *canonical) {
+    static const float identity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    uint32_t flags;
+
+    if(node_index >= source->node_count ||
+       model_ordinal == PVR_CHUNK_SCENE_MODEL_NONE) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if(source_node_is_pruned(source, node_index))
+        return 0;
+
+    /* The pose anchor retains component suppression and the complete dynamic
+       transform. Its identity child therefore follows animation without
+       duplicating tracks. Hidden remains a draw property, while pruning has
+       already been compiled into omission from this resolved schedule. */
+    flags = source->nodes[node_index].flags & PVR_CHUNK_NODE_HIDDEN;
+    return pvr_scene_ir_add_node_flags(
+        canonical, node_index, model_ordinal, flags, identity);
+}
+
+static captured_draw_t *captured_draw_find(captured_draw_t *captures,
+                                           size_t capture_count,
+                                           uint32_t slot) {
+    size_t index;
+
+    for(index = 0; index < capture_count; ++index) {
+        if(captures[index].slot == slot)
+            return captures + index;
+    }
+    return NULL;
+}
+
+int pvr_scene_ir_canonicalize_draw_schedule(
+    const pvr_scene_ir_t *source,
+    const pvr_scene_ir_draw_command_t *commands, size_t command_count,
+    pvr_scene_ir_t *canonical) {
+    pvr_scene_ir_t result = { 0 };
+    captured_draw_t *captures = NULL;
+    size_t capture_count = 0;
+    size_t command_index;
+    size_t node_index;
+
+    if(!source || !canonical || (command_count && !commands)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(canonical->nodes || canonical->node_count ||
+       canonical->node_capacity) {
+        errno = EBUSY;
+        return -1;
+    }
+    if(pvr_scene_ir_validate(source) < 0)
+        return -1;
+    if(command_count > SIZE_MAX / sizeof(*captures)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if(command_count) {
+        captures = malloc(command_count * sizeof(*captures));
+        if(!captures) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+
+    /* Source indices remain stable. These nodes own topology and pose only;
+       draw proxies appended below carry the resolved polygon execution order.
+       Pruning is lowered into absent draw proxies so a node may still anchor
+       its own replacement draw while suppressing its descendants. */
+    for(node_index = 0; node_index < source->node_count; ++node_index) {
+        const pvr_scene_ir_node_t *node = source->nodes + node_index;
+
+        if(pvr_scene_ir_add_node_flags(
+               &result, node->parent_index, PVR_CHUNK_SCENE_MODEL_NONE,
+               node->flags & ~PVR_CHUNK_NODE_PRUNE_CHILDREN,
+               node->local_transform) < 0)
+            goto fail;
+    }
+
+    for(command_index = 0; command_index < command_count;
+        ++command_index) {
+        const pvr_scene_ir_draw_command_t *command =
+            commands + command_index;
+        captured_draw_t *capture;
+
+        switch(command->operation) {
+            case PVR_SCENE_IR_DRAW_MODEL:
+                if(command->capture_slot != PVR_SCENE_IR_CAPTURE_NONE)
+                    goto malformed;
+                if(canonical_draw_append(
+                       source, command->node_index,
+                       command->model_ordinal, &result) < 0)
+                    goto fail;
+                break;
+
+            case PVR_SCENE_IR_CAPTURE_MODEL:
+                if(command->node_index >= source->node_count ||
+                   command->model_ordinal == PVR_CHUNK_SCENE_MODEL_NONE ||
+                   command->capture_slot == PVR_SCENE_IR_CAPTURE_NONE)
+                    goto malformed;
+                capture = captured_draw_find(
+                    captures, capture_count, command->capture_slot);
+                if(!capture) {
+                    capture = captures + capture_count++;
+                    capture->slot = command->capture_slot;
+                }
+                capture->node_index = command->node_index;
+                capture->model_ordinal = command->model_ordinal;
+                break;
+
+            case PVR_SCENE_IR_DRAW_CAPTURED_MODEL:
+                if(command->node_index != UINT32_MAX ||
+                   command->model_ordinal !=
+                       PVR_CHUNK_SCENE_MODEL_NONE ||
+                   command->capture_slot == PVR_SCENE_IR_CAPTURE_NONE)
+                    goto malformed;
+                capture = captured_draw_find(
+                    captures, capture_count, command->capture_slot);
+                if(!capture)
+                    goto malformed;
+                if(canonical_draw_append(
+                       source, capture->node_index,
+                       capture->model_ordinal, &result) < 0)
+                    goto fail;
+                break;
+
+            default:
+                goto malformed;
+        }
+    }
+
+    free(captures);
+    *canonical = result;
+    return 0;
+
+malformed:
+    errno = EILSEQ;
+fail: {
+        int saved_errno = errno ? errno : EIO;
+
+        free(captures);
+        pvr_scene_ir_free(&result);
+        errno = saved_errno;
+        return -1;
+    }
+}
+
 int pvr_scene_ir_serialize_hierarchy(const pvr_scene_ir_t *scene,
                                      uint8_t **bytes_out,
                                      size_t *size_out) {
@@ -1418,4 +1592,220 @@ fail: {
         errno = saved_errno;
         return -1;
     }
+}
+
+static int canonical_scene_layout_validate(
+    const pvr_scene_ir_t *canonical_scene, size_t source_node_count) {
+    static const float identity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    size_t index;
+
+    if(!canonical_scene || source_node_count > canonical_scene->node_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_scene_ir_validate(canonical_scene) < 0)
+        return -1;
+    for(index = 0; index < canonical_scene->node_count; ++index) {
+        const pvr_scene_ir_node_t *node = canonical_scene->nodes + index;
+
+        if((index < source_node_count &&
+            node->model_ordinal != PVR_CHUNK_SCENE_MODEL_NONE) ||
+           (index >= source_node_count &&
+            (node->parent_index >= source_node_count ||
+             node->model_ordinal == PVR_CHUNK_SCENE_MODEL_NONE ||
+             (node->flags & ~PVR_CHUNK_NODE_HIDDEN) ||
+             memcmp(node->local_transform, identity,
+                    sizeof(identity))))) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int pvr_scene_ir_serialize_animation_for_scene(
+    const anim_clip_view_t *clip, const pvr_scene_ir_t *canonical_scene,
+    size_t source_node_count, uint8_t **bytes_out, size_t *size_out) {
+    anim_transform_tracks_t *transforms = NULL;
+    anim_visibility_tracks_t *visibility = NULL;
+    anim_clip_view_t expanded;
+    size_t transform_count;
+    size_t index;
+    int result;
+    int saved_errno;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!clip || !bytes_out || !size_out ||
+       !animation_clip_valid(&clip->clip) ||
+       source_node_count != clip->clip.transform_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(canonical_scene_layout_validate(
+           canonical_scene, source_node_count) < 0)
+        return -1;
+    transform_count = canonical_scene->node_count;
+    if(transform_count > SIZE_MAX / sizeof(*transforms) ||
+       transform_count > SIZE_MAX / sizeof(*visibility)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    transforms = calloc(transform_count, sizeof(*transforms));
+    visibility = calloc(transform_count, sizeof(*visibility));
+    if(!transforms || !visibility) {
+        errno = ENOMEM;
+        goto fail;
+    }
+
+    memcpy(transforms, clip->clip.transforms,
+           source_node_count * sizeof(*transforms));
+    if(clip->clip.visibility) {
+        memcpy(visibility, clip->clip.visibility,
+               source_node_count * sizeof(*visibility));
+    }
+    else {
+        for(index = 0; index < source_node_count; ++index)
+            visibility[index].fallback = true;
+    }
+
+    for(index = source_node_count; index < transform_count; ++index) {
+        size_t pose_source = canonical_scene->nodes[index].parent_index;
+
+        transforms[index].fallback.rotation.w = 1.0f;
+        transforms[index].fallback.scale.x = 1.0f;
+        transforms[index].fallback.scale.y = 1.0f;
+        transforms[index].fallback.scale.z = 1.0f;
+        transforms[index].rotation_mode = ANIM_ROTATION_QUATERNION;
+        visibility[index] = visibility[pose_source];
+    }
+
+    expanded.clip.transforms = transforms;
+    expanded.clip.transform_count = transform_count;
+    expanded.clip.start_time = clip->clip.start_time;
+    expanded.clip.end_time = clip->clip.end_time;
+    expanded.clip.visibility = visibility;
+    result = pvr_scene_ir_serialize_animation(
+        &expanded, bytes_out, size_out);
+    saved_errno = errno;
+    free(visibility);
+    free(transforms);
+    errno = saved_errno;
+    return result;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    free(visibility);
+    free(transforms);
+    errno = saved_errno;
+    return -1;
+}
+
+int pvr_scene_ir_serialize_morph_animation_for_scene(
+    const pvr_chunk_morph_animation_t *animation,
+    const pvr_scene_ir_t *canonical_scene, size_t source_node_count,
+    uint8_t **bytes_out, size_t *size_out) {
+    pvr_chunk_morph_animation_binding_t *bindings = NULL;
+    pvr_chunk_morph_animation_t expanded;
+    uint8_t *validated_bytes = NULL;
+    size_t validated_size = 0;
+    size_t binding_count = 0;
+    size_t node_index;
+    size_t binding_index;
+    int result;
+    int saved_errno;
+
+    if(bytes_out)
+        *bytes_out = NULL;
+    if(size_out)
+        *size_out = 0;
+    if(!animation || !bytes_out || !size_out || !animation->bindings ||
+       !animation->binding_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(canonical_scene_layout_validate(
+           canonical_scene, source_node_count) < 0)
+        return -1;
+    for(binding_index = 0; binding_index < animation->binding_count;
+        ++binding_index) {
+        if(animation->bindings[binding_index].node_index >=
+           source_node_count) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    /* Validate every source binding even when pruning removes all of its
+       draws. Otherwise malformed discarded data could pass import simply
+       because it did not produce a target section. */
+    if(pvr_scene_ir_serialize_morph_animation(
+           animation, &validated_bytes, &validated_size) < 0)
+        return -1;
+    free(validated_bytes);
+    for(node_index = source_node_count;
+        node_index < canonical_scene->node_count; ++node_index) {
+        const pvr_scene_ir_node_t *node = canonical_scene->nodes + node_index;
+        size_t pose_source = node->parent_index;
+
+        for(binding_index = 0;
+            binding_index < animation->binding_count; ++binding_index) {
+            if(animation->bindings[binding_index].node_index == pose_source &&
+               animation->bindings[binding_index].model_ordinal ==
+                   node->model_ordinal) {
+                ++binding_count;
+                break;
+            }
+        }
+    }
+    if(!binding_count)
+        return 0;
+    if(binding_count > SIZE_MAX / sizeof(*bindings)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    bindings = malloc(binding_count * sizeof(*bindings));
+    if(!bindings) {
+        errno = ENOMEM;
+        return -1;
+    }
+
+    binding_count = 0;
+    for(node_index = source_node_count;
+        node_index < canonical_scene->node_count; ++node_index) {
+        const pvr_scene_ir_node_t *node = canonical_scene->nodes + node_index;
+        size_t pose_source = node->parent_index;
+
+        for(binding_index = 0;
+            binding_index < animation->binding_count; ++binding_index) {
+            const pvr_chunk_morph_animation_binding_t *source =
+                animation->bindings + binding_index;
+
+            if(source->node_index != pose_source ||
+               source->model_ordinal != node->model_ordinal)
+                continue;
+            bindings[binding_count] = *source;
+            bindings[binding_count].node_index = node_index;
+            bindings[binding_count].model_ordinal = node->model_ordinal;
+            ++binding_count;
+            break;
+        }
+    }
+
+    expanded.bindings = bindings;
+    expanded.binding_count = binding_count;
+    expanded.start_time = animation->start_time;
+    expanded.end_time = animation->end_time;
+    result = pvr_scene_ir_serialize_morph_animation(
+        &expanded, bytes_out, size_out);
+    saved_errno = errno;
+    free(bindings);
+    errno = saved_errno;
+    return result;
 }
