@@ -35,6 +35,64 @@ static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.0001f;
 }
 
+static float edge_value(const pvr_vertex_t *a, const pvr_vertex_t *b,
+                        float x, float y) {
+    return (x - a->x) * (b->y - a->y) -
+           (y - a->y) * (b->x - a->x);
+}
+
+static int point_in_triangle(const pvr_vertex_t *a,
+                             const pvr_vertex_t *b,
+                             const pvr_vertex_t *c,
+                             float x, float y) {
+    float ab = edge_value(a, b, x, y);
+    float bc = edge_value(b, c, x, y);
+    float ca = edge_value(c, a, x, y);
+
+    return (ab >= 0.0f && bc >= 0.0f && ca >= 0.0f) ||
+           (ab <= 0.0f && bc <= 0.0f && ca <= 0.0f);
+}
+
+static int quad_strip_matches_coverage_golden(const pvr_vertex_t strip[4],
+                                              float left, float top,
+                                              float right, float bottom) {
+    enum {
+        RASTER_WIDTH = 16,
+        RASTER_HEIGHT = 8
+    };
+    uint16_t coverage[RASTER_HEIGHT] = { 0 };
+    uint16_t overlap[RASTER_HEIGHT] = { 0 };
+    size_t y;
+
+    for(y = 0; y < RASTER_HEIGHT; ++y) {
+        size_t x;
+
+        for(x = 0; x < RASTER_WIDTH; ++x) {
+            /* Unequal subpixel offsets keep every sample off the shared
+               diagonal, making exact single coverage the stable golden. */
+            float sample_x = left + (right - left) *
+                ((float)x + 0.37f) / (float)RASTER_WIDTH;
+            float sample_y = top + (bottom - top) *
+                ((float)y + 0.61f) / (float)RASTER_HEIGHT;
+            unsigned count =
+                (unsigned)point_in_triangle(
+                    &strip[0], &strip[1], &strip[2], sample_x, sample_y) +
+                (unsigned)point_in_triangle(
+                    &strip[1], &strip[2], &strip[3], sample_x, sample_y);
+
+            if(count)
+                coverage[y] |= (uint16_t)(UINT16_C(1) << x);
+            if(count > 1u)
+                overlap[y] |= (uint16_t)(UINT16_C(1) << x);
+        }
+    }
+    for(y = 0; y < RASTER_HEIGHT; ++y) {
+        if(coverage[y] != UINT16_MAX || overlap[y])
+            return 0;
+    }
+    return 1;
+}
+
 static uint32_t crc32_bytes(const void *data, size_t size) {
     const uint8_t *bytes = data;
     uint32_t crc = UINT32_MAX;
@@ -458,6 +516,16 @@ static void test_compile_and_failures(void) {
     assert(close_enough(colored[3].y, 76.0f));
     assert(close_enough(colored[3].u, 0.5f));
     assert(close_enough(colored[3].v, 0.0f));
+    assert(quad_strip_matches_coverage_golden(
+        colored, 92.0f, 76.0f, 108.0f, 84.0f));
+    {
+        pvr_vertex_t rectangle_order[4] = {
+            colored[0], colored[1], colored[3], colored[2]
+        };
+
+        assert(!quad_strip_matches_coverage_golden(
+            rectangle_order, 92.0f, 76.0f, 108.0f, 84.0f));
+    }
 
     assert(pvr_cell_sprite_compile_colored_3d(colored, 8, &atlas, resolved,
                                               2, &basis, &identity,
