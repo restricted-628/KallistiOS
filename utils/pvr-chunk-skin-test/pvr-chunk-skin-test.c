@@ -122,6 +122,148 @@ static void normal_identity(pvr_normal_matrix_t *matrix) {
     matrix->column[2][2] = 1.0f;
 }
 
+static void test_deformation_canonicalizer(void) {
+    static const uint16_t vertex_indices[] = { 0, 2, 7 };
+    static const pvr_scene_ir_deform_contribution_t contributions[] = {
+        { 7, 0, 0.5f }, { 2, 1, 0.5f }, { 0, 0, 1.0f },
+        { 2, 0, 0.25f }, { 2, 1, 0.25f }, { 7, 0, 0.5f },
+        { 2, 0, 0.0f }
+    };
+    pvr_scene_ir_deform_contribution_t reordered[
+        sizeof(contributions) / sizeof(contributions[0])];
+    pvr_scene_ir_deform_source_t sources[2];
+    pvr_scene_ir_t scene = { 0 };
+    pvr_scene_ir_deformation_t canonical = { 0 };
+    pvr_scene_ir_deformation_t repeated = { 0 };
+    pvr_chunk_skin_general_section_view_t skin_view;
+    pvr_chunk_skeleton_section_view_t skeleton_view;
+    uint8_t *skin_bytes = NULL;
+    uint8_t *skeleton_bytes = NULL;
+    size_t skin_size = 0;
+    size_t skeleton_size = 0;
+    size_t index;
+
+    assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
+    assert(pvr_scene_ir_add_root_model(&scene, 1) == 0);
+    assert(pvr_scene_ir_add_root_model(&scene, 2) == 0);
+    sources[0].node_index = 2;
+    sources[1].node_index = 0;
+    identity(&sources[0].inverse_bind);
+    identity(&sources[1].inverse_bind);
+    sources[0].inverse_bind[3][0] = -2.0f;
+    sources[1].inverse_bind[3][0] = -1.0f;
+
+    assert(pvr_scene_ir_canonicalize_deformation(
+        &scene, vertex_indices,
+        sizeof(vertex_indices) / sizeof(vertex_indices[0]), sources, 2,
+        contributions, sizeof(contributions) / sizeof(contributions[0]),
+        &canonical) == 0);
+    assert(canonical.skin.spans == canonical.spans &&
+           canonical.skin.span_count == 3 &&
+           canonical.skin.weights == canonical.weights &&
+           canonical.skin.weight_count == 4 &&
+           canonical.skin.joint_count == 2);
+    assert(canonical.spans[0].vertex_index == 0 &&
+           canonical.spans[0].first_weight == 0 &&
+           canonical.spans[0].weight_count == 1 &&
+           canonical.spans[1].vertex_index == 2 &&
+           canonical.spans[1].first_weight == 1 &&
+           canonical.spans[1].weight_count == 2 &&
+           canonical.spans[2].vertex_index == 7 &&
+           canonical.spans[2].first_weight == 3 &&
+           canonical.spans[2].weight_count == 1);
+    assert(canonical.weights[0].joint == 1 &&
+           canonical.weights[0].weight == UINT16_MAX &&
+           canonical.weights[1].joint == 0 &&
+           canonical.weights[1].weight == 49151 &&
+           canonical.weights[2].joint == 1 &&
+           canonical.weights[2].weight == 16384 &&
+           canonical.weights[3].joint == 1 &&
+           canonical.weights[3].weight == UINT16_MAX);
+    assert(canonical.skeleton.joints == canonical.joints &&
+           canonical.skeleton.joint_count == 2 &&
+           canonical.skeleton.node_count == 3 &&
+           canonical.joints[0].node_index == 0 &&
+           canonical.joints[0].inverse_bind[3][0] == -1.0f &&
+           canonical.joints[1].node_index == 2 &&
+           canonical.joints[1].inverse_bind[3][0] == -2.0f);
+
+    for(index = 0; index < sizeof(contributions) /
+                              sizeof(contributions[0]); ++index) {
+        reordered[index] = contributions[
+            sizeof(contributions) / sizeof(contributions[0]) - index - 1u];
+    }
+    assert(pvr_scene_ir_canonicalize_deformation(
+        &scene, vertex_indices, 3, sources, 2, reordered,
+        sizeof(reordered) / sizeof(reordered[0]), &repeated) == 0);
+    assert(!memcmp(canonical.spans, repeated.spans,
+                   canonical.skin.span_count * sizeof(*canonical.spans)) &&
+           !memcmp(canonical.weights, repeated.weights,
+                   canonical.skin.weight_count * sizeof(*canonical.weights)) &&
+           !memcmp(canonical.joints, repeated.joints,
+                   canonical.skeleton.joint_count *
+                       sizeof(*canonical.joints)));
+
+    assert(pvr_scene_ir_serialize_general_skin(
+        &canonical.skin, &skin_bytes, &skin_size) == 0);
+    assert(pvr_chunk_skin_general_section_open(
+        skin_bytes, skin_size, &skin_view) == 0);
+    assert(skin_view.span_count == 3 && skin_view.weight_count == 4);
+    assert(pvr_scene_ir_serialize_skeleton(
+        &canonical.skeleton, &skeleton_bytes, &skeleton_size) == 0);
+    assert(pvr_chunk_skeleton_section_open(
+        skeleton_bytes, skeleton_size, &skeleton_view) == 0);
+    assert(skeleton_view.joint_count == 2 && skeleton_view.node_count == 3);
+
+    errno = 0;
+    assert(pvr_scene_ir_canonicalize_deformation(
+        &scene, vertex_indices, 3, sources, 2, contributions,
+        sizeof(contributions) / sizeof(contributions[0]), &canonical) == -1);
+    assert(errno == EBUSY);
+    {
+        pvr_scene_ir_deform_contribution_t malformed[
+            sizeof(contributions) / sizeof(contributions[0])];
+        pvr_scene_ir_deformation_t rejected = { 0 };
+
+        memcpy(malformed, contributions, sizeof(malformed));
+        malformed[2].vertex_index = 7;
+        errno = 0;
+        assert(pvr_scene_ir_canonicalize_deformation(
+            &scene, vertex_indices, 3, sources, 2, malformed,
+            sizeof(malformed) / sizeof(malformed[0]), &rejected) == -1);
+        assert(errno == EINVAL && rejected.spans == NULL &&
+               rejected.weights == NULL && rejected.joints == NULL);
+    }
+    {
+        pvr_scene_ir_deformation_t rejected = { 0 };
+
+        sources[1].node_index = 2;
+        errno = 0;
+        assert(pvr_scene_ir_canonicalize_deformation(
+            &scene, vertex_indices, 3, sources, 2, contributions,
+            sizeof(contributions) / sizeof(contributions[0]),
+            &rejected) == -1);
+        assert(errno == EINVAL && rejected.spans == NULL &&
+               rejected.weights == NULL && rejected.joints == NULL);
+        sources[1].node_index = 0;
+        sources[0].inverse_bind[0][0] = NAN;
+        errno = 0;
+        assert(pvr_scene_ir_canonicalize_deformation(
+            &scene, vertex_indices, 3, sources, 2, contributions,
+            sizeof(contributions) / sizeof(contributions[0]),
+            &rejected) == -1);
+        assert(errno == EDOM && rejected.spans == NULL &&
+               rejected.weights == NULL && rejected.joints == NULL);
+        sources[0].inverse_bind[0][0] = 1.0f;
+    }
+
+    free(skeleton_bytes);
+    free(skin_bytes);
+    pvr_scene_ir_deformation_free(&repeated);
+    pvr_scene_ir_deformation_free(&canonical);
+    pvr_scene_ir_free(&scene);
+}
+
 int main(void) {
     const pvr_chunk_model_t model = {
         vertices, sizeof(vertices) / sizeof(vertices[0]),
@@ -151,6 +293,8 @@ int main(void) {
     pvr_chunk_skin_pose_t pose;
     pvr_deform_vertex_t resolved;
     pvr_chunk_skin_influence_t malformed[3];
+
+    test_deformation_canonicalizer();
 
     assert(pvr_chunk_model_open(&model, &view) == 0);
     assert(pvr_chunk_model_plan_query(&view, &plan_requirements) == 0);

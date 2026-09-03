@@ -647,6 +647,402 @@ int pvr_scene_ir_validate(const pvr_scene_ir_t *scene) {
     return 0;
 }
 
+typedef struct deform_source_order {
+    size_t input_index;
+    size_t node_index;
+} deform_source_order_t;
+
+typedef struct deform_work_contribution {
+    uint16_t vertex_index;
+    uint16_t joint_index;
+    float weight;
+} deform_work_contribution_t;
+
+typedef struct deform_weight_candidate {
+    uint16_t vertex_index;
+    uint16_t joint_index;
+    double value;
+    double fraction;
+    uint32_t quantized;
+} deform_weight_candidate_t;
+
+typedef struct deform_remainder_order {
+    size_t candidate_index;
+    uint16_t joint_index;
+    double fraction;
+} deform_remainder_order_t;
+
+static int deform_source_order_compare(const void *left, const void *right) {
+    const deform_source_order_t *a = left;
+    const deform_source_order_t *b = right;
+
+    if(a->node_index < b->node_index)
+        return -1;
+    if(a->node_index > b->node_index)
+        return 1;
+    return 0;
+}
+
+static int deform_contribution_compare(const void *left,
+                                       const void *right) {
+    const deform_work_contribution_t *a = left;
+    const deform_work_contribution_t *b = right;
+
+    if(a->vertex_index != b->vertex_index)
+        return a->vertex_index < b->vertex_index ? -1 : 1;
+    if(a->joint_index != b->joint_index)
+        return a->joint_index < b->joint_index ? -1 : 1;
+    if(a->weight < b->weight)
+        return -1;
+    if(a->weight > b->weight)
+        return 1;
+    return 0;
+}
+
+static int deform_remainder_compare(const void *left, const void *right) {
+    const deform_remainder_order_t *a = left;
+    const deform_remainder_order_t *b = right;
+
+    if(a->fraction > b->fraction)
+        return -1;
+    if(a->fraction < b->fraction)
+        return 1;
+    if(a->joint_index < b->joint_index)
+        return -1;
+    if(a->joint_index > b->joint_index)
+        return 1;
+    return 0;
+}
+
+static int deform_vertex_contains(const uint16_t *indices, size_t count,
+                                  size_t requested) {
+    size_t low = 0;
+    size_t high = count;
+
+    if(requested > UINT16_MAX)
+        return 0;
+    while(low < high) {
+        size_t middle = low + (high - low) / 2u;
+
+        if(indices[middle] < requested)
+            low = middle + 1u;
+        else
+            high = middle;
+    }
+    return low < count && indices[low] == requested;
+}
+
+void pvr_scene_ir_deformation_free(
+    pvr_scene_ir_deformation_t *deformation) {
+    if(!deformation)
+        return;
+    free(deformation->joints);
+    free(deformation->weights);
+    free(deformation->spans);
+    memset(deformation, 0, sizeof(*deformation));
+}
+
+int pvr_scene_ir_canonicalize_deformation(
+    const pvr_scene_ir_t *scene,
+    const uint16_t *vertex_indices, size_t vertex_count,
+    const pvr_scene_ir_deform_source_t *sources, size_t source_count,
+    const pvr_scene_ir_deform_contribution_t *contributions,
+    size_t contribution_count, pvr_scene_ir_deformation_t *canonical) {
+    pvr_scene_ir_deformation_t result = { 0 };
+    deform_source_order_t *source_order = NULL;
+    size_t *source_to_joint = NULL;
+    deform_work_contribution_t *work = NULL;
+    deform_weight_candidate_t *candidates = NULL;
+    deform_remainder_order_t *remainder_order = NULL;
+    size_t positive_count = 0;
+    size_t candidate_count = 0;
+    size_t weight_count = 0;
+    size_t index;
+    int saved_errno;
+
+    if(!scene || !vertex_indices || !vertex_count || !sources ||
+       !source_count || !contributions || !contribution_count ||
+       !canonical) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(canonical->spans || canonical->weights || canonical->joints ||
+       canonical->skin.spans || canonical->skin.span_count ||
+       canonical->skin.weights || canonical->skin.weight_count ||
+       canonical->skin.joint_count || canonical->skeleton.joints ||
+       canonical->skeleton.joint_count || canonical->skeleton.node_count) {
+        errno = EBUSY;
+        return -1;
+    }
+    if(pvr_scene_ir_validate(scene) < 0)
+        return -1;
+    if(source_count > UINT16_MAX + 1u ||
+       source_count > SIZE_MAX / sizeof(*source_order) ||
+       source_count > SIZE_MAX / sizeof(*source_to_joint) ||
+       source_count > SIZE_MAX / sizeof(*result.joints) ||
+       vertex_count > UINT16_MAX + 1u ||
+       vertex_count > SIZE_MAX / sizeof(*result.spans) ||
+       contribution_count > SIZE_MAX / sizeof(*work) ||
+       contribution_count > SIZE_MAX / sizeof(*candidates) ||
+       contribution_count > SIZE_MAX / sizeof(*remainder_order)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    for(index = 0; index < vertex_count; ++index) {
+        if(index && vertex_indices[index] <= vertex_indices[index - 1u]) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+
+    source_order = malloc(source_count * sizeof(*source_order));
+    source_to_joint = malloc(source_count * sizeof(*source_to_joint));
+    result.joints = malloc(source_count * sizeof(*result.joints));
+    result.spans = malloc(vertex_count * sizeof(*result.spans));
+    work = malloc(contribution_count * sizeof(*work));
+    candidates = malloc(contribution_count * sizeof(*candidates));
+    remainder_order = malloc(contribution_count * sizeof(*remainder_order));
+    if(!source_order || !source_to_joint || !result.joints ||
+       !result.spans || !work || !candidates || !remainder_order) {
+        errno = ENOMEM;
+        goto fail;
+    }
+
+    for(index = 0; index < source_count; ++index) {
+        size_t component;
+
+        if(sources[index].node_index >= scene->node_count) {
+            errno = EINVAL;
+            goto fail;
+        }
+        for(component = 0; component < 16; ++component) {
+            if(!isfinite(((const float *)sources[index].inverse_bind)
+                             [component])) {
+                errno = EDOM;
+                goto fail;
+            }
+        }
+        source_order[index].input_index = index;
+        source_order[index].node_index = sources[index].node_index;
+    }
+    qsort(source_order, source_count, sizeof(*source_order),
+          deform_source_order_compare);
+    /* Joint ordinals are a storage choice, not source semantics. Sorting by
+       hierarchy node makes equivalent imports byte-identical, while the
+       reverse map preserves every contribution's intended producer. */
+    for(index = 0; index < source_count; ++index) {
+        size_t source_index = source_order[index].input_index;
+
+        if(index && source_order[index].node_index ==
+                        source_order[index - 1u].node_index) {
+            errno = EINVAL;
+            goto fail;
+        }
+        source_to_joint[source_index] = index;
+        result.joints[index].node_index = source_order[index].node_index;
+        memcpy(&result.joints[index].inverse_bind,
+               &sources[source_index].inverse_bind,
+               sizeof(result.joints[index].inverse_bind));
+    }
+
+    for(index = 0; index < contribution_count; ++index) {
+        const pvr_scene_ir_deform_contribution_t *source =
+            contributions + index;
+
+        if(source->source_index >= source_count ||
+           !deform_vertex_contains(vertex_indices, vertex_count,
+                                   source->vertex_index)) {
+            errno = EINVAL;
+            goto fail;
+        }
+        if(!isfinite(source->weight) || source->weight < 0.0f) {
+            errno = EDOM;
+            goto fail;
+        }
+        if(source->weight == 0.0f)
+            continue;
+        work[positive_count].vertex_index = (uint16_t)source->vertex_index;
+        work[positive_count].joint_index =
+            (uint16_t)source_to_joint[source->source_index];
+        work[positive_count].weight = source->weight;
+        ++positive_count;
+    }
+    if(!positive_count) {
+        errno = EINVAL;
+        goto fail;
+    }
+    qsort(work, positive_count, sizeof(*work),
+          deform_contribution_compare);
+
+    /* A staged source may contribute to the same vertex more than once.
+       Collapse those partial results before normalization so the target sees
+       one complete, order-independent influence set. */
+    for(index = 0; index < positive_count; ++index) {
+        const deform_work_contribution_t *source = work + index;
+        deform_weight_candidate_t *candidate;
+
+        if(candidate_count &&
+           candidates[candidate_count - 1u].vertex_index ==
+               source->vertex_index &&
+           candidates[candidate_count - 1u].joint_index ==
+               source->joint_index) {
+            candidate = candidates + candidate_count - 1u;
+            candidate->value += source->weight;
+            if(!isfinite(candidate->value)) {
+                errno = EDOM;
+                goto fail;
+            }
+            continue;
+        }
+        candidate = candidates + candidate_count++;
+        candidate->vertex_index = source->vertex_index;
+        candidate->joint_index = source->joint_index;
+        candidate->value = source->weight;
+        candidate->fraction = 0.0;
+        candidate->quantized = 0;
+    }
+
+    result.weights = malloc(candidate_count * sizeof(*result.weights));
+    if(!result.weights) {
+        errno = ENOMEM;
+        goto fail;
+    }
+
+    {
+        size_t candidate_cursor = 0;
+
+        for(index = 0; index < vertex_count; ++index) {
+            size_t first_candidate = candidate_cursor;
+            size_t local_count;
+            size_t emitted = 0;
+            size_t local;
+            double total = 0.0;
+            uint32_t quantized_total = 0;
+
+            while(candidate_cursor < candidate_count &&
+                  candidates[candidate_cursor].vertex_index ==
+                      vertex_indices[index]) {
+                total += candidates[candidate_cursor].value;
+                ++candidate_cursor;
+            }
+            local_count = candidate_cursor - first_candidate;
+            if(!local_count || !(total > 0.0) || !isfinite(total)) {
+                errno = EINVAL;
+                goto fail;
+            }
+            for(local = 0; local < local_count; ++local) {
+                deform_weight_candidate_t *candidate =
+                    candidates + first_candidate + local;
+                double scaled = candidate->value / total *
+                                PVR_CHUNK_SKIN_WEIGHT_SUM;
+                double integral = floor(scaled);
+
+                if(!isfinite(scaled) || integral < 0.0 ||
+                   integral > PVR_CHUNK_SKIN_WEIGHT_SUM) {
+                    errno = EDOM;
+                    goto fail;
+                }
+                candidate->quantized = (uint32_t)integral;
+                candidate->fraction = scaled - integral;
+                quantized_total += candidate->quantized;
+                remainder_order[local].candidate_index =
+                    first_candidate + local;
+                remainder_order[local].joint_index =
+                    candidate->joint_index;
+                remainder_order[local].fraction = candidate->fraction;
+            }
+            qsort(remainder_order, local_count,
+                  sizeof(*remainder_order), deform_remainder_compare);
+            /* Largest-remainder apportionment retains the closest unsigned
+               normalized values while enforcing the target format's exact
+               integer sum. Joint order breaks equal-fraction ties. */
+            if(quantized_total <= PVR_CHUNK_SKIN_WEIGHT_SUM) {
+                uint32_t missing = PVR_CHUNK_SKIN_WEIGHT_SUM -
+                                   quantized_total;
+
+                if(missing > local_count) {
+                    errno = EDOM;
+                    goto fail;
+                }
+                for(local = 0; local < missing; ++local)
+                    ++candidates[remainder_order[local].candidate_index]
+                          .quantized;
+            }
+            else {
+                uint32_t excess = quantized_total -
+                                  PVR_CHUNK_SKIN_WEIGHT_SUM;
+
+                for(local = local_count; local && excess; --local) {
+                    deform_weight_candidate_t *candidate = candidates +
+                        remainder_order[local - 1u].candidate_index;
+
+                    if(!candidate->quantized)
+                        continue;
+                    --candidate->quantized;
+                    --excess;
+                }
+                if(excess) {
+                    errno = EDOM;
+                    goto fail;
+                }
+            }
+            for(local = 0; local < local_count; ++local) {
+                const deform_weight_candidate_t *candidate =
+                    candidates + first_candidate + local;
+
+                if(!candidate->quantized)
+                    continue;
+                result.weights[weight_count].joint =
+                    candidate->joint_index;
+                result.weights[weight_count].weight =
+                    (uint16_t)candidate->quantized;
+                ++weight_count;
+                ++emitted;
+            }
+            if(!emitted || emitted > UINT16_MAX ||
+               weight_count - emitted > UINT32_MAX) {
+                errno = EOVERFLOW;
+                goto fail;
+            }
+            result.spans[index].vertex_index = vertex_indices[index];
+            result.spans[index].weight_count = (uint16_t)emitted;
+            result.spans[index].first_weight =
+                (uint32_t)(weight_count - emitted);
+        }
+        if(candidate_cursor != candidate_count) {
+            errno = EINVAL;
+            goto fail;
+        }
+    }
+
+    result.skin.spans = result.spans;
+    result.skin.span_count = vertex_count;
+    result.skin.weights = result.weights;
+    result.skin.weight_count = weight_count;
+    result.skin.joint_count = source_count;
+    result.skeleton.joints = result.joints;
+    result.skeleton.joint_count = source_count;
+    result.skeleton.node_count = scene->node_count;
+    free(remainder_order);
+    free(candidates);
+    free(work);
+    free(source_to_joint);
+    free(source_order);
+    *canonical = result;
+    return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    free(remainder_order);
+    free(candidates);
+    free(work);
+    free(source_to_joint);
+    free(source_order);
+    pvr_scene_ir_deformation_free(&result);
+    errno = saved_errno;
+    return -1;
+}
+
 typedef struct captured_draw {
     uint32_t slot;
     uint32_t node_index;

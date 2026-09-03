@@ -1176,7 +1176,7 @@ f 1/1/1 2/2/1 3/3/1
                 },
                 "indices": 4,
             }]}],
-            "skins": [{"joints": [1, 2], "inverseBindMatrices": 5}],
+            "skins": [{"joints": [2, 1], "inverseBindMatrices": 5}],
             "nodes": [
                 {"name": "root", "children": [1, 3]},
                 {"name": "joint-0", "children": [2]},
@@ -1213,7 +1213,7 @@ f 1/1/1 2/2/1 3/3/1
         assert tuple(
             struct.unpack_from("<HH", gltf_skin_section, 72 + index * 4)
             for index in range(4)
-        ) == ((0, 65535), (1, 65535), (0, 16384), (1, 49151))
+        ) == ((1, 65535), (0, 65535), (0, 49151), (1, 16384))
         gltf_skeleton_descriptor = struct.unpack_from(
             "<7IHH", gltf_skin_asset_bytes, 64 + 4 * 32
         )

@@ -476,6 +476,18 @@ pruning node to retain its own scheduled model draw without reintroducing
 runtime deferred execution. PMT1 version-two records let those scheduled model
 segments share their source vertex stream.
 
+Cross-node deformation is canonicalized through the same complete-pose model.
+The host scene IR accepts unordered contributions keyed by model vertex and
+producing hierarchy node, validates each node and inverse-bind matrix, merges
+duplicate vertex/source pairs, sorts the resulting skeleton by node, remaps
+all influences, and uses deterministic largest-remainder quantization so every
+vertex sums exactly to 65,535. A rigid reference is represented by one full
+weight; staged multi-node accumulation becomes an ordinary general-N skin.
+The glTF skin importer uses this canonicalizer as its sole weight emission
+path. Both cases serialize into the existing PSG1 and PSK1 sections, so the
+target still evaluates a complete pose before rendering and needs no
+intermediate vertex-result protocol.
+
 ## Rendering boundary
 
 The stream layer describes and validates model data; it does not own PVR scene

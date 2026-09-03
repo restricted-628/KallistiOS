@@ -389,7 +389,10 @@ format, deformation, or tooling gaps:
    pointer-free logical-clip catalog needed to pair repeated PAT1 and PMW1
    sections without placeholders, and the host importer emits mixed
    transform-only, morph-only, and combined glTF clips through it. Continue
-   wider modern scene import and parent-result deformation canonicalization.
+   wider modern scene import. Parent-result deformation canonicalization is
+   complete: unordered contributions from multiple hierarchy nodes are merged
+   into deterministic, exactly normalized general-N skin spans and an
+   inverse-bind skeleton, and the glTF importer uses that same path.
    The host scene IR now lowers resolved deferred capture/replay events into
    ordinary animated draw proxies, eliminating those controls from serialized
    hierarchy execution. PMT1 version two and the explicit PCM2 stream-pair

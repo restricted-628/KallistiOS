@@ -1522,21 +1522,11 @@ static int gltf_append_primitive(const cgltf_data *data,
 
 static int gltf_skin_append_vertex(
     const cgltf_primitive *primitive, cgltf_size vertex,
-    size_t source_vertex, size_t joint_count,
-    pvr_chunk_skin_span_t **spans, size_t *span_count,
-    size_t *span_capacity, pvr_chunk_skin_weight_t **weights,
-    size_t *weight_count, size_t *weight_capacity) {
-    uint16_t *joints = NULL;
-    double *values = NULL;
-    double *fractions = NULL;
-    uint16_t *quantized = NULL;
+    size_t source_vertex, size_t source_count,
+    pvr_scene_ir_deform_contribution_t **contributions,
+    size_t *contribution_count, size_t *contribution_capacity) {
     size_t set_count = 0;
-    size_t active_count = 0;
-    size_t allocation_count;
     size_t attribute;
-    double total = 0.0;
-    uint32_t quantized_total = 0;
-    int saved_errno;
 
     for(attribute = 0; attribute < primitive->attributes_count;
         ++attribute) {
@@ -1564,18 +1554,9 @@ static int gltf_skin_append_vertex(
             return -1;
         }
     }
-    if(!set_count || set_count > SIZE_MAX / 4u) {
+    if(!set_count || source_vertex > UINT16_MAX) {
         errno = EILSEQ;
         return -1;
-    }
-    allocation_count = set_count * 4u;
-    joints = calloc(allocation_count, sizeof(*joints));
-    values = calloc(allocation_count, sizeof(*values));
-    fractions = calloc(allocation_count, sizeof(*fractions));
-    quantized = calloc(allocation_count, sizeof(*quantized));
-    if(!joints || !values || !fractions || !quantized) {
-        errno = ENOMEM;
-        goto fail;
     }
 
     for(attribute = 0; attribute < primitive->attributes_count;
@@ -1597,108 +1578,34 @@ static int gltf_skin_append_vertex(
            !cgltf_accessor_read_float(weight_accessor, vertex,
                                       source_weights, 4)) {
             errno = EILSEQ;
-            goto fail;
+            return -1;
         }
         for(lane = 0; lane < 4; ++lane) {
-            size_t existing;
-            double value = source_weights[lane];
+            void *allocation = *contributions;
+            float value = source_weights[lane];
 
             if(!isfinite(value) || value < 0.0 ||
-               source_joints[lane] >= joint_count ||
+               source_joints[lane] >= source_count ||
                source_joints[lane] > UINT16_MAX) {
                 errno = EILSEQ;
-                goto fail;
+                return -1;
             }
             if(value == 0.0)
                 continue;
-            for(existing = 0; existing < active_count; ++existing) {
-                if(joints[existing] == source_joints[lane])
-                    break;
-            }
-            if(existing == active_count) {
-                joints[active_count] = (uint16_t)source_joints[lane];
-                ++active_count;
-            }
-            values[existing] += value;
-            total += value;
+            if(reserve_array(&allocation, contribution_capacity,
+                             *contribution_count + 1u,
+                             sizeof(**contributions)) < 0)
+                return -1;
+            *contributions = allocation;
+            (*contributions)[*contribution_count].vertex_index =
+                source_vertex;
+            (*contributions)[*contribution_count].source_index =
+                source_joints[lane];
+            (*contributions)[*contribution_count].weight = value;
+            ++*contribution_count;
         }
     }
-    if(!active_count || !(total > 0.0) || !isfinite(total)) {
-        errno = EILSEQ;
-        goto fail;
-    }
-    for(attribute = 0; attribute < active_count; ++attribute) {
-        double scaled = values[attribute] / total *
-                        PVR_CHUNK_SKIN_WEIGHT_SUM;
-        double integral = floor(scaled);
-
-        quantized[attribute] = (uint16_t)integral;
-        fractions[attribute] = scaled - integral;
-        quantized_total += quantized[attribute];
-    }
-    while(quantized_total < PVR_CHUNK_SKIN_WEIGHT_SUM) {
-        size_t best = 0;
-
-        for(attribute = 1; attribute < active_count; ++attribute) {
-            if(fractions[attribute] > fractions[best])
-                best = attribute;
-        }
-        ++quantized[best];
-        fractions[best] = -1.0;
-        ++quantized_total;
-    }
-
-    {
-        void *span_allocation = *spans;
-        void *weight_allocation = *weights;
-        size_t emitted = 0;
-        size_t first_weight = *weight_count;
-
-        for(attribute = 0; attribute < active_count; ++attribute) {
-            if(quantized[attribute])
-                ++emitted;
-        }
-        if(!emitted || emitted > UINT16_MAX || source_vertex > UINT16_MAX ||
-           first_weight > UINT32_MAX ||
-           emitted > UINT32_MAX - first_weight) {
-            errno = EOVERFLOW;
-            goto fail;
-        }
-        if(reserve_array(&span_allocation, span_capacity,
-                         *span_count + 1u, sizeof(**spans)) < 0)
-            goto fail;
-        *spans = span_allocation;
-        if(reserve_array(&weight_allocation, weight_capacity,
-                         *weight_count + emitted, sizeof(**weights)) < 0)
-            goto fail;
-        *weights = weight_allocation;
-        (*spans)[*span_count].vertex_index = (uint16_t)source_vertex;
-        (*spans)[*span_count].weight_count = (uint16_t)emitted;
-        (*spans)[*span_count].first_weight = (uint32_t)first_weight;
-        ++*span_count;
-        for(attribute = 0; attribute < active_count; ++attribute) {
-            if(!quantized[attribute])
-                continue;
-            (*weights)[*weight_count].joint = joints[attribute];
-            (*weights)[*weight_count].weight = quantized[attribute];
-            ++*weight_count;
-        }
-    }
-
-    free(quantized);
-    free(fractions);
-    free(values);
-    free(joints);
     return 0;
-
-fail:
-    saved_errno = errno ? errno : EIO;
-    free(quantized);
-    free(fractions);
-    free(values);
-    free(joints);
-    errno = saved_errno;
-    return -1;
 }
 
 static int gltf_build_skin(const cgltf_data *data,
@@ -1707,11 +1614,17 @@ static int gltf_build_skin(const cgltf_data *data,
                            const size_t *node_to_scene,
                            const pvr_scene_ir_t *scene,
                            gltf_model_metadata_t *metadata) {
-    size_t span_capacity = 0;
-    size_t weight_capacity = 0;
+    pvr_scene_ir_deform_source_t *sources = NULL;
+    pvr_scene_ir_deform_contribution_t *contributions = NULL;
+    pvr_scene_ir_deformation_t canonical = { 0 };
+    uint16_t *vertex_indices = NULL;
+    size_t contribution_count = 0;
+    size_t contribution_capacity = 0;
+    size_t vertex_count = 0;
     size_t source_vertex = 0;
     cgltf_size primitive;
     cgltf_size joint;
+    int saved_errno;
 
     if(!skin)
         return 0;
@@ -1722,11 +1635,28 @@ static int gltf_build_skin(const cgltf_data *data,
         errno = ENOTSUP;
         return -1;
     }
-    metadata->skeleton_joints = calloc(
-        skin->joints_count, sizeof(*metadata->skeleton_joints));
-    if(!metadata->skeleton_joints) {
-        errno = ENOMEM;
+    for(primitive = 0; primitive < mesh->primitives_count; ++primitive) {
+        const cgltf_accessor *positions = gltf_attribute(
+            &mesh->primitives[primitive],
+            cgltf_attribute_type_position, 0);
+
+        if(!positions || positions->count > UINT16_MAX + 1u - vertex_count) {
+            errno = positions ? EOVERFLOW : EILSEQ;
+            return -1;
+        }
+        vertex_count += positions->count;
+    }
+    if(!vertex_count ||
+       vertex_count > SIZE_MAX / sizeof(*vertex_indices) ||
+       skin->joints_count > SIZE_MAX / sizeof(*sources)) {
+        errno = vertex_count ? EOVERFLOW : EILSEQ;
         return -1;
+    }
+    sources = calloc(skin->joints_count, sizeof(*sources));
+    vertex_indices = malloc(vertex_count * sizeof(*vertex_indices));
+    if(!sources || !vertex_indices) {
+        errno = ENOMEM;
+        goto fail;
     }
     for(joint = 0; joint < skin->joints_count; ++joint) {
         const cgltf_node *node = skin->joints[joint];
@@ -1737,18 +1667,17 @@ static int gltf_build_skin(const cgltf_data *data,
         if(gltf_array_index(data->nodes, data->nodes_count,
                             sizeof(*data->nodes), node,
                             &node_ordinal) < 0)
-            return -1;
+            goto fail;
         if(node_to_scene[node_ordinal] == SIZE_MAX) {
             errno = ENOTSUP;
-            return -1;
+            goto fail;
         }
-        metadata->skeleton_joints[joint].node_index =
-            node_to_scene[node_ordinal];
+        sources[joint].node_index = node_to_scene[node_ordinal];
         if(skin->inverse_bind_matrices) {
             if(!cgltf_accessor_read_float(
                    skin->inverse_bind_matrices, joint, values, 16)) {
                 errno = EILSEQ;
-                return -1;
+                goto fail;
             }
         }
         else {
@@ -1758,9 +1687,9 @@ static int gltf_build_skin(const cgltf_data *data,
         for(component = 0; component < 16; ++component) {
             if(!isfinite(values[component])) {
                 errno = EILSEQ;
-                return -1;
+                goto fail;
             }
-            metadata->skeleton_joints[joint].inverse_bind
+            sources[joint].inverse_bind
                 [component / 4u][component % 4u] = values[component];
         }
     }
@@ -1777,26 +1706,51 @@ static int gltf_build_skin(const cgltf_data *data,
 
         if(!positions || !joint_zero || !weight_zero) {
             errno = EILSEQ;
-            return -1;
+            goto fail;
         }
         for(vertex = 0; vertex < positions->count; ++vertex) {
+            vertex_indices[source_vertex + vertex] =
+                (uint16_t)(source_vertex + vertex);
             if(gltf_skin_append_vertex(
                    source, vertex, source_vertex + vertex,
-                   skin->joints_count, &metadata->skin_spans,
-                   &metadata->skin.span_count, &span_capacity,
-                   &metadata->skin_weights, &metadata->skin.weight_count,
-                   &weight_capacity) < 0)
-                return -1;
+                   skin->joints_count, &contributions,
+                   &contribution_count, &contribution_capacity) < 0)
+                goto fail;
         }
         source_vertex += positions->count;
     }
-    metadata->skin.spans = metadata->skin_spans;
-    metadata->skin.weights = metadata->skin_weights;
-    metadata->skin.joint_count = skin->joints_count;
-    metadata->skeleton.joints = metadata->skeleton_joints;
-    metadata->skeleton.joint_count = skin->joints_count;
-    metadata->skeleton.node_count = scene->node_count;
+    if(source_vertex != vertex_count) {
+        errno = EPROTO;
+        goto fail;
+    }
+    if(pvr_scene_ir_canonicalize_deformation(
+           scene, vertex_indices, vertex_count, sources,
+           skin->joints_count, contributions, contribution_count,
+           &canonical) < 0) {
+        if(errno == EINVAL || errno == EDOM)
+            errno = EILSEQ;
+        goto fail;
+    }
+
+    metadata->skin_spans = canonical.spans;
+    metadata->skin_weights = canonical.weights;
+    metadata->skin = canonical.skin;
+    metadata->skeleton_joints = canonical.joints;
+    metadata->skeleton = canonical.skeleton;
+    memset(&canonical, 0, sizeof(canonical));
+    free(vertex_indices);
+    free(contributions);
+    free(sources);
     return 0;
+
+fail:
+    saved_errno = errno ? errno : EIO;
+    pvr_scene_ir_deformation_free(&canonical);
+    free(vertex_indices);
+    free(contributions);
+    free(sources);
+    errno = saved_errno;
+    return -1;
 }
 
 static int gltf_target_delta(const cgltf_morph_target *target,

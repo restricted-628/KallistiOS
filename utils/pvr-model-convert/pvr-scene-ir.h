@@ -60,6 +60,31 @@ typedef struct pvr_scene_ir_draw_command {
     uint32_t capture_slot;
 } pvr_scene_ir_draw_command_t;
 
+/* One hierarchy-node source which can contribute to a completed vertex pose.
+   inverse_bind converts model-space input into that node's bind space. */
+typedef struct pvr_scene_ir_deform_source {
+    size_t node_index;
+    matrix_t inverse_bind;
+} pvr_scene_ir_deform_source_t;
+
+/* One import-time contribution to a model vertex. Contributions may arrive
+   in any order and duplicate vertex/source pairs are accumulated. */
+typedef struct pvr_scene_ir_deform_contribution {
+    size_t vertex_index;
+    size_t source_index;
+    float weight;
+} pvr_scene_ir_deform_contribution_t;
+
+/* Owned canonical complete-pose deformation data. The embedded views borrow
+   the three allocations and remain valid until the owner is freed. */
+typedef struct pvr_scene_ir_deformation {
+    pvr_chunk_skin_span_t *spans;
+    pvr_chunk_skin_weight_t *weights;
+    pvr_chunk_skeleton_joint_t *joints;
+    pvr_chunk_skin_general_t skin;
+    pvr_chunk_skeleton_t skeleton;
+} pvr_scene_ir_deformation_t;
+
 void pvr_scene_ir_free(pvr_scene_ir_t *scene);
 
 int pvr_scene_ir_add_node(pvr_scene_ir_t *scene, uint32_t parent_index,
@@ -75,6 +100,21 @@ int pvr_scene_ir_add_root_model(pvr_scene_ir_t *scene,
                                 uint32_t model_ordinal);
 
 int pvr_scene_ir_validate(const pvr_scene_ir_t *scene);
+
+void pvr_scene_ir_deformation_free(
+    pvr_scene_ir_deformation_t *deformation);
+
+/* Canonicalize staged or cross-node vertex contributions into the ordinary
+   complete-pose skin and skeleton representation. vertex_indices defines the
+   exact strictly increasing model-vertex set which must be covered. Producing
+   nodes are sorted deterministically, duplicate contributions are merged,
+   and each output span is quantized to an exact normalized sum. */
+int pvr_scene_ir_canonicalize_deformation(
+    const pvr_scene_ir_t *scene,
+    const uint16_t *vertex_indices, size_t vertex_count,
+    const pvr_scene_ir_deform_source_t *sources, size_t source_count,
+    const pvr_scene_ir_deform_contribution_t *contributions,
+    size_t contribution_count, pvr_scene_ir_deformation_t *canonical);
 
 /* Lower a resolved draw schedule into ordinary parent-before-child nodes.
    Source nodes become stable transform-only pose anchors. Scheduled model

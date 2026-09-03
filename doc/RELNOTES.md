@@ -11,6 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added host-side complete-pose deformation canonicalization. Importers can
+  submit unordered, repeated vertex contributions from hierarchy nodes; the
+  compiler validates inverse-bind sources, merges duplicate pairs, sorts
+  joints deterministically, and quantizes every covered vertex to an exact
+  65,535 weight sum. The glTF skin importer now uses this path, producing the
+  existing general-skin and skeleton sections without intermediate-result
+  dependencies or new target-side machinery.
+
 * Added host-side canonical draw-schedule lowering. Importers can resolve
   ordinary draws plus deferred capture/replay operations into one flat command
   sequence, then emit a runtime hierarchy containing only transform anchors
