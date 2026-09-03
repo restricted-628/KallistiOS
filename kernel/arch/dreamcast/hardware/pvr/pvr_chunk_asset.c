@@ -380,11 +380,12 @@ static int open_pcm2(const void *data, size_t size,
             ++polygon_count;
         }
     }
-    if(!vertex_count || vertex_count != polygon_count) {
+    if(!vertex_count || !polygon_count) {
         errno = EILSEQ;
         return -1;
     }
-    parsed.model_count = vertex_count;
+    parsed.model_count = vertex_count < polygon_count ? vertex_count :
+                                                        polygon_count;
 
     *view = parsed;
     return 0;
@@ -502,8 +503,9 @@ static int section_needs_copy(const pvr_chunk_asset_section_t *section,
            ((uintptr_t)section->stored_data & (natural_alignment - 1u));
 }
 
-int pvr_chunk_asset_model_workspace_query(
-    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
+int pvr_chunk_asset_pair_workspace_query(
+    const pvr_chunk_asset_view_t *view, size_t vertex_ordinal,
+    size_t polygon_ordinal,
     pvr_chunk_asset_workspace_requirements_t *requirements) {
     pvr_chunk_asset_view_t checked;
     pvr_chunk_asset_section_t vertex;
@@ -519,16 +521,12 @@ int pvr_chunk_asset_model_workspace_query(
     }
     if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0)
         return -1;
-    if(model_ordinal >= checked.model_count) {
-        errno = ENOENT;
-        return -1;
-    }
     if(pvr_chunk_asset_section_find(
            &checked, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
-           model_ordinal, &vertex) < 0 ||
+           vertex_ordinal, &vertex) < 0 ||
        pvr_chunk_asset_section_find(
            &checked, PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
-           model_ordinal, &polygon) < 0)
+           polygon_ordinal, &polygon) < 0)
         return -1;
 
     memset(&result, 0, sizeof(result));
@@ -550,6 +548,27 @@ int pvr_chunk_asset_model_workspace_query(
     result.bytes = cursor;
     *requirements = result;
     return 0;
+}
+
+int pvr_chunk_asset_model_workspace_query(
+    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
+    pvr_chunk_asset_workspace_requirements_t *requirements) {
+    pvr_chunk_asset_view_t checked;
+
+    if(requirements)
+        memset(requirements, 0, sizeof(*requirements));
+    if(!view || !requirements || !view->data) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0)
+        return -1;
+    if(model_ordinal >= checked.model_count) {
+        errno = ENOENT;
+        return -1;
+    }
+    return pvr_chunk_asset_pair_workspace_query(
+        &checked, model_ordinal, model_ordinal, requirements);
 }
 
 int pvr_chunk_asset_workspace_query(
@@ -654,8 +673,9 @@ int pvr_chunk_asset_section_load(
     return 0;
 }
 
-int pvr_chunk_asset_model_load(
-    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
+int pvr_chunk_asset_pair_load(
+    const pvr_chunk_asset_view_t *view, size_t vertex_ordinal,
+    size_t polygon_ordinal,
     pvr_chunk_asset_decoder_t decoder, void *decoder_data,
     void *workspace, size_t workspace_bytes,
     pvr_chunk_model_view_t *model_view) {
@@ -674,14 +694,14 @@ int pvr_chunk_asset_model_load(
         return -1;
     }
     if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0 ||
-       pvr_chunk_asset_model_workspace_query(
-           &checked, model_ordinal, &requirements) < 0 ||
+       pvr_chunk_asset_pair_workspace_query(
+           &checked, vertex_ordinal, polygon_ordinal, &requirements) < 0 ||
        pvr_chunk_asset_section_find(
            &checked, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
-           model_ordinal, &vertex_section) < 0 ||
+           vertex_ordinal, &vertex_section) < 0 ||
        pvr_chunk_asset_section_find(
            &checked, PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
-           model_ordinal, &polygon_section) < 0)
+           polygon_ordinal, &polygon_section) < 0)
         return -1;
     if(requirements.bytes &&
        (!workspace || workspace_bytes < requirements.bytes ||
@@ -714,6 +734,30 @@ int pvr_chunk_asset_model_load(
     memcpy(model.center, checked.center, sizeof(model.center));
     model.radius = checked.radius;
     return pvr_chunk_model_open(&model, model_view);
+}
+
+int pvr_chunk_asset_model_load(
+    const pvr_chunk_asset_view_t *view, size_t model_ordinal,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *model_view) {
+    pvr_chunk_asset_view_t checked;
+
+    if(model_view)
+        memset(model_view, 0, sizeof(*model_view));
+    if(!view || !model_view || !view->data) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0)
+        return -1;
+    if(model_ordinal >= checked.model_count) {
+        errno = ENOENT;
+        return -1;
+    }
+    return pvr_chunk_asset_pair_load(
+        &checked, model_ordinal, model_ordinal, decoder, decoder_data,
+        workspace, workspace_bytes, model_view);
 }
 
 int pvr_chunk_asset_load(const pvr_chunk_asset_view_t *view,

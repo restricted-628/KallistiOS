@@ -93,8 +93,8 @@ int pvr_scene_ir_serialize_model_table(
             PVR_CHUNK_MODEL_TABLE_HEADER_BYTES +
             index * PVR_CHUNK_MODEL_TABLE_RECORD_BYTES;
 
-        if(record->vertex_ordinal != index ||
-           record->polygon_ordinal != index ||
+        if(record->vertex_ordinal == PVR_CHUNK_MODEL_SECTION_NONE ||
+           record->polygon_ordinal == PVR_CHUNK_MODEL_SECTION_NONE ||
            !isfinite(record->center[0]) ||
            !isfinite(record->center[1]) ||
            !isfinite(record->center[2]) ||

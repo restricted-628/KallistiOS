@@ -64,11 +64,12 @@ typedef enum pvr_chunk_asset_codec {
 
 /** \brief Stable semantic identifiers for section-directory entries.
 
-    PCM2 requires the same nonzero number of vertex and polygon streams. Their
-    type-local directory ordinals form stable model pairs. Other section types
-    are optional and may appear more than once. Unknown nonzero identifiers
-    remain queryable so newer host tools do not make older loaders reject an
-    otherwise usable model.
+    PCM2 requires at least one vertex and one polygon stream. Equal type-local
+    ordinals form the legacy implicit model pairs, while a model-table section
+    may pair either stream independently. Other section types are optional and
+    may appear more than once. Unknown nonzero identifiers remain queryable so
+    newer host tools do not make older loaders reject an otherwise usable
+    model.
 */
 typedef enum pvr_chunk_asset_section_type {
     PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM = 1,
@@ -115,7 +116,7 @@ typedef struct pvr_chunk_asset_view {
     const void *section_directory; /**< NULL for synthetic PCM1 sections. */
     size_t section_directory_bytes;
     size_t section_count;          /**< Includes required model streams. */
-    size_t model_count;            /**< Paired vertex/polygon stream count. */
+    size_t model_count;            /**< Legacy equal-ordinal pair count. */
     uint16_t version;              /**< 1 for PCM1 or 2 for PCM2. */
     uint16_t header_bytes;
 } pvr_chunk_asset_view_t;
@@ -224,6 +225,17 @@ int pvr_chunk_asset_model_workspace_query(
     const pvr_chunk_asset_view_t *view, size_t model_ordinal,
     pvr_chunk_asset_workspace_requirements_t *requirements);
 
+/** \brief Query workspace for an explicit vertex/polygon stream pair.
+
+    This is the allocation-free foundation used by model-table version two.
+    It permits several canonical polygon segments to share one immutable
+    vertex stream without duplicating geometry. Both ordinals are type-local.
+*/
+int pvr_chunk_asset_pair_workspace_query(
+    const pvr_chunk_asset_view_t *view, size_t vertex_ordinal,
+    size_t polygon_ordinal,
+    pvr_chunk_asset_workspace_requirements_t *requirements);
+
 /** \brief Materialize and fully admit a compact model from an asset.
 
     Workspace may be NULL only when the query reports zero bytes. It must be
@@ -248,6 +260,18 @@ int pvr_chunk_asset_model_load(
     const pvr_chunk_asset_view_t *view, size_t model_ordinal,
     pvr_chunk_asset_decoder_t decoder, void *decoder_data,
     void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *model_view);
+
+/** \brief Materialize an explicit vertex/polygon stream pair.
+
+    The decoder, CRC, workspace, admission, ownership, and no-allocation
+    contracts match pvr_chunk_asset_model_load(). The container-wide bounds
+    are installed; a model table may replace them with per-model bounds.
+*/
+int pvr_chunk_asset_pair_load(
+    const pvr_chunk_asset_view_t *view, size_t vertex_ordinal,
+    size_t polygon_ordinal, pvr_chunk_asset_decoder_t decoder,
+    void *decoder_data, void *workspace, size_t workspace_bytes,
     pvr_chunk_model_view_t *model_view);
 
 /** @} */

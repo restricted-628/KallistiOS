@@ -95,12 +95,16 @@ static void decode_record(const uint8_t *bytes,
     record->radius = read_float(bytes + RECORD_RADIUS_OFFSET);
 }
 
-static int record_is_valid(const uint8_t *bytes, size_t index) {
+static int record_is_valid(const uint8_t *bytes, size_t index,
+                           uint16_t version) {
     pvr_chunk_model_table_record_t record;
 
     decode_record(bytes, &record);
-    return record.vertex_ordinal == index &&
-           record.polygon_ordinal == index &&
+    return record.vertex_ordinal != PVR_CHUNK_MODEL_SECTION_NONE &&
+           record.polygon_ordinal != PVR_CHUNK_MODEL_SECTION_NONE &&
+           (version != PVR_CHUNK_MODEL_TABLE_VERSION_1 ||
+            (record.vertex_ordinal == index &&
+             record.polygon_ordinal == index)) &&
            !read_le32(bytes + RECORD_FLAGS_OFFSET) &&
            bytes_are_zero(bytes + RECORD_RESERVED_OFFSET,
                           RECORD_RESERVED_BYTES) &&
@@ -116,6 +120,7 @@ int pvr_chunk_model_table_open(
     uint32_t file_bytes;
     uint32_t model_count;
     uint16_t record_stride;
+    uint16_t version;
     size_t payload_bytes;
     size_t index;
 
@@ -127,12 +132,18 @@ int pvr_chunk_model_table_open(
     }
     if(size < PVR_CHUNK_MODEL_TABLE_HEADER_BYTES ||
        read_le32(bytes) != PVR_CHUNK_MODEL_TABLE_MAGIC ||
-       read_le16(bytes + 4) != PVR_CHUNK_MODEL_TABLE_VERSION ||
        read_le16(bytes + 6) != PVR_CHUNK_MODEL_TABLE_HEADER_BYTES ||
        read_le16(bytes + 18) ||
        read_le32(bytes + HEADER_RESERVED_OFFSET) ||
        read_le32(bytes + HEADER_CRC_OFFSET) !=
            crc32_bytes(bytes, HEADER_CRC_BYTES)) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    version = read_le16(bytes + 4);
+    if(version != PVR_CHUNK_MODEL_TABLE_VERSION_1 &&
+       version != PVR_CHUNK_MODEL_TABLE_VERSION) {
         errno = EILSEQ;
         return -1;
     }
@@ -158,7 +169,7 @@ int pvr_chunk_model_table_open(
         if(!record_is_valid(
                bytes + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES +
                    index * record_stride,
-               index)) {
+               index, version)) {
             errno = EILSEQ;
             return -1;
         }
@@ -170,7 +181,7 @@ int pvr_chunk_model_table_open(
     parsed.records = bytes + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES;
     parsed.model_count = model_count;
     parsed.record_stride = record_stride;
-    parsed.version = PVR_CHUNK_MODEL_TABLE_VERSION;
+    parsed.version = version;
     *view = parsed;
     return 0;
 }
@@ -229,7 +240,8 @@ int pvr_chunk_model_table_validate_asset(
        pvr_chunk_asset_open(
            asset->data, asset->size, &checked_asset) < 0)
         return -1;
-    if(checked_table.model_count != checked_asset.model_count) {
+    if(checked_table.version == PVR_CHUNK_MODEL_TABLE_VERSION_1 &&
+       checked_table.model_count != checked_asset.model_count) {
         errno = EILSEQ;
         return -1;
     }
@@ -241,6 +253,12 @@ int pvr_chunk_model_table_validate_asset(
                 index * checked_table.record_stride,
             &record);
         if(optional_section_exists(
+               &checked_asset, record.vertex_ordinal,
+               PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM) < 0 ||
+           optional_section_exists(
+               &checked_asset, record.polygon_ordinal,
+               PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM) < 0 ||
+           optional_section_exists(
                &checked_asset, record.resource_ordinal,
                PVR_CHUNK_ASSET_SECTION_RESOURCE_TABLE) < 0 ||
            optional_section_exists(
@@ -282,8 +300,8 @@ int pvr_chunk_model_table_workspace_query(
        pvr_chunk_model_table_record_get(
            view, model_ordinal, &record) < 0)
         return -1;
-    return pvr_chunk_asset_model_workspace_query(
-        asset, record.vertex_ordinal, requirements);
+    return pvr_chunk_asset_pair_workspace_query(
+        asset, record.vertex_ordinal, record.polygon_ordinal, requirements);
 }
 
 int pvr_chunk_model_table_load(
@@ -304,8 +322,9 @@ int pvr_chunk_model_table_load(
     if(pvr_chunk_model_table_validate_asset(view, asset) < 0 ||
        pvr_chunk_model_table_record_get(
            view, model_ordinal, &record) < 0 ||
-       pvr_chunk_asset_model_load(
-           asset, record.vertex_ordinal, decoder, decoder_data,
+       pvr_chunk_asset_pair_load(
+           asset, record.vertex_ordinal, record.polygon_ordinal,
+           decoder, decoder_data,
            workspace, workspace_bytes, &loaded) < 0)
         return -1;
 

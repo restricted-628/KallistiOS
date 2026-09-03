@@ -220,23 +220,27 @@ model admission boundary. The core container API allocates nothing and does
 not create a thread, fiber, callback worker, or decompression dependency.
 
 PCM2 preserves that contract while replacing header growth with a fixed
-64-byte header and a checksummed directory of 32-byte descriptors. The same
-nonzero number of vertex and polygon streams is required. The Nth stream of
-each type forms model ordinal N; the original workspace and load calls remain
-ordinal-zero wrappers, while `pvr_chunk_asset_model_workspace_query()` and
-`pvr_chunk_asset_model_load()` address every pair explicitly. The container's
-sphere is conservative for every model, so multi-model loading is correct even
-before a pipeline supplies narrower per-model metadata. PCM1 exposes one model
-through the same contract.
+64-byte header and a checksummed directory of 32-byte descriptors. At least
+one vertex and one polygon stream are required. Equal type-local ordinals form
+the legacy implicit pairs used by `pvr_chunk_asset_model_workspace_query()`
+and `pvr_chunk_asset_model_load()`. The explicit pair operations can instead
+join any admitted vertex and polygon ordinals, allowing canonical draw-order
+segments to share one immutable vertex stream. The original workspace and
+load calls remain ordinal-zero wrappers. The container's sphere is
+conservative for every model, so multi-model loading is correct even before a
+pipeline supplies narrower per-model metadata. PCM1 exposes one model through
+the same contract.
 
 Host-produced PCM2 files additionally carry one pointer-free `PMT1` model
-table. Its fixed 64-byte record maps each model ordinal to the canonical
-vertex/polygon pair, exact finite local sphere, and zero-based ordinals for
+table. Its fixed 64-byte record maps each model ordinal to required vertex and
+polygon streams, an exact finite local sphere, and zero-based ordinals for
 that model's optional resource, volume, compact skin, general skin, skeleton,
-morph, and cooked-cache sections. `UINT32_MAX` denotes an absent optional
-section. Header and payload CRCs, reserved fields, canonical pair ordinals,
-model count, bounds, and every referenced section type are admitted before a
-record can be used. `pvr_chunk_model_table_workspace_query()` and
+morph, and cooked-cache sections. Version two selects the two required streams
+independently and admits shared streams; version one remains readable with its
+original equal record/stream ordinal rule. `UINT32_MAX` denotes an absent
+optional section. Header and payload CRCs, reserved fields, bounds, and every
+referenced section type are admitted before a record can be used.
+`pvr_chunk_model_table_workspace_query()` and
 `pvr_chunk_model_table_load()` remain allocation-free and replace the
 container-wide conservative sphere with the selected model's exact bounds.
 

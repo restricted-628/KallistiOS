@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Extended PCM2 model composition without duplicating geometry. `PMT1`
+  version two selects vertex and polygon section ordinals independently, so
+  several canonical draw-order segments can share one immutable vertex
+  stream. New checked pair-workspace and pair-load operations retain the
+  allocation-free decode, CRC, bounds, and admission contracts; the original
+  equal-ordinal APIs and version-one model tables remain readable.
+
 * Added coherent allocation-free PCM2 scene loading. A checked scene-asset
   view joins the unique model table and hierarchy, validates their
   cross-section ordinals, computes one persistent decode span for every model,
@@ -107,16 +114,16 @@ lifecycle and naming conventions.
   assigned, materialized, and checked independently for every model. Authored
   general-N skins, inverse-bind skeletons, and sparse morph targets now follow
   the same per-model ownership and type-ordinal rules.
-* Added pointer-free PCM2 per-model metadata. Checked `PMT1` APIs bind every
-  canonical vertex/polygon pair to exact local bounds and typed optional-
-  section ordinals, cross-validate the complete table against its asset, and
-  load any model without allocation. The host converter now emits and reopens
-  this table for every section-directory asset.
-* Extended PCM2 from one model to a checked nonzero set of ordinal-paired
-  vertex and polygon streams. New workspace and load APIs admit any model
-  ordinal without allocation; the established single-model calls remain
-  ordinal-zero wrappers, and mismatched stream counts fail container
-  admission before either stream is published.
+* Added pointer-free PCM2 per-model metadata. Checked `PMT1` APIs bind required
+  vertex and polygon streams to exact local bounds and typed optional-section
+  ordinals, cross-validate the complete table against its asset, and load any
+  model without allocation. The host converter now emits and reopens this
+  table for every section-directory asset.
+* Extended PCM2 from one model to checked nonzero vertex and polygon stream
+  sets. Workspace and load APIs admit every equal-ordinal legacy pair without
+  allocation, while the established single-model calls remain ordinal-zero
+  wrappers. Explicit PMT1 version-two pairs may also select streams beyond
+  that common equal-ordinal range.
 * Added bounded host-side glTF 2.0 and GLB input to the compact-model
   converter. One selected scene and its unique mesh set can populate PCM2
   geometry, hierarchy, deterministic PBR-derived material state, exact
@@ -168,8 +175,8 @@ lifecycle and naming conventions.
   system.
 * Added a backward-compatible PCM2 compact-model asset directory beside PCM1.
   It validates checksummed, offset-ordered, nonoverlapping section descriptors;
-  requires equally many nonzero vertex and polygon streams; and exposes
-  ordinal-addressable models plus repeatable
+  requires nonzero vertex and polygon stream sets; and exposes legacy
+  equal-ordinal models plus repeatable
   optional typed or application sections through checked lookup and
   allocation-free materialization APIs. Raw aligned data remains zero-copy,
   while compressed or unaligned sections use exact caller-owned workspace.

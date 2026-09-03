@@ -390,10 +390,13 @@ format, deformation, or tooling gaps:
    sections without placeholders, and the host importer emits mixed
    transform-only, morph-only, and combined glTF clips through it. Continue
    wider modern scene import, parent-result canonicalization, and elimination
-   of deferred polygon controls. Target-side loading of the canonical PCM2
-   model table and hierarchy is now one coherent allocation-free operation
-   over caller-owned model, node, and persistent decode storage; multi-model
-   host output is round-tripped through that same path before publication.
+   of deferred polygon controls. PMT1 version two and the explicit PCM2 stream-
+   pair loader now permit the canonicalizer to split draw-order segments while
+   sharing vertex data instead of copying it. Target-side loading of the
+   canonical PCM2 model table and hierarchy is one coherent allocation-free
+   operation over caller-owned model, node, and persistent decode storage;
+   multi-model host output is round-tripped through that same path before
+   publication.
 2. Preserve the current flat parent-before-child hierarchy and complete-pose
    deformation. PCH1 version 2 supplies component suppression, hidden-node
    evaluation, and noncontiguous descendant pruning; PAT1 version 3 supplies

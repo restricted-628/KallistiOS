@@ -415,9 +415,19 @@ static void test_multi_model_asset(void) {
                PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 3u,
                PVR_CHUNK_ASSET_SECTION_APPLICATION);
     refresh_directory_checksums(asset);
+    assert(pvr_chunk_asset_open(asset, bytes, &view) == 0);
+    assert(view.model_count == 1 && view.section_count == 4);
+    assert(pvr_chunk_asset_pair_workspace_query(
+        &view, 1, 0, &requirements) == 0);
+    assert(!requirements.bytes);
+    assert(pvr_chunk_asset_pair_load(
+        &view, 1, 0, NULL, NULL, NULL, 0, &second) == 0);
+    assert(!memcmp(second.model.vertex_words, vertices_second,
+                   sizeof(vertices_second)));
     errno = 0;
-    assert(pvr_chunk_asset_open(asset, bytes, &view) == -1);
-    assert(errno == EILSEQ);
+    assert(pvr_chunk_asset_model_load(
+        &view, 1, NULL, NULL, NULL, 0, &second) == -1);
+    assert(errno == ENOENT);
 }
 
 static void test_unaligned_directory_asset(void) {

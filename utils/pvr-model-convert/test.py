@@ -427,7 +427,7 @@ f 1/1/1 2/2/1 3/3/1
         ]
         assert model_table[:4] == b"PMT1"
         assert struct.unpack_from("<HHIIH", model_table, 4) == (
-            1, 32, 96, 1, 64
+            2, 32, 96, 1, 64
         )
         assert zlib.crc32(model_table[32:]) == struct.unpack_from(
             "<I", model_table, 20
