@@ -19,21 +19,24 @@ pvr-model-convert [--flip-winding] [--flip-v] [--join-strips] \
 
 glTF and GLB input require `--emit-asset --section-directory`. The host-only
 importer uses cgltf and adds no parser, allocation, or code to a Dreamcast
-program. It accepts one selected scene and any nonzero set of unique
-meshes, including repeated instances, triangle, triangle-strip, or triangle-
-fan primitives, indexed or non-indexed positions, optional normals, material-
-selected texture-coordinate sets, and `COLOR_0`. Base-color texture transforms
-are baked into those selected coordinates before compact encoding. Stable
-texture ordinals, parent-before-child node transforms, and
-STEP, LINEAR, or CUBICSPLINE translation, rotation, scale, and morph-weight
-channels. Multiple
+program. It accepts one selected scene and any nonzero set of mesh/skin
+specializations, including repeated nodes and static `EXT_mesh_gpu_instancing`
+draws, triangle, triangle-strip, or triangle-fan primitives, indexed or
+non-indexed positions, optional normals, material-selected texture-coordinate
+sets, and `COLOR_0`. Base-color texture transforms are baked into those
+selected coordinates before compact encoding. It retains stable texture
+ordinals, parent-before-child node transforms, and STEP, LINEAR, or
+CUBICSPLINE translation, rotation, scale, and morph-weight channels. Multiple
 animations retain source order and may independently contain transform-only,
-morph-only, or combined channels. Each unique mesh becomes one PCM2 model
-ordinal
-with exact local bounds and its own resource manifest, general-N skin,
-inverse-bind skeleton, and sparse position/normal morph sections when authored.
-Different meshes may use different skins; repeated instances of one mesh must
-agree on that mesh's skin. General-N weights are normalized exactly to 65535;
+morph-only, or combined channels. Each distinct mesh/skin pair becomes one PCM2
+model ordinal with exact local bounds and its own resource manifest, general-N
+skin, inverse-bind skeleton, and sparse position/normal morph sections when
+authored. Specializations and otherwise identical models share immutable
+vertex and polygon sections through PMT1 version 2 instead of copying stream
+payloads. Skin joints outside the selected scene, together with the minimum
+ancestor chain needed to evaluate them, become transform-only hierarchy nodes;
+unselected meshes are never drawn implicitly. General-N weights are normalized
+exactly to 65535;
 no four-influence reduction is performed. Matching `JOINTS_n`/`WEIGHTS_n`
 sets are merged by joint across every set, so vertices with more than four
 authored influences remain general-N rather than being truncated. Skin
@@ -52,11 +55,11 @@ OBJ's independently indexed per-reference attributes likewise preserve UV and
 hard-normal discontinuities without duplicating the canonical position batch.
 
 Unsupported authored meaning is rejected rather than dropped. Current explicit
-boundaries include required extensions other than `KHR_texture_transform`, GPU
-instancing, point and line primitives, tangent/custom vertex attributes,
-non-base-color texture roles, advanced material models, detached skin joints,
-and conflicting skins on repeated mesh instances. Static matrix-authored nodes
-in an animated scene are admitted when
+boundaries include required extensions other than `KHR_texture_transform` and
+`EXT_mesh_gpu_instancing`, skinned or morph-target GPU instances, non-TRS
+instance attributes, point and line primitives, tangent/custom vertex
+attributes, non-base-color texture roles, and advanced material models. Static
+matrix-authored nodes in an animated scene are admitted when
 their affine transform decomposes exactly into translation, quaternion
 rotation, and signed scale; shear and degenerate axes are rejected.
 Explicit cubic-spline tangents retain their time-derivative meaning and are not

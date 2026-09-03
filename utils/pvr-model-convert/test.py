@@ -758,6 +758,127 @@ f 1/1/1 2/2/1 3/3/1
             0.0, 3.0, 0.0, 1.0
         )
 
+        instance_binary = (
+            gltf_binary +
+            struct.pack("<6f", 1.0, 2.0, 3.0, -4.0, 5.0, 6.0) +
+            struct.pack("<8f",
+                        0.0, 0.0, 0.0, 1.0,
+                        0.0, 0.0, math.sqrt(0.5), math.sqrt(0.5)) +
+            struct.pack("<6f", 1.0, 1.0, 1.0, 2.0, 3.0, 4.0) +
+            struct.pack("<2f", 0.0, 1.0) +
+            struct.pack("<6f", 10.0, 0.0, 0.0, 12.0, 0.0, 0.0)
+        )
+        instance_document = json.loads(gltf_source.read_text(
+            encoding="utf-8"
+        ))
+        instance_document["buffers"][0]["byteLength"] = len(
+            instance_binary
+        )
+        instance_document["buffers"][0]["uri"] = (
+            "data:application/octet-stream;base64," +
+            base64.b64encode(instance_binary).decode("ascii")
+        )
+        instance_document["bufferViews"].extend([
+            {"buffer": 0, "byteOffset": 80, "byteLength": 24},
+            {"buffer": 0, "byteOffset": 104, "byteLength": 32},
+            {"buffer": 0, "byteOffset": 136, "byteLength": 24},
+            {"buffer": 0, "byteOffset": 160, "byteLength": 8},
+            {"buffer": 0, "byteOffset": 168, "byteLength": 24},
+        ])
+        instance_document["accessors"].extend([
+            {"bufferView": 3, "componentType": 5126, "count": 2,
+             "type": "VEC3"},
+            {"bufferView": 4, "componentType": 5126, "count": 2,
+             "type": "VEC4"},
+            {"bufferView": 5, "componentType": 5126, "count": 2,
+             "type": "VEC3"},
+            {"bufferView": 6, "componentType": 5126, "count": 2,
+             "type": "SCALAR"},
+            {"bufferView": 7, "componentType": 5126, "count": 2,
+             "type": "VEC3"},
+        ])
+        instance_document["extensionsUsed"] = [
+            "EXT_mesh_gpu_instancing"
+        ]
+        instance_document["extensionsRequired"] = [
+            "EXT_mesh_gpu_instancing"
+        ]
+        instance_document["nodes"] = [{
+            "mesh": 0,
+            "translation": [10.0, 0.0, 0.0],
+            "extensions": {"EXT_mesh_gpu_instancing": {"attributes": {
+                "TRANSLATION": 3,
+                "ROTATION": 4,
+                "SCALE": 5,
+            }}},
+        }]
+        instance_document["scenes"] = [{"nodes": [0]}]
+        instance_document["animations"] = [{
+            "samplers": [{"input": 6, "output": 7,
+                          "interpolation": "LINEAR"}],
+            "channels": [{"sampler": 0,
+                          "target": {"node": 0,
+                                     "path": "translation"}}],
+        }]
+        instance_source = root / "triangle-instances.gltf"
+        instance_source.write_text(
+            json.dumps(instance_document), encoding="utf-8"
+        )
+        instance_asset = root / "triangle-instances.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            instance_source, instance_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "hierarchy_nodes=3\n" in result.stdout
+        assert "animation_transforms=3\n" in result.stdout
+        assert "animation_tracks=1\n" in result.stdout
+        instance_bytes = instance_asset.read_bytes()
+        instance_descriptors = [
+            struct.unpack_from("<7IHH", instance_bytes, 64 + i * 32)
+            for i in range(struct.unpack_from("<I", instance_bytes, 32)[0])
+        ]
+        instance_hierarchy_descriptor = next(
+            descriptor for descriptor in instance_descriptors
+            if descriptor[0] == 8
+        )
+        instance_hierarchy = instance_bytes[
+            instance_hierarchy_descriptor[2]:
+            instance_hierarchy_descriptor[2] +
+            instance_hierarchy_descriptor[3]
+        ]
+        assert struct.unpack_from("<I", instance_hierarchy, 12)[0] == 3
+        assert struct.unpack_from("<II", instance_hierarchy, 32) == (
+            0xffffffff, 0xffffffff
+        )
+        assert struct.unpack_from("<II", instance_hierarchy, 112) == (0, 0)
+        assert struct.unpack_from("<II", instance_hierarchy, 192) == (0, 0)
+        assert struct.unpack_from("<4f", instance_hierarchy, 96) == (
+            10.0, 0.0, 0.0, 1.0
+        )
+        assert struct.unpack_from("<4f", instance_hierarchy, 176) == (
+            1.0, 2.0, 3.0, 1.0
+        )
+        assert struct.unpack_from("<4f", instance_hierarchy, 256) == (
+            -4.0, 5.0, 6.0, 1.0
+        )
+        unsupported_instance = json.loads(json.dumps(instance_document))
+        instance_attributes = unsupported_instance["nodes"][0][
+            "extensions"
+        ]["EXT_mesh_gpu_instancing"]["attributes"]
+        instance_attributes["_CUSTOM"] = instance_attributes.pop("SCALE")
+        unsupported_instance_source = root / "unsupported-instance.gltf"
+        unsupported_instance_source.write_text(
+            json.dumps(unsupported_instance), encoding="utf-8"
+        )
+        instance_asset.write_bytes(b"instance sentinel")
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            unsupported_instance_source, instance_asset,
+        )
+        assert result.returncode == 1
+        assert instance_asset.read_bytes() == b"instance sentinel"
+
         color_binary = (
             struct.pack(
                 "<9f",
@@ -1024,14 +1145,14 @@ f 1/1/1 2/2/1 3/3/1
         assert "morph_targets=2\n" in result.stdout
         assert "morph_deltas=2\n" in result.stdout
         multi_bytes = multi_gltf_asset.read_bytes()
-        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 17
+        assert struct.unpack_from("<I", multi_bytes, 32)[0] == 16
         multi_descriptors = [
             struct.unpack_from("<7IHH", multi_bytes, 64 + i * 32)
-            for i in range(17)
+            for i in range(16)
         ]
         assert [descriptor[0] for descriptor in multi_descriptors] == [
             1, 2, 3, 10, 6, 11, 7,
-            1, 2, 3, 10, 6, 11, 7,
+            2, 3, 10, 6, 11, 7,
             8, 12, 15,
         ]
         first_polygon = multi_bytes[
@@ -1039,8 +1160,8 @@ f 1/1/1 2/2/1 3/3/1
             multi_descriptors[1][2] + multi_descriptors[1][3]
         ]
         second_polygon = multi_bytes[
-            multi_descriptors[8][2]:
-            multi_descriptors[8][2] + multi_descriptors[8][3]
+            multi_descriptors[7][2]:
+            multi_descriptors[7][2] + multi_descriptors[7][3]
         ]
         first_polygon_words = struct.unpack(
             f"<{len(first_polygon) // 2}H", first_polygon
@@ -1055,8 +1176,8 @@ f 1/1/1 2/2/1 3/3/1
         assert second_polygon_words[3] >> 8 == 0xFF
         assert second_polygon_words[10] == 79 | (0x08 << 8)
         multi_table = multi_bytes[
-            multi_descriptors[15][2]:
-            multi_descriptors[15][2] + multi_descriptors[15][3]
+            multi_descriptors[14][2]:
+            multi_descriptors[14][2] + multi_descriptors[14][3]
         ]
         assert multi_table[:4] == b"PMT1"
         assert struct.unpack_from("<I", multi_table, 12)[0] == 2
@@ -1064,7 +1185,7 @@ f 1/1/1 2/2/1 3/3/1
             0, 0, 0
         )
         assert struct.unpack_from("<3I", multi_table, 96) == (
-            1, 1, 1
+            0, 1, 1
         )
         assert struct.unpack_from("<I", multi_table, 64)[0] == 0
         assert struct.unpack_from("<I", multi_table, 128)[0] == 1
@@ -1073,15 +1194,15 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<II", multi_table, 52) == (0, 0)
         assert struct.unpack_from("<II", multi_table, 116) == (1, 1)
         multi_hierarchy = multi_bytes[
-            multi_descriptors[14][2]:
-            multi_descriptors[14][2] + multi_descriptors[14][3]
+            multi_descriptors[13][2]:
+            multi_descriptors[13][2] + multi_descriptors[13][3]
         ]
         assert struct.unpack_from("<I", multi_hierarchy, 12)[0] == 5
         assert struct.unpack_from("<II", multi_hierarchy, 112) == (0, 0)
         assert struct.unpack_from("<II", multi_hierarchy, 192) == (0, 1)
         multi_texture = multi_bytes[
-            multi_descriptors[16][2]:
-            multi_descriptors[16][2] + multi_descriptors[16][3]
+            multi_descriptors[15][2]:
+            multi_descriptors[15][2] + multi_descriptors[15][3]
         ]
         assert multi_texture[:4] == b"PTX1"
         assert struct.unpack_from("<HHIIHHI", multi_texture, 4) == (
@@ -1240,10 +1361,11 @@ f 1/1/1 2/2/1 3/3/1
         multi_lz4 = multi_gltf_asset.read_bytes()
         multi_lz4_descriptors = [
             struct.unpack_from("<7IHH", multi_lz4, 64 + i * 32)
-            for i in range(15)
+            for i in range(14)
         ]
         assert multi_lz4_descriptors[0][7] == 1
-        assert multi_lz4_descriptors[6][7] == 1
+        assert sum(descriptor[0] == 1
+                   for descriptor in multi_lz4_descriptors) == 1
 
         result = invoke(converter, "--emit-asset", gltf_source, gltf_asset)
         assert result.returncode == 2
@@ -1365,6 +1487,101 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<II", gltf_skeleton, 12) == (2, 4)
         assert struct.unpack_from("<I", gltf_skeleton, 48)[0] == 1
         assert struct.unpack_from("<I", gltf_skeleton, 128)[0] == 2
+
+        detached_skin_document = json.loads(gltf_skin_source.read_text(
+            encoding="utf-8"
+        ))
+        detached_skin_document["skins"][0]["joints"] = [2, 3]
+        detached_skin_document["nodes"] = [
+            {"name": "scene-root", "children": [1]},
+            {"name": "mesh", "mesh": 0, "skin": 0},
+            {"name": "detached-joint-root", "children": [3],
+             "translation": [4.0, 0.0, 0.0]},
+            {"name": "detached-joint-leaf"},
+        ]
+        detached_skin_source = root / "detached-skeleton.gltf"
+        detached_skin_source.write_text(
+            json.dumps(detached_skin_document), encoding="utf-8"
+        )
+        detached_skin_asset = root / "detached-skeleton.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            detached_skin_source, detached_skin_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "hierarchy_nodes=4\n" in result.stdout
+        detached_bytes = detached_skin_asset.read_bytes()
+        detached_descriptors = [
+            struct.unpack_from("<7IHH", detached_bytes, 64 + i * 32)
+            for i in range(struct.unpack_from("<I", detached_bytes, 32)[0])
+        ]
+        detached_skeleton_descriptor = next(
+            descriptor for descriptor in detached_descriptors
+            if descriptor[0] == 11
+        )
+        detached_skeleton = detached_bytes[
+            detached_skeleton_descriptor[2]:
+            detached_skeleton_descriptor[2] +
+            detached_skeleton_descriptor[3]
+        ]
+        assert struct.unpack_from("<I", detached_skeleton, 48)[0] == 2
+        assert struct.unpack_from("<I", detached_skeleton, 128)[0] == 3
+
+        specialized_document = json.loads(json.dumps(
+            detached_skin_document
+        ))
+        specialized_document["skins"] = [
+            {"joints": [3, 4], "inverseBindMatrices": 5},
+            {"joints": [5, 6], "inverseBindMatrices": 5},
+        ]
+        specialized_document["nodes"] = [
+            {"name": "scene-root", "children": [1, 2]},
+            {"name": "mesh-a", "mesh": 0, "skin": 0},
+            {"name": "mesh-b", "mesh": 0, "skin": 1},
+            {"name": "joint-a-root", "children": [4]},
+            {"name": "joint-a-leaf"},
+            {"name": "joint-b-root", "children": [6]},
+            {"name": "joint-b-leaf"},
+        ]
+        specialized_source = root / "mesh-skin-specializations.gltf"
+        specialized_source.write_text(
+            json.dumps(specialized_document), encoding="utf-8"
+        )
+        specialized_asset = root / "mesh-skin-specializations.pcm"
+        result = invoke(
+            converter, "--emit-asset", "--section-directory",
+            specialized_source, specialized_asset,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "models=2\n" in result.stdout
+        assert "hierarchy_nodes=7\n" in result.stdout
+        assert "general_skin_spans=6\n" in result.stdout
+        assert "skeleton_joints=4\n" in result.stdout
+        specialized_bytes = specialized_asset.read_bytes()
+        specialized_descriptors = [
+            struct.unpack_from("<7IHH", specialized_bytes, 64 + i * 32)
+            for i in range(
+                struct.unpack_from("<I", specialized_bytes, 32)[0]
+            )
+        ]
+        assert sum(descriptor[0] == 1
+                   for descriptor in specialized_descriptors) == 1
+        assert sum(descriptor[0] == 2
+                   for descriptor in specialized_descriptors) == 1
+        specialized_table_descriptor = next(
+            descriptor for descriptor in specialized_descriptors
+            if descriptor[0] == 12
+        )
+        specialized_table = specialized_bytes[
+            specialized_table_descriptor[2]:
+            specialized_table_descriptor[2] +
+            specialized_table_descriptor[3]
+        ]
+        assert struct.unpack_from("<I", specialized_table, 12)[0] == 2
+        assert struct.unpack_from("<2I", specialized_table, 32) == (0, 0)
+        assert struct.unpack_from("<2I", specialized_table, 96) == (0, 0)
+        assert struct.unpack_from("<2I", specialized_table, 52) == (0, 0)
+        assert struct.unpack_from("<2I", specialized_table, 116) == (1, 1)
 
         many_joints_0 = bytes((
             0, 1, 2, 3,

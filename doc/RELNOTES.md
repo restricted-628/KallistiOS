@@ -11,6 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Completed the bounded glTF scene-instance import path. Static
+  `EXT_mesh_gpu_instancing` TRS data lowers to ordinary animated hierarchy
+  children; distinct mesh/skin pairs become independent model-table entries;
+  identical vertex and polygon payloads share PCM2 sections; and skin joints
+  outside the selected scene enter only as transform anchors with their
+  required ancestors. The target gains no parser, extension state, retained
+  scene graph, or per-frame import work.
+
 * The compact-model host importer now lowers glTF triangle strips and fans,
   material-selected texture-coordinate sets, and finite base-color texture
   transforms into the existing canonical triangle and signed/float UV records.

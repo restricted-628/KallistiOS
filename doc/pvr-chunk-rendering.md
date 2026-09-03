@@ -396,6 +396,9 @@ format, deformation, or tooling gaps:
    Triangle strips and fans, material-selected texture-coordinate sets, and
    base-color texture transforms are also canonicalized by the host importer;
    the target retains one triangle/UV vocabulary and pays no scene-import cost.
+   Static GPU-authored TRS instances now lower to ordinary child draw nodes,
+   mesh/skin specializations share immutable PCM2 stream sections, and detached
+   required skin joints enter the hierarchy only as transform anchors.
    The host scene IR now lowers resolved deferred capture/replay events into
    ordinary animated draw proxies, eliminating those controls from serialized
    hierarchy execution. PMT1 version two and the explicit PCM2 stream-pair

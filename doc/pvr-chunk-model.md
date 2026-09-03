@@ -335,11 +335,18 @@ implementation before publishing the PCM2 file. The OBJ boundary has only one
 model and therefore emits only this explicit root; the glTF/GLB importer
 populates the same IR for an authored selected scene rather than defining
 another target format.
-Every unique mesh in that selected scene becomes a separate PCM2 model
-ordinal; repeated instances share the ordinal, while hierarchy nodes retain
-their distinct local transforms. Each model receives exact `PMT1` bounds and
-its own optional resource-manifest, cooked-cache, general-skin, skeleton, and
-morph ordinals. Multi-model raw and LZ4-framed outputs are reloaded with
+Every unique mesh/skin pair in that selected scene becomes a separate PCM2
+model ordinal; repeated instances of the same pair share the ordinal, while
+hierarchy nodes retain their distinct local transforms. Static
+`EXT_mesh_gpu_instancing` transforms are lowered into ordinary child draw nodes
+under the authored node's transform, leaving no extension machinery in the
+target runtime. Each model receives exact `PMT1` bounds and its own optional
+resource-manifest, cooked-cache, general-skin, skeleton, and morph ordinals.
+Identical vertex and polygon payloads are serialized once and referenced by
+independent PMT1 version 2 ordinals, so differently skinned specializations do
+not duplicate immutable geometry. Joints outside the selected scene and their
+required ancestors become transform-only pose anchors without pulling detached
+draws into the scene. Multi-model raw and LZ4-framed outputs are reloaded with
 persistent nonoverlapping decode workspace before publication. Each optional
 section is independently serialized, assigned, materialized, and checked for
 its owning model; a missing section on one model does not shift another

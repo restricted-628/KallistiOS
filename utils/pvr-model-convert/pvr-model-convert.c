@@ -54,6 +54,7 @@
 #include <unistd.h>
 
 #define MAX_POSITION_COUNT 65536u
+#define MAX_GLTF_SCENE_NODE_COUNT 65536u
 #define MAX_VERTEX_BATCH ((UINT16_MAX - 1u) / 3u)
 #define MAX_STRIP_COUNT UINT16_C(0x3fff)
 #define MAX_C_SYMBOL_LENGTH 31u
@@ -953,13 +954,15 @@ static int gltf_array_index(const void *base, size_t count,
     return 0;
 }
 
-static size_t gltf_mesh_ordinal(const cgltf_mesh *const *meshes,
-                                size_t mesh_count,
-                                const cgltf_mesh *mesh) {
+static size_t gltf_model_ordinal(const cgltf_mesh *const *meshes,
+                                 const cgltf_skin *const *skins,
+                                 size_t model_count,
+                                 const cgltf_mesh *mesh,
+                                 const cgltf_skin *skin) {
     size_t index;
 
-    for(index = 0; index < mesh_count; ++index) {
-        if(meshes[index] == mesh)
+    for(index = 0; index < model_count; ++index) {
+        if(meshes[index] == mesh && skins[index] == skin)
             return index;
     }
     return SIZE_MAX;
@@ -968,8 +971,8 @@ static size_t gltf_mesh_ordinal(const cgltf_mesh *const *meshes,
 static int gltf_scene_collect_meshes(const cgltf_node *node,
                                      const cgltf_mesh **meshes,
                                      const cgltf_skin **skins,
-                                     size_t *mesh_count,
-                                     size_t mesh_capacity,
+                                     size_t *model_count,
+                                     size_t model_capacity,
                                      size_t *visited, size_t node_limit) {
     cgltf_size child;
     size_t ordinal;
@@ -978,40 +981,166 @@ static int gltf_scene_collect_meshes(const cgltf_node *node,
         errno = EILSEQ;
         return -1;
     }
-    if(node->has_mesh_gpu_instancing) {
-        errno = ENOTSUP;
-        return -1;
-    }
     if(node->mesh) {
-        ordinal = gltf_mesh_ordinal(meshes, *mesh_count, node->mesh);
+        ordinal = gltf_model_ordinal(meshes, skins, *model_count,
+                                     node->mesh, node->skin);
         if(ordinal == SIZE_MAX) {
-            /* First selected-scene traversal order is the stable model
-               ordinal used by both hierarchy nodes and PCM2 stream pairs. */
-            if(*mesh_count >= mesh_capacity) {
+            /* A mesh/skin pair is one model specialization. Distinct skins
+               may reuse the same immutable geometry streams in PCM2. */
+            if(*model_count >= model_capacity) {
                 errno = EILSEQ;
                 return -1;
             }
-            ordinal = (*mesh_count)++;
+            ordinal = (*model_count)++;
             meshes[ordinal] = node->mesh;
             skins[ordinal] = node->skin;
-        }
-        else if(skins[ordinal] != node->skin) {
-            errno = ENOTSUP;
-            return -1;
         }
     }
     for(child = 0; child < node->children_count; ++child) {
         if(gltf_scene_collect_meshes(
-               node->children[child], meshes, skins, mesh_count,
-               mesh_capacity, visited, node_limit) < 0)
+               node->children[child], meshes, skins, model_count,
+               model_capacity, visited, node_limit) < 0)
             return -1;
     }
     return 0;
 }
 
+static int gltf_instance_attributes(
+    const cgltf_node *node, const cgltf_accessor **translations,
+    const cgltf_accessor **rotations, const cgltf_accessor **scales,
+    size_t *instance_count) {
+    cgltf_size attribute;
+
+    *translations = NULL;
+    *rotations = NULL;
+    *scales = NULL;
+    *instance_count = 0;
+    if(!node->has_mesh_gpu_instancing)
+        return 0;
+    if(!node->mesh || node->skin || node->weights_count ||
+       !node->mesh_gpu_instancing.attributes_count) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    for(attribute = 0; attribute < node->mesh->primitives_count;
+        ++attribute) {
+        if(node->mesh->primitives[attribute].targets_count) {
+            errno = ENOTSUP;
+            return -1;
+        }
+    }
+    for(attribute = 0;
+        attribute < node->mesh_gpu_instancing.attributes_count;
+        ++attribute) {
+        const cgltf_attribute *source =
+            &node->mesh_gpu_instancing.attributes[attribute];
+        const cgltf_accessor **destination;
+        cgltf_type expected_type;
+
+        if(!source->name || !source->data) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if(!strcmp(source->name, "TRANSLATION")) {
+            destination = translations;
+            expected_type = cgltf_type_vec3;
+        }
+        else if(!strcmp(source->name, "ROTATION")) {
+            destination = rotations;
+            expected_type = cgltf_type_vec4;
+        }
+        else if(!strcmp(source->name, "SCALE")) {
+            destination = scales;
+            expected_type = cgltf_type_vec3;
+        }
+        else {
+            errno = ENOTSUP;
+            return -1;
+        }
+        if(*destination || source->data->type != expected_type ||
+           source->data->component_type != cgltf_component_type_r_32f ||
+           !source->data->count) {
+            errno = EILSEQ;
+            return -1;
+        }
+        *destination = source->data;
+        if(!*instance_count)
+            *instance_count = source->data->count;
+        else if(*instance_count != source->data->count) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int gltf_instance_transform(
+    const cgltf_accessor *translations,
+    const cgltf_accessor *rotations,
+    const cgltf_accessor *scales, size_t instance, float local[16]) {
+    cgltf_node transform = { 0 };
+    size_t component;
+    double length_squared = 0.0;
+
+    transform.rotation[3] = 1.0f;
+    transform.scale[0] = 1.0f;
+    transform.scale[1] = 1.0f;
+    transform.scale[2] = 1.0f;
+    if(translations) {
+        transform.has_translation = 1;
+        if(!cgltf_accessor_read_float(
+               translations, instance, transform.translation, 3)) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    if(rotations) {
+        transform.has_rotation = 1;
+        if(!cgltf_accessor_read_float(
+               rotations, instance, transform.rotation, 4)) {
+            errno = EILSEQ;
+            return -1;
+        }
+        for(component = 0; component < 4; ++component)
+            length_squared += (double)transform.rotation[component] *
+                              transform.rotation[component];
+        if(!(length_squared > 0.0) || !isfinite(length_squared)) {
+            errno = EILSEQ;
+            return -1;
+        }
+        length_squared = 1.0 / sqrt(length_squared);
+        for(component = 0; component < 4; ++component)
+            transform.rotation[component] *= (float)length_squared;
+    }
+    if(scales) {
+        transform.has_scale = 1;
+        if(!cgltf_accessor_read_float(
+               scales, instance, transform.scale, 3)) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    for(component = 0; component < 3; ++component) {
+        if(!isfinite(transform.translation[component]) ||
+           !isfinite(transform.scale[component])) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    for(component = 0; component < 4; ++component) {
+        if(!isfinite(transform.rotation[component])) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+    cgltf_node_transform_local(&transform, local);
+    return 0;
+}
+
 static int gltf_scene_append_node(const cgltf_node *node,
                                   const cgltf_mesh *const *meshes,
-                                  size_t mesh_count,
+                                  const cgltf_skin *const *skins,
+                                  size_t model_count,
                                   uint32_t parent_index,
                                   pvr_scene_ir_t *scene,
                                   const cgltf_data *data,
@@ -1021,9 +1150,15 @@ static int gltf_scene_append_node(const cgltf_node *node,
     uint32_t node_index;
     size_t node_ordinal;
     size_t model_ordinal;
+    const cgltf_accessor *translations;
+    const cgltf_accessor *rotations;
+    const cgltf_accessor *scales;
+    size_t instance_count;
+    size_t instance;
     cgltf_size child;
 
-    if(++*visited > node_limit || scene->node_count >= UINT32_MAX) {
+    if(++*visited > node_limit ||
+       scene->node_count >= MAX_GLTF_SCENE_NODE_COUNT) {
         errno = EILSEQ;
         return -1;
     }
@@ -1032,89 +1167,135 @@ static int gltf_scene_append_node(const cgltf_node *node,
     if(gltf_array_index(data->nodes, data->nodes_count,
                         sizeof(*data->nodes), node, &node_ordinal) < 0)
         return -1;
+    if(node_to_scene[node_ordinal] != SIZE_MAX) {
+        errno = EILSEQ;
+        return -1;
+    }
     node_to_scene[node_ordinal] = node_index;
     model_ordinal = node->mesh ?
-        gltf_mesh_ordinal(meshes, mesh_count, node->mesh) : SIZE_MAX;
+        gltf_model_ordinal(meshes, skins, model_count,
+                           node->mesh, node->skin) : SIZE_MAX;
     if(node->mesh && (model_ordinal == SIZE_MAX ||
                       model_ordinal >= UINT32_MAX)) {
         errno = EILSEQ;
         return -1;
     }
-    if(pvr_scene_ir_add_node(
+    if(gltf_instance_attributes(node, &translations, &rotations, &scales,
+                                &instance_count) < 0 ||
+       pvr_scene_ir_add_node(
            scene, parent_index,
+           node->has_mesh_gpu_instancing ? PVR_CHUNK_SCENE_MODEL_NONE :
            node->mesh ? (uint32_t)model_ordinal :
                         PVR_CHUNK_SCENE_MODEL_NONE,
            local) < 0)
         return -1;
+    /* Expanded instances are ordinary identity-independent child draws. The
+       authored node remains their stable transform and animation anchor. */
+    for(instance = 0; instance < instance_count; ++instance) {
+        float instance_local[16];
+
+        if(scene->node_count >= MAX_GLTF_SCENE_NODE_COUNT) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if(gltf_instance_transform(translations, rotations, scales,
+                                   instance, instance_local) < 0 ||
+           pvr_scene_ir_add_node(scene, node_index,
+                                 (uint32_t)model_ordinal,
+                                 instance_local) < 0)
+            return -1;
+    }
     for(child = 0; child < node->children_count; ++child) {
         if(gltf_scene_append_node(
-               node->children[child], meshes, mesh_count, node_index,
+               node->children[child], meshes, skins, model_count, node_index,
                scene, data, node_to_scene, visited, node_limit) < 0)
             return -1;
     }
     return 0;
 }
 
+static int gltf_scene_append_required_node(
+    const cgltf_node *node, pvr_scene_ir_t *scene,
+    const cgltf_data *data, size_t *node_to_scene) {
+    size_t node_ordinal;
+    uint32_t parent_index = UINT32_MAX;
+    float local[16];
+
+    if(gltf_array_index(data->nodes, data->nodes_count,
+                        sizeof(*data->nodes), node, &node_ordinal) < 0)
+        return -1;
+    if(node_to_scene[node_ordinal] != SIZE_MAX)
+        return 0;
+    if(node->parent) {
+        size_t parent_ordinal;
+
+        if(gltf_scene_append_required_node(
+               node->parent, scene, data, node_to_scene) < 0 ||
+           gltf_array_index(data->nodes, data->nodes_count,
+                            sizeof(*data->nodes), node->parent,
+                            &parent_ordinal) < 0)
+            return -1;
+        if(node_to_scene[parent_ordinal] == SIZE_MAX ||
+           node_to_scene[parent_ordinal] >= UINT32_MAX) {
+            errno = EILSEQ;
+            return -1;
+        }
+        parent_index = (uint32_t)node_to_scene[parent_ordinal];
+    }
+    if(scene->node_count >= MAX_GLTF_SCENE_NODE_COUNT) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    cgltf_node_transform_local(node, local);
+    node_to_scene[node_ordinal] = scene->node_count;
+    /* A node pulled in solely by a skin is a pose anchor, never an implicit
+       draw from an unselected scene. */
+    return pvr_scene_ir_add_node(scene, parent_index,
+                                 PVR_CHUNK_SCENE_MODEL_NONE, local);
+}
+
 static int gltf_build_scene(const cgltf_data *data,
                             const cgltf_scene *source_scene,
                             const cgltf_mesh **meshes,
                             const cgltf_skin **skins,
-                            size_t *mesh_count,
+                            size_t *model_count,
                             pvr_scene_ir_t *scene,
                             size_t *node_to_scene) {
     size_t visited = 0;
+    size_t model;
     cgltf_size root;
 
-    *mesh_count = 0;
+    *model_count = 0;
     for(root = 0; root < data->nodes_count; ++root)
         node_to_scene[root] = SIZE_MAX;
     for(root = 0; root < source_scene->nodes_count; ++root) {
         if(gltf_scene_collect_meshes(
-               source_scene->nodes[root], meshes, skins, mesh_count,
-               data->meshes_count, &visited, data->nodes_count) < 0)
+               source_scene->nodes[root], meshes, skins, model_count,
+               data->nodes_count, &visited, data->nodes_count) < 0)
             return -1;
     }
-    if(!*mesh_count) {
+    if(!*model_count) {
         errno = EILSEQ;
         return -1;
     }
     visited = 0;
     for(root = 0; root < source_scene->nodes_count; ++root) {
         if(gltf_scene_append_node(
-               source_scene->nodes[root], meshes, *mesh_count,
+               source_scene->nodes[root], meshes, skins, *model_count,
                UINT32_MAX, scene, data, node_to_scene, &visited,
                data->nodes_count) < 0)
             return -1;
     }
-    if(visited != data->nodes_count) {
-        /* PCM2 intentionally serializes the selected scene, not detached
-           authoring nodes. Detached nodes may still be referenced by a skin;
-           that broader case is rejected when skin bindings are imported. */
-        size_t node;
+    for(model = 0; model < *model_count; ++model) {
+        const cgltf_skin *skin = skins[model];
+        cgltf_size joint;
 
-        for(node = 0; node < data->nodes_count; ++node) {
-            if(data->nodes[node].skin ||
-               gltf_mesh_ordinal(meshes, *mesh_count,
-                                 data->nodes[node].mesh) != SIZE_MAX) {
-                const cgltf_node *cursor = &data->nodes[node];
-                int belongs = 0;
-
-                while(cursor) {
-                    for(root = 0; root < source_scene->nodes_count; ++root) {
-                        if(cursor == source_scene->nodes[root]) {
-                            belongs = 1;
-                            break;
-                        }
-                    }
-                    if(belongs)
-                        break;
-                    cursor = cursor->parent;
-                }
-                if(!belongs) {
-                    errno = ENOTSUP;
-                    return -1;
-                }
-            }
+        if(!skin)
+            continue;
+        for(joint = 0; joint < skin->joints_count; ++joint) {
+            if(gltf_scene_append_required_node(
+                   skin->joints[joint], scene, data, node_to_scene) < 0)
+                return -1;
         }
     }
     return 0;
@@ -1422,7 +1603,9 @@ static int gltf_required_extensions_supported(const cgltf_data *data) {
     for(extension = 0; extension < data->extensions_required_count;
         ++extension) {
         if(strcmp(data->extensions_required[extension],
-                  "KHR_texture_transform")) {
+                  "KHR_texture_transform") &&
+           strcmp(data->extensions_required[extension],
+                  "EXT_mesh_gpu_instancing")) {
             errno = ENOTSUP;
             return -1;
         }
@@ -2250,6 +2433,17 @@ static int gltf_animation_fallbacks(
     const pvr_scene_ir_t *scene, gltf_animation_metadata_t *metadata) {
     size_t node;
 
+    /* Canonical-only nodes, including expanded draw instances, do not have a
+       source-node entry. Seed every fallback from the serialized hierarchy
+       before source nodes replace those values with their authored TRS. */
+    for(node = 0; node < scene->node_count; ++node) {
+        if(gltf_matrix_fallback(scene->nodes[node].local_transform,
+                                &metadata->animation_transforms[node]
+                                     .fallback) < 0)
+            return -1;
+        metadata->animation_visibility[node].fallback = true;
+    }
+
     for(node = 0; node < data->nodes_count; ++node) {
         const cgltf_node *source = &data->nodes[node];
         anim_transform_tracks_t *transform;
@@ -2940,7 +3134,7 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
     const cgltf_mesh **meshes = NULL;
     const cgltf_skin **skins = NULL;
     size_t *node_to_scene = NULL;
-    size_t mesh_count = 0;
+    size_t model_count = 0;
     cgltf_result result;
     size_t model;
     cgltf_size primitive;
@@ -2965,31 +3159,32 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
     }
     if(gltf_required_extensions_supported(data) < 0)
         goto fail;
-    if(!data->scenes_count || data->nodes_count > 65536u) {
+    if(!data->scenes_count || !data->nodes_count ||
+       data->nodes_count > MAX_GLTF_SCENE_NODE_COUNT) {
         errno = ENOTSUP;
         goto fail;
     }
     node_to_scene = malloc(data->nodes_count * sizeof(*node_to_scene));
-    meshes = calloc(data->meshes_count, sizeof(*meshes));
-    skins = calloc(data->meshes_count, sizeof(*skins));
+    meshes = calloc(data->nodes_count, sizeof(*meshes));
+    skins = calloc(data->nodes_count, sizeof(*skins));
     if(!node_to_scene || !meshes || !skins) {
         errno = ENOMEM;
         goto fail;
     }
     source_scene = data->scene ? data->scene : &data->scenes[0];
-    if(gltf_build_scene(data, source_scene, meshes, skins, &mesh_count,
+    if(gltf_build_scene(data, source_scene, meshes, skins, &model_count,
                         scene, node_to_scene) < 0 ||
        gltf_add_materials(data, library) < 0)
         goto fail;
-    models->models = calloc(mesh_count, sizeof(*models->models));
-    metadata->models = calloc(mesh_count, sizeof(*metadata->models));
+    models->models = calloc(model_count, sizeof(*models->models));
+    metadata->models = calloc(model_count, sizeof(*metadata->models));
     if(!models->models || !metadata->models) {
         errno = ENOMEM;
         goto fail;
     }
-    models->count = mesh_count;
-    metadata->model_count = mesh_count;
-    for(model = 0; model < mesh_count; ++model) {
+    models->count = model_count;
+    metadata->model_count = model_count;
+    for(model = 0; model < model_count; ++model) {
         const cgltf_mesh *mesh = meshes[model];
 
         /* A model uses one vertex-record family. Scan first so an uncolored
@@ -5397,6 +5592,8 @@ static int build_multi_asset_blob(const output_streams_t *streams,
     uint8_t *blob = NULL;
     size_t section_capacity;
     size_t section_count = 0;
+    size_t vertex_ordinal = 0;
+    size_t polygon_ordinal = 0;
     size_t resource_ordinal = 0;
     size_t cooked_ordinal = 0;
     size_t skin_ordinal = 0;
@@ -5464,29 +5661,60 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         size_t morph_bytes = 0;
         const gltf_model_metadata_t *model_metadata = &metadata[model];
         pvr_chunk_model_table_record_t *record = &records[model];
+        size_t shared;
 
-        /* Interleaving each pair with its optional manifest keeps file data
-           sequential; model pairing remains ordinal-by-section-type. */
-        if(serialize_words(
-               streams[model].vertex_words,
-               streams[model].vertex_word_count, sizeof(uint32_t),
-               &vertex, &vertex_bytes) < 0 ||
-           pcm2_host_section_add(
-               sections, section_capacity, &section_count,
-               PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM, vertex,
-               vertex_bytes, sizeof(uint32_t), lz4_vertices) < 0)
-            goto fail;
-        vertex = NULL;
-        if(serialize_words(
-               streams[model].polygon_words,
-               streams[model].polygon_word_count, sizeof(uint16_t),
-               &polygon, &polygon_bytes) < 0 ||
-           pcm2_host_section_add(
-               sections, section_capacity, &section_count,
-               PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM, polygon,
-               polygon_bytes, sizeof(uint16_t), 0) < 0)
-            goto fail;
-        polygon = NULL;
+        memset(record, 0, sizeof(*record));
+        /* Model specializations share immutable geometry by type-relative
+           PCM2 ordinal. Skin, skeleton, morph and resource bindings remain
+           independently selectable by the model table. */
+        for(shared = 0; shared < model; ++shared) {
+            if(streams[shared].vertex_word_count ==
+                   streams[model].vertex_word_count &&
+               !memcmp(streams[shared].vertex_words,
+                       streams[model].vertex_words,
+                       streams[model].vertex_word_count *
+                           sizeof(*streams[model].vertex_words)))
+                break;
+        }
+        if(shared < model)
+            record->vertex_ordinal = records[shared].vertex_ordinal;
+        else {
+            if(serialize_words(
+                   streams[model].vertex_words,
+                   streams[model].vertex_word_count, sizeof(uint32_t),
+                   &vertex, &vertex_bytes) < 0 ||
+               pcm2_host_section_add(
+                   sections, section_capacity, &section_count,
+                   PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM, vertex,
+                   vertex_bytes, sizeof(uint32_t), lz4_vertices) < 0)
+                goto fail;
+            vertex = NULL;
+            record->vertex_ordinal = vertex_ordinal++;
+        }
+        for(shared = 0; shared < model; ++shared) {
+            if(streams[shared].polygon_word_count ==
+                   streams[model].polygon_word_count &&
+               !memcmp(streams[shared].polygon_words,
+                       streams[model].polygon_words,
+                       streams[model].polygon_word_count *
+                           sizeof(*streams[model].polygon_words)))
+                break;
+        }
+        if(shared < model)
+            record->polygon_ordinal = records[shared].polygon_ordinal;
+        else {
+            if(serialize_words(
+                   streams[model].polygon_words,
+                   streams[model].polygon_word_count, sizeof(uint16_t),
+                   &polygon, &polygon_bytes) < 0 ||
+               pcm2_host_section_add(
+                   sections, section_capacity, &section_count,
+                   PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM, polygon,
+                   polygon_bytes, sizeof(uint16_t), 0) < 0)
+                goto fail;
+            polygon = NULL;
+            record->polygon_ordinal = polygon_ordinal++;
+        }
         if(pvr_chunk_model_open(&source_model, &source_view) < 0 ||
            serialize_resource_manifest(
                &source_view, &resource, &resource_bytes) < 0)
@@ -5508,9 +5736,6 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                &model_metadata->shapes, &morph, &morph_bytes) < 0)
             goto fail;
 
-        memset(record, 0, sizeof(*record));
-        record->vertex_ordinal = model;
-        record->polygon_ordinal = model;
         record->resource_ordinal = resource ? resource_ordinal++ :
             PVR_CHUNK_MODEL_SECTION_NONE;
         record->volume_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
