@@ -34,9 +34,6 @@ __BEGIN_DECLS
 /** \brief Little-endian bytes `PMW1` at the start of the section. */
 #define PVR_CHUNK_MORPH_ANIMATION_MAGIC UINT32_C(0x31574d50)
 
-/** \brief Original value-only morph-animation version. */
-#define PVR_CHUNK_MORPH_ANIMATION_VERSION_1 1u
-
 /** \brief Current serialized morph-animation version. */
 #define PVR_CHUNK_MORPH_ANIMATION_VERSION 2u
 
@@ -51,9 +48,6 @@ __BEGIN_DECLS
 
 /** \brief Fixed serialized scalar-track size. */
 #define PVR_CHUNK_MORPH_ANIMATION_TRACK_BYTES 16u
-
-/** \brief Legacy serialized scalar-key size. */
-#define PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1 8u
 
 /** \brief Current serialized scalar-key size. */
 #define PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES 16u

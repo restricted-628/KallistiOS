@@ -293,16 +293,12 @@ static void test_rejections(void) {
     assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
     assert(pvr_scene_ir_serialize_hierarchy(&scene, &bytes, &size) == 0);
 
-    write_le16(bytes + 4, PVR_CHUNK_SCENE_HIERARCHY_VERSION_1);
+    /* Obsolete development encodings must fail rather than be guessed. */
+    write_le16(bytes + 4, 1u);
     refresh_checksums(bytes, size);
-    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == 0);
-    assert(view.version == PVR_CHUNK_SCENE_HIERARCHY_VERSION_1);
-    write_le32(bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES + 8,
-               PVR_CHUNK_NODE_HIDDEN);
-    refresh_checksums(bytes, size);
+    errno = 0;
     assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == -1);
     assert(errno == EILSEQ);
-    write_le32(bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES + 8, 0);
     write_le16(bytes + 4, PVR_CHUNK_SCENE_HIERARCHY_VERSION);
     refresh_checksums(bytes, size);
 

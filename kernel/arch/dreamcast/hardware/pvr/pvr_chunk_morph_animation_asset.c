@@ -107,15 +107,13 @@ static void decode_track(
     track->key_count = read_le32(record + TRACK_KEY_COUNT_OFFSET);
 }
 
-static void decode_key(const uint8_t *record, uint16_t version,
+static void decode_key(const uint8_t *record,
                        anim_scalar_hermite_key_t *key) {
     memset(key, 0, sizeof(*key));
     key->time = read_float(record + KEY_TIME_OFFSET);
     key->value = read_float(record + KEY_VALUE_OFFSET);
-    if(version >= PVR_CHUNK_MORPH_ANIMATION_VERSION) {
-        key->in_tangent = read_float(record + KEY_IN_TANGENT_OFFSET);
-        key->out_tangent = read_float(record + KEY_OUT_TANGENT_OFFSET);
-    }
+    key->in_tangent = read_float(record + KEY_IN_TANGENT_OFFSET);
+    key->out_tangent = read_float(record + KEY_OUT_TANGENT_OFFSET);
 }
 
 int pvr_chunk_morph_animation_section_open(
@@ -156,15 +154,11 @@ int pvr_chunk_morph_animation_section_open(
         return -1;
     }
     version = read_le16(bytes + 4);
-    if(version != PVR_CHUNK_MORPH_ANIMATION_VERSION_1 &&
-       version != PVR_CHUNK_MORPH_ANIMATION_VERSION) {
+    if(version != PVR_CHUNK_MORPH_ANIMATION_VERSION) {
         errno = EILSEQ;
         return -1;
     }
-    serialized_key_bytes =
-        version == PVR_CHUNK_MORPH_ANIMATION_VERSION_1 ?
-            PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1 :
-            PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES;
+    serialized_key_bytes = PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES;
     for(index = HEADER_RESERVED_OFFSET;
         index < PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES; ++index) {
         if(bytes[index]) {
@@ -275,9 +269,7 @@ int pvr_chunk_morph_animation_section_open(
            read_le32(record + TRACK_RESERVED1_OFFSET) ||
            (track.interpolation != ANIM_INTERPOLATION_STEP &&
             track.interpolation != ANIM_INTERPOLATION_LINEAR &&
-            (version < PVR_CHUNK_MORPH_ANIMATION_VERSION ||
-             track.interpolation !=
-                 ANIM_INTERPOLATION_CUBIC_HERMITE)) ||
+            track.interpolation != ANIM_INTERPOLATION_CUBIC_HERMITE) ||
            !track.key_count || track.first_key != next_key ||
            track.key_count > parsed.key_count - next_key) {
             errno = EILSEQ;
@@ -288,7 +280,6 @@ int pvr_chunk_morph_animation_section_open(
 
             decode_key((const uint8_t *)parsed.keys + (next_key + key) *
                            parsed.key_bytes,
-                       parsed.version,
                        &decoded);
             if(!isfinite(decoded.time) || !isfinite(decoded.value) ||
                (track.interpolation ==
@@ -406,7 +397,6 @@ int pvr_chunk_morph_animation_section_key_get(
     }
     decode_key((const uint8_t *)checked.keys + index *
                    checked.key_bytes,
-               checked.version,
                key);
     return 0;
 }
@@ -536,7 +526,6 @@ int pvr_chunk_morph_animation_section_materialize(
     for(index = 0; index < checked.key_count; ++index)
         decode_key((const uint8_t *)checked.keys + index *
                        checked.key_bytes,
-                   checked.version,
                    keys + index);
     for(index = 0; index < checked.track_count; ++index) {
         pvr_chunk_morph_animation_section_track_t track;

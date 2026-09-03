@@ -33,9 +33,6 @@ __BEGIN_DECLS
 /** \brief Little-endian bytes `PMT1` at the start of a model table. */
 #define PVR_CHUNK_MODEL_TABLE_MAGIC UINT32_C(0x31544d50)
 
-/** \brief Original equal-ordinal serialized model-table version. */
-#define PVR_CHUNK_MODEL_TABLE_VERSION_1 1u
-
 /** \brief Current independently paired serialized model-table version. */
 #define PVR_CHUNK_MODEL_TABLE_VERSION 2u
 
@@ -77,9 +74,8 @@ typedef struct pvr_chunk_model_table_view {
 
     Header and payload CRCs, exact sizes, reserved fields, required stream
     ordinals, and finite nonnegative bounds are verified before \p view
-    changes. Version one additionally requires equal record/stream ordinals.
-    All section ordinals are checked against a concrete PCM2 directory by
-    pvr_chunk_model_table_validate_asset().
+    changes. All section ordinals are checked against a concrete PCM2 directory
+    by pvr_chunk_model_table_validate_asset().
 */
 int pvr_chunk_model_table_open(
     const void *data, size_t size, pvr_chunk_model_table_view_t *view);
@@ -91,10 +87,8 @@ int pvr_chunk_model_table_record_get(
 
 /** \brief Validate every record and optional ordinal against one asset.
 
-    Version one requires the table count to equal the asset's legacy paired
-    model count. Version two resolves each required vertex/polygon ordinal
-    independently. Every optional non-NONE ordinal must resolve to a section
-    of the corresponding type.
+    Required vertex and polygon ordinals resolve independently. Every optional
+    non-NONE ordinal must resolve to a section of the corresponding type.
 */
 int pvr_chunk_model_table_validate_asset(
     const pvr_chunk_model_table_view_t *view,

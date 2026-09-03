@@ -44,7 +44,6 @@ enum {
     KEY_VALUE_OFFSET = 4,
     KEY_IN_TANGENT_OFFSET = 20,
     KEY_OUT_TANGENT_OFFSET = 36,
-    KEY_RESERVED_OFFSET_V2 = 20,
     KEY_RESERVED_OFFSET = 52
 };
 
@@ -150,7 +149,7 @@ static int transform_fallback_valid(const anim_transform_t *fallback) {
            isfinite(fallback->scale.z);
 }
 
-static int decode_track(const uint8_t *record, uint16_t version,
+static int decode_track(const uint8_t *record,
                         pvr_chunk_animation_section_track_t *track) {
     uint16_t kind = read_le16(record + TRACK_KIND_OFFSET);
     uint16_t interpolation = read_le16(
@@ -158,8 +157,6 @@ static int decode_track(const uint8_t *record, uint16_t version,
 
     if(kind > ANIM_VALUE_BOOLEAN ||
        interpolation > ANIM_INTERPOLATION_CUBIC_HERMITE ||
-       (interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE &&
-        version < PVR_CHUNK_ANIMATION_SECTION_VERSION) ||
        (kind == ANIM_VALUE_BOOLEAN &&
         interpolation != ANIM_INTERPOLATION_STEP) ||
        ((kind == ANIM_VALUE_QUATERNION || kind == ANIM_VALUE_BOOLEAN) &&
@@ -177,15 +174,10 @@ static int decode_track(const uint8_t *record, uint16_t version,
 
 static int decode_key(const uint8_t *record, anim_value_kind_t kind,
                       anim_interpolation_t interpolation,
-                      uint16_t version,
                       pvr_chunk_animation_key_t *key) {
     float time = read_float(record + KEY_TIME_OFFSET);
-    size_t reserved_offset = version >=
-                                 PVR_CHUNK_ANIMATION_SECTION_VERSION ?
-                                 KEY_RESERVED_OFFSET :
-                                 KEY_RESERVED_OFFSET_V2;
 
-    if(!isfinite(time) || read_le32(record + reserved_offset)) {
+    if(!isfinite(time) || read_le32(record + KEY_RESERVED_OFFSET)) {
         errno = EILSEQ;
         return -1;
     }
@@ -299,7 +291,7 @@ static int decode_key(const uint8_t *record, anim_value_kind_t kind,
             }
         }
     }
-    else if(version >= PVR_CHUNK_ANIMATION_SECTION_VERSION) {
+    else {
         size_t offset;
 
         for(offset = KEY_IN_TANGENT_OFFSET;
@@ -315,7 +307,6 @@ static int decode_key(const uint8_t *record, anim_value_kind_t kind,
 
 static int decode_transform(
     const uint8_t *record,
-    uint16_t version,
     pvr_chunk_animation_section_transform_t *transform) {
     transform->translation_track = read_le32(
         record + TRANSFORM_TRANSLATION_OFFSET);
@@ -350,9 +341,7 @@ static int decode_transform(
         record + TRANSFORM_FALLBACK_VISIBLE_OFFSET);
     transform->rotation_mode = (anim_rotation_mode_t)read_le32(
         record + TRANSFORM_ROTATION_MODE_OFFSET);
-    if((version == PVR_CHUNK_ANIMATION_SECTION_VERSION_1 &&
-        transform->rotation_mode != ANIM_ROTATION_QUATERNION) ||
-       transform->rotation_mode < ANIM_ROTATION_QUATERNION ||
+    if(transform->rotation_mode < ANIM_ROTATION_QUATERNION ||
        transform->rotation_mode > ANIM_ROTATION_EULER_ZXY ||
        transform->fallback_visible > 1u ||
        !transform_fallback_valid(&transform->fallback)) {
@@ -372,7 +361,6 @@ static int track_reference_valid(
     if(ordinal >= view->track_count ||
        decode_track((const uint8_t *)view->tracks + ordinal *
                         PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
-                    view->version,
                     &track) < 0 || track.kind != expected)
         return 0;
     if(expected == ANIM_VALUE_BOOLEAN &&
@@ -419,17 +407,12 @@ int pvr_chunk_animation_section_open(
     }
 
     version = read_le16(bytes + 4);
-    if(version != PVR_CHUNK_ANIMATION_SECTION_VERSION_1 &&
-       version != PVR_CHUNK_ANIMATION_SECTION_VERSION_2 &&
-       version != PVR_CHUNK_ANIMATION_SECTION_VERSION) {
+    if(version != PVR_CHUNK_ANIMATION_SECTION_VERSION) {
         errno = EILSEQ;
         return -1;
     }
     serialized_key_bytes = read_le16(bytes + 28);
-    if(serialized_key_bytes !=
-           (version >= PVR_CHUNK_ANIMATION_SECTION_VERSION ?
-                PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES :
-                PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2)) {
+    if(serialized_key_bytes != PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES) {
         errno = EILSEQ;
         return -1;
     }
@@ -499,7 +482,6 @@ int pvr_chunk_animation_section_open(
 
         if(decode_track((const uint8_t *)parsed.tracks + index *
                             PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
-                        parsed.version,
                         &track) < 0 || !track.key_count ||
            track.first_key != next_key ||
            track.key_count > parsed.key_count - next_key) {
@@ -513,7 +495,7 @@ int pvr_chunk_animation_section_open(
                               (next_key + key_index) *
                                   parsed.key_bytes,
                           track.kind, track.interpolation,
-                          parsed.version, &key) < 0 ||
+                          &key) < 0 ||
                (key_index && key.time <= previous_time)) {
                 errno = EILSEQ;
                 return -1;
@@ -533,7 +515,7 @@ int pvr_chunk_animation_section_open(
 
         if(decode_transform((const uint8_t *)parsed.transforms + index *
                                 PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES,
-                            parsed.version, &transform) < 0)
+                            &transform) < 0)
             return -1;
         rotation_kind =
             transform.rotation_mode == ANIM_ROTATION_QUATERNION ?
@@ -574,7 +556,7 @@ int pvr_chunk_animation_section_transform_get(
     return decode_transform(
         (const uint8_t *)checked.transforms + index *
             PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES,
-        checked.version, transform);
+        transform);
 }
 
 int pvr_chunk_animation_section_track_get(
@@ -595,7 +577,6 @@ int pvr_chunk_animation_section_track_get(
     }
     return decode_track((const uint8_t *)checked.tracks + index *
                             PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
-                        checked.version,
                         track);
 }
 
@@ -681,13 +662,12 @@ int pvr_chunk_animation_section_materialize(
 
         decode_track((const uint8_t *)checked.tracks + index *
                          PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
-                     checked.version,
                      &track);
         for(key_index = 0; key_index < track.key_count; ++key_index)
             decode_key((const uint8_t *)checked.keys +
                            (track.first_key + key_index) *
                                checked.key_bytes,
-                       track.kind, track.interpolation, checked.version,
+                       track.kind, track.interpolation,
                        keys + track.first_key + key_index);
         tracks[index].track.kind = track.kind;
         tracks[index].track.interpolation = track.interpolation;
@@ -704,7 +684,7 @@ int pvr_chunk_animation_section_materialize(
 
         decode_transform((const uint8_t *)checked.transforms + index *
                              PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES,
-                         checked.version, &transform);
+                         &transform);
         transforms[index].translation =
             transform.translation_track == PVR_CHUNK_ANIMATION_TRACK_NONE ?
                 NULL : tracks + transform.translation_track;

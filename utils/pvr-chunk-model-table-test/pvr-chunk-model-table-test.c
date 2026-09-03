@@ -354,13 +354,12 @@ static void test_model_table_rejection(void) {
     assert(pvr_chunk_model_table_validate_asset(
         &table_view, &asset_view) == 0);
 
-    write_le16(table + 4, PVR_CHUNK_MODEL_TABLE_VERSION_1);
+    /* Obsolete development encodings must fail rather than be guessed. */
+    write_le16(table + 4, 1u);
     refresh_table_checksums(table, table_bytes);
-    assert(pvr_chunk_model_table_open(
-        table, table_bytes, &table_view) == 0);
     errno = 0;
-    assert(pvr_chunk_model_table_validate_asset(
-        &table_view, &asset_view) == -1);
+    assert(pvr_chunk_model_table_open(
+        table, table_bytes, &table_view) == -1);
     assert(errno == EILSEQ);
     free(table);
 }
@@ -389,14 +388,6 @@ static void test_corrupt_model_table(void) {
     assert(errno == EILSEQ);
 
     write_le32(table + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES + 36, 0);
-    write_le16(table + 4, PVR_CHUNK_MODEL_TABLE_VERSION_1);
-    write_le32(table + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES, 1);
-    refresh_table_checksums(table, table_bytes);
-    errno = 0;
-    assert(pvr_chunk_model_table_open(table, table_bytes, &view) == -1);
-    assert(errno == EILSEQ);
-
-    write_le32(table + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES, 0);
     write_le32(table + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES + 40,
                UINT32_C(0x7fc00000));
     refresh_table_checksums(table, table_bytes);

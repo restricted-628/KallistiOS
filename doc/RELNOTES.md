@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Froze the pre-release Compact asset format epoch. PAT1 version 3, PMW1
+  version 2, PMT1 version 2, and PCH1 version 2 are now the only admitted
+  encodings for their respective magics; obsolete development encodings are
+  rejected instead of burdening the first public release with legacy readers.
+  PCM1 and PCM2 remain intentionally distinct supported container profiles.
+
 * Kept shared PCM2 geometry shared after materialization. The coherent scene
   workspace now budgets every uniquely referenced compressed or unaligned
   vertex and polygon stream once, decodes it once, and points all selecting
@@ -55,7 +61,7 @@ lifecycle and naming conventions.
   several canonical draw-order segments can share one immutable vertex
   stream. New checked pair-workspace and pair-load operations retain the
   allocation-free decode, CRC, bounds, and admission contracts; the original
-  equal-ordinal APIs and version-one model tables remain readable.
+  equal-ordinal APIs remain available as ordinal-zero wrappers.
 
 * Added coherent allocation-free PCM2 scene loading. A checked scene-asset
   view joins the unique model table and hierarchy, validates their
@@ -81,9 +87,9 @@ lifecycle and naming conventions.
   pointer-free Compact asset pipeline. Scalar, vector, and quaternion tracks
   preserve independent incoming and outgoing time derivatives; quaternion
   results are normalized after component-wise Hermite evaluation. PAT1 v3 and
-  PMW1 v2 retain those tangents while continuing to read their value-only
-  predecessors. The glTF/GLB importer now preserves CUBICSPLINE TRS and morph
-  channels rather than rejecting or relabeling them as Catmull-Rom.
+  PMW1 v2 retain those tangents as their canonical key representation. The
+  glTF/GLB importer now preserves CUBICSPLINE TRS and morph channels rather
+  than rejecting or relabeling them as Catmull-Rom.
 
 * Added pointer-free PAC1 animation catalogs for PCM2. Logical clips map by
   source order and optional unique name to independent PAT1 transform and PMW1
@@ -123,12 +129,11 @@ lifecycle and naming conventions.
 
 * Added explicit XYZ and ZXY Euler rotation-track modes beside the preferred
   quaternion path. Euler keys retain their authored representation through
-  PAT1 version 2, interpolate over shortest angular arcs, and convert to the
-  established normalized quaternion pipeline only after sampling. PAT1
-  version 1 remains readable as quaternion-only data.
+  PAT1, interpolate over shortest angular arcs, and convert to the established
+  normalized quaternion pipeline only after sampling.
 
-* Extended pointer-free compact hierarchies with backward-readable PCH1 v2 node
-  policy. Caller-owned nodes now preserve translation/rotation/scale
+* Extended pointer-free compact hierarchies with PCH1 v2 node policy.
+  Caller-owned nodes now preserve translation/rotation/scale
   suppression, hidden evaluation, and descendant pruning. A new pose
   traversal applies component suppression before matrix construction and uses
   the established animation and hierarchy paths without allocation or matrix
@@ -190,10 +195,10 @@ lifecycle and naming conventions.
   transform bindings, channel types, gapless finite keys, canonical values,
   fallbacks, and checksums, then materialize caller-owned keys, track views,
   transform/visibility bindings, rotation modes, and an existing animation
-  clip. Version 2 retains quaternion, XYZ Euler, or ZXY Euler rotation tracks;
-  version 1 remains readable as quaternion-only data. The host pipeline emits
-  and reopens an explicit root-translation fixture without introducing a
-  container clock or a second interpolation engine.
+  clip. PAT1 version 3 retains quaternion, XYZ Euler, or ZXY Euler rotation
+  tracks and explicit cubic Hermite tangents. The host pipeline emits and
+  reopens an explicit root-translation fixture without introducing a container
+  clock or a second interpolation engine.
 * Added a portable PCM2 sparse morph-target section. Checked target APIs
   validate pointer-free target spans and finite indexed deltas, expose
   individual records, and materialize directly into the existing compact

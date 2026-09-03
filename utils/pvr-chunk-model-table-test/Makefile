@@ -30,3 +30,4 @@ test: $(TARGET)
 
 clean:
 	rm -f $(TARGET)
+	rm -rf $(TARGET).dSYM

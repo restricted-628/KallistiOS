@@ -95,16 +95,12 @@ static void decode_record(const uint8_t *bytes,
     record->radius = read_float(bytes + RECORD_RADIUS_OFFSET);
 }
 
-static int record_is_valid(const uint8_t *bytes, size_t index,
-                           uint16_t version) {
+static int record_is_valid(const uint8_t *bytes) {
     pvr_chunk_model_table_record_t record;
 
     decode_record(bytes, &record);
     return record.vertex_ordinal != PVR_CHUNK_MODEL_SECTION_NONE &&
            record.polygon_ordinal != PVR_CHUNK_MODEL_SECTION_NONE &&
-           (version != PVR_CHUNK_MODEL_TABLE_VERSION_1 ||
-            (record.vertex_ordinal == index &&
-             record.polygon_ordinal == index)) &&
            !read_le32(bytes + RECORD_FLAGS_OFFSET) &&
            bytes_are_zero(bytes + RECORD_RESERVED_OFFSET,
                           RECORD_RESERVED_BYTES) &&
@@ -142,8 +138,7 @@ int pvr_chunk_model_table_open(
     }
 
     version = read_le16(bytes + 4);
-    if(version != PVR_CHUNK_MODEL_TABLE_VERSION_1 &&
-       version != PVR_CHUNK_MODEL_TABLE_VERSION) {
+    if(version != PVR_CHUNK_MODEL_TABLE_VERSION) {
         errno = EILSEQ;
         return -1;
     }
@@ -166,10 +161,8 @@ int pvr_chunk_model_table_open(
         return -1;
     }
     for(index = 0; index < model_count; ++index) {
-        if(!record_is_valid(
-               bytes + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES +
-                   index * record_stride,
-               index, version)) {
+        if(!record_is_valid(bytes + PVR_CHUNK_MODEL_TABLE_HEADER_BYTES +
+                            index * record_stride)) {
             errno = EILSEQ;
             return -1;
         }
@@ -240,11 +233,6 @@ int pvr_chunk_model_table_validate_asset(
        pvr_chunk_asset_open(
            asset->data, asset->size, &checked_asset) < 0)
         return -1;
-    if(checked_table.version == PVR_CHUNK_MODEL_TABLE_VERSION_1 &&
-       checked_table.model_count != checked_asset.model_count) {
-        errno = EILSEQ;
-        return -1;
-    }
     for(index = 0; index < checked_table.model_count; ++index) {
         pvr_chunk_model_table_record_t record;
 

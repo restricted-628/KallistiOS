@@ -54,11 +54,6 @@ static void store_le16(uint8_t *bytes, uint16_t value) {
     bytes[1] = (uint8_t)(value >> 8);
 }
 
-static uint32_t load_le32(const uint8_t *bytes) {
-    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
-           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
-}
-
 static void store_float(uint8_t *bytes, float value) {
     uint32_t word;
 
@@ -73,80 +68,11 @@ static void refresh_crc(uint8_t *bytes, size_t size) {
     store_le32(bytes + 60, crc32_bytes(bytes, 60));
 }
 
-static uint8_t *animation_legacy_copy(const uint8_t *source,
-                                      size_t source_size,
-                                      size_t *legacy_size) {
-    uint32_t transform_bytes = load_le32(source + 32);
-    uint32_t track_bytes = load_le32(source + 36);
-    uint32_t key_count = load_le32(source + 20);
-    size_t prefix = PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES +
-                    transform_bytes + track_bytes;
-    uint8_t *copy;
-    size_t key;
-
-    assert(source_size == prefix +
-           (size_t)key_count * PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES);
-    *legacy_size = prefix +
-        (size_t)key_count * PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2;
-    copy = calloc(1, *legacy_size);
-    assert(copy);
-    memcpy(copy, source, prefix);
-    for(key = 0; key < key_count; ++key) {
-        memcpy(copy + prefix + key *
-                   PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2,
-               source + prefix + key *
-                   PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES,
-               20);
-    }
-    store_le32(copy + 8, (uint32_t)*legacy_size);
-    store_le16(copy + 28, PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2);
-    store_le32(copy + 40,
-               key_count * PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2);
-    refresh_crc(copy, *legacy_size);
-    return copy;
-}
-
 static void refresh_morph_crc(uint8_t *bytes, size_t size) {
     store_le32(bytes + 36, crc32_bytes(
         bytes + PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES,
         size - PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES));
     store_le32(bytes + 40, crc32_bytes(bytes, 40));
-}
-
-static uint8_t *morph_animation_legacy_copy(
-    const uint8_t *source, size_t source_size, size_t *legacy_size) {
-    uint32_t binding_count = load_le32(source + 12);
-    uint32_t channel_count = load_le32(source + 16);
-    uint32_t track_count = load_le32(source + 20);
-    uint32_t key_count = load_le32(source + 24);
-    size_t prefix = PVR_CHUNK_MORPH_ANIMATION_HEADER_BYTES +
-                    (size_t)binding_count *
-                        PVR_CHUNK_MORPH_ANIMATION_BINDING_BYTES +
-                    (size_t)channel_count *
-                        PVR_CHUNK_MORPH_ANIMATION_CHANNEL_BYTES +
-                    (size_t)track_count *
-                        PVR_CHUNK_MORPH_ANIMATION_TRACK_BYTES;
-    uint8_t *copy;
-    size_t key;
-
-    assert(source_size == prefix +
-           (size_t)key_count * PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES);
-    *legacy_size = prefix +
-        (size_t)key_count * PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1;
-    copy = calloc(1, *legacy_size);
-    assert(copy);
-    memcpy(copy, source, prefix);
-    for(key = 0; key < key_count; ++key) {
-        memcpy(copy + prefix + key *
-                   PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1,
-               source + prefix + key *
-                   PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES,
-               PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1);
-    }
-    store_le16(copy + 4, PVR_CHUNK_MORPH_ANIMATION_VERSION_1);
-    store_le32(copy + 8, (uint32_t)*legacy_size);
-    refresh_morph_crc(copy, *legacy_size);
-    return copy;
 }
 
 static void refresh_catalog_crc(uint8_t *bytes, size_t size) {
@@ -444,21 +370,16 @@ static void test_morph_animation(void) {
                                     &sampled, NULL) == 0);
     assert(close_enough(sampled, 0.5f));
 
-    {
-        size_t legacy_bytes;
-        uint8_t *legacy = morph_animation_legacy_copy(
-            serialized, serialized_bytes, &legacy_bytes);
-
-        assert(pvr_chunk_morph_animation_section_open(
-            legacy, legacy_bytes, &section) == 0);
-        assert(section.version == PVR_CHUNK_MORPH_ANIMATION_VERSION_1 &&
-               section.key_bytes ==
-                   PVR_CHUNK_MORPH_ANIMATION_KEY_BYTES_V1);
-        free(legacy);
-    }
-
     corrupt = malloc(serialized_bytes);
     assert(corrupt);
+    memcpy(corrupt, serialized, serialized_bytes);
+    /* Obsolete development encodings must fail rather than be guessed. */
+    store_le16(corrupt + 4, 1u);
+    refresh_morph_crc(corrupt, serialized_bytes);
+    errno = 0;
+    assert(pvr_chunk_morph_animation_section_open(
+        corrupt, serialized_bytes, &section) == -1);
+    assert(errno == EILSEQ);
     memcpy(corrupt, serialized, serialized_bytes);
     corrupt[serialized_bytes - 1u] ^= UINT8_C(0x80);
     errno = 0;
@@ -746,45 +667,22 @@ int main(void) {
                decoded_visibility.visible == NULL &&
                decoded_visibility.fallback);
 
-        store_le16(fallback_serialized + 4,
-                   PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
-        store_le16(fallback_serialized + 28,
-                   PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2);
-        refresh_crc(fallback_serialized, fallback_serialized_bytes);
-        assert(pvr_chunk_animation_section_open(
-            fallback_serialized, fallback_serialized_bytes,
-            &section_view) == 0);
-        assert(section_view.version ==
-               PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
-        store_le32(fallback_serialized +
-                       PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + 60,
-                   ANIM_ROTATION_EULER_XYZ);
+        /* PAT1 now admits exactly the current format epoch. */
+        store_le16(fallback_serialized + 4, 1u);
         refresh_crc(fallback_serialized, fallback_serialized_bytes);
         errno = 0;
         assert(pvr_chunk_animation_section_open(
             fallback_serialized, fallback_serialized_bytes,
             &section_view) == -1);
         assert(errno == EILSEQ);
-    }
 
-    {
-        size_t legacy_bytes;
-
-        corrupt = animation_legacy_copy(serialized, serialized_bytes,
-                                        &legacy_bytes);
-        store_le16(corrupt + 4, PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
-        store_le32(corrupt + PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES + 60,
-                   ANIM_ROTATION_QUATERNION);
-        store_le16(corrupt + PVR_CHUNK_ANIMATION_SECTION_HEADER_BYTES +
-                       PVR_CHUNK_ANIMATION_SECTION_TRANSFORM_BYTES +
-                       PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES,
-                   ANIM_VALUE_QUATERNION);
-        refresh_crc(corrupt, legacy_bytes);
+        store_le16(fallback_serialized + 4, 2u);
+        refresh_crc(fallback_serialized, fallback_serialized_bytes);
+        errno = 0;
         assert(pvr_chunk_animation_section_open(
-            corrupt, legacy_bytes, &section_view) == 0);
-        assert(section_view.version ==
-               PVR_CHUNK_ANIMATION_SECTION_VERSION_1);
-        free(corrupt);
+            fallback_serialized, fallback_serialized_bytes,
+            &section_view) == -1);
+        assert(errno == EILSEQ);
     }
 
     corrupt = malloc(serialized_bytes);

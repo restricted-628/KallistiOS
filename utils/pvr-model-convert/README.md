@@ -239,8 +239,7 @@ materializes the clip into the existing animation track, transform, visibility,
 sampling, blending, and playback runtime; the container adds no second clock
 or interpolation engine. New output uses PAT1 version 3, which retains
 quaternion, XYZ Euler, or ZXY Euler rotation tracks and explicit cubic Hermite
-tangents; the target also reads value-only versions 1 and 2. This bounded
-fixture requires
+tangents. This bounded fixture requires
 `--scene-root`, while scene importers supply wider authored clips to the same
 serializer.
 

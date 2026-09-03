@@ -236,10 +236,9 @@ table. Its fixed 64-byte record maps each model ordinal to required vertex and
 polygon streams, an exact finite local sphere, and zero-based ordinals for
 that model's optional resource, volume, compact skin, general skin, skeleton,
 morph, and cooked-cache sections. Version two selects the two required streams
-independently and admits shared streams; version one remains readable with its
-original equal record/stream ordinal rule. `UINT32_MAX` denotes an absent
-optional section. Header and payload CRCs, reserved fields, bounds, and every
-referenced section type are admitted before a record can be used.
+independently and admits shared streams. `UINT32_MAX` denotes an absent optional
+section. Header and payload CRCs, reserved fields, bounds, and every referenced
+section type are admitted before a record can be used.
 `pvr_chunk_model_table_workspace_query()` and
 `pvr_chunk_model_table_load()` remain allocation-free and replace the
 container-wide conservative sphere with the selected model's exact bounds.
@@ -373,17 +372,16 @@ fallbacks, rotation modes, and visibility fallback state.
 `pvr_chunk_animation_section_open()` admits the whole section before
 publication; indexed accessors expose its transform and track records, and
 `pvr_chunk_animation_section_materialize()` fills caller-owned canonical keys
-and existing animation runtime bindings. Version 1 remains readable with
-quaternion-only rotation; version 2 retains quaternion, XYZ Euler, or ZXY Euler
-tracks, and version 3 adds explicit incoming and outgoing cubic Hermite
-tangents. Euler values stay as radians through interpolation over shortest
-angular arcs and become normalized quaternions only at the sampled-pose
-boundary. Sampling, blending, events, and playback remain the responsibility
-of `dc/animation.h`; the asset layer owns no clock, worker, or alternate
-evaluator. The glTF/GLB importer uses the same section for authored STEP,
-LINEAR, and CUBICSPLINE TRS clips. Quaternion values are normalized while
-their derivative tangents remain unnormalized. Authored morph-weight channels
-use the separate `PMW1` instance-binding section described above.
+and existing animation runtime bindings. PAT1 version 3 retains quaternion,
+XYZ Euler, or ZXY Euler tracks and explicit incoming and outgoing cubic
+Hermite tangents. Euler values stay as radians through interpolation over
+shortest angular arcs and become normalized quaternions only at the
+sampled-pose boundary. Sampling, blending, events, and playback remain the
+responsibility of `dc/animation.h`; the asset layer owns no clock, worker, or
+alternate evaluator. The glTF/GLB importer uses the same section for authored
+STEP, LINEAR, and CUBICSPLINE TRS clips. Quaternion values are normalized
+while their derivative tangents remain unnormalized. Authored morph-weight
+channels use the separate `PMW1` instance-binding section described above.
 
 The optional `liblz4.a` addon provides full upstream LZ4 block, high-
 compression, Frame, and xxHash APIs plus `pvr_chunk_asset_lz4_decode()`. The
@@ -451,9 +449,7 @@ decomposition for reflection, negative scale, or shear.
 
 PCM2 hierarchy sections use fixed little-endian, pointer-free `PCH1` records.
 Every node stores one parent index, model ordinal, policy word, and 4x4 local
-transform. Section version 1 remains readable and requires its legacy policy
-word to be zero; new host output uses version 2 and admits only documented
-policy bits.
+transform. PCH1 version 2 admits only documented policy bits.
 `pvr_chunk_scene_hierarchy_open()` verifies framing, reserved fields, header
 and node checksums, finite matrices, and parent-before-child order before
 publishing a view. `pvr_chunk_scene_hierarchy_bind()` then resolves ordinals

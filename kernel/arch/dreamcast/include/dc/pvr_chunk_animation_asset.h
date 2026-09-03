@@ -32,12 +32,6 @@ __BEGIN_DECLS
 /** \brief Little-endian bytes `PAT1` at the start of an animation section. */
 #define PVR_CHUNK_ANIMATION_SECTION_MAGIC UINT32_C(0x31544150)
 
-/** \brief Original quaternion-only animation-section version. */
-#define PVR_CHUNK_ANIMATION_SECTION_VERSION_1 1u
-
-/** \brief Euler-capable fixed-value animation-section version. */
-#define PVR_CHUNK_ANIMATION_SECTION_VERSION_2 2u
-
 /** \brief Current serialized animation-section version. */
 #define PVR_CHUNK_ANIMATION_SECTION_VERSION 3u
 
@@ -49,9 +43,6 @@ __BEGIN_DECLS
 
 /** \brief Fixed serialized track descriptor size. */
 #define PVR_CHUNK_ANIMATION_SECTION_TRACK_BYTES 16u
-
-/** \brief Legacy serialized value-only key size. */
-#define PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES_V2 24u
 
 /** \brief Current serialized value-and-tangent key size. */
 #define PVR_CHUNK_ANIMATION_SECTION_KEY_BYTES 56u
@@ -97,10 +88,9 @@ typedef struct pvr_chunk_animation_key {
 /** \brief Checked immutable view of one serialized animation clip.
 
     The source byte image must remain immutable and accessible for the view's
-    lifetime and while any materialized runtime objects are being used. Section
-    Version 1 admits quaternion rotation tracks only. Version 2 additionally
-    preserves XYZ and ZXY Euler rotation-track modes. Version 3 preserves
-    explicit incoming and outgoing cubic Hermite tangents.
+    lifetime and while any materialized runtime objects are being used. The
+    current format preserves quaternion, XYZ Euler, and ZXY Euler rotation
+    modes plus explicit incoming and outgoing cubic Hermite tangents.
 */
 typedef struct pvr_chunk_animation_section_view {
     const void *data;
