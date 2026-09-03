@@ -633,9 +633,10 @@ int pvr_chunk_strip_vertex_get(const pvr_chunk_strip_view_t *strip,
 
 /** \brief Decode UV, normal, color, and triangle-user attributes.
 
-    Eight-bit and ten-bit UV encodings are normalized to `[0, 1]`. Signed
-    strip normals are expanded to `[-1, 1]`. Failure initializes
-    \p attributes to zero.
+    Legacy unsigned UV encodings are normalized to `[0, 1]`. Signed fixed UV8
+    and UV10 values use 1/256 and 1/1024 steps respectively, preserving
+    negative coordinates and texture repetition. Signed strip normals are
+    expanded to `[-1, 1]`. Failure initializes \p attributes to zero.
 */
 int pvr_chunk_strip_attributes_get(
     const pvr_chunk_strip_view_t *strip, size_t vertex_index,

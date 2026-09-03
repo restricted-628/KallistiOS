@@ -59,7 +59,8 @@ static alignas(32) const matrix_t screen_identity = {
 };
 
 typedef struct render_context {
-    pvr_poly_hdr_t header;
+    pvr_chunk_material_binding_t material;
+    pvr_chunk_render_policy_binding_t policy;
     pvr_chunk_skin_pose_t pose;
 } render_context_t;
 
@@ -77,9 +78,8 @@ static void normal_identity(pvr_normal_matrix_t *matrix) {
 static int begin_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
     render_context_t *context = data;
 
-    (void)strip;
-    pvr_prim(&context->header, sizeof(context->header));
-    return 0;
+    return pvr_chunk_render_policy_binding_begin_cached_strip(
+        strip, &context->policy);
 }
 
 static int resolve_vertex(uint16_t source_index,
@@ -94,18 +94,10 @@ static int prepare_vertex(
     const pvr_chunk_render_state_t *state,
     uint16_t source_index, const pvr_deform_vertex_t *deformed,
     pvr_vertex_t *vertex, void *data) {
-    float light;
-    uint32_t intensity;
+    render_context_t *context = data;
 
-    (void)state;
-    (void)source_index;
-    (void)data;
-    light = 0.25f + 0.75f * fmaxf(0.0f, deformed->normal.z);
-    intensity = (uint32_t)(light * 255.0f);
-    vertex->argb = UINT32_C(0xff000000) | (intensity << 16) |
-                   ((intensity * 3u / 4u) << 8) | intensity / 2u;
-    vertex->oargb = 0;
-    return 0;
+    return pvr_chunk_render_policy_binding_prepare_cached_vertex(
+        state, source_index, deformed, vertex, &context->policy);
 }
 
 int main(int argc, char **argv) {
@@ -133,6 +125,11 @@ int main(int argc, char **argv) {
     alignas(32) pvr_deform_vertex_t deformed[3];
     pvr_deform_result_t deform_result;
     pvr_poly_cxt_t polygon_context;
+    pvr_chunk_texture_table_t texture_table = { NULL, 0 };
+    pvr_chunk_texture_table_view_t texture_view;
+    pvr_light_t light;
+    pvr_lighting_extended_context_t lighting;
+    pvr_chunk_render_policy_config_t policy_config;
     render_context_t render_context;
     pvr_geometry_sink_t sink;
     alignas(32) pvr_vertex_t render_workspace[3];
@@ -172,7 +169,33 @@ int main(int argc, char **argv) {
     pvr_set_bg_color(0.02f, 0.02f, 0.08f);
     pvr_poly_cxt_col(&polygon_context, PVR_LIST_OP_POLY);
     polygon_context.gen.culling = PVR_CULLING_NONE;
-    pvr_poly_compile(&render_context.header, &polygon_context);
+    assert(pvr_chunk_texture_table_open(&texture_table, &texture_view) == 0);
+    assert(pvr_chunk_material_binding_init(
+        &render_context.material, &polygon_context, &texture_view,
+        PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+    memset(&light, 0, sizeof(light));
+    light.kind = PVR_LIGHT_DIRECTIONAL;
+    light.source.direction.z = 1.0f;
+    light.color.x = 1.0f;
+    light.color.y = 0.75f;
+    light.color.z = 0.5f;
+    light.intensity = 0.75f;
+    memset(&lighting, 0, sizeof(lighting));
+    lighting.ambient[0] = lighting.ambient[1] = lighting.ambient[2] = 0.25f;
+    lighting.lights = &light;
+    lighting.light_count = 1;
+    lighting.view_position.x = 320.0f;
+    lighting.view_position.y = 240.0f;
+    lighting.view_position.z = 10.0f;
+    lighting.specular_exponent = 8.0f;
+    memset(&policy_config, 0, sizeof(policy_config));
+    policy_config.policy = PVR_CHUNK_RENDER_POLICY_DIFFUSE;
+    policy_config.object_to_world = &screen_identity;
+    policy_config.lighting = &lighting;
+    policy_config.begin_strip = pvr_chunk_material_binding_begin_strip;
+    policy_config.begin_strip_data = &render_context.material;
+    assert(pvr_chunk_render_policy_binding_init(
+        &render_context.policy, &policy_config) == 0);
     render_context.pose.binding = &binding;
     render_context.pose.vertices = deformed;
     render_context.pose.vertex_count = 3;

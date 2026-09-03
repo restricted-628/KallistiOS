@@ -59,6 +59,14 @@ static const uint16_t polygons[] = {
     UINT16_C(0x00ff)
 };
 
+static const uint16_t reference_normal_polygons[] = {
+    PVR_CHUNK_STRIP_NORMAL, UINT16_C(14), UINT16_C(1), UINT16_C(3),
+    UINT16_C(0), UINT16_C(0x7fff), UINT16_C(0), UINT16_C(0),
+    UINT16_C(1), UINT16_C(0), UINT16_C(0x7fff), UINT16_C(0),
+    UINT16_C(2), UINT16_C(0), UINT16_C(0), UINT16_C(0x8000),
+    UINT16_C(0x00ff)
+};
+
 static const uint16_t float_uv_polygons[] = {
     PVR_CHUNK_STRIP_UV_FLOAT, UINT16_C(17), UINT16_C(1), UINT16_C(3),
     UINT16_C(0), UINT16_C(0x4000), UINT16_C(0x4348),
@@ -1131,6 +1139,35 @@ static void test_modifier_cache(void) {
     mutable_triangles[0].final_in_volume = 0;
 }
 
+static void test_reference_normal_cache(void) {
+    pvr_chunk_model_t model = make_model(
+        reference_normal_polygons,
+        sizeof(reference_normal_polygons) /
+        sizeof(reference_normal_polygons[0]));
+    pvr_chunk_model_view_t view;
+    pvr_chunk_model_plan_requirements_t plan_requirements;
+    pvr_chunk_vertex_index_entry_t plan_entries[256];
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_cache_requirements_t requirements;
+    alignas(32) uint8_t storage[1024];
+    pvr_chunk_model_cache_t cache;
+
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_query(&view, &plan_requirements) == 0);
+    assert(plan_requirements.vertex_index_entries == 256);
+    assert(pvr_chunk_model_plan_build(&view, plan_entries, 256, &plan) == 0);
+    assert(pvr_chunk_model_cache_query(&plan, &requirements) == 0);
+    assert(requirements.bytes <= sizeof(storage));
+    assert(pvr_chunk_model_cache_build(&plan, storage, sizeof(storage),
+                                       NULL, NULL, &cache) == 0);
+    assert(cache.vertex_count == 3);
+    assert(cache.deform_vertices[0].normal.x == 1.0f);
+    assert(cache.deform_vertices[0].normal.y == 0.0f);
+    assert(cache.deform_vertices[1].normal.y == 1.0f);
+    assert(cache.deform_vertices[1].normal.z == 0.0f);
+    assert(cache.deform_vertices[2].normal.z == -1.0f);
+}
+
 int main(void) {
     pvr_chunk_model_t model =
         make_model(polygons, sizeof(polygons) / sizeof(polygons[0]));
@@ -1293,6 +1330,7 @@ int main(void) {
     test_two_volume_cache();
     test_float_uv_caches();
     test_modifier_cache();
+    test_reference_normal_cache();
     test_wire_topologies();
     puts("pvr-chunk-cache-test: PASS");
     return 0;

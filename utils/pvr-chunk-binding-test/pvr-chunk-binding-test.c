@@ -378,15 +378,21 @@ static void test_render_policy_binding(void) {
     pvr_chunk_render_policy_binding_t unchanged;
     pvr_chunk_render_state_t state;
     pvr_chunk_strip_view_t strip;
+    pvr_chunk_cached_strip_t cached_strip;
     pvr_chunk_vertex_attributes_t vertex_attributes;
     pvr_chunk_strip_attributes_t strip_attributes;
+    pvr_deform_vertex_t deformation;
     pvr_vertex_t vertex;
+    pvr_vertex_t immediate_vertex;
+    pvr_vertex_t cached_vertex;
 
     memset(&config, 0, sizeof(config));
     memset(&state, 0, sizeof(state));
     memset(&strip, 0, sizeof(strip));
+    memset(&cached_strip, 0, sizeof(cached_strip));
     memset(&vertex_attributes, 0, sizeof(vertex_attributes));
     memset(&strip_attributes, 0, sizeof(strip_attributes));
+    memset(&deformation, 0, sizeof(deformation));
     memset(&vertex, 0, sizeof(vertex));
     config.policy = PVR_CHUNK_RENDER_POLICY_UNLIT;
     config.begin_strip = policy_begin;
@@ -396,6 +402,24 @@ static void test_render_policy_binding(void) {
     assert(pvr_chunk_render_policy_binding_begin_strip(
         &state, &strip, &binding) == 0);
     assert(policy_begin_calls == 1);
+    cached_strip.state = state;
+    cached_strip.source_type = PVR_CHUNK_STRIP_INDEX;
+    assert(pvr_chunk_render_policy_binding_begin_cached_strip(
+        &cached_strip, &binding) == 0);
+    assert(policy_begin_calls == 2);
+
+    deformation.position.x = 2.0f;
+    deformation.position.y = 4.0f;
+    deformation.position.z = 6.0f;
+    deformation.position.w = 1.0f;
+    deformation.normal.z = 1.0f;
+    vertex.argb = UINT32_C(0x80402010);
+    vertex.oargb = UINT32_C(0x00804020);
+    assert(pvr_chunk_render_policy_binding_prepare_cached_vertex(
+        &state, 7, &deformation, &vertex, &binding) == 0);
+    assert(vertex.x == 2.0f && vertex.y == 4.0f && vertex.z == 6.0f);
+    assert(vertex.argb == UINT32_C(0x80402010) &&
+           vertex.oargb == UINT32_C(0x00804020));
 
     vertex_attributes.position.x = 2.0f;
     vertex_attributes.position.y = 4.0f;
@@ -482,6 +506,38 @@ static void test_render_policy_binding(void) {
         &binding) == 0);
     assert((vertex.argb & UINT32_C(0x00ffffff)) == 0);
     assert(vertex.oargb == 0);
+
+    errno = 0;
+    assert(pvr_chunk_render_policy_binding_prepare_cached_vertex(
+        &state, 7, &deformation, &vertex, &binding) == -1);
+    assert(errno == ENOTSUP);
+
+    config.prepare_vertex = NULL;
+    config.prepare_vertex_data = NULL;
+    assert(pvr_chunk_render_policy_binding_init(&binding, &config) == 0);
+    state.strip_flags = PVR_CHUNK_STRIP_ENVIRONMENT;
+    memset(&vertex_attributes, 0, sizeof(vertex_attributes));
+    vertex_attributes.position = deformation.position;
+    vertex_attributes.present = PVR_CHUNK_VERTEX_ATTR_NORMAL;
+    vertex_attributes.normal = deformation.normal;
+    memset(&strip_attributes, 0, sizeof(strip_attributes));
+    memset(&immediate_vertex, 0, sizeof(immediate_vertex));
+    immediate_vertex.argb = UINT32_C(0xccff8040);
+    immediate_vertex.oargb = UINT32_C(0x00ff8040);
+    cached_vertex = immediate_vertex;
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &immediate_vertex,
+        &binding) == 0);
+    assert(pvr_chunk_render_policy_binding_prepare_cached_vertex(
+        &state, 7, &deformation, &cached_vertex, &binding) == 0);
+    assert(memcmp(&cached_vertex, &immediate_vertex,
+                  sizeof(cached_vertex)) == 0);
+
+    deformation.position.w = 0.0f;
+    errno = 0;
+    assert(pvr_chunk_render_policy_binding_prepare_cached_vertex(
+        &state, 7, &deformation, &cached_vertex, &binding) == -1);
+    assert(errno == EILSEQ);
 
     memset(&binding, 0x5a, sizeof(binding));
     memcpy(&unchanged, &binding, sizeof(binding));
@@ -706,17 +762,22 @@ static void test_two_volume_and_submission(void) {
         &state, &strip, &binding) == 1);
     memset(&cached_strip, 0, sizeof(cached_strip));
     cached_strip.state = state;
+    cached_strip.source_type = strip.type;
     cached_strip.source_flags = state.strip_flags;
     assert(pvr_chunk_material_binding_filter_cached_strip(
         &cached_strip, &binding) == 1);
     assert(pvr_chunk_material_binding_begin_strip(
         &state, &strip, &binding) == 0);
-    assert(current_submits == 1 && buffered_submits == 0);
+    assert(pvr_chunk_material_binding_begin_cached_strip(
+        &cached_strip, &binding) == 0);
+    assert(current_submits == 2 && buffered_submits == 0);
     assert(pvr_chunk_material_binding_init(
         &binding, &context, &view, PVR_GEOMETRY_SINK_BUFFERED_LIST) == 0);
     assert(pvr_chunk_material_binding_begin_strip(
         &state, &strip, &binding) == 0);
-    assert(current_submits == 1 && buffered_submits == 1);
+    assert(pvr_chunk_material_binding_begin_cached_strip(
+        &cached_strip, &binding) == 0);
+    assert(current_submits == 2 && buffered_submits == 2);
 
     errno = 0;
     assert(pvr_chunk_material_binding_init(
@@ -800,12 +861,15 @@ static void test_residency_binding(void) {
         &state, &strip, &binding) == 1);
     memset(&cached_strip, 0, sizeof(cached_strip));
     cached_strip.state = state;
+    cached_strip.source_type = strip.type;
     cached_strip.source_flags = state.strip_flags;
     assert(pvr_chunk_residency_binding_filter_cached_strip(
         &cached_strip, &binding) == 1);
     assert(pvr_chunk_residency_binding_begin_strip(
         &state, &strip, &binding) == 0);
-    assert(current_submits == 1);
+    assert(pvr_chunk_residency_binding_begin_cached_strip(
+        &cached_strip, &binding) == 0);
+    assert(current_submits == 2);
 
     model.model.polygon_words = absent_texture;
     model.model.polygon_word_count = 2;

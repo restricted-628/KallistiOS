@@ -715,6 +715,33 @@ int pvr_chunk_material_binding_begin_strip(
     return -1;
 }
 
+static int cached_strip_view_init(const pvr_chunk_cached_strip_t *cached,
+                                  pvr_chunk_strip_view_t *strip) {
+    if(!cached || !strip || cached->reserved ||
+       cached->source_type < PVR_CHUNK_STRIP_INDEX ||
+       cached->source_type > PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME ||
+       (cached->source_flags & ~PVR_CHUNK_STRIP_FLAGS_MASK) ||
+       cached->source_flags != cached->state.strip_flags) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(strip, 0, sizeof(*strip));
+    strip->type = cached->source_type;
+    strip->flags = cached->source_flags;
+    return 0;
+}
+
+int pvr_chunk_material_binding_begin_cached_strip(
+        const pvr_chunk_cached_strip_t *cached, void *data) {
+    pvr_chunk_strip_view_t strip;
+
+    if(cached_strip_view_init(cached, &strip) < 0)
+        return -1;
+    return pvr_chunk_material_binding_begin_strip(&cached->state, &strip,
+                                                  data);
+}
+
 static const vector_t *vertex_normal_select(
         const pvr_chunk_vertex_attributes_t *vertex_attributes,
         const pvr_chunk_strip_attributes_t *strip_attributes) {
@@ -725,23 +752,18 @@ static const vector_t *vertex_normal_select(
     return NULL;
 }
 
-static int environment_map_apply(
-        const pvr_normal_matrix_t *normal_matrix,
-        const pvr_chunk_vertex_attributes_t *vertex_attributes,
-        const pvr_chunk_strip_attributes_t *strip_attributes,
+static int environment_map_normal_apply(
+        const pvr_normal_matrix_t *normal_matrix, const vector_t *source,
         pvr_vertex_t *vertex) {
     pvr_normal_stream_t stream;
     pvr_normal_result_t result;
-    const vector_t *source = vertex_normal_select(vertex_attributes,
-                                                   strip_attributes);
     vector_t view_normal;
     float uv[2];
 
-    if(!source) {
-        errno = ENOTSUP;
+    if(!normal_matrix || !source || !vertex) {
+        errno = EINVAL;
         return -1;
     }
-
     stream.normals = source;
     stream.normal_count = 1;
     stream.stride = sizeof(*source);
@@ -752,6 +774,21 @@ static int environment_map_apply(
     vertex->u = uv[0];
     vertex->v = uv[1];
     return 0;
+}
+
+static int environment_map_apply(
+        const pvr_normal_matrix_t *normal_matrix,
+        const pvr_chunk_vertex_attributes_t *vertex_attributes,
+        const pvr_chunk_strip_attributes_t *strip_attributes,
+        pvr_vertex_t *vertex) {
+    const vector_t *source = vertex_normal_select(vertex_attributes,
+                                                   strip_attributes);
+
+    if(!source) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return environment_map_normal_apply(normal_matrix, source, vertex);
 }
 
 int pvr_chunk_environment_map_binding_init(
@@ -1039,11 +1076,27 @@ int pvr_chunk_render_policy_binding_begin_strip(
     return binding->begin_strip(state, strip, binding->begin_strip_data);
 }
 
-static int lit_vertex_apply(
+int pvr_chunk_render_policy_binding_begin_cached_strip(
+        const pvr_chunk_cached_strip_t *cached, void *data) {
+    pvr_chunk_render_policy_binding_t *binding = data;
+    pvr_chunk_strip_view_t strip;
+
+    if(!binding || !binding->begin_strip ||
+       cached_strip_view_init(cached, &strip) < 0) {
+        if(!binding || !binding->begin_strip)
+            errno = EINVAL;
+        return -1;
+    }
+    return binding->begin_strip(&cached->state, &strip,
+                                binding->begin_strip_data);
+}
+
+static int lit_vertex_apply_common(
         const pvr_chunk_render_state_t *state,
-        const pvr_chunk_vertex_attributes_t *vertex_attributes,
-        const pvr_chunk_strip_attributes_t *strip_attributes,
+        const vector_t *source_normal,
         pvr_vertex_t *vertex, const point_t *object_position,
+        float diffuse_intensity,
+        float specular_intensity,
         const pvr_chunk_render_policy_binding_t *binding) {
     pvr_lighting_extended_context_t context = binding->lighting;
     pvr_lighting_extended_sample_t sample;
@@ -1051,8 +1104,6 @@ static int lit_vertex_apply(
     pvr_lighting_output_t output;
     pvr_normal_stream_t normal_stream;
     pvr_normal_result_t normal_result;
-    const vector_t *source_normal = vertex_normal_select(vertex_attributes,
-                                                          strip_attributes);
     float ambient[4];
 
     if(!source_normal) {
@@ -1075,32 +1126,14 @@ static int lit_vertex_apply(
        fallback color precedence. The policy starts from that canonical color
        instead of reconstructing a second material hierarchy. */
     unpack_argb(vertex->argb, sample.diffuse);
-    if(vertex_attributes->present &
-       PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY) {
-        if(!isfinite(vertex_attributes->diffuse_intensity) ||
-           vertex_attributes->diffuse_intensity < 0.0f ||
-           vertex_attributes->diffuse_intensity > 1.0f) {
-            errno = EDOM;
-            return -1;
-        }
-        sample.diffuse[0] *= vertex_attributes->diffuse_intensity;
-        sample.diffuse[1] *= vertex_attributes->diffuse_intensity;
-        sample.diffuse[2] *= vertex_attributes->diffuse_intensity;
-    }
+    sample.diffuse[0] *= diffuse_intensity;
+    sample.diffuse[1] *= diffuse_intensity;
+    sample.diffuse[2] *= diffuse_intensity;
     unpack_argb(vertex->oargb, ambient);
     sample.specular[0] = ambient[0];
     sample.specular[1] = ambient[1];
     sample.specular[2] = ambient[2];
-    sample.specular_intensity =
-        vertex_attributes->present &
-        PVR_CHUNK_VERTEX_ATTR_SPECULAR_INTENSITY ?
-        vertex_attributes->specular_intensity : 1.0f;
-    if(!isfinite(sample.specular_intensity) ||
-       sample.specular_intensity < 0.0f ||
-       sample.specular_intensity > 1.0f) {
-        errno = EDOM;
-        return -1;
-    }
+    sample.specular_intensity = specular_intensity;
 
     /* Ignore-light suppresses direct lights but remains distinct from the
        independently encoded ambient and specular controls. */
@@ -1133,6 +1166,41 @@ static int lit_vertex_apply(
     vertex->argb = output.argb;
     vertex->oargb = output.oargb;
     return 0;
+}
+
+static int lit_vertex_apply(
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_vertex_attributes_t *vertex_attributes,
+        const pvr_chunk_strip_attributes_t *strip_attributes,
+        pvr_vertex_t *vertex, const point_t *object_position,
+        const pvr_chunk_render_policy_binding_t *binding) {
+    const vector_t *source_normal = vertex_normal_select(vertex_attributes,
+                                                          strip_attributes);
+    float diffuse_intensity;
+    float specular_intensity;
+
+    if(!source_normal) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    diffuse_intensity =
+        vertex_attributes->present &
+        PVR_CHUNK_VERTEX_ATTR_DIFFUSE_INTENSITY ?
+        vertex_attributes->diffuse_intensity : 1.0f;
+    specular_intensity =
+        vertex_attributes->present &
+        PVR_CHUNK_VERTEX_ATTR_SPECULAR_INTENSITY ?
+        vertex_attributes->specular_intensity : 1.0f;
+    if(!isfinite(diffuse_intensity) || diffuse_intensity < 0.0f ||
+       diffuse_intensity > 1.0f || !isfinite(specular_intensity) ||
+       specular_intensity < 0.0f ||
+       specular_intensity > 1.0f) {
+        errno = EDOM;
+        return -1;
+    }
+    return lit_vertex_apply_common(state, source_normal, vertex,
+                                   object_position, diffuse_intensity,
+                                   specular_intensity, binding);
 }
 
 int pvr_chunk_render_policy_binding_prepare_vertex(
@@ -1186,6 +1254,58 @@ int pvr_chunk_render_policy_binding_prepare_vertex(
         return binding->prepare_vertex(state, vertex_attributes,
                                        strip_attributes, vertex,
                                        binding->prepare_vertex_data);
+    return 0;
+}
+
+int pvr_chunk_render_policy_binding_prepare_cached_vertex(
+        const pvr_chunk_render_state_t *state, uint16_t source_index,
+        const pvr_deform_vertex_t *deformation, pvr_vertex_t *vertex,
+        void *data) {
+    pvr_chunk_render_policy_binding_t *binding = data;
+
+    (void)source_index;
+    if(!state || !deformation || !vertex || !binding ||
+       !binding->begin_strip ||
+       binding->policy < PVR_CHUNK_RENDER_POLICY_UNLIT ||
+       binding->policy > PVR_CHUNK_RENDER_POLICY_DIFFUSE_SPECULAR ||
+       (binding->features & ~PVR_CHUNK_RENDER_POLICY_FEATURES_ALL)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!isfinite(deformation->position.x) ||
+       !isfinite(deformation->position.y) ||
+       !isfinite(deformation->position.z) ||
+       deformation->position.w != 1.0f ||
+       !isfinite(deformation->normal.x) ||
+       !isfinite(deformation->normal.y) ||
+       !isfinite(deformation->normal.z) ||
+       deformation->normal.w != 0.0f) {
+        errno = EILSEQ;
+        return -1;
+    }
+    if(binding->prepare_vertex ||
+       (state->present & PVR_CHUNK_RENDER_BUMP_BASIS)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    vertex->x = deformation->position.x;
+    vertex->y = deformation->position.y;
+    vertex->z = deformation->position.z;
+    if(state->strip_flags & PVR_CHUNK_STRIP_ENVIRONMENT) {
+        if(!(binding->features & PVR_CHUNK_RENDER_POLICY_ENVIRONMENT_MAP)) {
+            errno = ENOTSUP;
+            return -1;
+        }
+        if(environment_map_normal_apply(&binding->view_normal_matrix,
+                                        &deformation->normal, vertex) < 0)
+            return -1;
+    }
+
+    if(render_policy_lit(binding->policy))
+        return lit_vertex_apply_common(state, &deformation->normal, vertex,
+                                       &deformation->position, 1.0f, 1.0f,
+                                       binding);
     return 0;
 }
 
@@ -1378,6 +1498,16 @@ int pvr_chunk_residency_binding_begin_strip(
 
     errno = EINVAL;
     return -1;
+}
+
+int pvr_chunk_residency_binding_begin_cached_strip(
+        const pvr_chunk_cached_strip_t *cached, void *data) {
+    pvr_chunk_strip_view_t strip;
+
+    if(cached_strip_view_init(cached, &strip) < 0)
+        return -1;
+    return pvr_chunk_residency_binding_begin_strip(&cached->state, &strip,
+                                                   data);
 }
 
 int pvr_chunk_residency_binding_release(

@@ -264,6 +264,14 @@ int pvr_chunk_material_binding_begin_strip(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip, void *data);
 
+/** \brief Cached-strip form of pvr_chunk_material_binding_begin_strip().
+
+    The cached strip retains every field needed by material resolution, so this
+    adapter performs no model-stream traversal or allocation.
+*/
+int pvr_chunk_material_binding_begin_cached_strip(
+    const pvr_chunk_cached_strip_t *strip, void *data);
+
 /** \brief Initialize the standard compact-model environment-map adapter.
 
     \p object_to_view supplies the complete object-to-view transform used to
@@ -321,6 +329,15 @@ int pvr_chunk_render_policy_binding_begin_strip(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip, void *data);
 
+/** \brief Forward cached strip setup to a render policy's material callback.
+
+    This is the pvr_chunk_cache_begin_strip_t form of the ordinary adapter. It
+    reconstructs only the immutable strip type and flags needed by the chained
+    material callback.
+*/
+int pvr_chunk_render_policy_binding_begin_cached_strip(
+    const pvr_chunk_cached_strip_t *strip, void *data);
+
 /** \brief Apply the selected compact vertex policy and chained callback.
 
     Homogeneous model positions are canonicalized before lighting and before
@@ -333,6 +350,23 @@ int pvr_chunk_render_policy_binding_prepare_vertex(
     const pvr_chunk_vertex_attributes_t *vertex_attributes,
     const pvr_chunk_strip_attributes_t *strip_attributes,
     pvr_vertex_t *vertex, void *data);
+
+/** \brief Apply a standard render policy to one cooked-cache vertex.
+
+    This is the pvr_chunk_cache_prepare_vertex_t form of the ordinary adapter.
+    Canonical UV, color, intensity, and homogeneous-position work was completed
+    when the cache was built; this callback applies only per-frame environment
+    mapping and lighting from the resolved deformation position and normal.
+
+    A binding configured with a chained immediate-stream vertex callback is not
+    representable through the cooked-cache callback vocabulary and reports
+    ENOTSUP. Bump-basis state likewise requires an application-specific cached
+    callback. The source index is accepted for signature compatibility and is
+    otherwise left to application callbacks.
+*/
+int pvr_chunk_render_policy_binding_prepare_cached_vertex(
+    const pvr_chunk_render_state_t *state, uint16_t source_index,
+    const pvr_deform_vertex_t *deformation, pvr_vertex_t *vertex, void *data);
 
 /** \brief Configure a compact-model adapter over one residency cache.
 
@@ -401,6 +435,10 @@ int pvr_chunk_residency_binding_filter_cached_strip(
 int pvr_chunk_residency_binding_begin_strip(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip, void *data);
+
+/** \brief Cached-strip form of pvr_chunk_residency_binding_begin_strip(). */
+int pvr_chunk_residency_binding_begin_cached_strip(
+    const pvr_chunk_cached_strip_t *strip, void *data);
 
 /** \brief Release all resident texture pins held by an adapter.
 

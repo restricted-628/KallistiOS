@@ -65,6 +65,12 @@ the callback is required and normally performs these application-owned steps:
 Memory sinks may omit the callback because no polygon header is submitted.
 They can also use it to capture state beside the emitted vertex array.
 
+The material and residency adapters each provide immediate/prepared and
+prepared-cache begin-strip forms. A cooked cache retains the decoded state,
+source strip type, and source flags required for the same checked material
+resolution, so cached emission does not need a parallel material system or a
+second model-stream walk.
+
 `pvr_chunk_render_state_list()` supplies the standard route: one/zero blending
 without strip alpha is opaque, one/zero with strip alpha is punch-through, and
 every other blend equation is translucent. The material and residency binding
@@ -143,8 +149,9 @@ callbacks can build samples from decoded or deformed position/normal data and
 write the returned `argb` and `oargb` directly. The original minimal Lambert
 function remains available when none of this policy is required.
 
-`pvr_chunk_render_policy_binding_t` supplies the standard immediate/prepared
-emission adapter for that work. Its three presets are deliberately small:
+`pvr_chunk_render_policy_binding_t` supplies standard immediate/prepared and
+prepared-cache adapters for that work. Its three presets are deliberately
+small:
 
 - UNLIT preserves decoded colors and applies optional vertex intensities;
 - DIFFUSE adds ambient plus signed directional or point Lambert lighting; and
@@ -157,6 +164,13 @@ through 17, observes the strip ignore-light/ambient/specular flags, and then
 runs an optional application callback. Its required begin-strip callback still
 owns material/header submission. Matrices and lighting context are copied at
 initialization; the admitted light array remains borrowed and immutable.
+
+Cooked caches retain canonical UV/color results plus a per-reference base
+normal, so hard-normal seams remain available to cached environment mapping and
+lighting. A deformation resolver may replace that normal with a current-pose
+normal before policy runs. Stream-specific custom vertex callbacks and bump
+bases remain explicit application cached callbacks because their richer source
+attribute vocabulary cannot be reconstructed from a cooked cache.
 
 This is a rendering-policy adapter, not a second renderer. It adds no model
 records or render-function markers, begins no scene or list, retains no model,

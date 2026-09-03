@@ -221,10 +221,16 @@ static int reject_storage_overlap(const pvr_chunk_model_plan_t *plan,
 
 static void base_deformation(
     const pvr_chunk_vertex_attributes_t *attributes,
+    const pvr_chunk_strip_attributes_t *strip_attributes,
     pvr_deform_vertex_t *deformation) {
     deformation->position = attributes->position;
     deformation->position.w = 1.0f;
-    if(attributes->present & PVR_CHUNK_VERTEX_ATTR_NORMAL)
+    /* The cache is corner-oriented. Retain a per-reference normal here so
+       cooked lighting and environment mapping preserve hard-normal seams. */
+    if(strip_attributes &&
+       (strip_attributes->present & PVR_CHUNK_STRIP_ATTR_NORMAL))
+        deformation->normal = strip_attributes->normal;
+    else if(attributes->present & PVR_CHUNK_VERTEX_ATTR_NORMAL)
         deformation->normal = attributes->normal;
     else {
         deformation->normal.x = 0.0f;
@@ -398,7 +404,7 @@ int pvr_chunk_model_cache_build(
                     base_vertex(&state, &vertex_attributes,
                                 &strip_attributes, command,
                                 vertices + vertex_index);
-                    base_deformation(&vertex_attributes,
+                    base_deformation(&vertex_attributes, &strip_attributes,
                                      deform_vertices + vertex_index);
                     source_indices[vertex_index] = strip_attributes.index;
                     if(prepare_vertex) {
@@ -1147,7 +1153,7 @@ int pvr_chunk_model_two_volume_cache_build(
                                            &strip_attributes,
                                            requirements.format, command,
                                            &vertex);
-                    base_deformation(&vertex_attributes,
+                    base_deformation(&vertex_attributes, &strip_attributes,
                                      deform_vertices + vertex_index);
                     source_indices[vertex_index] = strip_attributes.index;
                     if(prepare_vertex) {
@@ -1690,7 +1696,7 @@ static int build_modifier_triangle(
             errno = ENOTSUP;
             return -1;
         }
-        base_deformation(attributes + corner,
+        base_deformation(attributes + corner, NULL,
                          context->deform_vertices +
                          context->corner_index + corner);
         context->source_indices[context->corner_index + corner] =

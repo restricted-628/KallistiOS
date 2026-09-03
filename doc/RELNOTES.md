@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Unified immediate and cooked Compact rendering policy. New allocation-free
+  cached-strip adapters reuse the established material, texture-residency,
+  environment-map, and extended-lighting bindings without reparsing model
+  streams or introducing another renderer. Prepared caches now retain
+  per-reference normals so hard-normal seams survive into dynamic cached
+  lighting. The explicit skinning example exercises the shared path.
+
 * Froze the pre-release Compact asset format epoch. PAT1 version 3, PMW1
   version 2, PMT1 version 2, and PCH1 version 2 are now the only admitted
   encodings for their respective magics; obsolete development encodings are
