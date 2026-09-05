@@ -12,15 +12,14 @@ BIN2C = $(KOS_BASE)/utils/bin2c/bin2c
 HOST_CC ?= cc
 OBJS = chunk-opacity.o chunk-opacity-asset.o
 
-all: rm-elf $(TARGET)
+.PHONY: all clean run dist
+
+all: $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
-clean: rm-elf
-	-rm -f $(OBJS) $(MODEL_ASSET) $(GENERATED_ASSET)
-
-rm-elf:
-	-rm -f $(TARGET)
+clean:
+	-rm -f $(TARGET) $(OBJS) $(MODEL_ASSET) $(GENERATED_ASSET)
 
 $(MODEL_CONVERTER):
 	$(MAKE) -C $(KOS_BASE)/utils/pvr-model-convert CC="$(HOST_CC)"
@@ -37,7 +36,7 @@ $(GENERATED_ASSET): $(MODEL_ASSET) $(BIN2C)
 
 chunk-opacity-asset.o: $(GENERATED_ASSET)
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $(TARGET) $(OBJS)
 
 run: $(TARGET)

@@ -7,17 +7,16 @@
 TARGET = vq-compact.elf
 OBJS = vq_compact.o
 
-all: rm-elf $(TARGET)
+.PHONY: all clean run dist
+
+all: $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
-clean: rm-elf
-	-rm -f $(OBJS)
+clean:
+	-rm -f $(TARGET) $(OBJS)
 
-rm-elf:
-	-rm -f $(TARGET)
-
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $(TARGET) $(OBJS)
 
 run: $(TARGET)

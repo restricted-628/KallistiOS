@@ -7,6 +7,9 @@ SRAM lease followed by timed G2-DMA into system RAM. It performs no BIOS
 filesystem payload reads and does not allocate a worker or fiber. Each path
 then performs LZ4 Frame decoding, section CRC verification, and complete model
 admission. Decode time is reported separately from transport time.
+The generated fixture uses stable texture identifier 7 only to preserve the
+shared model's authored UV stream; this benchmark does not allocate or upload
+a texture because it performs no rendering.
 
 The build creates `chunk-asset-model.pcm`; place that file at the root of the
 test ISO as `/chunk-asset-model.pcm`. The normal ISO9660 path is used only to

@@ -149,7 +149,9 @@ This page serves as an index for all KallistiOS examples.
 - pthread
   - general
 - pvr
-  - background_plane
+  - [**background_plane**](pvr/background_plane/): Replaces the solid
+    background with checked per-scene RGB triangle geometry and verifies its
+    configuration lifetime
   - bumpmap
   - [**cell_asset**](pvr/cell_asset/): Compiles a declarative cell manifest
     into PCA1, then materializes, animates, priority-sorts, and routes one
@@ -183,21 +185,28 @@ This page serves as an index for all KallistiOS examples.
   - [**chunk_wire**](pvr/chunk_wire/): Draws a prepared compact strip as full
     mesh, outside-boundary, or consecutive-path wireframe geometry using
     clipped constant-width screen-space quads
-  - clipping
+  - [**clipping**](pvr/clipping/): Combines per-scene pixel bounds with a
+    checked tile-granular user-clip command
   - fb_tex
   - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned
     geometry with bounded frustum clipping, checked material compilation, and
     established PVR list sinks
-  - hybrid_lists
-  - material_state
-  - multipass
-  - multipass_dma
-  - multipass_hybrid
+  - [**hybrid_lists**](pvr/hybrid_lists/): Flushes a buffered translucent list
+    beside direct opaque submission without replaying completed geometry
+  - [**material_state**](pvr/material_state/): Exercises checked clamp,
+    punch-through, palette, supersampling, and buffered-list controls
+  - [**multipass**](pvr/multipass/): Registers three direct geometry passes
+    under one bounded hardware scene
+  - [**multipass_dma**](pvr/multipass_dma/): Advances three independently
+    buffered passes through DMA and registration interrupts
+  - [**multipass_hybrid**](pvr/multipass_hybrid/): Combines early list flushes
+    with hardware continuation across three registration passes
   - modifier_volume
   - modifier_volume_tex
   - modifier_volume_zclip
   - palette
-  - pipeline_status
+  - [**pipeline_status**](pvr/pipeline_status/): Checks coherent PVR state,
+    persistent fault records, and bounded interrupt-context event handlers
   - [**particles**](pvr/particles/): Simulates a caller-owned particle pool and
     emits hardware sprite cells plus colored polygon trails
   - plasma
@@ -205,7 +214,8 @@ This page serves as an index for all KallistiOS examples.
   - pvrmark
   - pvrmark_strips
   - pvrmark_strips_direct
-  - render_ticket
+  - [**render_ticket**](pvr/render_ticket/): Tracks off-screen completion and
+    displayed framebuffer completion with immutable render identities
   - [**sprite_cells**](pvr/sprite_cells/): Samples independent caller-owned
     cell streams, composes and priority-sorts their state, and emits compact
     textured PVR sprite packets through SH4ZAM-backed target paths
@@ -214,7 +224,9 @@ This page serves as an index for all KallistiOS examples.
     surfaces into one caller-owned contiguous VRAM reservation
   - [**texture_residency**](pvr/texture_residency/): Cycles three textures
     through two pinned, generation-checked LRU slots using asynchronous DMA
-  - texture_surface
+  - [**texture_surface**](pvr/texture_surface/): Validates caller-owned texture
+    layouts, bounded uploads/readback, asynchronous DMA, render targets, and
+    YUV conversion
   - texture_render
   - [**vq_palette**](pvr/vq_palette/): Uses a VQ codebook as an independent
     per-texture 16-bit palette for a byte-indexed image

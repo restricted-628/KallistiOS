@@ -15,16 +15,15 @@ HOST_CC ?= cc
 PYTHON ?= python3
 OBJS = cell-asset.o cell-asset-atlas.o cell-asset-data.o
 
-all: rm-elf $(TARGET)
+.PHONY: all clean run dist
+
+all: $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
-clean: rm-elf
-	-rm -f $(OBJS) $(ATLAS_IMAGE) $(CELL_ASSET) \
+clean:
+	-rm -f $(TARGET) $(OBJS) $(ATLAS_IMAGE) $(CELL_ASSET) \
 		$(GENERATED_ATLAS) $(GENERATED_ASSET)
-
-rm-elf:
-	-rm -f $(TARGET)
 
 $(CELL_CONVERTER):
 	$(MAKE) -C $(KOS_BASE)/utils/pvr-cell-convert CC="$(HOST_CC)"
@@ -48,7 +47,7 @@ $(GENERATED_ASSET): $(CELL_ASSET) $(BIN2C)
 cell-asset-atlas.o: $(GENERATED_ATLAS)
 cell-asset-data.o: $(GENERATED_ASSET)
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $(TARGET) $(OBJS)
 
 run: $(TARGET)

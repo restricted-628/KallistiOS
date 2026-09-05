@@ -11,15 +11,14 @@ MODEL_CONVERTER = $(KOS_BASE)/utils/pvr-model-convert/pvr-model-convert
 HOST_CC ?= cc
 OBJS = chunk-resources.o chunk-resource-model.o
 
-all: rm-elf $(TARGET)
+.PHONY: all clean run dist
+
+all: $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
-clean: rm-elf
-	-rm -f $(OBJS) $(GENERATED_MODEL)
-
-rm-elf:
-	-rm -f $(TARGET)
+clean:
+	-rm -f $(TARGET) $(OBJS) $(GENERATED_MODEL)
 
 $(MODEL_CONVERTER):
 	$(MAKE) -C $(KOS_BASE)/utils/pvr-model-convert CC="$(HOST_CC)"
@@ -31,7 +30,7 @@ $(GENERATED_MODEL): $(MODEL_SOURCE) $(MODEL_MATERIALS) $(MODEL_CONVERTER)
 
 chunk-resource-model.o: $(GENERATED_MODEL)
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $(TARGET) $(OBJS)
 
 run: $(TARGET)

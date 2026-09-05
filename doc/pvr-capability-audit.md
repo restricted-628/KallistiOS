@@ -167,18 +167,19 @@ physical-hardware validation.
 
 ### Post-closure integration audit
 
-The final graphics-wide pass rebuilt KOS and its addons with SH-4 GCC 16.2,
-compiled 28 focused graphics examples end to end, and compiled the modified
-translation unit in the one older example whose complete build requires an
-optional image-library port. All 18 host suites covering compact models,
+The graphics-wide pass rebuilt KOS and its addons with SH-4 GCC 16.2 and
+compiled every added graphics example end to end. The final Makefile audit
+also clean-built and repeat-built all 27 added PVR examples with parallel Make,
+proving that cleanup cannot race a completed ELF. The unified GNU17 host sweep
+passes all 52 discovered suites. Graphics suites covering compact models,
 conversion, geometry, materials, deformation, texture layout and residency,
-animation, matrices, and collision also passed with address and undefined-
-behavior sanitizers enabled.
+animation, matrices, collision, and the composed multi-model scene also pass
+their applicable strict-C23 and sanitizer lanes.
 
 The public graphics headers compile independently as GNU C23 and GNU C++20.
 The bundled optimized-math C and C++ umbrella headers pass the same target
-compiler check. All 191 added KOS graphics functions with compiled definitions
-are present in the Dreamcast module export set, and the generated API reference
+compiler check. All added KOS graphics functions with compiled definitions are
+present in the Dreamcast module export set, and the generated API reference
 reports no warnings in the graphics headers.
 
 This pass also closed four integration defects: host-test stubs now layer their

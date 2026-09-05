@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Corrected parallel-build races in all added PVR example Makefiles. Their
+  default target no longer runs ELF deletion concurrently with linking, clean
+  owns artifact removal, phony lifecycle targets are explicit, and each ELF
+  relinks when the KOS archive changes. The direct-disc asset benchmark also
+  supplies the stable texture identifier required by its shared UV fixture.
+
 * Added a multi-model Compact scene integration example and matching host
   regression suite. The same code composes serialized skeleton palettes,
   transform and instance morph-weight playback, deformation, and cooked-cache

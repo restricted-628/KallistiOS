@@ -386,57 +386,33 @@ matrix. Callbacks execute synchronously on the caller's thread. They may use
 application asset tables, but must not mutate the active model, workspace, or
 sink. The emitter retains no pointer after return.
 
-## Remaining compact-model work
+## Compact-model closure and extension boundary
 
-The prepared ordinary band-shading path closes the highest-priority cel
-topology gap, but it does not make the broader compact-model program complete.
-The remaining work is deliberately tracked here so renderer work cannot hide
-format, deformation, or tooling gaps:
+The Compact runtime and its core host compiler are closed at the API and
+emulator-validation level. No required model-format, deformation, rendering,
+animation, hierarchy, or cell-sprite feature remains from this audit. Further
+work belongs to one of two explicit categories: physical-hardware validation,
+or demand-driven expansion of the host content pipeline.
 
-1. Extend the now-established canonical host scene IR beyond its admitted
-   hierarchy, general-skin, sparse morph, and instance morph-animation
-   sections. `COLOR_0` VEC3/VEC4 import and exact colored-vertex round trips
-   are complete. Per-reference UV/normal seam fixtures and general-N glTF skin
-   round trips beyond four influences are also complete. Decomposable static
-   matrix nodes now retain exact signed-scale fallback transforms in animated
-   scenes, while shear remains an explicit boundary. PAC1 now supplies the
-   pointer-free logical-clip catalog needed to pair repeated PAT1 and PMW1
-   sections without placeholders, and the host importer emits mixed
-   transform-only, morph-only, and combined glTF clips through it. Continue
-   wider modern scene import. Parent-result deformation canonicalization is
-   complete: unordered contributions from multiple hierarchy nodes are merged
-   into deterministic, exactly normalized general-N skin spans and an
-   inverse-bind skeleton, and the glTF importer uses that same path.
-   Triangle strips and fans, material-selected texture-coordinate sets, and
-   base-color texture transforms are also canonicalized by the host importer;
-   the target retains one triangle/UV vocabulary and pays no scene-import cost.
-   Static GPU-authored TRS instances now lower to ordinary child draw nodes,
-   mesh/skin specializations share immutable PCM2 stream sections, and detached
-   required skin joints enter the hierarchy only as transform anchors.
-   The host scene IR now lowers resolved deferred capture/replay events into
-   ordinary animated draw proxies, eliminating those controls from serialized
-   hierarchy execution. PMT1 version two and the explicit PCM2 stream-pair
-   loader permit the importer to split draw-order segments while sharing
-   vertex data instead of copying it. Target-side loading of the
-   canonical PCM2 model table and hierarchy is one coherent allocation-free
-   operation over caller-owned model, node, and unique-stream persistent
-   decode storage;
-   multi-model host output is round-tripped through that same path before
-   publication.
-2. Preserve the current flat parent-before-child hierarchy and complete-pose
-   deformation. PCH1 version 2 supplies component suppression, hidden-node
-   evaluation, and noncontiguous descendant pruning; PAT1 version 3 supplies
-   exact XYZ/ZXY Euler sampling and cubic Hermite tangents beside the preferred
-   quaternion path. Do not
-   replace either with pointer trees or deferred polygon execution.
-3. Keep the separate cell-sprite system outside the 3D compact mesh grammar.
-   Its timestamped stream/list sampling and events, whole-motion binding,
-   signed priority, material/color metadata, compact or colored 2D/3D paths,
-   PCA1 pointer-free storage, and declarative atlas/image host compiler are
-   complete. Future additions should extend that pipeline rather than add
-   cell records to compact meshes.
+The admitted host scene vocabulary already covers multi-model hierarchy and
+instancing, general skinning, sparse morphs, transform and instance-specific
+morph animation, colored vertices, per-reference UV and normal seams, triangle
+strips and fans, selected texture-coordinate sets, base-color texture
+transforms, material opacity, exact signed-scale fallback transforms, and
+resolved parent-result deformation. It canonicalizes these features into one
+target representation and round-trips every emitted asset before publication.
+Additional interchange-format extensions are content-tool work, not missing
+target runtime capability and not a graphics-closure blocker.
 
-Already completed and not to be reimplemented are distinct signed UV8/UV10
+The flat parent-before-child hierarchy, complete-pose deformation, explicit
+XYZ/ZXY Euler or quaternion sampling, and cubic Hermite tangents remain the
+established contract. The separate cell-sprite pipeline remains outside the 3D
+mesh grammar; its storage, timestamped streams, events, motion binding,
+priority, materials, colors, and compact or colored 2D/3D output are complete.
+Neither subsystem should acquire pointer-tree execution, deferred polygon
+processing, or hidden scene ownership in a future extension.
+
+Closure includes distinct signed UV8/UV10
 records with automatic host-side selection and a finite float-UV escape for
 coordinates outside both compact ranges, the backward-compatible PCM2 checked
 section directory and generic section loader, the canonical host scene IR and
