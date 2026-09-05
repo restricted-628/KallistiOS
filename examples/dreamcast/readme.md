@@ -156,8 +156,8 @@ This page serves as an index for all KallistiOS examples.
     resolved cell sprite across opaque, punch-through, and translucent lists
   - cheap_shadow
   - [**chunk_asset**](pvr/chunk_asset/): Generates a versioned compact-model
-    asset, LZ4-compresses its vertex partition, and loads it through exact
-    caller-owned workspace without starting a service thread
+    asset, cooperatively decodes LZ4 through an opt-in service, destroys that
+    service, and renders through caller-owned deformation and residency
   - [**chunk_asset_disc**](pvr/chunk_asset_disc/): Reads a compact-model asset
     through direct GD-DMA and optionally a leased GAPS/G2 staging path, then
     verifies LZ4 decoding and reports separate transport and decode timings
@@ -168,6 +168,9 @@ This page serves as an index for all KallistiOS examples.
     model, then resolves its texture identifiers through a pre-acquired
     fixed-slot residency set, checked materials, and an admitted signed-light
     diffuse-plus-specular render policy
+  - [**chunk_scene**](pvr/chunk_scene/): Compiles two models with an animated
+    skeleton and independent morph curves, checks numerical pose goldens, and
+    renders their prepared caches without introducing retained scene ownership
   - [**chunk_skin**](pvr/chunk_skin/): Binds explicit normalized joint
     influences, builds a reusable canonical source, and renders a moving
     deformed pose through constant-time model-index lookup

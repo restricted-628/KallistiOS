@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a multi-model Compact scene integration example and matching host
+  regression suite. The same code composes serialized skeleton palettes,
+  transform and instance morph-weight playback, deformation, and cooked-cache
+  emission, checking six independently calculated poses before rendering.
+  No library API, automatic service, or retained scene owner is added.
+
 * Added checked Compact asset section-index lookup by type and ordinal, shared
   by the host compiler and the complete asset example. Optional skeleton and
   model-table sections no longer shift that example's resource, morph, or

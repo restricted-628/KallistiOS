@@ -444,6 +444,15 @@ data retain the established compact-model path unchanged.
 
 ## Validation gates
 
+The `chunk_scene` integration fixture exercises the coherent scene loader with
+two models, a serialized two-joint skeleton, transform playback, opposing
+instance-specific morph curves, and ordinary cooked caches. Its admission,
+pose, and memory-sink checks run from the same source on host and target.
+Independent numerical expectations cover six times, world-space skin output,
+and preserved per-model colors. This complements `chunk_asset`'s compressed
+service-loading, residency, and lighting composition; neither example adds
+retained scene ownership or constitutes exhaustive import conformance.
+
 Each tranche requires host tests for structure, bounds, interpolation, and
 packing; a complete Dreamcast cross-build; focused emulator execution for the
 public example; and an explicit physical-hardware list for timing or numerical
