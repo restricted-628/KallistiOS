@@ -184,6 +184,24 @@ int pvr_chunk_asset_section_find(const pvr_chunk_asset_view_t *view,
                                  uint32_t type, size_t ordinal,
                                  pvr_chunk_asset_section_t *section);
 
+/** \brief Find the directory index of the Nth section with one semantic type.
+
+    \a ordinal is zero-based among sections of \a type. The returned index
+    can be passed to pvr_chunk_asset_section_get(),
+    pvr_chunk_asset_section_workspace_query(), and
+    pvr_chunk_asset_section_load(), avoiding assumptions about optional
+    directory entries. The asset must remain immutable through those
+    operations. PCM1 returns its synthetic stream indices.
+
+    \retval 0 Success.
+    \retval -1 Failure with errno set as for pvr_chunk_asset_section_get(),
+               including ENOENT when the ordinal is absent. A non-NULL
+               output is set to SIZE_MAX on failure.
+*/
+int pvr_chunk_asset_section_find_index(const pvr_chunk_asset_view_t *view,
+                                       uint32_t type, size_t ordinal,
+                                       size_t *index);
+
 /** \brief Query workspace for one checked section by directory index.
 
     Raw naturally aligned bytes are borrowed with a zero-byte requirement.

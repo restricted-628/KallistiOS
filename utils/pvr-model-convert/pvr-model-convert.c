@@ -5970,7 +5970,6 @@ static int load_raw_section_ordinal(
     size_t ordinal,
     pvr_chunk_asset_section_t *section, const void **decoded) {
     size_t index;
-    size_t found = 0;
 
     if(decoded)
         *decoded = NULL;
@@ -5978,17 +5977,11 @@ static int load_raw_section_ordinal(
         errno = EINVAL;
         return -1;
     }
-    for(index = 0; index < view->section_count; ++index) {
-        if(pvr_chunk_asset_section_get(view, index, section) < 0)
-            return -1;
-        if(section->type != type)
-            continue;
-        if(found++ == ordinal)
-            return pvr_chunk_asset_section_load(
-                view, index, NULL, NULL, NULL, 0, decoded);
-    }
-    errno = ENOENT;
-    return -1;
+    if(pvr_chunk_asset_section_find_index(view, type, ordinal, &index) < 0 ||
+       pvr_chunk_asset_section_get(view, index, section) < 0)
+        return -1;
+    return pvr_chunk_asset_section_load(
+        view, index, NULL, NULL, NULL, 0, decoded);
 }
 
 static int load_raw_section_type(

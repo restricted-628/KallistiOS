@@ -360,6 +360,73 @@ static void test_directory_asset(void) {
     assert(errno == ENOENT && section.stored_data == NULL);
 }
 
+static void test_section_indices(void) {
+    alignas(32) uint8_t asset[2048];
+    pvr_chunk_asset_view_t view;
+    pvr_chunk_asset_section_workspace_requirements_t requirements;
+    const void *decoded;
+    size_t index;
+    size_t bytes = build_directory_asset(asset, sizeof(asset));
+
+    assert(pvr_chunk_asset_open(asset, bytes, &view) == 0);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, 0, &index) == 0);
+    assert(index == 2);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, 1, &index) == 0);
+    assert(index == 3);
+    assert(pvr_chunk_asset_section_workspace_query(
+        &view, index, &requirements) == 0 && requirements.bytes == 0);
+    assert(pvr_chunk_asset_section_load(
+        &view, index, NULL, NULL, NULL, 0, &decoded) == 0);
+    assert(!memcmp(decoded, "\x05\x06\x07\x08\x09\x0a\x0b\x0c", 8));
+
+    /* Adding an unrelated semantic section ahead of this one must not
+       make callers mistake its ordinal within a type for a directory index. */
+    write_le32(asset + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES +
+               2u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+               PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS);
+    write_le32(asset + 44, crc32_bytes(
+        asset + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES,
+        4u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES));
+    write_le32(asset + 60, crc32_bytes(asset, 60));
+    assert(pvr_chunk_asset_open(asset, bytes, &view) == 0);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, 0, &index) == 0);
+    assert(index == 3);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, 1, &index) == -1);
+    assert(errno == ENOENT && index == SIZE_MAX);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, SIZE_MAX, &index) == -1);
+    assert(errno == ENOENT && index == SIZE_MAX);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, 0, 0, &index) == -1);
+    assert(errno == EINVAL && index == SIZE_MAX);
+    assert(pvr_chunk_asset_section_find_index(
+        NULL, PVR_CHUNK_ASSET_SECTION_APPLICATION, 0, &index) == -1);
+    assert(errno == EINVAL && index == SIZE_MAX);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, 0, NULL) == -1);
+    assert(errno == EINVAL);
+    asset[0] ^= 1u;
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_APPLICATION, 0, &index) == -1);
+    assert(errno == EILSEQ && index == SIZE_MAX);
+
+    bytes = build_asset(asset, sizeof(asset), 0);
+    assert(pvr_chunk_asset_open(asset, bytes, &view) == 0);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM, 0, &index) == 0);
+    assert(index == 0);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM, 0, &index) == 0);
+    assert(index == 1);
+    assert(pvr_chunk_asset_section_find_index(
+        &view, PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM, 1, &index) == -1);
+    assert(errno == ENOENT && index == SIZE_MAX);
+}
+
 static void test_multi_model_asset(void) {
     alignas(32) uint8_t asset[2080];
     alignas(32) uint8_t workspace[2048];
@@ -625,6 +692,7 @@ static void test_corrupt_headers(void) {
 int main(void) {
     test_raw_borrow();
     test_directory_asset();
+    test_section_indices();
     test_multi_model_asset();
     test_unaligned_directory_asset();
     test_corrupt_directory();

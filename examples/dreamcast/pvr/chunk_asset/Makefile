@@ -12,15 +12,14 @@ BIN2C = $(KOS_BASE)/utils/bin2c/bin2c
 HOST_CC ?= cc
 OBJS = chunk-asset.o chunk-asset-model.o
 
-all: rm-elf $(TARGET)
+.PHONY: all clean run dist
+
+all: $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
-clean: rm-elf
-	-rm -f $(OBJS) $(MODEL_ASSET) $(GENERATED_MODEL)
-
-rm-elf:
-	-rm -f $(TARGET)
+clean:
+	-rm -f $(TARGET) $(OBJS) $(MODEL_ASSET) $(GENERATED_MODEL)
 
 $(MODEL_CONVERTER):
 	$(MAKE) -C $(KOS_BASE)/utils/pvr-model-convert CC="$(HOST_CC)"
@@ -40,7 +39,8 @@ $(GENERATED_MODEL): $(MODEL_ASSET) $(BIN2C)
 
 chunk-asset-model.o: $(GENERATED_MODEL)
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a \
+           $(KOS_BASE)/addons/lib/$(KOS_ARCH)/liblz4.a
 	kos-cc -o $(TARGET) $(OBJS) -llz4
 
 run: $(TARGET)

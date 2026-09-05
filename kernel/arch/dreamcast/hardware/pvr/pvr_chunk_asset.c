@@ -450,15 +450,18 @@ int pvr_chunk_asset_section_get(const pvr_chunk_asset_view_t *view,
         minimum_offset, section, &offset, &end);
 }
 
-int pvr_chunk_asset_section_find(const pvr_chunk_asset_view_t *view,
-                                 uint32_t type, size_t ordinal,
-                                 pvr_chunk_asset_section_t *section) {
+static int find_section(const pvr_chunk_asset_view_t *view,
+                         uint32_t type, size_t ordinal,
+                         pvr_chunk_asset_section_t *section,
+                         size_t *directory_index) {
     pvr_chunk_asset_view_t checked;
     size_t index;
 
     if(section)
         memset(section, 0, sizeof(*section));
-    if(!view || !section || !view->data || !type) {
+    if(directory_index)
+        *directory_index = SIZE_MAX;
+    if(!view || (!section && !directory_index) || !view->data || !type) {
         errno = EINVAL;
         return -1;
     }
@@ -486,7 +489,10 @@ int pvr_chunk_asset_section_find(const pvr_chunk_asset_view_t *view,
         }
         if(candidate.type == type) {
             if(!ordinal) {
-                *section = candidate;
+                if(section)
+                    *section = candidate;
+                if(directory_index)
+                    *directory_index = index;
                 return 0;
             }
             --ordinal;
@@ -495,6 +501,18 @@ int pvr_chunk_asset_section_find(const pvr_chunk_asset_view_t *view,
 
     errno = ENOENT;
     return -1;
+}
+
+int pvr_chunk_asset_section_find(const pvr_chunk_asset_view_t *view,
+                                 uint32_t type, size_t ordinal,
+                                 pvr_chunk_asset_section_t *section) {
+    return find_section(view, type, ordinal, section, NULL);
+}
+
+int pvr_chunk_asset_section_find_index(const pvr_chunk_asset_view_t *view,
+                                       uint32_t type, size_t ordinal,
+                                       size_t *index) {
+    return find_section(view, type, ordinal, NULL, index);
 }
 
 static int section_needs_copy(const pvr_chunk_asset_section_t *section,

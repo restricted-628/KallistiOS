@@ -11,6 +11,15 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added checked Compact asset section-index lookup by type and ordinal, shared
+  by the host compiler and the complete asset example. Optional skeleton and
+  model-table sections no longer shift that example's resource, morph, or
+  animation selections. The example now exercises decode-service teardown,
+  morphing, skinning, hierarchy animation, bounds, residency, lighting, and
+  cooked rendering together; it holds the rendered image for inspection,
+  preserves failure diagnostics through cleanup, and avoids a parallel-build
+  race that could remove its freshly linked ELF.
+
 * Unified immediate and cooked Compact rendering policy. New allocation-free
   cached-strip adapters reuse the established material, texture-residency,
   environment-map, and extended-lighting bindings without reparsing model
