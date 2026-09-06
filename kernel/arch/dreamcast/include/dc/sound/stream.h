@@ -133,6 +133,7 @@ typedef struct snd_stream_status {
     uint32_t underruns;             /**< Polls that substituted silence. */
     int channel[2];                 /**< Owned AICA channel numbers. */
     bool channel_playing[2];        /**< Coherent per-channel playback state. */
+    bool service_owned;             /**< Automatic polling owns this handle. */
 } snd_stream_status_t;
 
 /** \brief Initialize a checked stream configuration with safe defaults.
@@ -502,11 +503,15 @@ int snd_stream_poll(snd_stream_hnd_t hnd);
 
     Missing callback data is replaced by silence, increments the underrun
     counter, and returns ENODATA. Transfer and state failures use their native
-    errno values instead of the legacy -2/-3 return vocabulary.
+    errno values instead of the legacy -2/-3 return vocabulary. The optional
+    service in `dc/sound/stream_service.h` can own this call for applications
+    that do not want to poll explicitly.
 
     \param hnd             Allocated, started stream handle.
     \retval 0              On success or when no refill is required.
     \retval -1             On error with errno set.
+
+    \sa snd_stream_service_create
 */
 int snd_stream_poll_ex(snd_stream_hnd_t hnd);
 

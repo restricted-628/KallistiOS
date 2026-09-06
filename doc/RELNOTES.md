@@ -385,6 +385,10 @@ lifecycle and naming conventions.
   execution deadlines, cancellation, waits, and thread-context completion
   callbacks. Synchronous SPU transfers retain their established behavior and
   applications that do not submit a request allocate no worker or queue state.
+* Added an optional automatic stream polling service. One explicitly created
+  thread can own several streams, uses a caller-selected or caller-owned stack,
+  reports coherent poll and underrun counters, and bounds stream removal and
+  service teardown. Manual polling remains the allocation-free default.
 * Bundled SH4ZAM 0.8 as a first-class, automatically built Dreamcast math
   component and added it to the standard grouped KOS link set. The optimized
   target backend remains independently attributed under its MIT license and

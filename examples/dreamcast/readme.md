@@ -264,6 +264,9 @@ This page serves as an index for all KallistiOS examples.
   - [**stream-status**](sound/stream-status/): Exercises checked streaming,
     silence-padded short reads, live controls, progress, underrun accounting,
     and bounded teardown without external assets
+  - [**stream-service**](sound/stream-service/): Runs checked stream polling on
+    one optional thread with caller-owned stack storage and bounded ownership
+    teardown
 - tsunami
   - banner
   - font

@@ -34,6 +34,7 @@
 #include <dc/sound/sfxmgr.h>
 
 #include "arm/aica_cmd_iface.h"
+#include "snd_stream_internal.h"
 #include "snd_stream_split.h"
 
 /*
@@ -127,6 +128,9 @@ typedef struct strchan {
     volatile int dma_error;
     uint64_t dma_source_bytes;
     uint64_t dma_buffered_bytes;
+
+    /* Non-NULL while one optional polling service owns this handle. */
+    const void *service_owner;
 } strchan_t;
 
 /* Our stream structs */
@@ -651,6 +655,10 @@ int snd_stream_destroy_ex(snd_stream_hnd_t hnd, uint32_t timeout_ms) {
         return -1;
     if(checked_handle(hnd) < 0)
         goto fail;
+    if(streams[hnd].service_owner) {
+        errno = EBUSY;
+        goto fail;
+    }
 
     if(snd_stream_stop_ex(hnd, timeout_ms) < 0)
         goto fail;
@@ -1387,7 +1395,9 @@ static int stream_refresh_playback(strchan_t *stream,
     return 0;
 }
 
-static int snd_stream_poll_internal(snd_stream_hnd_t hnd, bool legacy) {
+static int snd_stream_poll_internal(snd_stream_hnd_t hnd, bool legacy,
+                                    const void *service_owner,
+                                    bool *underrun) {
     uint32_t write_pos;
     uint32_t current_play_pos;
     int needed_samples = 0;
@@ -1398,11 +1408,27 @@ static int snd_stream_poll_internal(snd_stream_hnd_t hnd, bool legacy) {
     int result = -1;
     strchan_t *stream;
 
+    if(underrun)
+        *underrun = false;
+
     if(mutex_lock(&stream_state_mutex) < 0)
         return -1;
     if(checked_handle(hnd) < 0)
         goto out;
     stream = &streams[hnd];
+
+    if(stream->service_owner != service_owner) {
+        errno = EBUSY;
+        goto out;
+    }
+
+    /* A service can own a stream before it starts or while it is queued. It
+       defers those states without changing the stream's lifecycle to ERROR. */
+    if(service_owner && stream->state != SND_STREAM_STATE_PLAYING &&
+       stream->state != SND_STREAM_STATE_UNDERRUN) {
+        errno = EAGAIN;
+        goto out;
+    }
 
     if(stream->callback_active) {
         errno = EDEADLK;
@@ -1487,6 +1513,8 @@ static int snd_stream_poll_internal(snd_stream_hnd_t hnd, bool legacy) {
         stream->last_write_pos -= write_pos;
 
     if(fill_result > 0) {
+        if(underrun)
+            *underrun = true;
         stream->underruns++;
         stream->state = SND_STREAM_STATE_UNDERRUN;
         stream->last_error = ENODATA;
@@ -1509,11 +1537,69 @@ out:
 
 /* Poll streamer to load more data if necessary. */
 int snd_stream_poll(snd_stream_hnd_t hnd) {
-    return snd_stream_poll_internal(hnd, true);
+    return snd_stream_poll_internal(hnd, true, NULL, NULL);
 }
 
 int snd_stream_poll_ex(snd_stream_hnd_t hnd) {
-    return snd_stream_poll_internal(hnd, false);
+    return snd_stream_poll_internal(hnd, false, NULL, NULL);
+}
+
+int _snd_stream_service_claim(snd_stream_hnd_t hnd, const void *owner) {
+    int result = -1;
+
+    if(!owner) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+    if(checked_handle(hnd) < 0)
+        goto out;
+    if(streams[hnd].service_owner) {
+        errno = EBUSY;
+        goto out;
+    }
+
+    streams[hnd].service_owner = owner;
+    result = 0;
+
+out:
+    mutex_unlock(&stream_state_mutex);
+    return result;
+}
+
+int _snd_stream_service_release(snd_stream_hnd_t hnd, const void *owner) {
+    int result = -1;
+
+    if(!owner) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+    if(checked_handle(hnd) < 0)
+        goto out;
+    if(streams[hnd].service_owner != owner) {
+        errno = EPERM;
+        goto out;
+    }
+
+    streams[hnd].service_owner = NULL;
+    result = 0;
+
+out:
+    mutex_unlock(&stream_state_mutex);
+    return result;
+}
+
+int _snd_stream_service_poll(snd_stream_hnd_t hnd, const void *owner,
+                             bool *underrun) {
+    if(!owner || !underrun) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return snd_stream_poll_internal(hnd, false, owner, underrun);
 }
 
 static void stream_copy_update_fields(snd_stream_config_t *destination,
@@ -1654,6 +1740,7 @@ int snd_stream_get_status(snd_stream_hnd_t hnd,
     status->channel[1] = stream->ch[1];
     status->channel_playing[0] = playing[0];
     status->channel_playing[1] = playing[1];
+    status->service_owned = stream->service_owner != NULL;
     irq_restore(old_irq);
     result = 0;
 

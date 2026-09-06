@@ -235,13 +235,21 @@ This tranche adds one static recursive manager mutex but no thread, fiber,
 periodic work, or new global audio buffer. Explicit application polling remains
 the zero-service default.
 
+An optional polling adapter now serves up to the existing four stream handles
+from one explicitly created KOS thread. Creation requires the application to
+choose the stack size and may use caller-owned stack storage. Registration
+gives the service exclusive polling ownership of a stream, while removal and
+shutdown have nonzero caller-provided deadlines. Stream callbacks may block on
+DMA and KOS synchronization, so this adapter deliberately does not occupy the
+shared cooperative fiber executor; doing so could stall unrelated services on
+the same carrier thread. Applications that poll directly retain the prior
+zero-thread, zero-allocation behavior.
+
 ## Remaining order
 
-1. Add an optional, lazily initialized stream service adapter with measured or
-   caller-selected execution storage.
-2. Add checked DSP program, routing, and output control.
-3. Build optional bank and sequence libraries plus host-side content tools.
-4. Add optional spatial helpers integrated with the established math stack.
+1. Add checked DSP program, routing, and output control.
+2. Build optional bank and sequence libraries plus host-side content tools.
+3. Add optional spatial helpers integrated with the established math stack.
 
 ## Validation boundary
 

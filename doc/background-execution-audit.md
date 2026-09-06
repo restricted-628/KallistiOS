@@ -42,6 +42,7 @@ service.
 | W5500 receive path | Dedicated thread when enabled | The device has no receive interrupt input and requires polling. |
 | PPP main loop | Dedicated thread | It owns device polling, protocol state, retransmission timing, and blocking connection setup. |
 | Profiling sampler | Dedicated thread | Sampling is coupled to scheduler polling. |
+| Optional sound-stream poller | One dedicated thread when explicitly created | Stream callbacks and bounded DMA waits may block, so sharing a cooperative fiber carrier would stall unrelated services. The caller selects or owns the stack. |
 | MIE callback dispatch | Shared thread worker | Registered callbacks require thread context and may unregister callbacks while dispatch is active. |
 | Controller callbacks | Existing per-registration workers | Their isolation is observable and their callback contract is not bounded. |
 | Threaded hardware events | Existing per-registration workers | A handler may sleep while its interrupt source remains masked. |
@@ -85,6 +86,11 @@ full.
 cancellation, periodic requeue suppression, duplicate rejection,
 self-cancellation, ordinary periodic scheduling, deadline ordering,
 long-deadline handling, and admission rejection after shutdown.
+
+`examples/dreamcast/sound/stream-service` verifies explicit caller-owned stack
+storage, exclusive poll ownership, service and stream progress, release back to
+manual polling, and bounded teardown. Ordinary sound initialization does not
+create this service.
 
 The BBA, W5500, and MIE changes are compile-validated without making unavailable
 hardware behavior claims. Device startup failure and callback-unregistration

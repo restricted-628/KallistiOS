@@ -93,6 +93,7 @@ __BEGIN_DECLS
 #include <dc/sci.h>
 #include <dc/sd.h>
 #include <dc/sound/stream.h>
+#include <dc/sound/stream_service.h>
 #include <dc/sound/sfxmgr.h>
 #include <dc/spu.h>
 #include <dc/sq.h>

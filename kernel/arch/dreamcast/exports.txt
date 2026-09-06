@@ -251,6 +251,11 @@ snd_stream_poll_ex
 snd_stream_update
 snd_stream_get_status
 snd_stream_destroy_ex
+snd_stream_service_create
+snd_stream_service_add
+snd_stream_service_remove
+snd_stream_service_get_status
+snd_stream_service_destroy
 snd_pcm16_split
 snd_pcm16_split_sq
 snd_pcm8_split

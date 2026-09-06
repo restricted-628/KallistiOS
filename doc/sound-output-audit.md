@@ -137,9 +137,13 @@ service may be considered separately, with measured stack use and explicit
 lifecycle, rather than imposing a thread on applications that do not request
 one.
 
-An automatic stream service remains deliberately separate and opt-in. DSP
-program management and optional content playback remain staged work. Their
-ownership and order are recorded in `audio-capability-audit.md`.
+Automatic stream polling is a separate, opt-in adapter. One explicitly created
+thread can own and poll several streams using a caller-selected or caller-owned
+stack; ordinary manual polling still creates no service resources. The adapter
+does not use the shared cooperative fiber executor because stream callbacks and
+DMA waits may block its carrier thread. DSP program management and optional
+content playback remain staged work. Their ownership and order are recorded in
+`audio-capability-audit.md`.
 
 ## Validation
 
