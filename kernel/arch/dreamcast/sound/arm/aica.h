@@ -22,5 +22,10 @@ void aica_vol(int ch);
 void aica_pan(int ch);
 void aica_freq(int ch);
 int aica_get_pos(int ch);
+int aica_is_playing(int ch);
+void aica_channel_start(int ch, const aica_channel_config_t *config,
+                        int delayed);
+void aica_channel_update(int ch, const aica_channel_config_t *config,
+                         uint32 fields);
 
 #endif  /* __AICA_H */

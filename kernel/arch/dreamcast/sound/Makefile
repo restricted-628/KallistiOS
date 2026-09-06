@@ -19,7 +19,7 @@ include $(KOS_BASE)/Makefile.prefab
 
 arm/stream.drv: subdirs
 
-snd_iface.c: snd_stream_drv.c
+snd_iface.o: snd_stream_drv.c
 
 snd_stream_drv.c: arm/stream.drv $(KOS_BASE)/utils/bin2c/bin2c
 	$(KOS_BASE)/utils/bin2c/bin2c $< $@ snd_stream_drv

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <inttypes.h>
 #include <errno.h>
 
 #include <kos/dbglog.h>
@@ -46,6 +47,157 @@ _Static_assert(SND_DRIVER_FEATURE_VALIDATION ==
                "command-validation capability ABI");
 _Static_assert(SND_DRIVER_FEATURE_POSITION == AICA_DRIVER_FEATURE_POSITION,
                "channel-position capability ABI");
+_Static_assert(SND_DRIVER_FEATURE_CHANNEL_CONTROL ==
+               AICA_DRIVER_FEATURE_CHANNEL_CONTROL,
+               "checked channel-control capability ABI");
+_Static_assert(SND_CHANNEL_START_DELAYED == AICA_CHANNEL_START_DELAYED,
+               "checked channel start flag ABI");
+_Static_assert(SND_CHANNEL_UPDATE_ALL == AICA_CHANNEL_UPDATE_ALL,
+               "checked channel update mask ABI");
+_Static_assert(SND_CHANNEL_UPDATE_FREQUENCY ==
+               AICA_CHANNEL_UPDATE_FREQUENCY,
+               "channel frequency update ABI");
+_Static_assert(SND_CHANNEL_UPDATE_VOLUME == AICA_CHANNEL_UPDATE_VOLUME,
+               "channel volume update ABI");
+_Static_assert(SND_CHANNEL_UPDATE_PAN == AICA_CHANNEL_UPDATE_PAN,
+               "channel pan update ABI");
+_Static_assert(SND_CHANNEL_UPDATE_ENVELOPE == AICA_CHANNEL_UPDATE_ENVELOPE,
+               "channel envelope update ABI");
+_Static_assert(SND_CHANNEL_UPDATE_LFO == AICA_CHANNEL_UPDATE_LFO,
+               "channel LFO update ABI");
+_Static_assert(SND_CHANNEL_UPDATE_ROUTING == AICA_CHANNEL_UPDATE_ROUTING,
+               "channel routing update ABI");
+_Static_assert(SND_CHANNEL_UPDATE_FILTER == AICA_CHANNEL_UPDATE_FILTER,
+               "channel filter update ABI");
+_Static_assert(SND_CHANNEL_SAMPLE_PCM16 == AICA_SM_16BIT &&
+               SND_CHANNEL_SAMPLE_PCM8 == AICA_SM_8BIT &&
+               SND_CHANNEL_SAMPLE_ADPCM == AICA_SM_ADPCM &&
+               SND_CHANNEL_SAMPLE_ADPCM_LOOP == AICA_SM_ADPCM_LS,
+               "channel sample format ABI");
+
+static int channel_fields_valid(const snd_channel_config_t *config,
+                                uint32_t fields) {
+    size_t i;
+
+    if((fields & SND_CHANNEL_UPDATE_FREQUENCY) &&
+       (!config->sample_rate || config->sample_rate > (UINT32_MAX >> 10)))
+        return 0;
+    if((fields & SND_CHANNEL_UPDATE_ENVELOPE) &&
+       (config->envelope.attack_rate > 31 ||
+        config->envelope.decay1_rate > 31 ||
+        config->envelope.decay2_rate > 31 ||
+        config->envelope.release_rate > 31 ||
+        config->envelope.decay_level > 31 ||
+        config->envelope.key_rate_scaling > 15))
+        return 0;
+    if((fields & SND_CHANNEL_UPDATE_LFO) &&
+       (config->lfo.frequency > 31 || config->lfo.pitch_waveform > 3 ||
+        config->lfo.pitch_depth > 7 ||
+        config->lfo.amplitude_waveform > 3 ||
+        config->lfo.amplitude_depth > 7))
+        return 0;
+    if((fields & SND_CHANNEL_UPDATE_ROUTING) &&
+       (config->routing.effect_channel > 15 ||
+        config->routing.effect_send > 15 ||
+        config->routing.direct_level > 15))
+        return 0;
+    if(fields & SND_CHANNEL_UPDATE_FILTER) {
+        if(config->filter.resonance > 31 ||
+           config->filter.attack_rate > 31 ||
+           config->filter.decay1_rate > 31 ||
+           config->filter.decay2_rate > 31 ||
+           config->filter.release_rate > 31)
+            return 0;
+
+        for(i = 0; i < 5; ++i)
+            if(config->filter.level[i] > 0x1fff)
+                return 0;
+    }
+
+    return 1;
+}
+
+static void channel_config_pack(aica_channel_config_t *destination,
+                                const snd_channel_config_t *source) {
+    size_t i;
+
+    memset(destination, 0, sizeof(*destination));
+    destination->base = source->sample_address;
+    destination->type = source->format;
+    destination->length = source->sample_count;
+    destination->loop = source->loop_enabled;
+    destination->loopstart = source->loop_start;
+    destination->loopend = source->loop_end;
+    destination->freq = source->sample_rate;
+    destination->vol = source->volume;
+    destination->pan = source->pan;
+    destination->attack_rate = source->envelope.attack_rate;
+    destination->decay1_rate = source->envelope.decay1_rate;
+    destination->decay2_rate = source->envelope.decay2_rate;
+    destination->release_rate = source->envelope.release_rate;
+    destination->decay_level = source->envelope.decay_level;
+    destination->key_rate_scaling = source->envelope.key_rate_scaling;
+    destination->envelope_hold = source->envelope.hold;
+    destination->envelope_loop_link = source->envelope.loop_link;
+    destination->lfo_reset = source->lfo.reset_on_start;
+    destination->lfo_frequency = source->lfo.frequency;
+    destination->pitch_lfo_wave = source->lfo.pitch_waveform;
+    destination->pitch_lfo_depth = source->lfo.pitch_depth;
+    destination->amplitude_lfo_wave = source->lfo.amplitude_waveform;
+    destination->amplitude_lfo_depth = source->lfo.amplitude_depth;
+    destination->effect_channel = source->routing.effect_channel;
+    destination->effect_send = source->routing.effect_send;
+    destination->direct_level = source->routing.direct_level;
+    destination->filter_enabled = source->filter.enabled;
+    destination->filter_resonance = source->filter.resonance;
+    for(i = 0; i < 5; ++i)
+        destination->filter_level[i] = source->filter.level[i];
+    destination->filter_attack_rate = source->filter.attack_rate;
+    destination->filter_decay1_rate = source->filter.decay1_rate;
+    destination->filter_decay2_rate = source->filter.decay2_rate;
+    destination->filter_release_rate = source->filter.release_rate;
+}
+
+static void channel_config_unpack(snd_channel_config_t *destination,
+                                  const aica_channel_config_t *source) {
+    size_t i;
+
+    memset(destination, 0, sizeof(*destination));
+    destination->sample_address = source->base;
+    destination->format = source->type;
+    destination->sample_count = source->length;
+    destination->loop_enabled = source->loop;
+    destination->loop_start = source->loopstart;
+    destination->loop_end = source->loopend;
+    destination->sample_rate = source->freq;
+    destination->volume = source->vol;
+    destination->pan = source->pan;
+    destination->envelope.attack_rate = source->attack_rate;
+    destination->envelope.decay1_rate = source->decay1_rate;
+    destination->envelope.decay2_rate = source->decay2_rate;
+    destination->envelope.release_rate = source->release_rate;
+    destination->envelope.decay_level = source->decay_level;
+    destination->envelope.key_rate_scaling = source->key_rate_scaling;
+    destination->envelope.hold = source->envelope_hold;
+    destination->envelope.loop_link = source->envelope_loop_link;
+    destination->lfo.reset_on_start = source->lfo_reset;
+    destination->lfo.frequency = source->lfo_frequency;
+    destination->lfo.pitch_waveform = source->pitch_lfo_wave;
+    destination->lfo.pitch_depth = source->pitch_lfo_depth;
+    destination->lfo.amplitude_waveform = source->amplitude_lfo_wave;
+    destination->lfo.amplitude_depth = source->amplitude_lfo_depth;
+    destination->routing.effect_channel = source->effect_channel;
+    destination->routing.effect_send = source->effect_send;
+    destination->routing.direct_level = source->direct_level;
+    destination->filter.enabled = source->filter_enabled;
+    destination->filter.resonance = source->filter_resonance;
+    for(i = 0; i < 5; ++i)
+        destination->filter.level[i] = source->filter_level[i];
+    destination->filter.attack_rate = source->filter_attack_rate;
+    destination->filter.decay1_rate = source->filter_decay1_rate;
+    destination->filter.decay2_rate = source->filter_decay2_rate;
+    destination->filter.release_rate = source->filter_release_rate;
+}
 
 /* Validate a shared queue before using offsets supplied by the ARM firmware.
    The data region must stay between its queue header and the next reserved
@@ -73,6 +225,11 @@ static int queue_geometry(uint32_t queue_address, uint32_t region_end,
        data < queue_address - SPU_RAM_UNCACHED_BASE + sizeof(aica_queue_t) ||
        data >= region_end || size > region_end - data ||
        current_head >= size || current_tail >= size) {
+        dbglog(DBG_ERROR,
+               "snd: invalid queue at %08" PRIx32
+               " data=%08" PRIx32 " size=%" PRIu32
+               " head=%" PRIu32 " tail=%" PRIu32 "\n",
+               queue_address, data, size, current_head, current_tail);
         errno = EPROTO;
         return -1;
     }
@@ -176,6 +333,18 @@ int snd_init(void) {
         if(status_result < 0 ||
            !(status.features & SND_DRIVER_FEATURE_SYNC_CHANNELS)) {
             int saved_errno = status_result < 0 ? errno : EPROTO;
+
+            if(status_result < 0) {
+                dbglog(DBG_ERROR,
+                       "snd_init(): firmware status query failed: %s\n",
+                       strerror(saved_errno));
+            }
+            else {
+                dbglog(DBG_ERROR,
+                       "snd_init(): firmware feature mask %08" PRIx32
+                       " lacks synchronized channel start\n",
+                       status.features);
+            }
 
             snd_shutdown();
             errno = saved_errno;
@@ -306,6 +475,177 @@ int snd_channels_start_sync(uint64_t channels) {
     return snd_sh4_to_aica(tmp, cmd->size);
 }
 
+int snd_channel_config_init(snd_channel_config_t *config) {
+    size_t i;
+
+    if(!config) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(config, 0, sizeof(*config));
+    config->format = SND_CHANNEL_SAMPLE_PCM16;
+    config->sample_rate = 44100;
+    config->volume = 255;
+    config->pan = 128;
+    config->envelope.attack_rate = 31;
+    config->envelope.release_rate = 31;
+    config->envelope.key_rate_scaling = 15;
+    config->routing.direct_level = 15;
+    config->filter.resonance = 4;
+    for(i = 0; i < 5; ++i)
+        config->filter.level[i] = 0x1ff8;
+    return 0;
+}
+
+int snd_channel_config_validate(const snd_channel_config_t *config) {
+    uint32_t sample_bytes;
+
+    if(!config || config->format < SND_CHANNEL_SAMPLE_PCM16 ||
+       config->format > SND_CHANNEL_SAMPLE_ADPCM_LOOP ||
+       config->sample_address < AICA_RAM_START ||
+       config->sample_address >= AICA_RAM_END || !config->sample_count ||
+       config->sample_count > 65534 ||
+       config->loop_start >= config->loop_end ||
+       config->loop_end > config->sample_count ||
+       !channel_fields_valid(config, SND_CHANNEL_UPDATE_ALL)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(config->format == SND_CHANNEL_SAMPLE_PCM16)
+        sample_bytes = config->sample_count * 2;
+    else if(config->format == SND_CHANNEL_SAMPLE_PCM8)
+        sample_bytes = config->sample_count;
+    else
+        sample_bytes = (config->sample_count + 1) / 2;
+
+    if(sample_bytes > AICA_RAM_END - config->sample_address) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return 0;
+}
+
+static int channel_control_submit(unsigned int channel, uint32_t operation,
+                                  uint32_t fields, uint32_t start_flags,
+                                  const snd_channel_config_t *config) {
+    AICA_CMDSTR_CHANNEL_CONTROL(packet, command, control);
+
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+    if(!(driver_features & SND_DRIVER_FEATURE_CHANNEL_CONTROL)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    memset(packet, 0, sizeof(packet));
+    command->size = AICA_CMDSTR_CHANNEL_CONTROL_SIZE;
+    command->cmd = AICA_CMD_CHANNEL_CONTROL;
+    command->cmd_id = channel;
+    control->operation = operation;
+    control->fields = fields;
+    control->start_flags = start_flags;
+    if(config)
+        channel_config_pack(&control->config, config);
+    return snd_sh4_to_aica(packet, command->size);
+}
+
+int snd_channel_start(unsigned int channel,
+                      const snd_channel_config_t *config, uint32_t flags) {
+    if(channel >= 64 || (flags & ~SND_CHANNEL_START_DELAYED) ||
+       snd_channel_config_validate(config) < 0) {
+        if(channel >= 64 || (flags & ~SND_CHANNEL_START_DELAYED))
+            errno = EINVAL;
+        return -1;
+    }
+
+    return channel_control_submit(channel, AICA_CHANNEL_OP_START, 0,
+                                  flags, config);
+}
+
+int snd_channel_update(unsigned int channel,
+                       const snd_channel_config_t *config, uint32_t fields) {
+    if(channel >= 64 || !config || !fields ||
+       (fields & ~SND_CHANNEL_UPDATE_ALL) ||
+       !channel_fields_valid(config, fields)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return channel_control_submit(channel, AICA_CHANNEL_OP_UPDATE, fields, 0,
+                                  config);
+}
+
+int snd_channel_stop(unsigned int channel) {
+    if(channel >= 64) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return channel_control_submit(channel, AICA_CHANNEL_OP_STOP, 0, 0, NULL);
+}
+
+int snd_channel_get_status_ex(unsigned int channel,
+                              snd_channel_status_ex_t *status) {
+    aica_channel_status_ext_t snapshot;
+    uint32_t *words = (uint32_t *)&snapshot;
+    uint32_t address;
+    uint32_t first_sequence;
+    uint32_t last_sequence;
+    size_t word;
+    unsigned int attempt;
+
+    if(channel >= 64 || !status) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memset(status, 0, sizeof(*status));
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+    if(!(driver_features & SND_DRIVER_FEATURE_CHANNEL_CONTROL)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    address = SPU_RAM_UNCACHED_BASE + AICA_CHANNEL_STATUS(channel);
+    g2_lock_scoped();
+
+    for(attempt = 0; attempt < 8; ++attempt) {
+        g2_fifo_wait();
+        first_sequence = g2_read_32_raw(address);
+        if(first_sequence & 1)
+            continue;
+
+        words[0] = first_sequence;
+        for(word = 1; word < sizeof(snapshot) / sizeof(words[0]); ++word) {
+            if((word & 7) == 0)
+                g2_fifo_wait();
+            words[word] = g2_read_32_raw(address + word * sizeof(words[0]));
+        }
+        g2_fifo_wait();
+        last_sequence = g2_read_32_raw(address);
+
+        if(first_sequence == last_sequence && !(last_sequence & 1)) {
+            status->sequence = last_sequence;
+            status->configured = snapshot.configured != 0;
+            status->playing = snapshot.playing != 0;
+            status->position = snapshot.position & 0xffff;
+            channel_config_unpack(&status->config, &snapshot.config);
+            return 0;
+        }
+    }
+
+    errno = EAGAIN;
+    return -1;
+}
+
 /* Transfer one packet of data from the AICA->SH4 queue. Expects to
    find AICA_CMD_MAX_SIZE dwords of space available. Returns -1
    if failure, 0 for no packets available, 1 otherwise. Failure
@@ -349,7 +689,9 @@ int snd_aica_to_sh4(void *packetout) {
 
     if(size < sizeof(aica_cmd_t) / sizeof(uint32_t) ||
        size >= AICA_CMD_MAX_SIZE) {
-        dbglog(DBG_ERROR, "snd_aica_to_sh4(): packet larger than %d dwords\n", AICA_CMD_MAX_SIZE);
+        dbglog(DBG_ERROR,
+               "snd_aica_to_sh4(): invalid packet size %" PRIu32
+               " dwords\n", size);
         errno = EPROTO;
         mutex_unlock(&response_mutex);
         return -1;
@@ -358,6 +700,10 @@ int snd_aica_to_sh4(void *packetout) {
     available = head >= tail ? head - tail : queue_size - (tail - head);
 
     if(size > available / sizeof(uint32_t)) {
+        dbglog(DBG_ERROR,
+               "snd_aica_to_sh4(): packet size %" PRIu32
+               " exceeds available response words %" PRIu32 "\n",
+               size, available / (uint32_t)sizeof(uint32_t));
         errno = EPROTO;
         mutex_unlock(&response_mutex);
         return -1;
@@ -512,12 +858,20 @@ int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
                 const aica_driver_info_t *info;
 
                 if(response->size != AICA_CMDSTR_DRIVER_INFO_SIZE) {
+                    dbglog(DBG_ERROR,
+                           "snd_driver_get_status(): response size %" PRIu32
+                           ", expected %zu\n", response->size,
+                           (size_t)AICA_CMDSTR_DRIVER_INFO_SIZE);
                     errno = EPROTO;
                     goto unlock_response_queue;
                 }
 
                 info = (const aica_driver_info_t *)response->cmd_data;
                 if(info->protocol_version != AICA_DRIVER_PROTOCOL_VERSION) {
+                    dbglog(DBG_ERROR,
+                           "snd_driver_get_status(): protocol %08" PRIx32
+                           ", expected %08x\n", info->protocol_version,
+                           AICA_DRIVER_PROTOCOL_VERSION);
                     errno = EPROTO;
                     goto unlock_response_queue;
                 }
@@ -539,6 +893,10 @@ int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
                 goto unlock_response_queue;
             }
 
+            dbglog(DBG_ERROR,
+                   "snd_driver_get_status(): unexpected response cmd=%08"
+                   PRIx32 " id=%08" PRIx32 " expected=%08" PRIx32 "\n",
+                   response->cmd, response->cmd_id, command_id);
             errno = EPROTO;
             goto unlock_response_queue;
         }

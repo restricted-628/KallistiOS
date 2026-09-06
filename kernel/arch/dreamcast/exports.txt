@@ -201,6 +201,12 @@ snd_sh4_to_aica_start
 snd_sh4_to_aica_stop
 snd_channels_start_sync
 snd_driver_get_status
+snd_channel_config_init
+snd_channel_config_validate
+snd_channel_start
+snd_channel_update
+snd_channel_stop
+snd_channel_get_status_ex
 snd_aica_to_sh4
 snd_poll_resp
 snd_sfx_unload_all

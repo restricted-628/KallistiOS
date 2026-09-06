@@ -171,11 +171,36 @@ the driver. The synchronous SPU primitives, high-level sound manager, and
 ordinary hardware initialization create neither worker. Request objects and
 their main-RAM endpoints remain caller-owned.
 
+## Third closure tranche
+
+The default firmware now negotiates complete checked channel control without
+changing the established 64-byte channel packet. One native configuration
+covers sample and loop geometry, frequency, volume, pan, amplitude envelope,
+pitch and amplitude LFOs, direct level, DSP input and send level, and every
+time-variant filter point and rate. Starts may be staged for the existing
+64-channel synchronized key-on command, while live updates select only the
+fields that should change.
+
+Validation occurs before queue admission and again in the ARM firmware before
+register programming. Sample ranges cannot overlap firmware-reserved sound
+RAM, every logical value is range checked, and loop and sample geometry are
+bounded before byte counts are derived. Existing effect and stream packets
+remain accepted and are reflected into the same status vocabulary.
+
+Each channel has a firmware-owned coherent snapshot in the reserved control
+area below sample RAM. An even sequence counter brackets configuration,
+position, and key-on publication; `snd_channel_get_status_ex()` uses bounded
+retry rather than a command-response wait. The snapshot is allocation-free
+and does not create a worker or require application polling for firmware
+progress.
+
 ## Resource model
 
 The first tranche adds no thread, fiber, periodic callback, permanent buffer,
 or dynamic allocation. The second tranche allocates request objects and starts
 its two bounded workers only after the first asynchronous transfer submission.
+The third tranche uses the firmware's previously reserved control area below
+the unchanged sample-RAM pool boundary; it adds no SH-4 allocation or worker.
 Applications using only synchronous sound retain the earlier resource profile.
 
 Future optional services must be lazy. The default stream path remains driven
@@ -184,17 +209,17 @@ explicit lifecycle choice.
 
 ## Remaining order
 
-1. Complete checked channel envelope, filter, routing, and coherent status.
-2. Complete checked stream lifecycle, progress, underrun reporting, and live
+1. Complete checked stream lifecycle, progress, underrun reporting, and live
    controls; then add an optional service adapter.
-3. Add checked DSP program, routing, and output control.
-4. Build optional bank and sequence libraries plus host-side content tools.
-5. Add optional spatial helpers integrated with the established math stack.
+2. Add checked DSP program, routing, and output control.
+3. Build optional bank and sequence libraries plus host-side content tools.
+4. Add optional spatial helpers integrated with the established math stack.
 
 ## Validation boundary
 
-The shared packet layout has a host-side golden test, and both SH-4 and ARM
-sources must build in the same tree before the embedded firmware is updated.
+The shared packet layout, including complete channel control and coherent
+status, has a host-side golden test. Both SH-4 and ARM sources must build in
+the same tree before the embedded firmware is updated.
 Emulation can validate command flow and ordinary playback. Physical hardware
 is still required to establish exact multi-channel start skew, maximum-buffer
 loop behavior, DSP behavior, and recovery from malformed or interrupted

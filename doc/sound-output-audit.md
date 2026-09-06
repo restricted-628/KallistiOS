@@ -88,6 +88,21 @@ or request pool is reserved by `spu_init()`.
 bit while holding the G2 lock. Existing `snd_get_pos()` and
 `snd_is_playing()` now reject channel numbers outside 0 through 63.
 
+### Complete checked channels
+
+`snd_channel_start()` configures the complete per-slot hardware surface:
+bounded sample and loop geometry, pitch, level, pan, amplitude envelope, LFO,
+direct and DSP routing, and the time-variant filter. Live updates use an
+explicit field mask, and `snd_channel_stop()` performs a checked key-off
+through the configured release envelope. The firmware independently validates
+every packet before changing channel registers.
+
+The established effect and stream managers continue to use their compact
+legacy packets. Both packet families publish into one versioned coherent
+status area, so `snd_channel_get_status_ex()` observes old and new channel
+users through the same logical configuration. Sequence-checked reads are
+bounded and allocation-free.
+
 ## Resource model
 
 These facilities preserve KOS's link-time, pay-for-use model. They add no
@@ -105,8 +120,8 @@ service may be considered separately, with measured stack use and explicit
 lifecycle, rather than imposing a thread on applications that do not request
 one.
 
-Complete channel controls, checked stream status, DSP routing, and optional
-content playback remain staged work. Their ownership and order are recorded in
+Checked stream status, DSP program management, and optional content playback
+remain staged work. Their ownership and order are recorded in
 `audio-capability-audit.md`.
 
 ## Validation

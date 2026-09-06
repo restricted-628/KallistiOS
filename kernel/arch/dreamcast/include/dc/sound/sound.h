@@ -135,6 +135,7 @@ void snd_shutdown(void);
 #define SND_DRIVER_FEATURE_SYNC_CHANNELS 0x00000001u
 #define SND_DRIVER_FEATURE_VALIDATION    0x00000002u
 #define SND_DRIVER_FEATURE_POSITION      0x00000004u
+#define SND_DRIVER_FEATURE_CHANNEL_CONTROL 0x00000008u
 /** @} */
 
 /** \brief Coherent AICA firmware capability and health snapshot. */
@@ -317,6 +318,184 @@ uint16_t snd_get_pos(unsigned int ch);
     \return                 True if the channel is playing.
 */
 bool snd_is_playing(unsigned int ch);
+
+/** \defgroup audio_channel_control Checked Channel Control
+    \brief Complete low-level AICA channel configuration
+    \ingroup audio_driver
+
+    These calls extend the existing effect and stream managers. They do not
+    reserve channels, sound RAM, a thread, or a service object. Applications
+    that manage channels through a higher-level KOS facility should retain
+    that facility's ownership rules.
+
+    @{
+*/
+
+/** \brief Sample encoding accepted by the checked channel API. */
+typedef enum snd_channel_sample_format {
+    SND_CHANNEL_SAMPLE_PCM16 = 0, /**< Signed 16-bit linear PCM. */
+    SND_CHANNEL_SAMPLE_PCM8 = 1,  /**< Signed 8-bit linear PCM. */
+    SND_CHANNEL_SAMPLE_ADPCM = 2, /**< 4-bit ADPCM. */
+    SND_CHANNEL_SAMPLE_ADPCM_LOOP = 3 /**< Loop-aware 4-bit ADPCM. */
+} snd_channel_sample_format_t;
+
+/** \brief Amplitude-envelope parameters in hardware rate units. */
+typedef struct snd_channel_envelope {
+    uint8_t attack_rate;      /**< Attack rate, 0 through 31. */
+    uint8_t decay1_rate;      /**< First decay rate, 0 through 31. */
+    uint8_t decay2_rate;      /**< Second decay rate, 0 through 31. */
+    uint8_t release_rate;     /**< Key-off release rate, 0 through 31. */
+    uint8_t decay_level;      /**< First-to-second decay threshold, 0 through 31. */
+    uint8_t key_rate_scaling; /**< Key-rate scaling, 0 through 15. */
+    bool hold;                /**< Hold the attack level when true. */
+    bool loop_link;           /**< Link envelope decay to loop progress. */
+} snd_channel_envelope_t;
+
+/** \brief Per-channel pitch and amplitude LFO parameters. */
+typedef struct snd_channel_lfo {
+    bool reset_on_start;       /**< Reset phase when the channel starts. */
+    uint8_t frequency;         /**< Frequency index, 0 through 31. */
+    uint8_t pitch_waveform;    /**< Pitch waveform, 0 through 3. */
+    uint8_t pitch_depth;       /**< Pitch depth, 0 through 7. */
+    uint8_t amplitude_waveform;/**< Amplitude waveform, 0 through 3. */
+    uint8_t amplitude_depth;   /**< Amplitude depth, 0 through 7. */
+} snd_channel_lfo_t;
+
+/** \brief Direct-output and DSP-effect routing. */
+typedef struct snd_channel_routing {
+    uint8_t effect_channel; /**< DSP mixer input, 0 through 15. */
+    uint8_t effect_send;    /**< DSP send level, 0 through 15. */
+    uint8_t direct_level;   /**< Direct output level, 0 through 15. */
+} snd_channel_routing_t;
+
+/** \brief Time-variant low-pass filter parameters. */
+typedef struct snd_channel_filter {
+    bool enabled;             /**< Enable the low-pass filter. */
+    uint8_t resonance;        /**< Resonance, 0 through 31. */
+    uint16_t level[5];        /**< Cutoff envelope points, 0 through 8191. */
+    uint8_t attack_rate;      /**< Filter attack rate, 0 through 31. */
+    uint8_t decay1_rate;      /**< First filter decay rate, 0 through 31. */
+    uint8_t decay2_rate;      /**< Second filter decay rate, 0 through 31. */
+    uint8_t release_rate;     /**< Filter release rate, 0 through 31. */
+} snd_channel_filter_t;
+
+/** \brief Complete logical configuration for one AICA channel. */
+typedef struct snd_channel_config {
+    uint32_t sample_address;             /**< Sound-RAM byte offset. */
+    snd_channel_sample_format_t format;  /**< Sample encoding. */
+    uint32_t sample_count;               /**< Number of sample frames. */
+    bool loop_enabled;                   /**< Enable forward looping. */
+    uint32_t loop_start;                 /**< First loop frame. */
+    uint32_t loop_end;                   /**< Exclusive loop end frame. */
+    uint32_t sample_rate;                /**< Playback frequency in Hz. */
+    uint8_t volume;                      /**< Linear volume, 0 through 255. */
+    uint8_t pan;                         /**< 0 left, 128 center, 255 right. */
+    snd_channel_envelope_t envelope;     /**< Amplitude envelope. */
+    snd_channel_lfo_t lfo;               /**< Pitch and amplitude LFO. */
+    snd_channel_routing_t routing;       /**< Direct and DSP routing. */
+    snd_channel_filter_t filter;         /**< Time-variant filter. */
+} snd_channel_config_t;
+
+/** \brief Initialize a channel configuration with safe audible defaults.
+
+    The resulting configuration still requires caller-supplied sample
+    address, sample count, and loop end before it can be started.
+
+    \param config          Configuration to initialize.
+    \retval 0              On success.
+    \retval -1             When config is NULL, with errno set to EINVAL.
+*/
+int snd_channel_config_init(snd_channel_config_t *config);
+
+/** \brief Validate a complete channel start configuration.
+
+    \param config          Configuration to validate.
+    \retval 0              When every field and sound-RAM range is valid.
+    \retval -1             On invalid input, with errno set to EINVAL.
+*/
+int snd_channel_config_validate(const snd_channel_config_t *config);
+
+/** \brief Delay key-on until snd_channels_start_sync() selects the channel. */
+#define SND_CHANNEL_START_DELAYED 0x00000001u
+
+/** \brief Start or stage one completely configured channel.
+
+    Success means the validated command was admitted to the firmware queue;
+    the firmware independently validates it again before touching hardware.
+
+    \param ch              Channel number, 0 through 63.
+    \param config          Complete channel configuration.
+    \param flags           Zero or SND_CHANNEL_START_DELAYED.
+    \retval 0              On successful submission.
+    \retval -1             On error with errno set.
+*/
+int snd_channel_start(unsigned int ch, const snd_channel_config_t *config,
+                      uint32_t flags);
+
+/** \defgroup audio_channel_update Channel Update Fields
+    \brief Fields accepted by snd_channel_update()
+    \ingroup audio_channel_control
+    @{
+*/
+#define SND_CHANNEL_UPDATE_FREQUENCY 0x00000001u
+#define SND_CHANNEL_UPDATE_VOLUME    0x00000002u
+#define SND_CHANNEL_UPDATE_PAN       0x00000004u
+#define SND_CHANNEL_UPDATE_ENVELOPE  0x00000008u
+#define SND_CHANNEL_UPDATE_LFO       0x00000010u
+#define SND_CHANNEL_UPDATE_ROUTING   0x00000020u
+#define SND_CHANNEL_UPDATE_FILTER    0x00000040u
+#define SND_CHANNEL_UPDATE_ALL       0x0000007fu
+/** @} */
+
+/** \brief Update selected controls on a configured channel.
+
+    Sample address, encoding, loop geometry, and length are start-time
+    properties. The selected live fields are validated before the command is
+    queued and the firmware validates them again before updating registers.
+    Values belonging only to unselected fields are ignored.
+
+    \param ch              Channel number, 0 through 63.
+    \param config          Source of the selected values.
+    \param fields          Nonzero SND_CHANNEL_UPDATE_* mask.
+    \retval 0              On successful command submission.
+    \retval -1             On error with errno set.
+*/
+int snd_channel_update(unsigned int ch, const snd_channel_config_t *config,
+                       uint32_t fields);
+
+/** \brief Key off a channel through the configured release envelope.
+
+    \param ch              Channel number, 0 through 63.
+    \retval 0              On successful command submission.
+    \retval -1             On error with errno set.
+*/
+int snd_channel_stop(unsigned int ch);
+
+/** \brief Complete coherent state for one checked channel. */
+typedef struct snd_channel_status_ex {
+    uint32_t sequence;          /**< Monotonic even firmware snapshot sequence. */
+    bool configured;           /**< Whether a start configuration was accepted. */
+    bool playing;              /**< Current hardware key-on state. */
+    uint16_t position;         /**< Current sample-frame position. */
+    snd_channel_config_t config; /**< Last accepted logical configuration. */
+} snd_channel_status_ex_t;
+
+/** \brief Read one coherent firmware-owned channel snapshot.
+
+    This is an allocation-free shared-memory query. It retries if the ARM
+    updates the selected channel during the read and returns EAGAIN if a stable
+    snapshot cannot be obtained within a bounded number of attempts.
+
+    \param ch              Channel number, 0 through 63.
+    \param status          Receives the coherent snapshot.
+    \retval 0              On success.
+    \retval -1             On error, with errno set to EINVAL, ENODEV,
+                           ENOTSUP, or EAGAIN.
+*/
+int snd_channel_get_status_ex(unsigned int ch,
+                              snd_channel_status_ex_t *status);
+
+/** @} */
 
 /** \brief Coherent playback state for one AICA channel. */
 typedef struct snd_channel_status {

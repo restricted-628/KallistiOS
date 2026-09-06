@@ -5,6 +5,11 @@ waveform on both channels without starting either one, and then starts both
 with one 64-channel synchronization command. Using channels on opposite sides
 of the 32-bit boundary verifies both halves of the public channel mask.
 
+Each channel is submitted through the complete checked configuration API with
+an explicit amplitude envelope. After synchronized key-on, the example reads
+both coherent firmware snapshots and verifies their retained pan and envelope
+state before reporting success.
+
 The generated tone is panned hard left and right. It plays for two seconds,
 then the example stops the channels and releases all sound-RAM and channel
 resources. It also prints the negotiated firmware version and feature mask.

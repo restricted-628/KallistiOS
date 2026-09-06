@@ -359,6 +359,14 @@ lifecycle and naming conventions.
   malformed queue records cannot trap its command loop. PCM stream maxima now
   fit the 16-bit hardware loop endpoint after alignment. These changes add no
   service thread, allocation, or periodic work.
+* Added negotiated complete AICA channel control for amplitude envelopes,
+  pitch and amplitude LFOs, direct and DSP routing, and time-variant filters.
+  Checked starts, selected live updates, release-aware stops, and coherent
+  sequence-checked status share the existing firmware and channel ownership;
+  legacy effect and stream packets remain supported and visible through the
+  same status vocabulary. ARM queue setup no longer reads back posted sound-RAM
+  writes to derive capacity, the ARM7 FIQ enable updates the complete status
+  register, and firmware regeneration now rebuilds its embedding object.
 * The bundled AICA firmware now reports a versioned capability and health
   snapshot. Sound initialization rejects silent or incompatible firmware, and
   applications can inspect queue pressure and rejected or malformed commands

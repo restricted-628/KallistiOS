@@ -97,6 +97,109 @@ static inline int calc_aica_pan(int x) {
     }
 }
 
+static uint32 calc_aica_pitch(uint32 freq) {
+    uint32 freq_lo;
+    uint32 freq_base = 5644800;
+    int freq_hi = 7;
+
+    while(freq < freq_base && freq_hi > -8) {
+        freq_base >>= 1;
+        --freq_hi;
+    }
+
+    freq_lo = (freq << 10) / freq_base;
+    return (((uint32)freq_hi & 0x1f) << 11) | (freq_lo & 1023);
+}
+
+static void write_envelope(int ch, const aica_channel_config_t *config) {
+    CHNREG32(ch, 0x10) =
+        (config->decay2_rate << 11) |
+        (config->decay1_rate << 6) |
+        (config->envelope_hold << 5) |
+        config->attack_rate;
+    CHNREG32(ch, 0x14) =
+        (config->envelope_loop_link << 14) |
+        (config->key_rate_scaling << 10) |
+        (config->decay_level << 5) |
+        config->release_rate;
+}
+
+static void write_lfo(int ch, const aica_channel_config_t *config) {
+    CHNREG32(ch, 0x1c) =
+        (config->lfo_reset << 15) |
+        (config->lfo_frequency << 10) |
+        (config->pitch_lfo_wave << 8) |
+        (config->pitch_lfo_depth << 5) |
+        (config->amplitude_lfo_wave << 3) |
+        config->amplitude_lfo_depth;
+}
+
+static void write_routing(int ch, const aica_channel_config_t *config) {
+    CHNREG8(ch, 0x20) = config->effect_channel;
+    CHNREG8(ch, 0x21) = config->effect_send;
+    CHNREG8(ch, 0x25) = config->direct_level;
+}
+
+static void write_filter(int ch, const aica_channel_config_t *config) {
+    CHNREG8(ch, 0x28) =
+        (config->filter_enabled ? 0 : 0x20) |
+        config->filter_resonance;
+    CHNREG32(ch, 0x2c) = config->filter_level[0];
+    CHNREG32(ch, 0x30) = config->filter_level[1];
+    CHNREG32(ch, 0x34) = config->filter_level[2];
+    CHNREG32(ch, 0x38) = config->filter_level[3];
+    CHNREG32(ch, 0x3c) = config->filter_level[4];
+    CHNREG32(ch, 0x40) =
+        (config->filter_attack_rate << 8) |
+        config->filter_decay1_rate;
+    CHNREG32(ch, 0x44) =
+        (config->filter_decay2_rate << 8) |
+        config->filter_release_rate;
+}
+
+void aica_channel_start(int ch, const aica_channel_config_t *config,
+                        int delayed) {
+    uint32 play_control;
+
+    aica_stop(ch);
+
+    CHNREG32(ch, 0x08) = config->loopstart;
+    CHNREG32(ch, 0x0c) = config->loopend;
+    CHNREG32(ch, 0x18) = calc_aica_pitch(config->freq);
+    write_envelope(ch, config);
+    write_lfo(ch, config);
+    write_routing(ch, config);
+    write_filter(ch, config);
+    CHNREG8(ch, 0x24) = calc_aica_pan(config->pan);
+    CHNREG8(ch, 0x29) = calc_aica_vol(config->vol);
+    CHNREG32(ch, 0x04) = config->base & 0xffff;
+
+    play_control = (config->type << 7) | (config->base >> 16);
+    if(config->loop)
+        play_control |= 0x0200;
+
+    CHNREG32(ch, 0x00) = delayed ? play_control :
+        0xc000 | play_control;
+}
+
+void aica_channel_update(int ch, const aica_channel_config_t *config,
+                         uint32 fields) {
+    if(fields & AICA_CHANNEL_UPDATE_FREQUENCY)
+        CHNREG32(ch, 0x18) = calc_aica_pitch(config->freq);
+    if(fields & AICA_CHANNEL_UPDATE_VOLUME)
+        CHNREG8(ch, 0x29) = calc_aica_vol(config->vol);
+    if(fields & AICA_CHANNEL_UPDATE_PAN)
+        CHNREG8(ch, 0x24) = calc_aica_pan(config->pan);
+    if(fields & AICA_CHANNEL_UPDATE_ENVELOPE)
+        write_envelope(ch, config);
+    if(fields & AICA_CHANNEL_UPDATE_LFO)
+        write_lfo(ch, config);
+    if(fields & AICA_CHANNEL_UPDATE_ROUTING)
+        write_routing(ch, config);
+    if(fields & AICA_CHANNEL_UPDATE_FILTER)
+        write_filter(ch, config);
+}
+
 /* Sets up a sound channel completely. This is generally good if you want
    a quick and dirty way to play notes. If you want a more comprehensive
    set of routines (more like PC wavetable cards) see below.
@@ -123,8 +226,6 @@ void aica_play(int ch, int delay) {
     uint32 pan      = chans[ch].pan;
     uint32 loopflag = chans[ch].loop;
 
-    uint32 freq_lo, freq_base = 5644800;
-    int freq_hi = 7;
     uint32 playCont;
 
     /* Stop the channel (if it's already playing) */
@@ -133,13 +234,6 @@ void aica_play(int ch, int delay) {
     /* Need to convert frequency to floating point format
        (freq_hi is exponent, freq_lo is mantissa)
        Formula is freq = 44100*2^freq_hi*(1+freq_lo/1024) */
-    while(freq < freq_base && freq_hi > -8) {
-        freq_base >>= 1;
-        --freq_hi;
-    }
-
-    freq_lo = (freq << 10) / freq_base;
-
     /* Envelope setup. The first of these is the loop point,
        e.g., where the sample starts over when it loops. The second
        is the loop end. This is the full length of the sample when
@@ -150,7 +244,7 @@ void aica_play(int ch, int delay) {
     CHNREG32(ch, 12) = loopend & 0xffff;
 
     /* Write resulting values */
-    CHNREG32(ch, 24) = (freq_hi << 11) | (freq_lo & 1023);
+    CHNREG32(ch, 24) = calc_aica_pitch(freq);
 
     /* Convert the incoming pan into a hardware value and set it */
     CHNREG8(ch, 36) = calc_aica_pan(pan);
@@ -234,17 +328,7 @@ void aica_pan(int ch) {
 
 /* Set channel frequency */
 void aica_freq(int ch) {
-    uint32 freq = chans[ch].freq;
-    uint32 freq_lo, freq_base = 5644800;
-    int freq_hi = 7;
-
-    while(freq < freq_base && freq_hi > -8) {
-        freq_base >>= 1;
-        freq_hi--;
-    }
-
-    freq_lo = (freq << 10) / freq_base;
-    CHNREG32(ch, 24) = (freq_hi << 11) | (freq_lo & 1023);
+    CHNREG32(ch, 24) = calc_aica_pitch(chans[ch].freq);
 }
 
 /* Get channel position */
@@ -262,4 +346,8 @@ int aica_get_pos(int ch) {
     chans[ch].pos = SNDREG32(0x2814) & 0xffff;
 
     return chans[ch].pos;
+}
+
+int aica_is_playing(int ch) {
+    return (CHNREG32(ch, 0) & AICA_CHANNEL_KEYONB) != 0;
 }
