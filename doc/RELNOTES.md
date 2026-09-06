@@ -11,6 +11,15 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a checked stream lifecycle over the established allocation and polling
+  model. Streams now provide validated complete channel controls, coherent
+  source/buffered/played progress, underrun counts, live updates, bounded stop
+  and destruction, and explicit lifecycle/error state. Short callback blocks
+  are silence-padded without source over-read or stale ring data, exact stereo
+  tails avoid fixed-block splitters, and key-on waits for both prefill halves.
+  Existing stream entry points remain available and use the checked engine;
+  no automatic poller, worker, or permanent buffer was added.
+
 * Corrected parallel-build races in all added PVR example Makefiles. Their
   default target no longer runs ELF deletion concurrently with linking, clean
   owns artifact removal, phony lifecycle targets are explicit, and each ELF

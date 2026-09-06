@@ -235,6 +235,7 @@ snd_stream_start
 snd_stream_start_pcm8
 snd_stream_start_adpcm
 snd_stream_queue_go
+snd_stream_queue_go_ex
 snd_stream_stop
 snd_stream_poll
 snd_stream_volume
@@ -242,6 +243,14 @@ snd_stream_pan
 snd_stream_alloc
 snd_stream_destroy
 snd_stream_reinit
+snd_stream_config_init
+snd_stream_config_validate
+snd_stream_start_ex
+snd_stream_stop_ex
+snd_stream_poll_ex
+snd_stream_update
+snd_stream_get_status
+snd_stream_destroy_ex
 snd_pcm16_split
 snd_pcm16_split_sq
 snd_pcm8_split

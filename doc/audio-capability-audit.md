@@ -207,10 +207,38 @@ Future optional services must be lazy. The default stream path remains driven
 by the application, while service-thread or service-fiber operation is an
 explicit lifecycle choice.
 
+## Fourth closure tranche
+
+The existing stream allocator and explicit poll loop now feed a checked
+lifecycle rather than a second playback system. A complete stream
+configuration selects encoding, frequency, channel count, transfer deadline,
+and the full envelope, LFO, routing, filter, volume, and pan surface for each
+physical channel. Starts prefill the whole circular buffer, wait for the last
+DMA before synchronized key-on, and preserve the existing optional queue gate.
+
+Callback data is copied into driver-owned staging before asynchronous DMA can
+outlive the callback. Short and empty returns initialize the remainder with
+silence, exact stereo tails bypass fixed-block assembly splitters, and the
+producer advances across the initialized interval rather than repeatedly
+targeting stale ring data. DMA ownership and channel release are drained with
+nonzero caller-selected deadlines before checked destruction can free sound
+RAM.
+
+Coherent status reports lifecycle state, the last error, logical source bytes,
+buffered bytes including substituted silence, estimated consumed bytes, ring
+positions, poll and underrun counts, DMA activity, and both physical-channel
+playback states. Live updates reuse checked channel control and cover pitch,
+level, pan, envelope, LFO, routing, and filter fields. The compatibility start,
+stop, poll, volume, and pan calls route through these checked internals.
+
+This tranche adds one static recursive manager mutex but no thread, fiber,
+periodic work, or new global audio buffer. Explicit application polling remains
+the zero-service default.
+
 ## Remaining order
 
-1. Complete checked stream lifecycle, progress, underrun reporting, and live
-   controls; then add an optional service adapter.
+1. Add an optional, lazily initialized stream service adapter with measured or
+   caller-selected execution storage.
 2. Add checked DSP program, routing, and output control.
 3. Build optional bank and sequence libraries plus host-side content tools.
 4. Add optional spatial helpers integrated with the established math stack.

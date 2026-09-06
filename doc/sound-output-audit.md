@@ -103,6 +103,23 @@ status area, so `snd_channel_get_status_ex()` observes old and new channel
 users through the same logical configuration. Sequence-checked reads are
 bounded and allocation-free.
 
+### Checked stream lifecycle
+
+The stream manager now has checked configuration, start, stop, poll, update,
+status, and destruction calls. The checked start path uses complete channel
+control for both halves of a stereo stream and does not key on until both
+prefill transfers are complete. Status separates bytes supplied by callbacks
+from bytes initialized in the ring, counts underruns and polls, estimates
+absolute consumption from the published play position, and exposes the owned
+physical channels without requiring a background service.
+
+Short callback results are padded with silence for the complete writable
+interval. They do not read beyond the callback buffer, enter a fixed-32-byte
+stereo splitter with a partial block, or leave old ring contents audible. A
+driver-owned staging buffer remains the source of asynchronous DMA, so a
+callback may reuse its own buffer immediately after returning. Stop and destroy
+wait only to a caller-provided nonzero deadline before releasing sound RAM.
+
 ## Resource model
 
 These facilities preserve KOS's link-time, pay-for-use model. They add no
@@ -120,9 +137,9 @@ service may be considered separately, with measured stack use and explicit
 lifecycle, rather than imposing a thread on applications that do not request
 one.
 
-Checked stream status, DSP program management, and optional content playback
-remain staged work. Their ownership and order are recorded in
-`audio-capability-audit.md`.
+An automatic stream service remains deliberately separate and opt-in. DSP
+program management and optional content playback remain staged work. Their
+ownership and order are recorded in `audio-capability-audit.md`.
 
 ## Validation
 
