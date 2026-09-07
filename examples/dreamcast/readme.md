@@ -251,6 +251,9 @@ This page serves as an index for all KallistiOS examples.
   - [**channel-sync**](sound/channel-sync/): Starts AICA channels 31 and 32
     together through checked envelope-aware configurations and one
     synchronized 64-channel key-on, then verifies coherent firmware snapshots
+  - [**dsp-control**](sound/dsp-control/): Validates checked DSP program
+    geometry, coherent state, effect-return control, and bounded clearing
+    without requiring authored effect content
   - ghettoplay-vorbis
   - hello-adx
   - hello-mp3

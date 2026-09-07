@@ -92,6 +92,7 @@ __BEGIN_DECLS
 #include <dc/scif.h>
 #include <dc/sci.h>
 #include <dc/sd.h>
+#include <dc/sound/dsp.h>
 #include <dc/sound/stream.h>
 #include <dc/sound/stream_service.h>
 #include <dc/sound/sfxmgr.h>

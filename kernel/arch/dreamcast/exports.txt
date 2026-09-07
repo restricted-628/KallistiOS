@@ -256,6 +256,14 @@ snd_stream_service_add
 snd_stream_service_remove
 snd_stream_service_get_status
 snd_stream_service_destroy
+snd_dsp_program_init
+snd_dsp_program_validate
+snd_dsp_program_load
+snd_dsp_program_clear
+snd_dsp_outputs_set
+snd_dsp_output_set
+snd_dsp_output_get
+snd_dsp_get_status
 snd_pcm16_split
 snd_pcm16_split_sq
 snd_pcm8_split

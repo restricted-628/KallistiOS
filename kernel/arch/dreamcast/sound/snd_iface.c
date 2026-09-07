@@ -24,6 +24,7 @@
 #include <dc/sound/sound.h>
 
 #include "arm/aica_cmd_iface.h"
+#include "snd_iface_internal.h"
 
 /* Include the default firmware blob */
 #include "snd_stream_drv.c"
@@ -263,6 +264,68 @@ static int shared_queue_state(uint32_t queue_address, uint32_t region_end,
     return 0;
 }
 
+bool snd_iface_is_initialized(void) {
+    return initted != 0;
+}
+
+int snd_iface_exclusive_begin(uint32_t timeout_ms) {
+    uint64_t deadline;
+    bool empty;
+    bool processing;
+
+    if(!timeout_ms) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+
+    deadline = timer_ms_gettime64() + timeout_ms;
+    if(mutex_lock_timed(&queue_proc_mutex, timeout_ms) < 0)
+        return -1;
+
+    if(!initted) {
+        errno = ENODEV;
+        goto fail;
+    }
+
+    for(;;) {
+        if(shared_queue_state(SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE,
+                              AICA_MEM_RESP_QUEUE, &empty, &processing) < 0)
+            goto fail;
+        if(!processing) {
+            errno = EBUSY;
+            goto fail;
+        }
+        if(empty)
+            break;
+        if(timer_ms_gettime64() >= deadline) {
+            errno = ETIMEDOUT;
+            goto fail;
+        }
+        thd_pass();
+    }
+
+    /* No producer can enter snd_sh4_to_aica() while this recursive mutex is
+       held. Emptying the queue first means the ARM has finished the last
+       admitted command before processing is paused. */
+    g2_write_32(SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE +
+                offsetof(aica_queue_t, process_ok), 0);
+    return 0;
+
+fail:
+    mutex_unlock(&queue_proc_mutex);
+    return -1;
+}
+
+void snd_iface_exclusive_end(void) {
+    g2_write_32(SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE +
+                offsetof(aica_queue_t, process_ok), 1);
+    mutex_unlock(&queue_proc_mutex);
+}
+
 static int response_queue_peek_type(uint32_t *type) {
     uint32_t data_address;
     uint32_t queue_size;
@@ -350,6 +413,8 @@ int snd_init(void) {
             errno = saved_errno;
             return -1;
         }
+
+        snd_dsp_system_reset();
     }
 
     initted = 1;
@@ -361,6 +426,7 @@ int snd_init(void) {
 void snd_shutdown(void) {
     if(initted) {
         spu_disable();
+        snd_dsp_system_shutdown();
         snd_mem_shutdown();
         initted = 0;
         driver_features = 0;

@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added checked AICA DSP ownership to the base sound driver. Callers can
+  validate and load complete program images, receive computed work-memory
+  requirements, control all sixteen effect returns, inspect coherent state,
+  and clear the processor with a bounded command-queue drain. Replacement is
+  rejected while live channels route into the DSP; work memory is allocated
+  only for an installed image, and no thread or service is created.
+
 * Added a checked stream lifecycle over the established allocation and polling
   model. Streams now provide validated complete channel controls, coherent
   source/buffered/played progress, underrun counts, live updates, bounded stop

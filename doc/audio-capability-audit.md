@@ -245,11 +245,52 @@ shared cooperative fiber executor; doing so could stall unrelated services on
 the same carrier thread. Applications that poll directly retain the prior
 zero-thread, zero-allocation behavior.
 
-## Remaining order
+## Fifth closure tranche
 
-1. Add checked DSP program, routing, and output control.
-2. Build optional bank and sequence libraries plus host-side content tools.
-3. Add optional spatial helpers integrated with the established math stack.
+The base sound driver now owns a checked DSP image and effect-return contract.
+Programs describe all 128 coefficients, 64 address entries, 128 four-word
+steps, ring geometry, and an optional initial work-memory prefix. Pure
+validation rejects reserved instruction and coefficient bits, undefined input
+selectors, an empty stopped image, invalid ring geometry, malformed work
+initialization, and sound-memory controls on steps where the hardware cannot
+service them. It also computes the complete reachable work span,
+conservatively reserving the full 128 KiB address space when address-register
+variation could wrap.
+
+Loading is synchronous and failure-atomic with respect to validation,
+allocation, and work-memory initialization. KOS allocates a private 2 KiB
+aligned sound-RAM range before disturbing the installed image. The command
+queue is then drained and paused under its existing producer mutex. A load or
+clear is rejected while any playing channel has a nonzero effect send, so a
+new program cannot inherit live input routing accidentally.
+
+During replacement, all effect returns are muted, the old program is stopped,
+runtime tables and state are cleared without writing the live slot mixer, the
+new tables and ring are installed, and the program is published last. Output
+level and pan can be changed independently or as one sixteen-channel update;
+all public status is copied coherently under one driver mutex. Clear and sound
+shutdown stop the program, mute returns, release owned work memory, and leave
+the hardware in the all-zero stopped state.
+
+This tranche adds no thread, fiber, service, periodic callback, or permanent
+main-RAM buffer. It reuses the sound allocator and command transport and pays
+for work memory only while a DSP image is installed.
+
+## Sound stopping point
+
+The checked base now covers sound-RAM ownership and transfer, complete channel
+control and observation, synchronized start, checked stream lifecycle,
+optional stream servicing, and DSP program, routing, work-memory, output, and
+status control. This is the intended stopping point before higher-level sound
+content systems.
+
+The following remain deliberately deferred rather than incomplete base-driver
+work:
+
+1. Optional instrument-bank and sequence libraries plus host-side content
+   tools.
+2. Optional spatial helpers integrated with the established math stack.
+3. Authored DSP effects and their host-side assembler or compiler.
 
 ## Validation boundary
 
@@ -258,5 +299,5 @@ status, has a host-side golden test. Both SH-4 and ARM sources must build in
 the same tree before the embedded firmware is updated.
 Emulation can validate command flow and ordinary playback. Physical hardware
 is still required to establish exact multi-channel start skew, maximum-buffer
-loop behavior, DSP behavior, and recovery from malformed or interrupted
-traffic.
+loop behavior, DSP program behavior, effect-return mixer behavior, and
+recovery from malformed or interrupted traffic.
