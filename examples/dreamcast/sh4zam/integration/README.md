@@ -32,5 +32,9 @@ validation that does not provide a debug console.
 
 On 2026-08-23, the camera, frustum, geometry, and fiber paths produced the
 expected result in Flycast with both the SH-4 interpreter and dynarec. The
-compact-model extension has completed its GCC 16.2.0 target build and still
-requires an updated emulator run.
+compact-model extension subsequently passed in Flycast on 2026-09-08 with
+explicit interpreter and dynarec selections after the clean GCC 16.2.0 KOS
+build incorporating official master through `33c6e0ba`. Both runs printed the
+result above, covering model emission and matrix restoration as well as the
+earlier checks. This is an emulator correctness fixture, not a physical-device
+numerical or performance certification.

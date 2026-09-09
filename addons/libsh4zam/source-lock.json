@@ -1,0 +1,331 @@
+{
+  "upstream_url": "https://github.com/gyrovorbis/sh4zam",
+  "upstream_revision": "ad353dc2cea596a7c8c7b56b05cbe2e07b84ed4a",
+  "patch_sha256": "8a34bdb78c8cd7bbd6f0c8b0c5edd2c69b1ca0f3ede0841b08da4d31c89c5a1a",
+  "files": [
+    {
+      "upstream_path": "LICENSE",
+      "local_path": "addons/libsh4zam/LICENSE",
+      "upstream_sha256": "1a4848616ddb76da5ba8816daf21fedba78670ba35a1be12390d76d1c11ba95a",
+      "bundled_sha256": "1a4848616ddb76da5ba8816daf21fedba78670ba35a1be12390d76d1c11ba95a"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sh4/shz_matrix_sh4.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sh4/shz_matrix_sh4.inl.h",
+      "upstream_sha256": "3fb10e6e2022c04a090035eaff325bf35c075a56196f099c37fba48bd408ae89",
+      "bundled_sha256": "eaed7c3658015c82ea864d74568900180e5fba4741c0824eaaf782588066b5db"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sh4/shz_mem_sh4.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sh4/shz_mem_sh4.inl.h",
+      "upstream_sha256": "716ec151054093c42b87336cbd1ce09287ae27b5f220c1300713b1949a1665c8",
+      "bundled_sha256": "7340fbe4bb0ab216eb1b6b0a8bcec09614b4c0486cf26abef877a62f9ccdb16a"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sh4/shz_quat_sh4.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sh4/shz_quat_sh4.inl.h",
+      "upstream_sha256": "2f162fa7db1e98dff1a4db1ee0e100b5f5773771bb99ca767f9e36e9ed32898d",
+      "bundled_sha256": "9c8d7c36a2d8982adf25a58ccec5711e0b0c62d654c41899a17ec358560880ea"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sh4/shz_scalar_sh4.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sh4/shz_scalar_sh4.inl.h",
+      "upstream_sha256": "b0c1d4cf98b44d5ecb137ef2d5f195f433a824d2f4d8c751a5c826aa692a37cb",
+      "bundled_sha256": "5171faa68dd3c03bfba219dd870c35bcb402837a1c50742a7d94f7f8a7854b95"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sh4/shz_trig_sh4.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sh4/shz_trig_sh4.inl.h",
+      "upstream_sha256": "f15d5df67adf924572056234a251dcdedc9f60f9cfc4745d97d530a54fe2970e",
+      "bundled_sha256": "e9838d51c1255df5184a27c8766dc82f24c7bab985698afc8f68edc6caff54c3"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sh4/shz_vector_sh4.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sh4/shz_vector_sh4.inl.h",
+      "upstream_sha256": "87dc6091a8f270e3800ec08c6ea44178417daed93a65f4e4210aed5fa590dd34",
+      "bundled_sha256": "227b8fb81f64a66e152fd7e4da46e7a075d5060a862fd47a9daf094ba62adf70"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h",
+      "upstream_sha256": "52059f0392afcb2696a839be742e5d3ecca3aa156648461c75bb701a10abf53c",
+      "bundled_sha256": "6519dad190ddbbf66e9217ddf713298f746b6fecde45f06741dcb15c933c40b8"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_complex.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_complex.inl.h",
+      "upstream_sha256": "189314670a9b910d54c7f3941a347f0fabb4c466b91305510d6b452dac4f139b",
+      "bundled_sha256": "189314670a9b910d54c7f3941a347f0fabb4c466b91305510d6b452dac4f139b"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_matrix.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_matrix.inl.h",
+      "upstream_sha256": "0961afdbc4e9e530d96ac6d8076155597e77e7aceba0b8aa9f9f593a68e64997",
+      "bundled_sha256": "0961afdbc4e9e530d96ac6d8076155597e77e7aceba0b8aa9f9f593a68e64997"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_mem.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_mem.inl.h",
+      "upstream_sha256": "abe2b45892f22b5dcd6c20f3730a859f8f806b4fc7f31cee6935912ec001f7a2",
+      "bundled_sha256": "66a3557716828ae7536d4281ba35bd94a456367e10b06a2edb55eb52bb6c83b5"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_quat.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_quat.inl.h",
+      "upstream_sha256": "930ffbc64e7d286f048cad38b82dda97aad9efce63f7c0f9d34198d3f9c18a89",
+      "bundled_sha256": "930ffbc64e7d286f048cad38b82dda97aad9efce63f7c0f9d34198d3f9c18a89"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_scalar.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_scalar.inl.h",
+      "upstream_sha256": "3a1644b62dc0eb5a1c4f580f60f5881b3e5b05f4797d1fa504c1a1b17ca5cf72",
+      "bundled_sha256": "3a1644b62dc0eb5a1c4f580f60f5881b3e5b05f4797d1fa504c1a1b17ca5cf72"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_trig.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_trig.inl.h",
+      "upstream_sha256": "1e1d3e52aa6f05e5d5dc6d111b1fd5cac3066db033d16788524d5d509788b1a3",
+      "bundled_sha256": "1e1d3e52aa6f05e5d5dc6d111b1fd5cac3066db033d16788524d5d509788b1a3"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_vector.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_vector.inl.h",
+      "upstream_sha256": "c7567866e8011fc143eadc009dfba9860bb48371b7292467fa74ced52badd3f4",
+      "bundled_sha256": "161b5d1a2391aff8c50fbb079a1341c5c7ef06395f3d0d554aeefcbc3fff20fe"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/shz_xmtrx.inl.h",
+      "local_path": "addons/include/sh4zam/inline/shz_xmtrx.inl.h",
+      "upstream_sha256": "2ef54c8c792af8f10d5f894d8fe1cb4f7850a6704e1f9847a12b57ceb3391876",
+      "bundled_sha256": "36c14a9010dfe88eb4b44f1dfdd726597975a970500668139b2478a164165c18"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sw/shz_matrix_sw.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sw/shz_matrix_sw.inl.h",
+      "upstream_sha256": "872638da43ebcfab57a62bbb2031abf98f6535329653735056c6b553840ff788",
+      "bundled_sha256": "1559d66a2dfd2c52aae8deb9a59ce5c23ba77bb6cb8ee6914843c8e024fb5b6b"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sw/shz_mem_sw.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sw/shz_mem_sw.inl.h",
+      "upstream_sha256": "3ba7379c852f2847a06c4770786dfc2239f99533e038622a34079c31da3dae54",
+      "bundled_sha256": "7f4c097fb9dafa7da4322ed3a6f78cf6c073da13c0b8478e539e6210fa2b89ab"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sw/shz_quat_sw.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sw/shz_quat_sw.inl.h",
+      "upstream_sha256": "e9c4f9aeb50ce806cd74626b9c6542aa7ffac405d8322abce9e82f62de822574",
+      "bundled_sha256": "1d0b82241893d23bbb8a9865ca7207240dc7520275c1c775ecf418eb32e88e8a"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sw/shz_scalar_sw.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sw/shz_scalar_sw.inl.h",
+      "upstream_sha256": "67b99cebd707217664165070d6675343aa850301498b1360bfb46ad7e67f9f17",
+      "bundled_sha256": "e8bf0ad2d3b87e2394c4928bd6dec417a3fe0adb5e291873f5b4d7b87854a497"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sw/shz_trig_sw.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sw/shz_trig_sw.inl.h",
+      "upstream_sha256": "dd4a650d13b1cb5ffdab9af0188c86a9e762870dcb3cb5641bac9f784a9c7dc3",
+      "bundled_sha256": "84eb1f740948d9a783813a77e3c6bb00fa9797f14c5e05295e567782d752e869"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sw/shz_vector_sw.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sw/shz_vector_sw.inl.h",
+      "upstream_sha256": "9364e039f4523831506d1fd5ac95fef393b823424fc7d6cdb6d040e4b8c4de0a",
+      "bundled_sha256": "147bf6e04b1f0493076d4e65a0f5f50bce4f9d85742843a0a143e43cbc5c1ef7"
+    },
+    {
+      "upstream_path": "include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h",
+      "local_path": "addons/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h",
+      "upstream_sha256": "eb706ac695f3d9b7731543adf64835b6b8c7001e97817cb1ef0d81ec55d10466",
+      "bundled_sha256": "3efdaa9a9c092fe7c3d0b9d3d4865fa6482361a436f8d5fa8b43ddb0c1bee24d"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_cdefs.h",
+      "local_path": "addons/include/sh4zam/shz_cdefs.h",
+      "upstream_sha256": "9c07b26de1a04507c88c5ed64bac7dc7915f95745a3220550bad6a19fea6a66f",
+      "bundled_sha256": "9c07b26de1a04507c88c5ed64bac7dc7915f95745a3220550bad6a19fea6a66f"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_cdefs.hpp",
+      "local_path": "addons/include/sh4zam/shz_cdefs.hpp",
+      "upstream_sha256": "ab6579e934e167ca141a0745e50aa4b02ac289b4e812f6a4bd8ede3aacf83c60",
+      "bundled_sha256": "ab6579e934e167ca141a0745e50aa4b02ac289b4e812f6a4bd8ede3aacf83c60"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_complex.h",
+      "local_path": "addons/include/sh4zam/shz_complex.h",
+      "upstream_sha256": "c7a9dcff2eb30050879a61996a8452da4e0fe817f88766452b01b716d1074e12",
+      "bundled_sha256": "e3b1caeb8f2287b2d45bf06ceadaeeb2072e0d3ecdcbdca2281b24a092916685"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_complex.hpp",
+      "local_path": "addons/include/sh4zam/shz_complex.hpp",
+      "upstream_sha256": "977eaf258f544f0d8fb33cbe7991776fb9e8b3918104ada2bc9e6c28629e4abf",
+      "bundled_sha256": "977eaf258f544f0d8fb33cbe7991776fb9e8b3918104ada2bc9e6c28629e4abf"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_matrix.h",
+      "local_path": "addons/include/sh4zam/shz_matrix.h",
+      "upstream_sha256": "2f1233c870ac1abfad2c4a55591c658b703746595ef5f91a8b24db7fc39291e3",
+      "bundled_sha256": "2f1233c870ac1abfad2c4a55591c658b703746595ef5f91a8b24db7fc39291e3"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_matrix.hpp",
+      "local_path": "addons/include/sh4zam/shz_matrix.hpp",
+      "upstream_sha256": "a74eb4e44b58c781258b8c8a79c3dbf9418c09f9be3d008fa89cc8d1abbaf62f",
+      "bundled_sha256": "9db97937c57c2e6e057040782b8b89dd6376f4966d081c908d6469e4e88b41da"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_mem.h",
+      "local_path": "addons/include/sh4zam/shz_mem.h",
+      "upstream_sha256": "89cd76be2d07566f2f104560a3bb16fbebad2d23f8013b774c96c66ce72ce062",
+      "bundled_sha256": "e027beab3d8758144a6dc217820b4cc77821b1a26242e147f6b7581546937cb7"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_mem.hpp",
+      "local_path": "addons/include/sh4zam/shz_mem.hpp",
+      "upstream_sha256": "197eabbe44bd25cd80a0048ddd92299d806f63e3ca2b3e636ecbed38fa5250b2",
+      "bundled_sha256": "500960a1648627cec9a22e98269b446541a218a834c22c8157ee57ddcf758672"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_quat.h",
+      "local_path": "addons/include/sh4zam/shz_quat.h",
+      "upstream_sha256": "236c57697e14fa7c3d3b8388508be7539a05368f52ec9d518fe90425dcbb4414",
+      "bundled_sha256": "236c57697e14fa7c3d3b8388508be7539a05368f52ec9d518fe90425dcbb4414"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_quat.hpp",
+      "local_path": "addons/include/sh4zam/shz_quat.hpp",
+      "upstream_sha256": "62ea97fcb6f60491c0fbc214fac478f48ec2e89abb31af9cbe29e7561dd3312a",
+      "bundled_sha256": "60fa4237fdaad0cf37d5a3340cd093dbe7fc9e71e89f73a4d968e5f29caeca93"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_scalar.h",
+      "local_path": "addons/include/sh4zam/shz_scalar.h",
+      "upstream_sha256": "fc3e4b2195bf55a76795eedd5910cd52b4248a6454763ea909011da63ea7b6fc",
+      "bundled_sha256": "fc3e4b2195bf55a76795eedd5910cd52b4248a6454763ea909011da63ea7b6fc"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_scalar.hpp",
+      "local_path": "addons/include/sh4zam/shz_scalar.hpp",
+      "upstream_sha256": "03c2f54dfad5abe56d977d621dee5e2a8466ea08947cd2c1e829bfb1359301c7",
+      "bundled_sha256": "03c2f54dfad5abe56d977d621dee5e2a8466ea08947cd2c1e829bfb1359301c7"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_sh4zam.h",
+      "local_path": "addons/include/sh4zam/shz_sh4zam.h",
+      "upstream_sha256": "207159b59032b4a33de7c4b152fb180ed93914db5da744f7cbe96ac648ef0929",
+      "bundled_sha256": "207159b59032b4a33de7c4b152fb180ed93914db5da744f7cbe96ac648ef0929"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_sh4zam.hpp",
+      "local_path": "addons/include/sh4zam/shz_sh4zam.hpp",
+      "upstream_sha256": "ecae29daec2b5c2d6735127764391f7cc6bbf1697c42bc06a64a85c3eba10eea",
+      "bundled_sha256": "ecae29daec2b5c2d6735127764391f7cc6bbf1697c42bc06a64a85c3eba10eea"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_trig.h",
+      "local_path": "addons/include/sh4zam/shz_trig.h",
+      "upstream_sha256": "cbac0be488a5bdc2308ac418c94516d04720bebb79c6a10adf158ecba321b6be",
+      "bundled_sha256": "53b82c5f06789d618e4a38ee2f6be57c8e0e9e839ea5c1a129757e3b0ff09a5b"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_trig.hpp",
+      "local_path": "addons/include/sh4zam/shz_trig.hpp",
+      "upstream_sha256": "aaa0922f5ac060a45ddc1844c20c8796f43ae088a359d67f8f22405884bbec83",
+      "bundled_sha256": "37f140bf6f08d440ee93112fdeea5aa2e67d1ddc6f5d5c7b360c48ff5e266023"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_vector.h",
+      "local_path": "addons/include/sh4zam/shz_vector.h",
+      "upstream_sha256": "89725eab4f088d8cf097061a6a2bb5f84362a738766bf7589eea105cc9dab23c",
+      "bundled_sha256": "89725eab4f088d8cf097061a6a2bb5f84362a738766bf7589eea105cc9dab23c"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_vector.hpp",
+      "local_path": "addons/include/sh4zam/shz_vector.hpp",
+      "upstream_sha256": "f431fd77558e266ccf6bd5a6df6cb68e32d10d20a4d94d01a38c5734b373c676",
+      "bundled_sha256": "1df0d5543ae2a7cff5f25e33a963e2d21178a2c4958c05f583e38a552709dac8"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_version.h",
+      "local_path": "addons/include/sh4zam/shz_version.h",
+      "upstream_sha256": "3ddda30af1f2e83a1def5b7b84cbc99220767ceaf54c5b1312a42b2888b8548b",
+      "bundled_sha256": "d372280b73c16e02b511c9d5e79645136af9f947a715f84cff174f50f52a264d"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_version.hpp",
+      "local_path": "addons/include/sh4zam/shz_version.hpp",
+      "upstream_sha256": "095fec8d1d190571967e21e1472446b9c9d30e9098866d06277d5d566943c7e6",
+      "bundled_sha256": "8db5a2cc0555d3c6fb86d658e86fcecc9abbc7179379ff1304ed7f7573ea1ede"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_xmtrx.h",
+      "local_path": "addons/include/sh4zam/shz_xmtrx.h",
+      "upstream_sha256": "ddddbdf7409c2e804136dd4d89ce34973c404b8651dc8420140b4c1adba05ad2",
+      "bundled_sha256": "358fcc35f978aa2736f43a13c44f21a11f3556d51f9c153c115a6cde7bb7db05"
+    },
+    {
+      "upstream_path": "include/sh4zam/shz_xmtrx.hpp",
+      "local_path": "addons/include/sh4zam/shz_xmtrx.hpp",
+      "upstream_sha256": "d3f0407b2ef2a5ce3ee2b7d61fcd5d113fc79e1112532bb0e290d5b7c3d14569",
+      "bundled_sha256": "4d5473896e92d49c0c39d6312e8fd6169d45ec711fc8bc3f8a0e87712545fdfb"
+    },
+    {
+      "upstream_path": "source/sh4/shz_complex_sh4.c",
+      "local_path": "addons/libsh4zam/source/sh4/shz_complex_sh4.c",
+      "upstream_sha256": "be339f0297681fad56e1796141c1f708d0969bede6144e37c1d196485edeb851",
+      "bundled_sha256": "15256a2a22325d8aba086e42684f47c1277e1a7c3d5a5e53e4f87a0168329bdc"
+    },
+    {
+      "upstream_path": "source/sh4/shz_mem_sh4.s",
+      "local_path": "addons/libsh4zam/source/sh4/shz_mem_sh4.s",
+      "upstream_sha256": "bf1ff962534f073592e265673defcf6c7fcf7bf9ef6cd0d94ef6adc7ce28f971",
+      "bundled_sha256": "36c4196d1c6a96d9cde0d1b0d5c4d4f046b39c127656710947e97f7dba4c522d"
+    },
+    {
+      "upstream_path": "source/sh4/shz_xmtrx_sh4.s",
+      "local_path": "addons/libsh4zam/source/sh4/shz_xmtrx_sh4.s",
+      "upstream_sha256": "ea7042a33c5a01c0c48a69f2880dd14f6e44269dcb04efcc3cf9a1732dd8a98f",
+      "bundled_sha256": "ea7042a33c5a01c0c48a69f2880dd14f6e44269dcb04efcc3cf9a1732dd8a98f"
+    },
+    {
+      "upstream_path": "source/shz_matrix.c",
+      "local_path": "addons/libsh4zam/source/shz_matrix.c",
+      "upstream_sha256": "9afb47ab08b4329933750c419a94127ce491476b5b387f8246582658c868c550",
+      "bundled_sha256": "9afb47ab08b4329933750c419a94127ce491476b5b387f8246582658c868c550"
+    },
+    {
+      "upstream_path": "source/shz_quat.c",
+      "local_path": "addons/libsh4zam/source/shz_quat.c",
+      "upstream_sha256": "3d410a9ea5503740d459d41682da672dd246581e68707e30387fe9fb32ef6883",
+      "bundled_sha256": "3d410a9ea5503740d459d41682da672dd246581e68707e30387fe9fb32ef6883"
+    },
+    {
+      "upstream_path": "source/shz_version.c",
+      "local_path": "addons/libsh4zam/source/shz_version.c",
+      "upstream_sha256": "4ca27ca9804577fd1b91f883f12a17fd93368ef9b4ff17da52ad1a068fe95913",
+      "bundled_sha256": "4ca27ca9804577fd1b91f883f12a17fd93368ef9b4ff17da52ad1a068fe95913"
+    },
+    {
+      "upstream_path": "source/shz_xmtrx.c",
+      "local_path": "addons/libsh4zam/source/shz_xmtrx.c",
+      "upstream_sha256": "9d08a8f70af02fc5ba959c305bd51cd872be57a8a9d2637386fcae2fb2b5edb6",
+      "bundled_sha256": "9d08a8f70af02fc5ba959c305bd51cd872be57a8a9d2637386fcae2fb2b5edb6"
+    },
+    {
+      "upstream_path": "source/sw/shz_complex_sw.c",
+      "local_path": "addons/libsh4zam/source/sw/shz_complex_sw.c",
+      "upstream_sha256": "db123bc686874560d85d395b597b71102088ab51e31c0d7619e91ed38636cc73",
+      "bundled_sha256": "db123bc686874560d85d395b597b71102088ab51e31c0d7619e91ed38636cc73"
+    },
+    {
+      "upstream_path": "source/sw/shz_xmtrx_sw.c",
+      "local_path": "addons/libsh4zam/source/sw/shz_xmtrx_sw.c",
+      "upstream_sha256": "43b6e42a1bb15b56390e74922b3dc1f0bb9d852376d1c3950308be69b3c356f4",
+      "bundled_sha256": "43b6e42a1bb15b56390e74922b3dc1f0bb9d852376d1c3950308be69b3c356f4"
+    }
+  ]
+}

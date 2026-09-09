@@ -66,6 +66,9 @@ typedef enum kfiber_attach_flags {
         matrix state across a yield. It adds one 64-byte, 32-byte-aligned
         allocation per fiber and the corresponding matrix store/load work to
         each switch. It does not create a thread or affect unattached threads.
+        It does not preserve a separate FPSCR, FPUL, or TLS environment.
+        Temporary FPU mode and exception-enable changes must be restored
+        before any cooperative transfer.
     */
     KFIBER_ATTACH_MATH_CONTEXT = 1u << 0
 } kfiber_attach_flags_t;
