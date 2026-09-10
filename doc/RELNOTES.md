@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a bounded, caller-owned scrolling tile-map compiler over cell geometry
+  and frustum clipping. Independent wrap/clamp/finite axes, transformed views,
+  colors and atlas flips produce canonical vertices with explicit list and
+  material routing. Exact capacity preflight preserves outputs on failure;
+  no allocation, persistent cache, worker or automatic renderer is introduced.
+
 * Checked PVR materials now reject both trilinear phases on the punch-through
   list and require compatible mipmapped textures. Polygon, sprite, and both
   two-volume texture states share the checks; rejection preserves the previous

@@ -220,6 +220,8 @@ This page serves as an index for all KallistiOS examples.
     cell streams, composes and priority-sorts their state, and emits compact
     textured PVR sprite packets through SH4ZAM-backed target paths
   - strided_texture
+  - [**tilemap**](pvr/tilemap/): Compiles bounded rotated/scaled scrolling maps
+    with atlas flips, viewport clipping, wrap/clamp policies and list routing
   - [**texture_reservation**](pvr/texture_reservation/): Packs multiple checked
     surfaces into one caller-owned contiguous VRAM reservation
   - [**texture_residency**](pvr/texture_residency/): Cycles three textures

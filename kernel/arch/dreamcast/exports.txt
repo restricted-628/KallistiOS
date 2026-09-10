@@ -823,6 +823,8 @@ pvr_cell_sprite_compile_2d
 pvr_cell_sprite_compile_3d
 pvr_cell_sprite_compile_colored_2d
 pvr_cell_sprite_compile_colored_3d
+pvr_tilemap_measure
+pvr_tilemap_compile
 pvr_particle_pool_clear
 pvr_particle_spawn
 pvr_particle_step

@@ -35,8 +35,9 @@ individually valid headers forms a correct accumulation recipe.
 
 ## Remaining graphics agenda
 
-1. A bounded tile-map compiler over existing cell/sprite sinks, with viewport
-   clipping, wrap/clamp policies, and transformed maps.
+1. Completed on September 9: a bounded tile-map compiler over existing cell
+   geometry, with viewport clipping, wrap/clamp policies, and transformed maps.
+   See [scrolling tile maps](pvr-tilemaps.md) and the checkpoint below.
 2. Compound trilinear and bump-material recipes, including secondary color
    and alpha accumulation and explicit draw ordering.
 3. Extended multipass depth preserve/clear policy, followed by a portal or
@@ -48,7 +49,7 @@ individually valid headers forms a correct accumulation recipe.
 6. Physical image tests for translucent accumulation, modifier clipping and
    presort, compact VQ, global texture state, RTT visibility, and DMA/SQ use.
 
-These are distinct deliverables, not newly completed features. The existing
+Items 2-6 remain distinct deliverables, not completed features. The existing
 animation, deformation, cells, particles, compact-model caches, and math
 bridges remain the basis for them. General scene ownership and game-specific
 policies belong above the current runtime.
@@ -80,3 +81,34 @@ work or allocation and does not change the default lightweight fiber mode.
 These runs establish build and fixture correctness. They do not establish
 physical rendering conformance, instruction-wide numerical bounds, FFT
 accuracy, or performance improvements. Those remain in the agenda above.
+
+## September 9: scrolling tile maps
+
+Added `pvr_tilemap_measure()` and `pvr_tilemap_compile()`. Both operate on
+caller-owned arrays with an explicit candidate-work limit. The compiler
+reuses colored cell expansion, SH4ZAM target trigonometry, frustum clipping,
+and canonical geometry sinks. It introduces no allocation, runtime service,
+retained scene owner, or new texture-management policy. Atlas flips, padded
+rows, empty/hidden cells, independent finite/wrap/clamp axes, and transformed
+views retain explicit material/list/priority routing metadata.
+
+Validation for this addition:
+
+- Tile-map, cell, and geometry/frustum host suites passed under GCC 14 GNU17,
+  GCC 14 strict C23, Apple Clang GNU17, and Apple Clang strict C2x (12 runs).
+- The tile-map suite passed AddressSanitizer and UndefinedBehaviorSanitizer,
+  with rasterized coverage, interpolation, exact-capacity, and failure-atomic
+  admission checks. The full unrelated host suite was not rerun for this item.
+- Incremental KOS GCC 16.2.0 build and both new SH-4 ELF links passed. Both
+  public functions were confirmed in the kernel and module-export archives.
+- The procedural example completed all four address-policy phases and PVR
+  fault checks in Flycast interpreter and dynarec modes. Its transformed
+  clipped image was inspected. Target numerical checks also passed in both
+  modes, including preservation of a nonidentity XMTRX across measure/compile.
+- Focused Doxygen generation includes the new group and both public APIs,
+  with no warning attributed to the new header. Full-tree generation was
+  stopped after a prolonged run; existing unrelated group warnings remain.
+
+The example is a correctness fixture, not a performance benchmark. Physical
+console rasterization and timing remain open. Compound material recipes are
+the next implementation item; no sound or driver changes are part of this one.
