@@ -62,7 +62,7 @@ than place another renderer above them.
 | YUV conversion | Checked single-destination synchronous and asynchronous conversion is covered | Add contiguous multi-destination conversion only with bounded geometry, progress, and ownership. |
 | Palette and fog | Palette format, checked bulk ranges, fog colors, density, and table generation are covered | Preserve range validation and packing tests. |
 | Diagnostics and recovery | Coherent status, fault latching, events, bounded waits, and fail-closed TA admission are covered | Add automatic reset only after a safe physical-hardware recovery sequence is known. |
-| Transform math | Existing KOS matrix API; optional optimized math can remain external | Keep transforms outside the PVR driver. A future scene library may consume both without making the driver depend on either. |
+| Transform math | Existing KOS matrix API and bundled SH4ZAM; graphics helpers use the optimized target backend | Preserve matrix ownership and ABI bridges; numerical and performance certification remains a target-test gate. |
 
 ## Known concrete defects and incomplete paths
 

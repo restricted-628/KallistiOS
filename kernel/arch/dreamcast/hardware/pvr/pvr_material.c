@@ -53,7 +53,8 @@ static int texture_format_valid(int format) {
     return 1;
 }
 
-static int texture_valid(int enabled, int width, int height, pvr_ptr_t base,
+static int texture_valid(pvr_list_t list, int mipmap,
+                         int enabled, int width, int height, pvr_ptr_t base,
                          int format, pvr_filter_mode_t filter,
                          pvr_mip_bias_t mip_bias, pvr_uv_flip_t flip,
                          pvr_uv_clamp_t clamp,
@@ -62,6 +63,18 @@ static int texture_valid(int enabled, int width, int height, pvr_ptr_t base,
 
     if(!enabled)
         return 1;
+
+    /* Filtering phases encode separately, but require a mipmapped texture
+       and cannot execute on the punch-through list. Palette selectors reuse
+       the linear-layout bit, so interpret it only for non-paletted formats. */
+    if((filter == PVR_FILTER_TRILINEAR1 ||
+        filter == PVR_FILTER_TRILINEAR2) &&
+       (list == PVR_LIST_PT_POLY || !mipmap))
+        return 0;
+    if(mipmap && (width != height ||
+       ((((uint32_t)format >> 27) & 7u) < 5u &&
+        ((uint32_t)format & PVR_TXRFMT_NONTWIDDLED))))
+        return 0;
 
     if(width < 8 || width > 1024 || (width & (width - 1)) ||
        height < 8 || height > 1024 || (height & (height - 1)) || !base)
@@ -122,7 +135,8 @@ static int polygon_context_valid(const pvr_poly_cxt_t *context,
         return 0;
     }
 
-    if(!texture_valid(context->txr.enable, context->txr.width,
+    if(!texture_valid(context->list_type, context->txr.mipmap,
+                      context->txr.enable, context->txr.width,
                       context->txr.height, context->txr.base,
                       context->txr.format, context->txr.filter,
                       context->txr.mipmap_bias, context->txr.uv_flip,
@@ -130,7 +144,8 @@ static int polygon_context_valid(const pvr_poly_cxt_t *context,
         return 0;
 
     return !two_volume ||
-           texture_valid(context->txr2.enable, context->txr2.width,
+           texture_valid(context->list_type, context->txr2.mipmap,
+                         context->txr2.enable, context->txr2.width,
                          context->txr2.height, context->txr2.base,
                          context->txr2.format, context->txr2.filter,
                          context->txr2.mipmap_bias, context->txr2.uv_flip,
@@ -142,7 +157,8 @@ static int sprite_context_valid(const pvr_sprite_cxt_t *context) {
                         context->gen.clip_mode, context->depth.comparison,
                         context->blend.src, context->blend.dst,
                         context->gen.fog_type) &&
-           texture_valid(context->txr.enable, context->txr.width,
+           texture_valid(context->list_type, context->txr.mipmap,
+                         context->txr.enable, context->txr.width,
                          context->txr.height, context->txr.base,
                          context->txr.format, context->txr.filter,
                          context->txr.mipmap_bias, context->txr.uv_flip,

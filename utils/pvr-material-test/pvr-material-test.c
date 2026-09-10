@@ -155,6 +155,89 @@ static void test_sprite_and_two_volume(void) {
     assert(pvr_material_compile_two_volume(&material, &two, 0) == -1);
 }
 
+static void test_filter_capabilities(void) {
+    const pvr_list_t lists[] = {
+        PVR_LIST_OP_POLY, PVR_LIST_TR_POLY, PVR_LIST_PT_POLY
+    };
+    const pvr_filter_mode_t filters[] = {
+        PVR_FILTER_NEAREST, PVR_FILTER_BILINEAR,
+        PVR_FILTER_TRILINEAR1, PVR_FILTER_TRILINEAR2
+    };
+
+    /* Exercise every checked entry point, including the second volume.
+       A failed admission must leave the previous compiled packet intact. */
+    for(size_t l = 0; l < sizeof(lists) / sizeof(lists[0]); ++l) {
+        for(size_t f = 0; f < sizeof(filters) / sizeof(filters[0]); ++f) {
+            for(int mipmap = 0; mipmap < 2; ++mipmap) {
+                for(int path = 0; path < 4; ++path) {
+                    pvr_poly_cxt_t poly = polygon_context();
+                    pvr_sprite_cxt_t sprite = sprite_context();
+                    pvr_material_t material, saved;
+                    int expected = f >= 2 &&
+                        (!mipmap || lists[l] == PVR_LIST_PT_POLY) ? -1 : 0;
+                    int result;
+
+                    enable_texture(&poly, PVR_TXRFMT_RGB565);
+                    poly.list_type = lists[l];
+                    poly.txr.height = poly.txr.width;
+                    poly.txr.mipmap = mipmap;
+                    poly.txr.filter = filters[f];
+                    memset(&material, 0xa5, sizeof(material));
+                    saved = material;
+                    errno = 0;
+                    if(path == 0) {
+                        result = pvr_material_compile_polygon(&material,
+                                                              &poly, 0);
+                    }
+                    else if(path == 1) {
+                        sprite.list_type = poly.list_type;
+                        memcpy(&sprite.txr, &poly.txr, sizeof(sprite.txr));
+                        result = pvr_material_compile_sprite(&material,
+                                                             &sprite, 0);
+                    }
+                    else {
+                        poly.fmt.modifier = true;
+                        poly.gen.modifier_mode = true;
+                        poly.gen.fog_type2 = PVR_FOG_DISABLE;
+                        poly.blend.src2 = PVR_BLEND_ONE;
+                        poly.blend.dst2 = PVR_BLEND_ZERO;
+                        if(path == 3) {
+                            memcpy(&poly.txr2, &poly.txr, sizeof(poly.txr2));
+                            poly.txr.enable = false;
+                        }
+                        result = pvr_material_compile_two_volume(&material,
+                                                                 &poly, 0);
+                    }
+                    assert(result == expected);
+                    if(expected < 0) {
+                        assert(errno == EINVAL);
+                        assert(!memcmp(&material, &saved, sizeof(material)));
+                    }
+                }
+            }
+        }
+    }
+
+    pvr_poly_cxt_t poly = polygon_context();
+    pvr_material_t material, saved;
+    enable_texture(&poly, PVR_TXRFMT_RGB565);
+    poly.txr.mipmap = true;
+    memset(&material, 0x5a, sizeof(material));
+    saved = material;
+    assert(pvr_material_compile_polygon(&material, &poly, 0) == -1);
+    assert(!memcmp(&material, &saved, sizeof(material)));
+    poly.txr.height = poly.txr.width;
+    poly.txr.format |= PVR_TXRFMT_NONTWIDDLED;
+    assert(pvr_material_compile_polygon(&material, &poly, 0) == -1);
+    assert(!memcmp(&material, &saved, sizeof(material)));
+    poly.txr.format = PVR_TXRFMT_PAL4BPP | PVR_TXRFMT_4BPP_PAL(31);
+    assert(pvr_material_compile_polygon(&material, &poly, 0) == 0);
+    poly.list_type = PVR_LIST_PT_POLY;
+    poly.txr.filter = PVR_FILTER_TRILINEAR1;
+    poly.txr.enable = false;
+    assert(pvr_material_compile_polygon(&material, &poly, 0) == 0);
+}
+
 static void test_submission(void) {
     pvr_poly_cxt_t context = polygon_context();
     pvr_material_t material;
@@ -181,6 +264,7 @@ static void test_submission(void) {
 int main(void) {
     test_polygon();
     test_sprite_and_two_volume();
+    test_filter_capabilities();
     test_submission();
     puts("pvr-material-test: PASS");
     return 0;

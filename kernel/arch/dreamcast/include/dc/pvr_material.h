@@ -12,6 +12,13 @@
     This interface validates one complete context and publishes an immutable,
     submission-ready material packet without allocating memory, retaining a
     texture, or taking ownership of a scene.
+
+    Checked texture admission includes supported filter/list combinations:
+    trilinear phases require mipmaps and are rejected on the punch-through
+    list. Mipmapped textures must be square and twiddled (including VQ).
+    Both texture states of a two-volume material obey the same rules.
+    Disabled texture fields are ignored. Raw pvr_*_compile interfaces remain
+    available for callers that need direct header encoding.
 */
 
 #ifndef __DC_PVR_MATERIAL_H

@@ -11,6 +11,16 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Checked PVR materials now reject both trilinear phases on the punch-through
+  list and require compatible mipmapped textures. Polygon, sprite, and both
+  two-volume texture states share the checks; rejection preserves the previous
+  output packet. Raw header compilation remains available.
+
+* Pinned the bundled SH4ZAM source revision with verifiable per-file hashes
+  and a local patch record, retaining the GCC 16 FFT assembly fix. Clarified
+  that the optional fiber math context preserves XMTRX, not an independent
+  FPSCR, FPUL, or TLS environment.
+
 * Added checked AICA DSP ownership to the base sound driver. Callers can
   validate and load complete program images, receive computed work-memory
   requirements, control all sixteen effect returns, inspect coherent state,
