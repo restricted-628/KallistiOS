@@ -30,17 +30,22 @@ complete upstream ancestry; no rebase or selective omission was necessary.
 
 The new GCC patches enable libstdc++ clock/nanosleep/scheduler support during
 configuration. Merely merging those patches does not update an installed
-compiler library. The currently installed GCC 16.2.0 still has the relevant
+compiler library. At the merge checkpoint, the installed GCC 16.2.0 had its
 `_GLIBCXX_USE_CLOCK_*`, `NANOSLEEP`, and `SCHED_YIELD` settings undefined, and
-its sysroot still has Newlib's previous generic `machine/time.h`.
+its sysroot still had Newlib's previous generic `machine/time.h`.
 
-Next toolchain step: use the updated kos-chain patches and Newlib header fixup
-to build a separately validated GCC 16.2.0 toolchain prefix, with the KOS time
+The follow-up toolchain step was to use the updated kos-chain patches and
+Newlib header fixup to build a separately validated GCC 16.2.0 toolchain prefix,
+with the KOS time
 header installed before configuring the final libstdc++ build. Verify its
 configuration, clock call path and target timing before switching the shared
 environment. Do not hand-edit installed `c++config.h`: that cannot rebuild
 the library's already compiled clock implementation. No GCC major-version
 upgrade or global C-language-standard change is required by this merge.
+
+The [clock-library refresh](toolchain-clock-refresh.md) records the subsequent
+isolated rebuild and its validation. The results below describe the original
+merge checkpoint, before that refresh.
 
 ## Validation
 

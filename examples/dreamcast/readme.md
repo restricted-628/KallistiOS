@@ -65,6 +65,7 @@ This page serves as an index for all KallistiOS examples.
   - kosh
   - wump
 - cpp
+  - [**chrono_probe**](cpp/chrono_probe/): Checks C++ clock domains and sleep/yield against KOS, without external assets.
   - clock
   - concurrency
   - dcplib
