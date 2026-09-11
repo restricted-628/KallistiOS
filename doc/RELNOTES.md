@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added checked lightmap and emissive material recipes through the existing
+  Compact resource/context and canonical-geometry paths. They preserve surface
+  alpha, support independent input sampling flags and reuse bounded recipe
+  storage without allocation or startup work. The example includes a layered
+  mode; authored asset-role metadata and physical image validation remain open.
+
 * Added reusable checked Compact material-context resolution for existing
   trilinear and bump recipes. It shares the regular resolver's validation,
   leaves outputs unchanged on failure and borrows texture addresses without

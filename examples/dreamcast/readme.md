@@ -216,7 +216,8 @@ This page serves as an index for all KallistiOS examples.
     emits hardware sprite cells plus colored polygon trails
   - plasma
   - [**material_recipes**](pvr/material_recipes/): Compiles ordered trilinear
-    and bump headers, with optional numeric framebuffer and occlusion checks
+    and bump headers, plus selectable lightmap/emissive layers, with optional
+    numeric framebuffer and occlusion checks
   - pvrline
   - pvrmark
   - pvrmark_strips

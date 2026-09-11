@@ -13,6 +13,31 @@ APIs. Four panels demonstrate opaque/translucent trilinear (top row) and
 opaque/translucent bump shading (bottom row). Two dark vertical bars cover
 the opaque panels; their color must not change during recipe completion.
 
+For lightmap (top) and emissive (bottom) composition instead:
+
+```sh
+make clean
+make LAYERS=1 VERIFY_PIXELS=1
+make run
+```
+
+This mode uses the same Compact table/resolver and geometry. Identifier 19
+selects an ARGB4444 layer with RGB (6/15,5/15,4/15) and alpha 1/15. Layer alpha
+must be ignored: the lightmap uses vertex alpha 255 and the emission uses
+vertex alpha zero. Both use unlit white vertex RGB and zero offset color.
+Expected opaque/translucent RGB8 centers are (82,34,14)/(55,42,43) for the
+lightmap and (255,187,119)/(148,124,99) for emission. Emission saturates before
+the final surface-alpha blend. This is not HDR or opacity-independent glow.
+Rebuild with `make clean` when changing mode variables; the default remains
+the trilinear/bump fixture. Presort, pixel verification and emulator diagnostic
+caveats below apply to both modes.
+
+Validation: interpreter and dynarec both pass exact packet comparisons and
+five of seven presorted pixel checks in layered mode. Both translucent panels
+remain white in that path. The separate `LAYERS=1 AUTOSORT_DIAGNOSTIC=1`
+Vulkan per-pixel diagnostic passes all seven samples; it does not establish
+general ordering or physical hardware behavior.
+
 The application binds the color surface to Compact texture identifier 7 and
 the bump surface to identifier 19. It resolves their contexts through
 `pvr_chunk_material_resolve_context()` and feeds those into the existing

@@ -5,7 +5,7 @@ polygon headers. It does not own textures, transform geometry, allocate an
 intermediate VRAM surface, select a scene, or schedule render passes. A recipe
 step means **header followed by geometry**, not another frame/render pass.
 
-`pvr_material_compile_trilinear()` and `pvr_material_compile_bump()` add the
+The trilinear, bump, lightmap and emissive recipe compilers add the
 relationships that individually valid material headers cannot express:
 complementary filtering phases, initialization of intermediates, modulation,
 final blending, matching depth tests, and required vertex interpretation.
@@ -18,6 +18,10 @@ final blending, matching depth tests, and required vertex interpretation.
 | Translucent trilinear | 3 | Overwrite secondary with A; add B there; resolve to primary |
 | Opaque bump | 2 | Opaque bump-light seed; equal-depth surface-color modulation |
 | Translucent bump | 3 | Bump-light seed in secondary; surface modulation there; resolve |
+| Opaque lightmap | 2 | Surface seed; equal-depth unlit lightmap multiplication |
+| Translucent lightmap | 3 | Surface in secondary; lightmap multiplication there; resolve |
+| Opaque emissive | 2 | Surface seed; equal-depth unlit emission addition |
+| Translucent emissive | 3 | Surface in secondary; emission addition there; resolve |
 
 Inputs currently require packed vertex colors, float UVs, ordinary OP/TR
 polygons, no modifiers, no fog or color clamp, and default buffer selectors.
@@ -26,6 +30,12 @@ their surface cannot itself request trilinear filtering. Unsupported combined
 profiles are rejected rather than silently approximated. Sprites, two-volume
 recipes, combined bump-plus-trilinear, and fog-aware compound shading are not
 covered by these initial profiles.
+
+Lightmap/emissive inputs may be ordinary textures or vertex-colored layers,
+but neither input may request bump sampling or trilinear phases. They use the
+same OP/TR list. Each input has its own checked supersampling mask, so resolve
+both through `pvr_chunk_material_resolve_context()` and pass each context and
+mask directly. No combined lightmap-plus-emission four-step recipe is implied.
 
 Both inputs are validated before publication. Errors preserve the complete
 output, and output/input overlap is rejected. Texture lifetime and retained
@@ -46,6 +56,28 @@ light coefficients in `oargb`. Decal shading plus forced seed alpha one gives
 vector produces `(h*C.r, h*C.g, h*C.b, a)`. This is why a naive alpha-weighted
 bump seed is not interchangeable: it can unintentionally attenuate alpha and
 then apply the lighting factor again during final transparency blending.
+
+`pvr_material_compile_lightmap()` seeds the shaded surface `(C,a)`, then
+multiplies by `(L,1)`. The LIGHTMAP role requires **unlit RGB tint and vertex
+alpha 255**, with independent layer UVs and zero offset color. Texture alpha
+is disabled and MODULATEALPHA shading retains the vertex alpha, giving
+`(C*L,a)`. White RGB tint uses the lightmap without additional attenuation.
+
+`pvr_material_compile_emissive()` seeds the shaded surface and adds `(E,0)`.
+The EMISSIVE role requires **unlit RGB tint and vertex alpha zero**, layer UVs
+and zero offset color. The result is `(clamp(C+E,0,1),a)` before the final
+surface blend. Texture alpha must not change the original opacity. This is
+bounded-color emission, not HDR, bloom, or glow that ignores surface opacity.
+The surface may already contain lit/specular RGB; the auxiliary step never
+evaluates lighting or adds a second specular contribution.
+
+Both layer compilers inherit the surface's geometry/depth/flat-or-Gouraud
+policy and retain only the auxiliary texture description. No texture identity
+is assigned a global role: the application chooses which draw input is a
+lightmap or emission layer. Existing Compact models, prepared geometry,
+caller-owned texture tables and UV callbacks provide those inputs. This does
+not yet admit previously rejected glTF emissive/unlit materials or add authored
+role metadata to asset files.
 
 Surface and bump steps may use different UVs and colors but must reproduce
 the same positions, depth, winding and clipped coverage. Resolve vertices can
@@ -76,11 +108,14 @@ Their descriptions were clarified without changing the ABI or encoding.
 
 ## Validation and current limitation
 
-`utils/pvr-material-recipe-test` checks the four profiles, shared validation,
+`utils/pvr-material-recipe-test` checks the eight profiles, shared validation,
 preserved inputs, failure atomicity, alias rejection, buffer-selection and
 depth bits, complementary filters, and an independent RGBA blend model.
 Its target build uses the actual KOS packet compiler; host builds capture
 the necessary fields through a test double.
+Layer checks include independent sampling flags, neutral-alpha header state,
+zero/partial/full opacity, zero/full layer intensity, saturation, colored-only
+inputs and rejection/alias/output-preservation checks for both inputs.
 
 The [procedural example](../examples/dreamcast/pvr/material_recipes/) also
 offers numeric RGB565 framebuffer checks against expected surface colors and

@@ -51,8 +51,9 @@ individually valid headers forms a correct accumulation recipe.
 4. Model-asset roles for emissive/unlit, lightmaps, environment mapping and
    bump inputs, using existing texture converters and prepared bindings.
    Checked reusable context resolution now connects distinct texture inputs
-   to existing bump/trilinear recipes. Authored per-material role metadata and
-   lightmap/emissive composition remain open; see the September 10 entry below.
+   to existing bump/trilinear recipes. Bounded lightmap/emissive composition is
+   now implemented too. Authored per-material role metadata remains open;
+   see the September 10 entries below.
 5. Target numerical/ABI and performance fixtures for SH4ZAM consumers, with
    explicit error tolerances, XMTRX preservation, and warm/cold measurements.
 6. Physical image tests for translucent accumulation, modifier clipping and
@@ -270,3 +271,49 @@ This closes the reusable resource-to-recipe bridge, not all material roles.
 Per-material authored role metadata, lightmap/emissive composition, SH4ZAM
 numerical/performance fixtures and physical rendering validation remain open.
 Existing unlit and environment-map vertex policies are reused, not replaced.
+
+## September 10: lightmap and emissive composition
+
+Added `pvr_material_compile_lightmap()` and
+`pvr_material_compile_emissive()` over the established checked context,
+secondary-buffer, and canonical-geometry recipe path. Compact resource
+contexts feed both directly, with separate sampling flags for each input.
+The existing three-step recipe layout and previous role values are unchanged.
+No model format, asset importer, startup allocation, service or global state
+is added. The compiled recipe object (including the older bump/trilinear
+functions) reports 2,108 bytes in its text bucket and zero data/BSS with the
+current GCC 16.2.0 build; this is not a performance benchmark.
+
+Lightmaps multiply RGB with neutral alpha one. Emission adds unlit RGB with
+neutral alpha zero and saturates before the final surface blend. Neither
+operation changes surface opacity or repeats lighting. The caller supplies
+layer UVs/tint, matching coverage/depth and explicit ordering; unsupported
+compound combinations remain errors rather than approximations.
+
+Validation:
+
+- Material and recipe suites passed GCC 14 GNU17/strict C23 and Apple Clang
+  GNU17/strict C2x (eight runs). Recipe ASan/UBSan passed. Tests cover both
+  input masks, opacity/intensity endpoints and intermediates, RGB saturation,
+  preserved alpha, two input rejection paths, aliases and unchanged outputs.
+  Compact binding regressions also passed GCC 14 strict C23 and Clang GNU17.
+- KOS, the SH-4 recipe test and both example modes built with GCC 16.2.0.
+  Both APIs are present in kernel/module-export archives. Focused Doxygen
+  groups both APIs correctly; only the omitted parent group warns.
+- The recipe contract test uses the real header encoder on SH-4 and passed
+  under Flycast interpreter and dynarec. The layered example also passes all
+  four resource-versus-explicit TA packet comparisons in both modes.
+- Presorted Vulkan rendering in both modes passes the backdrop, opaque
+  lightmap, opaque emission and both occluder samples. Both translucent samples
+  are white rather than the expected composed colors: two of seven image
+  checks fail. The strict assertion is retained. This matches the recorded
+  secondary-resolve limitation; physical rendering validation remains open.
+- A separately labeled Vulkan per-pixel autosort diagnostic passed all seven
+  framebuffer samples, including partial-opacity layer composition with
+  nonidentity texture alpha. It supports arithmetic behavior on separated
+  quads, not presort ordering or physical-console conformance. No production
+  setting or expected pixel was weakened to obtain that diagnostic PASS.
+
+The bounded composition primitives are now present. Authored per-material role
+metadata/import, broader compound profiles and the SH4ZAM numerical/performance
+fixtures are still separate work. This does not claim complete graphics parity.

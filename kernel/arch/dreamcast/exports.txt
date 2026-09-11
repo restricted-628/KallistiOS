@@ -803,6 +803,8 @@ pvr_material_compile_sprite
 pvr_material_compile_two_volume
 pvr_material_compile_trilinear
 pvr_material_compile_bump
+pvr_material_compile_lightmap
+pvr_material_compile_emissive
 pvr_material_submit
 pvr_material_submit_list
 pvr_sprite_batch_compile_2d

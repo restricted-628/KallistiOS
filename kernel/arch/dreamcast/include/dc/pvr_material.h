@@ -110,7 +110,9 @@ int pvr_material_submit(const pvr_material_t *material);
 typedef enum pvr_material_pass_role {
     PVR_MATERIAL_PASS_SURFACE = 0, /**< Ordinary surface colors and UVs. */
     PVR_MATERIAL_PASS_BUMP, /**< Black base RGB; oargb from pvr_pack_bump(). */
-    PVR_MATERIAL_PASS_RESOLVE /**< Matching coverage/depth; colors/UVs unused. */
+    PVR_MATERIAL_PASS_RESOLVE, /**< Matching coverage/depth; colors/UVs unused. */
+    PVR_MATERIAL_PASS_LIGHTMAP, /**< Unlit RGB tint, alpha 255; layer UVs. */
+    PVR_MATERIAL_PASS_EMISSIVE /**< Unlit RGB tint, alpha zero; layer UVs. */
 } pvr_material_pass_role_t;
 
 /** \brief One material header and its vertex-data contract. */
@@ -182,6 +184,46 @@ int pvr_material_compile_bump(pvr_material_recipe_t *recipe,
                               const pvr_poly_cxt_t *surface,
                               const pvr_poly_cxt_t *bump,
                               uint32_t compile_flags);
+
+/** \brief Modulate a surface by an unlit lightmap, preserving surface alpha.
+
+    Both inputs may be textured or colored, but cannot use bump formats or
+    trilinear filtering. They must select the same OP/TR list and satisfy the
+    trilinear compiler's base profile. Geometry/depth/shading mode comes from
+    surface; only lightmap's texture description is retained. The two compile
+    masks independently select PVR_COMPILE_SUPERSAMPLE for their inputs.
+
+    The LIGHTMAP step requires matching canonical geometry with layer UVs and
+    unlit vertex RGB tint, alpha 255, and zero offset color. Texture alpha is
+    ignored, specular is disabled, and texture RGB multiplies vertex RGB.
+    This produces (C * L, a), not (C * L, a * L.a). Use white tint for an
+    unmodified lightmap. A colored input permits constant/per-vertex lighting.
+
+    Opaque output uses two steps; translucent output adds a secondary resolve
+    with the surface's original blend factors. No allocation/submission occurs.
+    Ownership, failure-atomicity, alias and ordering contracts are identical to
+    pvr_material_compile_trilinear(). Physical image validation remains open.
+*/
+int pvr_material_compile_lightmap(pvr_material_recipe_t *recipe,
+                                  const pvr_poly_cxt_t *surface,
+                                  const pvr_poly_cxt_t *lightmap,
+                                  uint32_t surface_flags,
+                                  uint32_t lightmap_flags);
+
+/** \brief Add unlit emission to a surface before its final transparency blend.
+
+    Admission and ownership match pvr_material_compile_lightmap(). The
+    EMISSIVE step instead requires vertex alpha zero, unlit RGB tint and zero
+    offset color. Texture alpha is ignored. Addition yields
+    (clamp(C + E, 0, 1), a), preserving alpha for final blending; this is not
+    HDR, bloom, or opacity-independent glow. It does not add emission once per
+    light or run the emission through the surface's lighting policy.
+*/
+int pvr_material_compile_emissive(pvr_material_recipe_t *recipe,
+                                  const pvr_poly_cxt_t *surface,
+                                  const pvr_poly_cxt_t *emissive,
+                                  uint32_t surface_flags,
+                                  uint32_t emissive_flags);
 
 /** \brief Submit one material header to an explicit buffered PVR list.
 

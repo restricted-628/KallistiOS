@@ -158,3 +158,71 @@ int pvr_material_compile_bump(pvr_material_recipe_t *recipe,
     memcpy(recipe, &candidate, sizeof(candidate));
     return 0;
 }
+
+static bool ordinary_sample(const pvr_poly_cxt_t *context) {
+    return !context->txr.enable || (pixel_format(context) != 4 &&
+                                    context->txr.filter <= PVR_FILTER_BILINEAR);
+}
+
+static int compile_layer(pvr_material_recipe_t *recipe,
+                         const pvr_poly_cxt_t *surface,
+                         const pvr_poly_cxt_t *layer,
+                         uint32_t surface_flags, uint32_t layer_flags,
+                         bool emissive) {
+    pvr_material_recipe_t candidate = { 0 };
+    pvr_poly_cxt_t context;
+    bool secondary;
+
+    if(!recipe || profile_valid(surface, surface_flags) < 0 ||
+       profile_valid(layer, layer_flags) < 0)
+        return invalid();
+    if(aliases(recipe, surface) || aliases(recipe, layer) ||
+       !ordinary_sample(surface) || !ordinary_sample(layer) ||
+       surface->list_type != layer->list_type)
+        return invalid();
+
+    secondary = surface->list_type == PVR_LIST_TR_POLY;
+    candidate.requires_presort = true;
+    context = *surface;
+    seed_state(&context, secondary);
+    if(append(&candidate, &context, PVR_MATERIAL_PASS_SURFACE, surface_flags) < 0)
+        return -1;
+
+    context = *surface;
+    context.txr = layer->txr;
+    completion_state(&context, secondary);
+    context.gen.specular = false;
+    context.gen.alpha = true;
+    /* Ignore texture alpha, not vertex alpha. MODULATEALPHA then makes the
+       caller's 1 (multiply) or 0 (add) the alpha identity for this operation.
+       Disabling all alpha would break emissive transparency by adding one. */
+    context.txr.alpha = true;
+    context.txr.env = PVR_TXRENV_MODULATEALPHA;
+    context.blend.src = emissive ? PVR_BLEND_ONE : PVR_BLEND_DESTCOLOR;
+    context.blend.dst = emissive ? PVR_BLEND_ONE : PVR_BLEND_ZERO;
+    if(append(&candidate, &context, emissive ? PVR_MATERIAL_PASS_EMISSIVE :
+                                             PVR_MATERIAL_PASS_LIGHTMAP,
+              layer_flags) < 0 ||
+       (secondary && resolve(&candidate, surface) < 0))
+        return -1;
+    memcpy(recipe, &candidate, sizeof(candidate));
+    return 0;
+}
+
+int pvr_material_compile_lightmap(pvr_material_recipe_t *recipe,
+                                  const pvr_poly_cxt_t *surface,
+                                  const pvr_poly_cxt_t *lightmap,
+                                  uint32_t surface_flags,
+                                  uint32_t lightmap_flags) {
+    return compile_layer(recipe, surface, lightmap, surface_flags,
+                          lightmap_flags, false);
+}
+
+int pvr_material_compile_emissive(pvr_material_recipe_t *recipe,
+                                  const pvr_poly_cxt_t *surface,
+                                  const pvr_poly_cxt_t *emissive,
+                                  uint32_t surface_flags,
+                                  uint32_t emissive_flags) {
+    return compile_layer(recipe, surface, emissive, surface_flags,
+                          emissive_flags, true);
+}

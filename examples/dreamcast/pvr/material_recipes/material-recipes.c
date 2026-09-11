@@ -1,6 +1,6 @@
 /* KallistiOS ##version##
 
-   Opaque/translucent trilinear and bump composition, with depth occlusion.
+   Opaque/translucent compound materials, with depth occlusion.
    Copyright (C) 2026 Joseph Black
 */
 
@@ -52,6 +52,8 @@ static void draw_step(size_t object, size_t step) {
     const pvr_material_recipe_pass_t *pass = &recipes[object].passes[step];
     bool bump = pass->role == PVR_MATERIAL_PASS_BUMP;
     uint32_t color = bump ? UINT32_C(0xff000000) : UINT32_MAX;
+    if(pass->role == PVR_MATERIAL_PASS_EMISSIVE)
+        color = UINT32_C(0x00ffffff);
     /* Zero-angle bump texels with overhead lighting produce K1 = 128/255.
        The RGB result should be half-bright, without losing surface alpha. */
     uint32_t offset = bump ? pvr_pack_bump(.5f, F_PI / 2, 0) : 0;
@@ -82,10 +84,19 @@ static void verify_framebuffer(void) {
     /* Independent reference: C=(.8,.4,.2), A=8/15, h=128/255,
        background=(.1,.2,.3); transparent output is C*A + bg*(1-A). */
     unsigned failures = check_pixel(&fb, 20, 20, 26, 51, 77);
+#if RECIPE_LAYERS
+    /* L=(6/15,5/15,4/15): top is C*L; bottom is clamp(C+L).
+       Source alpha is applied only once after composition on the right. */
+    failures += check_pixel(&fb, 100, 120, 82, 34, 14);
+    failures += check_pixel(&fb, 420, 120, 55, 42, 43);
+    failures += check_pixel(&fb, 100, 328, 255, 187, 119);
+    failures += check_pixel(&fb, 420, 328, 148, 124, 99);
+#else
     failures += check_pixel(&fb, 100, 120, 204, 102, 51);
     failures += check_pixel(&fb, 420, 120, 121, 78, 63);
     failures += check_pixel(&fb, 100, 328, 102, 51, 26);
     failures += check_pixel(&fb, 420, 328, 67, 51, 49);
+#endif
     failures += check_pixel(&fb, 164, 120, 32, 32, 32);
     failures += check_pixel(&fb, 164, 328, 32, 32, 32);
     printf("framebuffer comparison: %u mismatches\n", failures);
@@ -101,7 +112,7 @@ int main(void) {
         .autosort_disabled = !RECIPE_AUTOSORT_DIAGNOSTIC,
         .opb_overflow_count = 1
     };
-    pvr_txr_surface_t color, normals;
+    pvr_txr_surface_t color, auxiliary;
     pvr_chunk_texture_binding_t entries[2];
     pvr_chunk_texture_table_t table = { entries, 2 };
     pvr_chunk_texture_table_view_t textures;
@@ -117,17 +128,23 @@ int main(void) {
     pvr_set_bg_color(.1f, .2f, .3f);
     assert(pvr_txr_surface_alloc(&color, 64, 64, PVR_TXR_SURFACE_ARGB4444,
                                  PVR_TXR_SURFACE_TWIDDLED, true) == 0);
-    assert(pvr_txr_surface_alloc(&normals, 64, 64, PVR_TXR_SURFACE_BUMP,
+    assert(pvr_txr_surface_alloc(&auxiliary, 64, 64,
+                                 RECIPE_LAYERS ? PVR_TXR_SURFACE_ARGB4444 :
+                                                 PVR_TXR_SURFACE_BUMP,
                                  PVR_TXR_SURFACE_TWIDDLED, false) == 0);
     upload_constant(&color, UINT16_C(0x8c63));
-    upload_constant(&normals, 0);
+    /* Alpha 1/15 deliberately differs from both zero and one: layered
+       shading must ignore it rather than attenuating the surface alpha. */
+    upload_constant(&auxiliary, RECIPE_LAYERS ? UINT16_C(0x1654) : 0);
     entries[0] = (pvr_chunk_texture_binding_t){ 7, 0, &color };
-    entries[1] = (pvr_chunk_texture_binding_t){ 19, 0, &normals };
+    entries[1] = (pvr_chunk_texture_binding_t){ 19, 0, &auxiliary };
     assert(pvr_chunk_texture_table_open(&table, &textures) == 0);
     puts("material recipes: procedural texture levels uploaded");
+    puts(RECIPE_LAYERS ? "recipe profiles: lightmap/emissive" :
+                         "recipe profiles: trilinear/bump");
     for(size_t i = 0; i < 4; ++i) {
-        pvr_poly_cxt_t bump;
-        pvr_chunk_material_context_t resolved_surface, resolved_bump;
+        pvr_poly_cxt_t layer;
+        pvr_chunk_material_context_t resolved_surface, resolved_layer;
         pvr_material_recipe_t reference;
         pvr_chunk_render_state_t state = { 0 };
         pvr_chunk_strip_view_t strip = { 0 };
@@ -149,6 +166,23 @@ int main(void) {
             &resolved_surface, &context, &textures, &state, &strip) == 0);
         assert(resolved_surface.context.txr.base == color.vram);
         assert(resolved_surface.compile_flags == 0);
+#if RECIPE_LAYERS
+        int (*compile)(pvr_material_recipe_t *, const pvr_poly_cxt_t *,
+                       const pvr_poly_cxt_t *, uint32_t, uint32_t) =
+            i < 2 ? pvr_material_compile_lightmap : pvr_material_compile_emissive;
+        layer = context;
+        layer.txr.base = auxiliary.vram;
+        layer.txr.mipmap = false;
+        layer.txr.mipmap_bias = PVR_MIPBIAS_NORMAL;
+        state.texture.identifier = 19;
+        assert(pvr_chunk_material_resolve_context(
+            &resolved_layer, &context, &textures, &state, &strip) == 0);
+        assert(resolved_layer.context.txr.base == auxiliary.vram);
+        assert(compile(&reference, &context, &layer, 0, 0) == 0);
+        assert(compile(&recipes[i], &resolved_surface.context,
+                       &resolved_layer.context, resolved_surface.compile_flags,
+                       resolved_layer.compile_flags) == 0);
+#else
         if(i < 2) {
             assert(pvr_material_compile_trilinear(&reference, &context, 0) == 0);
             assert(pvr_material_compile_trilinear(
@@ -156,25 +190,26 @@ int main(void) {
                 resolved_surface.compile_flags) == 0);
         }
         else {
-            bump = context;
-            bump.txr.base = normals.vram;
-            bump.txr.format = PVR_TXRFMT_BUMP;
-            bump.txr.mipmap = false;
+            layer = context;
+            layer.txr.base = auxiliary.vram;
+            layer.txr.format = PVR_TXRFMT_BUMP;
+            layer.txr.mipmap = false;
             /* Bias is inactive without mipmaps. Match the resource resolver's
                canonical normal value instead of inheriting the color bias. */
-            bump.txr.mipmap_bias = PVR_MIPBIAS_NORMAL;
-            assert(pvr_material_compile_bump(&reference, &context, &bump, 0) == 0);
+            layer.txr.mipmap_bias = PVR_MIPBIAS_NORMAL;
+            assert(pvr_material_compile_bump(&reference, &context, &layer, 0) == 0);
             state.texture.identifier = 19;
             assert(pvr_chunk_material_resolve_context(
-                &resolved_bump, &context, &textures, &state, &strip) == 0);
-            assert(resolved_bump.context.txr.base == normals.vram);
+                &resolved_layer, &context, &textures, &state, &strip) == 0);
+            assert(resolved_layer.context.txr.base == auxiliary.vram);
             /* The recipe has a shared sampling policy, not independently
                supersampled inputs. Never silently merge mismatched flags. */
-            assert(resolved_surface.compile_flags == resolved_bump.compile_flags);
+            assert(resolved_surface.compile_flags == resolved_layer.compile_flags);
             assert(pvr_material_compile_bump(
-                &recipes[i], &resolved_surface.context, &resolved_bump.context,
+                &recipes[i], &resolved_surface.context, &resolved_layer.context,
                 resolved_surface.compile_flags) == 0);
         }
+#endif
         /* Compare actual TA packets, not struct padding or test doubles. The
            explicit context reference bypasses Compact resource resolution. */
         assert(recipes[i].pass_count == reference.pass_count);
@@ -237,7 +272,7 @@ int main(void) {
 #endif
     puts("RESULT: PASS (recipe submission; visual comparison still required)");
     thd_sleep(30000);
-    pvr_txr_surface_release(&normals);
+    pvr_txr_surface_release(&auxiliary);
     pvr_txr_surface_release(&color);
     assert(pvr_shutdown() == 0);
     return 0;

@@ -87,6 +87,10 @@ This connects resource identifiers to the existing compound-material APIs:
   their contexts to `pvr_material_compile_bump()`. The recipe uses one shared
   compile mask: require equal flags or deliberately choose a common sampling
   policy, rather than silently merging different supersampling requirements.
+- Resolve surface and lightmap/emissive inputs separately, then pass their
+  contexts and individual flags to `pvr_material_compile_lightmap()` or
+  `pvr_material_compile_emissive()`. Replay the prepared geometry with layer UVs
+  and unlit tint; lightmap alpha must be 255 and emissive alpha zero.
 
 The recipe compilers retain their narrower profile checks; successful context
 resolution alone does not guarantee recipe admission. Callers retain scene,
@@ -103,8 +107,9 @@ including auxiliary textures absent from the model's own resource manifest.
 Texture identity is not a shading role. One resource may serve different roles
 in different draws. Unlit and environment-map vertex policies already exist;
 this API does not introduce per-material authored role metadata, automatic
-lightmap/emissive composition, another material manager, or a model-format
-revision. Those authoring and composition gaps remain separate work.
+shader selection, another material manager, or a model-format revision.
+The layer recipes provide explicit lightmap/emissive composition; importing
+authored roles and selecting those recipes from assets remain separate work.
 
 ## Renderer integration
 

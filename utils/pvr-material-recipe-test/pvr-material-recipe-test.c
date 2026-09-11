@@ -17,7 +17,7 @@
 void pvr_poly_compile_ex(pvr_poly_hdr_t *header,
                          const pvr_poly_cxt_t *c, uint32_t flags) {
     uint32_t words[8] = { 0 };
-    (void)flags;
+    words[0] = (uint32_t)c->gen.specular << 2;
     words[1] = ((uint32_t)c->depth.comparison << 29) |
                ((uint32_t)c->depth.write << 26);
     words[2] = ((uint32_t)c->blend.src << 29) |
@@ -25,7 +25,9 @@ void pvr_poly_compile_ex(pvr_poly_hdr_t *header,
                ((uint32_t)c->blend.src_enable << 25) |
                ((uint32_t)c->blend.dst_enable << 24) |
                ((uint32_t)c->gen.alpha << 20) |
+               ((uint32_t)c->txr.alpha << 19) |
                ((uint32_t)c->txr.filter << 13) |
+               ((uint32_t)!!(flags & PVR_COMPILE_SUPERSAMPLE) << 12) |
                ((uint32_t)c->txr.env << 6);
     memcpy(header, words, sizeof(words));
 }
@@ -182,6 +184,123 @@ static void test_bump(void) {
     }
 }
 
+typedef int (*layer_compiler_t)(pvr_material_recipe_t *,
+                                const pvr_poly_cxt_t *,
+                                const pvr_poly_cxt_t *, uint32_t, uint32_t);
+
+static void test_layers(void) {
+    const layer_compiler_t compile[] = {
+        pvr_material_compile_lightmap, pvr_material_compile_emissive
+    };
+    const float color[3] = { .8f, .2f, .5f };
+    const float background[4] = { .1f, .4f, .3f, 1 };
+    for(unsigned emission = 0; emission < 2; ++emission) {
+        for(unsigned translucent = 0; translucent < 2; ++translucent) {
+            pvr_poly_cxt_t c = surface(translucent), layer = c;
+            pvr_material_recipe_t r;
+            layer.txr.mipmap = false;
+            layer.txr.format = PVR_TXRFMT_ARGB4444;
+            layer.gen.specular = true;
+            /* Input alpha/environment policy must not leak into the layer. */
+            layer.txr.alpha = false;
+            layer.txr.env = PVR_TXRENV_DECAL;
+            pvr_poly_cxt_t saved = layer;
+            for(unsigned flags = 0; flags < 4; ++flags) {
+                assert(compile[emission](&r, &c, &layer, flags & 1u,
+                                         (flags >> 1) & 1u) == 0);
+                assert(((word(&r, 0, 2) >> 12) & 1) == (flags & 1u));
+                assert(((word(&r, 1, 2) >> 12) & 1) == ((flags >> 1) & 1u));
+            }
+            assert(!memcmp(&layer, &saved, sizeof(layer)));
+            check_depth(&r, translucent);
+            assert(r.passes[0].role == PVR_MATERIAL_PASS_SURFACE);
+            assert(r.passes[1].role == (emission ? PVR_MATERIAL_PASS_EMISSIVE :
+                                                   PVR_MATERIAL_PASS_LIGHTMAP));
+            assert(!(word(&r, 1, 0) & (1u << 2)));
+            assert(word(&r, 1, 2) & (1u << 20));
+            assert(word(&r, 1, 2) & (1u << 19));
+            assert(((word(&r, 1, 2) >> 6) & 3) == PVR_TXRENV_MODULATEALPHA);
+            for(unsigned alpha = 0; alpha <= 4; ++alpha) {
+                for(unsigned level = 0; level <= 4; ++level) {
+                    float a = translucent ? alpha * .25f : 1;
+                    float l = level * .25f;
+                    float base[4] = { color[0], color[1], color[2], a };
+                    float detail[4] = { l, l * .5f, l * .75f,
+                                       emission ? 0 : 1 };
+                    float primary[4], secondary[4] = { .7f, .2f, .9f, .1f };
+                    memcpy(primary, background, sizeof(primary));
+                    blend(&r, 0, base, primary, secondary);
+                    blend(&r, 1, detail, primary, secondary);
+                    assert(fabsf((translucent ? secondary[3] : primary[3]) - a)
+                           < .00001f);
+                    if(translucent)
+                        blend(&r, 2, background, primary, secondary);
+                    for(unsigned i = 0; i < 3; ++i) {
+                        float expected = emission ? fminf(1, color[i] + detail[i])
+                                                  : color[i] * detail[i];
+                        if(translucent)
+                            expected = expected * a + background[i] * (1 - a);
+                        assert(fabsf(primary[i] - expected) < .00001f);
+                    }
+                }
+            }
+            c.txr.enable = layer.txr.enable = false;
+            assert(compile[emission](&r, &c, &layer, 0, 0) == 0);
+        }
+    }
+}
+
+static void test_layer_rejection(void) {
+    const layer_compiler_t compile[] = {
+        pvr_material_compile_lightmap, pvr_material_compile_emissive
+    };
+    for(unsigned kind = 0; kind < 2; ++kind) {
+        for(unsigned input = 0; input < 2; ++input) {
+            for(unsigned error = 0; error < 9; ++error) {
+                pvr_poly_cxt_t c = surface(true), layer = c;
+                pvr_poly_cxt_t *bad = input ? &layer : &c;
+                pvr_material_recipe_t r, saved;
+                memset(&r, 0xa5, sizeof(r));
+                memcpy(&saved, &r, sizeof(r));
+                switch(error) {
+                    case 0: bad->list_type = PVR_LIST_PT_POLY; break;
+                    case 1: bad->txr.format = PVR_TXRFMT_BUMP; break;
+                    case 2: bad->txr.filter = PVR_FILTER_TRILINEAR1; break;
+                    case 3: bad->txr.width = 63; break;
+                    case 4: bad->gen.fog_type = PVR_FOG_TABLE; break;
+                    case 5: bad->fmt.modifier = true; break;
+                    case 6: bad->blend.dst_enable = true; break;
+                    case 7: bad->gen.color_clamp = true; break;
+                    case 8: bad->list_type = PVR_LIST_OP_POLY; break;
+                }
+                assert(compile[kind](&r, &c, &layer, 0, 0) == -1);
+                assert(errno == EINVAL && !memcmp(&r, &saved, sizeof(r)));
+            }
+        }
+        pvr_poly_cxt_t c = surface(true);
+        pvr_material_recipe_t r, saved;
+        memset(&r, 0xa5, sizeof(r));
+        memcpy(&saved, &r, sizeof(r));
+        assert(compile[kind](&r, &c, &c, UINT32_MAX, 0) == -1);
+        assert(!memcmp(&r, &saved, sizeof(r)));
+        assert(compile[kind](&r, &c, &c, 0, UINT32_MAX) == -1);
+        assert(!memcmp(&r, &saved, sizeof(r)));
+        assert(compile[kind](&r, NULL, &c, 0, 0) == -1);
+        assert(compile[kind](&r, &c, NULL, 0, 0) == -1);
+        assert(!memcmp(&r, &saved, sizeof(r)));
+        assert(compile[kind](NULL, &c, &c, 0, 0) == -1);
+        union {
+            pvr_material_recipe_t recipe;
+            pvr_poly_cxt_t context;
+        } alias;
+        alias.context = c;
+        assert(compile[kind](&alias.recipe, &alias.context, &c, 0, 0) == -1);
+        assert(!memcmp(&alias.context, &c, sizeof(c)));
+        assert(compile[kind](&alias.recipe, &c, &alias.context, 0, 0) == -1);
+        assert(!memcmp(&alias.context, &c, sizeof(c)));
+    }
+}
+
 static void test_rejection(void) {
     pvr_material_recipe_t r, saved;
     for(unsigned error = 0; error < 10; ++error) {
@@ -228,6 +347,8 @@ static void test_rejection(void) {
 int main(void) {
     test_trilinear();
     test_bump();
+    test_layers();
+    test_layer_rejection();
     test_rejection();
     puts("pvr-material-recipe-test: PASS");
     return 0;
