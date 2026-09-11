@@ -133,8 +133,9 @@ export_sym_t *export_lookup_addr(uintptr_t addr) {
     size_t index;
     int i;
     symtab_handler_t *sth;
-
+    uintptr_t sym_addr;
     uintptr_t dist = ~0;
+    uintptr_t off;
     export_sym_t *best = NULL;
 
     for(index = 0;
@@ -150,8 +151,15 @@ export_sym_t *export_lookup_addr(uintptr_t addr) {
 
         /* First look through the kernel table */
         for(i = 0; sth->table[i].name; i++) {
-            if(addr - sth->table[i].ptr < dist) {
-                dist = addr - sth->table[i].ptr;
+            sym_addr = sth->table[i].ptr;
+
+            if(sym_addr > addr)
+                continue;
+
+            off = addr - sym_addr;
+
+            if(off < dist) {
+                dist = off;
                 best = sth->table + i;
             }
         }

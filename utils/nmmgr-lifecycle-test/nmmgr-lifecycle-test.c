@@ -5,6 +5,7 @@
 */
 
 #include <kos/nmmgr.h>
+#include <kos/exports.h>
 
 #include <errno.h>
 #include <pthread.h>
@@ -13,6 +14,16 @@
 #include <time.h>
 
 static int failures;
+
+/* Unsorted tables expose address-underflow mistakes independently of list
+   order. High addresses must never wrap into a false preceding symbol. */
+export_sym_t kernel_symtab[] = {
+    { "high", UINTPTR_MAX - 15 }, { "low", 0x100 }, { NULL, 0 }
+};
+export_sym_t arch_symtab[] = {
+    { "middle", 0x200 }, { NULL, 0 }
+};
+export_sym_t subarch_symtab[] = { { NULL, 0 } };
 
 #define CHECK(condition) do { \
     if(!(condition)) { \
@@ -149,12 +160,38 @@ static void test_alias_retains_target(void) {
     CHECK(nmmgr_handler_remove(&target) == 0);
 }
 
+static void test_export_lookup(void) {
+    export_init();
+    CHECK(export_lookup_addr(0) == NULL);
+    CHECK(export_lookup_addr(0xff) == NULL);
+    CHECK(export_lookup_addr(0x100) == &kernel_symtab[1]);
+    CHECK(export_lookup_addr(0x1ff) == &kernel_symtab[1]);
+    CHECK(export_lookup_addr(0x200) == &arch_symtab[0]);
+    CHECK(export_lookup_addr(0x280) == &arch_symtab[0]);
+    CHECK(export_lookup_addr(UINTPTR_MAX) == &kernel_symtab[0]);
+    CHECK(export_lookup("low") == &kernel_symtab[1]);
+    CHECK(export_lookup_path("middle", "sym/kernel/arch") == &arch_symtab[0]);
+    CHECK(export_lookup("absent") == NULL);
+    /* Every lookup must release its temporary handler reference. Otherwise
+       shutdown/removal would hang even with no concurrent table unload. */
+    const char *paths[] = {
+        "sym/kernel/kernel", "sym/kernel/arch", "sym/kernel/subarch"
+    };
+    for(size_t i = 0; i < sizeof(paths) / sizeof(paths[0]); ++i) {
+        nmmgr_handler_t *handler = nmmgr_lookup(paths[i]);
+        CHECK(handler != NULL);
+        if(handler)
+            CHECK(nmmgr_handler_remove_timed(handler, 1) == 0);
+    }
+}
+
 int main(void) {
     nmmgr_init();
     test_add_lookup_and_snapshot();
     test_timeout_unpublishes();
     test_blocking_drain();
     test_alias_retains_target();
+    test_export_lookup();
     nmmgr_shutdown();
 
     if(failures) {
