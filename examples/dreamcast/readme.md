@@ -202,6 +202,8 @@ This page serves as an index for all KallistiOS examples.
     buffered passes through DMA and registration interrupts
   - [**multipass_depth**](pvr/multipass_depth/): Checks depth clear/preserve
     independently of retained color with direct, DMA and hybrid pixel tests
+  - [**portal**](pvr/portal/): Composes a clipped second view with foreground
+    occlusion, using separate disjoint-coverage and strict depth-clear routes
   - [**multipass_hybrid**](pvr/multipass_hybrid/): Combines early list flushes
     with hardware continuation across three registration passes
   - modifier_volume

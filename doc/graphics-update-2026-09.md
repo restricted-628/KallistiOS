@@ -45,7 +45,9 @@ individually valid headers forms a correct accumulation recipe.
 3. Explicit multipass depth preserve/clear policy implemented September 10,
    independently of color retention. Region-array checks pass; the Vulkan
    emulator fails the clear-specific image checks. Physical depth validation
-   and a portal or mirror fixture remain open.
+   remains open. A bounded rectangular portal fixture is now implemented;
+   its disjoint-coverage route passes emulator checks, while its strict
+   depth-clear route retains the same image-validation gate.
 4. Model-asset roles for emissive/unlit, lightmaps, environment mapping and
    bump inputs, using existing texture converters and prepared bindings.
 5. Target numerical/ABI and performance fixtures for SH4ZAM consumers, with
@@ -186,3 +188,42 @@ The emulator discrepancy and source evidence are recorded in the
 [multipass design](pvr-multipass-design.md#depth-boundary-validation).
 This closes the driver API/encoding item, not the physical depth-clear image
 gate or the portal/mirror integration fixture. No sound changes are included.
+
+## September 10: rectangular portal integration
+
+Added the [portal fixture](../examples/dreamcast/pvr/portal/) without a public
+scene-owner or portal API. It reuses homogeneous frustum clipping, the SH4ZAM
+target transform path, checked polygon materials, canonical geometry sinks,
+and direct/DMA/hybrid multipass registration. No production library code or
+allocation policy changes are needed for this integration.
+
+Two separate routes have an identical intended image. The disjoint-coverage
+route leaves a real hole in the first view's wall and preserves depth. The
+strict depth-clear route initially covers the opening, clears depth before
+the second view, and replays a foreground occluder whose depth was lost.
+Both clip remote geometry to the opening and preserve the final pass's depth.
+There is no silent emulator fallback between the routes.
+
+The shared host/target builder is checked by software rasterized full-frame
+goldens, analytic UV/depth checks and deliberate missing-clear/missing-replay
+negative controls. This closes the bounded portal integration fixture, not
+arbitrary portal traversal, mirror rendering, physical depth-clear validation
+or a scene graph. Model-asset material roles and SH4ZAM numerical/performance
+fixtures remain next in the graphics agenda.
+
+Validation for this fixture:
+
+- Portal and existing geometry/frustum suites passed GCC 14 GNU17/strict C23
+  and Apple Clang GNU17/strict C2x (eight focused runs). The portal suite also
+  passed AddressSanitizer/UndefinedBehaviorSanitizer. Its aperture is not
+  tile-aligned, and both analytic full-frame goldens retain exact coverage.
+- GCC 16.2.0 compiled and linked the example against the current KOS build.
+  No kernel/public API changes were made and no exports were needed.
+- Flycast Vulkan interpreter and dynarec runs preserve the nonidentity XMTRX
+  across all geometry
+  preparation calls, complete direct/DMA/hybrid submission without pipeline
+  faults, and pass all 27 disjoint-coverage pixel samples. The strict clear
+  route fails the two remote-object samples per mode (6/27), as in the
+  preceding depth-boundary test. The final result deliberately remains FAIL.
+- Unrelated host suites and physical-console tests were not run for this
+  fixture. It is not a performance benchmark or a general scene graph.

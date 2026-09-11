@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a rectangular portal integration example over existing homogeneous
+  clipping, SH4ZAM transforms, checked materials, geometry sinks and multipass
+  registration. A shared host/target geometry fixture has full-frame software
+  coverage goldens and foreground-depth negative controls. No public scene
+  API or runtime allocation was added; the strict depth-clear image check
+  retains the recorded emulator limitation.
+
 * Added opt-in per-pass depth clear/preserve initialization for hardware
   multipass rendering, independent of accumulated color retention. Existing
   initialization APIs and public configuration layouts are unchanged. The
