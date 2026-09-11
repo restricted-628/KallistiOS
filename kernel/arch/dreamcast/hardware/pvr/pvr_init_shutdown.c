@@ -41,8 +41,9 @@ int pvr_init(const pvr_init_params_t *params) {
     return pvr_init_common(params, NULL);
 }
 
-int pvr_init_multipass(const pvr_init_params_t *params,
-                       const pvr_pass_config_t *passes, size_t pass_count) {
+static int init_multipass(const pvr_init_params_t *params,
+                          const pvr_pass_config_t *passes,
+                          const pvr_pass_depth_t *depth, size_t pass_count) {
     pvr_multipass_state_t *multipass;
     size_t pass;
 
@@ -55,6 +56,19 @@ int pvr_init_multipass(const pvr_init_params_t *params,
     if(irq_inside_int()) {
         errno = EPERM;
         return -1;
+    }
+
+    /* Reject the complete depth plan before allocating or touching VRAM.
+       NULL is reserved for the original entry point's implicit policy. */
+    if(depth) {
+        for(pass = 0; pass < pass_count; ++pass) {
+            if((depth[pass] != PVR_PASS_DEPTH_CLEAR &&
+                    depth[pass] != PVR_PASS_DEPTH_PRESERVE) ||
+                    (!pass && depth[pass] != PVR_PASS_DEPTH_CLEAR)) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
     }
 
     multipass = calloc(1, sizeof(*multipass));
@@ -99,6 +113,8 @@ int pvr_init_multipass(const pvr_init_params_t *params,
 
         multipass->passes[pass].presort =
             !!passes[pass].autosort_disabled;
+        multipass->passes[pass].clear_depth =
+            depth && depth[pass] == PVR_PASS_DEPTH_CLEAR;
     }
 
     if(pvr_init_common(params, multipass) < 0) {
@@ -111,6 +127,22 @@ int pvr_init_multipass(const pvr_init_params_t *params,
     }
 
     return 0;
+}
+
+int pvr_init_multipass(const pvr_init_params_t *params,
+                       const pvr_pass_config_t *passes, size_t pass_count) {
+    return init_multipass(params, passes, NULL, pass_count);
+}
+
+int pvr_init_multipass_depth(const pvr_init_params_t *params,
+                             const pvr_pass_config_t *passes,
+                             const pvr_pass_depth_t *depth, size_t pass_count) {
+    if(!depth) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return init_multipass(params, passes, depth, pass_count);
 }
 
 /* Initialize the PVR chip to ready status, enabling the specified lists

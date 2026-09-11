@@ -166,6 +166,41 @@ static void test_frame_layout(void) {
     assert(frame.bank_end == 0x00402500);
 }
 
+static void test_depth_independent_of_color(void) {
+    /* Enumerate every depth-clear mask, including pass zero, for 1..8
+       passes. Compare all words against legacy output, not just bit 30:
+       pointers, sort, tile retention, coordinates and final marker must
+       remain untouched. Multiple rows/columns catch cross-tile inheritance. */
+    for(size_t count = 1; count <= PVR_MULTIPASS_MAX_PASSES; ++count) {
+        pvr_ta_pass_layout_t passes[PVR_MULTIPASS_MAX_PASSES] = { 0 };
+        pvr_ta_layout_t layout;
+        uint32_t original[6 + 6 * 6 * PVR_MULTIPASS_MAX_PASSES];
+        uint32_t changed[6 + 6 * 6 * PVR_MULTIPASS_MAX_PASSES];
+        for(size_t pass = 0; pass < count; ++pass) {
+            passes[pass].opb_size[pass % 5] = 32;
+            passes[pass].presort = (pass & 1) != 0;
+        }
+        assert(pvr_ta_layout_calculate(&layout, 2, 3, passes, count) == 0);
+        assert(pvr_ta_layout_build_regions(original, layout.region_words,
+                                           0x4000, &layout, passes) == 0);
+        for(unsigned mask = 0; mask < (1u << count); ++mask) {
+            for(size_t pass = 0; pass < count; ++pass)
+                passes[pass].clear_depth = (mask & (1u << pass)) != 0;
+            assert(pvr_ta_layout_build_regions(changed, layout.region_words,
+                                               0x4000, &layout, passes) == 0);
+            for(size_t word = 0; word < layout.region_words; ++word) {
+                uint32_t expected = original[word];
+                if(word >= 6 && word % 6 == 0) {
+                    const size_t pass = (word / 6 - 1) % count;
+                    if(mask & (1u << pass))
+                        expected &= ~UINT32_C(0x40000000);
+                }
+                assert(changed[word] == expected);
+            }
+        }
+    }
+}
+
 static void test_rejections(void) {
     pvr_ta_pass_layout_t pass = {
         .opb_size = { 32, 0, 0, 0, 0 }
@@ -235,6 +270,7 @@ int main(void) {
     test_three_pass_tile_order();
     test_maximum_pass_count();
     test_frame_layout();
+    test_depth_independent_of_color();
     test_rejections();
     puts("pvr multipass layout tests passed");
     return 0;

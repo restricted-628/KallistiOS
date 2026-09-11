@@ -41,7 +41,8 @@ tile 1: pass 0, pass 1, ... pass N-1
 The control word uses these fields:
 
 - bit 31: final region; set only on the final pass of the final tile;
-- bit 30: preserve depth; clear on pass zero, set on later passes;
+- bit 30: preserve incoming depth; clear on pass zero, set on later passes
+  unless the caller explicitly requests a depth clear;
 - bit 29: translucent list is pre-sorted for this pass;
 - bit 28: preserve the tile accumulation result; set on every pass except the
   final pass;
@@ -53,13 +54,18 @@ initial object-pointer block for the tile and list.
 
 ## Public API
 
-The implementation adds three opt-in operations without changing the layout or
+The implementation adds opt-in operations without changing the layout or
 behavior of `pvr_init_params_t`:
 
 ```
 int pvr_init_multipass(const pvr_init_params_t *common,
                        const pvr_pass_config_t *passes,
                        size_t pass_count);
+
+int pvr_init_multipass_depth(const pvr_init_params_t *common,
+                             const pvr_pass_config_t *passes,
+                             const pvr_pass_depth_t *depth,
+                             size_t pass_count);
 
 int pvr_scene_next_pass(void);
 
@@ -72,6 +78,21 @@ int pvr_set_pass_vertbuf_checked(size_t pass, pvr_list_t list,
 `pvr_pass_config_t` contains the five OPB sizes and the translucent sort policy
 for one pass. The supported pass count is one through eight. A count of one
 uses the same region and registration behavior as direct `pvr_init()`.
+
+The original initializer retains its clear-first/preserve-later policy.
+`pvr_init_multipass_depth()` accepts a required array of CLEAR/PRESERVE values,
+copied alongside the existing pass settings. Pass zero must be CLEAR: tile
+depth is not inherited across tiles or scenes. Other passes may independently
+clear or preserve. Invalid policies are rejected before allocation or VRAM
+changes. Neither existing public structure changes layout.
+
+Depth clear and accumulated color retention are independent. Color remains
+live across every intermediate boundary; a depth clear changes only bit 30
+on that incoming pass, not bit 28 on the previous pass. It does not clear a
+framebuffer, write a replacement polygon, restart TA registration, allocate
+a new surface, or invalidate the shared geometry cursor. It applies to all
+tiles, not an arbitrary portal aperture. Applications must still constrain
+later geometry and reconstruct appropriate occlusion within their effect.
 
 `pvr_scene_next_pass()` closes the current pass, establishes the required
 registration boundary, and admits the next pass. It fails on the configured
@@ -88,7 +109,7 @@ machine without becoming part of the low-level driver.
 
 ## Resource model
 
-Multipass storage is allocated only by `pvr_init_multipass()`.
+Multipass storage is allocated only by the two multipass initializers.
 
 For each of the two TA frame banks, VRAM contains:
 
@@ -225,6 +246,34 @@ TA pass. A list that was flushed early is never replayed at scene completion.
    exceptions.
 8. Retain physical-hardware validation gates for timing, overflow behavior,
    sort interaction, and accumulation/depth preservation.
+
+## Depth-boundary validation
+
+The [depth example](../examples/dreamcast/pvr/multipass_depth/) verifies the
+actual submitted region controls through the uncached VRAM view after rendering
+is idle. Its independent pixel checks exercise legacy/preserve/clear policies
+under direct, buffered DMA and hybrid submission. Clear only at the middle
+boundary must expose a farther green panel without losing earlier red color
+outside it, and the following preserve boundary must hide a farther yellow
+panel. This is stronger than a successful registration-completion marker.
+
+Current Flycast Vulkan interpreter and dynarec runs pass all submitted control
+words and all 30 legacy/preserve pixel samples. Each clear case fails the
+center sample (red instead of green); the other 12 clear-case samples pass.
+The strict test reports three failures out of 45, not an overall PASS.
+An additional OpenGL 4.1 dynarec run reproduces the same three mismatches,
+with the same correct region controls; changing renderer did not close the
+image-validation gate.
+
+This is consistent with the emulator's implementation: its
+[parser](https://github.com/flyinghead/flycast/blob/0abac3465dc9547dca5f30f3352fee10b67e34b2/core/hw/pvr/ta_vtx.cpp#L1598)
+extracts `z_clear`, but the
+[Vulkan drawer](https://github.com/flyinghead/flycast/blob/0abac3465dc9547dca5f30f3352fee10b67e34b2/core/rend/vulkan/drawer.cpp)
+and [Vulkan per-pixel drawer](https://github.com/flyinghead/flycast/blob/0abac3465dc9547dca5f30f3352fee10b67e34b2/core/rend/vulkan/oit/oit_drawer.cpp#L352)
+do not consult it when drawing subsequent passes. Source inspection plus
+correct register-array readback supports an emulator limitation; it does not
+replace physical-console verification. Framebuffer emulation must also be
+enabled, or pixel reads can return stale memory rather than rendered colors.
 
 ## Deferred features
 

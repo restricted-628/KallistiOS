@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added opt-in per-pass depth clear/preserve initialization for hardware
+  multipass rendering, independent of accumulated color retention. Existing
+  initialization APIs and public configuration layouts are unchanged. The
+  framebuffer fixture checks direct, DMA and hybrid submission; physical
+  depth-clear behavior remains a validation gate, with a recorded Vulkan
+  emulator limitation rather than a relaxed pixel test.
+
 * Added bounded opaque/translucent trilinear and bump material recipes over
   existing checked polygon contexts. Ordered headers describe intermediate
   accumulation, modulation, final blending, and vertex-data requirements;

@@ -70,6 +70,7 @@ static void pvr_init_tile_matrix(int which, bool presort) {
             pass.opb_size[i] = pvr_state.opb_size[i];
 
         pass.presort = presort;
+        pass.clear_depth = false;
 
         result = pvr_ta_layout_calculate(&layout, pvr_state.tw, pvr_state.th,
                                          &pass, 1);
@@ -269,6 +270,7 @@ static int calculate_buffer_plan(const pvr_init_params_t *params,
         }
 
         pass->presort = !!params->autosort_disabled;
+        pass->clear_depth = false;
         passes = pass;
         pass_count = 1;
     }

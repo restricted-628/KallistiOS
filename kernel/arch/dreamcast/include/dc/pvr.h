@@ -677,6 +677,16 @@ typedef struct pvr_pass_config {
     int autosort_disabled;
 } pvr_pass_config_t;
 
+/** \brief Depth state entering a hardware registration pass.
+    \ingroup pvr_init
+
+    This controls tile depth, not polygon depth writes or accumulated color.
+*/
+typedef enum pvr_pass_depth {
+    PVR_PASS_DEPTH_CLEAR = 0, /**< Start this pass with cleared tile depth. */
+    PVR_PASS_DEPTH_PRESERVE   /**< Retain depth from the preceding pass. */
+} pvr_pass_depth_t;
+
 /** \brief   PVR initialization structure
     \ingroup pvr_init
 
@@ -812,6 +822,34 @@ int pvr_init(const pvr_init_params_t *params);
 */
 int pvr_init_multipass(const pvr_init_params_t *params,
                        const pvr_pass_config_t *passes, size_t pass_count);
+
+/** \brief Initialize multipass registration with explicit depth boundaries.
+    \ingroup pvr_init
+
+    Behaves like pvr_init_multipass(), but depth[pass] selects whether depth
+    is cleared before that pass or retained from the preceding pass. Pass
+    zero must use PVR_PASS_DEPTH_CLEAR: depth cannot be inherited from another
+    tile or scene. Accumulated color is retained between passes independently
+    of this choice. A clear applies to every tile, not a portal rectangle;
+    later geometry must supply its own coverage and occlusion constraints.
+
+    Settings are copied at initialization and apply to every scene, in direct,
+    DMA and hybrid modes. There is no extra allocation beyond the established
+    multipass state. The original configuration structures and entry point
+    retain their ABI and clear-first/preserve-later behavior.
+
+    \param params       Common settings, as for pvr_init_multipass().
+    \param passes       Array of pass-specific bin and sort settings.
+    \param depth        Required array of pass_count depth policies.
+    \param pass_count   Number of passes, one through PVR_MULTIPASS_MAX_PASSES.
+    \retval 0           On success.
+    \retval -1          On error, with errno as for pvr_init_multipass().
+                        Null depth, invalid policies, or preserving pass-zero
+                        depth give EINVAL before allocation or hardware changes.
+*/
+int pvr_init_multipass_depth(const pvr_init_params_t *params,
+                             const pvr_pass_config_t *passes,
+                             const pvr_pass_depth_t *depth, size_t pass_count);
 
 /** \brief   Simple PVR initialization.
     \ingroup pvr_init
@@ -1048,7 +1086,8 @@ void pvr_scene_begin(void);
     chain performs continuation after pvr_scene_finish(). Neither path resets
     the shared parameter or overflow cursors or starts rendering early.
 
-    The call is valid only for a scene started after pvr_init_multipass(), and
+    The call is valid only for a scene started after pvr_init_multipass() or
+    pvr_init_multipass_depth(), and
     only before the configured final pass.
 
     \retval 0               The next pass is ready for list submission.

@@ -849,6 +849,7 @@ pvr_fog_table_linear
 pvr_fog_table_custom
 pvr_init
 pvr_init_multipass
+pvr_init_multipass_depth
 pvr_shutdown
 pvr_mem_malloc
 pvr_mem_reservation_alloc

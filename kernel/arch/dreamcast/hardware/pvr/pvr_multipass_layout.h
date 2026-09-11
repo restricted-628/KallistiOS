@@ -20,6 +20,8 @@
 typedef struct pvr_ta_pass_layout {
     uint32_t opb_size[5];
     bool presort;
+    /* False preserves legacy clear-first/preserve-later behavior. */
+    bool clear_depth;
 } pvr_ta_pass_layout_t;
 
 typedef struct pvr_ta_layout {

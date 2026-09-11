@@ -17,7 +17,7 @@ SOURCES = pvr-multipass-layout-test.c $(PVR_DIR)/pvr_multipass_layout.c
 
 all: test
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) $(PVR_DIR)/pvr_multipass_layout.h
 	$(CC) $(CFLAGS) $(INCLUDES) $(SOURCES) -o $@
 
 test: $(TARGET)

@@ -42,8 +42,10 @@ individually valid headers forms a correct accumulation recipe.
    September 10, including secondary RGBA accumulation and explicit ordering.
    Physical composition/order validation and broader combinations remain open;
    see [compound material recipes](pvr-material-recipes.md).
-3. Extended multipass depth preserve/clear policy, followed by a portal or
-   mirror fixture; keep color retention independent from depth.
+3. Explicit multipass depth preserve/clear policy implemented September 10,
+   independently of color retention. Region-array checks pass; the Vulkan
+   emulator fails the clear-specific image checks. Physical depth validation
+   and a portal or mirror fixture remain open.
 4. Model-asset roles for emissive/unlit, lightmaps, environment mapping and
    bump inputs, using existing texture converters and prepared bindings.
 5. Target numerical/ABI and performance fixtures for SH4ZAM consumers, with
@@ -152,3 +154,35 @@ overlapping surfaces. Fog-aware recipes, sprites, two-volume combinations,
 and combined bump/trilinear are outside these initial profiles. Multipass
 depth policy remains the next implementation item; no sound or driver changes
 are part of this checkpoint.
+
+## September 10: explicit multipass depth boundaries
+
+Added `pvr_init_multipass_depth()` and the CLEAR/PRESERVE policy enum. It shares
+the existing initializer, TA continuation and region layout rather than
+introducing a second pass scheduler. The original initializer still clears
+pass zero and preserves depth thereafter. Public configuration structures
+retain their ABI; the internal clear flag fits existing structure padding.
+Color retention, list routing and parameter/overflow cursors are unchanged.
+
+Validation:
+
+- Expanded host region tests enumerate every depth mask for one through eight
+  passes over multiple rows and columns, comparing every word with the legacy
+  baseline. GCC 14 GNU17/strict C23 and Apple Clang GNU17/strict C2x passed.
+  AddressSanitizer/UndefinedBehaviorSanitizer passed separately.
+- Incremental GCC 16.2.0 KOS build and new SH-4 example link passed. Kernel
+  and module-export archives contain the new API. Focused Doxygen includes
+  the function and enum in `pvr_init`; only missing parent/related groups
+  outside the focused input produce warnings.
+- In Flycast Vulkan, interpreter and dynarec runs each completed all nine
+  direct/DMA/hybrid and legacy/preserve/clear combinations. Invalid-policy
+  sentinel checks, pipeline fault checks and all submitted tile-control words
+  passed. The six legacy/preserve cases pass all image samples. The three
+  clear cases each fail the center sample: 3 mismatches out of 45 overall.
+  The example reports failure; no expected color was weakened to obtain PASS.
+  An additional OpenGL 4.1 dynarec run gives the same 3/45 mismatches.
+
+The emulator discrepancy and source evidence are recorded in the
+[multipass design](pvr-multipass-design.md#depth-boundary-validation).
+This closes the driver API/encoding item, not the physical depth-clear image
+gate or the portal/mirror integration fixture. No sound changes are included.

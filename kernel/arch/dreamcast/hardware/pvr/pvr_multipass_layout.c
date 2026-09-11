@@ -170,7 +170,10 @@ int pvr_ta_layout_build_regions(uint32_t *regions, size_t capacity_words,
                 uint32_t control = (y << 8) | (x << 2);
                 size_t list;
 
-                if(pass)
+                /* Depth is an incoming-pass choice (bit 30); color retention
+                   is an outgoing boundary choice (bit 28). Clearing depth
+                   must not terminate accumulation or restart registration. */
+                if(pass && !passes[pass].clear_depth)
                     control |= PVR_REGION_KEEP_DEPTH;
 
                 if(passes[pass].presort)

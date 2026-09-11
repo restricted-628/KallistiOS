@@ -200,6 +200,8 @@ This page serves as an index for all KallistiOS examples.
     under one bounded hardware scene
   - [**multipass_dma**](pvr/multipass_dma/): Advances three independently
     buffered passes through DMA and registration interrupts
+  - [**multipass_depth**](pvr/multipass_depth/): Checks depth clear/preserve
+    independently of retained color with direct, DMA and hybrid pixel tests
   - [**multipass_hybrid**](pvr/multipass_hybrid/): Combines early list flushes
     with hardware continuation across three registration passes
   - modifier_volume
