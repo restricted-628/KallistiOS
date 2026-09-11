@@ -11,6 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added bounded opaque/translucent trilinear and bump material recipes over
+  existing checked polygon contexts. Ordered headers describe intermediate
+  accumulation, modulation, final blending, and vertex-data requirements;
+  no scene owner or intermediate VRAM allocation is introduced. Unsupported
+  compound profiles are rejected. Physical composition/order validation is
+  still required; the included framebuffer fixture records an emulator
+  limitation for presorted secondary-buffer operations.
+
 * Added a bounded, caller-owned scrolling tile-map compiler over cell geometry
   and frustum clipping. Independent wrap/clamp/finite axes, transformed views,
   colors and atlas flips produce canonical vertices with explicit list and

@@ -24,6 +24,7 @@ OBJS += pvr_palette.o
 
 # Primitives / scene management
 OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
+	pvr_material_recipe.o \
 	pvr_chunk_model.o pvr_chunk_asset.o pvr_chunk_asset_io.o \
 	pvr_chunk_hierarchy.o pvr_chunk_scene.o pvr_chunk_scene_asset.o \
 	pvr_chunk_render.o \

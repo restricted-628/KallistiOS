@@ -193,12 +193,12 @@ typedef struct {
     struct {
         pvr_blend_mode_t    src;            /**< \brief Source blending mode outside modifier */
         pvr_blend_mode_t    dst;            /**< \brief Dest blending mode outside modifier */
-        bool                src_enable;     /**< \brief Source blending enable outside modifier */
-        bool                dst_enable;     /**< \brief Dest blending enable outside modifier */
+        bool                src_enable;     /**< \brief Select secondary source instead of shaded color */
+        bool                dst_enable;     /**< \brief Select secondary blend destination/output */
         pvr_blend_mode_t    src2;           /**< \brief Source blending mode inside modifier */
         pvr_blend_mode_t    dst2;           /**< \brief Dest blending mode inside modifier */
-        bool                src_enable2;    /**< \brief Source blending mode inside modifier */
-        bool                dst_enable2;    /**< \brief Dest blending mode inside modifier */
+        bool                src_enable2;    /**< \brief Select secondary source inside modifier */
+        bool                dst_enable2;    /**< \brief Select secondary destination/output inside modifier */
     } blend;                                /**< \brief Blending parameters */
     struct {
         pvr_color_fmts_t    color;      /**< \brief Color format in vertex */
@@ -207,7 +207,7 @@ typedef struct {
     } fmt;                              /**< \brief Format control */
     struct {
         pvr_depthcmp_mode_t comparison; /**< \brief Depth comparison mode */
-        bool                write;      /**< \brief Enable depth writes */
+        bool                write;      /**< \brief Encoded write-disable bit; use PVR_DEPTHWRITE_* */
     } depth;                            /**< \brief Depth comparison/write modes */
     struct {
         bool                enable;         /**< \brief Enable/disable texturing */
@@ -253,12 +253,12 @@ typedef struct {
     struct {
         pvr_blend_mode_t    src;        /**< \brief Source blending mode */
         pvr_blend_mode_t    dst;        /**< \brief Dest blending mode */
-        bool                src_enable; /**< \brief Source blending enable */
-        bool                dst_enable; /**< \brief Dest blending enable */
+        bool                src_enable; /**< \brief Select secondary source instead of shaded color */
+        bool                dst_enable; /**< \brief Select secondary destination/output */
     } blend;
     struct {
         pvr_depthcmp_mode_t comparison; /**< \brief Depth comparison mode */
-        bool                write;      /**< \brief Enable depth writes */
+        bool                write;      /**< \brief Encoded write-disable bit; use PVR_DEPTHWRITE_* */
     } depth;                            /**< \brief Depth comparison/write modes */
     struct {
         bool                enable;         /**< \brief Enable/disable texturing */

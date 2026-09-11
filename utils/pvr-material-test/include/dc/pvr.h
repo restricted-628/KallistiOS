@@ -109,6 +109,9 @@ typedef enum pvr_uv_clamp {
 
 #define PVR_TXRFMT_VQ_ENABLE       (1u << 30)
 #define PVR_TXRFMT_RGB565          (1u << 27)
+#define PVR_TXRFMT_BUMP            (4u << 27)
+#define PVR_DEPTHWRITE_ENABLE      0
+#define PVR_DEPTHWRITE_DISABLE     1
 #define PVR_TXRFMT_PAL4BPP         (5u << 27)
 #define PVR_TXRFMT_PAL8BPP         (6u << 27)
 #define PVR_TXRFMT_NONTWIDDLED     (1u << 26)

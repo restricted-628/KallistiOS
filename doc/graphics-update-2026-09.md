@@ -38,8 +38,10 @@ individually valid headers forms a correct accumulation recipe.
 1. Completed on September 9: a bounded tile-map compiler over existing cell
    geometry, with viewport clipping, wrap/clamp policies, and transformed maps.
    See [scrolling tile maps](pvr-tilemaps.md) and the checkpoint below.
-2. Compound trilinear and bump-material recipes, including secondary color
-   and alpha accumulation and explicit draw ordering.
+2. Initial bounded compound trilinear and bump-material recipes landed on
+   September 10, including secondary RGBA accumulation and explicit ordering.
+   Physical composition/order validation and broader combinations remain open;
+   see [compound material recipes](pvr-material-recipes.md).
 3. Extended multipass depth preserve/clear policy, followed by a portal or
    mirror fixture; keep color retention independent from depth.
 4. Model-asset roles for emissive/unlit, lightmaps, environment mapping and
@@ -49,7 +51,8 @@ individually valid headers forms a correct accumulation recipe.
 6. Physical image tests for translucent accumulation, modifier clipping and
    presort, compact VQ, global texture state, RTT visibility, and DMA/SQ use.
 
-Items 2-6 remain distinct deliverables, not completed features. The existing
+The remaining parts of items 2-6 are distinct deliverables, not completed
+features. The existing
 animation, deformation, cells, particles, compact-model caches, and math
 bridges remain the basis for them. General scene ownership and game-specific
 policies belong above the current runtime.
@@ -112,3 +115,40 @@ Validation for this addition:
 The example is a correctness fixture, not a performance benchmark. Physical
 console rasterization and timing remain open. Compound material recipes are
 the next implementation item; no sound or driver changes are part of this one.
+
+## September 10: compound material profiles
+
+Added checked trilinear and bump recipe compilers to the existing material
+layer. Four initial profiles cover opaque and translucent surfaces through
+two or three ordered headers, with role-specific vertex contracts. They add
+no allocation, scene owner, service or alternative geometry/math pipeline.
+Inputs and failed outputs are preserved, including rejected aliasing. The
+legacy depth-write-disable bit and secondary-buffer selectors now have
+explicit comments; their ABI and raw encoding are unchanged.
+
+Validation for this addition:
+
+- Existing material and new recipe suites passed GCC 14 GNU17/strict C23 and
+  Apple Clang 16 GNU17/strict C2x (eight focused runs). The new suite also
+  passed AddressSanitizer and UndefinedBehaviorSanitizer. Unrelated host
+  suites were not rerun for this item.
+- The incremental GCC 16.2.0 KOS build and both new ELF links passed. The
+  recipe fixture checks the actual target packet encoder, not only its host
+  test double; it passed in Flycast interpreter and dynarec configurations.
+- The procedural example's numeric RGB565 framebuffer check passed all seven
+  samples in the explicitly labeled autosort diagnostic: four surface colors,
+  the background, and two depth-occluding bars. This checks the emulator's
+  secondary resolver and the recipe arithmetic on isolated geometry.
+- The required presort configuration failed exactly the two translucent
+  samples (white resolve polygons); the other five samples passed. Flycast's
+  presorted TR route bypasses its secondary-buffer resolver. This known
+  failure is retained, not hidden by weakening the recipe ordering contract.
+- Both APIs were confirmed in the kernel and module-export archives and in
+  the focused Doxygen material group. The focused run's only warning was the
+  existing parent group omitted from that single-header input.
+
+Physical-console composition and ordering are still required, especially for
+overlapping surfaces. Fog-aware recipes, sprites, two-volume combinations,
+and combined bump/trilinear are outside these initial profiles. Multipass
+depth policy remains the next implementation item; no sound or driver changes
+are part of this checkpoint.

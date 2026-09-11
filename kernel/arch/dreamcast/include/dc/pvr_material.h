@@ -106,6 +106,83 @@ int pvr_material_compile_two_volume(pvr_material_t *material,
 */
 int pvr_material_submit(const pvr_material_t *material);
 
+/** \brief Required vertex data for a compound-material step. */
+typedef enum pvr_material_pass_role {
+    PVR_MATERIAL_PASS_SURFACE = 0, /**< Ordinary surface colors and UVs. */
+    PVR_MATERIAL_PASS_BUMP, /**< Black base RGB; oargb from pvr_pack_bump(). */
+    PVR_MATERIAL_PASS_RESOLVE /**< Matching coverage/depth; colors/UVs unused. */
+} pvr_material_pass_role_t;
+
+/** \brief One material header and its vertex-data contract. */
+typedef struct pvr_material_recipe_pass {
+    pvr_material_t material;
+    pvr_material_pass_role_t role;
+} pvr_material_recipe_pass_t;
+
+/** \brief Caller-owned compound material with at most three ordered steps.
+
+    Each step is a header followed by geometry, not a scene/render pass.
+    Use canonical packed-color, float-UV pvr_vertex_t packets. Coverage,
+    clipping, winding and reciprocal depth must match across steps. Bump and
+    surface UVs may differ; resolve vertices reuse either geometry.
+
+    Presort (autosort disabled) is required. A translucent recipe must be
+    contiguous per surface: do not batch all objects' first steps together.
+    Intervening secondary-buffer users would overwrite live intermediates.
+
+    Opaque recipes have an opaque seed and translucent completion at equal
+    depth. Submit opaque seeds first, then completions before unrelated
+    transparency. Coincident surfaces at exactly equal depth need caller
+    disambiguation. No new VRAM buffer, allocator or renderer is introduced.
+
+    \warning Physical-console composition/order validation is still required.
+             Host arithmetic and packet tests do not certify raster behavior.
+*/
+typedef struct pvr_material_recipe {
+    size_t pass_count;
+    bool requires_presort;
+    pvr_material_recipe_pass_t passes[3];
+} pvr_material_recipe_t;
+
+/** \brief Compile complementary trilinear phases and their composition.
+
+    Select opaque or translucent polygons and a mipmapped non-bump texture.
+    Opaque output uses two steps; translucent output accumulates both phases
+    into the secondary buffer, then resolves RGBA using the source blend
+    factors. Geometry and textures remain caller-owned through completion.
+
+    Supported profiles require packed colors, float UVs, no modifiers, no
+    fog/color clamp, and ordinary source/destination buffer selectors. Opaque
+    seeds write depth; other steps disable writes regardless of the source
+    write bit. Depth comparison is retained except for opaque completion's
+    equal-depth test. Compile flags use PVR_COMPILE_SUPERSAMPLE.
+
+    No submission/allocation occurs. Output/source overlap is rejected. Sources
+    are unchanged, and failure leaves output unchanged. Returns 0, or -1 with
+    EINVAL for unsupported/invalid state.
+*/
+int pvr_material_compile_trilinear(pvr_material_recipe_t *recipe,
+                                   const pvr_poly_cxt_t *surface,
+                                   uint32_t compile_flags);
+
+/** \brief Compile bump lighting followed by surface-color modulation.
+
+    Surface may be textured or colored, but not bump-formatted or trilinear.
+    Bump must select a nonmipmapped bump texture and the same list as surface.
+    Only its texture description is retained; geometry/depth state comes from
+    surface. Both contexts must fit the profile described above.
+
+    Bump vertices require black base RGB and packed light coefficients in
+    oargb. Decal shading with forced seed alpha one produces (h,h,h,1), so
+    multiplying the surface preserves its alpha rather than squaring h.
+    Opaque output uses two steps; translucent output adds a secondary resolve.
+    Ownership, failure and ordering contracts match the trilinear compiler.
+*/
+int pvr_material_compile_bump(pvr_material_recipe_t *recipe,
+                              const pvr_poly_cxt_t *surface,
+                              const pvr_poly_cxt_t *bump,
+                              uint32_t compile_flags);
+
 /** \brief Submit one material header to an explicit buffered PVR list.
 
     The encoded list must equal \p list. Scene and buffer ownership remain
