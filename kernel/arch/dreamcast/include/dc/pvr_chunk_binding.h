@@ -227,6 +227,39 @@ int pvr_chunk_material_resolve(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip);
 
+/** \brief Checked compact material context for further recipe compilation.
+
+    Texture addresses are borrowed, not retained or pinned. Keep the backing
+    VRAM allocations valid through rendering and resolve again after rebinding
+    resources. This value owns no allocation and may be copied by the caller.
+*/
+typedef struct pvr_chunk_material_context {
+    pvr_poly_cxt_t context; /**< Resolved polygon context. */
+    uint32_t compile_flags; /**< Checked texture supersampling flags. */
+} pvr_chunk_material_context_t;
+
+/** \brief Resolve compact draw state into a reusable checked context.
+
+    Uses the same state mapping and checked one-/two-volume compilation as
+    pvr_chunk_material_resolve(), but publishes the context and compile flags
+    rather than the temporary header. Every failure leaves \p resolved
+    unchanged. No memory is allocated and no geometry is submitted.
+
+    Separately resolved surface and bump inputs can feed
+    pvr_material_compile_bump(); a resolved mipmapped surface can feed
+    pvr_material_compile_trilinear(). Those compilers still enforce their own
+    narrower recipe contracts. Bump recipes use one shared compile-flag mask;
+    require equal input flags or explicitly choose a common sampling policy.
+    Texture identifiers select resources, not global shading roles: the caller
+    chooses each input's role and its base-context policy explicitly.
+*/
+int pvr_chunk_material_resolve_context(
+    pvr_chunk_material_context_t *resolved,
+    const pvr_poly_cxt_t *base_context,
+    const pvr_chunk_texture_table_view_t *textures,
+    const pvr_chunk_render_state_t *state,
+    const pvr_chunk_strip_view_t *strip);
+
 /** \brief Initialize a stateless material submission adapter.
 
     `destination` must be a current-list or explicit buffered-list sink kind.

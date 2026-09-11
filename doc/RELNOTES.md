@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added reusable checked Compact material-context resolution for existing
+  trilinear and bump recipes. It shares the regular resolver's validation,
+  leaves outputs unchanged on failure and borrows texture addresses without
+  allocating or retaining resources. Ordinary material resolution still
+  compiles once; model formats and existing public layouts are unchanged.
+
 * Added a rectangular portal integration example over existing homogeneous
   clipping, SH4ZAM transforms, checked materials, geometry sinks and multipass
   registration. A shared host/target geometry fixture has full-frame software

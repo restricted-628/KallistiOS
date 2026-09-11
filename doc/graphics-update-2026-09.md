@@ -50,6 +50,9 @@ individually valid headers forms a correct accumulation recipe.
    depth-clear route retains the same image-validation gate.
 4. Model-asset roles for emissive/unlit, lightmaps, environment mapping and
    bump inputs, using existing texture converters and prepared bindings.
+   Checked reusable context resolution now connects distinct texture inputs
+   to existing bump/trilinear recipes. Authored per-material role metadata and
+   lightmap/emissive composition remain open; see the September 10 entry below.
 5. Target numerical/ABI and performance fixtures for SH4ZAM consumers, with
    explicit error tolerances, XMTRX preservation, and warm/cold measurements.
 6. Physical image tests for translucent accumulation, modifier clipping and
@@ -227,3 +230,43 @@ Validation for this fixture:
   preceding depth-boundary test. The final result deliberately remains FAIL.
 - Unrelated host suites and physical-console tests were not run for this
   fixture. It is not a performance benchmark or a general scene graph.
+
+## September 10: Compact resource inputs for material recipes
+
+Added `pvr_chunk_material_resolve_context()` to expose the checked polygon
+context and compile flags through the existing resource resolver. One shared
+mapping/validation path serves both APIs. Ordinary draws still compile one
+header, with no additional output-context copy; the opt-in API adds no
+allocation, texture ownership, worker, format revision or existing ABI change.
+
+The compound-material example now resolves color and bump identifiers from
+one caller-owned texture table before invoking the existing recipe compilers.
+All four opaque/translucent bump/trilinear recipes compare their actual TA
+headers against an independent explicit-context construction. The nonmipmapped
+bump reference explicitly uses normal mip bias, matching the resolver's
+established normalization of that inactive field.
+
+Validation:
+
+- Binding and material-recipe host suites passed GCC 14 GNU17/strict C23 and
+  Apple Clang GNU17/strict C2x. Both passed AddressSanitizer and
+  UndefinedBehaviorSanitizer. Checks include unchanged outputs on validation
+  and compiler failure, distinct texture inputs, compact-VQ address bias,
+  supersampling and two-volume state. The host binding compiler is a test
+  double; real packet equivalence is checked separately on the target.
+- GCC 16.2.0 rebuilt KOS and linked the example. The API is present in kernel
+  and module-export archives. Focused Doxygen places the API and type in the
+  resource-binding group (only the omitted parent group warns).
+- Flycast Vulkan interpreter and dynarec both passed all four exact recipe
+  packet comparisons and reached image validation with no pipeline fault.
+  Both retained three of seven strict pixel mismatches: opaque trilinear red
+  is 213 rather than 204 (tolerance eight), and both translucent centers are
+  white. The image assertion remains a failure, not a submission PASS.
+  Rebuilding the prior example from `ab4343b5` and running it with the same
+  dynarec/settings produced exactly the same seven pixel values. These image
+  failures are not introduced by resource resolution. No physical tests ran.
+
+This closes the reusable resource-to-recipe bridge, not all material roles.
+Per-material authored role metadata, lightmap/emissive composition, SH4ZAM
+numerical/performance fixtures and physical rendering validation remain open.
+Existing unlit and environment-map vertex policies are reused, not replaced.

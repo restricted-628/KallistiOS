@@ -68,6 +68,44 @@ Missing identifiers report `ENOENT`. Invalid model state, mutated surface
 metadata, incompatible one/two-volume contexts, and invalid palette or mip
 state leave the destination material unchanged.
 
+## Resolved contexts and material roles
+
+`pvr_chunk_material_resolve_context()` exposes the same checked result before
+header submission: a copied polygon context plus its compile flags. It shares
+the regular resolver's mapping and checked compiler, including two-volume
+validation. Failure leaves the destination unchanged. The ordinary material
+resolver still compiles only once and does not copy an extra output context.
+Resolve during preparation and reuse the result while draw policy and resource
+bindings remain unchanged; there is no need to repeat that validation for each
+recipe step.
+
+This connects resource identifiers to the existing compound-material APIs:
+
+- Resolve a mipmapped surface, then pass its context and flags to
+  `pvr_material_compile_trilinear()`.
+- Resolve color and bump inputs separately from a texture table, then pass
+  their contexts to `pvr_material_compile_bump()`. The recipe uses one shared
+  compile mask: require equal flags or deliberately choose a common sampling
+  policy, rather than silently merging different supersampling requirements.
+
+The recipe compilers retain their narrower profile checks; successful context
+resolution alone does not guarantee recipe admission. Callers retain scene,
+list, clipping, UV generation and matching-coverage responsibilities. The
+[material recipe example](../examples/dreamcast/pvr/material_recipes/) resolves
+two distinct texture identifiers and checks its resulting TA packets against
+independently configured contexts before rendering.
+
+Resolved contexts borrow VRAM addresses. They neither pin resources nor retain
+a table: keep allocations valid through render completion and resolve again
+after rebinding. Residency users must explicitly pin every recipe input,
+including auxiliary textures absent from the model's own resource manifest.
+
+Texture identity is not a shading role. One resource may serve different roles
+in different draws. Unlit and environment-map vertex policies already exist;
+this API does not introduce per-material authored role metadata, automatic
+lightmap/emissive composition, another material manager, or a model-format
+revision. Those authoring and composition gaps remain separate work.
+
 ## Renderer integration
 
 `pvr_chunk_material_binding_t` copies the base context and admitted table view

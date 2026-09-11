@@ -16,6 +16,7 @@ static pvr_poly_cxt_t compiled_context;
 static uint32_t compiled_flags;
 static pvr_material_kind_t compiled_kind;
 static size_t compile_calls;
+static int compile_failure;
 static size_t current_submits;
 static size_t buffered_submits;
 static size_t environment_begin_calls;
@@ -209,6 +210,10 @@ static int compile_material(pvr_material_t *material,
     compiled_context = *context;
     compiled_flags = flags;
     compiled_kind = kind;
+    if(compile_failure) {
+        errno = EINVAL;
+        return -1;
+    }
     memset(material, 0, sizeof(*material));
     material->list = context->list_type;
     material->kind = kind;
@@ -647,6 +652,7 @@ static void test_resolve(void) {
     pvr_chunk_strip_view_t strip;
     pvr_material_t material;
     pvr_material_t unchanged;
+    pvr_chunk_material_context_t resolved;
 
     color.layout = PVR_TXR_SURFACE_VQ;
     color.codebook_size = 1024;
@@ -691,6 +697,11 @@ static void test_resolve(void) {
            compiled_context.gen.specular);
     assert(compiled_context.blend.src == PVR_BLEND_SRCALPHA &&
            compiled_context.blend.dst == PVR_BLEND_INVSRCALPHA);
+    assert(pvr_chunk_material_resolve_context(&resolved, &context, &view,
+                                              &state, &strip) == 0);
+    assert(resolved.compile_flags == PVR_COMPILE_SUPERSAMPLE);
+    assert(!memcmp(&resolved.context, &compiled_context, sizeof(context)));
+    assert(resolved.context.txr.base == (uint8_t *)color.vram - 1024u);
 
     state.present = PVR_CHUNK_RENDER_TEXTURE;
     state.texture.identifier = 5;
@@ -715,6 +726,82 @@ static void test_resolve(void) {
                                       sizeof(material)));
 }
 
+static void test_resolved_context(void) {
+    pvr_txr_surface_t color = make_surface(0x1000,
+                                           PVR_TXR_SURFACE_RGB565, 0);
+    pvr_txr_surface_t bump = make_surface(0x9000,
+                                          PVR_TXR_SURFACE_BUMP, 0);
+    pvr_chunk_texture_binding_t entries[] = {
+        { 1, 0, &color }, { 2, 0, &bump }
+    };
+    pvr_chunk_texture_table_t table = { entries, 2 };
+    pvr_chunk_texture_table_view_t view;
+    pvr_poly_cxt_t context = make_context(0);
+    pvr_chunk_render_state_t state = { 0 };
+    pvr_chunk_strip_view_t strip = { 0 };
+    pvr_chunk_material_context_t resolved, unchanged, surface;
+
+    assert(pvr_chunk_texture_table_open(&table, &view) == 0);
+    state.present = PVR_CHUNK_RENDER_TEXTURE | PVR_CHUNK_RENDER_BLEND;
+    state.blend_source = PVR_BLEND_SRCALPHA;
+    state.blend_destination = PVR_BLEND_INVSRCALPHA;
+    state.texture.identifier = 1;
+    state.texture.filter = PVR_FILTER_BILINEAR;
+    state.texture.supersample = 1;
+    state.texture.uv_clamp = PVR_UVCLAMP_U;
+    state.strip_flags = PVR_CHUNK_STRIP_USE_ALPHA;
+    strip.type = PVR_CHUNK_STRIP_UV8_FIXED;
+    strip.flags = state.strip_flags;
+    compile_calls = 0;
+    assert(pvr_chunk_material_resolve_context(&surface, &context, &view,
+                                              &state, &strip) == 0);
+    assert(compile_calls == 1 && surface.compile_flags ==
+           PVR_COMPILE_SUPERSAMPLE);
+    assert(!memcmp(&surface.context, &compiled_context, sizeof(context)));
+    assert(surface.context.txr.base == color.vram);
+    assert(surface.context.txr.format == PVR_TXRFMT_RGB565);
+    assert(surface.context.txr.uv_clamp == PVR_UVCLAMP_U);
+    assert(surface.context.depth.comparison == context.depth.comparison);
+    assert(surface.context.blend.src == PVR_BLEND_SRCALPHA);
+    state.texture.identifier = 2;
+    assert(pvr_chunk_material_resolve_context(&resolved, &context, &view,
+                                              &state, &strip) == 0);
+    assert(compile_calls == 2 && resolved.compile_flags ==
+           surface.compile_flags);
+    assert(resolved.context.txr.base == bump.vram);
+    assert(resolved.context.txr.format == PVR_TXRFMT_BUMP);
+    assert(surface.context.txr.base == color.vram);
+
+    memset(&resolved, 0x5a, sizeof(resolved));
+    unchanged = resolved;
+    compile_failure = 1;
+    errno = 0;
+    assert(pvr_chunk_material_resolve_context(&resolved, &context, &view,
+                                              &state, &strip) == -1);
+    assert(errno == EINVAL && compile_calls == 3);
+    assert(!memcmp(&resolved, &unchanged, sizeof(resolved)));
+    compile_failure = 0;
+    state.texture.identifier = 3;
+    errno = 0;
+    assert(pvr_chunk_material_resolve_context(&resolved, &context, &view,
+                                              &state, &strip) == -1);
+    assert(errno == ENOENT && compile_calls == 3);
+    assert(!memcmp(&resolved, &unchanged, sizeof(resolved)));
+    state.texture.identifier = 2;
+    bump.vram = (pvr_ptr_t)(uintptr_t)0x1000;
+    assert(pvr_chunk_material_resolve_context(&resolved, &context, &view,
+                                              &state, &strip) == -1);
+    assert(errno == EFAULT && compile_calls == 3);
+    assert(!memcmp(&resolved, &unchanged, sizeof(resolved)));
+    assert(pvr_chunk_material_resolve_context(NULL, &context, &view,
+                                              &state, &strip) == -1);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_material_resolve_context(&resolved, NULL, &view,
+                                              &state, &strip) == -1);
+    assert(errno == EINVAL);
+    assert(!memcmp(&resolved, &unchanged, sizeof(resolved)));
+}
+
 static void test_two_volume_and_submission(void) {
     pvr_txr_surface_t first = make_surface(0x1000,
                                            PVR_TXR_SURFACE_RGB565, 0);
@@ -731,6 +818,7 @@ static void test_two_volume_and_submission(void) {
     pvr_chunk_strip_view_t strip;
     pvr_chunk_cached_strip_t cached_strip;
     pvr_material_t material;
+    pvr_chunk_material_context_t resolved;
 
     assert(pvr_chunk_texture_table_open(&table, &view) == 0);
     memset(&state, 0, sizeof(state));
@@ -754,6 +842,12 @@ static void test_two_volume_and_submission(void) {
            compiled_context.txr2.base == second.vram);
     assert(compiled_context.blend.src2 == PVR_BLEND_SRCALPHA &&
            compiled_context.blend.dst2 == PVR_BLEND_INVSRCALPHA);
+    assert(pvr_chunk_material_resolve_context(&resolved, &context, &view,
+                                              &state, &strip) == 0);
+    assert(resolved.compile_flags == PVR_COMPILE_ALL_FLAGS);
+    assert(resolved.context.fmt.modifier);
+    assert(resolved.context.txr.base == first.vram &&
+           resolved.context.txr2.base == second.vram);
 
     current_submits = buffered_submits = 0;
     assert(pvr_chunk_material_binding_init(
@@ -919,6 +1013,7 @@ static void test_residency_binding(void) {
 int main(void) {
     test_table();
     test_resolve();
+    test_resolved_context();
     test_two_volume_and_submission();
     test_environment_binding();
     test_render_policy_binding();

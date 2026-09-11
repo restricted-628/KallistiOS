@@ -13,6 +13,16 @@ APIs. Four panels demonstrate opaque/translucent trilinear (top row) and
 opaque/translucent bump shading (bottom row). Two dark vertical bars cover
 the opaque panels; their color must not change during recipe completion.
 
+The application binds the color surface to Compact texture identifier 7 and
+the bump surface to identifier 19. It resolves their contexts through
+`pvr_chunk_material_resolve_context()` and feeds those into the existing
+recipe compilers. Before rendering, all four recipes' TA headers, roles and
+list metadata must match an independent explicit-context construction. The
+packet-comparison PASS marker is separate from submission and image checks.
+Both texture allocations remain alive until the final render completes.
+This demonstrates caller-selected material inputs, not a new asset format or
+automatic shader-role selection.
+
 The backdrop is RGB (.1, .2, .3), surface RGB is (.8, .4, .2), surface alpha
 is 8/15, and the bump light factor is 128/255. Expected RGB8 panel centers:
 
@@ -44,6 +54,12 @@ for presorted transparency. The production-order fixture consequently fails
 its translucent color checks there, even with the per-pixel renderer selected.
 Do not interpret its separate submission/PVR-fault PASS marker as image proof.
 See the [recipe guide](../../../../doc/pvr-material-recipes.md).
+
+The September 10 Vulkan regression run also measured opaque trilinear red at
+213 rather than 204, just outside the unchanged tolerance of eight. The prior
+explicit-context example produced the identical seven samples under the same
+settings. This image discrepancy remains open independently of the new
+resource-resolution packet comparisons.
 
 For an emulator-only comparison of secondary-buffer algebra:
 

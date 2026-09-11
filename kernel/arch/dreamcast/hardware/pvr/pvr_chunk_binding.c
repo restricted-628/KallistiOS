@@ -521,8 +521,9 @@ static int render_state_valid(const pvr_chunk_render_state_t *state,
     return 1;
 }
 
-int pvr_chunk_material_resolve(
-        pvr_material_t *material, const pvr_poly_cxt_t *base_context,
+static int resolve_material(
+        pvr_material_t *material, pvr_chunk_material_context_t *resolved,
+        const pvr_poly_cxt_t *base_context,
         const pvr_chunk_texture_table_view_t *textures,
         const pvr_chunk_render_state_t *state,
         const pvr_chunk_strip_view_t *strip) {
@@ -599,7 +600,38 @@ int pvr_chunk_material_resolve(
         return -1;
     }
     *material = candidate;
+    if(resolved) {
+        resolved->context = context;
+        resolved->compile_flags = compile_flags;
+    }
     return 0;
+}
+
+int pvr_chunk_material_resolve(
+        pvr_material_t *material, const pvr_poly_cxt_t *base_context,
+        const pvr_chunk_texture_table_view_t *textures,
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_strip_view_t *strip) {
+    return resolve_material(material, NULL, base_context, textures, state,
+                            strip);
+}
+
+int pvr_chunk_material_resolve_context(
+        pvr_chunk_material_context_t *resolved,
+        const pvr_poly_cxt_t *base_context,
+        const pvr_chunk_texture_table_view_t *textures,
+        const pvr_chunk_render_state_t *state,
+        const pvr_chunk_strip_view_t *strip) {
+    pvr_material_t material;
+
+    if(!resolved) {
+        errno = EINVAL;
+        return -1;
+    }
+    /* Keep one authoritative mapping and validation path. Ordinary draws do
+       not pay for a second context copy or a second header compilation. */
+    return resolve_material(&material, resolved, base_context, textures, state,
+                            strip);
 }
 
 int pvr_chunk_material_binding_init(

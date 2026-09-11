@@ -5,10 +5,12 @@
 */
 
 #include <kos.h>
+#include <dc/pvr_chunk_binding.h>
 #include <assert.h>
 #include <stdalign.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
@@ -100,6 +102,9 @@ int main(void) {
         .opb_overflow_count = 1
     };
     pvr_txr_surface_t color, normals;
+    pvr_chunk_texture_binding_t entries[2];
+    pvr_chunk_texture_table_t table = { entries, 2 };
+    pvr_chunk_texture_table_view_t textures;
     pvr_material_t occluder;
     pvr_poly_cxt_t context;
     pvr_pipeline_status_t pipeline;
@@ -116,9 +121,16 @@ int main(void) {
                                  PVR_TXR_SURFACE_TWIDDLED, false) == 0);
     upload_constant(&color, UINT16_C(0x8c63));
     upload_constant(&normals, 0);
+    entries[0] = (pvr_chunk_texture_binding_t){ 7, 0, &color };
+    entries[1] = (pvr_chunk_texture_binding_t){ 19, 0, &normals };
+    assert(pvr_chunk_texture_table_open(&table, &textures) == 0);
     puts("material recipes: procedural texture levels uploaded");
     for(size_t i = 0; i < 4; ++i) {
         pvr_poly_cxt_t bump;
+        pvr_chunk_material_context_t resolved_surface, resolved_bump;
+        pvr_material_recipe_t reference;
+        pvr_chunk_render_state_t state = { 0 };
+        pvr_chunk_strip_view_t strip = { 0 };
         pvr_list_t list = i % 2 ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
         pvr_poly_cxt_txr(&context, list, PVR_TXRFMT_ARGB4444, 64, 64,
                          color.vram, PVR_FILTER_BILINEAR);
@@ -126,17 +138,71 @@ int main(void) {
         context.txr.mipmap_bias = PVR_MIPBIAS_1_75;
         context.txr.env = PVR_TXRENV_MODULATEALPHA;
         context.gen.culling = PVR_CULLING_NONE;
-        if(i < 2)
-            assert(pvr_material_compile_trilinear(&recipes[i], &context, 0) == 0);
+        state.present = PVR_CHUNK_RENDER_TEXTURE;
+        state.texture.identifier = 7;
+        state.texture.filter = PVR_FILTER_BILINEAR;
+        state.texture.mipmap_adjust = PVR_MIPBIAS_1_75;
+        state.strip_flags = context.gen.alpha ? PVR_CHUNK_STRIP_USE_ALPHA : 0;
+        strip.type = PVR_CHUNK_STRIP_UV8_FIXED;
+        strip.flags = state.strip_flags;
+        assert(pvr_chunk_material_resolve_context(
+            &resolved_surface, &context, &textures, &state, &strip) == 0);
+        assert(resolved_surface.context.txr.base == color.vram);
+        assert(resolved_surface.compile_flags == 0);
+        if(i < 2) {
+            assert(pvr_material_compile_trilinear(&reference, &context, 0) == 0);
+            assert(pvr_material_compile_trilinear(
+                &recipes[i], &resolved_surface.context,
+                resolved_surface.compile_flags) == 0);
+        }
         else {
             bump = context;
             bump.txr.base = normals.vram;
             bump.txr.format = PVR_TXRFMT_BUMP;
             bump.txr.mipmap = false;
-            assert(pvr_material_compile_bump(&recipes[i], &context, &bump, 0) == 0);
+            /* Bias is inactive without mipmaps. Match the resource resolver's
+               canonical normal value instead of inheriting the color bias. */
+            bump.txr.mipmap_bias = PVR_MIPBIAS_NORMAL;
+            assert(pvr_material_compile_bump(&reference, &context, &bump, 0) == 0);
+            state.texture.identifier = 19;
+            assert(pvr_chunk_material_resolve_context(
+                &resolved_bump, &context, &textures, &state, &strip) == 0);
+            assert(resolved_bump.context.txr.base == normals.vram);
+            /* The recipe has a shared sampling policy, not independently
+               supersampled inputs. Never silently merge mismatched flags. */
+            assert(resolved_surface.compile_flags == resolved_bump.compile_flags);
+            assert(pvr_material_compile_bump(
+                &recipes[i], &resolved_surface.context, &resolved_bump.context,
+                resolved_surface.compile_flags) == 0);
+        }
+        /* Compare actual TA packets, not struct padding or test doubles. The
+           explicit context reference bypasses Compact resource resolution. */
+        assert(recipes[i].pass_count == reference.pass_count);
+        assert(recipes[i].requires_presort == reference.requires_presort);
+        for(size_t j = 0; j < reference.pass_count; ++j) {
+            assert(recipes[i].passes[j].role == reference.passes[j].role);
+            assert(recipes[i].passes[j].material.list ==
+                   reference.passes[j].material.list);
+            if(memcmp(&recipes[i].passes[j].material.header,
+                      &reference.passes[j].material.header,
+                      sizeof(pvr_poly_hdr_t))) {
+                uint32_t actual[8], expected[8];
+                memcpy(actual, &recipes[i].passes[j].material.header,
+                       sizeof(actual));
+                memcpy(expected, &reference.passes[j].material.header,
+                       sizeof(expected));
+                for(size_t k = 0; k < 8; ++k)
+                    printf("recipe %u step %u word %u: %08lx expected %08lx\n",
+                           (unsigned)i, (unsigned)j, (unsigned)k,
+                           (unsigned long)actual[k], (unsigned long)expected[k]);
+            }
+            assert(!memcmp(&recipes[i].passes[j].material.header,
+                           &reference.passes[j].material.header,
+                           sizeof(pvr_poly_hdr_t)));
         }
         assert(recipes[i].requires_presort);
     }
+    puts("RESULT: PASS (asset-resolved recipes match explicit TA packets)");
     pvr_poly_cxt_col(&context, PVR_LIST_OP_POLY);
     context.gen.culling = PVR_CULLING_NONE;
     assert(pvr_material_compile_polygon(&occluder, &context, 0) == 0);
