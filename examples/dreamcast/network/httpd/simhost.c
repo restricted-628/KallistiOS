@@ -7,14 +7,21 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT | INIT_NET);
 
+static volatile bool main_shutdown = false;
+
+void httpd_shutdown(void);
 void httpd(void);
-void *do_httpd(void * foo) {
+void *do_httpd(void *foo) {
     httpd();
+
+    /* If the daemon dies, shut down the host as well */
+    main_shutdown = true;
+
     return NULL;
 }
 
 int main(int argc, char **argv) {
-    thd_create(1, do_httpd, NULL);
+    thd_create(true, do_httpd, NULL);
 
     vid_clear(50, 0, 70);
     bfont_draw_str(vram_s + 20 * 640 + 20, 640, 0, "KOSHttpd active");
@@ -22,14 +29,17 @@ int main(int argc, char **argv) {
 
     thd_sleep(1000 * 5);
 
-    for(; ;) {
+    while(!main_shutdown) {
         MAPLE_FOREACH_BEGIN(MAPLE_FUNC_CONTROLLER, cont_state_t, st)
 
         if(st->buttons & CONT_START)
-            return 0;
+            main_shutdown = true;
 
         MAPLE_FOREACH_END()
     }
+
+    /* Request the httpd be shut down */
+    httpd_shutdown();
 
     return 0;
 }

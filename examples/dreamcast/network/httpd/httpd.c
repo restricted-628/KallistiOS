@@ -20,6 +20,9 @@
 #include <kos/thread.h>
 #include <kos/mutex.h>
 
+static volatile bool daemon_shutdown = false;
+
+int listenfd;
 struct http_state;
 typedef TAILQ_HEAD(http_state_list, http_state) http_state_list_t;
 
@@ -33,17 +36,12 @@ typedef struct http_state {
     kthread_t       * thd;
 } http_state_t;
 
-http_state_list_t states;
+http_state_list_t states = TAILQ_HEAD_INITIALIZER(states);
 #define st_foreach(var) TAILQ_FOREACH(var, &states, list)
 mutex_t list_mutex = MUTEX_INITIALIZER;
 
-int st_init(void) {
-    TAILQ_INIT(&states);
-    return 0;
-}
-
-http_state_t * st_create(void) {
-    http_state_t * ns;
+http_state_t *st_create(void) {
+    http_state_t *ns;
 
     ns = calloc(1, sizeof(http_state_t));
     mutex_lock(&list_mutex);
@@ -60,8 +58,8 @@ void st_destroy(http_state_t *st) {
     free(st);
 }
 
-int st_add_fds(fd_set * fds, int maxfd) {
-    http_state_t * st;
+int st_add_fds(fd_set *fds, int maxfd) {
+    http_state_t *st;
 
     mutex_lock(&list_mutex);
     st_foreach(st) {
@@ -103,7 +101,7 @@ int readline(int sock, char *buf, int bufsize) {
     return 0;
 }
 
-int read_headers(http_state_t * hs, char * buffer, int bufsize) {
+int read_headers(http_state_t *hs, char *buffer, int bufsize) {
     char fn[256];
     int i, j;
 
@@ -142,12 +140,12 @@ int read_headers(http_state_t * hs, char * buffer, int bufsize) {
 
 /**********************************************************************/
 
-static const char * errmsg1 = "<html><head><title>";
-static const char * errmsg2 = "</title></head><body bgcolor=\"white\"><h4>";
-static const char * errmsg3 = "</h4>\n<hr>\nKOSHttp/1.0 server\n</body></html>";
+static const char *errmsg1 = "<html><head><title>";
+static const char *errmsg2 = "</title></head><body bgcolor=\"white\"><h4>";
+static const char *errmsg3 = "</h4>\n<hr>\nKOSHttp/1.0 server\n</body></html>";
 
-int send_error(http_state_t * hs, int errcode, const char * str) {
-    char * buffer = malloc(65536);
+int send_error(http_state_t *hs, int errcode, const char *str) {
+    char *buffer = malloc(65536);
 
     if(buffer == NULL)
         return -1;
@@ -172,7 +170,7 @@ int send_error(http_state_t * hs, int errcode, const char * str) {
     return 0;
 }
 
-int send_ok(http_state_t * hs, const char * ct) {
+int send_ok(http_state_t *hs, const char *ct) {
     char buffer[512];
 
     sprintf(buffer, "HTTP/1.0 200 OK\r\nContent-type: %s\r\nConnection: close\r\n\r\n", ct);
@@ -183,8 +181,8 @@ int send_ok(http_state_t * hs, const char * ct) {
 
 /**********************************************************************/
 
-int do_dirlist(const char * name, http_state_t * hs, file_t f) {
-    char * dl, *dlout;
+int do_dirlist(const char *name, http_state_t *hs, file_t f) {
+    char *dl, *dlout;
     const dirent_t *d;
     int dlsize, r;
 
@@ -201,12 +199,12 @@ int do_dirlist(const char * name, http_state_t * hs, file_t f) {
     dlout += strlen(dlout);
 
     while((d = fs_readdir(f))) {
-        if(d->size >= 0) {
-            sprintf(dlout, "<tr><td><a href=\"%s\">%s</a></td><td>%d</td></tr>\n", d->name, d->name, d->size);
+        if(d->attr & O_DIR) {
+            sprintf(dlout, "<tr><td><a href=\"%s/\">%s/</a></td><td align=right>&lt;DIR&gt;</td></tr>\n", d->name, d->name);
             dlout += strlen(dlout);
         }
         else {
-            sprintf(dlout, "<tr><td><a href=\"%s/\">%s/</a></td><td>%d</td></tr>\n", d->name, d->name, d->size);
+            sprintf(dlout, "<tr><td><a href=\"%s\">%s</a></td><td>%d</td></tr>\n", d->name, d->name, d->size);
             dlout += strlen(dlout);
         }
     }
@@ -241,9 +239,9 @@ int do_dirlist(const char * name, http_state_t * hs, file_t f) {
 #define BUFSIZE (256*1024)
 
 void *client_thread(void *p) {
-    http_state_t * hs = (http_state_t *)p;
-    char * buf, * ext;
-    const char * ct;
+    http_state_t *hs = (http_state_t *)p;
+    char *buf, *ext;
+    const char *ct;
     file_t f = FILEHND_INVALID;
     int r, o, cnt;
 
@@ -328,7 +326,7 @@ out:
 /**********************************************************************/
 
 /*
-int handle_read(http_state_t * hs) {
+int handle_read(http_state_t *hs) {
     char buffer[80];
     int rc;
 
@@ -346,7 +344,6 @@ int handle_read(http_state_t * hs) {
 /**********************************************************************/
 
 void httpd(void) {
-    int listenfd;
     struct sockaddr_in saddr;
     fd_set readset;
     fd_set writeset;
@@ -377,10 +374,9 @@ void httpd(void) {
         return;
     }
 
-    st_init();
     printf("httpd: listening for connections on socket %d\n", listenfd);
 
-    for(; ;) {
+    while(!daemon_shutdown) {
         maxfdp1 = listenfd + 1;
 
         FD_ZERO(&readset);
@@ -391,7 +387,7 @@ void httpd(void) {
 
         i = select(maxfdp1, &readset, &writeset, 0, 0);
 
-        if(i == 0)
+        if(i <= 0)
             continue;
 
         // Check for new incoming connections
@@ -435,4 +431,19 @@ void httpd(void) {
         }
 #endif
     }
+}
+
+void httpd_shutdown(void) {
+    /* First make sure httpd doesn't loop more */
+    daemon_shutdown = true;
+
+    /* Then shut down the listener socket */
+    shutdown(listenfd, SHUT_RDWR);
+    close(listenfd);
+
+    /* As long as there are still states, keep passing. The httpd thread will
+    destroy its state and not loop again, and client threads have a chance to
+    finish working. */
+    while(TAILQ_FIRST(&states))
+        thd_pass();
 }

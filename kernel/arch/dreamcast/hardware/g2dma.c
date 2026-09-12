@@ -53,6 +53,8 @@ typedef struct {
    semaphore is only a wakeup token for the one active waiter. */
 static semaphore_t dma_done[4];
 static int dma_progress[4];
+/* Reserves completion for the legacy blocking caller, including before it
+   sleeps. g2_dma_wait() must not admit a competing waiter in that window. */
 static int dma_blocking[4];
 static bool dma_waiting[4];
 static g2_dma_callback_t dma_callback[4];

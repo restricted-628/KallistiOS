@@ -26,7 +26,6 @@
 
 /* Signaling semaphore */
 static semaphore_t dma_done;
-static bool dma_blocking;
 static pvr_dma_callback_t dma_callback;
 static void *dma_cbdata;
 static size_t dma_last_remaining;
@@ -78,10 +77,9 @@ static void pvr_dma_irq_hnd(uint32_t code, void *data) {
     }
 
     /* Signal the calling thread to continue, if any. */
-    if(dma_blocking) {
+    if(sem_count(&dma_done)) {
         sem_signal(&dma_done);
         thd_schedule(true);
-        dma_blocking = false;
     }
 }
 
@@ -149,7 +147,6 @@ int pvr_dma_transfer(const void *src, uintptr_t dest, size_t count,
     if(dma_transfer(&pvr_dma_config, 0, src_addr, count, NULL))
         return -1;
 
-    dma_blocking = block;
     dma_callback = callback;
     dma_cbdata = cbdata;
     dma_last_remaining = count;
@@ -199,7 +196,6 @@ uint32_t pvr_dma_completion_detail(void) {
 void pvr_dma_init(void) {
     /* Create an initially blocked semaphore */
     sem_init(&dma_done, 0);
-    dma_blocking = false;
     dma_callback = NULL;
     dma_cbdata = 0;
     dma_last_remaining = 0;
@@ -228,7 +224,6 @@ void pvr_dma_shutdown(void) {
        no stale callback may retain its request in the meantime. */
     dma_callback = NULL;
     dma_cbdata = NULL;
-    dma_blocking = false;
 
     /* Clean up */
     asic_evt_disable(ASIC_EVT_PVR_DMA, ASIC_IRQ_DEFAULT);

@@ -128,6 +128,8 @@ static uint8_t orig_dev = 0x00;
 
 /* Variables related to DMA. */
 static int dma_in_progress = 0;
+/* Also retains G1 ownership until the blocking caller acknowledges status;
+   semaphore waiter count alone cannot replace this operation state. */
 static int dma_blocking = 0;
 static uint8_t dma_cmd = 0;
 static size_t dma_nb_sectors = 0;

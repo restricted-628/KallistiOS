@@ -42,6 +42,10 @@ kernel; so don't use them if you don't need to =).
 #define SNDREGADDR(x) (0xa0700000 + (x))
 #define CHNREGADDR(chn, x) SNDREGADDR(0x80*(chn) + (x))
 
+static inline uint32_t spu_ram_mode(void) {
+    return hardware_sys_mode(NULL) == HW_TYPE_RETAIL ? 0 : BIT(9);
+}
+
 /* memcpy and memset designed for sound RAM; for addresses, don't include the
    implied 0xa0800000 base. Byte tails use byte-width G2 accesses so callers
    never have to expose padding beyond the requested source or destination. */
@@ -306,7 +310,7 @@ void spu_reset_chans(void) {
     g2_fifo_wait();
 
     /* Read current mode and stereo settings */
-    sav = g2_read_32_raw(SNDREGADDR(0x2800));
+    sav = g2_read_32_raw(SNDREGADDR(0x2800)) | spu_ram_mode();
 
     g2_fifo_wait();
     g2_write_32_raw(SNDREGADDR(0x2800), sav & ~0x000f);
@@ -393,24 +397,23 @@ void spu_master_mixer(int volume, int stereo) {
     g2_fifo_wait();
     val = g2_read_32(SNDREGADDR(0x2800));
     g2_write_32(SNDREGADDR(0x2800),
-                (val & ~0x800f) | (volume & 0xf) | (stereo ? 0 : 0x8000));
+                (val & ~0x800f) | (volume & 0xf) | (stereo ? 0 : 0x8000) |
+                spu_ram_mode());
 }
 
 /* Initialize the SPU; by default it will be left in a state of
    reset until you upload a program. */
 int spu_init(void) {
-    bool is_retail = hardware_sys_mode(NULL) == HW_TYPE_RETAIL;
-
     spu_transfer_system_init();
 
     /* Set the RAM mode (2MB or 8MB) and default to stereo/min volume */
-    g2_write_32(SNDREGADDR(0x2800), is_retail ? 0 : BIT(9));
+    g2_write_32(SNDREGADDR(0x2800), spu_ram_mode());
 
     /* Stop the ARM */
     spu_disable();
 
     /* Clear out sound RAM */
-    spu_memset_sq(0, 0, is_retail ? 0x200000 : 0x800000);
+    spu_memset_sq(0, 0, SPU_RAM_SIZE);
 
     /* Load a default "program" into the SPU that just executes
        an infinite loop, so that CD audio works. */
@@ -434,7 +437,7 @@ int spu_shutdown(void) {
     if(spu_transfer_system_shutdown() < 0)
         return -1;
     spu_disable();
-    spu_memset_sq(0, 0, 0x200000);
+    spu_memset_sq(0, 0, SPU_RAM_SIZE);
     return 0;
 }
 
