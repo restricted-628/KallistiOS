@@ -960,6 +960,50 @@ f 1/1/1 2/2/1 3/3/1
         assert struct.unpack_from("<I", color_vertices, 36)[0] == 0xff008000
         assert struct.unpack_from("<I", color_vertices, 52)[0] == 0xff000080
 
+        # Required and optional unlit use the same stream flag. PBR fallback
+        # fields must not relight the base color or require vertex normals.
+        unlit_document = json.loads(json.dumps(color_document))
+        unlit_document["extensionsUsed"] = ["KHR_materials_unlit"]
+        unlit_document["extensionsRequired"] = ["KHR_materials_unlit"]
+        unlit_material = unlit_document["materials"][0]
+        unlit_material["extensions"] = {"KHR_materials_unlit": {}}
+        unlit_material["emissiveFactor"] = [0.8, 0.7, 0.6]
+        unlit_material["alphaMode"] = "BLEND"
+        unlit_material["doubleSided"] = True
+        del unlit_document["meshes"][0]["primitives"][0]["attributes"]["NORMAL"]
+        unlit_source = root / "unlit.gltf"
+        unlit_asset = root / "unlit.pcm"
+        for required in (True, False):
+            if not required:
+                del unlit_document["extensionsRequired"]
+            unlit_source.write_text(json.dumps(unlit_document), encoding="utf-8")
+            result = invoke(converter, "--emit-asset", "--section-directory",
+                            "--cooked-cache", unlit_source, unlit_asset)
+            assert result.returncode == 0, result.stderr
+            unlit_bytes = unlit_asset.read_bytes()
+            sections = [struct.unpack_from("<7IHH", unlit_bytes, 64 + i * 32)
+                        for i in range(struct.unpack_from("<I", unlit_bytes, 32)[0])]
+            vertex_section = next(s for s in sections if s[0] == 1)
+            polygon_section = next(s for s in sections if s[0] == 2)
+            assert unlit_bytes[vertex_section[2]:
+                               vertex_section[2] + vertex_section[3]] == color_vertices
+            words = struct.unpack_from(f"<{polygon_section[3] // 2}H",
+                                       unlit_bytes, polygon_section[2])
+            # DIFFUSE record (four words), followed by an INDEX strip.
+            assert words[0] & 0xff == 17
+            assert words[4] == 64 | (0x98 << 8)  # unlit + blend + double-sided
+            assert any(s[0] == 10 for s in sections)  # checked cooked cache
+
+        # Removing the extension restores the existing unsupported-emission
+        # gate, and failed conversion must not replace a published asset.
+        del unlit_material["extensions"]
+        unlit_source.write_text(json.dumps(unlit_document), encoding="utf-8")
+        unlit_asset.write_bytes(b"unlit sentinel")
+        result = invoke(converter, "--emit-asset", "--section-directory",
+                        unlit_source, unlit_asset)
+        assert result.returncode != 0
+        assert unlit_asset.read_bytes() == b"unlit sentinel"
+
         color3_binary = (
             color_binary[:36] +
             struct.pack("<9f",
@@ -1175,6 +1219,42 @@ f 1/1/1 2/2/1 3/3/1
         assert second_polygon_words[0] == 23 | (0x08 << 8)
         assert second_polygon_words[3] >> 8 == 0xFF
         assert second_polygon_words[10] == 79 | (0x08 << 8)
+
+        mixed_document = json.loads(multi_gltf_source.read_text(encoding="utf-8"))
+        mixed_document["extensionsUsed"] = ["KHR_materials_unlit"]
+        mixed_material = mixed_document["materials"][0]
+        mixed_material["extensions"] = {"KHR_materials_unlit": {}}
+        # Core fallback maps are valid source data but unused by unlit.
+        mixed_material["normalTexture"] = {"index": 0}
+        mixed_material["occlusionTexture"] = {"index": 0}
+        mixed_material["emissiveTexture"] = {"index": 0}
+        mixed_material["pbrMetallicRoughness"]["metallicRoughnessTexture"] = {
+            "index": 0
+        }
+        mixed_source = root / "mixed-unlit.gltf"
+        mixed_asset = root / "mixed-unlit.pcm"
+        mixed_source.write_text(json.dumps(mixed_document), encoding="utf-8")
+        result = invoke(converter, "--emit-asset", "--section-directory",
+                        "--cooked-cache", mixed_source, mixed_asset)
+        assert result.returncode == 0, result.stderr
+        mixed_bytes = mixed_asset.read_bytes()
+        mixed_sections = [struct.unpack_from("<7IHH", mixed_bytes, 64 + i * 32)
+                          for i in range(16)]
+        mixed_polygons = [mixed_bytes[s[2]:s[2] + s[3]]
+                          for s in mixed_sections if s[0] == 2]
+        assert len(mixed_polygons) == 2
+        assert struct.unpack_from("<H", mixed_polygons[0], 0)[0] == (
+            17 | (0x25 << 8)
+        )
+        assert struct.unpack_from("<H", mixed_polygons[0], 12)[0] == (
+            79 | (0x98 << 8)
+        )
+        assert mixed_polygons[1] == second_polygon  # next material stays lit
+        original_textures = next(s for s in multi_descriptors if s[0] == 12)
+        mixed_textures = next(s for s in mixed_sections if s[0] == 12)
+        assert mixed_bytes[mixed_textures[2]:
+                           mixed_textures[2] + mixed_textures[3]] == multi_bytes[
+            original_textures[2]:original_textures[2] + original_textures[3]]
         multi_table = multi_bytes[
             multi_descriptors[14][2]:
             multi_descriptors[14][2] + multi_descriptors[14][3]

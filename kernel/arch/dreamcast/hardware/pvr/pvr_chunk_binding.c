@@ -555,7 +555,8 @@ static int resolve_material(
     context.gen.culling = strip->flags & PVR_CHUNK_STRIP_DOUBLE_SIDED ?
                           PVR_CULLING_NONE : base_context->gen.culling;
     context.gen.specular =
-        !(strip->flags & PVR_CHUNK_STRIP_IGNORE_SPECULAR) &&
+        !(strip->flags & (PVR_CHUNK_STRIP_IGNORE_SPECULAR |
+                          PVR_CHUNK_STRIP_UNLIT)) &&
         (base_context->gen.specular ||
          (state->present & PVR_CHUNK_RENDER_SPECULAR));
     if(two_volume)
@@ -1268,7 +1269,8 @@ int pvr_chunk_render_policy_binding_prepare_vertex(
         }
     }
 
-    if(render_policy_lit(binding->policy)) {
+    if(render_policy_lit(binding->policy) &&
+       !(state->strip_flags & PVR_CHUNK_STRIP_UNLIT)) {
         if(lit_vertex_apply(state, vertex_attributes, strip_attributes,
                             vertex, &object_position, binding) < 0)
             return -1;
@@ -1276,6 +1278,11 @@ int pvr_chunk_render_policy_binding_prepare_vertex(
     else if(intensity_apply(vertex_attributes, vertex) < 0) {
         return -1;
     }
+
+    /* Authored unlit overrides even a lit scene policy. Do not reinterpret
+       IGNORE_LIGHT: that older flag still permits ambient illumination. */
+    if(state->strip_flags & PVR_CHUNK_STRIP_UNLIT)
+        vertex->oargb = 0;
 
     if((state->present & PVR_CHUNK_RENDER_BUMP_BASIS) &&
        !binding->prepare_vertex) {
@@ -1334,10 +1341,13 @@ int pvr_chunk_render_policy_binding_prepare_cached_vertex(
             return -1;
     }
 
-    if(render_policy_lit(binding->policy))
+    if(render_policy_lit(binding->policy) &&
+       !(state->strip_flags & PVR_CHUNK_STRIP_UNLIT))
         return lit_vertex_apply_common(state, &deformation->normal, vertex,
                                        &deformation->position, 1.0f, 1.0f,
                                        binding);
+    if(state->strip_flags & PVR_CHUNK_STRIP_UNLIT)
+        vertex->oargb = 0;
     return 0;
 }
 

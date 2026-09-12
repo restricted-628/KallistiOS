@@ -76,8 +76,10 @@ policy and retain only the auxiliary texture description. No texture identity
 is assigned a global role: the application chooses which draw input is a
 lightmap or emission layer. Existing Compact models, prepared geometry,
 caller-owned texture tables and UV callbacks provide those inputs. This does
-not yet admit previously rejected glTF emissive/unlit materials or add authored
-role metadata to asset files.
+not yet admit glTF emissive texture roles or add auxiliary texture-role metadata
+to asset files. Authored unlit base-color materials are supported separately by
+the Compact converter and standard policy bindings; they do not implicitly
+create a multipass recipe.
 
 Surface and bump steps may use different UVs and colors but must reproduce
 the same positions, depth, winding and clipped coverage. Resolve vertices can

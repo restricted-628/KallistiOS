@@ -146,6 +146,7 @@ typedef struct material_definition {
     float alpha;
     uint8_t alpha_mode;
     uint8_t double_sided;
+    uint8_t unlit;
     unsigned int present;
 } material_definition_t;
 
@@ -1316,16 +1317,18 @@ static int gltf_add_materials(const cgltf_data *data,
         float roughness = 1.0f;
         size_t component;
 
+        /* Unlit uses only base color/coverage. Ignore the core lighting
+           fallback, but keep unsupported extension combinations explicit. */
         if(source && (source->has_transmission || source->has_volume ||
                       source->has_diffuse_transmission ||
                       source->has_pbr_specular_glossiness ||
-                      source->normal_texture.texture ||
-                      source->occlusion_texture.texture ||
-                      source->emissive_texture.texture ||
-                      source->emissive_factor[0] != 0.0f ||
-                      source->emissive_factor[1] != 0.0f ||
-                      source->emissive_factor[2] != 0.0f ||
-                      source->unlit ||
+                      (!source->unlit &&
+                       (source->normal_texture.texture ||
+                        source->occlusion_texture.texture ||
+                        source->emissive_texture.texture ||
+                        source->emissive_factor[0] != 0.0f ||
+                        source->emissive_factor[1] != 0.0f ||
+                        source->emissive_factor[2] != 0.0f)) ||
                       source->extensions_count)) {
             errno = ENOTSUP;
             return -1;
@@ -1352,7 +1355,7 @@ static int gltf_add_materials(const cgltf_data *data,
                 }
             }
         }
-        if(source && source->has_pbr_metallic_roughness) {
+        if(source && !source->unlit && source->has_pbr_metallic_roughness) {
             metallic = source->pbr_metallic_roughness.metallic_factor;
             roughness = source->pbr_metallic_roughness.roughness_factor;
             if(source->pbr_metallic_roughness.
@@ -1379,6 +1382,7 @@ static int gltf_add_materials(const cgltf_data *data,
         if(definition->exponent < 0.0f)
             definition->exponent = 0.0f;
         definition->double_sided = source && source->double_sided;
+        definition->unlit = source && source->unlit;
         if(source) {
             switch(source->alpha_mode) {
                 case cgltf_alpha_mode_opaque:
@@ -1404,6 +1408,8 @@ static int gltf_add_materials(const cgltf_data *data,
         }
         definition->present = MATERIAL_DIFFUSE | MATERIAL_AMBIENT |
                               MATERIAL_SPECULAR | MATERIAL_EXPONENT;
+        if(definition->unlit)
+            definition->present = MATERIAL_DIFFUSE;
         if(definition->alpha_mode != MATERIAL_ALPHA_OPAQUE)
             definition->present |= MATERIAL_ALPHA;
     }
@@ -1604,6 +1610,8 @@ static int gltf_required_extensions_supported(const cgltf_data *data) {
         ++extension) {
         if(strcmp(data->extensions_required[extension],
                   "KHR_texture_transform") &&
+           strcmp(data->extensions_required[extension],
+                  "KHR_materials_unlit") &&
            strcmp(data->extensions_required[extension],
                   "EXT_mesh_gpu_instancing")) {
             errno = ENOTSUP;
@@ -4199,6 +4207,8 @@ static int generate_streams(const source_model_t *model,
                     strip_flags |= PVR_CHUNK_STRIP_USE_ALPHA;
                 if(definition->double_sided)
                     strip_flags |= PVR_CHUNK_STRIP_DOUBLE_SIDED;
+                if(definition->unlit)
+                    strip_flags |= PVR_CHUNK_STRIP_UNLIT;
             }
             *polygon_output++ = (uint16_t)type |
                                 (uint16_t)((uint16_t)strip_flags << 8);

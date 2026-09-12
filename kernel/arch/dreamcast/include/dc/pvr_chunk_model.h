@@ -177,7 +177,11 @@ typedef enum pvr_chunk_strip_flags {
     PVR_CHUNK_STRIP_USE_ALPHA = 0x08,
     PVR_CHUNK_STRIP_DOUBLE_SIDED = 0x10,
     PVR_CHUNK_STRIP_FLAT_SHADED = 0x20,
-    PVR_CHUNK_STRIP_ENVIRONMENT = 0x40
+    PVR_CHUNK_STRIP_ENVIRONMENT = 0x40,
+    /** Authored base-color-only material; bypass CPU lighting and specular.
+        Distinct from IGNORE_LIGHT, which does not suppress ambient. Requires
+        a renderer with this extension; older checked renderers reject it. */
+    PVR_CHUNK_STRIP_UNLIT = 0x80
 } pvr_chunk_strip_flags_t;
 
 /** \brief Mask of every admitted strip-policy flag. */
@@ -188,7 +192,8 @@ typedef enum pvr_chunk_strip_flags {
      PVR_CHUNK_STRIP_USE_ALPHA | \
      PVR_CHUNK_STRIP_DOUBLE_SIDED | \
      PVR_CHUNK_STRIP_FLAT_SHADED | \
-     PVR_CHUNK_STRIP_ENVIRONMENT)
+     PVR_CHUNK_STRIP_ENVIRONMENT | \
+     PVR_CHUNK_STRIP_UNLIT)
 
 /** \brief A bounded compact model description.
 

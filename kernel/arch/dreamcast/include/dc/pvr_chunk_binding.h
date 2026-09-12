@@ -97,6 +97,12 @@ typedef struct pvr_chunk_environment_map_binding {
     ownership. UNLIT retains decoded colors while consuming optional vertex
     intensity. DIFFUSE evaluates ambient and signed Lambert light. The final
     preset additionally produces offset-color specular highlights.
+
+    An authored PVR_CHUNK_STRIP_UNLIT material overrides these lighting presets:
+    decoded base color and alpha (including optional intensity) are retained,
+    offset color is cleared, and lighting/depth-cue evaluation is skipped.
+    Environment UV generation remains independent and may still need normals.
+    Custom callbacks remain responsible for honoring authored material intent.
 */
 typedef enum pvr_chunk_render_policy {
     PVR_CHUNK_RENDER_POLICY_UNLIT = 0,

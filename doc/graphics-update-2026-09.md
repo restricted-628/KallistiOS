@@ -52,7 +52,8 @@ individually valid headers forms a correct accumulation recipe.
    bump inputs, using existing texture converters and prepared bindings.
    Checked reusable context resolution now connects distinct texture inputs
    to existing bump/trilinear recipes. Bounded lightmap/emissive composition is
-   now implemented too. Authored per-material role metadata remains open;
+   now implemented too. Authored unlit metadata/import is now implemented;
+   auxiliary per-material texture roles remain open;
    see the September 10 entries below.
 5. Target numerical/ABI and performance fixtures for SH4ZAM consumers, with
    explicit error tolerances, XMTRX preservation, and warm/cold measurements.
@@ -317,3 +318,53 @@ Validation:
 The bounded composition primitives are now present. Authored per-material role
 metadata/import, broader compound profiles and the SH4ZAM numerical/performance
 fixtures are still separate work. This does not claim complete graphics parity.
+
+## September 12: authored unlit materials
+
+The first authored material role now travels from glTF import through Compact
+streams, ordinary/two-volume prepared admission, portable cooked caches and
+standard resource/policy bindings. `PVR_CHUNK_STRIP_UNLIT` uses the formerly
+reserved strip bit `0x80`; no model/cache structures or container layouts grow.
+Existing flags retain their meaning. Newly flagged content requires the updated
+runtime because older checked renderers reject that reserved bit.
+
+Standard policy bindings bypass ambient/diffuse/specular and depth-cue
+evaluation for an authored unlit strip even in a lit scene. They retain decoded
+base color/alpha and optional vertex intensity, and clear offset color before
+the optional custom callback. Checked header resolution also disables specular
+without changing the caller's base context. Environment UV generation remains
+independent and still requires its normal inputs. `IGNORE_LIGHT` is unchanged:
+it does not mean unlit, because ambient evaluation remains independent.
+
+The converter accepts optional or required `KHR_materials_unlit`. Base-color
+factor, vertex colors, base-color textures, supported alpha modes and culling
+use the existing conversion path; unused core PBR fallback lighting inputs are
+ignored for this role. Unsupported extension combinations still fail. A mixed
+asset test confirms the next lit material and compiled base-color image remain
+unchanged. No extra material manager, worker, allocation, startup work or shader
+interface is introduced. Existing quantization/color-space limits remain;
+this is not a claim of exact glTF visual reproduction.
+
+Validation includes fixed expected color/alpha values, missing-normal behavior,
+environment-map rejection, specular suppression, list routing, raw-to-prepared
+flag preservation, cooked serialization/reopening/materialization, optional
+and required extension import, and failed-import output preservation.
+Binding, render and cache host suites pass GCC 14 GNU17/strict C23 and Apple
+Clang GNU17/strict C2x; ASan/UBSan runs pass for all three. Converter goldens
+pass Clang GNU17 and both compilers' strict language lanes. The strict Clang
+converter build uses the existing `HOST_LZ4_WARNINGS` exception for the bundled
+LZ4 constant-logical-operand warning; no vendor source or test expectation was
+changed to silence it.
+
+The cache suite also exposed an older target-fixture error: its host-only
+submission stub accepted current-list writes without a scene, whereas real
+KOS rejects those writes with `EPERM`. The target branch now checks that exact
+rejection and zero emitted vertices; the host still checks successful stub
+submission. No production submission check was weakened.
+
+The target cache suite passes Flycast interpreter and dynarec with GCC 16.2.0,
+and the full KOS build passes. These are parser/cache/numerical checks, not a
+physical-console or framebuffer proof of authored-material appearance.
+Auxiliary texture-role metadata/import, broader compound profiles and the
+SH4ZAM numerical/ABI/performance fixtures remain next; authored unlit does not
+implicitly create a multipass recipe.

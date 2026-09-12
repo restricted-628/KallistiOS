@@ -54,9 +54,27 @@ seams remain distinct because the importer does not merge source vertices.
 OBJ's independently indexed per-reference attributes likewise preserve UV and
 hard-normal discontinuities without duplicating the canonical position batch.
 
+`KHR_materials_unlit`, whether optional or required, emits authored
+`PVR_CHUNK_STRIP_UNLIT` intent. Standard immediate and prepared render-policy
+bindings retain base color and alpha without scene lighting, depth cue or
+specular, even when the scene selects a lit policy. Base-color textures,
+vertex-color multiplication, alpha modes and double-sided state retain their
+existing conversion paths. Lighting-related core PBR fallback properties are
+ignored for this material, as specified by the
+[unlit extension](https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_materials_unlit).
+This is not the older `IGNORE_LIGHT` flag, which still permits ambient light.
+Custom rendering callbacks must honor the authored flag themselves. Existing
+color quantization and texture-conversion limits still apply; this is not a
+claim of exact glTF color-space reproduction.
+
+The new strip flag occupies a formerly reserved bit. Container layouts and
+existing flag meanings do not change, but older checked render paths reject
+new unlit content. Use a matching updated converter and runtime.
+
 Unsupported authored meaning is rejected rather than dropped. Current explicit
-boundaries include required extensions other than `KHR_texture_transform` and
-`EXT_mesh_gpu_instancing`, skinned or morph-target GPU instances, non-TRS
+boundaries include required extensions other than `KHR_texture_transform`,
+`KHR_materials_unlit`, and `EXT_mesh_gpu_instancing`, skinned or morph-target
+GPU instances, non-TRS
 instance attributes, point and line primitives, tangent/custom vertex
 attributes, non-base-color texture roles, and advanced material models. Static
 matrix-authored nodes in an animated scene are admitted when

@@ -219,7 +219,7 @@ static int validate_record_fields(const pvr_chunk_record_t *record) {
         }
     }
     else if(record->record_class == PVR_CHUNK_RECORD_STRIP &&
-            (record->flags & UINT8_C(0x80))) {
+            (record->flags & ~PVR_CHUNK_STRIP_FLAGS_MASK)) {
         errno = EILSEQ;
         return -1;
     }

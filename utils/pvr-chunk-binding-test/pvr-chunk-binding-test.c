@@ -538,6 +538,37 @@ static void test_render_policy_binding(void) {
     assert(memcmp(&cached_vertex, &immediate_vertex,
                   sizeof(cached_vertex)) == 0);
 
+    /* A lit scene must not relight an authored unlit material, even without
+       normals. Test both paths against authored colors, not each other only. */
+    state.strip_flags = PVR_CHUNK_STRIP_UNLIT;
+    vertex_attributes.present = 0;
+    memset(&deformation.normal, 0, sizeof(deformation.normal));
+    immediate_vertex.argb = cached_vertex.argb = UINT32_C(0x80402010);
+    immediate_vertex.oargb = cached_vertex.oargb = UINT32_C(0x00ffffff);
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &immediate_vertex,
+        &binding) == 0);
+    assert(pvr_chunk_render_policy_binding_prepare_cached_vertex(
+        &state, 7, &deformation, &cached_vertex, &binding) == 0);
+    assert(immediate_vertex.argb == UINT32_C(0x80402010));
+    assert(cached_vertex.argb == UINT32_C(0x80402010));
+    assert(immediate_vertex.oargb == 0 && cached_vertex.oargb == 0);
+
+    state.strip_flags |= PVR_CHUNK_STRIP_ENVIRONMENT;
+    errno = 0;
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &immediate_vertex,
+        &binding) == -1);
+    assert(errno == ENOTSUP); /* Unlit does not supply missing environment UVs. */
+
+    state.strip_flags = PVR_CHUNK_STRIP_IGNORE_LIGHT;
+    errno = 0;
+    assert(pvr_chunk_render_policy_binding_prepare_vertex(
+        &state, &vertex_attributes, &strip_attributes, &immediate_vertex,
+        &binding) == -1);
+    assert(errno == ENOTSUP);
+    state.strip_flags = PVR_CHUNK_STRIP_UNLIT;
+
     deformation.position.w = 0.0f;
     errno = 0;
     assert(pvr_chunk_render_policy_binding_prepare_cached_vertex(
@@ -702,6 +733,16 @@ static void test_resolve(void) {
     assert(resolved.compile_flags == PVR_COMPILE_SUPERSAMPLE);
     assert(!memcmp(&resolved.context, &compiled_context, sizeof(context)));
     assert(resolved.context.txr.base == (uint8_t *)color.vram - 1024u);
+
+    state.strip_flags |= PVR_CHUNK_STRIP_UNLIT;
+    strip.flags = state.strip_flags;
+    context.gen.specular = true;
+    assert(pvr_chunk_material_resolve_context(&resolved, &context, &view,
+                                              &state, &strip) == 0);
+    assert(!resolved.context.gen.specular && context.gen.specular);
+    assert(resolved.context.gen.alpha &&
+           resolved.context.gen.culling == PVR_CULLING_NONE);
+    context.gen.specular = false;
 
     state.present = PVR_CHUNK_RENDER_TEXTURE;
     state.texture.identifier = 5;

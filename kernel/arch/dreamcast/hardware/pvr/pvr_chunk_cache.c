@@ -651,7 +651,7 @@ static int cache_valid(const pvr_chunk_model_cache_t *cache) {
            strip->source_type < PVR_CHUNK_STRIP_INDEX ||
            strip->source_type > PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME ||
            strip_is_two_volume(strip->source_type) ||
-           strip->source_flags & UINT8_C(0x80) ||
+           strip->source_flags & ~PVR_CHUNK_STRIP_FLAGS_MASK ||
            strip->state.strip_flags != strip->source_flags ||
            accumulate(&vertex_cursor, strip->vertex_count) < 0 ||
            vertex_cursor > cache->vertex_count) {
@@ -1268,7 +1268,7 @@ static int two_volume_cache_valid(
             strip->source_type != PVR_CHUNK_STRIP_UV10_FIXED_TWO_VOLUME &&
             strip->source_type != PVR_CHUNK_STRIP_UV_FLOAT_TWO_VOLUME) ||
            format != cache->format ||
-           strip->source_flags & UINT8_C(0x80) ||
+           strip->source_flags & ~PVR_CHUNK_STRIP_FLAGS_MASK ||
            strip->state.strip_flags != strip->source_flags ||
            accumulate(&vertex_cursor, strip->vertex_count) < 0 ||
            vertex_cursor > cache->vertex_count) {

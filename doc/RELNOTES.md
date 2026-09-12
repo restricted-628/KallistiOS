@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added authored unlit Compact materials and glTF `KHR_materials_unlit` import.
+  Standard raw/prepared policy bindings bypass lighting and clear specular,
+  while checked material contexts retain alpha and culling behavior. The flag
+  survives prepared/cooked caches using existing storage; no allocation or
+  startup work is added. Old checked renderers reject newly flagged content.
+  Auxiliary texture-role metadata remains separate follow-up work.
+
 * Added checked lightmap and emissive material recipes through the existing
   Compact resource/context and canonical-geometry paths. They preserve surface
   alpha, support independent input sampling flags and reuse bounded recipe

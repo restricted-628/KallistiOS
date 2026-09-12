@@ -594,11 +594,17 @@ static void test_list_routing(void) {
     assert(pvr_chunk_render_state_list(&state, &list) == 0);
     assert(list == PVR_LIST_OP_POLY);
 
-    state.strip_flags = UINT8_C(0x80);
-    list = PVR_LIST_TR_POLY;
-    errno = 0;
-    assert(pvr_chunk_render_state_list(&state, &list) == -1);
-    assert(errno == EILSEQ && list == PVR_LIST_TR_POLY);
+    /* Authored unlit changes lighting, not coverage or list routing. */
+    state.strip_flags = PVR_CHUNK_STRIP_UNLIT;
+    assert(pvr_chunk_render_state_list(&state, &list) == 0);
+    assert(list == PVR_LIST_OP_POLY);
+    state.strip_flags |= PVR_CHUNK_STRIP_USE_ALPHA;
+    assert(pvr_chunk_render_state_list(&state, &list) == 0);
+    assert(list == PVR_LIST_PT_POLY);
+    state.blend_source = PVR_BLEND_SRCALPHA;
+    state.blend_destination = PVR_BLEND_INVSRCALPHA;
+    assert(pvr_chunk_render_state_list(&state, &list) == 0);
+    assert(list == PVR_LIST_TR_POLY);
 
     errno = 0;
     assert(pvr_chunk_render_state_list(NULL, &list) == -1);

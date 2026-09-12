@@ -396,7 +396,8 @@ static int validate_strips(const uint8_t *bytes, size_t strip_count,
         if(!state_valid(record) || first != cursor || count < 3u ||
            count > vertex_count - cursor ||
            !strip_type_valid(source_type, kind, format) ||
-           source_flags & UINT8_C(0x80) || record[14] != source_flags ||
+           source_flags & ~PVR_CHUNK_STRIP_FLAGS_MASK ||
+           record[14] != source_flags ||
            !vector_valid(record + 104, 1.0f) ||
            !vector_valid(record + 120, 1.0f) ||
            read_float(record + 104) > read_float(record + 120) ||

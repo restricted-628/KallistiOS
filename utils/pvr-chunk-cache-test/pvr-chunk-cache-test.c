@@ -399,6 +399,11 @@ static void test_ordinary_cooked_section(
         &cache) == 0);
     assert(cache.strip_count == source->strip_count);
     assert(cache.vertex_count == source->vertex_count);
+    for(size_t i = 0; i < cache.strip_count; ++i) {
+        assert(cache.strips[i].source_flags == source->strips[i].source_flags);
+        assert(cache.strips[i].state.strip_flags ==
+               source->strips[i].state.strip_flags);
+    }
     assert(memcmp(cache.vertices, source->vertices,
                   cache.vertex_count * sizeof(*cache.vertices)) == 0);
     assert(memcmp(cache.deform_vertices, source->deform_vertices,
@@ -410,6 +415,29 @@ static void test_ordinary_cooked_section(
         cooked_section_bytes, bytes, &view) == -1);
     assert(errno == EILSEQ);
     cooked_section_bytes[bytes - 1u] ^= 1u;
+}
+
+static void test_unlit_cooked_section(void) {
+    uint16_t authored[sizeof(polygons) / sizeof(polygons[0])];
+    pvr_chunk_model_t model;
+    pvr_chunk_model_view_t view;
+    pvr_chunk_vertex_index_entry_t entries[256];
+    pvr_chunk_model_plan_t plan;
+    alignas(32) uint8_t storage[1024];
+    pvr_chunk_model_cache_t cache;
+
+    memcpy(authored, polygons, sizeof(authored));
+    authored[4] = POLYGON_HEADER(PVR_CHUNK_STRIP_INDEX,
+                                  PVR_CHUNK_STRIP_UNLIT);
+    model = make_model(authored, sizeof(authored) / sizeof(authored[0]));
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_build(&view, entries, 256, &plan) == 0);
+    assert(pvr_chunk_model_cache_build(&plan, storage, sizeof(storage),
+                                      NULL, NULL, &cache) == 0);
+    assert(cache.strips[0].source_flags == PVR_CHUNK_STRIP_UNLIT);
+    assert(cache.strips[0].state.strip_flags == PVR_CHUNK_STRIP_UNLIT);
+    assert(pvr_chunk_model_cache_validate(&cache) == 0);
+    test_ordinary_cooked_section(&cache);
 }
 
 static void test_two_volume_cooked_section(
@@ -698,12 +726,23 @@ static void test_wire_cache(const pvr_chunk_model_cache_t *cache) {
 
     memset(&callbacks, 0, sizeof(callbacks));
     assert(pvr_geometry_sink_init_current(&sink) == 0);
+#ifdef __DREAMCAST__
+    /* Unlike the host submission stub, real KOS requires an active scene.
+       This numerical fixture intentionally never initializes the PVR. */
+    errno = 0;
+    assert(pvr_chunk_model_cache_emit_wire(
+        cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
+        &sink, &workspace, NULL, begin_strip, NULL, NULL, NULL,
+        &callbacks, &result) == -1);
+    assert(errno == EPERM && sink.emitted_vertices == 0);
+#else
     assert(pvr_chunk_model_cache_emit_wire(
         cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile,
         &sink, &workspace, NULL, begin_strip, NULL, NULL, NULL,
         &callbacks, &result) == 0);
     assert(callbacks.begins == 1 && sink.emitted_vertices == 12 &&
            result.emitted_edges == 3 && result.emitted_vertices == 12);
+#endif
 
     memset(&callbacks, 0, sizeof(callbacks));
     assert(pvr_geometry_sink_init_memory(&sink, output, 12) == 0);
@@ -1229,6 +1268,7 @@ int main(void) {
 
     assert(pvr_chunk_model_cache_validate(&cache) == 0);
     test_ordinary_cooked_section(&cache);
+    test_unlit_cooked_section();
     test_toon_cache(&cache);
     test_outline_cache(&cache);
     test_wire_cache(&cache);
