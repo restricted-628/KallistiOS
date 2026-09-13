@@ -550,3 +550,41 @@ physical-hardware coverage or close the existing image/presort gates. The next
 graphics work remains independent auxiliary UV attributes, base-transform
 mapping, imported texture manifests and recipe selection; those importer
 features have not been added by this scheduler correction.
+
+## September 12: host UV mapping preparation
+
+Base-texture conversion now uses a small host-only UV IR with explicit source
+attribute identity and double-precision affine rows. Offset, rotation, scale
+and post-transform V flip are compiled once per primitive, rather than doing
+trigonometry at every vertex. Emitted coordinates remain binary32 before the
+existing signed-fixed/float record selection. Reflections, repeating UVs and
+collapsed forward mappings are legal; invalid inputs and overflow fail before
+the destination pair is published.
+
+The same module can propose `auxiliary * inverse(base)` for a future layer
+using the same source set. Different sets, singular/ill-conditioned base maps
+and unrepresentable float coefficients request independent coordinates instead.
+That result is deliberately a preparation candidate, not proof of lossless
+reuse. A regression demonstrates an invertible base map whose signed-UV10
+encoding loses the information needed by its auxiliary layer. Import admission
+must compare actual decoded canonical corners against independently baked
+auxiliary corners before accepting a shared representation.
+
+This changes no target code, exported API, runtime allocation, thread, model or
+container layout. Auxiliary glTF materials remain rejected. Independent
+per-reference UV storage and its raw/prepared rendering binding come next,
+followed by imported auxiliary texture manifests and recipe selection. PML1's
+canonical-only contract has not been loosened.
+
+Validation:
+
+- The new UV suite passes GCC 14 GNU17/strict C23 and Clang GNU17/strict C2x,
+  plus Clang ASan/UBSan. It covers independent goldens, rotated/reflected maps,
+  all V-flip pairs, different sets, singular/ill-conditioned maps, overflow,
+  invalid inputs, in-place evaluation and failure-output preservation.
+- The full converter suite passes the same four compiler/language lanes.
+  New fixtures decode actual signed-UV strip references and compare literal
+  expected coordinates for V flip, negative scale and zero scale. Selecting a
+  missing source set fails without replacing the destination file.
+- These are host-tool tests, not emulator image or physical-hardware evidence.
+  No KOS kernel code changed in this tranche.

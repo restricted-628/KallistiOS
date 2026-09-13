@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Centralized host-side Compact UV baking and added relative auxiliary-map
+  preparation with explicit independent-coordinate fallback. Converter tests
+  check transformed signed UVs, V-flip order and legal zero/negative scales.
+  No runtime layout or auxiliary material admission changes are implied.
+
 * Fixed a scheduler stack-bound false positive when an interrupt lands inside
   a GCC soft-gUSA atomic operation. The check now uses the preserved logical
   stack address without changing the atomic restart context. Failure diagnostics

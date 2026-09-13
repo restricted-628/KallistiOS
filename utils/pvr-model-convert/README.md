@@ -87,6 +87,20 @@ specular, and exponent state. Referenced base-color images are compiled into
 the checked `PTX1` section; VRAM placement, residency, and non-base-color image
 roles remain application resource policy.
 
+Base UV baking uses the host-only `pvr-uv-ir` module: source-set identity,
+double-precision affine rows and a final binary32 conversion. Rotation is
+prepared once per primitive, not recomputed per vertex. V flip is applied after
+the authored transform, and zero/negative scale remains legal for forward
+mapping. Existing UV record selection and runtime layouts are unchanged.
+
+The module also proposes a relative auxiliary mapping against an already-baked
+base map. It requests independent coordinates for different sets, singular or
+ill-conditioned bases, or unrepresentable coefficients. Even a usable inverse
+is only a candidate: quantizing canonical UVs may lose information or amplify
+auxiliary error. An importer must compare actual decoded corners with separately
+evaluated auxiliary coordinates before reusing them. This preparation helper
+does not yet enable auxiliary glTF materials or serialize independent UV sets.
+
 The admitted source subset is:
 
 - finite `v X Y Z` positions;

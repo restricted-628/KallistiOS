@@ -1416,6 +1416,74 @@ f 1/1/1 2/2/1 3/3/1
         assert all(struct.pack("<hh", 9216, 9216) not in polygons
                    for polygons in topology_polygons)
 
+        # Literal fixed-grid goldens: V flip follows the authored transform,
+        # while negative and zero scale remain legal forward UV mappings.
+        for name, scale, flip, expected in (
+            ("flipped", [2, 3], True,
+             [(1536, 512), (2560, 512), (2560, -1024), (1536, -1024)]),
+            ("reflected", [-2, 3], False,
+             [(512, 512), (-512, 512), (-512, 2048), (512, 2048)]),
+            ("collapsed", [0, 3], False,
+             [(1024, 512), (1024, 512), (1024, 2048), (1024, 2048)]),
+        ):
+            document = json.loads(topology_source.read_text(encoding="utf-8"))
+            transform = document["materials"][0]["pbrMetallicRoughness"][
+                "baseColorTexture"]["extensions"]["KHR_texture_transform"]
+            transform["scale"] = scale
+            transform["rotation"] = 0
+            variant_source = root / f"uv-{name}.gltf"
+            variant_asset = root / f"uv-{name}.pcm"
+            variant_source.write_text(json.dumps(document), encoding="utf-8")
+            result = invoke(converter, "--emit-asset", "--section-directory",
+                            *(["--flip-v"] if flip else []),
+                            variant_source, variant_asset)
+            assert result.returncode == 0, result.stderr
+            encoded_asset = variant_asset.read_bytes()
+            count = struct.unpack_from("<I", encoded_asset, 32)[0]
+            descriptors = [struct.unpack_from("<7IHH", encoded_asset, 64 + i * 32)
+                           for i in range(count)]
+            polygon_streams = [encoded_asset[d[2]:d[2] + d[3]]
+                               for d in descriptors if d[0] == 2]
+            assert len(polygon_streams) == 2
+            for stream in polygon_streams:
+                words = struct.unpack(f"<{len(stream) // 2}H", stream)
+                cursor, observed = 0, set()
+                while words[cursor] != 255:
+                    kind = words[cursor] & 255
+                    if kind == 8:  # Two-word texture selection.
+                        cursor += 2
+                        continue
+                    end = cursor + 2 + words[cursor + 1]
+                    if kind == 77:  # Signed UV10, no normal/color attributes.
+                        strip_count = words[cursor + 2]
+                        at = cursor + 3
+                        for _ in range(strip_count):
+                            corner_count = words[at] & 0x7fff
+                            at += 1
+                            for _ in range(corner_count):
+                                pair = struct.unpack_from("<hh", stream,
+                                                          (at + 1) * 2)
+                                observed.add(pair)
+                                at += 3
+                        assert at == end
+                    else:
+                        assert 16 <= kind < 32, (name, kind)  # Material.
+                    cursor = end
+                assert cursor == len(words) - 1
+                assert observed == set(expected), (name, observed, expected)
+
+        missing_uv_set = json.loads(topology_source.read_text(encoding="utf-8"))
+        missing_uv_set["materials"][0]["pbrMetallicRoughness"][
+            "baseColorTexture"]["extensions"]["KHR_texture_transform"]["texCoord"] = 2
+        missing_source = root / "uv-missing-set.gltf"
+        missing_source.write_text(json.dumps(missing_uv_set), encoding="utf-8")
+        missing_asset = root / "uv-missing-set.pcm"
+        missing_asset.write_bytes(b"UV sentinel")
+        result = invoke(converter, "--emit-asset", "--section-directory",
+                        missing_source, missing_asset)
+        assert result.returncode == 1
+        assert missing_asset.read_bytes() == b"UV sentinel"
+
         unsupported_extension = json.loads(
             topology_source.read_text(encoding="utf-8")
         )

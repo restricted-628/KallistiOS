@@ -77,6 +77,15 @@ importer must derive the auxiliary mapping relative to those coordinates. It
 cannot blindly copy an authored transform. Noninvertible mappings or different
 UV sets need explicit attribute preservation, not a guessed inverse.
 
+The host compiler's `pvr-uv-ir` module now centralizes base baking and proposes
+relative transforms with an explicit independent-coordinate fallback. Shared
+source-set identity and an invertible map are not sufficient proof of reusable
+stored UVs: signed fixed-point or float rounding can destroy information before
+the relative map runs. Check the actual decoded base corners against separately
+baked auxiliary corners using the chosen error budget. PML1 version 1 and its
+canonical-only admission are unchanged; the helper does not provide independent
+UV storage or make unsupported glTF layers importable.
+
 ## Wire layout
 
 All integers are unsigned little endian. UVs are IEEE binary32 bit patterns,

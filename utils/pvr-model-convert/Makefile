@@ -15,7 +15,7 @@ LDLIBS += -lm
 
 TARGET = pvr-model-convert
 SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c \
-	  pvr-model-table-ir.c cgltf.c \
+	  pvr-model-table-ir.c pvr-uv-ir.c cgltf.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model_table.c \
@@ -47,7 +47,7 @@ SOURCES = pvr-model-convert.c pvr-scene-ir.c pvr-skeleton-ir.c \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) pvr-uv-ir.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)

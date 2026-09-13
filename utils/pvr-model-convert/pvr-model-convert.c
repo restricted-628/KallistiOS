@@ -32,6 +32,7 @@
 #include <dc/pvr_chunk_texture_asset.h>
 
 #include "pvr-scene-ir.h"
+#include "pvr-uv-ir.h"
 #include "third_party/cgltf.h"
 #include "stb_image.h"
 
@@ -99,10 +100,7 @@ typedef struct source_texcoord {
 typedef struct gltf_texture_mapping {
     int texture_identifier;
     int texcoord_set;
-    float offset[2];
-    float scale[2];
-    float rotation;
-    int transformed;
+    pvr_uv_ir_transform_t transform;
 } gltf_texture_mapping_t;
 
 typedef struct source_normal {
@@ -1460,35 +1458,14 @@ static int gltf_append_color_value(source_model_t *model,
 
 static int gltf_append_texcoord_value(
     source_model_t *model, const float value[2],
-    const gltf_texture_mapping_t *mapping, int flip_v) {
+    const gltf_texture_mapping_t *mapping) {
     void *allocation = model->texcoords;
     source_texcoord_t texcoord;
-    double u = value[0];
-    double v = value[1];
-
-    if(!isfinite(u) || !isfinite(v)) {
-        errno = EILSEQ;
+    if(pvr_uv_ir_apply(&mapping->transform, value, texcoord.value) < 0) {
+        if(errno == EDOM)
+            errno = EILSEQ;
         return -1;
     }
-    if(mapping->transformed) {
-        double cosine = cos(mapping->rotation);
-        double sine = sin(mapping->rotation);
-        double scaled_u = u * mapping->scale[0];
-        double scaled_v = v * mapping->scale[1];
-
-        u = mapping->offset[0] + cosine * scaled_u - sine * scaled_v;
-        v = mapping->offset[1] + sine * scaled_u + cosine * scaled_v;
-    }
-    if(flip_v)
-        v = 1.0 - v;
-    if(!isfinite(u) || !isfinite(v) ||
-       u < -FLT_MAX || u > FLT_MAX || v < -FLT_MAX || v > FLT_MAX) {
-        errno = ERANGE;
-        return -1;
-    }
-
-    texcoord.value[0] = (float)u;
-    texcoord.value[1] = (float)v;
     if(reserve_array(&allocation, &model->texcoord_capacity,
                      model->texcoord_count + 1u,
                      sizeof(*model->texcoords)) < 0)
@@ -1541,16 +1518,17 @@ static int gltf_material_index(const cgltf_data *data,
 
 static int gltf_texture_mapping(const cgltf_data *data,
                                 const cgltf_material *material,
-                                int override,
+                                int override, int flip_v,
                                 gltf_texture_mapping_t *mapping) {
     const cgltf_texture_view *view = NULL;
     const cgltf_texture *texture = NULL;
-    size_t component;
+    float offset[2] = {0, 0}, scale[2] = {1, 1}, rotation = 0;
 
     memset(mapping, 0, sizeof(*mapping));
     mapping->texture_identifier = -1;
-    mapping->scale[0] = 1.0f;
-    mapping->scale[1] = 1.0f;
+    if(pvr_uv_ir_transform_init(&mapping->transform, 0, offset, scale,
+                                rotation, flip_v) < 0)
+        return -1;
 
     if(override >= 0) {
         mapping->texture_identifier = override;
@@ -1567,24 +1545,19 @@ static int gltf_texture_mapping(const cgltf_data *data,
     if(view->has_transform) {
         if(view->transform.has_texcoord)
             mapping->texcoord_set = view->transform.texcoord;
-        for(component = 0; component < 2; ++component) {
-            if(!isfinite(view->transform.offset[component]) ||
-               !isfinite(view->transform.scale[component])) {
-                errno = EILSEQ;
-                return -1;
-            }
-            mapping->offset[component] = view->transform.offset[component];
-            mapping->scale[component] = view->transform.scale[component];
-        }
-        if(!isfinite(view->transform.rotation)) {
-            errno = EILSEQ;
-            return -1;
-        }
-        mapping->rotation = view->transform.rotation;
-        mapping->transformed = 1;
+        memcpy(offset, view->transform.offset, sizeof(offset));
+        memcpy(scale, view->transform.scale, sizeof(scale));
+        rotation = view->transform.rotation;
     }
     if(mapping->texcoord_set < 0) {
         errno = EILSEQ;
+        return -1;
+    }
+    if(pvr_uv_ir_transform_init(&mapping->transform,
+                                (uint32_t)mapping->texcoord_set,
+                                offset, scale, rotation, flip_v) < 0) {
+        if(errno == EDOM)
+            errno = EILSEQ;
         return -1;
     }
     {
@@ -1712,7 +1685,7 @@ static int gltf_append_primitive(const cgltf_data *data,
     if(gltf_material_index(data, primitive->material,
                            &material_index) < 0 ||
        gltf_texture_mapping(data, primitive->material, texture_override,
-                            &texture_mapping) < 0)
+                            flip_v, &texture_mapping) < 0)
         return -1;
     texcoords = texture_mapping.texture_identifier >= 0 ?
         gltf_attribute(primitive, cgltf_attribute_type_texcoord,
@@ -1752,8 +1725,7 @@ static int gltf_append_primitive(const cgltf_data *data,
             return -1;
         if(texcoords &&
            (!cgltf_accessor_read_float(texcoords, vertex, texcoord, 2) ||
-            gltf_append_texcoord_value(model, texcoord, &texture_mapping,
-                                       flip_v) < 0))
+            gltf_append_texcoord_value(model, texcoord, &texture_mapping) < 0))
             return -1;
         if(normals &&
            (!cgltf_accessor_read_float(normals, vertex, normal, 3) ||
