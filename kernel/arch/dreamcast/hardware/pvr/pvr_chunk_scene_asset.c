@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_scene.h>
+#include <dc/pvr_chunk_layer_asset.h>
 
 #include <errno.h>
 #include <stdint.h>
@@ -326,13 +327,14 @@ static int load_scene_stream(
     return 0;
 }
 
-int pvr_chunk_scene_asset_load(
+static int scene_asset_load(
     const pvr_chunk_scene_asset_view_t *view,
     pvr_chunk_asset_decoder_t decoder, void *decoder_data,
     void *workspace, size_t workspace_bytes,
     pvr_chunk_model_view_t *models, size_t model_capacity,
     pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
-    pvr_chunk_hierarchy_t *hierarchy) {
+    pvr_chunk_hierarchy_t *hierarchy,
+    pvr_chunk_layer_section_view_t *layers) {
     pvr_chunk_scene_asset_view_t checked;
     pvr_chunk_scene_asset_workspace_requirements_t requirements;
     size_t model_bytes;
@@ -340,7 +342,17 @@ int pvr_chunk_scene_asset_load(
     size_t cursor = 0;
     size_t model;
     int saved_errno;
+    pvr_chunk_layer_section_view_t parsed_layers;
 
+    /* Reject output aliasing before even clearing the hierarchy. */
+    if(layers && (!view ||
+       ranges_overlap(layers, sizeof(*layers), view, sizeof(*view)) ||
+       ranges_overlap(layers, sizeof(*layers), hierarchy, sizeof(*hierarchy)) ||
+       ranges_overlap(layers, sizeof(*layers), view->asset.data,
+                      view->asset.size))) {
+        errno = EINVAL;
+        return -1;
+    }
     if(hierarchy)
         memset(hierarchy, 0, sizeof(*hierarchy));
     if(!view || !hierarchy || !view->asset.data) {
@@ -348,6 +360,8 @@ int pvr_chunk_scene_asset_load(
         return -1;
     }
     if(pvr_chunk_scene_asset_open(&view->asset, &checked) < 0 ||
+       pvr_chunk_asset_requirements_check(&checked.asset, layers ?
+           PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS : 0) < 0 ||
        pvr_chunk_scene_asset_workspace_query(
            &checked, &requirements) < 0)
         return -1;
@@ -369,6 +383,14 @@ int pvr_chunk_scene_asset_load(
     }
     model_bytes = checked.model_count * sizeof(*models);
     node_bytes = checked.node_count * sizeof(*nodes);
+    if(layers &&
+       (ranges_overlap(layers, sizeof(*layers), models, model_bytes) ||
+        ranges_overlap(layers, sizeof(*layers), nodes, node_bytes) ||
+        ranges_overlap(layers, sizeof(*layers), workspace,
+                       requirements.bytes))) {
+        errno = EINVAL;
+        return -1;
+    }
     if((requirements.bytes &&
         (!workspace || ((uintptr_t)workspace &
                         (requirements.alignment - 1u)))) ||
@@ -385,6 +407,15 @@ int pvr_chunk_scene_asset_load(
                       nodes, node_bytes)) {
         errno = EINVAL;
         return -1;
+    }
+
+    if(layers) {
+        const void *data;
+        size_t bytes;
+        if(load_unique_direct_section(&checked.asset,
+               PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS, &data, &bytes) < 0 ||
+           pvr_chunk_layer_section_open(data, bytes, &parsed_layers) < 0)
+            return -1;
     }
 
     memset(models, 0, model_bytes);
@@ -434,10 +465,16 @@ int pvr_chunk_scene_asset_load(
         errno = EILSEQ;
         goto fail;
     }
+    /* Do not publish a hierarchy whose required material ranges are invalid. */
+    if(layers && pvr_chunk_layer_section_validate_models(
+           &parsed_layers, models, checked.model_count) < 0)
+        goto fail;
     if(pvr_chunk_scene_hierarchy_bind_models(
            &checked.hierarchy, models, checked.model_count,
            nodes, checked.node_count, hierarchy) < 0)
         goto fail;
+    if(layers)
+        *layers = parsed_layers;
     return 0;
 
 fail:
@@ -448,4 +485,33 @@ fail:
     memset(hierarchy, 0, sizeof(*hierarchy));
     errno = saved_errno;
     return -1;
+}
+
+int pvr_chunk_scene_asset_load(
+    const pvr_chunk_scene_asset_view_t *view,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *models, size_t model_capacity,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy) {
+    return scene_asset_load(view, decoder, decoder_data, workspace,
+        workspace_bytes, models, model_capacity, nodes, node_capacity,
+        hierarchy, NULL);
+}
+
+int pvr_chunk_scene_asset_load_layers(
+    const pvr_chunk_scene_asset_view_t *view,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *models, size_t model_capacity,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy,
+    pvr_chunk_layer_section_view_t *layers) {
+    if(!layers) {
+        errno = EINVAL;
+        return -1;
+    }
+    return scene_asset_load(view, decoder, decoder_data, workspace,
+        workspace_bytes, models, model_capacity, nodes, node_capacity,
+        hierarchy, layers);
 }

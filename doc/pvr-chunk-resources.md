@@ -155,8 +155,11 @@ can be admitted. Those imports remain rejected until that path is implemented.
 
 The [PML1 section codec](pvr-chunk-layers.md) now provides pointer-free
 model/source-strip associations, explicit serialization, immutable lookup and
-model-array bounds validation. It decodes into the same runtime layer type;
-automatic PCM2 consumption and independent UV-set import remain separate.
+model-array bounds validation. It decodes into the same runtime layer type.
+Required PCM2 layer sections are consumed by the explicit layer-aware scene
+loader and rejected by geometry-only loaders. Table validation and auxiliary
+pin preparation share the ordinary residency adapter. Independent UV-set import
+and automatic recipe selection remain separate work.
 
 ## Renderer integration
 

@@ -11,7 +11,8 @@ SOURCES = pvr-chunk-layer-test.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_layer_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_model.c
 HEADERS = ../../kernel/arch/dreamcast/include/dc/pvr_chunk_layer_asset.h \
-          ../../kernel/arch/dreamcast/include/dc/pvr_chunk_binding.h \
+          ../../kernel/arch/dreamcast/include/dc/pvr_chunk_layer.h \
+          ../../kernel/arch/dreamcast/include/dc/pvr_material_types.h \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_layer_internal.h
 .PHONY: all test clean dreamcast
 all: $(TARGET)

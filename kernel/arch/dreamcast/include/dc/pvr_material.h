@@ -30,6 +30,7 @@ __BEGIN_DECLS
 #include <stdint.h>
 
 #include <dc/pvr.h>
+#include <dc/pvr_material_types.h>
 
 /** \defgroup pvr_material Checked materials
     \brief                   Immutable compiled PVR material packets
@@ -105,15 +106,6 @@ int pvr_material_compile_two_volume(pvr_material_t *material,
                set appropriately.
 */
 int pvr_material_submit(const pvr_material_t *material);
-
-/** \brief Required vertex data for a compound-material step. */
-typedef enum pvr_material_pass_role {
-    PVR_MATERIAL_PASS_SURFACE = 0, /**< Ordinary surface colors and UVs. */
-    PVR_MATERIAL_PASS_BUMP, /**< Black base RGB; oargb from pvr_pack_bump(). */
-    PVR_MATERIAL_PASS_RESOLVE, /**< Matching coverage/depth; colors/UVs unused. */
-    PVR_MATERIAL_PASS_LIGHTMAP, /**< Unlit RGB tint, alpha 255; layer UVs. */
-    PVR_MATERIAL_PASS_EMISSIVE /**< Unlit RGB tint, alpha zero; layer UVs. */
-} pvr_material_pass_role_t;
 
 /** \brief One material header and its vertex-data contract. */
 typedef struct pvr_material_recipe_pass {

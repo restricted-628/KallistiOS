@@ -20,6 +20,7 @@ __BEGIN_DECLS
 
 #include <dc/pvr_chunk_cache.h>
 #include <dc/pvr_chunk_render.h>
+#include <dc/pvr_chunk_layer.h>
 #include <dc/pvr_lighting.h>
 #include <dc/pvr_material.h>
 
@@ -265,22 +266,6 @@ int pvr_chunk_material_resolve_context(
     const pvr_chunk_texture_table_view_t *textures,
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip);
-
-/** \brief Optional caller-owned auxiliary material input.
-
-    Only LIGHTMAP and EMISSIVE roles are admitted. Texture identifiers remain
-    resource identities, not global roles. rgb is an unlit 0x00RRGGBB tint;
-    role determines vertex alpha. The affine UV rows map the supplied source
-    coordinates: u' = row[0]*u + row[1]*v + row[2], and likewise for v'.
-    Use {{1,0,0},{0,1,0}} for identity. This is runtime metadata, not a wire
-    format or an implicit extension of a model's resource manifest.
-*/
-typedef struct pvr_chunk_material_layer {
-    pvr_material_pass_role_t role;
-    pvr_chunk_texture_state_t texture;
-    uint32_t rgb;
-    float uv[2][3];
-} pvr_chunk_material_layer_t;
 
 /** \brief Resolve an auxiliary texture and compile its bounded layer recipe.
 

@@ -454,3 +454,54 @@ Validation:
   example passes its independent packet and submission checks in both modes.
   These are not pixel-conformance or physical-hardware validation results;
   the existing translucent presort/image gates remain open.
+
+## September 12: required layers in container loading
+
+PCM2 section type 16 carries PML1 and must set the new required-section flag.
+The flag was reserved zero in older readers, so they reject this authored
+meaning instead of dropping it. Unknown required types/flags are rejected.
+Structural inspection stays separate from semantic consumption: the explicit
+requirements check admits only caller-supported features, and ordinary model
+and scene loaders reject required layers before stream decoding.
+
+The layer-aware scene loader reads one unique raw PML1 section, shares the
+existing geometry workspace, and checks concrete model/strip associations
+before publishing the hierarchy and borrowed layer view. No extra allocation,
+thread, ownership manager or persistent workspace was added. Bad ranges clear
+the same model/node outputs as a failed ordinary scene load; preflight failures
+do not decode streams. The layer output is preserved on failure.
+
+Auxiliary table validation and pin preparation now use the ordinary texture
+table/residency adapter. Duplicate identifiers share pins. A later missing or
+loading texture leaves earlier successful pins tracked for the usual release;
+malformed section data acquires nothing. Recipe/profile validation still occurs
+when resolving the actual surface and auxiliary texture together.
+
+Material-role and layer-data declarations moved to lightweight shared headers
+without changing their values, fields or layouts. This prevents the host codec
+and scene loader from importing the complete material/residency interface.
+The shared sampler validator uses fixed encoded limits, with compile-time
+checks against PVR constants in the binding implementation.
+
+The converter still rejects unsupported auxiliary glTF materials. Independent
+UV attributes, mapping relative to any baked base transform, imported texture
+manifest integration and automatic recipe selection remain the next tranche.
+Existing PRT1 manifests continue to describe direct polygon-stream usage.
+
+The SH-4 interpreter scene suite passed all assertions and then printed a
+scheduler stack-bound trace after main returned; a repeat reproduced it. The
+small codec baseline and the previous scene test source did not reproduce it,
+nor did the new scene suite under dynarec. Symbolizing the trace locates the
+owned-stack guard in `thd_schedule_inner()`. This is an unresolved completion/
+shutdown observation, not evidence of a clean exit or a diagnosed loader
+defect. Isolating this timing/execution-path difference is the next regression
+gate before expanding the importer; this change does not alter the scheduler.
+
+Validation includes the scene, binding and codec suites under GCC 14 GNU17/
+strict C23 and Clang GNU17/strict C2x; scene/binding ASan/UBSan; the existing
+container suite (using the existing vendor warning exception for strict Clang
+LZ4); the converter regression suite; and the scene example's host integration
+and failure-cleanup fixtures. Full KOS builds and SH-4 scene-test links pass.
+All four new entry points are in the export archive and focused Doxygen groups.
+Target assertions pass in interpreter and dynarec, subject to the interpreter
+completion trace above. Physical image/presort gates remain open.

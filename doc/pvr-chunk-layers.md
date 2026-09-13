@@ -3,11 +3,36 @@
 PML1 associates an existing lightmap/emission layer with a contiguous range of
 source strips in one model. A shared texture can have different roles, sampling,
 UV transforms and tints in different draws. Texture identity is not material
-identity. This checkpoint supplies the codec, lookup and model-validation
-gate, **not** automatic PCM2 scene consumption or auxiliary glTF import. Those
-imports remain rejected until container association, independent UV-set storage
-and renderer selection are integrated. Required material meaning must not be
-silently ignored by a generic loader.
+identity. The codec, model-range admission, explicit PCM2 scene loading and
+texture residency preparation share the existing Compact pipeline. Auxiliary
+glTF import remains rejected until independent UV-set storage and renderer
+selection are integrated. Required material meaning must not be silently
+ignored by a generic loader.
+
+## PCM2 admission
+
+Section type 16 (`PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS`) carries PML1 and
+must set descriptor flag bit 0 (`PVR_CHUNK_ASSET_SECTION_REQUIRED`). Encoding
+this section with zero flags is malformed. Unknown flag bits are malformed;
+unknown required section types are unsupported. Older PCM2 parsers required
+all descriptor flags to be zero, so they reject these assets rather than
+silently dropping the layer. Existing assets and optional sections are unchanged.
+
+`pvr_chunk_asset_open()` is structural inspection, not rendering admission.
+Custom loaders call `pvr_chunk_asset_requirements_check()` and acknowledge only
+features they actually consume. Ordinary model/pair loading and ordinary scene
+loading reject required layers with `ENOTSUP` before decoding model streams.
+Section loading remains available for custom consumers and tools.
+
+`pvr_chunk_scene_asset_load_layers()` is the explicit scene entry point. It
+requires exactly one raw/directly readable PML1 section, checks both container
+and PML1 checksums, loads the existing shared geometry workspace, and validates
+all model/strip ranges before publishing the hierarchy and borrowed layer view.
+Missing, duplicate or compressed layer metadata is rejected. Invalid ranges
+after geometry decode clear model/node outputs as in ordinary scene loading;
+the layer output is preserved on every failure. There is no extra persistent
+workspace, allocation or scene manager. The caller still chooses recipes and
+pins auxiliary resources; accepting the layer-aware API promises to use them.
 
 ## Load and preparation
 
@@ -18,8 +43,11 @@ silently ignored by a generic loader.
    (PMT1 order for a multi-model asset, not polygon-section order). Referenced
    models are reopened once each; source strip bounds and unresolved execution
    requirements are checked before preparation.
-3. Enumerate and explicitly pin every auxiliary identifier in the existing
-   texture/residency table. They are not implicitly in the PRT1 stream manifest.
+3. Use `pvr_chunk_layer_section_validate_table()` for a fixed texture table, or
+   `pvr_chunk_layer_section_prepare_residency()` to pin auxiliary identifiers
+   through the existing adapter before starting a PVR list. Repeated identifiers
+   reuse pins; on partial failure successful pins remain tracked for the normal
+   binding release operation. PRT1 still describes only direct stream usage.
 4. Find a layer by model/source-strip ordinal, copy it to caller-owned
    preparation data and use `pvr_chunk_material_resolve_layer()`. That helper
    checks actual surfaces and recipe/profile admission.

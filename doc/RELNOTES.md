@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added required PCM2 material-layer sections and explicit layer-aware scene
+  loading. Geometry-only loaders reject these assets instead of silently
+  discarding required rendering meaning. Legacy zero-flag assets are unchanged.
+* Added auxiliary texture-table validation and preparation through the existing
+  residency adapter, with shared duplicate pins and explicit failure cleanup.
+
 * Added a checked pointer-free material-layer section codec. Model/source-strip
   ranges map to existing layer descriptors, with CRCs, explicit little-endian
   encoding, immutable binary-search lookup and load-time model validation.

@@ -19,6 +19,7 @@ SOURCES = $(EXAMPLE)/chunk-scene.c host-support.c \
           $(PVR)/pvr_chunk_model_table.c $(PVR)/pvr_chunk_scene.c \
           $(PVR)/pvr_chunk_hierarchy.c \
           $(PVR)/pvr_chunk_scene_asset.c $(PVR)/pvr_chunk_skin.c \
+          $(PVR)/pvr_chunk_layer_asset.c \
           $(PVR)/pvr_chunk_skin_asset.c $(PVR)/pvr_chunk_skeleton_asset.c \
           $(PVR)/pvr_chunk_shape.c $(PVR)/pvr_chunk_shape_asset.c \
           $(PVR)/pvr_chunk_animation_asset.c \

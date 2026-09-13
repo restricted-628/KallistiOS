@@ -26,6 +26,8 @@ __BEGIN_DECLS
 #include <dc/pvr_chunk_asset.h>
 #include <dc/pvr_chunk_model_table.h>
 
+struct pvr_chunk_layer_section_view;
+
 /** \addtogroup pvr_chunk_model
     @{
 */
@@ -178,6 +180,7 @@ int pvr_chunk_scene_asset_workspace_query(
     failures do not modify the arrays.
 
     No allocation, clock, renderer, list, or scene lifecycle is introduced.
+    Required auxiliary material sections report ENOTSUP; use load_layers().
 */
 int pvr_chunk_scene_asset_load(
     const pvr_chunk_scene_asset_view_t *view,
@@ -186,6 +189,28 @@ int pvr_chunk_scene_asset_load(
     pvr_chunk_model_view_t *models, size_t model_capacity,
     pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
     pvr_chunk_hierarchy_t *hierarchy);
+
+/** \brief Load a scene and its required auxiliary material associations.
+
+    This explicit opt-in has the ordinary loader's workspace/ownership rules.
+    Exactly one raw, directly readable PML1 section is required. Its CRCs and
+    metadata are admitted before stream decoding, and every model/strip range
+    is validated before hierarchy publication. Failure preserves layers;
+    layers must be disjoint from all inputs, outputs and used workspace.
+
+    The returned immutable view borrows asset bytes. The caller must consume
+    the associations when preparing recipes and pin their textures with
+    pvr_chunk_layer_section_prepare_residency() before rendering. Loading does
+    not choose render passes, acquire textures or start a scene implicitly.
+*/
+int pvr_chunk_scene_asset_load_layers(
+    const pvr_chunk_scene_asset_view_t *view,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *models, size_t model_capacity,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy,
+    struct pvr_chunk_layer_section_view *layers);
 
 /** @} */
 

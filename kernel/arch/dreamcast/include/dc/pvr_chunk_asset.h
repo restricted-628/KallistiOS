@@ -69,7 +69,8 @@ typedef enum pvr_chunk_asset_codec {
     may pair either stream independently. Other section types are optional and
     may appear more than once. Unknown nonzero identifiers remain queryable so
     newer host tools do not make older loaders reject an otherwise usable
-    model.
+    model. Required sections are different: their semantics must be explicitly
+    supported by the consuming loader, not silently skipped.
 */
 typedef enum pvr_chunk_asset_section_type {
     PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM = 1,
@@ -86,8 +87,15 @@ typedef enum pvr_chunk_asset_section_type {
     PVR_CHUNK_ASSET_SECTION_MODEL_TABLE = 12,
     PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION = 13,
     PVR_CHUNK_ASSET_SECTION_ANIMATION_CATALOG = 14,
-    PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES = 15
+    PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES = 15,
+    PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS = 16
 } pvr_chunk_asset_section_type_t;
+
+/** Required rendering meaning; older readers reject this formerly zero bit.
+    Currently mandatory and permitted only for MATERIAL_LAYERS sections. */
+#define PVR_CHUNK_ASSET_SECTION_REQUIRED UINT32_C(1)
+/** Explicit loader support for PML1 auxiliary material associations. */
+#define PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS UINT32_C(1)
 
 /** \brief First section identifier reserved for application-defined data. */
 #define PVR_CHUNK_ASSET_SECTION_APPLICATION UINT32_C(0x80000000)
@@ -101,7 +109,7 @@ typedef struct pvr_chunk_asset_section {
     uint32_t dictionary_id;
     pvr_chunk_asset_codec_t codec;
     uint32_t type;       /**< pvr_chunk_asset_section_type_t or extension. */
-    uint32_t flags;      /**< Must be zero in the current directory revision. */
+    uint32_t flags;      /**< PVR_CHUNK_ASSET_SECTION_REQUIRED or zero. */
     size_t alignment;    /**< Required decoded-data alignment, power of two. */
 } pvr_chunk_asset_section_t;
 
@@ -160,6 +168,18 @@ typedef int (*pvr_chunk_asset_decoder_t)(
 */
 int pvr_chunk_asset_open(const void *data, size_t size,
                          pvr_chunk_asset_view_t *view);
+
+/** \brief Reject required semantics absent from the consumer's feature mask.
+
+    Structural opening/section inspection does not promise rendering support.
+    Custom loaders must call this before publishing usable models and must
+    actually consume every feature they acknowledge. Unknown feature bits in
+    supported_features report EINVAL; unsupported requirements report ENOTSUP.
+    Ordinary model loading supports no auxiliary layers. Use the layer-aware
+    scene loader or explicit section loading for such assets.
+*/
+int pvr_chunk_asset_requirements_check(const pvr_chunk_asset_view_t *view,
+                                      uint32_t supported_features);
 
 /** \brief Return one checked section by directory order.
 

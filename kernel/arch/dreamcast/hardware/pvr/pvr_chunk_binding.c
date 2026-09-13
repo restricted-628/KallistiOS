@@ -19,6 +19,12 @@
 #include "pvr_lighting_internal.h"
 #include "pvr_chunk_layer_internal.h"
 
+_Static_assert(PVR_FILTER_BILINEAR == 1, "layer filter encoding");
+_Static_assert(PVR_UVFLIP_UV == 3, "layer flip encoding");
+_Static_assert(PVR_UVCLAMP_UV == 3, "layer clamp encoding");
+_Static_assert(PVR_MIPBIAS_0_25 == 1, "layer minimum bias encoding");
+_Static_assert(PVR_MIPBIAS_3_75 == 15, "layer maximum bias encoding");
+
 #define PVR_CHUNK_RENDER_STATE_ALL \
     (PVR_CHUNK_RENDER_BLEND | PVR_CHUNK_RENDER_MIPMAP_ADJUST | \
      PVR_CHUNK_RENDER_SPECULAR_EXPONENT | PVR_CHUNK_RENDER_TEXTURE | \

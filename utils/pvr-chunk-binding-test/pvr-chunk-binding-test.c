@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_binding.h>
+#include <dc/pvr_chunk_layer_asset.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -25,6 +26,17 @@ static size_t environment_begin_calls;
 static size_t environment_vertex_calls;
 static size_t policy_begin_calls;
 static size_t policy_vertex_calls;
+
+/* This suite uses a minimal polygon iterator below to isolate binding policy.
+   Real model admission is exercised by the layer and scene suites. */
+int pvr_chunk_model_open(const pvr_chunk_model_t *source,
+                         pvr_chunk_model_view_t *view) {
+    (void)source;
+    (void)view;
+    assert(!"model admission is outside the binding mock");
+    errno = ENOTSUP;
+    return -1;
+}
 
 int pvr_chunk_polygon_iterator_init(pvr_chunk_iterator_t *iterator,
                                     const uint16_t *words,
@@ -952,6 +964,62 @@ static int palette_one(uint16_t identifier, uint8_t *palette, void *data) {
     return 0;
 }
 
+static void test_layer_residency(void) {
+    pvr_txr_residency_t cache;
+    pvr_txr_residency_slot_t slots[3];
+    pvr_txr_surface_t surfaces[3];
+    pvr_chunk_texture_binding_t textures[2];
+    pvr_txr_residency_handle_t handles[2];
+    pvr_chunk_residency_binding_t binding;
+    pvr_poly_cxt_t context = make_context(0);
+    pvr_chunk_layer_entry_t entries[3] = {0};
+    pvr_chunk_layer_section_view_t layers;
+    uint8_t bytes[32 + 3 * 64];
+
+    init_residency(&cache, slots, surfaces);
+    assert(pvr_chunk_residency_binding_init(&binding, &cache, textures,
+        handles, 2, NULL, NULL, &context, PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+    for(size_t i = 0; i < 3; ++i) {
+        entries[i] = (pvr_chunk_layer_entry_t){
+            .model = (uint32_t)i, .strip_count = 1, .layer = {
+                .role = PVR_MATERIAL_PASS_LIGHTMAP,
+                .texture = { .identifier = i == 2 ? 1 : 5,
+                    .mipmap_adjust = PVR_MIPBIAS_NORMAL },
+                .rgb = 0xffffff, .uv = {{1,0,0},{0,1,0}} } };
+    }
+    for(unsigned variant = 0; variant < 4; ++variant) {
+        entries[2].layer.texture.identifier = variant == 0 ? 1 :
+                                             variant == 1 ? 3 : 2;
+        assert(pvr_chunk_layer_section_write(entries, 3, bytes, sizeof(bytes)) == 0);
+        assert(pvr_chunk_layer_section_open(bytes, sizeof(bytes), &layers) == 0);
+        if(variant == 3)
+            bytes[sizeof(bytes) - 1] ^= 1;
+        int rv = pvr_chunk_layer_section_prepare_residency(&layers, &binding);
+        pvr_chunk_texture_table_t table = { binding.textures, binding.count };
+        pvr_chunk_texture_table_view_t table_view;
+        assert(pvr_chunk_texture_table_open(&table, &table_view) == 0);
+        if(variant == 0) {
+            assert(rv == 0 && binding.count == 2);
+            assert(slots[0].pin_count == 1 && slots[1].pin_count == 1);
+            assert(pvr_chunk_layer_section_validate_table(&layers, &table_view) == 0);
+        }
+        else {
+            assert(rv < 0);
+            assert(errno == (variant == 1 ? EAGAIN :
+                             variant == 2 ? ENOENT : EILSEQ));
+            assert(binding.count == (variant == 3 ? 0 : 1));
+            if(variant != 3) {
+                assert(pvr_chunk_layer_section_validate_table(
+                    &layers, &table_view) < 0 && errno == ENOENT);
+                assert(slots[0].pin_count == 1);
+            }
+        }
+        assert(pvr_chunk_residency_binding_release(&binding) == 0);
+        assert(binding.count == 0 && slots[0].pin_count == 0 &&
+               slots[1].pin_count == 0 && slots[2].pin_count == 1);
+    }
+}
+
 static void test_residency_binding(void) {
     static const uint16_t model_textures[] = { 5, 1, 5, UINT16_C(0xffff) };
     static const uint16_t absent_texture[] = { 2, UINT16_C(0xffff) };
@@ -1149,6 +1217,7 @@ static void test_material_layer(void) {
 }
 
 int main(void) {
+    test_layer_residency();
     test_material_layer();
     test_table();
     test_resolve();

@@ -232,12 +232,18 @@ static int parse_pcm2_section(
     uint16_t alignment = read_le16(descriptor + 30);
     size_t end;
 
-    if(!type || flags || !stored || !decoded ||
+    if(!type || (flags & ~PVR_CHUNK_ASSET_SECTION_REQUIRED) ||
+       (type == PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS &&
+        flags != PVR_CHUNK_ASSET_SECTION_REQUIRED) || !stored || !decoded ||
        !power_of_two(alignment) || alignment > PVR_CHUNK_ASSET_ALIGNMENT ||
        offset < minimum_offset ||
        (offset & (PVR_CHUNK_ASSET_ALIGNMENT - 1u)) ||
        add_size(offset, stored, &end) < 0 || end > file_bytes) {
         errno = EILSEQ;
+        return -1;
+    }
+    if(flags && type != PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS) {
+        errno = ENOTSUP;
         return -1;
     }
     if(codec != PVR_CHUNK_ASSET_CODEC_RAW &&
@@ -691,6 +697,32 @@ int pvr_chunk_asset_section_load(
     return 0;
 }
 
+int pvr_chunk_asset_requirements_check(const pvr_chunk_asset_view_t *view,
+                                      uint32_t supported_features) {
+    pvr_chunk_asset_view_t checked;
+    if(!view || (supported_features &
+                 ~PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0)
+        return -1;
+    if(!checked.section_directory)
+        return 0;
+    /* The full directory was just admitted. Inspect fixed-width flags without
+       repeating its CRC/geometry scan once for every section. */
+    for(size_t i = 0; i < checked.section_count; ++i) {
+        const uint8_t *entry = (const uint8_t *)checked.section_directory +
+                              i * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+        if(read_le32(entry + 4) &&
+           !(supported_features & PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS)) {
+            errno = ENOTSUP;
+            return -1;
+        }
+    }
+    return 0;
+}
+
 int pvr_chunk_asset_pair_load(
     const pvr_chunk_asset_view_t *view, size_t vertex_ordinal,
     size_t polygon_ordinal,
@@ -712,6 +744,7 @@ int pvr_chunk_asset_pair_load(
         return -1;
     }
     if(pvr_chunk_asset_open(view->data, view->size, &checked) < 0 ||
+       pvr_chunk_asset_requirements_check(&checked, 0) < 0 ||
        pvr_chunk_asset_pair_workspace_query(
            &checked, vertex_ordinal, polygon_ordinal, &requirements) < 0 ||
        pvr_chunk_asset_section_find(

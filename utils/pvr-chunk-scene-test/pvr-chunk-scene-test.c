@@ -6,6 +6,7 @@
 
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_layer_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -131,8 +132,9 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
                                 const void *table, size_t table_bytes,
                                 const void *hierarchy,
                                 size_t hierarchy_bytes,
-                                int compress_first_vertex) {
-    const size_t section_count = 6;
+                                int compress_first_vertex,
+                                const void *layers, size_t layer_bytes) {
+    const size_t section_count = layers ? 7 : 6;
     const size_t directory_bytes = section_count *
         PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
     size_t vertex0_offset = align32(
@@ -146,7 +148,9 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
     size_t table_offset = align32(
         polygon1_offset + sizeof(scene_polygons));
     size_t hierarchy_offset = align32(table_offset + table_bytes);
-    size_t file_bytes = hierarchy_offset + hierarchy_bytes;
+    size_t layer_offset = align32(hierarchy_offset + hierarchy_bytes);
+    size_t file_bytes = layers ? layer_offset + layer_bytes :
+                                hierarchy_offset + hierarchy_bytes;
     uint8_t *directory = asset + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
 
     assert(file_bytes <= capacity);
@@ -188,6 +192,15 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
                   PVR_CHUNK_ASSET_SECTION_HIERARCHY,
                   hierarchy_offset, hierarchy, hierarchy_bytes,
                   hierarchy_bytes, PVR_CHUNK_ASSET_CODEC_RAW, 4);
+    if(layers) {
+        uint8_t *entry = directory +
+            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 6u;
+        memcpy(asset + layer_offset, layers, layer_bytes);
+        write_section(entry, PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS,
+                      layer_offset, layers, layer_bytes, layer_bytes,
+                      PVR_CHUNK_ASSET_CODEC_RAW, 4);
+        write_le32(entry + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
+    }
 
     write_le32(asset, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
     write_le16(asset + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
@@ -596,7 +609,7 @@ static void test_scene_asset(void) {
                &scene, &hierarchy_bytes, &hierarchy_size) == 0);
     asset_bytes = build_scene_asset(
         asset, sizeof(asset), table, table_bytes,
-        hierarchy_bytes, hierarchy_size, 1);
+        hierarchy_bytes, hierarchy_size, 1, NULL, 0);
 
     assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
     assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
@@ -619,6 +632,96 @@ static void test_scene_asset(void) {
            models[1].model.radius == 4.0f);
     assert(decoder_calls == 1);
     assert(models[0].model.vertex_words == models[1].model.vertex_words);
+
+    /* Required associations must survive the container/loader boundary. */
+    {
+        uint8_t layer_bytes[96];
+        pvr_chunk_layer_entry_t entry = { .model = 1, .strip_count = 1,
+            .layer = { .role = PVR_MATERIAL_PASS_EMISSIVE,
+                .texture = { .identifier = 7,
+                    .mipmap_adjust = PVR_MIPBIAS_NORMAL },
+                .rgb = 0x123456, .uv = { {1,0,0}, {0,1,0} } } };
+        pvr_chunk_layer_section_view_t layers, sentinel;
+        uint8_t *descriptor = asset + 64 + 6 * 32;
+        for(unsigned variant = 0; variant < 8; ++variant) {
+            entry.model = variant == 1 ? 2 : 1;
+            entry.strip_count = variant == 2 ? 2 : 1;
+            assert(pvr_chunk_layer_section_write(
+                &entry, 1, layer_bytes, sizeof(layer_bytes)) == 0);
+            asset_bytes = build_scene_asset(asset, sizeof(asset), table,
+                table_bytes, hierarchy_bytes, hierarchy_size, 1,
+                layer_bytes, sizeof(layer_bytes));
+            if(variant == 3) /* No optional encoding of required meaning. */
+                write_le32(descriptor + 4, 0);
+            if(variant == 4) /* Unknown required semantic. */
+                write_le32(descriptor, PVR_CHUNK_ASSET_SECTION_APPLICATION);
+            if(variant == 5) /* Unknown flag. */
+                write_le32(descriptor + 4, 3);
+            if(variant == 6) /* Canonical metadata must stay directly readable. */
+                write_le16(descriptor + 28, PVR_CHUNK_ASSET_CODEC_LZ4_FRAME);
+            if(variant == 7) /* Payload corruption, outer CRC left unchanged. */
+                asset[read_le32(descriptor + 8) + 24] ^= 1;
+            write_le32(asset + 44, crc32_bytes(asset + 64, 7 * 32));
+            write_le32(asset + 60, crc32_bytes(asset, 60));
+            if(variant >= 3 && variant <= 5) {
+                assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) < 0);
+                assert(errno == (variant == 4 ? ENOTSUP : EILSEQ));
+                continue;
+            }
+            assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+            assert(pvr_chunk_asset_requirements_check(&asset_view, 0) < 0);
+            assert(errno == ENOTSUP);
+            assert(pvr_chunk_asset_requirements_check(&asset_view,
+                PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS) == 0);
+            assert(pvr_chunk_asset_requirements_check(&asset_view, 2) < 0);
+            assert(errno == EINVAL);
+            assert(pvr_chunk_asset_load(&asset_view, copy_decoder, NULL,
+                workspace, sizeof(workspace), &models[0]) < 0);
+            assert(errno == ENOTSUP);
+            assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+            decoder_calls = 0;
+            assert(pvr_chunk_scene_asset_load(&scene_view, copy_decoder, NULL,
+                workspace, sizeof(workspace), models, 2, nodes, 2,
+                &hierarchy) < 0);
+            assert(errno == ENOTSUP && decoder_calls == 0);
+            memset(&layers, 0xa5, sizeof(layers));
+            sentinel = layers;
+            int rv = pvr_chunk_scene_asset_load_layers(&scene_view,
+                copy_decoder, NULL, workspace, sizeof(workspace), models, 2,
+                nodes, 2, &hierarchy, &layers);
+            if(variant == 0) {
+                assert(rv == 0 && hierarchy.node_count == 2);
+                assert(decoder_calls == 1 && layers.entry_count == 1);
+                assert(pvr_chunk_layer_section_find(&layers, 1, 0, &entry) == 0);
+                assert(entry.layer.texture.identifier == 7);
+                assert(pvr_chunk_scene_asset_load_layers(&scene_view,
+                    copy_decoder, NULL, workspace, sizeof(workspace), models, 2,
+                    nodes, 2, &hierarchy, (void *)workspace) < 0);
+                assert(errno == EINVAL);
+            }
+            else {
+                assert(rv < 0 && hierarchy.node_count == 0);
+                assert(errno == (variant == 6 ? ENOTSUP : EILSEQ));
+                assert(!memcmp(&layers, &sentinel, sizeof(layers)));
+                if(variant <= 2) {
+                    for(size_t i = 0; i < sizeof(models); ++i)
+                        assert(((uint8_t *)models)[i] == 0);
+                    for(size_t i = 0; i < sizeof(nodes); ++i)
+                        assert(((uint8_t *)nodes)[i] == 0);
+                }
+                else
+                    assert(decoder_calls == 0);
+            }
+        }
+        /* Restore the ordinary asset used by the following failure tests. */
+        asset_bytes = build_scene_asset(asset, sizeof(asset), table, table_bytes,
+            hierarchy_bytes, hierarchy_size, 1, NULL, 0);
+        assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+        assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+        assert(pvr_chunk_scene_asset_load_layers(&scene_view, copy_decoder, NULL,
+            workspace, sizeof(workspace), models, 2, nodes, 2,
+            &hierarchy, &layers) < 0 && errno == ENOENT);
+    }
     memset(models, 0xa5, sizeof(models));
     memset(nodes, 0xa5, sizeof(nodes));
     memset(&hierarchy, 0xa5, sizeof(hierarchy));
@@ -685,7 +788,7 @@ static void test_scene_asset(void) {
                &scene, &hierarchy_bytes, &hierarchy_size) == 0);
     asset_bytes = build_scene_asset(
         asset, sizeof(asset), table, table_bytes,
-        hierarchy_bytes, hierarchy_size, 1);
+        hierarchy_bytes, hierarchy_size, 1, NULL, 0);
     assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
     assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == -1);
     assert(errno == EILSEQ);

@@ -11,7 +11,10 @@
 #ifndef __DC_PVR_CHUNK_LAYER_ASSET_H
 #define __DC_PVR_CHUNK_LAYER_ASSET_H
 
-#include <dc/pvr_chunk_binding.h>
+#include <dc/pvr_chunk_layer.h>
+
+struct pvr_chunk_texture_table_view;
+struct pvr_chunk_residency_binding;
 
 __BEGIN_DECLS
 /** \addtogroup pvr_chunk_binding
@@ -91,13 +94,32 @@ int pvr_chunk_layer_section_find(const pvr_chunk_layer_section_view_t *view,
     Revalidates referenced models and checks source strip bounds. This is an
     explicit load-time gate, not a render-loop call. Texture existence and
     recipe/profile admission are checked later by resolve_layer(); callers
-    must enumerate and pin these auxiliary identifiers separately from PRT1.
-    Ordinary scene loading does not automatically consume this section or
-    select a recipe. No importer may silently discard these associations.
+    must pin these auxiliary identifiers in addition to PRT1 resources, using
+    prepare_residency() or their own ownership policy. The layer-aware scene
+    loader calls this range check before publishing a hierarchy, but does not
+    select a recipe. Ordinary scene loading rejects required layer sections.
 */
 int pvr_chunk_layer_section_validate_models(
     const pvr_chunk_layer_section_view_t *view,
     const pvr_chunk_model_view_t *models, size_t model_count);
+
+/** \brief Check every auxiliary texture against an admitted texture table.
+    This checks existence/surface validity, not surface-specific recipe policy.
+*/
+int pvr_chunk_layer_section_validate_table(
+    const pvr_chunk_layer_section_view_t *view,
+    const struct pvr_chunk_texture_table_view *textures);
+
+/** \brief Pin auxiliary textures through the existing residency adapter.
+
+    Call before beginning a PVR list, in addition to preparing base-model
+    resources. Duplicate identifiers reuse existing pins. On partial failure,
+    all acquired pins remain tracked and must be released with the ordinary
+    binding release operation. Malformed sections acquire no pins.
+*/
+int pvr_chunk_layer_section_prepare_residency(
+    const pvr_chunk_layer_section_view_t *view,
+    struct pvr_chunk_residency_binding *binding);
 
 /** @} */
 __END_DECLS
