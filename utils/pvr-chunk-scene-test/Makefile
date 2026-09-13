@@ -1,8 +1,8 @@
 CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
-CPPFLAGS += -I../pvr-chunk-binding-test/include \
-            -I../pvr-chunk-render-test/include \
+CPPFLAGS += -I../pvr-chunk-render-test/include \
+            -I../pvr-chunk-binding-test/include \
             -I../pvr-chunk-model-test/include \
             -I../pvr-model-convert \
             -I../../kernel/arch/dreamcast/include
@@ -19,6 +19,10 @@ SOURCES = pvr-chunk-scene-test.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_layer_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_uv_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_render.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_skin_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_shape_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_animation_asset.c \

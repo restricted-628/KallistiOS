@@ -27,6 +27,7 @@ __BEGIN_DECLS
 #include <dc/pvr_chunk_model_table.h>
 
 struct pvr_chunk_layer_section_view;
+struct pvr_chunk_uv_section_view;
 
 /** \addtogroup pvr_chunk_model
     @{
@@ -202,6 +203,7 @@ int pvr_chunk_scene_asset_load(
     the associations when preparing recipes and pin their textures with
     pvr_chunk_layer_section_prepare_residency() before rendering. Loading does
     not choose render passes, acquire textures or start a scene implicitly.
+    Required independent UV sections report ENOTSUP; use load_layers_uv().
 */
 int pvr_chunk_scene_asset_load_layers(
     const pvr_chunk_scene_asset_view_t *view,
@@ -211,6 +213,33 @@ int pvr_chunk_scene_asset_load_layers(
     pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
     pvr_chunk_hierarchy_t *hierarchy,
     struct pvr_chunk_layer_section_view *layers);
+
+/** \brief Load a layered scene with required independent UV associations.
+
+    Extends load_layers() with exactly one raw, directly readable PUV1 section.
+    Missing metadata reports ENOENT, duplicate sections EILSEQ, and compressed
+    or non-direct metadata ENOTSUP. PML1/PUV1 framing is admitted before geometry
+    decoding. All source counts and bound model/layer identities are checked
+    before hierarchy publication. Failure preserves both metadata outputs;
+    model/node arrays follow the ordinary loader's preflight/rollback rules.
+
+    Both outputs borrow immutable asset bytes and must be disjoint from each
+    other, all inputs, other outputs and used workspace. The existing workspace
+    query remains sufficient: UV coordinates are not expanded automatically.
+    Select sources with pvr_chunk_uv_section_find(), decode only the needed
+    sources into caller storage, and bind with pvr_chunk_uv_source_init().
+    The application must consume these associations when rendering; loading
+    does not select passes, bind UVs to draws, acquire textures or allocate RAM.
+*/
+int pvr_chunk_scene_asset_load_layers_uv(
+    const pvr_chunk_scene_asset_view_t *view,
+    pvr_chunk_asset_decoder_t decoder, void *decoder_data,
+    void *workspace, size_t workspace_bytes,
+    pvr_chunk_model_view_t *models, size_t model_capacity,
+    pvr_chunk_hierarchy_node_t *nodes, size_t node_capacity,
+    pvr_chunk_hierarchy_t *hierarchy,
+    struct pvr_chunk_layer_section_view *layers,
+    struct pvr_chunk_uv_section_view *uv);
 
 /** @} */
 

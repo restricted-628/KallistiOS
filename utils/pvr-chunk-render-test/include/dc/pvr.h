@@ -7,6 +7,7 @@
 
 #define PVR_CMD_VERTEX     UINT32_C(0xe0000000)
 #define PVR_CMD_VERTEX_EOL UINT32_C(0xf0000000)
+#define PVR_MIPBIAS_NORMAL 4
 
 typedef enum pvr_list {
     PVR_LIST_OP_POLY = 0,

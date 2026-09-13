@@ -11,10 +11,15 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added explicit UV-aware layered scene loading. PML1/PUV1 framing is checked
+  before geometry decode, and cross-section relationships before hierarchy
+  publication. Views borrow asset bytes; UV expansion stays caller-controlled.
+  Ordinary scene users do not acquire the UV codec's link-time dependency.
+
 * Added PUV1 independent UV source serialization and shared material-layer
   associations, with explicit model/layer validation and caller-owned decode.
   Required PCM2 feature gating prevents unsupported loaders from dropping UV
-  semantics. Automatic UV-aware scene loading and auxiliary import remain open.
+  semantics. Auxiliary import remains open.
 
 * Added caller-owned per-reference Compact UV sources, integrated before
   ordinary filtered/clipped rendering and prepared-cache construction. Seams

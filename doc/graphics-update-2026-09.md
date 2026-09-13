@@ -676,3 +676,44 @@ Validation:
 Next: an explicit UV-aware scene loader, auxiliary texture-manifest/recipe
 integration and importer admission. Auxiliary glTF materials are not enabled by
 this codec alone; existing image/presort and hardware gates remain separate.
+
+## September 13: UV-aware layered scene admission
+
+`pvr_chunk_scene_asset_load_layers_uv()` extends the existing coherent scene
+loader with exactly one raw/direct PML1 and PUV1 section. Both metadata payloads
+are admitted before geometry decoding. UV reference counts and bound model/layer
+identities are validated before hierarchy publication. No separate scene manager
+or automatic coordinate allocation is introduced: the existing geometry
+workspace query is sufficient, metadata views borrow immutable asset bytes,
+and the caller selects/decodes only sources it needs for runtime UV binding.
+
+Metadata outputs remain unchanged on failure. Late decoder or semantic failures
+clear model/node arrays and publish no hierarchy, while decoder workspace writes
+may remain. Ordinary/PML1-only loaders still reject required PUV1 rather than
+discarding its meaning. Compressed metadata remains explicitly unsupported by
+this direct-metadata loader, consistent with its PML1/model-table policy.
+
+The common loader uses a private admission adapter whose codec references are
+owned by the UV entry point. A pair of SH-4 link probes confirms that an ordinary
+loader executable retains no `pvr_chunk_uv_*` symbols, while the UV-aware probe
+retains the source validator. This keeps optional UV code out of ordinary scene
+users while sharing the existing publication and rollback implementation.
+
+Validation:
+
+- The expanded scene suite passes GCC 14 GNU17/strict C23, Clang GNU17/strict
+  C2x, and Clang ASan/UBSan. Twenty cases cover coherent UV-aware loading,
+  selection/decode/runtime binding, wrong model/count/layer associations,
+  inner/outer corruption, missing/duplicate/compressed metadata, capacity,
+  output aliases and a decoder which writes before returning EIO.
+- The ordinary scene integration and failure-cleanup suite passes with the
+  regenerated converter fixture. The full KOS build and SH-4 scene-test link
+  pass; the new API appears in both implementation and export archives.
+- Focused Doxygen output groups the API correctly without warnings.
+- The SH-4 scene suite passes Flycast interpreter and dynarec. These are
+  admission/numerical checks, not texture-image or physical-hardware evidence.
+
+Next is auxiliary texture-manifest/recipe integration and importer admission.
+The loader returns associations; applications still must use them when choosing
+UV sources and rendering passes. Auxiliary glTF materials remain disabled until
+the complete import/resource/render path can honor them.

@@ -7,6 +7,7 @@
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_animation_asset.h>
 #include <dc/pvr_chunk_layer_asset.h>
+#include <dc/pvr_chunk_uv_asset.h>
 
 #include "pvr-scene-ir.h"
 
@@ -18,6 +19,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifndef __DREAMCAST__
+void pvr_mod_compile(pvr_mod_hdr_t *out, pvr_list_t list, uint32_t mode,
+                     uint32_t cull) {
+    (void)out; (void)list; (void)mode; (void)cull;
+    assert(0 && "scene admission must not submit modifiers");
+}
+int pvr_prim(const void *data, size_t bytes) {
+    (void)data; (void)bytes;
+    assert(0 && "scene admission must not submit geometry");
+    return -1;
+}
+int pvr_list_prim(pvr_list_t list, const void *data, size_t bytes) {
+    (void)list;
+    return pvr_prim(data, bytes);
+}
+#endif
 
 #define VERTEX_HEADER(type, size) \
     ((uint32_t)(type) | ((uint32_t)(size) << 16))
@@ -128,13 +146,14 @@ static void init_model_record(pvr_chunk_model_table_record_t *record,
     record->radius = radius;
 }
 
-static size_t build_scene_asset(uint8_t *asset, size_t capacity,
+static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
                                 const void *table, size_t table_bytes,
                                 const void *hierarchy,
                                 size_t hierarchy_bytes,
                                 int compress_first_vertex,
-                                const void *layers, size_t layer_bytes) {
-    const size_t section_count = layers ? 7 : 6;
+                                const void *layers, size_t layer_bytes,
+                                const void *uv, size_t uv_bytes) {
+    const size_t section_count = 6 + (layers != NULL) + (uv != NULL);
     const size_t directory_bytes = section_count *
         PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
     size_t vertex0_offset = align32(
@@ -151,8 +170,11 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
     size_t layer_offset = align32(hierarchy_offset + hierarchy_bytes);
     size_t file_bytes = layers ? layer_offset + layer_bytes :
                                 hierarchy_offset + hierarchy_bytes;
+    size_t uv_offset = align32(file_bytes);
     uint8_t *directory = asset + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
 
+    if(uv)
+        file_bytes = uv_offset + uv_bytes;
     assert(file_bytes <= capacity);
     memset(asset, 0, capacity);
     memcpy(asset + vertex0_offset, scene_vertices0,
@@ -201,6 +223,15 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
                       PVR_CHUNK_ASSET_CODEC_RAW, 4);
         write_le32(entry + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
     }
+    if(uv) {
+        uint8_t *entry = directory +
+            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * (6u + (layers != NULL));
+        memcpy(asset + uv_offset, uv, uv_bytes);
+        write_section(entry, PVR_CHUNK_ASSET_SECTION_UV_SOURCES,
+                      uv_offset, uv, uv_bytes, uv_bytes,
+                      PVR_CHUNK_ASSET_CODEC_RAW, 4);
+        write_le32(entry + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
+    }
 
     write_le32(asset, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
     write_le16(asset + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
@@ -215,6 +246,16 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
     return file_bytes;
 }
 
+static size_t build_scene_asset(uint8_t *asset, size_t capacity,
+                                const void *table, size_t table_bytes,
+                                const void *hierarchy, size_t hierarchy_bytes,
+                                int compress_first_vertex,
+                                const void *layers, size_t layer_bytes) {
+    return build_scene_asset_extended(asset, capacity, table, table_bytes,
+        hierarchy, hierarchy_bytes, compress_first_vertex, layers, layer_bytes,
+        NULL, 0);
+}
+
 static size_t decoder_calls;
 
 static int copy_decoder(const pvr_chunk_asset_section_t *section,
@@ -225,6 +266,14 @@ static int copy_decoder(const pvr_chunk_asset_section_t *section,
     ++decoder_calls;
     memcpy(destination, section->stored_data, destination_bytes);
     return 0;
+}
+
+static int fail_decoder(const pvr_chunk_asset_section_t *section,
+                        void *destination, size_t destination_bytes,
+                        void *data) {
+    (void)copy_decoder(section, destination, destination_bytes, data);
+    errno = EIO;
+    return -1;
 }
 
 static void refresh_checksums(uint8_t *bytes, size_t size) {
@@ -574,6 +623,131 @@ static void test_draw_schedule_canonicalization(void) {
     pvr_scene_ir_free(&source);
 }
 
+static void test_scene_uv(const void *table, size_t table_bytes,
+                           const void *hierarchy_bytes, size_t hierarchy_size) {
+    const pvr_chunk_uv_t coordinates[] = {{-1,2},{3,4},{5,6}};
+    pvr_chunk_layer_entry_t entries[2] = {
+        {.model = 0, .strip_count = 1, .layer = {
+            .role = PVR_MATERIAL_PASS_EMISSIVE,
+            .texture = {.identifier = 7, .mipmap_adjust = PVR_MIPBIAS_NORMAL},
+            .rgb = 0xffffff, .uv = {{1,0,0},{0,1,0}}}},
+        {.model = 1, .strip_count = 1, .layer = {
+            .role = PVR_MATERIAL_PASS_LIGHTMAP,
+            .texture = {.identifier = 8, .mipmap_adjust = PVR_MIPBIAS_NORMAL},
+            .rgb = 0xffffff, .uv = {{1,0,0},{0,1,0}}}}
+    };
+    uint8_t layer_bytes[160], uv_bytes[136];
+    assert(pvr_chunk_layer_section_write(entries, 2, layer_bytes,
+                                          sizeof(layer_bytes)) == 0);
+    for(unsigned variant = 0; variant < 20; ++variant) {
+        pvr_chunk_uv_asset_source_t sources[] = {
+            {0,coordinates,3}, {variant == 2 ? 0 : 1,coordinates,
+                               variant == 3 ? 2 : 3}};
+        pvr_chunk_uv_asset_binding_t bindings[] = {{0,0},
+            {variant == 4 ? 2 : 1,1}};
+        size_t uv_size, asset_size;
+        alignas(32) uint8_t asset[4096], asset_before[4096];
+        alignas(32) uint8_t workspace[sizeof(scene_vertices1)];
+        pvr_chunk_asset_view_t asset_view;
+        pvr_chunk_scene_asset_view_t scene_view;
+        pvr_chunk_scene_asset_workspace_requirements_t required;
+        pvr_chunk_model_view_t models[2], saved_models[2];
+        pvr_chunk_hierarchy_node_t nodes[2], saved_nodes[2];
+        pvr_chunk_hierarchy_t hierarchy;
+        pvr_chunk_layer_section_view_t layers, saved_layers;
+        pvr_chunk_uv_section_view_t uv, saved_uv;
+        pvr_chunk_uv_section_view_t *out_uv = &uv;
+        assert(pvr_chunk_uv_section_query(2, 2,
+            sources[0].uv_count + sources[1].uv_count, &uv_size) == 0);
+        assert(pvr_chunk_uv_section_write(sources, 2, bindings, 2,
+                                            uv_bytes, sizeof(uv_bytes)) == 0);
+        if(variant == 1)
+            uv_bytes[32] ^= 1; /* Correct container CRC, invalid inner CRC. */
+        asset_size = build_scene_asset_extended(asset, sizeof(asset), table,
+            table_bytes, hierarchy_bytes, hierarchy_size, 1,
+            layer_bytes, sizeof(layer_bytes), uv_bytes, uv_size);
+        uint8_t *uv_descriptor = asset + 64 + 7 * 32;
+        if(variant == 5) { /* Unused second vertex stream becomes a duplicate. */
+            write_le32(asset + 64 + 2 * 32, PVR_CHUNK_ASSET_SECTION_UV_SOURCES);
+            write_le32(asset + 64 + 2 * 32 + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
+        }
+        if(variant == 6)
+            write_le16(uv_descriptor + 28, PVR_CHUNK_ASSET_CODEC_LZ4_FRAME);
+        if(variant == 7 || variant == 8) {
+            uint8_t *entry = variant == 7 ? uv_descriptor : asset + 64 + 6 * 32;
+            write_le32(entry, PVR_CHUNK_ASSET_SECTION_APPLICATION);
+            write_le32(entry + 4, 0);
+        }
+        if(variant == 9)
+            asset[read_le32(uv_descriptor + 8) + 32] ^= 1;
+        write_le32(asset + 44, crc32_bytes(asset + 64, 8 * 32));
+        write_le32(asset + 60, crc32_bytes(asset, 60));
+        assert(pvr_chunk_asset_open(asset, asset_size, &asset_view) == 0);
+        assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+        assert(pvr_chunk_scene_asset_workspace_query(&scene_view, &required) == 0);
+        assert(required.bytes == sizeof(workspace)); /* No eager UV expansion. */
+        memset(models, 0x5a, sizeof(models));
+        memcpy(saved_models, models, sizeof(models));
+        memset(nodes, 0x5a, sizeof(nodes));
+        memcpy(saved_nodes, nodes, sizeof(nodes));
+        memset(&layers, 0x5a, sizeof(layers));
+        memcpy(&saved_layers, &layers, sizeof(layers));
+        memset(&uv, 0x5a, sizeof(uv));
+        memcpy(&saved_uv, &uv, sizeof(uv));
+        memcpy(asset_before, asset, sizeof(asset));
+        if(variant == 11) out_uv = (void *)&layers;
+        if(variant == 12) out_uv = (void *)asset;
+        if(variant == 13) out_uv = (void *)models;
+        if(variant == 14) out_uv = (void *)nodes;
+        if(variant == 15) out_uv = (void *)workspace;
+        if(variant == 16) out_uv = (void *)&scene_view;
+        if(variant == 17) out_uv = (void *)&hierarchy;
+        if(variant == 19) out_uv = NULL;
+        decoder_calls = 0;
+        int result = pvr_chunk_scene_asset_load_layers_uv(&scene_view,
+            variant == 18 ? fail_decoder : copy_decoder, NULL,
+            workspace, variant == 10 ? sizeof(workspace) - 1 : sizeof(workspace),
+            models, 2, nodes, 2, &hierarchy, &layers, out_uv);
+        if(variant == 0) {
+            uint32_t selected;
+            pvr_chunk_uv_t decoded[3];
+            pvr_chunk_uv_strip_t index[1];
+            pvr_chunk_uv_source_t runtime;
+            assert(result == 0 && decoder_calls == 1);
+            assert(hierarchy.node_count == 2 && layers.entry_count == 2);
+            assert(uv.data == asset + read_le32(uv_descriptor + 8));
+            assert(pvr_chunk_uv_section_find(&uv, 1, &selected) == 0);
+            assert(selected == 1);
+            assert(pvr_chunk_uv_section_decode(&uv, selected, decoded, 3) == 0);
+            assert(!memcmp(decoded, coordinates, sizeof(coordinates)));
+            assert(pvr_chunk_uv_source_init(&models[1], decoded, 3,
+                                               index, 1, &runtime) == 0);
+            assert(runtime.model == &models[1] && runtime.uv_count == 3);
+        }
+        else {
+            int expected = variant >= 11 && variant != 18 ? EINVAL :
+                variant == 18 ? EIO : variant == 10 ? ENOSPC :
+                variant == 7 || variant == 8 ? ENOENT :
+                variant == 6 ? ENOTSUP : EILSEQ;
+            assert(result < 0 && errno == expected);
+            assert(!memcmp(&layers, &saved_layers, sizeof(layers)));
+            assert(!memcmp(&uv, &saved_uv, sizeof(uv)));
+            if((variant >= 2 && variant <= 4) || variant == 18) {
+                const uint8_t *m = (const void *)models, *n = (const void *)nodes;
+                assert(decoder_calls == 1 && hierarchy.node_count == 0);
+                for(size_t i = 0; i < sizeof(models); ++i) assert(m[i] == 0);
+                for(size_t i = 0; i < sizeof(nodes); ++i) assert(n[i] == 0);
+            }
+            else {
+                assert(decoder_calls == 0);
+                assert(!memcmp(models, saved_models, sizeof(models)));
+                assert(!memcmp(nodes, saved_nodes, sizeof(nodes)));
+            }
+        }
+        assert(!memcmp(asset, asset_before, sizeof(asset)));
+    }
+}
+
 static void test_scene_asset(void) {
     static const float child_transform[16] = {
         1.0f, 0.0f, 0.0f, 0.0f,
@@ -607,6 +781,7 @@ static void test_scene_asset(void) {
                &scene, 0, 1, child_transform) == 0);
     assert(pvr_scene_ir_serialize_hierarchy(
                &scene, &hierarchy_bytes, &hierarchy_size) == 0);
+    test_scene_uv(table, table_bytes, hierarchy_bytes, hierarchy_size);
     asset_bytes = build_scene_asset(
         asset, sizeof(asset), table, table_bytes,
         hierarchy_bytes, hierarchy_size, 1, NULL, 0);

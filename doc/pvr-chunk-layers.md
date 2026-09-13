@@ -34,6 +34,13 @@ the layer output is preserved on every failure. There is no extra persistent
 workspace, allocation or scene manager. The caller still chooses recipes and
 pins auxiliary resources; accepting the layer-aware API promises to use them.
 
+For independent coordinates, `pvr_chunk_scene_asset_load_layers_uv()` additionally
+admits one raw/direct PUV1 section and validates the combined associations before
+publication. It returns both borrowed metadata views without eagerly expanding
+UV arrays. The PML1-only loader still rejects required PUV1. Coordinate selection,
+decode and runtime binding remain explicit; see the [PUV1 loading contract](
+pvr-chunk-uv-sources.md).
+
 ## Load and preparation
 
 1. Open immutable decoded bytes with `pvr_chunk_layer_section_open()`. It
@@ -130,8 +137,9 @@ ordinary UV source. These checks establish runtime binding, not PML1 admission.
 PML1 version 1 still rejects independent selectors in its own UV-source byte.
 The separate [PUV1 section](pvr-chunk-uv-sources.md) now stores per-reference
 coordinates and explicit PML1-entry associations, with required PCM2 feature
-gating and model/layer validation. Automatic UV-aware scene loading,
-texture-manifest integration and auxiliary glTF import remain separate work.
+gating and model/layer validation. The explicit UV-aware scene loader returns
+both admitted views. Texture-manifest integration and auxiliary glTF import
+remain separate work.
 
 ## Wire layout
 

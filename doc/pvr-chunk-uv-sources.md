@@ -26,12 +26,30 @@ PCM2 section type 17 (`PVR_CHUNK_ASSET_SECTION_UV_SOURCES`) must carry
 Acknowledgment only checks understood section requirements: it does not decode
 or validate the UV payload or its model/layer relationships.
 
-Geometry-only and existing layer-aware scene loaders reject this required
+Geometry-only and PML1-only scene loaders reject this required
 feature with `ENOTSUP`, before geometry decoding. They must not silently render
-with canonical UVs instead. An automatic UV-aware scene loader and auxiliary
-glTF material import are still separate work.
+with canonical UVs instead.
 
-The explicit load-time sequence is:
+`pvr_chunk_scene_asset_load_layers_uv()` admits scenes with both associations.
+It requires exactly one raw, directly readable PML1 and PUV1 section, validates
+their framing before invoking a geometry decoder, and validates all UV/model/
+layer relationships before publishing the hierarchy. Missing metadata reports
+`ENOENT`, duplicates `EILSEQ`, and compressed/non-direct metadata `ENOTSUP`.
+The existing scene workspace query is unchanged: metadata views borrow the
+immutable asset bytes, while UV expansion remains explicit. Decode only sources
+that will be used, and share them among the corresponding layers.
+
+Both metadata outputs are preserved on failure. If a geometry decode or
+model-dependent semantic check fails after loading begins, model/node outputs
+are cleared and no hierarchy is published; decoder writes to workspace may
+remain. Aliased UV metadata outputs are rejected before writing them or decoding
+geometry. No textures, passes, runtime UV arrays or scene lifecycle are created
+by loading. A caller choosing this API must consume the returned associations
+when rendering. Auxiliary glTF material import remains separate work.
+
+For a scene, the new loader performs steps 1-3 below for directly readable
+metadata and the existing geometry workspace. For custom section consumers,
+the equivalent explicit load-time sequence is:
 
 1. Open the PCM2 container, acknowledge its required features, and decode its
    sections into disjoint caller-owned storage using the section codec APIs.
@@ -105,6 +123,7 @@ fields, multiple/shared sources, lookup gaps, output preservation and aliases.
 It also validates actual PML1/model relationships, decodes coordinates, and
 checks the real renderer's output UVs across reversed strips and shared IDs.
 
-The scene suite checks that unsupported loaders reject required UV sources
-before invoking a decoder. These numerical and admission tests are not texture
+The scene suite checks both rejection by unsupported loaders and coherent
+UV-aware publication/rollback, including metadata aliases and a decoder that
+writes before failing. These numerical and admission tests are not texture
 image, importer-conformance, presort, or physical-hardware proof.
