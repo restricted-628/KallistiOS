@@ -643,7 +643,7 @@ static void test_scene_asset(void) {
                 .rgb = 0x123456, .uv = { {1,0,0}, {0,1,0} } } };
         pvr_chunk_layer_section_view_t layers, sentinel;
         uint8_t *descriptor = asset + 64 + 6 * 32;
-        for(unsigned variant = 0; variant < 8; ++variant) {
+        for(unsigned variant = 0; variant < 10; ++variant) {
             entry.model = variant == 1 ? 2 : 1;
             entry.strip_count = variant == 2 ? 2 : 1;
             assert(pvr_chunk_layer_section_write(
@@ -661,9 +661,13 @@ static void test_scene_asset(void) {
                 write_le16(descriptor + 28, PVR_CHUNK_ASSET_CODEC_LZ4_FRAME);
             if(variant == 7) /* Payload corruption, outer CRC left unchanged. */
                 asset[read_le32(descriptor + 8) + 24] ^= 1;
+            if(variant >= 8) /* Framing alone does not consume UV semantics. */
+                write_le32(descriptor, PVR_CHUNK_ASSET_SECTION_UV_SOURCES);
+            if(variant == 9)
+                write_le32(descriptor + 4, 0);
             write_le32(asset + 44, crc32_bytes(asset + 64, 7 * 32));
             write_le32(asset + 60, crc32_bytes(asset, 60));
-            if(variant >= 3 && variant <= 5) {
+            if((variant >= 3 && variant <= 5) || variant == 9) {
                 assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) < 0);
                 assert(errno == (variant == 4 ? ENOTSUP : EILSEQ));
                 continue;
@@ -671,9 +675,25 @@ static void test_scene_asset(void) {
             assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
             assert(pvr_chunk_asset_requirements_check(&asset_view, 0) < 0);
             assert(errno == ENOTSUP);
+            if(variant == 8) {
+                assert(pvr_chunk_asset_requirements_check(&asset_view,
+                    PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS) < 0);
+                assert(errno == ENOTSUP);
+                assert(pvr_chunk_asset_requirements_check(&asset_view,
+                    PVR_CHUNK_ASSET_FEATURE_UV_SOURCES) == 0);
+                assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+                decoder_calls = 0;
+                layers = sentinel;
+                assert(pvr_chunk_scene_asset_load_layers(&scene_view,
+                    copy_decoder, NULL, workspace, sizeof(workspace), models, 2,
+                    nodes, 2, &hierarchy, &layers) < 0);
+                assert(errno == ENOTSUP && decoder_calls == 0);
+                assert(!memcmp(&layers, &sentinel, sizeof(layers)));
+                continue;
+            }
             assert(pvr_chunk_asset_requirements_check(&asset_view,
                 PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS) == 0);
-            assert(pvr_chunk_asset_requirements_check(&asset_view, 2) < 0);
+            assert(pvr_chunk_asset_requirements_check(&asset_view, 4) < 0);
             assert(errno == EINVAL);
             assert(pvr_chunk_asset_load(&asset_view, copy_decoder, NULL,
                 workspace, sizeof(workspace), &models[0]) < 0);

@@ -233,7 +233,8 @@ static int parse_pcm2_section(
     size_t end;
 
     if(!type || (flags & ~PVR_CHUNK_ASSET_SECTION_REQUIRED) ||
-       (type == PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS &&
+       ((type == PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS ||
+         type == PVR_CHUNK_ASSET_SECTION_UV_SOURCES) &&
         flags != PVR_CHUNK_ASSET_SECTION_REQUIRED) || !stored || !decoded ||
        !power_of_two(alignment) || alignment > PVR_CHUNK_ASSET_ALIGNMENT ||
        offset < minimum_offset ||
@@ -242,7 +243,8 @@ static int parse_pcm2_section(
         errno = EILSEQ;
         return -1;
     }
-    if(flags && type != PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS) {
+    if(flags && type != PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS &&
+       type != PVR_CHUNK_ASSET_SECTION_UV_SOURCES) {
         errno = ENOTSUP;
         return -1;
     }
@@ -701,7 +703,8 @@ int pvr_chunk_asset_requirements_check(const pvr_chunk_asset_view_t *view,
                                       uint32_t supported_features) {
     pvr_chunk_asset_view_t checked;
     if(!view || (supported_features &
-                 ~PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS)) {
+                 ~(PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS |
+                   PVR_CHUNK_ASSET_FEATURE_UV_SOURCES))) {
         errno = EINVAL;
         return -1;
     }
@@ -714,8 +717,11 @@ int pvr_chunk_asset_requirements_check(const pvr_chunk_asset_view_t *view,
     for(size_t i = 0; i < checked.section_count; ++i) {
         const uint8_t *entry = (const uint8_t *)checked.section_directory +
                               i * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
-        if(read_le32(entry + 4) &&
-           !(supported_features & PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS)) {
+        uint32_t feature =
+            read_le32(entry) == PVR_CHUNK_ASSET_SECTION_UV_SOURCES ?
+            PVR_CHUNK_ASSET_FEATURE_UV_SOURCES :
+            PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS;
+        if(read_le32(entry + 4) && !(supported_features & feature)) {
             errno = ENOTSUP;
             return -1;
         }

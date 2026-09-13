@@ -88,14 +88,18 @@ typedef enum pvr_chunk_asset_section_type {
     PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION = 13,
     PVR_CHUNK_ASSET_SECTION_ANIMATION_CATALOG = 14,
     PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES = 15,
-    PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS = 16
+    PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS = 16,
+    /** Independent UV sources and PML1 entry associations (PUV1). */
+    PVR_CHUNK_ASSET_SECTION_UV_SOURCES = 17
 } pvr_chunk_asset_section_type_t;
 
 /** Required rendering meaning; older readers reject this formerly zero bit.
-    Currently mandatory and permitted only for MATERIAL_LAYERS sections. */
+    Mandatory for MATERIAL_LAYERS and UV_SOURCES sections. */
 #define PVR_CHUNK_ASSET_SECTION_REQUIRED UINT32_C(1)
 /** Explicit loader support for PML1 auxiliary material associations. */
 #define PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS UINT32_C(1)
+/** \brief Consumer understands PUV1 associations and independent UV sources. */
+#define PVR_CHUNK_ASSET_FEATURE_UV_SOURCES UINT32_C(2)
 
 /** \brief First section identifier reserved for application-defined data. */
 #define PVR_CHUNK_ASSET_SECTION_APPLICATION UINT32_C(0x80000000)

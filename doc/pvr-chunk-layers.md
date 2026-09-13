@@ -127,10 +127,11 @@ Writable render/cache destinations may not overlap that borrowed storage.
 Two-volume/modifier/cached-control stream families remain unsupported by this
 ordinary UV source. These checks establish runtime binding, not PML1 admission.
 
-PML1 version 1 still rejects independent selectors. The next step is explicit
-serialized per-corner storage and layer associations, then texture-manifest and
-importer integration. No auxiliary glTF material has been enabled by the runtime
-UV source alone.
+PML1 version 1 still rejects independent selectors in its own UV-source byte.
+The separate [PUV1 section](pvr-chunk-uv-sources.md) now stores per-reference
+coordinates and explicit PML1-entry associations, with required PCM2 feature
+gating and model/layer validation. Automatic UV-aware scene loading,
+texture-manifest integration and auxiliary glTF import remain separate work.
 
 ## Wire layout
 

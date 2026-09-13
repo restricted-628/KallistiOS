@@ -631,3 +631,48 @@ Validation:
 - The expanded target suite passes Flycast interpreter and dynarec. These are
   numerical/packet assertions, not texture-image or physical-hardware proof;
   existing image/presort and real-hardware gates remain open.
+
+## September 13: serialized independent UV sources and layer associations
+
+The PUV1 codec stores full-model per-reference binary32 coordinate sources and
+sorted PML1-entry-to-source bindings. Layers can share a source without copying
+its coordinates; distinct sources can target the same model. The source order
+matches the runtime UV path before reversed-strip winding correction. PML1's
+existing bytes, Compact streams and prepared-cache layouts remain unchanged.
+
+Seven exported APIs query, write, admit, look up, inspect, decode and validate
+these sections. Serialization preflights every source and binding before
+writing; structural admission checks exact framing, two CRCs, dense source
+ranges, sorted unique bindings and finite UVs. Explicit semantic validation
+checks PML1 ranges, model identity and full-model reference counts. Callers
+decode into their own UV storage and bind it through the existing renderer or
+cache builder. No thread, allocation, pinning or persistent manager is added.
+
+PCM2 section type 17 carries a mandatory required flag and its own feature bit.
+Geometry-only and existing layer-aware loaders reject it before decoding rather
+than silently losing UV meaning. Feature acknowledgment is not a substitute for
+payload/model/layer validation. The complete layout and explicit loading steps
+are in [the PUV1 contract](pvr-chunk-uv-sources.md).
+
+Validation:
+
+- The new codec suite passes GCC 14 GNU17/strict C23 and Clang GNU17/strict C2x,
+  plus Clang ASan/UBSan. It includes a fixed independent byte/CRC golden,
+  truncation/corruption sweeps, repaired-CRC semantic failures, multiple/shared
+  sources, lookup gaps, late invalid coordinates and output/alias preservation.
+- A PML1/model round-trip decodes coordinates into the actual UV renderer and
+  checks seams and reversed-strip output numerically. Wrong model identities,
+  reference counts and layer ordinals fail explicit semantic validation.
+- Existing container tests pass GCC GNU17. Expanded scene tests pass GCC GNU17,
+  GCC strict C23 and Clang strict C2x, including required-feature rejection before
+  a decoder can run.
+- KOS kernel/archive build and target fixture link pass; all seven functions
+  occur in implementation and module-export archives. Focused Doxygen output
+  places them in the rendering group (the limited input set omits its outer
+  geometry group and produces that existing group warning).
+- The target fixture passes Flycast interpreter and dynarec. These are
+  numerical/admission assertions, not texture-image or physical-hardware proof.
+
+Next: an explicit UV-aware scene loader, auxiliary texture-manifest/recipe
+integration and importer admission. Auxiliary glTF materials are not enabled by
+this codec alone; existing image/presort and hardware gates remain separate.

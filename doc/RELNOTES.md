@@ -11,10 +11,15 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added PUV1 independent UV source serialization and shared material-layer
+  associations, with explicit model/layer validation and caller-owned decode.
+  Required PCM2 feature gating prevents unsupported loaders from dropping UV
+  semantics. Automatic UV-aware scene loading and auxiliary import remain open.
+
 * Added caller-owned per-reference Compact UV sources, integrated before
   ordinary filtered/clipped rendering and prepared-cache construction. Seams
   and reversed strip order are preserved without growing model/cache layouts.
-  Independent UV serialization and auxiliary glTF import remain separate work.
+  Auxiliary glTF import remains separate work.
 
 * Centralized host-side Compact UV baking and added relative auxiliary-map
   preparation with explicit independent-coordinate fallback. Converter tests
