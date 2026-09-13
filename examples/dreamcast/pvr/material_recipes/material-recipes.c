@@ -16,6 +16,9 @@ KOS_INIT_FLAGS(INIT_DEFAULT);
 
 static uint16_t pixels[64 * 64];
 static pvr_material_recipe_t recipes[4];
+#if RECIPE_LAYERS
+static pvr_chunk_material_layer_t layers[4];
+#endif
 
 static void upload_constant(pvr_txr_surface_t *surface, uint16_t value) {
     for(size_t i = 0; i < 64 * 64; ++i)
@@ -31,7 +34,8 @@ static void upload_constant(pvr_txr_surface_t *surface, uint16_t value) {
 }
 
 static void rectangle(float x, float y, float w, float h, float z,
-                       uint32_t argb, uint32_t oargb) {
+                       uint32_t argb, uint32_t oargb,
+                       const pvr_chunk_material_layer_t *layer) {
     alignas(32) pvr_vertex_t v[4] = {
         { .flags = PVR_CMD_VERTEX, .x = x, .y = y + h, .z = z,
           .u = 0, .v = 1, .argb = argb, .oargb = oargb },
@@ -43,6 +47,17 @@ static void rectangle(float x, float y, float w, float h, float z,
           .u = 1, .v = 0, .argb = argb, .oargb = oargb }
     };
     pvr_geometry_vertex_sink_t sink;
+    if(layer) {
+        for(size_t i = 0; i < 4; ++i) {
+            pvr_vertex_t original = v[i];
+            assert(pvr_chunk_material_layer_prepare_vertex(
+                layer, &v[i], &v[i]) == 0);
+            assert(!memcmp(&original, &v[i], 4 * sizeof(uint32_t)));
+            assert(v[i].u == 2 * original.u + .25f);
+            assert(v[i].v == .5f * original.v - .25f);
+            assert(v[i].argb == argb && v[i].oargb == 0);
+        }
+    }
     assert(pvr_geometry_vertex_sink_init_current(
         &sink, PVR_GEOMETRY_VERTEX_CANONICAL) == 0);
     assert(pvr_geometry_vertex_sink_emit(&sink, v, 4) == 0);
@@ -57,9 +72,17 @@ static void draw_step(size_t object, size_t step) {
     /* Zero-angle bump texels with overhead lighting produce K1 = 128/255.
        The RGB result should be half-bright, without losing surface alpha. */
     uint32_t offset = bump ? pvr_pack_bump(.5f, F_PI / 2, 0) : 0;
+    const pvr_chunk_material_layer_t *layer = NULL;
+#if RECIPE_LAYERS
+    if(pass->role == PVR_MATERIAL_PASS_LIGHTMAP ||
+       pass->role == PVR_MATERIAL_PASS_EMISSIVE) {
+        layer = &layers[object];
+        assert(layer->role == pass->role);
+    }
+#endif
     assert(pvr_material_submit(&pass->material) == 0);
     rectangle(object % 2 ? 352 : 40, object / 2 ? 272 : 64,
-              248, 144, .5f, color, offset);
+              248, 144, .5f, color, offset, layer);
 }
 
 #if RECIPE_VERIFY_PIXELS
@@ -144,7 +167,10 @@ int main(void) {
                          "recipe profiles: trilinear/bump");
     for(size_t i = 0; i < 4; ++i) {
         pvr_poly_cxt_t layer;
-        pvr_chunk_material_context_t resolved_surface, resolved_layer;
+        pvr_chunk_material_context_t resolved_surface;
+#if !RECIPE_LAYERS
+        pvr_chunk_material_context_t resolved_layer;
+#endif
         pvr_material_recipe_t reference;
         pvr_chunk_render_state_t state = { 0 };
         pvr_chunk_strip_view_t strip = { 0 };
@@ -174,14 +200,17 @@ int main(void) {
         layer.txr.base = auxiliary.vram;
         layer.txr.mipmap = false;
         layer.txr.mipmap_bias = PVR_MIPBIAS_NORMAL;
-        state.texture.identifier = 19;
-        assert(pvr_chunk_material_resolve_context(
-            &resolved_layer, &context, &textures, &state, &strip) == 0);
-        assert(resolved_layer.context.txr.base == auxiliary.vram);
+        layers[i] = (pvr_chunk_material_layer_t){
+            .role = i < 2 ? PVR_MATERIAL_PASS_LIGHTMAP :
+                            PVR_MATERIAL_PASS_EMISSIVE,
+            .texture = { .identifier = 19, .filter = PVR_FILTER_BILINEAR,
+                         .mipmap_adjust = PVR_MIPBIAS_NORMAL },
+            .rgb = UINT32_C(0x00ffffff),
+            .uv = { { 2, 0, .25f }, { 0, .5f, -.25f } }
+        };
         assert(compile(&reference, &context, &layer, 0, 0) == 0);
-        assert(compile(&recipes[i], &resolved_surface.context,
-                       &resolved_layer.context, resolved_surface.compile_flags,
-                       resolved_layer.compile_flags) == 0);
+        assert(pvr_chunk_material_resolve_layer(
+            &recipes[i], &resolved_surface, &textures, &layers[i]) == 0);
 #else
         if(i < 2) {
             assert(pvr_material_compile_trilinear(&reference, &context, 0) == 0);
@@ -249,8 +278,8 @@ int main(void) {
         draw_step(0, 0);
         draw_step(2, 0);
         assert(pvr_material_submit(&occluder) == 0);
-        rectangle(156, 64, 16, 144, 1, 0xff202020, 0);
-        rectangle(156, 272, 16, 144, 1, 0xff202020, 0);
+        rectangle(156, 64, 16, 144, 1, 0xff202020, 0, NULL);
+        rectangle(156, 272, 16, 144, 1, 0xff202020, 0, NULL);
         assert(pvr_list_finish() == 0);
         assert(pvr_list_begin(PVR_LIST_TR_POLY) == 0);
         draw_step(0, 1);

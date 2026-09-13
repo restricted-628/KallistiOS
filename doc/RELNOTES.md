@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added caller-owned Compact auxiliary layer descriptors and checked recipe/
+  vertex preparation for lightmaps and emission. They reuse texture tables,
+  preserve independent sampling and geometry/depth, enforce neutral layer
+  alpha and clear offset color without allocation or startup work. The example
+  checks explicit-context header equivalence and nonidentity UV mapping.
+  Serialized auxiliary material associations/import remain separate work.
+
 * Added authored unlit Compact materials and glTF `KHR_materials_unlit` import.
   Standard raw/prepared policy bindings bypass lighting and clear specular,
   while checked material contexts retain alpha and culling behavior. The flag

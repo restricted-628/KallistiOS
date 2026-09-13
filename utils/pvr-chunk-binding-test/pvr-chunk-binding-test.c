@@ -8,6 +8,8 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <float.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -1051,7 +1053,103 @@ static void test_residency_binding(void) {
     assert(slots[0].pin_count == 0 && slots[1].pin_count == 0);
 }
 
+static void test_material_layer(void) {
+    pvr_txr_surface_t texture = make_surface(0x1000,
+                                               PVR_TXR_SURFACE_RGB565, 1);
+    pvr_chunk_texture_binding_t entry = { 19, 0, &texture };
+    pvr_chunk_texture_table_t table = { &entry, 1 };
+    pvr_chunk_texture_table_view_t textures;
+    pvr_chunk_material_context_t surface = { 0 };
+    pvr_chunk_material_layer_t layer = {
+        .role = PVR_MATERIAL_PASS_LIGHTMAP,
+        .texture = { .identifier = 19, .filter = PVR_FILTER_BILINEAR,
+                     .supersample = 1, .mipmap_adjust = PVR_MIPBIAS_1_25 },
+        .rgb = UINT32_C(0x00123456),
+        .uv = { { 2, -1, .5f }, { .25f, 4, -1 } }
+    };
+    pvr_material_recipe_t recipe, unchanged;
+    pvr_vertex_t source = { .flags = PVR_CMD_VERTEX_EOL,
+        .x = 1, .y = -4, .z = .5f, .u = -2, .v = 3,
+        .argb = UINT32_C(0x80402010), .oargb = UINT32_MAX };
+    pvr_vertex_t output, previous;
+
+    assert(pvr_chunk_texture_table_open(&table, &textures) == 0);
+    surface.context = make_context(0);
+    for(unsigned translucent = 0; translucent < 2; ++translucent) {
+        surface.context.list_type = translucent ? PVR_LIST_TR_POLY :
+                                                 PVR_LIST_OP_POLY;
+        surface.context.gen.alpha = translucent;
+        surface.context.blend.src = translucent ? PVR_BLEND_SRCALPHA :
+                                                 PVR_BLEND_ONE;
+        surface.context.blend.dst = translucent ? PVR_BLEND_INVSRCALPHA :
+                                                 PVR_BLEND_ZERO;
+        for(unsigned emission = 0; emission < 2; ++emission) {
+            layer.role = emission ? PVR_MATERIAL_PASS_EMISSIVE :
+                                    PVR_MATERIAL_PASS_LIGHTMAP;
+            assert(pvr_chunk_material_resolve_layer(
+                &recipe, &surface, &textures, &layer) == 0);
+            assert(recipe.pass_count == (translucent ? 3u : 2u));
+            assert(recipe.passes[1].role == layer.role);
+            assert(recipe.requires_presort);
+            if(!translucent) {
+                assert(compiled_context.txr.base == texture.vram);
+                assert(compiled_context.txr.mipmap_bias == PVR_MIPBIAS_1_25);
+                assert(compiled_flags == PVR_COMPILE_SUPERSAMPLE);
+                assert(!compiled_context.gen.specular);
+            }
+            output = source;
+            assert(pvr_chunk_material_layer_prepare_vertex(
+                &layer, &output, &output) == 0);
+            assert(!memcmp(&source, &output, 4 * sizeof(uint32_t)));
+            assert(output.u == -6.5f && output.v == 10.5f);
+            assert(output.argb == (emission ? UINT32_C(0x00123456) :
+                                             UINT32_C(0xff123456)));
+            assert(output.oargb == 0);
+        }
+    }
+    unchanged = recipe;
+    layer.texture.identifier = 18;
+    errno = 0;
+    assert(pvr_chunk_material_resolve_layer(
+        &recipe, &surface, &textures, &layer) == -1);
+    assert(errno == ENOENT && !memcmp(&recipe, &unchanged, sizeof(recipe)));
+    layer.texture.identifier = 19;
+    compile_failure = 1;
+    assert(pvr_chunk_material_resolve_layer(
+        &recipe, &surface, &textures, &layer) == -1);
+    assert(!memcmp(&recipe, &unchanged, sizeof(recipe)));
+    compile_failure = 0;
+    layer.texture.filter = PVR_FILTER_TRILINEAR1;
+    assert(pvr_chunk_material_resolve_layer(
+        &recipe, &surface, &textures, &layer) == -1);
+    assert(!memcmp(&recipe, &unchanged, sizeof(recipe)));
+    layer.texture.filter = PVR_FILTER_BILINEAR;
+
+    previous = output;
+    layer.rgb |= UINT32_C(0xff000000);
+    assert(pvr_chunk_material_layer_prepare_vertex(&layer, &source, &output) == -1);
+    assert(!memcmp(&output, &previous, sizeof(output)));
+    layer.rgb = 0;
+    layer.role = PVR_MATERIAL_PASS_SURFACE;
+    assert(pvr_chunk_material_layer_prepare_vertex(&layer, &source, &output) == -1);
+    layer.role = PVR_MATERIAL_PASS_EMISSIVE;
+    layer.uv[0][0] = NAN;
+    errno = 0;
+    assert(pvr_chunk_material_layer_prepare_vertex(&layer, &source, &output) == -1);
+    assert(errno == EDOM && !memcmp(&output, &previous, sizeof(output)));
+    layer.uv[0][0] = FLT_MAX;
+    errno = 0;
+    assert(pvr_chunk_material_layer_prepare_vertex(&layer, &source, &output) == -1);
+    assert(errno == ERANGE && !memcmp(&output, &previous, sizeof(output)));
+    layer.uv[0][0] = 1;
+    source.v = INFINITY;
+    errno = 0;
+    assert(pvr_chunk_material_layer_prepare_vertex(&layer, &source, &output) == -1);
+    assert(errno == EDOM && !memcmp(&output, &previous, sizeof(output)));
+}
+
 int main(void) {
+    test_material_layer();
     test_table();
     test_resolve();
     test_resolved_context();

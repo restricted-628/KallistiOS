@@ -108,8 +108,50 @@ Texture identity is not a shading role. One resource may serve different roles
 in different draws. Unlit and environment-map vertex policies already exist;
 this API does not introduce per-material authored role metadata, automatic
 shader selection, another material manager, or a model-format revision.
-The layer recipes provide explicit lightmap/emissive composition; importing
-authored roles and selecting those recipes from assets remain separate work.
+The layer recipes provide explicit lightmap/emissive composition. Authored
+unlit base-color import is supported; importing auxiliary roles and selecting
+their recipes from serialized assets remain separate work.
+
+## Auxiliary layer preparation
+
+`pvr_chunk_material_layer_t` is optional caller-owned metadata for one textured
+lightmap or emission input: role, existing texture/sampler state, RGB tint, and
+two affine UV rows. It does not assign a global role to a texture identifier,
+allocate storage on every strip, or change any serialized model/cache layout.
+Applications associate the descriptor with their selected draw/material.
+
+Pass an already-resolved surface plus the layer descriptor and existing texture
+table to `pvr_chunk_material_resolve_layer()`. The helper resolves the auxiliary
+surface, including palette and texture address conventions, and calls the
+existing checked recipe compiler. Surface and layer sampling flags remain
+independent; the surface's stream mip override cannot leak into the layer.
+Unsupported trilinear/bump/two-volume/coverage combinations remain errors under
+the recipe contract. Failure preserves the previous recipe. All input storage
+must be disjoint from output and remain valid while used.
+
+For the recipe's auxiliary step, supply canonical geometry and the chosen UV
+set to `pvr_chunk_material_layer_prepare_vertex()`. It maps UVs, supplies the
+unlit constant tint, sets role-specific neutral alpha, clears offset color, and
+copies command, position and depth unchanged. It supports in-place use and
+leaves output unchanged on invalid metadata, nonfinite UVs or mapped overflow.
+The same helper works after raw or prepared geometry generation. It does not
+select a UV attribute set, run lighting, clip geometry, or submit anything.
+UV mapping must follow the same clipped geometry; never rerun surface lighting
+on the layer or multiply the tint by the already-lit surface color.
+
+Use identity rows `{{1,0,0},{0,1,0}}` when no UV transformation is needed, and
+`0x00ffffff` for an untinted layer. Lightmap vertex alpha is 255, emission alpha
+is zero, independent of the source surface opacity. Constant-color vertex
+tests cover a nonidentity transform; the example checks headers against an
+explicit-context reference and verifies position/depth preservation on target.
+
+Preparation adds no allocation, worker, scene owner, resource pin or hidden
+cache. Pin **both** resource inputs until rendering completes. The existing
+PRT1 manifest still describes only texture usage in the polygon streams and
+does not automatically pin a layer supplied out of band. The descriptor is
+not a binary asset record: per-material association, independent UV-set data,
+and importer/loader validation are required before auxiliary glTF materials
+can be admitted. Those imports remain rejected until that path is implemented.
 
 ## Renderer integration
 

@@ -635,6 +635,94 @@ int pvr_chunk_material_resolve_context(
                             strip);
 }
 
+static int material_layer_valid(const pvr_chunk_material_layer_t *layer) {
+    if(!layer ||
+       (layer->role != PVR_MATERIAL_PASS_LIGHTMAP &&
+        layer->role != PVR_MATERIAL_PASS_EMISSIVE) ||
+       (layer->rgb & UINT32_C(0xff000000)) ||
+       layer->texture.identifier > PVR_CHUNK_TEXTURE_IDENTIFIER_MAX ||
+       layer->texture.filter > PVR_FILTER_BILINEAR ||
+       layer->texture.supersample > 1u ||
+       layer->texture.uv_flip > PVR_UVFLIP_UV ||
+       layer->texture.uv_clamp > PVR_UVCLAMP_UV ||
+       layer->texture.mipmap_adjust < PVR_MIPBIAS_0_25 ||
+       layer->texture.mipmap_adjust > PVR_MIPBIAS_3_75) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(size_t row = 0; row < 2; ++row) {
+        for(size_t column = 0; column < 3; ++column) {
+            if(!isfinite(layer->uv[row][column])) {
+                errno = EDOM;
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+int pvr_chunk_material_resolve_layer(
+        pvr_material_recipe_t *recipe,
+        const pvr_chunk_material_context_t *surface,
+        const pvr_chunk_texture_table_view_t *textures,
+        const pvr_chunk_material_layer_t *layer) {
+    pvr_chunk_render_state_t state = { 0 };
+    resolved_texture_t texture;
+    pvr_poly_cxt_t auxiliary;
+
+    if(!recipe || !surface) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(material_layer_valid(layer) < 0 ||
+       resolve_texture(textures, &state, &layer->texture,
+                       PVR_COMPILE_SUPERSAMPLE, &texture) < 0)
+        return -1;
+    /* No stream mip override: each input owns its sampling. The recipe keeps
+       surface geometry policy and supplies the layer's neutral alpha state. */
+    auxiliary = surface->context;
+    apply_primary_texture(&auxiliary, &texture);
+    if(layer->role == PVR_MATERIAL_PASS_LIGHTMAP)
+        return pvr_material_compile_lightmap(recipe, &surface->context,
+                                             &auxiliary,
+                                             surface->compile_flags,
+                                             texture.compile_flag);
+    return pvr_material_compile_emissive(recipe, &surface->context, &auxiliary,
+                                         surface->compile_flags,
+                                         texture.compile_flag);
+}
+
+int pvr_chunk_material_layer_prepare_vertex(
+        const pvr_chunk_material_layer_t *layer,
+        const pvr_vertex_t *source, pvr_vertex_t *output) {
+    pvr_vertex_t candidate;
+
+    if(!source || !output) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(material_layer_valid(layer) < 0)
+        return -1;
+    if(!isfinite(source->u) || !isfinite(source->v)) {
+        errno = EDOM;
+        return -1;
+    }
+    candidate = *source;
+    candidate.u = layer->uv[0][0] * source->u +
+                  layer->uv[0][1] * source->v + layer->uv[0][2];
+    candidate.v = layer->uv[1][0] * source->u +
+                  layer->uv[1][1] * source->v + layer->uv[1][2];
+    if(!isfinite(candidate.u) || !isfinite(candidate.v)) {
+        errno = ERANGE;
+        return -1;
+    }
+    candidate.argb = layer->rgb |
+        (layer->role == PVR_MATERIAL_PASS_LIGHTMAP ? UINT32_C(0xff000000) : 0);
+    candidate.oargb = 0;
+    *output = candidate;
+    return 0;
+}
+
 int pvr_chunk_material_binding_init(
         pvr_chunk_material_binding_t *binding,
         const pvr_poly_cxt_t *base_context,

@@ -266,6 +266,52 @@ int pvr_chunk_material_resolve_context(
     const pvr_chunk_render_state_t *state,
     const pvr_chunk_strip_view_t *strip);
 
+/** \brief Optional caller-owned auxiliary material input.
+
+    Only LIGHTMAP and EMISSIVE roles are admitted. Texture identifiers remain
+    resource identities, not global roles. rgb is an unlit 0x00RRGGBB tint;
+    role determines vertex alpha. The affine UV rows map the supplied source
+    coordinates: u' = row[0]*u + row[1]*v + row[2], and likewise for v'.
+    Use {{1,0,0},{0,1,0}} for identity. This is runtime metadata, not a wire
+    format or an implicit extension of a model's resource manifest.
+*/
+typedef struct pvr_chunk_material_layer {
+    pvr_material_pass_role_t role;
+    pvr_chunk_texture_state_t texture;
+    uint32_t rgb;
+    float uv[2][3];
+} pvr_chunk_material_layer_t;
+
+/** \brief Resolve an auxiliary texture and compile its bounded layer recipe.
+
+    Reuses a previously resolved surface, the existing texture table and
+    lightmap/emissive recipe admission. Sampling and mip bias come from layer,
+    not the surface's stream state. No geometry, UVs or scene state are changed.
+    Keep both VRAM inputs alive through render completion; residency users must
+    explicitly pin the auxiliary identifier as well. Output must not overlap
+    borrowed inputs, and remains unchanged on every failure. No allocation.
+*/
+int pvr_chunk_material_resolve_layer(
+    pvr_material_recipe_t *recipe,
+    const pvr_chunk_material_context_t *surface,
+    const pvr_chunk_texture_table_view_t *textures,
+    const pvr_chunk_material_layer_t *layer);
+
+/** \brief Prepare one auxiliary-step vertex from canonical geometry.
+
+    Copies command/position/depth exactly, maps the supplied UVs, sets unlit
+    tint with alpha 255 (lightmap) or zero (emission), and clears offset color.
+    The caller supplies the chosen UV set before this call; it does not select
+    mesh attributes or multiply by already-lit surface color. Use only for
+    the recipe's auxiliary step, not its surface or resolve steps.
+    In-place use is allowed. Invalid metadata/UVs or nonfinite mapped UVs leave
+    output unchanged. This is not a substitute for geometry/sink validation;
+    preserve identical clipping, coverage and depth across recipe steps.
+*/
+int pvr_chunk_material_layer_prepare_vertex(
+    const pvr_chunk_material_layer_t *layer,
+    const pvr_vertex_t *source, pvr_vertex_t *output);
+
 /** \brief Initialize a stateless material submission adapter.
 
     `destination` must be a current-list or explicit buffered-list sink kind.

@@ -44,6 +44,15 @@ the bump surface to identifier 19. It resolves their contexts through
 recipe compilers. Before rendering, all four recipes' TA headers, roles and
 list metadata must match an independent explicit-context construction. The
 packet-comparison PASS marker is separate from submission and image checks.
+In layered mode, caller-owned `pvr_chunk_material_layer_t` descriptors instead
+carry identifier 19, independent sampling, the lightmap/emission role and tint.
+`pvr_chunk_material_resolve_layer()` compiles the recipes, and
+`pvr_chunk_material_layer_prepare_vertex()` maps auxiliary UVs with
+`u'=2u+.25`, `v'=.5v-.25` while preserving command/position/depth bit-for-bit.
+Assertions check these values and the required alpha against the explicit
+fixture expectations. Constant textures isolate composition; this does not
+test a varying-texture seam or interpolation image.
+
 Both texture allocations remain alive until the final render completes.
 This demonstrates caller-selected material inputs, not a new asset format or
 automatic shader-role selection.

@@ -53,7 +53,8 @@ individually valid headers forms a correct accumulation recipe.
    Checked reusable context resolution now connects distinct texture inputs
    to existing bump/trilinear recipes. Bounded lightmap/emissive composition is
    now implemented too. Authored unlit metadata/import is now implemented;
-   auxiliary per-material texture roles remain open;
+   auxiliary runtime layer descriptors and preparation are implemented, while
+   serialized per-material texture roles/import remain open;
    see the September 10 entries below.
 5. Target numerical/ABI and performance fixtures for SH4ZAM consumers, with
    explicit error tolerances, XMTRX preservation, and warm/cold measurements.
@@ -368,3 +369,44 @@ physical-console or framebuffer proof of authored-material appearance.
 Auxiliary texture-role metadata/import, broader compound profiles and the
 SH4ZAM numerical/ABI/performance fixtures remain next; authored unlit does not
 implicitly create a multipass recipe.
+
+## September 12: auxiliary layer preparation bridge
+
+`pvr_chunk_material_layer_t` now carries caller-owned texture/sampler state,
+an explicit lightmap/emission role, RGB tint and two affine UV rows. It is
+runtime metadata, not a serialized asset record and not an allocation added
+to every model or strip. Applications associate it with their selected draw.
+
+`pvr_chunk_material_resolve_layer()` reuses a previously resolved Compact
+surface and the existing texture table, then calls the checked layer recipe
+compiler. Sampling and mip bias remain independent across inputs. The
+matching vertex helper preserves command/position/depth exactly while mapping
+the caller-supplied UV set and replacing already-lit colors with the layer's
+unlit tint and neutral alpha. Invalid metadata, missing textures, compilation
+failures and mapped UV overflow preserve output. No allocation, resource pin,
+scene owner or worker is introduced. Both resources must stay alive through
+render completion; existing stream manifests do not implicitly pin auxiliary
+textures supplied out of band.
+
+Validation:
+
+- Binding tests link the real recipe planner and pass GCC 14 GNU17/strict C23
+  and Clang GNU17/strict C2x. ASan/UBSan passes. Cases cover both roles and OP/TR
+  routing, independent sampling, fixed expected tint/alpha/UV results, in-place
+  preparation, invalid roles/tints, nonfinite/overflowed UVs, missing texture,
+  unsupported filtering, and unchanged outputs on compiler rejection.
+- Full KOS and both material-example modes build with GCC 16.2.0. Kernel and
+  module-export archives contain both APIs. Focused Doxygen groups them with
+  the Compact bindings; only the omitted parent group warns.
+- The layered example compares all four recipes with independent explicit
+  contexts and checks nonidentity UV mapping plus position/depth preservation.
+  It passes packet and submission checks in Flycast interpreter and dynarec.
+  Constant textures isolate composition, not varying-texture interpolation;
+  these runs do not close the existing presort/physical image-validation gates.
+
+This closes the runtime preparation side, not asset import. Next is a checked
+serialized material-to-layer association, independent UV-set handling and
+resource/loader integration before accepting auxiliary glTF materials. The
+existing PRT1 manifest describes direct stream usage; adding global role bits
+to its texture entries would not describe per-material associations correctly.
+SH4ZAM numerical/ABI/performance fixtures and physical image gates remain open.
