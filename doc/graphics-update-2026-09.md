@@ -505,3 +505,48 @@ and failure-cleanup fixtures. Full KOS builds and SH-4 scene-test links pass.
 All four new entry points are in the export archive and focused Doxygen groups.
 Target assertions pass in interpreter and dynarec, subject to the interpreter
 completion trace above. Physical image/presort gates remain open.
+
+## September 12: atomic restart stack-check correction
+
+The preceding interpreter completion trace is now diagnosed and corrected.
+The interrupted PC was in `mutex_trylock_thd()` inside a compiler soft-gUSA
+atomic region: r15 contained the negative restart length, while r1 held the
+real stack pointer. The scheduler incorrectly checked the raw r15 marker
+against the thread's stack allocation. This was a stack-guard false positive,
+not evidence of a scene-loader buffer overrun.
+
+`irq_context_stack_pointer()` recovers r1 only for the soft-gUSA marker range
+(-128 through -1); other values and atomic models retain ordinary raw-SP
+behavior. The scheduler uses that logical address for both owned stacks and
+the optional fiber bounds resolver. Saved registers, the existing IRQ restart
+protocol, and `CONTEXT_SP()` are unchanged. No stack guard is disabled, and no
+allocation, per-thread field or automatic fiber attachment is added. Guard
+failure diagnostics now use debug I/O, including when stdout is already closed
+during shutdown.
+
+A new `utils/irq-stack-test` suite checks every marker, both region-interior
+and region-end PCs, ordinary addresses, the adjacent -129 boundary, invalid
+preserved addresses and unchanged saved contexts. Its target stress phase
+temporarily raises preemption frequency, observes interrupted atomic regions,
+checks the atomic result and restores the previous IRQ observer and frequency.
+
+Validation:
+
+- Both synthetic atomic-model branches pass GCC 14 GNU17/strict C23 and
+  Clang GNU17/strict C2x, plus Clang ASan/UBSan.
+- Full KOS rebuild and target test/example links pass.
+- The fixed stress test passes Flycast interpreter with 6,334,464 operations
+  and 1,046 observed interrupted atomics, and dynarec with 32,858,112 operations
+  and 1,775 observed interrupted atomics.
+- A control build restoring only the raw-SP guard triggers its failure
+  diagnostics during the stress test and does not reach PASS. This verifies
+  that the target regression exercises the defect, not just the helper.
+- The rebuilt scene suite passes in interpreter without the previous trace
+  during the observed run. The fiber-context probe also passes in interpreter
+  (`scheduler=2 bounds=2`).
+
+This closes the diagnosed emulator regression gate. It does not establish
+physical-hardware coverage or close the existing image/presort gates. The next
+graphics work remains independent auxiliary UV attributes, base-transform
+mapping, imported texture manifests and recipe selection; those importer
+features have not been added by this scheduler correction.

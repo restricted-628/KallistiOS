@@ -5,6 +5,7 @@
    Copyright (C) 2010, 2016, 2023 Lawrence Sebald
    Copyright (C) 2023 Colton Pawielski
    Copyright (C) 2023, 2024, 2025 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <assert.h>
@@ -655,12 +656,16 @@ static inline void thd_schedule_inner(kthread_t *thd, uint64_t now) {
        pointer outside it can consult an optional cooperative-context runtime. */
     if(thd_current->stack && thd_current->stack_size) {
         uintptr_t stack_base = (uintptr_t)thd_current->stack;
-        uintptr_t sp = CONTEXT_SP(thd_current->context);
+        /* An interrupted compiler atomic may keep a restart marker in the
+           raw SP register. Validate the logical stack, including fibers. */
+        uintptr_t sp = irq_context_stack_pointer(&thd_current->context);
 
         if((sp < stack_base || sp - stack_base > thd_current->stack_size) &&
            !_thd_continuation_stack_bounds(thd_current, sp, NULL, NULL)) {
-            thd_pslist(printf);
-            thd_pslist_queue(printf);
+            /* This can run from the timer IRQ, including after the VFS has
+               closed stdout during shutdown. Keep diagnostics on debug I/O. */
+            thd_pslist(dbgio_printf);
+            thd_pslist_queue(dbgio_printf);
             assert_msg(0, "Thread context escaped valid stack bounds");
         }
     }

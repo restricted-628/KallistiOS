@@ -24,6 +24,13 @@ thread attaches the fiber runtime. Consequently threads which never attach
 fibers carry no fiber fields and do not link the fiber runtime merely because
 the scheduler supports it.
 
+With GCC soft-gUSA atomics, the raw saved r15 can temporarily contain a negative
+restart length rather than a stack address. The scheduler uses
+`irq_context_stack_pointer()` to recover the preserved r1 before either the
+owned-stack check or the optional fiber resolver. Raw context registers and
+atomic restart handling stay unchanged. This does not attach fibers to ordinary
+threads or add per-thread state.
+
 ## MMU relationship
 
 Fiber creation does not create mappings, page tables, address spaces, or guard

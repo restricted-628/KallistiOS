@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Fixed a scheduler stack-bound false positive when an interrupt lands inside
+  a GCC soft-gUSA atomic operation. The check now uses the preserved logical
+  stack address without changing the atomic restart context. Failure diagnostics
+  use debug I/O instead of stdout, including after filesystem teardown.
+
 * Added required PCM2 material-layer sections and explicit layer-aware scene
   loading. Geometry-only loaders reject these assets instead of silently
   discarding required rendering meaning. Legacy zero-flag assets are unchanged.
