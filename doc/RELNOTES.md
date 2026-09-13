@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a checked pointer-free material-layer section codec. Model/source-strip
+  ranges map to existing layer descriptors, with CRCs, explicit little-endian
+  encoding, immutable binary-search lookup and load-time model validation.
+  The example consumes decoded associations; host/target tests include fixed
+  wire goldens and malformed-input cases. No model/cache layouts grow and no
+  automatic auxiliary glTF import or scene consumption is implied.
+
 * Added caller-owned Compact auxiliary layer descriptors and checked recipe/
   vertex preparation for lightmaps and emission. They reuse texture tables,
   preserve independent sampling and geometry/depth, enforce neutral layer

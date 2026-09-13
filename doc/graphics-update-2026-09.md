@@ -410,3 +410,47 @@ resource/loader integration before accepting auxiliary glTF materials. The
 existing PRT1 manifest describes direct stream usage; adding global role bits
 to its texture entries would not describe per-material associations correctly.
 SH4ZAM numerical/ABI/performance fixtures and physical image gates remain open.
+
+## September 12: serialized auxiliary associations
+
+The explicit PML1 codec now associates model/source-strip ranges with the
+existing lightmap/emission descriptor. It provides checked size queries,
+serialization, opening, indexed decode, binary-search lookup and concrete
+model-array validation. The 32-byte header and 64-byte entries are encoded
+field-by-field in little endian with separate header/payload CRCs. Runtime
+enum values are translated, not dumped. See [the wire contract](pvr-chunk-layers.md).
+
+Admission rejects overlapping/overflowing ranges, invalid samplers/tints,
+nonfinite UV transforms, unknown UV selectors, reserved bytes, malformed
+framing and CRCs. Writes validate the entire input and capacity before any
+mutation; views/accessor outputs cannot alias source bytes. Models referenced
+by associations are reopened once each during load-time validation. Immutable
+render-time lookups do not repeat CRC scans. No existing model/cache layout,
+allocation policy or ordinary scene lifecycle changes.
+
+The runtime helper and codec share a private metadata validator. The layered
+example now serializes, opens and looks up its procedural associations before
+resolving real texture-table entries and preparing recipe geometry. A new
+host/target suite uses independently encoded golden bytes and fixed CRCs, plus
+all truncations and single-byte corruptions, CRC-repaired malformed fields,
+alias rejection, range gaps/boundaries and real model-view validation.
+
+Automatic PCM2 scene consumption and auxiliary glTF import are deliberately
+still absent. Those require a required-material admission policy, container
+association, independent UV attributes and resource/recipe integration. A
+generic loader ignoring this new rendering meaning must not count as a
+successful import. Existing base-UV transforms must also be accounted for
+before deriving a canonical-to-layer UV mapping. These are the next steps;
+the codec is not a claim that the asset-import objective is complete.
+
+Validation:
+
+- Layer-codec and resource-binding suites pass GCC 14 GNU17/strict C23 and
+  Clang GNU17/strict C2x; the codec also passes ASan/UBSan.
+- Full KOS rebuild and SH-4 links of the codec test and both ordinary/layered
+  material examples pass. All six public functions have module exports and
+  appear in the focused Doxygen group output.
+- The codec test passes Flycast interpreter and dynarec. The serialized-layer
+  example passes its independent packet and submission checks in both modes.
+  These are not pixel-conformance or physical-hardware validation results;
+  the existing translucent presort/image gates remain open.

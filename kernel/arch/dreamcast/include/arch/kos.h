@@ -85,6 +85,7 @@ __BEGIN_DECLS
 #include <dc/pvr_chunk_wire.h>
 #include <dc/pvr_material.h>
 #include <dc/pvr_chunk_binding.h>
+#include <dc/pvr_chunk_layer_asset.h>
 #include <dc/pvr_particle.h>
 #include <dc/pvr_sprite_geometry.h>
 #include <dc/pvr_cell.h>

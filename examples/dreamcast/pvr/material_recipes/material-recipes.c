@@ -6,6 +6,7 @@
 
 #include <kos.h>
 #include <dc/pvr_chunk_binding.h>
+#include <dc/pvr_chunk_layer_asset.h>
 #include <assert.h>
 #include <stdalign.h>
 #include <stdio.h>
@@ -165,6 +166,29 @@ int main(void) {
     puts("material recipes: procedural texture levels uploaded");
     puts(RECIPE_LAYERS ? "recipe profiles: lightmap/emissive" :
                          "recipe profiles: trilinear/bump");
+#if RECIPE_LAYERS
+    pvr_chunk_layer_entry_t authored[4];
+    uint8_t encoded_layers[PVR_CHUNK_LAYER_SECTION_HEADER_BYTES +
+                           4 * PVR_CHUNK_LAYER_SECTION_ENTRY_BYTES];
+    pvr_chunk_layer_section_view_t layer_view;
+    for(size_t i = 0; i < 4; ++i) {
+        authored[i] = (pvr_chunk_layer_entry_t){
+            .model = (uint32_t)i, .first_strip = 0, .strip_count = 1,
+            .layer = {
+                .role = i < 2 ? PVR_MATERIAL_PASS_LIGHTMAP :
+                                PVR_MATERIAL_PASS_EMISSIVE,
+                .texture = { .identifier = 19, .filter = PVR_FILTER_BILINEAR,
+                             .mipmap_adjust = PVR_MIPBIAS_NORMAL },
+                .rgb = UINT32_C(0x00ffffff),
+                .uv = { { 2, 0, .25f }, { 0, .5f, -.25f } }
+            }
+        };
+    }
+    assert(pvr_chunk_layer_section_write(
+        authored, 4, encoded_layers, sizeof(encoded_layers)) == 0);
+    assert(pvr_chunk_layer_section_open(
+        encoded_layers, sizeof(encoded_layers), &layer_view) == 0);
+#endif
     for(size_t i = 0; i < 4; ++i) {
         pvr_poly_cxt_t layer;
         pvr_chunk_material_context_t resolved_surface;
@@ -200,14 +224,10 @@ int main(void) {
         layer.txr.base = auxiliary.vram;
         layer.txr.mipmap = false;
         layer.txr.mipmap_bias = PVR_MIPBIAS_NORMAL;
-        layers[i] = (pvr_chunk_material_layer_t){
-            .role = i < 2 ? PVR_MATERIAL_PASS_LIGHTMAP :
-                            PVR_MATERIAL_PASS_EMISSIVE,
-            .texture = { .identifier = 19, .filter = PVR_FILTER_BILINEAR,
-                         .mipmap_adjust = PVR_MIPBIAS_NORMAL },
-            .rgb = UINT32_C(0x00ffffff),
-            .uv = { { 2, 0, .25f }, { 0, .5f, -.25f } }
-        };
+        pvr_chunk_layer_entry_t decoded;
+        assert(pvr_chunk_layer_section_find(&layer_view, (uint32_t)i, 0,
+                                             &decoded) == 0);
+        layers[i] = decoded.layer;
         assert(compile(&reference, &context, &layer, 0, 0) == 0);
         assert(pvr_chunk_material_resolve_layer(
             &recipes[i], &resolved_surface, &textures, &layers[i]) == 0);

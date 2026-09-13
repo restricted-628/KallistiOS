@@ -153,6 +153,11 @@ not a binary asset record: per-material association, independent UV-set data,
 and importer/loader validation are required before auxiliary glTF materials
 can be admitted. Those imports remain rejected until that path is implemented.
 
+The [PML1 section codec](pvr-chunk-layers.md) now provides pointer-free
+model/source-strip associations, explicit serialization, immutable lookup and
+model-array bounds validation. It decodes into the same runtime layer type;
+automatic PCM2 consumption and independent UV-set import remain separate.
+
 ## Renderer integration
 
 `pvr_chunk_material_binding_t` copies the base context and admitted table view

@@ -16,12 +16,14 @@ SOURCES = pvr-chunk-binding-test.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_route.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c
 LDLIBS += -lm
+HEADERS = ../../kernel/arch/dreamcast/include/dc/pvr_chunk_binding.h \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_layer_internal.h
 
 .PHONY: all clean test
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) $(HEADERS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)

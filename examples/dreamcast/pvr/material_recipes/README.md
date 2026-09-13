@@ -46,6 +46,9 @@ list metadata must match an independent explicit-context construction. The
 packet-comparison PASS marker is separate from submission and image checks.
 In layered mode, caller-owned `pvr_chunk_material_layer_t` descriptors instead
 carry identifier 19, independent sampling, the lightmap/emission role and tint.
+Four procedural model/source-strip associations are serialized into PML1,
+opened and found by ordinal before copying each decoded layer for preparation.
+This exercises the real codec on target, not automatic PCM2/glTF ingestion.
 `pvr_chunk_material_resolve_layer()` compiles the recipes, and
 `pvr_chunk_material_layer_prepare_vertex()` maps auxiliary UVs with
 `u'=2u+.25`, `v'=.5v-.25` while preserving command/position/depth bit-for-bit.
