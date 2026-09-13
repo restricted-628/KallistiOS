@@ -8,6 +8,7 @@
 #include <dc/pvr_chunk_cache_asset.h>
 #include <dc/pvr_chunk_toon.h>
 #include <dc/pvr_chunk_wire.h>
+#include <dc/pvr_chunk_uv.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -1207,7 +1208,165 @@ static void test_reference_normal_cache(void) {
     assert(cache.deform_vertices[2].normal.z == -1.0f);
 }
 
+static int uv_skip_first(const pvr_chunk_render_state_t *state,
+                         const pvr_chunk_strip_view_t *strip, void *data) {
+    (void)state;
+    return strip->words != *(const uint16_t **)data;
+}
+
+static int uv_policy(const pvr_chunk_render_state_t *state,
+                      const pvr_chunk_vertex_attributes_t *va,
+                      const pvr_chunk_strip_attributes_t *sa,
+                      pvr_vertex_t *vertex, void *data) {
+    (void)state;
+    (void)va;
+    (void)data;
+    assert(sa->present & PVR_CHUNK_STRIP_ATTR_UV0);
+    assert(sa->uv[0][0] == vertex->u && sa->uv[0][1] == vertex->v);
+    vertex->u += 2; /* Stand-in for the layer's affine UV preparation. */
+    return 0;
+}
+
+static void test_independent_uv(void) {
+    static const uint16_t seams[] = {
+        PVR_CHUNK_STRIP_INDEX, 9, 2,
+        3, 0, 1, 2, 0x8003, 0, 1, 2, 255
+    };
+    pvr_chunk_model_t model = make_model(seams, sizeof(seams) / sizeof(*seams));
+    pvr_chunk_model_view_t view;
+    pvr_chunk_vertex_index_entry_t plan_entries[256];
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_uv_t uv[] = {{-1, 2}, {3, 4}, {5, 6},
+                           {10, 20}, {30, 40}, {50, 60}};
+    pvr_chunk_uv_strip_t index[2], saved_index[2];
+    pvr_chunk_uv_source_t source, saved_source;
+    alignas(32) uint8_t storage[2048];
+    pvr_chunk_model_cache_t cache;
+    alignas(32) pvr_vertex_t output[6], cached[6], work[3];
+    pvr_geometry_sink_t sink;
+    alignas(8) matrix_t matrix;
+    pvr_frustum_t frustum;
+    size_t strips = 77, coordinates = 88;
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_build(&view, plan_entries, 256, &plan) == 0);
+    assert(pvr_chunk_uv_source_query(&view, &strips, &coordinates) == 0);
+    assert(strips == 2 && coordinates == 6);
+    memset(index, 0x5a, sizeof(index));
+    memset(&source, 0x5a, sizeof(source));
+    memcpy(saved_index, index, sizeof(index));
+    memcpy(&saved_source, &source, sizeof(source));
+    assert(pvr_chunk_uv_source_init(&view, uv, 5, index, 2, &source) == -1);
+    assert(!memcmp(index, saved_index, sizeof(index)));
+    assert(!memcmp(&source, &saved_source, sizeof(source)));
+    assert(pvr_chunk_uv_source_init(&view, uv, 6, index, 1, &source) == -1);
+    assert(errno == ENOSPC);
+    uv[5].v = NAN;
+    assert(pvr_chunk_uv_source_init(&view, uv, 6, index, 2, &source) == -1);
+    assert(errno == EDOM && !memcmp(index, saved_index, sizeof(index)));
+    assert(!memcmp(&source, &saved_source, sizeof(source)));
+    uv[5].v = 60;
+    assert(pvr_chunk_uv_source_init(&view, uv, 6,
+        (pvr_chunk_uv_strip_t *)(void *)uv, 2, &source) == -1);
+    assert(pvr_chunk_uv_source_init(&view, uv, 6, index, 2,
+        (pvr_chunk_uv_source_t *)(void *)index) == -1);
+    assert(!memcmp(index, saved_index, sizeof(index)));
+    assert(pvr_chunk_uv_source_init(&view, uv, 6, index, 2, &source) == 0);
+    assert(index[0].first_uv == 0 && index[1].first_uv == 3);
+    identity(&matrix);
+    assert(pvr_frustum_init(&frustum, &matrix, -2, -2, 4, 2, .5f, 2) == 0);
+    assert(pvr_geometry_sink_init_memory(&sink, output, 6) == 0);
+    assert(pvr_chunk_model_emit_uv(&source, NULL, &frustum,
+        PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink, work, 3, NULL, 0,
+        NULL, NULL, uv_policy, NULL, NULL) == 0);
+    const float expected_u[] = {1, 5, 7, 32, 12, 52};
+    const float expected_v[] = {2, 4, 6, 40, 20, 60};
+    for(size_t i = 0; i < 6; ++i) {
+        assert(output[i].u == expected_u[i] && output[i].v == expected_v[i]);
+    }
+    assert(output[0].x == output[4].x); /* Same ID, distinct seam UVs. */
+    assert(pvr_chunk_model_cache_build_uv(&plan, &source, storage,
+        sizeof(storage), uv_policy, NULL, &cache) == 0);
+    assert(pvr_geometry_sink_init_memory(&sink, cached, 6) == 0);
+    assert(pvr_chunk_model_cache_emit(&cache, &matrix, &sink, work, 3,
+        NULL, NULL, NULL, NULL, NULL) == 0);
+    assert(!memcmp(output, cached, sizeof(output)));
+    /* Filtering must not shift the auxiliary attribute cursor. */
+    const uint16_t *first = seams + index[0].word_offset;
+    assert(pvr_geometry_sink_init_memory(&sink, cached, 6) == 0);
+    assert(pvr_chunk_model_emit_uv(&source, &plan, &frustum,
+        PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink, work, 3, NULL, 0,
+        uv_skip_first, NULL, uv_policy, &first, NULL) == 0);
+    assert(sink.emitted_vertices == 3);
+    assert(!memcmp(output + 3, cached, 3 * sizeof(*cached)));
+    assert(pvr_chunk_model_emit_uv(&source, NULL, &frustum,
+        PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink, work, 3, NULL, 0,
+        NULL, NULL, NULL, NULL, (pvr_chunk_render_result_t *)(void *)uv) == -1);
+    pvr_chunk_model_cache_t before = cache;
+    assert(pvr_chunk_model_cache_build_uv(&plan, &source, uv, sizeof(uv),
+        NULL, NULL, &cache) == -1);
+    assert(!memcmp(&cache, &before, sizeof(cache)));
+    /* Ending the binding lifetime cannot invalidate the baked cache. */
+    memset(uv, 0, sizeof(uv));
+    assert(pvr_geometry_sink_init_memory(&sink, cached, 6) == 0);
+    assert(pvr_chunk_model_cache_emit(&cache, &matrix, &sink, work, 3,
+        NULL, NULL, NULL, NULL, NULL) == 0);
+    assert(!memcmp(output, cached, sizeof(output)));
+}
+
+static void test_independent_uv_near_clip(void) {
+    static const uint32_t xyz[] = {
+        VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10), 0x00030000,
+        0xbe800000, 0, 0x3e800000,
+        0x3e800000, 0, 0x3f800000,
+        0, 0x3e800000, 0x3f800000, 255
+    };
+    pvr_chunk_model_t model = make_model(polygons, sizeof(polygons) / 2);
+    model.vertex_words = xyz;
+    model.vertex_word_count = sizeof(xyz) / 4;
+    pvr_chunk_model_view_t view;
+    pvr_chunk_uv_t uv[] = {{0, 0}, {3, 0}, {0, 6}};
+    pvr_chunk_uv_strip_t index;
+    pvr_chunk_uv_source_t source;
+    alignas(8) matrix_t matrix;
+    pvr_frustum_t frustum;
+    alignas(32) pvr_vertex_t work[3], clipped[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    alignas(32) pvr_vertex_t output[PVR_FRUSTUM_CLIP_MAX_VERTICES];
+    pvr_geometry_sink_t sink;
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_uv_source_init(&view, uv, 3, &index, 1, &source) == 0);
+    identity(&matrix);
+    matrix[2][3] = 1;
+    matrix[3][3] = 0; /* Homogeneous W = object Z. */
+    assert(pvr_frustum_init(&frustum, &matrix, -4, -4, 4, 4, .5f, 2) == 0);
+    assert(pvr_geometry_sink_init_memory(&sink, output,
+        PVR_FRUSTUM_CLIP_MAX_VERTICES) == 0);
+    assert(pvr_chunk_model_emit_uv(&source, NULL, &frustum, PVR_CHUNK_CLIP_SPLIT,
+        &sink, work, 3, clipped, PVR_FRUSTUM_CLIP_MAX_VERTICES,
+        NULL, NULL, NULL, NULL, NULL) == 0);
+    assert(sink.emitted_vertices > 3);
+    unsigned ab = 0, ac = 0;
+    for(size_t i = 0; i < sink.emitted_vertices; ++i) {
+        if(fabsf(output[i].z - 2) < .0001f) {
+            if(fabsf(output[i].u - 1) < .0001f && fabsf(output[i].v) < .0001f)
+                ++ab;
+            else if(fabsf(output[i].u) < .0001f &&
+                    fabsf(output[i].v - 2) < .0001f)
+                ++ac;
+            else
+                assert(0 && "wrong interpolated auxiliary UV");
+        }
+    }
+    assert(ab && ac);
+    assert(pvr_geometry_sink_init_memory(&sink, output,
+        PVR_FRUSTUM_CLIP_MAX_VERTICES) == 0);
+    assert(pvr_chunk_model_emit_uv(&source, NULL, &frustum, PVR_CHUNK_CLIP_DROP,
+        &sink, work, 3, NULL, 0, NULL, NULL, NULL, NULL, NULL) == 0);
+    assert(sink.emitted_vertices == 0);
+}
+
 int main(void) {
+    test_independent_uv();
+    test_independent_uv_near_clip();
     pvr_chunk_model_t model =
         make_model(polygons, sizeof(polygons) / sizeof(polygons[0]));
     pvr_chunk_model_view_t view;

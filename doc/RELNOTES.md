@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added caller-owned per-reference Compact UV sources, integrated before
+  ordinary filtered/clipped rendering and prepared-cache construction. Seams
+  and reversed strip order are preserved without growing model/cache layouts.
+  Independent UV serialization and auxiliary glTF import remain separate work.
+
 * Centralized host-side Compact UV baking and added relative auxiliary-map
   preparation with explicit independent-coordinate fallback. Converter tests
   check transformed signed UVs, V-flip order and legal zero/negative scales.

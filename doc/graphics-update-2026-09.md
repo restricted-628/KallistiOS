@@ -588,3 +588,46 @@ Validation:
   missing source set fails without replacing the destination file.
 - These are host-tool tests, not emulator image or physical-hardware evidence.
   No KOS kernel code changed in this tranche.
+
+## September 13: independent per-reference UV runtime path
+
+`pvr_chunk_uv_source_query()` and `pvr_chunk_uv_source_init()` bind a caller's
+finite UV pairs to every ordinary source strip reference and build a small
+caller-owned strip index. Position IDs are not attribute IDs: repeated indices
+can carry different UVs at a seam. Initialization validates the complete model,
+exact coordinate count, capacity and disjoint writable storage before publishing
+the index/source. Views and all borrowed storage are immutable during use.
+
+`pvr_chunk_model_emit_uv()` reuses the existing filtered/clipped renderer, with
+optional prepared vertex lookup. It selects coordinates before vertex policy
+and homogeneous clipping, corrects reversed-strip reference order, and keys
+lookup by source strip offset rather than an emitted-corner counter. SPLIT,
+DROP and ASSUME_VISIBLE retain their existing geometry behavior. Vertex policy
+also sees the replacement UV0 in decoded strip attributes.
+
+`pvr_chunk_model_cache_build_uv()` bakes these coordinates into an ordinary
+cache's existing packets before its one-time vertex callback. The UV source can
+be released after construction; no new field or packet type is added. Both base
+and auxiliary caches, if desired, cost caller-supplied cache storage. The direct
+path instead borrows eight bytes per corner plus a twelve-byte-per-strip index
+on SH-4. No cache, array, thread or manager is allocated automatically, and
+ordinary model/cache layouts remain unchanged.
+
+The source currently supports ordinary strips only. PML1's canonical-only wire
+contract and auxiliary glTF rejection remain intact. Explicit serialized UV
+storage/layer association comes next, then imported texture manifests and recipe
+selection. This is runtime integration, not a completed auxiliary importer.
+
+Validation:
+
+- Expanded cache tests pass GCC 14 GNU17/strict C23 and Clang GNU17/strict C2x,
+  plus Clang ASan/UBSan. The existing direct-render suite also passes GCC GNU17.
+- New cases cover shared IDs with distinct UVs, reversed strips, filtered-strip
+  identity, callback-visible coordinates, direct/cache packet equality, cache
+  independence after borrowed UV lifetime, failed initialization/output aliases,
+  near-plane UV interpolation against independently calculated values, and DROP.
+- Full KOS build and SH-4 cache-test link pass. All four public functions appear
+  in the implementation and export archives and focused Doxygen group output.
+- The expanded target suite passes Flycast interpreter and dynarec. These are
+  numerical/packet assertions, not texture-image or physical-hardware proof;
+  existing image/presort and real-hardware gates remain open.

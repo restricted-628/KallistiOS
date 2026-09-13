@@ -289,6 +289,26 @@ int pvr_chunk_model_cache_build(
     pvr_chunk_render_prepare_vertex_t prepare_vertex, void *data,
     pvr_chunk_model_cache_t *cache);
 
+struct pvr_chunk_uv_source;
+/** \brief Build an ordinary cache with independent per-reference UVs.
+
+    The UV source must bind the same model as plan. Coordinates replace UV0
+    before the existing build-time callback, in corrected strip winding order.
+    They are baked into the cache's existing packets, not retained as additional
+    cache fields. UV storage can be released after a successful build. All
+    existing emission/deformation/clipping paths consume this ordinary cache.
+    Cache/output storage must not overlap borrowed UV storage. This creates an
+    auxiliary cache when required; it does not mutate/share another cache's
+    packets or silently allocate one. Normal build failure contracts apply,
+    except UV admission/alias failures preserve the output cache descriptor.
+*/
+int pvr_chunk_model_cache_build_uv(
+    const pvr_chunk_model_plan_t *plan,
+    const struct pvr_chunk_uv_source *uv,
+    void *storage, size_t storage_bytes,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex, void *data,
+    pvr_chunk_model_cache_t *cache);
+
 /** \brief Project and emit a completed compact-model draw cache.
 
     One 32-byte-aligned pvr_vertex_t workspace entry is required per vertex in

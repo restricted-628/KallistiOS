@@ -4,6 +4,14 @@
 #define __PVR_CHUNK_RENDER_INTERNAL_H
 
 #include <dc/pvr_chunk_render.h>
+#include <dc/pvr_chunk_uv.h>
+
+int pvr_chunk_uv_validate(const pvr_chunk_uv_source_t *uv,
+                          const pvr_chunk_model_view_t *model);
+int pvr_chunk_uv_disjoint(const pvr_chunk_uv_source_t *uv,
+                          const void *pointer, size_t count, size_t size);
+const pvr_chunk_uv_t *pvr_chunk_uv_strip_data(
+    const pvr_chunk_uv_source_t *uv, const pvr_chunk_strip_view_t *strip);
 
 int pvr_chunk_render_validate_state_record(
     const pvr_chunk_record_t *record);

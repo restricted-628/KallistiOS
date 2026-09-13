@@ -68,6 +68,7 @@ __BEGIN_DECLS
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_asset_io.h>
 #include <dc/pvr_chunk_render.h>
+#include <dc/pvr_chunk_uv.h>
 #include <dc/pvr_chunk_cache.h>
 #include <dc/pvr_chunk_cache_asset.h>
 #include <dc/pvr_chunk_model_table.h>

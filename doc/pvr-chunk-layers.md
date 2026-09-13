@@ -84,7 +84,53 @@ stored UVs: signed fixed-point or float rounding can destroy information before
 the relative map runs. Check the actual decoded base corners against separately
 baked auxiliary corners using the chosen error budget. PML1 version 1 and its
 canonical-only admission are unchanged; the helper does not provide independent
-UV storage or make unsupported glTF layers importable.
+UV serialization or make unsupported glTF layers importable.
+
+## Independent runtime coordinates
+
+`dc/pvr_chunk_uv.h` now supplies a caller-owned runtime UV source for ordinary
+Compact strips. Query the model's strip/reference counts, supply one finite
+`pvr_chunk_uv_t` per authored strip corner, and initialize a caller-owned strip
+index. The index and UV array are borrowed, never allocated or attached to a
+model automatically. On SH-4 the arrays cost eight bytes per corner and twelve
+bytes per strip, plus the small source descriptor. Unused models pay no storage
+cost and existing model/cache layouts are unchanged.
+
+Coordinates follow source strip order and then original reference order, not
+vertex-ID order. Repeated vertex IDs can therefore carry distinct UVs at seams.
+The renderer applies the same first-two-reference swap as ordinary reversed
+strips. Lookup is by source strip word offset, so skipping a strip does not
+shift subsequent attributes. A selected strip's lookup is logarithmic; its
+corner access is constant-time, with no per-frame full UV validation scan.
+
+`pvr_chunk_model_emit_uv()` uses the existing filtered/clipped emitter, with an
+optional prepared vertex plan. It selects UVs before the vertex policy callback
+and before homogeneous clipping; generated near-plane vertices interpolate
+these coordinates normally. `pvr_chunk_material_layer_prepare_vertex()` can
+then apply the auxiliary affine/tint policy in that callback. Position, winding,
+depth, colors and deformation are otherwise unchanged. The caller remains
+responsible for replaying identical geometry across a material recipe.
+
+`pvr_chunk_model_cache_build_uv()` bakes the selected coordinates into an
+ordinary cache's existing packets before the build-time callback. Later cache
+emission needs neither the UV source nor a new packet type. A separate prepared
+cache for an auxiliary pass costs another cache allocation supplied by the
+caller; this is not a claim that multiple cached UV sets are free. Use the
+borrowed direct path when that tradeoff is undesirable. The implementation does
+not mutate a base cache, duplicate an existing cache automatically, or install
+a manager/thread.
+
+Initialization checks the complete ordinary model, exact coordinate count,
+finite coordinates, capacity and aliases before writing index/output. UV views,
+indices, models and coordinate arrays must remain immutable during direct use.
+Writable render/cache destinations may not overlap that borrowed storage.
+Two-volume/modifier/cached-control stream families remain unsupported by this
+ordinary UV source. These checks establish runtime binding, not PML1 admission.
+
+PML1 version 1 still rejects independent selectors. The next step is explicit
+serialized per-corner storage and layer associations, then texture-manifest and
+importer integration. No auxiliary glTF material has been enabled by the runtime
+UV source alone.
 
 ## Wire layout
 

@@ -623,14 +623,183 @@ void pvr_chunk_render_update_state(pvr_chunk_render_state_t *state,
         update_material(state, record);
 }
 
+/* One scan serves query, pre-write admission, and index construction. Source
+   reference order is retained; winding correction belongs to assembly. */
+static int uv_scan(const pvr_chunk_model_view_t *view,
+                    pvr_chunk_uv_strip_t *index, size_t *strips, size_t *uvs) {
+    pvr_chunk_iterator_t iterator;
+    pvr_chunk_record_t record;
+    size_t s = 0, n = 0;
+    int rv;
+    if(pvr_chunk_polygon_iterator_init(&iterator, view->model.polygon_words,
+                                       view->model.polygon_word_count) < 0)
+        return -1;
+    while((rv = pvr_chunk_iterator_next(&iterator, &record)) > 0) {
+        if(pvr_chunk_render_validate_state_record(&record) < 0)
+            return -1;
+        if(record.record_class == PVR_CHUNK_RECORD_STRIP) {
+            pvr_chunk_strip_iterator_t it;
+            pvr_chunk_strip_view_t strip;
+            int next;
+            if(pvr_chunk_strip_iterator_init(&it, &record) < 0)
+                return -1;
+            while((next = pvr_chunk_strip_iterator_next(&it, &strip)) > 0) {
+                if(index) {
+                    index[s].word_offset = (size_t)(strip.words -
+                                                   view->model.polygon_words);
+                    index[s].first_uv = n;
+                    index[s].vertex_count = strip.vertex_count;
+                }
+                if(checked_add(&n, strip.vertex_count) < 0 ||
+                   checked_add(&s, 1) < 0)
+                    return -1;
+            }
+            if(next < 0)
+                return -1;
+        }
+    }
+    if(rv < 0)
+        return -1;
+    *strips = s;
+    *uvs = n;
+    return 0;
+}
+
+/* Overflow-safe byte-range checks also cover descriptors, not only arrays.
+   Otherwise a sink could overwrite its own borrowed UV source mid-emission. */
+int pvr_chunk_uv_disjoint(const pvr_chunk_uv_source_t *uv,
+                          const void *pointer, size_t count, size_t size) {
+    const void *inputs[] = {uv, uv->model, uv->strips, uv->uv,
+        uv->model->model.vertex_words, uv->model->model.polygon_words};
+    size_t counts[] = {1, 1, uv->strip_count, uv->uv_count,
+        uv->model->model.vertex_word_count, uv->model->model.polygon_word_count};
+    size_t sizes[] = {sizeof(*uv), sizeof(*uv->model), sizeof(*uv->strips),
+        sizeof(*uv->uv), sizeof(uint32_t), sizeof(uint16_t)};
+    uintptr_t start, other;
+    size_t bytes, other_bytes;
+    if(range_get(pointer, count, size, &start, &bytes) < 0)
+        return -1;
+    for(size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+        if(range_get(inputs[i], counts[i], sizes[i], &other, &other_bytes) < 0)
+            return -1;
+        if(ranges_overlap(start, bytes, other, other_bytes)) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int pvr_chunk_uv_source_query(const pvr_chunk_model_view_t *model,
+                              size_t *strip_count, size_t *uv_count) {
+    pvr_chunk_model_view_t checked;
+    size_t strips, uvs;
+    if(!model || !strip_count || !uv_count || strip_count == uv_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_model_open(&model->model, &checked) < 0 ||
+       uv_scan(&checked, NULL, &strips, &uvs) < 0)
+        return -1;
+    pvr_chunk_uv_source_t inputs = {.model = model};
+    if(pvr_chunk_uv_disjoint(&inputs, strip_count, 1, sizeof(*strip_count)) < 0 ||
+       pvr_chunk_uv_disjoint(&inputs, uv_count, 1, sizeof(*uv_count)) < 0)
+        return -1;
+    *strip_count = strips;
+    *uv_count = uvs;
+    return 0;
+}
+
+int pvr_chunk_uv_source_init(const pvr_chunk_model_view_t *model,
+                             const pvr_chunk_uv_t *uv, size_t uv_count,
+                             pvr_chunk_uv_strip_t *index, size_t index_capacity,
+                             pvr_chunk_uv_source_t *output) {
+    size_t strips, uvs;
+    if(!output || pvr_chunk_uv_source_query(model, &strips, &uvs) < 0) {
+        if(!output)
+            errno = EINVAL;
+        return -1;
+    }
+    if(!strips || !uv || !index || uv_count != uvs ||
+       ((uintptr_t)uv % _Alignof(pvr_chunk_uv_t)) ||
+       ((uintptr_t)index % _Alignof(pvr_chunk_uv_strip_t))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(index_capacity < strips) {
+        errno = ENOSPC;
+        return -1;
+    }
+    pvr_chunk_uv_source_t candidate = {
+        .model = model, .uv = uv, .uv_count = uvs
+    };
+    if(pvr_chunk_uv_disjoint(&candidate, index, strips, sizeof(*index)) < 0)
+        return -1;
+    candidate.strips = index;
+    candidate.strip_count = strips;
+    if(pvr_chunk_uv_disjoint(&candidate, output, 1, sizeof(*output)) < 0)
+        return -1;
+    for(size_t i = 0; i < uvs; ++i) {
+        if(!isfinite(uv[i].u) || !isfinite(uv[i].v)) {
+            errno = EDOM;
+            return -1;
+        }
+    }
+    /* The immutable stream already passed this exact scan. No failure can
+       follow a write unless the caller violates its lifetime contract. */
+    if(uv_scan(model, index, &strips, &uvs) < 0)
+        return -1;
+    *output = candidate;
+    return 0;
+}
+
+int pvr_chunk_uv_validate(const pvr_chunk_uv_source_t *uv,
+                          const pvr_chunk_model_view_t *model) {
+    if(!uv || !model || !uv->model || !uv->strips || !uv->uv ||
+       !uv->strip_count || !uv->uv_count ||
+       uv->model->model.vertex_words != model->model.vertex_words ||
+       uv->model->model.vertex_word_count != model->model.vertex_word_count ||
+       uv->model->model.polygon_words != model->model.polygon_words ||
+       uv->model->model.polygon_word_count != model->model.polygon_word_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    /* Views produced by init and their borrowed arrays are immutable. No
+       per-frame UV scan or mutable emitted-reference counter is required. */
+    return 0;
+}
+
+const pvr_chunk_uv_t *pvr_chunk_uv_strip_data(
+    const pvr_chunk_uv_source_t *uv, const pvr_chunk_strip_view_t *strip) {
+    size_t key = (size_t)(strip->words - uv->model->model.polygon_words);
+    size_t lo = 0, hi = uv->strip_count;
+    while(lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if(uv->strips[mid].word_offset < key)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    if(lo == uv->strip_count || uv->strips[lo].word_offset != key ||
+       uv->strips[lo].vertex_count != strip->vertex_count) {
+        errno = EILSEQ;
+        return NULL;
+    }
+    return uv->uv + uv->strips[lo].first_uv;
+}
+
 static int assemble_strip(const pvr_chunk_model_view_t *view,
                           const pvr_chunk_model_plan_t *plan,
                           const pvr_chunk_render_state_t *state,
                           const pvr_chunk_strip_view_t *strip,
                           pvr_vertex_t *workspace,
                           pvr_chunk_render_prepare_vertex_t prepare_vertex,
-                          void *data) {
+                          void *data, const pvr_chunk_uv_source_t *uv) {
     size_t destination_index;
+    const pvr_chunk_uv_t *coordinates = uv ? pvr_chunk_uv_strip_data(uv, strip) :
+                                            NULL;
+    if(uv && !coordinates)
+        return -1;
 
     for(destination_index = 0; destination_index < strip->vertex_count;
         ++destination_index) {
@@ -656,6 +825,13 @@ static int assemble_strip(const pvr_chunk_model_view_t *view,
         if(strip_attributes.present & PVR_CHUNK_STRIP_ATTR_UV0) {
             vertex.u = strip_attributes.uv[0][0];
             vertex.v = strip_attributes.uv[0][1];
+        }
+        if(coordinates) {
+            vertex.u = coordinates[source_index].u;
+            vertex.v = coordinates[source_index].v;
+            strip_attributes.uv[0][0] = vertex.u;
+            strip_attributes.uv[0][1] = vertex.v;
+            strip_attributes.present |= PVR_CHUNK_STRIP_ATTR_UV0;
         }
         if(strip_attributes.present & PVR_CHUNK_STRIP_ATTR_COLOR)
             vertex.argb = strip_attributes.argb;
@@ -714,7 +890,8 @@ static int model_emit(
     pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
-    void *data, pvr_chunk_render_result_t *result) {
+    void *data, pvr_chunk_render_result_t *result,
+    const pvr_chunk_uv_source_t *uv) {
     pvr_chunk_render_result_t progress = { 0 };
     render_requirements_t requirements;
     pvr_chunk_render_state_t state;
@@ -760,7 +937,7 @@ static int model_emit(
                 if(!filter_result)
                     continue;
                 if(assemble_strip(view, plan, &state, &strip, workspace,
-                                  prepare_vertex, data) < 0)
+                                  prepare_vertex, data, uv) < 0)
                     goto fail;
 
                 geometry.vertices = workspace;
@@ -813,7 +990,7 @@ int pvr_chunk_model_emit(
     void *data, pvr_chunk_render_result_t *result) {
     return model_emit(view, NULL, object_to_screen, sink, workspace,
                       workspace_count, NULL, begin_strip, prepare_vertex, data,
-                      result);
+                      result, NULL);
 }
 
 int pvr_chunk_model_emit_filtered(
@@ -827,7 +1004,7 @@ int pvr_chunk_model_emit_filtered(
     void *data, pvr_chunk_render_result_t *result) {
     return model_emit(view, NULL, object_to_screen, sink, workspace,
                       workspace_count, filter_strip, begin_strip,
-                      prepare_vertex, data, result);
+                      prepare_vertex, data, result, NULL);
 }
 
 int pvr_chunk_model_emit_prepared(
@@ -844,7 +1021,7 @@ int pvr_chunk_model_emit_prepared(
     }
     return model_emit(&plan->view, plan, object_to_screen, sink, workspace,
                       workspace_count, NULL, begin_strip, prepare_vertex, data,
-                      result);
+                      result, NULL);
 }
 
 int pvr_chunk_model_emit_prepared_filtered(
@@ -864,7 +1041,7 @@ int pvr_chunk_model_emit_prepared_filtered(
     }
     return model_emit(&plan->view, plan, object_to_screen, sink, workspace,
                       workspace_count, filter_strip, begin_strip,
-                      prepare_vertex, data, result);
+                      prepare_vertex, data, result, NULL);
 }
 
 static int clipped_workspace_valid(
@@ -1026,7 +1203,8 @@ static int model_emit_clipped(
     pvr_chunk_render_filter_strip_t filter_strip,
     pvr_chunk_render_begin_strip_t begin_strip,
     pvr_chunk_render_prepare_vertex_t prepare_vertex,
-    void *data, pvr_chunk_render_result_t *result) {
+    void *data, pvr_chunk_render_result_t *result,
+    const pvr_chunk_uv_source_t *uv) {
     pvr_chunk_render_result_t progress = { 0 };
     pvr_frustum_classification_t model_classification;
     render_requirements_t requirements;
@@ -1052,7 +1230,7 @@ static int model_emit_clipped(
         return model_emit(view, plan, &frustum->object_to_screen, sink,
                           workspace, workspace_count, filter_strip,
                           begin_strip,
-                          prepare_vertex, data, result);
+                          prepare_vertex, data, result, uv);
 
     if(pvr_chunk_model_classify(view, frustum, &model_classification) < 0)
         return -1;
@@ -1062,7 +1240,7 @@ static int model_emit_clipped(
         return model_emit(view, plan, &frustum->object_to_screen, sink,
                           workspace, workspace_count, filter_strip,
                           begin_strip,
-                          prepare_vertex, data, result);
+                          prepare_vertex, data, result, uv);
 
     if(preflight(view, plan, &frustum->object_to_screen, sink, workspace,
                  workspace_count, begin_strip, prepare_vertex,
@@ -1104,7 +1282,7 @@ static int model_emit_clipped(
                 if(!filter_result)
                     continue;
                 if(assemble_strip(view, plan, &state, &strip, workspace,
-                                  prepare_vertex, data) < 0)
+                                  prepare_vertex, data, uv) < 0)
                     goto fail;
                 for(triangle_index = 0;
                     triangle_index + 2u < strip.vertex_count;
@@ -1167,7 +1345,7 @@ int pvr_chunk_model_emit_clipped(
     return model_emit_clipped(view, NULL, frustum, policy, sink, workspace,
                               workspace_count, clip_workspace,
                               clip_workspace_count, NULL, begin_strip,
-                              prepare_vertex, data, result);
+                              prepare_vertex, data, result, NULL);
 }
 
 int pvr_chunk_model_emit_clipped_filtered(
@@ -1182,7 +1360,7 @@ int pvr_chunk_model_emit_clipped_filtered(
     return model_emit_clipped(view, NULL, frustum, policy, sink, workspace,
                               workspace_count, clip_workspace,
                               clip_workspace_count, filter_strip, begin_strip,
-                              prepare_vertex, data, result);
+                              prepare_vertex, data, result, NULL);
 }
 
 int pvr_chunk_model_emit_clipped_prepared(
@@ -1202,7 +1380,7 @@ int pvr_chunk_model_emit_clipped_prepared(
     return model_emit_clipped(&plan->view, plan, frustum, policy, sink,
                               workspace, workspace_count, clip_workspace,
                               clip_workspace_count, NULL, begin_strip,
-                              prepare_vertex, data, result);
+                              prepare_vertex, data, result, NULL);
 }
 
 int pvr_chunk_model_emit_clipped_prepared_filtered(
@@ -1223,7 +1401,37 @@ int pvr_chunk_model_emit_clipped_prepared_filtered(
     return model_emit_clipped(&plan->view, plan, frustum, policy, sink,
                               workspace, workspace_count, clip_workspace,
                               clip_workspace_count, filter_strip, begin_strip,
-                              prepare_vertex, data, result);
+                              prepare_vertex, data, result, NULL);
+}
+
+int pvr_chunk_model_emit_uv(
+    const pvr_chunk_uv_source_t *uv, const pvr_chunk_model_plan_t *plan,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t policy,
+    pvr_geometry_sink_t *sink, pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_vertex_t *clip_workspace, size_t clip_workspace_count,
+    pvr_chunk_render_filter_strip_t filter_strip,
+    pvr_chunk_render_begin_strip_t begin_strip,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_render_result_t *result) {
+    if(pvr_chunk_uv_validate(uv, plan ? &plan->view : (uv ? uv->model : NULL)) < 0)
+        return -1;
+    if(pvr_chunk_uv_disjoint(uv, workspace, workspace_count,
+                             sizeof(*workspace)) < 0 ||
+       pvr_chunk_uv_disjoint(uv, clip_workspace, clip_workspace_count,
+                             sizeof(*clip_workspace)) < 0 ||
+       pvr_chunk_uv_disjoint(uv, sink, 1, sizeof(*sink)) < 0 ||
+       (result && pvr_chunk_uv_disjoint(uv, result, 1, sizeof(*result)) < 0) ||
+       sink_valid(sink) < 0)
+        return -1;
+    if(sink->kind == PVR_GEOMETRY_SINK_MEMORY &&
+       pvr_chunk_uv_disjoint(uv, sink->destination.memory.vertices,
+                             sink->destination.memory.capacity,
+                             sizeof(pvr_vertex_t)) < 0)
+        return -1;
+    return model_emit_clipped(uv->model, plan, frustum, policy, sink, workspace,
+                              workspace_count, clip_workspace,
+                              clip_workspace_count, filter_strip, begin_strip,
+                              prepare_vertex, data, result, uv);
 }
 
 size_t pvr_chunk_render_two_volume_format_size(

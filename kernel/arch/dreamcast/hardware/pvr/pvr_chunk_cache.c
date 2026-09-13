@@ -295,10 +295,10 @@ static void cached_strip_bound_include(
 
 static int finite_deformation(const pvr_deform_vertex_t *vertex);
 
-int pvr_chunk_model_cache_build(
+static int cache_build(
     const pvr_chunk_model_plan_t *plan, void *storage, size_t storage_bytes,
     pvr_chunk_render_prepare_vertex_t prepare_vertex, void *data,
-    pvr_chunk_model_cache_t *cache) {
+    pvr_chunk_model_cache_t *cache, const pvr_chunk_uv_source_t *uv) {
     pvr_chunk_cache_requirements_t requirements;
     pvr_chunk_model_cache_t prepared = { 0 };
     pvr_chunk_cached_strip_t *strips;
@@ -364,6 +364,10 @@ int pvr_chunk_model_cache_build(
                        &strip_iterator, &strip)) > 0) {
                 pvr_chunk_cached_strip_t *cached = strips + strip_index;
                 size_t destination_index;
+                const pvr_chunk_uv_t *coordinates = uv ?
+                    pvr_chunk_uv_strip_data(uv, &strip) : NULL;
+                if(uv && !coordinates)
+                    return -1;
 
                 memset(cached, 0, sizeof(*cached));
                 cached->state = state;
@@ -404,6 +408,13 @@ int pvr_chunk_model_cache_build(
                     base_vertex(&state, &vertex_attributes,
                                 &strip_attributes, command,
                                 vertices + vertex_index);
+                    if(coordinates) {
+                        vertices[vertex_index].u = coordinates[source_index].u;
+                        vertices[vertex_index].v = coordinates[source_index].v;
+                        strip_attributes.uv[0][0] = coordinates[source_index].u;
+                        strip_attributes.uv[0][1] = coordinates[source_index].v;
+                        strip_attributes.present |= PVR_CHUNK_STRIP_ATTR_UV0;
+                    }
                     base_deformation(&vertex_attributes, &strip_attributes,
                                      deform_vertices + vertex_index);
                     source_indices[vertex_index] = strip_attributes.index;
@@ -460,6 +471,27 @@ int pvr_chunk_model_cache_build(
     prepared.radius = plan->view.model.radius;
     *cache = prepared;
     return 0;
+}
+
+int pvr_chunk_model_cache_build(
+    const pvr_chunk_model_plan_t *plan, void *storage, size_t storage_bytes,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex, void *data,
+    pvr_chunk_model_cache_t *cache) {
+    return cache_build(plan, storage, storage_bytes, prepare_vertex, data,
+                        cache, NULL);
+}
+
+int pvr_chunk_model_cache_build_uv(
+    const pvr_chunk_model_plan_t *plan, const pvr_chunk_uv_source_t *uv,
+    void *storage, size_t storage_bytes,
+    pvr_chunk_render_prepare_vertex_t prepare_vertex, void *data,
+    pvr_chunk_model_cache_t *cache) {
+    if(pvr_chunk_uv_validate(uv, plan ? &plan->view : NULL) < 0 ||
+       pvr_chunk_uv_disjoint(uv, storage, storage_bytes, 1) < 0 ||
+       pvr_chunk_uv_disjoint(uv, cache, 1, sizeof(*cache)) < 0)
+        return -1;
+    return cache_build(plan, storage, storage_bytes, prepare_vertex, data,
+                        cache, uv);
 }
 
 static int finite_deformation(const pvr_deform_vertex_t *vertex) {
