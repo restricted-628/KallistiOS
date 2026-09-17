@@ -122,3 +122,72 @@ int pvr_uv_ir_relative(const pvr_uv_ir_transform_t *base,
     memcpy(output, candidate, sizeof(candidate));
     return PVR_UV_IR_SHARED;
 }
+
+static int overlaps(const void *a, size_t an, const void *b, size_t bn) {
+    uintptr_t x = (uintptr_t)a, y = (uintptr_t)b;
+    return x <= y ? y - x < an : x - y < bn;
+}
+
+int pvr_uv_ir_select(const pvr_uv_ir_transform_t *base,
+                     const pvr_uv_ir_transform_t *auxiliary,
+                     const pvr_uv_ir_sample_t *samples, size_t count,
+                     double absolute_error, pvr_uv_ir_selection_t *output) {
+    pvr_uv_ir_selection_t selected = {
+        .storage = PVR_UV_IR_INDEPENDENT,
+        .mapping = {{1, 0, 0}, {0, 1, 0}},
+        .candidate_error = INFINITY
+    };
+    float mapping[2][3];
+    if(!base || !auxiliary || !samples || !count || !output ||
+       !isfinite(absolute_error) || absolute_error < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(count > SIZE_MAX / sizeof(*samples)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    if(overlaps(output, sizeof(*output), base, sizeof(*base)) ||
+       overlaps(output, sizeof(*output), auxiliary, sizeof(*auxiliary)) ||
+       overlaps(output, sizeof(*output), samples, count * sizeof(*samples))) {
+        errno = EINVAL;
+        return -1;
+    }
+    int candidate = pvr_uv_ir_relative(base, auxiliary, mapping);
+    if(candidate < 0)
+        return -1;
+    if(candidate == PVR_UV_IR_SHARED)
+        selected.candidate_error = 0;
+    for(size_t i = 0; i < count; ++i) {
+        float authored[2];
+        if(!isfinite(samples[i].canonical[0]) ||
+           !isfinite(samples[i].canonical[1])) {
+            errno = EDOM;
+            return -1;
+        }
+        if(pvr_uv_ir_apply(auxiliary, samples[i].auxiliary, authored) < 0)
+            return -1;
+        /* Do not early-out on an over-budget corner: later authored values
+           must be safe to bake before selecting the independent path. */
+        if(candidate != PVR_UV_IR_SHARED)
+            continue;
+        for(unsigned r = 0; r < 2; ++r) {
+            /* Force binary32 steps even with host contraction/excess
+               precision enabled. Double arithmetic would test a different
+               expression from the ordinary target layer callback. */
+            volatile float x = mapping[r][0] * samples[i].canonical[0];
+            volatile float y = mapping[r][1] * samples[i].canonical[1];
+            volatile float sum = x + y;
+            volatile float value = sum + mapping[r][2];
+            double error = isfinite(value) ?
+                fabs((double)value - authored[r]) : INFINITY;
+            selected.candidate_error = fmax(selected.candidate_error, error);
+        }
+    }
+    if(selected.candidate_error <= absolute_error) {
+        selected.storage = PVR_UV_IR_SHARED;
+        memcpy(selected.mapping, mapping, sizeof(mapping));
+    }
+    *output = selected;
+    return 0;
+}

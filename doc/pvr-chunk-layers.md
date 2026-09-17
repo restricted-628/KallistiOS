@@ -102,6 +102,16 @@ canonical-only admission are unchanged; the helper does not provide independent
 UV serialization itself or make unsupported glTF layers importable. PUV1 now
 provides that storage separately, with its own required-feature contract.
 
+`pvr_uv_ir_select()` performs the decoded-corner comparison with a caller-chosen
+absolute, per-component UV budget. It checks every supplied source reference,
+preserves seam duplicates and rejects invalid late inputs even when an earlier
+corner already ruled out reuse. Shared results carry the relative map;
+independent results carry identity rows for coordinates baked once from the
+authored auxiliary mapping. This avoids using base quantization loss as an
+implicit layer approximation or applying a baked transform twice. The check
+uses separate binary32 operations; target FP modes, clipping and image sampling
+still need their own validation.
+
 ## Independent runtime coordinates
 
 `dc/pvr_chunk_uv.h` now supplies a caller-owned runtime UV source for ordinary

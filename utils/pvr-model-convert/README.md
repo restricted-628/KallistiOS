@@ -97,9 +97,26 @@ The module also proposes a relative auxiliary mapping against an already-baked
 base map. It requests independent coordinates for different sets, singular or
 ill-conditioned bases, or unrepresentable coefficients. Even a usable inverse
 is only a candidate: quantizing canonical UVs may lose information or amplify
-auxiliary error. An importer must compare actual decoded corners with separately
-evaluated auxiliary coordinates before reusing them. This preparation helper
-does not yet enable auxiliary glTF materials or serialize independent UV sets.
+auxiliary error. `pvr_uv_ir_select()` now performs that comparison across every
+supplied final source-reference corner, using the decoded base UVs and separately
+evaluated authored auxiliary coordinates. Its explicit per-component UV error
+budget has no hidden default or texture-resolution assumption. Zero requires
+equal values in the binary32 multiply/add probe; this is not a guarantee about
+other target FP modes, clipping or texture sampling.
+
+The compiler must supply the final strip-reference order, including seam
+duplicates, not deduplicated position indices. A shared result returns relative
+PML1 rows. An independent result returns identity rows: bake authored auxiliary
+coordinates once into a full-model PUV1 source, then bind the relevant PML1
+entries to it. Different attribute sets never become shared merely because
+their current coordinates coincide. Invalid late corners still fail after an
+earlier corner has forced fallback; failure leaves the selection unchanged.
+
+This host preparation step adds no target runtime state and does not yet enable
+auxiliary glTF material import. Role extraction, sampler/color-space policy and
+emission into the converter's PCM2 output still need integration. In particular,
+glTF occlusion must not silently become a full-surface lightmap, and emissive
+texture RGB/linear-factor handling needs a declared conversion policy.
 
 The admitted source subset is:
 

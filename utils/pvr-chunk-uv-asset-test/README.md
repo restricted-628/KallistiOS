@@ -16,6 +16,11 @@ The suite checks:
 - PML1 entry/model/count validation against real admitted Compact models.
 - Decoding and runtime binding into the actual UV renderer, including seams
   on shared position IDs and reversed-strip coordinate order.
+- Host compiler storage selection with a collapsed base mapping, followed by
+  independent-coordinate baking, PML1/PUV1 serialization and rendering. Literal
+  expected UVs verify that the layer transform is baked once, with identity
+  PML1 rows afterward. The SH-4 fixture links the host helper for this test only;
+  it is not added to the target KOS library.
 
 No graphics hardware calls are made: the renderer writes a memory sink. Host
 stubs fail immediately if a hardware submission is accidentally introduced.
@@ -23,5 +28,5 @@ An emulator PASS establishes target-side numerical behavior, not texture-image
 or physical-hardware correctness.
 
 The complete byte contract and explicit loading sequence are documented in
-`doc/pvr-chunk-uv-sources.md`. Automatic UV-aware scene loading and auxiliary
-material import are not implemented by this test or codec.
+`doc/pvr-chunk-uv-sources.md`. Explicit UV-aware scene loading is implemented
+separately. Auxiliary material import is not enabled by this test or codec.

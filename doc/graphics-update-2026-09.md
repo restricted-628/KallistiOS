@@ -752,3 +752,40 @@ Next: host compiler extraction and serialization of supported auxiliary
 materials into the existing PML1/PUV1/PTX1 path, followed by imported-asset image
 validation. Unsupported importer features remain rejected. No additional scene
 manager, container version or permanent allocation is introduced here.
+
+## September 17: decoded-corner auxiliary UV selection
+
+The host-only `pvr_uv_ir_select()` closes the gap between proposing an affine
+inverse and deciding whether that inverse can safely reuse stored base UVs.
+It checks every supplied final strip-reference corner against independently
+evaluated authored layer coordinates using an explicit per-component error
+budget. Different attribute sets, unusable inverses, probe overflow and
+over-budget quantization choose independent storage. A bad late input fails
+without publishing a selection, even when an earlier corner forced fallback.
+
+Shared results contain relative PML1 rows. Independent results contain identity
+rows for a PUV1 source baked once from the authored auxiliary transform. This
+does not deduplicate position indices or discard UV seams. The helper allocates
+nothing and introduces no target code, model layout or wire-format version.
+Its binary32 arithmetic probe is not a claim about all target FP modes or
+post-clipping texture sampling.
+
+Validation:
+
+- Selection and codec/render tests pass GCC 14 GNU17/strict C23 and Clang
+  GNU17/strict C2x, plus Clang ASan/UBSan. Tests cover both signed precision
+  modes, exact budget boundaries, late seam differences, malformed inputs,
+  overlap rejection and preserved outputs.
+- The converter rebuild and existing Python conversion regression suite pass.
+- The extended codec fixture links the helper only for testing on SH-4. A
+  collapsed base map selects independent storage, round-trips through PML1 and
+  PUV1, and preserves literal baked coordinates on shared position IDs and a
+  reversed strip. Flycast interpreter and dynarec pass; no GPU image or real
+  hardware claim follows from the memory-sink fixture.
+
+The CLI importer still does not invoke this selection helper or admit new
+auxiliary materials. Next is wiring final source-reference correspondence and
+material/resource serialization into that importer. Occlusion is not a generic
+lightmap, and emissive sRGB texels with linear multipliers need a declared
+conversion policy before enabling those source features. Existing rejection
+checks remain intact until that integrated path is tested.

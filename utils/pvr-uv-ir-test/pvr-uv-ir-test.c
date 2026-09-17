@@ -150,11 +150,162 @@ static void quantization_is_not_equivalence(void) {
     assert(fabsf(v - authored[1]) > .2f);
 }
 
+static void storage_selection(void) {
+    pvr_uv_ir_transform_t base = identity(0), auxiliary = identity(0);
+    pvr_uv_ir_sample_t samples[6] = {
+        {{0,0}, {0,0}}, {{1,0}, {1,0}}, {{0,1}, {0,1}},
+        {{0,0}, {0,0}}, {{1,0}, {1,0}}, {{0,1}, {0,1}}
+    };
+    pvr_uv_ir_selection_t selected;
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, &selected) == 0);
+    assert(selected.storage == PVR_UV_IR_SHARED && selected.candidate_error == 0);
+    /* Only the LAST corner differs: a first-triangle or vertex-dedup check
+       would miss this independently authored seam. */
+    samples[5].auxiliary[0] = .25f;
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, &selected) == 0);
+    assert(selected.storage == PVR_UV_IR_INDEPENDENT);
+    assert(selected.candidate_error == .25);
+    assert(selected.mapping[0][0] == 1 && selected.mapping[1][1] == 1);
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, .25, &selected) == 0);
+    assert(selected.storage == PVR_UV_IR_SHARED);
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6,
+                           nextafter(.25, 0), &selected) == 0);
+    assert(selected.storage == PVR_UV_IR_INDEPENDENT);
+
+    samples[5].auxiliary[0] = 0;
+    auxiliary.source_set = 1;
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 100, &selected) == 0);
+    assert(selected.storage == PVR_UV_IR_INDEPENDENT);
+    assert(isinf(selected.candidate_error));
+    auxiliary.source_set = 0;
+    /* Signed UV8 and UV10 quantization destroy the small base scale. The
+       inverse exists, but must not be accepted as a storage optimization. */
+    base.row[0][0] = base.row[1][1] = .001;
+    for(unsigned bits = 8; bits <= 10; bits += 2) {
+        float scale = (float)(1u << bits);
+        for(size_t i = 0; i < 6; ++i) {
+            samples[i].auxiliary[0] = (float)i * .03125f;
+            samples[i].auxiliary[1] = .25f;
+            assert(pvr_uv_ir_apply(&base, samples[i].auxiliary,
+                                   samples[i].canonical) == 0);
+            for(unsigned r = 0; r < 2; ++r)
+                samples[i].canonical[r] =
+                    roundf(samples[i].canonical[r] * scale) / scale;
+        }
+        assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 1e-5,
+                                &selected) == 0);
+        assert(selected.storage == PVR_UV_IR_INDEPENDENT);
+        assert(selected.candidate_error == .25);
+    }
+    base = identity(0);
+    auxiliary.row[0][0] = 2;
+    samples[0].canonical[0] = FLT_MAX; /* Probe overflow is a fallback. */
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 1, &selected) == 0);
+    assert(selected.storage == PVR_UV_IR_INDEPENDENT);
+    assert(isinf(selected.candidate_error));
+
+    pvr_uv_ir_selection_t saved;
+    memcpy(&saved, &selected, sizeof(saved));
+    samples[5].auxiliary[1] = NAN; /* Still checked after probe overflow. */
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, &selected) < 0);
+    assert(errno == EDOM && !memcmp(&saved, &selected, sizeof(saved)));
+    samples[5].auxiliary[1] = 1;
+    samples[5].auxiliary[0] = FLT_MAX;
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, &selected) < 0);
+    assert(errno == ERANGE && !memcmp(&saved, &selected, sizeof(saved)));
+    samples[5].auxiliary[0] = 0;
+    samples[5].canonical[0] = INFINITY;
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, &selected) < 0);
+    assert(errno == EDOM && !memcmp(&saved, &selected, sizeof(saved)));
+    samples[5].canonical[0] = 0;
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 0, 0, &selected) < 0);
+    assert(errno == EINVAL && !memcmp(&saved, &selected, sizeof(saved)));
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, SIZE_MAX, 0,
+                            &selected) < 0);
+    assert(errno == EOVERFLOW && !memcmp(&saved, &selected, sizeof(saved)));
+    const double invalid[] = {-1, NAN, INFINITY};
+    for(size_t i = 0; i < 3; ++i) {
+        assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, invalid[i],
+                                &selected) < 0);
+        assert(errno == EINVAL && !memcmp(&saved, &selected, sizeof(saved)));
+    }
+    assert(pvr_uv_ir_select(NULL, &auxiliary, samples, 6, 0, &selected) < 0);
+    assert(errno == EINVAL && !memcmp(&saved, &selected, sizeof(saved)));
+    assert(pvr_uv_ir_select(&base, &auxiliary, NULL, 6, 0, &selected) < 0);
+    assert(errno == EINVAL && !memcmp(&saved, &selected, sizeof(saved)));
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, NULL) < 0);
+    assert(errno == EINVAL);
+    union {
+        pvr_uv_ir_sample_t samples[6];
+        pvr_uv_ir_selection_t selected;
+        pvr_uv_ir_transform_t transform;
+    } alias;
+    unsigned char before[sizeof(alias)];
+    memset(&alias, 0x5a, sizeof(alias));
+    memcpy(before, &alias, sizeof(alias));
+    assert(pvr_uv_ir_select(&base, &auxiliary, alias.samples, 6, 0,
+                            &alias.selected) < 0);
+    assert(errno == EINVAL && !memcmp(before, &alias, sizeof(alias)));
+    assert(pvr_uv_ir_select(&alias.transform, &auxiliary, samples, 6, 0,
+                            &alias.selected) < 0);
+    assert(errno == EINVAL && !memcmp(before, &alias, sizeof(alias)));
+    assert(pvr_uv_ir_select(&base, &alias.transform, samples, 6, 0,
+                            &alias.selected) < 0);
+    assert(errno == EINVAL && !memcmp(before, &alias, sizeof(alias)));
+}
+
+static void affine_storage_selection(void) {
+    pvr_uv_ir_transform_t base = identity(4), auxiliary = identity(4);
+    base.row[0][0] = 2;
+    base.row[0][2] = 1;
+    base.row[1][1] = 4;
+    base.row[1][2] = -2;
+    auxiliary.row[0][0] = -4;
+    auxiliary.row[0][2] = 5;
+    auxiliary.row[1][1] = .5;
+    auxiliary.row[1][2] = 6;
+    for(unsigned bits = 8; bits <= 10; bits += 2) {
+        pvr_uv_ir_sample_t samples[65];
+        double maximum = 0;
+        for(unsigned i = 0; i < 65; ++i) {
+            float u = ((int)i - 32) * .0031f;
+            float v = ((int)i - 32) * .0087f;
+            float scale = (float)(1u << bits);
+            samples[i].auxiliary[0] = u;
+            samples[i].auxiliary[1] = v;
+            samples[i].canonical[0] = roundf((2*u+1) * scale) / scale;
+            samples[i].canonical[1] = roundf((4*v-2) * scale) / scale;
+            /* Literal inverse and independently evaluated authored map. */
+            float recovered[] = {-2*samples[i].canonical[0]+7,
+                                 .125f*samples[i].canonical[1]+6.25f};
+            float authored[] = {(float)(-4*(double)u+5),
+                                (float)(.5*(double)v+6)};
+            for(unsigned r = 0; r < 2; ++r)
+                maximum = fmax(maximum, fabs((double)recovered[r]-authored[r]));
+        }
+        assert(maximum > 0);
+        pvr_uv_ir_selection_t selected;
+        assert(pvr_uv_ir_select(&base, &auxiliary, samples, 65, maximum,
+                                &selected) == 0);
+        assert(selected.storage == PVR_UV_IR_SHARED);
+        assert(selected.candidate_error == maximum);
+        assert(selected.mapping[0][0] == -2 && selected.mapping[0][2] == 7);
+        assert(selected.mapping[1][1] == .125f && selected.mapping[1][2] == 6.25f);
+        assert(pvr_uv_ir_select(&base, &auxiliary, samples, 65,
+                                nextafter(maximum, 0), &selected) == 0);
+        assert(selected.storage == PVR_UV_IR_INDEPENDENT);
+        assert(selected.mapping[0][0] == 1 && selected.mapping[1][1] == 1);
+        assert(selected.mapping[0][2] == 0 && selected.mapping[1][2] == 0);
+    }
+}
+
 int main(void) {
     forward();
     relative();
     independent_and_invalid();
     quantization_is_not_equivalence();
+    storage_selection();
+    affine_storage_selection();
     puts("pvr-uv-ir-test: PASS");
     return 0;
 }

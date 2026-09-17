@@ -2,6 +2,7 @@
    Copyright (C) 2026 Joseph Black
 */
 #include <dc/pvr_chunk_uv_asset.h>
+#include "pvr-uv-ir.h"
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
@@ -181,9 +182,12 @@ static void binding_and_render(void) {
         0, 0x3f800000, 0x3f800000, 255
     };
     static const uint16_t polygons[] = {
-        PVR_CHUNK_STRIP_INDEX, 9, 2, 3, 0, 1, 2, 0x8003, 0, 1, 2, 255
+        PVR_CHUNK_STRIP_UV10_FIXED, 21, 2,
+        3, 0,0,0, 1,0,0, 2,0,0,
+        0x8003, 0,0,0, 1,0,0, 2,0,0, 255
     };
-    const pvr_chunk_model_t model = {vertices, 12, polygons, 12, {0,0,1}, 2};
+    const pvr_chunk_model_t model = {vertices, 12, polygons,
+        sizeof(polygons) / sizeof(*polygons), {0,0,1}, 2};
     pvr_chunk_model_view_t models[2];
     assert(pvr_chunk_model_open(&model, &models[0]) == 0);
     models[1] = models[0];
@@ -198,9 +202,39 @@ static void binding_and_render(void) {
     };
     uint8_t layer_bytes[160], uv_bytes[256];
     pvr_chunk_layer_section_view_t layers;
+    /* Host compiler decision -> actual PML1/PUV1 writers -> actual renderer.
+       The base mapping collapsed the authored coordinates to zero. Repeated
+       canonical vertex indices still have distinct per-reference layer UVs. */
+    pvr_uv_ir_transform_t base = {.source_set = 0, .row = {{0,0,0},{0,0,0}}};
+    pvr_uv_ir_transform_t auxiliary = {
+        .source_set = 0, .row = {{-2,0,.25},{0,.5,-1}}
+    };
+    pvr_uv_ir_sample_t samples[] = {
+        {{0,0},{0,0}}, {{0,0},{1,0}}, {{0,0},{0,1}},
+        {{0,0},{-2,3}}, {{0,0},{4,5}}, {{0,0},{6,7}}
+    };
+    pvr_uv_ir_selection_t selection;
+    assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, &selection) == 0);
+    assert(selection.storage == PVR_UV_IR_INDEPENDENT);
+    pvr_chunk_uv_t input[6];
+    const pvr_chunk_uv_t expected[] = {
+        {.25f,-1}, {-1.75f,-1}, {.25f,-.5f},
+        {4.25f,.5f}, {-7.75f,1.5f}, {-11.75f,2.5f}
+    };
+    for(size_t i = 0; i < 6; ++i) {
+        float pair[2];
+        assert(pvr_uv_ir_apply(&auxiliary, samples[i].auxiliary, pair) == 0);
+        input[i] = (pvr_chunk_uv_t){pair[0], pair[1]};
+        assert(input[i].u == expected[i].u && input[i].v == expected[i].v);
+    }
+    for(size_t i = 0; i < 2; ++i) {
+        memcpy(entries[i].layer.uv, selection.mapping, sizeof(selection.mapping));
+        /* Independent coordinates are already transformed, never twice. */
+        assert(entries[i].layer.uv[0][0] == 1 && entries[i].layer.uv[1][1] == 1);
+        assert(entries[i].layer.uv[0][2] == 0 && entries[i].layer.uv[1][2] == 0);
+    }
     assert(pvr_chunk_layer_section_write(entries, 2, layer_bytes, 160) == 0);
     assert(pvr_chunk_layer_section_open(layer_bytes, 160, &layers) == 0);
-    pvr_chunk_uv_t input[] = {{0,0},{1,0},{0,1},{-2,3},{4,5},{6,7}};
     pvr_chunk_uv_asset_source_t source = {0, input, 6};
     pvr_chunk_uv_asset_binding_t bindings[] = {{0,0},{1,0}};
     pvr_chunk_uv_section_view_t view;
