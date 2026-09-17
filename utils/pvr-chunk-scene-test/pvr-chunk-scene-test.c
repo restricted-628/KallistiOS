@@ -8,6 +8,10 @@
 #include <dc/pvr_chunk_animation_asset.h>
 #include <dc/pvr_chunk_layer_asset.h>
 #include <dc/pvr_chunk_uv_asset.h>
+#include <dc/pvr_chunk_texture_asset.h>
+#ifdef __DREAMCAST__
+#include <dc/pvr_chunk_binding.h>
+#endif
 
 #include "pvr-scene-ir.h"
 
@@ -152,8 +156,19 @@ static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
                                 size_t hierarchy_bytes,
                                 int compress_first_vertex,
                                 const void *layers, size_t layer_bytes,
-                                const void *uv, size_t uv_bytes) {
-    const size_t section_count = 6 + (layers != NULL) + (uv != NULL);
+                                const void *uv, size_t uv_bytes,
+                                const void *images, size_t image_bytes) {
+    static const uint16_t textured_polygons[] = {
+        PVR_CHUNK_TEXTURE | (4u << 8), 7,
+        PVR_CHUNK_STRIP_UV8_FIXED, 11, 1, 3,
+        0, 0, 0, 1, 256, 0, 2, 0, 256, 255
+    };
+    const void *polygon_data = images ? (const void *)textured_polygons :
+                                       (const void *)scene_polygons;
+    const size_t polygon_bytes = images ? sizeof(textured_polygons) :
+                                         sizeof(scene_polygons);
+    const size_t section_count = 6 + (layers != NULL) + (uv != NULL) +
+                                 (images != NULL);
     const size_t directory_bytes = section_count *
         PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
     size_t vertex0_offset = align32(
@@ -161,11 +176,11 @@ static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
     size_t polygon0_offset = align32(
         vertex0_offset + sizeof(scene_vertices0));
     size_t vertex1_offset = align32(
-        polygon0_offset + sizeof(scene_polygons));
+        polygon0_offset + polygon_bytes);
     size_t polygon1_offset = align32(
         vertex1_offset + sizeof(scene_vertices1));
     size_t table_offset = align32(
-        polygon1_offset + sizeof(scene_polygons));
+        polygon1_offset + polygon_bytes);
     size_t hierarchy_offset = align32(table_offset + table_bytes);
     size_t layer_offset = align32(hierarchy_offset + hierarchy_bytes);
     size_t file_bytes = layers ? layer_offset + layer_bytes :
@@ -175,16 +190,17 @@ static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
 
     if(uv)
         file_bytes = uv_offset + uv_bytes;
+    size_t image_offset = align32(file_bytes);
+    if(images)
+        file_bytes = image_offset + image_bytes;
     assert(file_bytes <= capacity);
     memset(asset, 0, capacity);
     memcpy(asset + vertex0_offset, scene_vertices0,
            sizeof(scene_vertices0));
-    memcpy(asset + polygon0_offset, scene_polygons,
-           sizeof(scene_polygons));
+    memcpy(asset + polygon0_offset, polygon_data, polygon_bytes);
     memcpy(asset + vertex1_offset, scene_vertices1,
            sizeof(scene_vertices1));
-    memcpy(asset + polygon1_offset, scene_polygons,
-           sizeof(scene_polygons));
+    memcpy(asset + polygon1_offset, polygon_data, polygon_bytes);
     memcpy(asset + table_offset, table, table_bytes);
     memcpy(asset + hierarchy_offset, hierarchy, hierarchy_bytes);
 
@@ -195,8 +211,8 @@ static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
                       PVR_CHUNK_ASSET_CODEC_RAW, 4);
     write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
                   PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
-                  polygon0_offset, scene_polygons, sizeof(scene_polygons),
-                  sizeof(scene_polygons), PVR_CHUNK_ASSET_CODEC_RAW, 2);
+                  polygon0_offset, polygon_data, polygon_bytes,
+                  polygon_bytes, PVR_CHUNK_ASSET_CODEC_RAW, 2);
     write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 2u,
                   PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
                   vertex1_offset, scene_vertices1, sizeof(scene_vertices1),
@@ -204,8 +220,8 @@ static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
                   PVR_CHUNK_ASSET_CODEC_LZ4_FRAME, 4);
     write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 3u,
                   PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
-                  polygon1_offset, scene_polygons, sizeof(scene_polygons),
-                  sizeof(scene_polygons), PVR_CHUNK_ASSET_CODEC_RAW, 2);
+                  polygon1_offset, polygon_data, polygon_bytes,
+                  polygon_bytes, PVR_CHUNK_ASSET_CODEC_RAW, 2);
     write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 4u,
                   PVR_CHUNK_ASSET_SECTION_MODEL_TABLE,
                   table_offset, table, table_bytes, table_bytes,
@@ -232,6 +248,14 @@ static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
                       PVR_CHUNK_ASSET_CODEC_RAW, 4);
         write_le32(entry + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
     }
+    if(images) {
+        uint8_t *entry = directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES *
+            (6u + (layers != NULL) + (uv != NULL));
+        memcpy(asset + image_offset, images, image_bytes);
+        write_section(entry, PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES,
+                      image_offset, images, image_bytes, image_bytes,
+                      PVR_CHUNK_ASSET_CODEC_RAW, 32);
+    }
 
     write_le32(asset, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
     write_le16(asset + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
@@ -253,7 +277,70 @@ static size_t build_scene_asset(uint8_t *asset, size_t capacity,
                                 const void *layers, size_t layer_bytes) {
     return build_scene_asset_extended(asset, capacity, table, table_bytes,
         hierarchy, hierarchy_bytes, compress_first_vertex, layers, layer_bytes,
-        NULL, 0);
+        NULL, 0, NULL, 0);
+}
+
+/* Two independently framed 8x8 RGB565 images, IDs 7 and 8. Uniform texels
+   avoid depending on a host texture converter or twiddle implementation. */
+static void build_layer_images(uint8_t bytes[384]) {
+    memset(bytes, 0, 384);
+    write_le32(bytes, PVR_CHUNK_TEXTURE_SECTION_MAGIC);
+    write_le16(bytes + 4, PVR_CHUNK_TEXTURE_SECTION_VERSION);
+    write_le16(bytes + 6, 64);
+    write_le32(bytes + 8, 384);
+    write_le32(bytes + 12, 2);
+    write_le16(bytes + 16, 32);
+    write_le32(bytes + 20, 128);
+    for(size_t i = 0; i < 2; ++i) {
+        uint8_t *entry = bytes + 64 + i * 32;
+        uint8_t *pixels = bytes + 128 + i * 128;
+        write_le16(entry, (uint16_t)(7 + i));
+        entry[2] = PVR_TXR_SURFACE_RGB565;
+        entry[3] = PVR_TXR_SURFACE_TWIDDLED;
+        write_le16(entry + 4, 8);
+        write_le16(entry + 6, 8);
+        write_le32(entry + 12, (uint32_t)(128 + i * 128));
+        write_le32(entry + 16, 128);
+        for(size_t j = 0; j < 64; ++j)
+            write_le16(pixels + j * 2, i ? 0x07e0 : 0xf800);
+        write_le32(entry + 20, crc32_bytes(pixels, 128));
+    }
+    write_le32(bytes + 24, crc32_bytes(bytes + 64, 64));
+    write_le32(bytes + 28, crc32_bytes(bytes + 128, 256));
+    write_le32(bytes + 60, crc32_bytes(bytes, 60));
+}
+
+static void test_layer_images(const pvr_chunk_layer_section_view_t *layers,
+                              const pvr_chunk_texture_section_view_t *images) {
+    uint8_t bytes[384], layer_bytes[160];
+    pvr_chunk_texture_section_view_t view;
+    pvr_chunk_layer_section_view_t shared;
+    pvr_chunk_layer_entry_t entries[2];
+    assert(pvr_chunk_layer_section_validate_images(layers, images) == 0);
+    for(size_t i = 0; i < 2; ++i) {
+        assert(pvr_chunk_layer_section_entry_get(layers, i, &entries[i]) == 0);
+        entries[i].layer.texture.identifier = 7;
+    }
+    assert(pvr_chunk_layer_section_write(entries, 2, layer_bytes, 160) == 0);
+    assert(pvr_chunk_layer_section_open(layer_bytes, 160, &shared) == 0);
+    assert(pvr_chunk_layer_section_validate_images(&shared, images) == 0);
+    layer_bytes[40] ^= 1;
+    assert(pvr_chunk_layer_section_validate_images(&shared, images) < 0);
+    assert(errno == EILSEQ);
+    memcpy(bytes, images->data, sizeof(bytes));
+    write_le16(bytes + 64, 6); /* Well-formed package missing layer ID 7. */
+    write_le32(bytes + 24, crc32_bytes(bytes + 64, 64));
+    write_le32(bytes + 60, crc32_bytes(bytes, 60));
+    assert(pvr_chunk_texture_section_open(bytes, sizeof(bytes), &view) == 0);
+    assert(pvr_chunk_layer_section_validate_images(layers, &view) < 0);
+    assert(errno == ENOENT);
+    bytes[140] ^= 1;
+    assert(pvr_chunk_layer_section_validate_images(layers, &view) < 0);
+    assert(errno == EILSEQ);
+    assert(pvr_chunk_layer_section_validate_images(NULL, images) < 0);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_layer_section_validate_images(layers, NULL) < 0);
+    assert(errno == EINVAL);
 }
 
 static size_t decoder_calls;
@@ -623,6 +710,154 @@ static void test_draw_schedule_canonicalization(void) {
     pvr_scene_ir_free(&source);
 }
 
+#ifdef __DREAMCAST__
+typedef struct layer_pipeline {
+    pvr_poly_cxt_t context;
+    const pvr_chunk_texture_table_view_t *textures;
+    pvr_chunk_material_layer_t layer;
+    pvr_material_recipe_t recipe;
+    size_t begins;
+} layer_pipeline_t;
+
+static int layer_begin(const pvr_chunk_render_state_t *state,
+                       const pvr_chunk_strip_view_t *strip, void *data) {
+    layer_pipeline_t *pipeline = data;
+    pvr_chunk_material_context_t surface;
+    if(pvr_chunk_material_resolve_context(&surface, &pipeline->context,
+           pipeline->textures, state, strip) < 0 ||
+       pvr_chunk_material_resolve_layer(&pipeline->recipe, &surface,
+           pipeline->textures, &pipeline->layer) < 0)
+        return -1;
+    assert(surface.context.txr.enable);
+    ++pipeline->begins;
+    return 0;
+}
+
+static int layer_vertex(const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *attributes,
+    const pvr_chunk_strip_attributes_t *reference,
+    pvr_vertex_t *vertex, void *data) {
+    layer_pipeline_t *pipeline = data;
+    (void)state; (void)attributes; (void)reference;
+    return pvr_chunk_material_layer_prepare_vertex(&pipeline->layer,
+                                                   vertex, vertex);
+}
+
+/* Real KOS implementations, not host mocks: packaged images -> allocated
+   surfaces -> texture table -> recipe -> UV renderer/cache -> caller sink.
+   No header/geometry submission occurs, so this is not a pixel-order test. */
+static void test_layer_pipeline(const pvr_chunk_model_view_t *models,
+    const pvr_chunk_layer_section_view_t *layers,
+    const pvr_chunk_uv_section_view_t *uv,
+    const pvr_chunk_texture_section_view_t *images) {
+    /* The allocator's first allocation establishes the aligned arena and
+       retains its leading padding. Compare live allocations only after that
+       one-time setup, without resetting the allocator to hide a leak. */
+    size_t cold_available = pvr_mem_available();
+    pvr_ptr_t warmup = pvr_mem_malloc(32);
+    assert(warmup);
+    pvr_mem_free(warmup);
+    size_t available = pvr_mem_available();
+    printf("layer VRAM baseline: %lu -> %lu bytes after arena setup\n",
+           (unsigned long)cold_available, (unsigned long)available);
+    pvr_txr_surface_t surfaces[2];
+    pvr_chunk_texture_binding_t bindings[2];
+    pvr_chunk_texture_table_t table = {bindings, 2};
+    pvr_chunk_texture_table_view_t textures;
+    assert(pvr_chunk_layer_section_validate_images(layers, images) == 0);
+    for(size_t i = 0; i < 2; ++i) {
+        pvr_chunk_texture_image_t image;
+        assert(pvr_chunk_texture_section_entry_get(images, i, &image) == 0);
+        assert(pvr_txr_surface_alloc(&surfaces[i], image.width, image.height,
+            image.format, image.layout, image.mipmapped) == 0);
+        assert(pvr_chunk_texture_image_upload(&image, &surfaces[i],
+                                               PVR_TXR_TRANSFER_CPU) == 0);
+        bindings[i] = (pvr_chunk_texture_binding_t){image.identifier, 0,
+                                                   &surfaces[i]};
+    }
+    assert(pvr_chunk_texture_table_open(&table, &textures) == 0);
+    assert(pvr_chunk_layer_section_validate_table(layers, &textures) == 0);
+    for(size_t i = 0; i < 2; ++i) {
+        pvr_chunk_layer_entry_t entry;
+        uint32_t selected;
+        pvr_chunk_uv_t coordinates[3];
+        pvr_chunk_uv_strip_t strips[1];
+        pvr_chunk_uv_source_t source;
+        layer_pipeline_t pipeline = {.textures = &textures};
+        pvr_chunk_model_plan_requirements_t plan_size;
+        pvr_chunk_model_plan_t plan;
+        pvr_chunk_cache_requirements_t cache_size;
+        pvr_chunk_model_cache_t cache;
+        alignas(32) pvr_vertex_t direct[3], cached[3], base[3], work[3];
+        pvr_geometry_sink_t sink;
+        const matrix_t matrix = {{1,0,0,0},{0,1,0,0},{0,0,1,0},{0,0,1,1}};
+        pvr_frustum_t frustum;
+        assert(pvr_chunk_layer_section_entry_get(layers, i, &entry) == 0);
+        assert(entry.model == i);
+        pipeline.layer = entry.layer;
+        pvr_poly_cxt_col(&pipeline.context, PVR_LIST_OP_POLY);
+        pipeline.context.gen.culling = PVR_CULLING_NONE;
+        pipeline.context.txr.env = PVR_TXRENV_MODULATEALPHA;
+        assert(pvr_chunk_uv_section_find(uv, (uint32_t)i, &selected) == 0);
+        assert(pvr_chunk_uv_section_decode(uv, selected, coordinates, 3) == 0);
+        assert(pvr_chunk_uv_source_init(&models[i], coordinates, 3, strips, 1,
+                                          &source) == 0);
+        assert(pvr_frustum_init(&frustum, &matrix, -4,-4,4,4,.5f,2) == 0);
+        assert(pvr_geometry_sink_init_memory(&sink, direct, 3) == 0);
+        assert(pvr_chunk_model_emit_uv(&source, NULL, &frustum,
+            PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink, work, 3, NULL, 0,
+            NULL, layer_begin, layer_vertex, &pipeline, NULL) == 0);
+        assert(pipeline.begins == 1 && pipeline.recipe.pass_count == 2);
+        assert(pipeline.recipe.requires_presort);
+        assert(pipeline.recipe.passes[0].role == PVR_MATERIAL_PASS_SURFACE);
+        assert(pipeline.recipe.passes[1].role == entry.layer.role);
+        assert(pvr_geometry_sink_init_memory(&sink, base, 3) == 0);
+        assert(pvr_chunk_model_emit_clipped(&models[i], &frustum,
+            PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink, work, 3, NULL, 0,
+            NULL, NULL, NULL, NULL) == 0);
+        const float expected_u[] = {-1.75f,6.25f,10.25f};
+        const float expected_v[] = {.75f,1.75f,2.75f};
+        for(size_t v = 0; v < 3; ++v) {
+            assert(direct[v].x == base[v].x && direct[v].y == base[v].y &&
+                   direct[v].z == base[v].z && direct[v].flags == base[v].flags);
+            assert(direct[v].u == expected_u[v] && direct[v].v == expected_v[v]);
+            assert(direct[v].argb == (i ? UINT32_C(0xffffffff) : 0x00ffffff));
+            assert(direct[v].oargb == 0);
+        }
+        assert(pvr_chunk_model_plan_query(&models[i], &plan_size) == 0);
+        pvr_chunk_vertex_index_entry_t *index = malloc(plan_size.vertex_index_bytes);
+        assert(index);
+        assert(pvr_chunk_model_plan_build(&models[i], index,
+            plan_size.vertex_index_entries, &plan) == 0);
+        assert(pvr_chunk_model_cache_query(&plan, &cache_size) == 0);
+        size_t bytes = (cache_size.bytes + 31u) & ~(size_t)31u;
+        void *storage = aligned_alloc(32, bytes);
+        assert(storage);
+        assert(pvr_chunk_model_cache_build_uv(&plan, &source, storage, bytes,
+            layer_vertex, &pipeline, &cache) == 0);
+        memset(coordinates, 0, sizeof(coordinates)); /* Cache owns baked values. */
+        assert(pvr_geometry_sink_init_memory(&sink, cached, 3) == 0);
+        assert(pvr_chunk_model_cache_emit(&cache, &matrix, &sink, work, 3,
+            NULL, NULL, NULL, NULL, NULL) == 0);
+        assert(!memcmp(cached, direct, sizeof(direct)));
+        free(storage);
+        free(index);
+        /* Missing auxiliary bindings fail without replacing a valid recipe. */
+        pvr_material_recipe_t saved = pipeline.recipe;
+        pvr_chunk_material_context_t surface = {pipeline.context, 0};
+        pvr_chunk_material_layer_t missing = pipeline.layer;
+        missing.texture.identifier = 9;
+        assert(pvr_chunk_material_resolve_layer(&pipeline.recipe, &surface,
+            &textures, &missing) < 0 && errno == ENOENT);
+        assert(!memcmp(&saved, &pipeline.recipe, sizeof(saved)));
+    }
+    for(size_t i = 0; i < 2; ++i)
+        pvr_txr_surface_release(&surfaces[i]);
+    assert(pvr_mem_available() == available);
+    puts("layer pipeline: packaged textures, recipes, UV/cache and cleanup passed");
+}
+#endif
+
 static void test_scene_uv(const void *table, size_t table_bytes,
                            const void *hierarchy_bytes, size_t hierarchy_size) {
     const pvr_chunk_uv_t coordinates[] = {{-1,2},{3,4},{5,6}};
@@ -630,13 +865,15 @@ static void test_scene_uv(const void *table, size_t table_bytes,
         {.model = 0, .strip_count = 1, .layer = {
             .role = PVR_MATERIAL_PASS_EMISSIVE,
             .texture = {.identifier = 7, .mipmap_adjust = PVR_MIPBIAS_NORMAL},
-            .rgb = 0xffffff, .uv = {{1,0,0},{0,1,0}}}},
+            .rgb = 0xffffff, .uv = {{2,0,.25f},{0,.5f,-.25f}}}},
         {.model = 1, .strip_count = 1, .layer = {
             .role = PVR_MATERIAL_PASS_LIGHTMAP,
             .texture = {.identifier = 8, .mipmap_adjust = PVR_MIPBIAS_NORMAL},
-            .rgb = 0xffffff, .uv = {{1,0,0},{0,1,0}}}}
+            .rgb = 0xffffff, .uv = {{2,0,.25f},{0,.5f,-.25f}}}}
     };
     uint8_t layer_bytes[160], uv_bytes[136];
+    alignas(32) uint8_t image_bytes[384];
+    build_layer_images(image_bytes);
     assert(pvr_chunk_layer_section_write(entries, 2, layer_bytes,
                                           sizeof(layer_bytes)) == 0);
     for(unsigned variant = 0; variant < 20; ++variant) {
@@ -665,7 +902,8 @@ static void test_scene_uv(const void *table, size_t table_bytes,
             uv_bytes[32] ^= 1; /* Correct container CRC, invalid inner CRC. */
         asset_size = build_scene_asset_extended(asset, sizeof(asset), table,
             table_bytes, hierarchy_bytes, hierarchy_size, 1,
-            layer_bytes, sizeof(layer_bytes), uv_bytes, uv_size);
+            layer_bytes, sizeof(layer_bytes), uv_bytes, uv_size,
+            image_bytes, sizeof(image_bytes));
         uint8_t *uv_descriptor = asset + 64 + 7 * 32;
         if(variant == 5) { /* Unused second vertex stream becomes a duplicate. */
             write_le32(asset + 64 + 2 * 32, PVR_CHUNK_ASSET_SECTION_UV_SOURCES);
@@ -680,7 +918,7 @@ static void test_scene_uv(const void *table, size_t table_bytes,
         }
         if(variant == 9)
             asset[read_le32(uv_descriptor + 8) + 32] ^= 1;
-        write_le32(asset + 44, crc32_bytes(asset + 64, 8 * 32));
+        write_le32(asset + 44, crc32_bytes(asset + 64, 9 * 32));
         write_le32(asset + 60, crc32_bytes(asset, 60));
         assert(pvr_chunk_asset_open(asset, asset_size, &asset_view) == 0);
         assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
@@ -723,6 +961,18 @@ static void test_scene_uv(const void *table, size_t table_bytes,
             assert(pvr_chunk_uv_source_init(&models[1], decoded, 3,
                                                index, 1, &runtime) == 0);
             assert(runtime.model == &models[1] && runtime.uv_count == 3);
+            pvr_chunk_texture_section_view_t images;
+            pvr_chunk_asset_section_t image_section;
+            const void *image_data;
+            assert(pvr_chunk_asset_section_get(&asset_view, 8, &image_section) == 0);
+            assert(pvr_chunk_asset_section_load(&asset_view, 8, NULL, NULL,
+                NULL, 0, &image_data) == 0);
+            assert(pvr_chunk_texture_section_open(image_data,
+                image_section.decoded_bytes, &images) == 0);
+            test_layer_images(&layers, &images);
+#ifdef __DREAMCAST__
+            test_layer_pipeline(models, &layers, &uv, &images);
+#endif
         }
         else {
             int expected = variant >= 11 && variant != 18 ? EINVAL :
@@ -994,11 +1244,17 @@ static void test_scene_asset(void) {
 }
 
 int main(void) {
+#ifdef __DREAMCAST__
+    assert(pvr_init_defaults() == 0);
+#endif
     test_round_trip();
     test_rejections();
     test_ir_rejections();
     test_draw_schedule_canonicalization();
     test_scene_asset();
+#ifdef __DREAMCAST__
+    pvr_shutdown();
+#endif
     puts("pvr chunk scene tests passed");
     return 0;
 }

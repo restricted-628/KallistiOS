@@ -717,3 +717,38 @@ Next is auxiliary texture-manifest/recipe integration and importer admission.
 The loader returns associations; applications still must use them when choosing
 UV sources and rendering passes. Auxiliary glTF materials remain disabled until
 the complete import/resource/render path can honor them.
+
+## September 17: packaged layer images and integrated target preparation
+
+`pvr_chunk_layer_section_validate_images()` checks PML1 auxiliary texture IDs
+against fully validated PTX1 images before VRAM acquisition. Shared IDs and
+unused packaged images are accepted; missing IDs and corrupt data are rejected.
+This is an optional load-time check, not a per-frame operation. PRT1 keeps its
+exact direct-stream-use meaning: packaged requirements are the union of base
+stream resources and auxiliary layer resources, not a new manifest format.
+
+The existing two-model scene fixture now includes textured base geometry,
+lightmap/emission layer descriptors, independent UV sources and two packaged
+images. Its SH-4 path uses real KOS surface allocation/upload, texture binding,
+material recipe compilation, UV rendering and prepared cache emission. Literal
+UV/color expectations and base/layer geometry comparisons precede byte-identical
+direct/cache packet checks. Missing bindings preserve an existing recipe and
+explicit release restores the free VRAM baseline. The test warms the allocator
+first: its initial aligned arena setup retains 24 bytes in these emulator runs,
+which is not a texture leak. No allocator reset masks the cleanup result.
+
+Validation:
+
+- Host scene tests pass GCC 14 GNU17/strict C23, Clang GNU17/strict C2x and
+  Clang ASan/UBSan. Existing resource-binding tests also pass, including shared
+  pins and partial-failure cleanup.
+- The full KOS build, SH-4 test link, implementation/module exports and focused
+  Doxygen grouping checks pass.
+- The integrated SH-4 fixture passes Flycast interpreter and dynarec. It uploads
+  textures and inspects generated packets but does not submit geometry: this
+  is not framebuffer composition, presort, imported-content or hardware proof.
+
+Next: host compiler extraction and serialization of supported auxiliary
+materials into the existing PML1/PUV1/PTX1 path, followed by imported-asset image
+validation. Unsupported importer features remain rejected. No additional scene
+manager, container version or permanent allocation is introduced here.

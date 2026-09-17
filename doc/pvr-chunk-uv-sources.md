@@ -56,7 +56,10 @@ the equivalent explicit load-time sequence is:
 2. Open the PML1 and PUV1 sections and admit the ordered model views.
 3. Call `pvr_chunk_uv_section_validate_layers()` with those views. It rechecks
    both sections, all layer ranges, full-model source coordinate counts, and
-   each bound layer's model identity. Texture and recipe validation is separate.
+   each bound layer's model identity. Before uploading packaged images, use
+   `pvr_chunk_layer_section_validate_images()` to verify that PTX1 covers all
+   auxiliary texture identifiers. Actual surface/recipe validation stays in
+   the existing texture-table and material-binding APIs.
 4. For a layer entry, use `pvr_chunk_uv_section_find()`. `ENOENT` selects the
    canonical path. Otherwise query that source's identity/count with
    `pvr_chunk_uv_section_source_get()`, then decode its coordinates with

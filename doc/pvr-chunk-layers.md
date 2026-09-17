@@ -4,9 +4,10 @@ PML1 associates an existing lightmap/emission layer with a contiguous range of
 source strips in one model. A shared texture can have different roles, sampling,
 UV transforms and tints in different draws. Texture identity is not material
 identity. The codec, model-range admission, explicit PCM2 scene loading and
-texture residency preparation share the existing Compact pipeline. Auxiliary
-glTF import remains rejected until independent UV-set storage and renderer
-selection are integrated. Required material meaning must not be silently
+texture residency preparation share the existing Compact pipeline. Independent
+UV storage, renderer/cache binding and explicit scene loading are implemented.
+Auxiliary glTF import remains rejected until the host compiler preserves the
+complete texture, UV and material meaning. Required meaning must not be silently
 ignored by a generic loader.
 
 ## PCM2 admission
@@ -50,15 +51,20 @@ pvr-chunk-uv-sources.md).
    (PMT1 order for a multi-model asset, not polygon-section order). Referenced
    models are reopened once each; source strip bounds and unresolved execution
    requirements are checked before preparation.
-3. Use `pvr_chunk_layer_section_validate_table()` for a fixed texture table, or
+3. For packaged textures, call `pvr_chunk_layer_section_validate_images()` on
+   the PML1 and PTX1 views before acquiring VRAM. It revalidates both sections
+   and rejects missing auxiliary images. Packaged requirements are the union
+   of direct-stream IDs (PRT1, when present) and PML1 layer IDs; PRT1 usage bits
+   and exact stream validation do not change. External textures need no PTX1.
+4. Use `pvr_chunk_layer_section_validate_table()` for a fixed texture table, or
    `pvr_chunk_layer_section_prepare_residency()` to pin auxiliary identifiers
    through the existing adapter before starting a PVR list. Repeated identifiers
    reuse pins; on partial failure successful pins remain tracked for the normal
    binding release operation. PRT1 still describes only direct stream usage.
-4. Find a layer by model/source-strip ordinal, copy it to caller-owned
+5. Find a layer by model/source-strip ordinal, copy it to caller-owned
    preparation data and use `pvr_chunk_material_resolve_layer()`. That helper
    checks actual surfaces and recipe/profile admission.
-5. Replay identical canonical geometry through the recipe. For the layer step
+6. Replay identical canonical geometry through the recipe. For the layer step
    use `pvr_chunk_material_layer_prepare_vertex()`, preserving clipping,
    coverage, depth, material order and resource lifetime through completion.
 
@@ -76,8 +82,10 @@ starts a worker, owns a scene or implicitly pins a resource. Existing model and
 cache structures do not grow.
 
 Version 1 admits one textured lightmap **or** emission layer per source strip.
-It uses canonical draw UVs plus an affine transform. Independent UV selectors
-and stacked layer combinations are rejected, not approximated. Future changes
+Standalone PML1 uses canonical draw UVs plus an affine transform; an explicit
+PUV1 association can select independent coordinates instead. Selectors encoded
+in PML1's reserved byte and stacked layer combinations are rejected, not
+approximated. Future changes
 must be explicit; reserved bytes cannot silently change old content's meaning.
 If conversion already baked a base-texture transform into canonical UVs, an
 importer must derive the auxiliary mapping relative to those coordinates. It
@@ -91,7 +99,8 @@ stored UVs: signed fixed-point or float rounding can destroy information before
 the relative map runs. Check the actual decoded base corners against separately
 baked auxiliary corners using the chosen error budget. PML1 version 1 and its
 canonical-only admission are unchanged; the helper does not provide independent
-UV serialization or make unsupported glTF layers importable.
+UV serialization itself or make unsupported glTF layers importable. PUV1 now
+provides that storage separately, with its own required-feature contract.
 
 ## Independent runtime coordinates
 

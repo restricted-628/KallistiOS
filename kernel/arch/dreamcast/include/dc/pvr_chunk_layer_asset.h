@@ -15,6 +15,7 @@
 
 struct pvr_chunk_texture_table_view;
 struct pvr_chunk_residency_binding;
+struct pvr_chunk_texture_section_view;
 
 __BEGIN_DECLS
 /** \addtogroup pvr_chunk_binding
@@ -109,6 +110,20 @@ int pvr_chunk_layer_section_validate_models(
 int pvr_chunk_layer_section_validate_table(
     const pvr_chunk_layer_section_view_t *view,
     const struct pvr_chunk_texture_table_view *textures);
+
+/** \brief Verify packaged images cover every auxiliary texture identifier.
+
+    Revalidates both PML1 and PTX1 before checking identifiers. Missing images
+    report ENOENT. Shared identifiers and unused packaged images are allowed.
+    This optional load-time gate performs no allocation, pinning or upload and
+    changes neither input. PRT1 continues to describe direct stream usage;
+    packaged requirements are the union of those IDs and the PML1 layer IDs.
+    Surface-specific recipe admission still occurs during resolve_layer().
+    Applications providing textures externally can use validate_table() instead.
+*/
+int pvr_chunk_layer_section_validate_images(
+    const pvr_chunk_layer_section_view_t *layers,
+    const struct pvr_chunk_texture_section_view *images);
 
 /** \brief Pin auxiliary textures through the existing residency adapter.
 

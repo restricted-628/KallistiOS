@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added a load-time packaged-image check for auxiliary Compact material layers.
+  PML1 requirements complement rather than redefine PRT1 stream requirements.
+  The scene fixture now exercises packaged textures, independent UVs, actual
+  material recipes, direct/cache packet agreement and VRAM cleanup on SH-4.
+
 * Added explicit UV-aware layered scene loading. PML1/PUV1 framing is checked
   before geometry decode, and cross-section relationships before hierarchy
   publication. Views borrow asset bytes; UV expansion stays caller-controlled.

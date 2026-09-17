@@ -4,6 +4,7 @@ include ../Makefile.host-test
 CPPFLAGS += -I../pvr-chunk-render-test/include \
             -I../pvr-chunk-binding-test/include \
             -I../pvr-chunk-model-test/include \
+            -I../pvr-chunk-texture-asset-test/include \
             -I../pvr-model-convert \
             -I../../kernel/arch/dreamcast/include
 LDLIBS += -lm
@@ -19,6 +20,8 @@ SOURCES = pvr-chunk-scene-test.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_scene_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_layer_asset.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_layer_images.c \
+          ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_texture_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_uv_asset.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_render.c \
           ../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c \
