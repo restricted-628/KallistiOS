@@ -3,6 +3,7 @@
 */
 #include <dc/pvr_chunk_uv_asset.h>
 #include "pvr-uv-ir.h"
+#include "pvr-reference-ir.h"
 #include <assert.h>
 #include <errno.h>
 #include <math.h>
@@ -175,6 +176,104 @@ static void multiple_sources(void) {
     assert(pvr_chunk_uv_section_open(bytes, size, &view) < 0);
 }
 
+static void reference_correspondence(void) {
+    static const uint32_t vertices[] = {
+        PVR_CHUNK_VERTEX_XYZ | (10u << 16), 0x00030000,
+        0xbf800000, 0, 0x3f800000, 0x3f800000, 0, 0x3f800000,
+        0, 0x3f800000, 0x3f800000, 255
+    };
+    /* Literal words, not converter output: each strip reuses positions but
+       carries different UVs. FLOAT is low word first. INDEX has no UV. */
+    alignas(32) uint16_t polygons[] = {
+        PVR_CHUNK_STRIP_UV8_FIXED, 11, 1,
+        3, 0,0xff00,128, 1,1,0xffff, 2,512,768,
+        PVR_CHUNK_STRIP_UV10_FIXED, 11, 1,
+        0x8003, 0,0xfc00,512, 1,1,0xffff, 2,2048,3072,
+        PVR_CHUNK_STRIP_UV_FLOAT, 17, 1,
+        3, 0,0,0xbf80,0,0x3f00, 1,0,0x3e80,0,0xbe80,
+        2,0,0x4000,0,0x4040,
+        PVR_CHUNK_STRIP_INDEX, 5, 1, 3, 0,1,2, 255
+    };
+    pvr_chunk_model_t model = {vertices, 12, polygons,
+        sizeof(polygons) / sizeof(*polygons), {0,0,1}, 2};
+    pvr_reference_ir_t refs[12], before[12];
+    memset(refs, 0xa5, sizeof(refs));
+    for(size_t i = 0; i < 12; ++i) {
+        refs[i].triangle = i / 3;
+        refs[i].corner = (unsigned)(i % 3);
+        refs[i].vertex = (uint16_t)(i % 3);
+    }
+    const float expected[12][2] = {
+        {-1,.5f}, {1.0f/256,-1.0f/256}, {2,3},
+        {-1,.5f}, {1.0f/1024,-1.0f/1024}, {2,3},
+        {-1,.5f}, {.25f,-.25f}, {2,3}, {0,0}, {0,0}, {0,0}
+    };
+    assert(pvr_reference_ir_resolve(&model, 4, refs, 12) == 0);
+    for(size_t i = 0; i < 12; ++i) {
+        assert(refs[i].triangle == i / 3 && refs[i].corner == i % 3);
+        assert(refs[i].vertex == i % 3 && refs[i].strip == i / 3);
+        assert(refs[i].reversed == (i / 3 == 1));
+        assert(refs[i].has_uv == (i < 9));
+        assert(refs[i].canonical[0] == expected[i][0]);
+        assert(refs[i].canonical[1] == expected[i][1]);
+    }
+    /* Late errors must not partially publish even the first decoded row. */
+    for(unsigned fault = 0; fault < 7; ++fault) {
+        pvr_reference_ir_t bad[12];
+        pvr_chunk_model_t broken = model;
+        size_t count = 12;
+        memcpy(bad, refs, sizeof(bad));
+        bad[0].canonical[0] = 99;
+        switch(fault) {
+            case 0: bad[11].vertex = 0; break;
+            case 1: bad[11].triangle = 4; break;
+            case 2: bad[11].corner = 3; break;
+            case 3: --count; break;
+            case 4: --broken.polygon_word_count; break;
+            case 5: count = SIZE_MAX / sizeof(*bad) + 1; break;
+            case 6: broken.vertex_word_count = SIZE_MAX; break;
+        }
+        memcpy(before, bad, sizeof(before));
+        assert(pvr_reference_ir_resolve(&broken, 4, bad, count) < 0);
+        assert(memcmp(before, bad, sizeof(before)) == 0);
+    }
+    memcpy(before, refs, sizeof(before));
+    assert(pvr_reference_ir_resolve(NULL, 4, refs, 12) < 0);
+    assert(pvr_reference_ir_resolve(&model, 4, NULL, 12) < 0);
+    assert(pvr_reference_ir_resolve(&model, 0, refs, 12) < 0);
+    assert(pvr_reference_ir_resolve(&model, 4, refs, 0) < 0);
+    assert(pvr_reference_ir_resolve(&model, 3, refs, 12) < 0);
+    assert(memcmp(before, refs, sizeof(before)) == 0);
+    assert(pvr_reference_ir_resolve(&model, 4,
+        (pvr_reference_ir_t *)(void *)&model, 12) < 0 && errno == EINVAL);
+    assert(pvr_reference_ir_resolve(&model, 4,
+        (pvr_reference_ir_t *)(void *)polygons, 12) < 0 && errno == EINVAL);
+    polygons[45] = PVR_CHUNK_STRIP_TWO_VOLUME;
+    assert(pvr_reference_ir_resolve(&model, 4, refs, 12) < 0 && errno == ENOTSUP);
+    assert(memcmp(before, refs, sizeof(before)) == 0);
+
+    /* Two authored triangles joined into four references, not six. The last
+       reference repeats position zero with a different corner occurrence/UV. */
+    const uint16_t joined[] = {
+        PVR_CHUNK_STRIP_UV8_FIXED, 14, 1,
+        4, 0,0xff00,0, 1,0,0, 2,0,256, 0,512,768, 255
+    };
+    model.polygon_words = joined;
+    model.polygon_word_count = sizeof(joined) / sizeof(*joined);
+    pvr_reference_ir_t joined_refs[4] = {
+        {.triangle = 0, .corner = 0, .vertex = 0},
+        {.triangle = 0, .corner = 1, .vertex = 1},
+        {.triangle = 0, .corner = 2, .vertex = 2},
+        {.triangle = 1, .corner = 2, .vertex = 0}
+    };
+    assert(pvr_reference_ir_resolve(&model, 2, joined_refs, 4) == 0);
+    assert(joined_refs[0].canonical[0] == -1);
+    assert(joined_refs[3].canonical[0] == 2);
+    assert(joined_refs[3].canonical[1] == 3);
+    assert(joined_refs[3].strip == 0 && joined_refs[3].triangle == 1);
+    assert(joined_refs[3].corner == 2 && joined_refs[3].vertex == 0);
+}
+
 static void binding_and_render(void) {
     static const uint32_t vertices[] = {
         PVR_CHUNK_VERTEX_XYZ | (10u << 16), 0x00030000,
@@ -213,6 +312,20 @@ static void binding_and_render(void) {
         {{0,0},{0,0}}, {{0,0},{1,0}}, {{0,0},{0,1}},
         {{0,0},{-2,3}}, {{0,0},{4,5}}, {{0,0},{6,7}}
     };
+    pvr_reference_ir_t refs[6] = {0};
+    for(size_t i = 0; i < 6; ++i) {
+        refs[i].triangle = i / 3;
+        refs[i].corner = (unsigned)(i % 3);
+        refs[i].vertex = (uint16_t)(i % 3);
+    }
+    assert(pvr_reference_ir_resolve(&model, 2, refs, 6) == 0);
+    for(size_t i = 0; i < 6; ++i) {
+        /* Use decoded final geometry, not a re-created quantization formula. */
+        memcpy(samples[i].canonical, refs[i].canonical,
+               sizeof(samples[i].canonical));
+        assert(refs[i].has_uv && refs[i].strip == i / 3);
+        assert(refs[i].canonical[0] == 0 && refs[i].canonical[1] == 0);
+    }
     pvr_uv_ir_selection_t selection;
     assert(pvr_uv_ir_select(&base, &auxiliary, samples, 6, 0, &selection) == 0);
     assert(selection.storage == PVR_UV_IR_INDEPENDENT);
@@ -288,6 +401,7 @@ static void binding_and_render(void) {
 int main(void) {
     codec();
     multiple_sources();
+    reference_correspondence();
     binding_and_render();
     puts("pvr-chunk-uv-asset-test: PASS");
     return 0;

@@ -827,3 +827,40 @@ Validation:
 The next graphics deliverable is still final-corner/material serialization
 in the host importer, followed by imported-image validation. No compiler
 upgrade, separate KOS installation or sound scope expansion was needed here.
+
+## September 17: final emitted-corner correspondence
+
+The CLI converter now keeps a host-only provenance record for every emitted
+strip reference. Its authored triangle/corner and expected position index are
+captured at the same point as geometry emission, including the newly appended
+corner of each joined triangle. After writing the streams, the actual Compact
+decoder verifies the map and supplies strip ordinals, reversed flags and final
+decoded canonical UVs. It does not repeat the quantization formula.
+
+This retains seam occurrences and the mapping through strip batching without
+altering PCM2, raw stream bytes, model versions or target RAM requirements.
+Host memory grows by one reference record per emitted corner and is released
+with the converted streams. The resolver performs a complete read-only pass
+before publishing metadata; late invalid tags/indices, malformed framing,
+overflow, overlap and unsupported model families leave the map untouched.
+
+Validation covers literal signed UV8/UV10 and float coordinates, untextured
+references, reversed strips, shared position IDs, and joined triangles with
+four references rather than six. The decoded map also feeds the existing
+storage-selection, PML1/PUV1 and memory-sink renderer fixture. The converter's
+existing Python golden suite exercises the new gate on ordinary CLI output,
+attribute seams and large joined-strip record boundaries.
+
+The focused suite passes GCC 14 GNU17/strict C23, Clang GNU17/strict C2x
+and Clang ASan/UBSan. Full converter regressions pass GCC 14 GNU17/strict
+C23 and the Clang ASan/UBSan build. The host helper is linked into the SH-4
+test executable only, not libkallisti, and passes Flycast interpreter and
+dynarec. These are compiler/codec and target numerical checks, not
+physical-hardware texture sampling or image-fidelity evidence.
+
+This is a correspondence checkpoint, not auxiliary-material admission. The
+next step is fetching auxiliary attributes by these authored occurrences and
+serializing their material/resource bindings. Auxiliary seam identity must be
+added to the join predicate before those materials are admitted. Occlusion
+remains distinct from a full-surface lightmap; emissive color/blending needs an
+explicit import policy. Existing CLI rejection gates remain in force.

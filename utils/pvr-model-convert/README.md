@@ -112,6 +112,22 @@ entries to it. Different attribute sets never become shared merely because
 their current coordinates coincide. Invalid late corners still fail after an
 earlier corner has forced fallback; failure leaves the selection unchanged.
 
+Every CLI conversion now retains a compiler-private reference map until its
+output streams are released. Each emitted strip reference records its authored
+triangle/corner and expected position index. After emission, the real Compact
+decoder verifies those indices and fills the strip ordinal, reversed flag,
+UV-presence flag and decoded UV pair. This accounts for signed quantization,
+joined strips and record splitting without changing any output-file bytes.
+The map costs one `pvr_reference_ir_t` per emitted reference on the host;
+it is never serialized or added to the target runtime.
+
+Reference order is the raw stream order, before reversed-strip swaps, clipping
+or filtering. Auxiliary attributes must eventually be fetched by the recorded
+authored occurrence, not merely by position index. When auxiliary attributes
+are admitted, their seam identity must also participate in strip joining: a
+map cannot recover a seam discarded by an earlier join. The resolver preflights
+the complete map and leaves it untouched on failure.
+
 This host preparation step adds no target runtime state and does not yet enable
 auxiliary glTF material import. Role extraction, sampler/color-space policy and
 emission into the converter's PCM2 output still need integration. In particular,

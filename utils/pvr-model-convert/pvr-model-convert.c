@@ -33,6 +33,7 @@
 
 #include "pvr-scene-ir.h"
 #include "pvr-uv-ir.h"
+#include "pvr-reference-ir.h"
 #include "third_party/cgltf.h"
 #include "stb_image.h"
 
@@ -257,6 +258,8 @@ typedef struct output_streams {
     size_t material_record_count;
     size_t source_strip_count;
     size_t output_strip_count;
+    pvr_reference_ir_t *references;
+    size_t reference_count;
 } output_streams_t;
 
 typedef struct temporary_output {
@@ -344,6 +347,7 @@ static void gltf_asset_metadata_free(gltf_asset_metadata_t *metadata) {
 static void output_streams_free(output_streams_t *streams) {
     free(streams->vertex_words);
     free(streams->polygon_words);
+    free(streams->references);
     memset(streams, 0, sizeof(*streams));
 }
 
@@ -4081,6 +4085,7 @@ static int generate_streams(const source_model_t *model,
     uint32_t *vertex_output;
     uint16_t *polygon_output;
     size_t first;
+    size_t reference_cursor = 0;
     int active_texture = -1;
     size_t active_material = SIZE_MAX;
 
@@ -4090,11 +4095,22 @@ static int generate_streams(const source_model_t *model,
         goto fail;
     streams->source_strip_count = model->triangle_count;
     streams->output_strip_count = plan.count;
+    if(plan.count > (SIZE_MAX - model->triangle_count) / 2u) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    streams->reference_count = model->triangle_count + 2u * plan.count;
+    if(streams->reference_count > SIZE_MAX / sizeof(*streams->references)) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    streams->references = calloc(streams->reference_count,
+                                  sizeof(*streams->references));
     streams->vertex_words =
         malloc(streams->vertex_word_count * sizeof(*streams->vertex_words));
     streams->polygon_words =
         malloc(streams->polygon_word_count * sizeof(*streams->polygon_words));
-    if(!streams->vertex_words || !streams->polygon_words) {
+    if(!streams->vertex_words || !streams->polygon_words || !streams->references) {
         errno = ENOMEM;
         goto fail;
     }
@@ -4195,22 +4211,37 @@ static int generate_streams(const source_model_t *model,
             size_t corner;
 
             *polygon_output++ = (uint16_t)source_strip->vertex_count;
-            for(corner = 0; corner < 3u; ++corner)
+            for(corner = 0; corner < 3u; ++corner) {
                 emit_corner(&polygon_output, model, &initial->corner[corner],
                             type);
+                streams->references[reference_cursor++] = (pvr_reference_ir_t){
+                    .triangle = source_strip->first_triangle,
+                    .corner = (unsigned)corner,
+                    .vertex = (uint16_t)initial->corner[corner].position
+                };
+            }
             for(triangle = 1; triangle < source_strip->triangle_count;
                 ++triangle) {
                 const source_triangle_t *source = &model->triangles[
                     source_strip->first_triangle + triangle];
 
+                /* The join plan proved the shared edge already matches;
+                   only corner 2 contributes a new emitted reference. Keep
+                   its authored occurrence even if its position ID repeats. */
                 emit_corner(&polygon_output, model, &source->corner[2], type);
+                streams->references[reference_cursor++] = (pvr_reference_ir_t){
+                    .triangle = source_strip->first_triangle + triangle,
+                    .corner = 2,
+                    .vertex = (uint16_t)source->corner[2].position
+                };
             }
         }
         first += count;
     }
     *polygon_output++ = PVR_CHUNK_CONTROL_END;
 
-    if((size_t)(vertex_output - streams->vertex_words) !=
+    if(reference_cursor != streams->reference_count ||
+       (size_t)(vertex_output - streams->vertex_words) !=
            streams->vertex_word_count ||
        (size_t)(polygon_output - streams->polygon_words) !=
            streams->polygon_word_count) {
@@ -4249,7 +4280,11 @@ static int validate_generated(const source_model_t *source,
         errno = EPROTO;
         return -1;
     }
-    return 0;
+    /* Resolve from the finished stream, not the input UVs: signed fixed
+       quantization and strip batching have already happened. These host-only
+       records keep authored corner identity for subsequent layer compilation. */
+    return pvr_reference_ir_resolve(&model, source->triangle_count,
+                                   streams->references, streams->reference_count);
 }
 
 static int write_word(FILE *file, uint32_t value, size_t width) {

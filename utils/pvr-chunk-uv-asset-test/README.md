@@ -14,9 +14,15 @@ The suite checks:
 - Multiple sources, shared layer bindings, lookup gaps, dense source ranges,
   capacity/alias rejection and untouched outputs on failure.
 - PML1 entry/model/count validation against real admitted Compact models.
+- Final-reference provenance resolution against literal signed UV8/UV10,
+  float-UV and untextured strips. Shared positions retain distinct corner
+  tags; reversed strips retain raw order. Late index/tag errors, count and
+  framing errors, overflow, aliasing and two-volume input are rejected without
+  partially publishing the reference map.
 - Decoding and runtime binding into the actual UV renderer, including seams
   on shared position IDs and reversed-strip coordinate order.
-- Host compiler storage selection with a collapsed base mapping, followed by
+- Decoded final references feeding host compiler storage selection with a
+  collapsed base mapping, followed by
   independent-coordinate baking, PML1/PUV1 serialization and rendering. Literal
   expected UVs verify that the layer transform is baked once, with identity
   PML1 rows afterward. The SH-4 fixture links the host helper for this test only;
