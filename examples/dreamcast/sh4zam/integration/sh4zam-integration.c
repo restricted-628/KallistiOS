@@ -58,6 +58,43 @@ static kfiber_t *main_fiber;
 static shz_mat4x4_t fiber_matrix;
 static int fiber_result;
 
+typedef struct fpscr_probe {
+    uint32_t expected;
+    bool passed;
+} fpscr_probe_t;
+
+static void *fpscr_thread(void *data) {
+    fpscr_probe_t *probe = data;
+    const uint32_t modes = (1u << 18) | 3u; /* DN and rounding mode. */
+    uint32_t observed = __builtin_sh_get_fpscr();
+    probe->passed = (observed & modes) == (probe->expected & modes);
+    /* Child changes must survive scheduling without leaking to the creator.
+       Leave PR/SZ/FR and exception enables alone throughout this fixture. */
+    uint32_t changed = observed ^ 1u;
+    __builtin_sh_set_fpscr(changed);
+    thd_pass();
+    probe->passed &= (__builtin_sh_get_fpscr() & modes) == (changed & modes);
+    __builtin_sh_set_fpscr(observed);
+    return NULL;
+}
+
+static bool verify_thread_fpscr(void) {
+    uint32_t saved = __builtin_sh_get_fpscr();
+    const uint32_t modes = (1u << 18) | 3u;
+    for(uint32_t rounding = 0; rounding <= 1; ++rounding) {
+        fpscr_probe_t probe = {
+            .expected = (saved & ~3u) | (1u << 18) | rounding
+        };
+        __builtin_sh_set_fpscr(probe.expected);
+        kthread_t *thread = thd_create(false, fpscr_thread, &probe);
+        __builtin_sh_set_fpscr(saved);
+        if(!thread || thd_join(thread, NULL) < 0 || !probe.passed ||
+           (__builtin_sh_get_fpscr() & modes) != (saved & modes))
+            return false;
+    }
+    return true;
+}
+
 static int compact_begin_strip(const pvr_chunk_render_state_t *state,
                                const pvr_chunk_strip_view_t *strip,
                                void *data) {
@@ -190,6 +227,11 @@ int main(int argc, char **argv) {
     (void)argv;
 
     (void)dbgio_dev_select("scif");
+
+    if(!verify_thread_fpscr()) {
+        FAIL("thread FPSCR inheritance/isolation");
+    }
+    puts("SH4ZAM thread FPSCR inheritance/isolation: PASS");
 
     shz_mat4x4_init_translation(&source, 4.0f, 5.0f, 6.0f);
     shz_kos_matrix_export(&established, &source);

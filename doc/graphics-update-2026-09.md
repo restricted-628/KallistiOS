@@ -789,3 +789,41 @@ material/resource serialization into that importer. Occlusion is not a generic
 lightmap, and emissive sRGB texels with linear multipliers need a declared
 conversion policy before enabling those source features. Existing rejection
 checks remain intact until that integrated path is tested.
+
+## September 17: upstream SQ/FPSCR fixes and SH4ZAM ABI detection
+
+Fetched and merged official KOS master through
+`fcfa7d869471591ca1c777543261a7bfea7cb726` without conflicts. The two new
+commits preserve our SQ ownership/validation changes while correcting the
+8-byte-aligned copy path's source advance between 1 MiB batches (`757a8f9d`),
+and initialize new thread contexts from the creator's FPSCR (`fcfa7d86`).
+The latter preserves the creating thread's denormal/rounding environment;
+it does not add separate FP modes to fibers. Existing lightweight and opt-in
+XMTRX fiber contracts remain unchanged.
+
+SH4ZAM master advanced to `0bacf4b336368c0b47864ce9eeb59e7c07904b51`.
+The bundled header now selects the SH-4 backend by single-precision ABI macros
+rather than a Dreamcast platform macro. Both SH-4 ABI forms select SHZ_SH4
+without `__DREAMCAST__`, host builds select SHZ_SW, and an explicit backend
+override is preserved. This is backend detection, not a new platform port.
+The 54-file source lock was refreshed and verified; the local maintenance
+patch remains byte-identical, including the GCC 16 FFT fix. Upstream's GitLab
+emulator-test setting is not part of the vendored library.
+
+Validation:
+
+- Full KOS build, forced SH4ZAM archive rebuild and affected example links pass.
+- The SQ fixture crosses the 1 MiB boundary with both fast and slow source
+  alignment, in MMU-off and MMU-on modes. It checks the entire copied range
+  and destination guards. Both Flycast interpreter and dynarec pass.
+- The SH4ZAM fixture checks new-thread FPSCR inheritance in both rounding
+  modes, child-state preservation across scheduling and creator isolation,
+  then runs its existing camera, frustum, geometry and fiber/XMTRX checks.
+  Both Flycast modes pass. This is integration evidence, not a physical
+  hardware numerical or throughput certificate.
+- The UV asset fixture relinks against the updated library. Existing host
+  converter regressions pass; no auxiliary-import rejection gate was removed.
+
+The next graphics deliverable is still final-corner/material serialization
+in the host importer, followed by imported-image validation. No compiler
+upgrade, separate KOS installation or sound scope expansion was needed here.

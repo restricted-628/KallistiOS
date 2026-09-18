@@ -43,6 +43,47 @@ static int verify_copy(void) {
     return 0;
 }
 
+/* Cross sq_cpy's 1 MiB batching boundary on both source-alignment paths.
+   Padding keeps the historical erroneous +4 MiB source advance readable so
+   the regression reports a byte mismatch instead of provoking a bus fault. */
+static int verify_batched_copy(void) {
+    const size_t mib = 1024u * 1024u;
+    const size_t bytes = mib + 96u;
+    uint8_t *input = aligned_alloc(32, 4u * mib + 128u);
+    uint8_t *output = aligned_alloc(32, bytes + 64u);
+    int result = -1;
+
+    if(!input || !output) {
+        errno = ENOMEM;
+        goto out;
+    }
+    for(size_t i = 0; i < 4u * mib + 128u; ++i)
+        input[i] = (uint8_t)(i ^ (i >> 8) ^ (i >> 16) ^ 0xa5u);
+    for(size_t offset = 0; offset <= 4; offset += 4) {
+        memset(output, 0x5a, bytes + 64u);
+        dcache_purge_range((uintptr_t)output, bytes + 64u);
+        if(sq_cpy(output + 32, input + offset, bytes) != output + 32)
+            goto out;
+        sq_wait();
+        dcache_inval_range((uintptr_t)output, bytes + 64u);
+        if(memcmp(output + 32, input + offset, bytes)) {
+            errno = EIO;
+            goto out;
+        }
+        for(size_t i = 0; i < 32; ++i) {
+            if(output[i] != 0x5a || output[bytes + 32u + i] != 0x5a) {
+                errno = EIO;
+                goto out;
+            }
+        }
+    }
+    result = 0;
+out:
+    free(output);
+    free(input);
+    return result;
+}
+
 int main(int argc, char **argv) {
     bool initialized_mmu = false;
     bool recursion_failed = false;
@@ -117,7 +158,7 @@ unlock:
     if(recursion_failed)
         goto out;
 
-    if(verify_copy() < 0) {
+    if(verify_copy() < 0 || verify_batched_copy() < 0) {
         result = fail("MMU-off copy");
         goto out;
     }
@@ -127,12 +168,12 @@ unlock:
         initialized_mmu = true;
     }
 
-    if(!mmu_enabled() || verify_copy() < 0) {
+    if(!mmu_enabled() || verify_copy() < 0 || verify_batched_copy() < 0) {
         result = fail("MMU-on copy");
         goto out;
     }
 
-    printf("KOSSQ recursion=8 validation=1 mmu=1\n");
+    printf("KOSSQ recursion=8 validation=1 mmu=1 batch=1\n");
     result = EXIT_SUCCESS;
 
 out:

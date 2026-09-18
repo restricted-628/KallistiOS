@@ -5,6 +5,14 @@ the normal KOS include and link environment. Its Makefile deliberately does not
 add `-lsh4zam`; the standard grouped KOS libraries supply the implementation and
 discard unused sections normally.
 
+Before running graphics math, the example creates threads under both supported
+rounding modes with denormal flushing enabled. It checks FPSCR inheritance,
+child mode preservation across scheduling and isolation from the creator.
+This exercises KOS master’s new-thread context fix without intentionally
+triggering an FPU exception. It does not change the fiber contract: lightweight
+fibers share their carrier thread's FP modes, while the opt-in math attachment
+preserves XMTRX only.
+
 The program also exercises the alias-safe bridge between established KOS
 matrix/vector types and SH4ZAM types. New performance-sensitive graphics code
 should keep SH4ZAM types throughout its transform pipeline and convert only at

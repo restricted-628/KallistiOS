@@ -24,10 +24,14 @@ KOS threads preserve their floating-point state through their scheduler.
 
 Upstream: https://github.com/gyrovorbis/sh4zam
 
-Verified upstream revision (2026-09-08):
-`ad353dc2cea596a7c8c7b56b05cbe2e07b84ed4a` (0.8.0).
-Fetching upstream on this date found no newer commit. The bundled source
-already incorporates this revision's implementation with these local changes:
+Verified upstream revision (2026-09-17):
+`0bacf4b336368c0b47864ce9eeb59e7c07904b51` (0.8.0).
+This adds SH-4 ABI-based backend detection (`__SH4_SINGLE__` or
+`__SH4_SINGLE_ONLY__`) instead of requiring `__DREAMCAST__`. It preserves the
+optimized Dreamcast path and also recognizes other compatible SH-4 builds.
+Upstream's separate GitLab emulator-test setting is not a bundled source file;
+our emulator checks remain integration checks, not numerical hardware proof.
+The bundled source incorporates this revision with these local changes:
 
 - Whitespace normalization, balanced Doxygen conditional regions, and a
   distinct memory documentation group to avoid colliding with KOS groups.

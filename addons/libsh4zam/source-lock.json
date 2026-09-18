@@ -1,6 +1,6 @@
 {
   "upstream_url": "https://github.com/gyrovorbis/sh4zam",
-  "upstream_revision": "ad353dc2cea596a7c8c7b56b05cbe2e07b84ed4a",
+  "upstream_revision": "0bacf4b336368c0b47864ce9eeb59e7c07904b51",
   "patch_sha256": "8a34bdb78c8cd7bbd6f0c8b0c5edd2c69b1ca0f3ede0841b08da4d31c89c5a1a",
   "files": [
     {
@@ -144,8 +144,8 @@
     {
       "upstream_path": "include/sh4zam/shz_cdefs.h",
       "local_path": "addons/include/sh4zam/shz_cdefs.h",
-      "upstream_sha256": "9c07b26de1a04507c88c5ed64bac7dc7915f95745a3220550bad6a19fea6a66f",
-      "bundled_sha256": "9c07b26de1a04507c88c5ed64bac7dc7915f95745a3220550bad6a19fea6a66f"
+      "upstream_sha256": "a96ad299691705090e9b505702ba00c47d3c81f719289975b41c3fb254236905",
+      "bundled_sha256": "a96ad299691705090e9b505702ba00c47d3c81f719289975b41c3fb254236905"
     },
     {
       "upstream_path": "include/sh4zam/shz_cdefs.hpp",
