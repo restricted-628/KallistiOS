@@ -16,6 +16,8 @@ import sys
 import tempfile
 import zlib
 
+sys.dont_write_bytecode = True
+
 
 REPORT = """converted=1
 positions=3
@@ -151,6 +153,8 @@ def main():
 
     with tempfile.TemporaryDirectory() as directory:
         root = pathlib.Path(directory)
+        from emissive_test import run as test_emissive
+        test_emissive(converter, root, invoke, png_rgba)
         source = root / "triangle.obj"
         vertices = root / "vertices.bin"
         polygons = root / "polygons.bin"

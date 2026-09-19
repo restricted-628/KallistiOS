@@ -864,3 +864,50 @@ serializing their material/resource bindings. Auxiliary seam identity must be
 added to the join predicate before those materials are admitted. Occlusion
 remains distinct from a full-surface lightmap; emissive color/blending needs an
 explicit import policy. Existing CLI rejection gates remain in force.
+
+## September 19: opt-in emissive importer completion
+
+The host converter now provides `--pvr-emissive` for an explicitly approximate
+opaque-material profile. This closes the emitted-corner to auxiliary-material
+serialization path, using existing required PML1/PUV1 sections, PTX1 images,
+PMT1 scene metadata and the existing layer-aware runtime loader. No new target
+API, runtime worker or wire-format version was introduced.
+
+Auxiliary TEXCOORD selection/transforms are baked per authored corner before
+joining. Joins require matching auxiliary coordinates; the final provenance
+map emits independent binary32 coordinates in raw strip-reference order.
+Adjacent ranges share material associations. These sources remain independent
+of base fixed-point quantization, including collapsed base mappings.
+
+Emission images decode sRGB, apply linear factors, re-encode sRGB and become
+opaque RGB565. A separate image per emissive material prevents changes to a
+shared base image. Missing images produce constant 8x8 textures; zero emission
+adds no layer. PVR display-space addition is an opt-in approximation, not an
+exact glTF linear-light renderer. MASK/BLEND emission, occlusion, normal maps,
+unsupported extensions, mipmapped/mixed filters and external texture overrides
+remain rejected. Unlit lighting-fallback behavior is unchanged.
+
+Before publication, generated assets pass the real coherent scene loader with
+layer/UV admission and auxiliary image-coverage checks. Independent Python byte
+goldens cover required section flags, UV order/transforms, joined and flipped
+strips, material/model associations, sampler bits, sRGB factor baking, ignored
+emissive alpha, unchanged base-image bytes, constants and cooked/LZ4 paths.
+Negative cases verify existing output bytes and temporary-file cleanup.
+
+The cross-compiler run exposed a pre-existing host allocation assumption:
+32-byte-relative texture offsets do not make a malloc-based PCM2 blob itself
+32-byte aligned. Depending on heap placement, direct PTX1 loading could fail.
+Both blob builders now use checked, rounded aligned allocations while retaining
+the exact serialized size and CRCs. This does not change the wire format.
+
+The complete converter suite passes the optimized GCC 14 GNU17 build,
+GCC 14 strict C23, Clang strict C2x and Clang GNU17 ASan/UBSan.
+The Clang strict lane uses the existing
+`HOST_LZ4_WARNINGS=-Wno-constant-logical-operand` accommodation for vendored
+LZ4, without changing its source. Repeated zero-emission conversions exercise
+fresh allocation layouts. No new Flycast or physical-hardware rendering claim
+is made for this host-importer change.
+
+This is a bounded importer checkpoint, not a claim that all graphics or glTF
+features are complete. Image-fidelity and physical-hardware sampling remain
+separate validation gates.

@@ -122,17 +122,57 @@ The map costs one `pvr_reference_ir_t` per emitted reference on the host;
 it is never serialized or added to the target runtime.
 
 Reference order is the raw stream order, before reversed-strip swaps, clipping
-or filtering. Auxiliary attributes must eventually be fetched by the recorded
-authored occurrence, not merely by position index. When auxiliary attributes
-are admitted, their seam identity must also participate in strip joining: a
-map cannot recover a seam discarded by an earlier join. The resolver preflights
-the complete map and leaves it untouched on failure.
+or filtering. Auxiliary attributes are fetched by the recorded authored
+occurrence, not merely by position index. Baked auxiliary UVs participate in
+strip joining, so a join cannot discard a differing auxiliary seam. The
+resolver preflights the complete map and leaves it untouched on failure.
 
-This host preparation step adds no target runtime state and does not yet enable
-auxiliary glTF material import. Role extraction, sampler/color-space policy and
-emission into the converter's PCM2 output still need integration. In particular,
-glTF occlusion must not silently become a full-surface lightmap, and emissive
-texture RGB/linear-factor handling needs a declared conversion policy.
+### Opt-in PVR emissive profile
+
+Default imports still reject active emissive materials. For an explicitly
+approximate opaque-material conversion, use:
+
+```sh
+pvr-model-convert --emit-asset --section-directory --pvr-emissive \
+    --join-strips --cooked-cache scene.gltf scene.pcm
+```
+
+The profile uses existing PCM2 sections and the existing PVR emissive pass;
+it adds no target API or model-format version. It handles textured or constant
+emission, multiple models/materials, alternate TEXCOORD sets,
+KHR_texture_transform, winding/V flips, strip joining and optional LZ4/cooked
+base geometry. Each emitted auxiliary corner is stored in a full-model PUV1
+source; ordinary geometry's quantized UVs cannot change it. Adjacent strips
+with the same emissive material share one PML1 range. Identity layer rows
+prevent applying the baked transform twice.
+
+The color policy is deliberate: decode image RGB from sRGB, multiply by the
+linear emissive factor, re-encode to sRGB, quantize to twiddled RGB565, then
+use PVR display-space additive blending. Image alpha is ignored. A missing
+image becomes a constant 8x8 texture. Dedicated per-material images keep base
+textures and differently tinted uses of a shared image independent. This is
+**not** exact glTF linear-light framebuffer compositing; it can brighten and
+saturate differently. The CLI prints that warning on every opt-in invocation.
+See the [glTF material contract](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#material-emissivetexture).
+
+Limits are explicit: only opaque lit materials; emissive factors in [0,1];
+nearest or bilinear non-mipmapped sampling with matching min/mag filters;
+repeat, mirrored repeat or clamp-to-edge. Unspecified filters choose bilinear
+(or the one specified filter). MASK/BLEND emission, occlusion, normal maps,
+emissive-strength/other unsupported lighting extensions, mipmapped or mixed
+filters, unsupported image variants and external `--texture-id` overrides
+are rejected. Unlit materials continue to ignore lighting fallback fields;
+zero emission produces no layer/UV section. This does not reinterpret occlusion
+as a full-surface lightmap.
+
+PML1 and PUV1 are marked required. Load with
+`pvr_chunk_scene_asset_load_layers_uv()` and consume its layer/UV associations;
+an ordinary loader must not silently omit the emissive pass. Pin base and
+auxiliary textures and select an appropriate opaque-base/emissive recipe before
+rendering. The converter runs this same layer-aware loader and checks every
+auxiliary identifier against PTX1 before publishing its output. Import does
+not automatically schedule passes or allocate VRAM. RAM/VRAM costs occur only
+for content using the extra UV source, images and pass.
 
 The admitted source subset is:
 

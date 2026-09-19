@@ -30,6 +30,8 @@
 #include <dc/pvr_chunk_volume_asset.h>
 #include <dc/pvr_chunk_resource_asset.h>
 #include <dc/pvr_chunk_texture_asset.h>
+#include <dc/pvr_chunk_layer_asset.h>
+#include <dc/pvr_chunk_uv_asset.h>
 
 #include "pvr-scene-ir.h"
 #include "pvr-uv-ir.h"
@@ -116,6 +118,7 @@ typedef struct source_corner {
     size_t position;
     size_t texcoord;
     size_t normal;
+    float auxiliary_uv[2];
 } source_corner_t;
 
 typedef struct source_triangle {
@@ -147,6 +150,8 @@ typedef struct material_definition {
     uint8_t double_sided;
     uint8_t unlit;
     unsigned int present;
+    bool emissive;
+    pvr_chunk_texture_state_t emissive_texture;
 } material_definition_t;
 
 enum {
@@ -229,7 +234,8 @@ typedef struct gltf_asset_metadata {
 
 static int serialize_gltf_textures(
     const cgltf_data *data, const char *source_path,
-    int texture_override, uint8_t **bytes_out, size_t *size_out);
+    int texture_override, int pvr_emissive,
+    uint8_t **bytes_out, size_t *size_out);
 
 typedef struct source_strip {
     size_t first_triangle;
@@ -270,7 +276,7 @@ static void usage(FILE *stream, const char *program) {
     fprintf(stream,
             "usage: %s [--flip-winding] [--flip-v] [--texture-id ID | "
             "--material NAME=ID ...] [--material-library FILE ...] "
-            "[--join-strips] [--emit-c SYMBOL | --emit-asset "
+            "[--join-strips] [--pvr-emissive] [--emit-c SYMBOL | --emit-asset "
             "[--section-directory [--scene-root] [--rigid-skin] "
             "[--morph-target DX DY DZ] [--animation-offset DX DY DZ] "
             "[--cooked-cache]] "
@@ -1304,8 +1310,54 @@ static int gltf_build_scene(const cgltf_data *data,
     return 0;
 }
 
+static bool gltf_emissive_active(const cgltf_material *material) {
+    return material && !material->unlit &&
+        (material->emissive_factor[0] > 0 ||
+         material->emissive_factor[1] > 0 ||
+         material->emissive_factor[2] > 0);
+}
+
+/* One explicit non-mipmapped sampler for the auxiliary pass. PVR cannot
+   choose different minification/magnification filters in this profile. */
+static int gltf_emissive_sampler(const cgltf_texture *texture,
+                                 pvr_chunk_texture_state_t *state) {
+    const cgltf_sampler *sampler = texture ? texture->sampler : NULL;
+    state->filter = 1; /* Compact filter encoding: nearest=0, bilinear=1. */
+    state->mipmap_adjust = 4;
+    if(!sampler)
+        return 0;
+    if(sampler->extensions_count) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    cgltf_filter_type min = sampler->min_filter;
+    cgltf_filter_type mag = sampler->mag_filter;
+    if(!min) min = mag ? mag : cgltf_filter_type_linear;
+    if(!mag) mag = min;
+    if(min != mag || (min != cgltf_filter_type_linear &&
+                      min != cgltf_filter_type_nearest)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    state->filter = min == cgltf_filter_type_nearest ? 0 : 1;
+    const cgltf_wrap_mode wraps[2] = {sampler->wrap_s, sampler->wrap_t};
+    for(unsigned axis = 0; axis < 2; ++axis) {
+        /* Compact/PVR clamp and flip fields use U=2, V=1. */
+        unsigned bit = 2u >> axis;
+        if(wraps[axis] == cgltf_wrap_mode_clamp_to_edge)
+            state->uv_clamp |= bit;
+        else if(wraps[axis] == cgltf_wrap_mode_mirrored_repeat)
+            state->uv_flip |= bit;
+        else if(wraps[axis] != cgltf_wrap_mode_repeat) {
+            errno = ENOTSUP;
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int gltf_add_materials(const cgltf_data *data,
-                              material_library_t *library) {
+                              material_library_t *library, int pvr_emissive) {
     cgltf_size material;
 
     for(material = 0; material <= data->materials_count; ++material) {
@@ -1327,10 +1379,11 @@ static int gltf_add_materials(const cgltf_data *data,
                       (!source->unlit &&
                        (source->normal_texture.texture ||
                         source->occlusion_texture.texture ||
-                        source->emissive_texture.texture ||
-                        source->emissive_factor[0] != 0.0f ||
-                        source->emissive_factor[1] != 0.0f ||
-                        source->emissive_factor[2] != 0.0f)) ||
+                        (!pvr_emissive &&
+                         (source->emissive_texture.texture ||
+                          source->emissive_factor[0] != 0.0f ||
+                          source->emissive_factor[1] != 0.0f ||
+                          source->emissive_factor[2] != 0.0f)))) ||
                       source->extensions_count)) {
             errno = ENOTSUP;
             return -1;
@@ -1345,6 +1398,46 @@ static int gltf_add_materials(const cgltf_data *data,
             name = generated_name;
             if(material_definition_add(library, name, &definition) < 0)
                 return -1;
+        }
+        if(source && !source->unlit && pvr_emissive) {
+            if(source->has_emissive_strength || source->has_clearcoat ||
+               source->has_ior || source->has_specular || source->has_sheen ||
+               source->has_iridescence || source->has_anisotropy ||
+               source->has_dispersion) {
+                errno = ENOTSUP;
+                return -1;
+            }
+            for(component = 0; component < 3; ++component) {
+                if(!isfinite(source->emissive_factor[component]) ||
+                   source->emissive_factor[component] < 0 ||
+                   source->emissive_factor[component] > 1) {
+                    errno = EILSEQ;
+                    return -1;
+                }
+            }
+            if(gltf_emissive_active(source)) {
+                /* A private baked image per material prevents its linear
+                   factor/ignored alpha from modifying a shared base image. */
+                if(source->alpha_mode != cgltf_alpha_mode_opaque ||
+                   data->textures_count > PVR_CHUNK_TEXTURE_IDENTIFIER_MAX ||
+                   material - 1u > PVR_CHUNK_TEXTURE_IDENTIFIER_MAX -
+                                       data->textures_count) {
+                    errno = ENOTSUP;
+                    return -1;
+                }
+                definition->emissive = true;
+                const cgltf_texture *texture = source->emissive_texture.texture;
+                if(texture && (!texture->image || texture->has_basisu ||
+                               texture->has_webp || texture->extensions_count)) {
+                    errno = ENOTSUP;
+                    return -1;
+                }
+                definition->emissive_texture.identifier =
+                    (uint16_t)(data->textures_count + material - 1u);
+                if(gltf_emissive_sampler(source->emissive_texture.texture,
+                                         &definition->emissive_texture) < 0)
+                    return -1;
+            }
         }
         base = source && source->has_pbr_metallic_roughness ?
             source->pbr_metallic_roughness.base_color_factor : NULL;
@@ -1520,12 +1613,11 @@ static int gltf_material_index(const cgltf_data *data,
     return 0;
 }
 
-static int gltf_texture_mapping(const cgltf_data *data,
-                                const cgltf_material *material,
+static int gltf_view_mapping(const cgltf_data *data,
+                                const cgltf_texture_view *view,
                                 int override, int flip_v,
                                 gltf_texture_mapping_t *mapping) {
-    const cgltf_texture_view *view = NULL;
-    const cgltf_texture *texture = NULL;
+    const cgltf_texture *texture = view ? view->texture : NULL;
     float offset[2] = {0, 0}, scale[2] = {1, 1}, rotation = 0;
 
     memset(mapping, 0, sizeof(*mapping));
@@ -1537,10 +1629,6 @@ static int gltf_texture_mapping(const cgltf_data *data,
     if(override >= 0) {
         mapping->texture_identifier = override;
         return 0;
-    }
-    if(material && material->has_pbr_metallic_roughness) {
-        view = &material->pbr_metallic_roughness.base_color_texture;
-        texture = view->texture;
     }
     if(!texture)
         return 0;
@@ -1578,6 +1666,16 @@ static int gltf_texture_mapping(const cgltf_data *data,
         mapping->texture_identifier = (int)texture_ordinal;
     }
     return 0;
+}
+
+static int gltf_texture_mapping(const cgltf_data *data,
+                                const cgltf_material *material,
+                                int override, int flip_v,
+                                gltf_texture_mapping_t *mapping) {
+    return gltf_view_mapping(data,
+        material && material->has_pbr_metallic_roughness ?
+            &material->pbr_metallic_roughness.base_color_texture : NULL,
+        override, flip_v, mapping);
 }
 
 static int gltf_required_extensions_supported(const cgltf_data *data) {
@@ -1638,7 +1736,7 @@ static int gltf_append_primitive(const cgltf_data *data,
                                  const cgltf_primitive *primitive,
                                  source_model_t *model, int flip_winding,
                                  int flip_v, int texture_override,
-                                 int has_skin) {
+                                 int has_skin, int pvr_emissive) {
     const cgltf_accessor *positions = gltf_attribute(
         primitive, cgltf_attribute_type_position, 0);
     const cgltf_accessor *texcoords;
@@ -1651,6 +1749,8 @@ static int gltf_append_primitive(const cgltf_data *data,
     size_t normal_base = model->normal_count;
     size_t material_index;
     gltf_texture_mapping_t texture_mapping;
+    gltf_texture_mapping_t auxiliary_mapping;
+    const cgltf_accessor *auxiliary_coords = NULL;
     cgltf_size vertex;
     cgltf_size element_count;
     cgltf_size triangle_count;
@@ -1694,6 +1794,20 @@ static int gltf_append_primitive(const cgltf_data *data,
     texcoords = texture_mapping.texture_identifier >= 0 ?
         gltf_attribute(primitive, cgltf_attribute_type_texcoord,
                        texture_mapping.texcoord_set) : NULL;
+    if(pvr_emissive && gltf_emissive_active(primitive->material) &&
+       primitive->material->emissive_texture.texture) {
+        if(gltf_view_mapping(data, &primitive->material->emissive_texture,
+                             -1, flip_v, &auxiliary_mapping) < 0)
+            return -1;
+        auxiliary_coords = gltf_attribute(primitive,
+            cgltf_attribute_type_texcoord, auxiliary_mapping.texcoord_set);
+        if(!positions || !auxiliary_coords ||
+           auxiliary_coords->type != cgltf_type_vec2 ||
+           auxiliary_coords->count != positions->count) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
 
     if(primitive->has_draco_mesh_compression || !positions ||
        positions->type != cgltf_type_vec3 || !positions->count ||
@@ -1781,6 +1895,14 @@ static int gltf_append_primitive(const cgltf_data *data,
                 texcoord_base + index : SIZE_MAX;
             triangle.corner[corner].normal = normals ?
                 normal_base + index : SIZE_MAX;
+            if(auxiliary_coords) {
+                float authored[2];
+                if(!cgltf_accessor_read_float(auxiliary_coords, index,
+                                              authored, 2) ||
+                   pvr_uv_ir_apply(&auxiliary_mapping.transform, authored,
+                                  triangle.corner[corner].auxiliary_uv) < 0)
+                    return -1;
+            }
         }
         if(flip_winding) {
             source_corner_t temporary = triangle.corner[1];
@@ -3109,6 +3231,7 @@ static int gltf_build_animations(const cgltf_data *data,
 static int load_gltf_source(const char *path, source_model_set_t *models,
                             int flip_winding, int flip_v,
                             int texture_identifier,
+                            int pvr_emissive,
                             material_library_t *library,
                             pvr_scene_ir_t *scene,
                             gltf_asset_metadata_t *metadata) {
@@ -3158,7 +3281,7 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
     source_scene = data->scene ? data->scene : &data->scenes[0];
     if(gltf_build_scene(data, source_scene, meshes, skins, &model_count,
                         scene, node_to_scene) < 0 ||
-       gltf_add_materials(data, library) < 0)
+       gltf_add_materials(data, library, pvr_emissive) < 0)
         goto fail;
     models->models = calloc(model_count, sizeof(*models->models));
     metadata->models = calloc(model_count, sizeof(*metadata->models));
@@ -3186,7 +3309,8 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
             if(gltf_append_primitive(
                    data, &mesh->primitives[primitive],
                    &models->models[model], flip_winding, flip_v,
-                   texture_identifier, skins[model] != NULL) < 0)
+                   texture_identifier, skins[model] != NULL,
+                   pvr_emissive) < 0)
                 goto fail;
         }
         if(validate_references(&models->models[model]) < 0 ||
@@ -3197,7 +3321,8 @@ static int load_gltf_source(const char *path, source_model_set_t *models,
     }
     if(gltf_build_animations(data, node_to_scene, scene, metadata) < 0 ||
        serialize_gltf_textures(
-           data, path, texture_identifier, &metadata->texture_section,
+           data, path, texture_identifier, pvr_emissive,
+           &metadata->texture_section,
            &metadata->texture_section_bytes) < 0)
         goto fail;
     free(skins);
@@ -3262,6 +3387,7 @@ static int parse_corner(char *token, const source_model_t *model,
     char *first_slash = strchr(token, '/');
     char *second_slash = NULL;
 
+    memset(corner->auxiliary_uv, 0, sizeof(corner->auxiliary_uv));
     corner->texcoord = SIZE_MAX;
     corner->normal = SIZE_MAX;
     if(first_slash) {
@@ -3699,7 +3825,9 @@ static int corners_equal(const source_corner_t *left,
                          const source_corner_t *right) {
     return left->position == right->position &&
            left->texcoord == right->texcoord &&
-           left->normal == right->normal;
+           left->normal == right->normal &&
+           left->auxiliary_uv[0] == right->auxiliary_uv[0] &&
+           left->auxiliary_uv[1] == right->auxiliary_uv[1];
 }
 
 static size_t maximum_strip_vertices(uint8_t type) {
@@ -4341,6 +4469,22 @@ static int align_size_32(size_t value, size_t *result) {
     return 0;
 }
 
+static uint8_t *allocate_asset_blob(size_t file_bytes) {
+    size_t allocation;
+    if(align_size_32(file_bytes, &allocation) < 0)
+        return NULL;
+    /* PTX1 descriptors promise 32-byte direct-load alignment. Relative
+       offsets alone do not satisfy it when malloc returns a 16-byte base.
+       Keep allocation padding out of the serialized file size/CRCs. */
+    uint8_t *blob = aligned_alloc(PVR_CHUNK_ASSET_ALIGNMENT, allocation);
+    if(!blob) {
+        errno = ENOMEM;
+        return NULL;
+    }
+    memset(blob, 0, allocation);
+    return blob;
+}
+
 typedef struct compiled_texture_image {
     uint16_t identifier;
     uint16_t width;
@@ -4504,6 +4648,7 @@ static int gltf_image_rgba_load(const cgltf_image *image,
 static int compile_texture_image(const cgltf_image *source,
                                  const char *source_path,
                                  uint16_t identifier,
+                                 const float *emissive_factor,
                                  compiled_texture_image_t *image) {
     stbi_uc *rgba = NULL;
     uint8_t *encoded = NULL;
@@ -4515,8 +4660,17 @@ static int compile_texture_image(const cgltf_image *source,
     int has_partial_alpha = 0;
 
     memset(image, 0, sizeof(*image));
-    if(gltf_image_rgba_load(source, source_path, &rgba,
-                            &width, &height) < 0)
+    if(!source && emissive_factor) {
+        width = height = 8;
+        rgba = malloc(8u * 8u * 4u);
+        if(!rgba) {
+            errno = ENOMEM;
+            return -1;
+        }
+        memset(rgba, 255, 8u * 8u * 4u);
+    }
+    else if(gltf_image_rgba_load(source, source_path, &rgba,
+                                 &width, &height) < 0)
         return -1;
     if(!texture_dimension_valid(width) ||
        !texture_dimension_valid(height)) {
@@ -4529,6 +4683,31 @@ static int compile_texture_image(const cgltf_image *source,
         stbi_image_free(rgba);
         errno = EOVERFLOW;
         return -1;
+    }
+    if(emissive_factor) {
+        uint8_t lookup[3][256];
+        /* Bake the emission term in linear light, then encode for PVR's
+           display-space additive pass. That final blend is an approximation,
+           not a replacement for a linear-light framebuffer. Alpha is unused. */
+        for(unsigned channel = 0; channel < 3; ++channel) {
+            for(unsigned value = 0; value < 256; ++value) {
+                double encoded_value = value / 255.0;
+                double linear = encoded_value <= 0.04045 ?
+                    encoded_value / 12.92 :
+                    pow((encoded_value + 0.055) / 1.055, 2.4);
+                linear *= emissive_factor[channel];
+                double srgb = linear <= 0.0031308 ? linear * 12.92 :
+                    1.055 * pow(linear, 1.0 / 2.4) - 0.055;
+                lookup[channel][value] = (uint8_t)lround(
+                    fmin(1.0, fmax(0.0, srgb)) * 255.0);
+            }
+        }
+        for(pixel = 0; pixel < pixel_count; ++pixel) {
+            for(unsigned channel = 0; channel < 3; ++channel)
+                rgba[pixel * 4u + channel] =
+                    lookup[channel][rgba[pixel * 4u + channel]];
+            rgba[pixel * 4u + 3u] = 255;
+        }
     }
     for(pixel = 0; pixel < pixel_count; ++pixel) {
         uint8_t alpha = rgba[pixel * 4u + 3u];
@@ -4585,7 +4764,8 @@ static int compile_texture_image(const cgltf_image *source,
 
 static int serialize_gltf_textures(
         const cgltf_data *data, const char *source_path,
-        int texture_override, uint8_t **bytes_out, size_t *size_out) {
+        int texture_override, int pvr_emissive,
+        uint8_t **bytes_out, size_t *size_out) {
     uint8_t *used = NULL;
     compiled_texture_image_t *images = NULL;
     uint8_t *bytes = NULL;
@@ -4600,9 +4780,9 @@ static int serialize_gltf_textures(
 
     *bytes_out = NULL;
     *size_out = 0;
-    if(texture_override >= 0 || !data->textures_count)
+    if(texture_override >= 0 || (!data->textures_count && !pvr_emissive))
         return 0;
-    used = calloc(data->textures_count, sizeof(*used));
+    used = calloc(data->textures_count ? data->textures_count : 1, sizeof(*used));
     if(!used) {
         errno = ENOMEM;
         goto fail;
@@ -4614,6 +4794,8 @@ static int serialize_gltf_textures(
             source->pbr_metallic_roughness.base_color_texture.texture : NULL;
         size_t ordinal;
 
+        if(pvr_emissive && gltf_emissive_active(source))
+            ++image_count;
         if(!texture_pointer)
             continue;
         if(gltf_array_index(data->textures, data->textures_count,
@@ -4640,8 +4822,20 @@ static int serialize_gltf_textures(
         if(texture > PVR_CHUNK_TEXTURE_IDENTIFIER_MAX ||
            compile_texture_image(data->textures[texture].image,
                                  source_path, (uint16_t)texture,
-                                 &images[output++]) < 0)
+                                 NULL, &images[output++]) < 0)
             goto fail;
+    }
+    if(pvr_emissive) {
+        for(material = 0; material < data->materials_count; ++material) {
+            const cgltf_material *source = &data->materials[material];
+            if(!gltf_emissive_active(source))
+                continue;
+            const cgltf_texture *emissive = source->emissive_texture.texture;
+            if(compile_texture_image(emissive ? emissive->image : NULL,
+                source_path, (uint16_t)(data->textures_count + material),
+                source->emissive_factor, &images[output++]) < 0)
+                goto fail;
+        }
     }
     if(output != image_count ||
        image_count > (SIZE_MAX - PVR_CHUNK_TEXTURE_SECTION_HEADER_BYTES) /
@@ -4762,6 +4956,9 @@ static void store_pcm2_section(uint8_t *descriptor, uint32_t type,
                                pvr_chunk_asset_codec_t codec,
                                uint16_t alignment) {
     store_le32(descriptor, type);
+    if(type == PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS ||
+       type == PVR_CHUNK_ASSET_SECTION_UV_SOURCES)
+        store_le32(descriptor + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
     store_le32(descriptor + 8, (uint32_t)offset);
     store_le32(descriptor + 12, (uint32_t)stored_bytes);
     store_le32(descriptor + 16, (uint32_t)decoded_bytes);
@@ -5235,11 +5432,9 @@ static int build_asset_blob(const output_streams_t *streams,
         goto fail;
     }
 
-    blob = calloc(1, file_bytes);
-    if(!blob) {
-        errno = ENOMEM;
+    blob = allocate_asset_blob(file_bytes);
+    if(!blob)
         goto fail;
-    }
     memcpy(blob + vertex_offset, vertex_stored,
            vertex_stored_bytes);
     memcpy(blob + polygon_offset, polygon_raw, polygon_bytes);
@@ -5592,6 +5787,139 @@ static int multi_asset_bounds(const output_streams_t *streams,
     return 0;
 }
 
+/* Build associations from emitted references, never from deduplicated vertex
+   IDs. This first profile deliberately stores independent binary32 UVs:
+   canonical fixed-point quantization cannot alter the auxiliary mapping. */
+static int serialize_emissive_layers(const source_model_t *models,
+    const output_streams_t *streams, size_t model_count,
+    const material_library_t *library, uint8_t **layer_bytes,
+    size_t *layer_size, uint8_t **uv_bytes, size_t *uv_size) {
+    pvr_chunk_layer_entry_t *entries = NULL;
+    pvr_chunk_uv_asset_binding_t *bindings = NULL;
+    pvr_chunk_uv_asset_source_t *sources = NULL;
+    size_t capacity = 0, count = 0, source_count = 0, uv_count = 0;
+    int result = -1;
+    *layer_bytes = *uv_bytes = NULL;
+    *layer_size = *uv_size = 0;
+    for(size_t m = 0; m < model_count; ++m) {
+        if(streams[m].output_strip_count > UINT32_MAX - capacity) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        capacity += streams[m].output_strip_count;
+    }
+    if(capacity > SIZE_MAX / sizeof(*entries) ||
+       capacity > SIZE_MAX / sizeof(*bindings) ||
+       model_count > SIZE_MAX / sizeof(*sources)) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    entries = calloc(capacity, sizeof(*entries));
+    bindings = calloc(capacity, sizeof(*bindings));
+    sources = calloc(model_count, sizeof(*sources));
+    if(!entries || !bindings || !sources) {
+        errno = ENOMEM;
+        goto out;
+    }
+    for(size_t m = 0; m < model_count; ++m) {
+        bool active = false;
+        for(size_t t = 0; t < models[m].triangle_count; ++t) {
+            size_t material = models[m].triangles[t].material_definition;
+            if(material >= library->count) {
+                errno = EILSEQ;
+                goto out;
+            }
+            active |= library->definitions[material].emissive;
+        }
+        if(!active)
+            continue;
+        size_t refs = streams[m].reference_count;
+        if(refs > SIZE_MAX / sizeof(pvr_chunk_uv_t) ||
+           refs > UINT32_MAX - uv_count) {
+            errno = EOVERFLOW;
+            goto out;
+        }
+        pvr_chunk_uv_t *coords = calloc(refs, sizeof(*coords));
+        if(!coords) {
+            errno = ENOMEM;
+            goto out;
+        }
+        size_t source_index = source_count++;
+        sources[source_index] = (pvr_chunk_uv_asset_source_t){
+            (uint32_t)m, coords, refs};
+        uv_count += refs;
+        size_t previous_strip = SIZE_MAX, previous_material = SIZE_MAX;
+        for(size_t i = 0; i < refs; ++i) {
+            const pvr_reference_ir_t *ref = &streams[m].references[i];
+            const source_triangle_t *triangle = &models[m].triangles[ref->triangle];
+            const material_definition_t *material =
+                &library->definitions[triangle->material_definition];
+            if(material->emissive) {
+                const source_corner_t *corner = &triangle->corner[ref->corner];
+                coords[i] = (pvr_chunk_uv_t){corner->auxiliary_uv[0],
+                                            corner->auxiliary_uv[1]};
+            }
+            if(ref->strip == previous_strip)
+                continue;
+            previous_strip = ref->strip;
+            if(!material->emissive) {
+                previous_material = SIZE_MAX;
+                continue;
+            }
+            if(count && previous_material == triangle->material_definition &&
+               entries[count - 1].model == m &&
+               entries[count - 1].first_strip +
+                   entries[count - 1].strip_count == ref->strip) {
+                ++entries[count - 1].strip_count;
+                continue;
+            }
+            previous_material = triangle->material_definition;
+            entries[count] = (pvr_chunk_layer_entry_t){
+                .model = (uint32_t)m, .first_strip = (uint32_t)ref->strip,
+                .strip_count = 1, .layer = {
+                    .role = PVR_MATERIAL_PASS_EMISSIVE,
+                    .texture = material->emissive_texture,
+                    .rgb = 0xffffff, .uv = {{1,0,0},{0,1,0}}}};
+            bindings[count] = (pvr_chunk_uv_asset_binding_t){
+                (uint32_t)count, (uint32_t)source_index};
+            ++count;
+        }
+    }
+    if(!count) {
+        result = 0;
+        goto out;
+    }
+    if(pvr_chunk_layer_section_query(count, layer_size) < 0 ||
+       pvr_chunk_uv_section_query(source_count, count, uv_count, uv_size) < 0)
+        goto out;
+    *layer_bytes = malloc(*layer_size);
+    *uv_bytes = malloc(*uv_size);
+    if(!*layer_bytes || !*uv_bytes) {
+        errno = ENOMEM;
+        goto out;
+    }
+    if(pvr_chunk_layer_section_write(entries, count, *layer_bytes, *layer_size) < 0 ||
+       pvr_chunk_uv_section_write(sources, source_count, bindings, count,
+                                  *uv_bytes, *uv_size) < 0)
+        goto out;
+    result = 0;
+out:
+    if(sources) {
+        for(size_t i = 0; i < source_count; ++i)
+            free((void *)sources[i].uv);
+    }
+    free(sources);
+    free(bindings);
+    free(entries);
+    if(result < 0) {
+        free(*layer_bytes);
+        free(*uv_bytes);
+        *layer_bytes = *uv_bytes = NULL;
+        *layer_size = *uv_size = 0;
+    }
+    return result;
+}
+
 static int build_multi_asset_blob(const output_streams_t *streams,
                                   size_t model_count, int lz4_vertices,
                                   int include_cooked_cache,
@@ -5601,6 +5929,9 @@ static int build_multi_asset_blob(const output_streams_t *streams,
                                   size_t animation_count,
                                   const void *texture_section,
                                   size_t texture_section_bytes,
+                                  const source_model_t *source_models,
+                                  const material_library_t *library,
+                                  int pvr_emissive,
                                   uint8_t **blob_out,
                                   size_t *blob_bytes_out) {
     pcm2_host_section_t *sections = NULL;
@@ -5632,12 +5963,12 @@ static int build_multi_asset_blob(const output_streams_t *streams,
        !blob_bytes_out || model_count > UINT32_MAX ||
        !metadata || (animation_count && !animations) ||
        animation_count > UINT32_MAX ||
-       model_count > (SIZE_MAX - 4u) / 7u ||
+       model_count > (SIZE_MAX - 6u) / 7u ||
        ((texture_section == NULL) != (texture_section_bytes == 0))) {
         errno = EINVAL;
         return -1;
     }
-    section_capacity = model_count * 7u + 4u;
+    section_capacity = model_count * 7u + 6u;
     if(animation_count > (SIZE_MAX - section_capacity) / 2u) {
         errno = EOVERFLOW;
         return -1;
@@ -5910,6 +6241,31 @@ static int build_multi_asset_blob(const output_streams_t *streams,
             goto fail;
         }
     }
+    if(pvr_emissive) {
+        uint8_t *layers = NULL, *uv = NULL;
+        size_t layer_size = 0, uv_size = 0;
+        if(serialize_emissive_layers(source_models, streams, model_count,
+                                    library, &layers, &layer_size,
+                                    &uv, &uv_size) < 0)
+            goto fail;
+        if(layers) {
+            /* Capacity reserved above; uncompressed additions cannot fail
+               after ownership is transferred to the section list. */
+            if(pcm2_host_section_add(sections, section_capacity, &section_count,
+                PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS, layers, layer_size,
+                sizeof(uint32_t), 0) < 0) {
+                free(layers);
+                free(uv);
+                goto fail;
+            }
+            if(pcm2_host_section_add(sections, section_capacity, &section_count,
+                PVR_CHUNK_ASSET_SECTION_UV_SOURCES, uv, uv_size,
+                sizeof(uint32_t), 0) < 0) {
+                free(uv);
+                goto fail;
+            }
+        }
+    }
     if(section_count > UINT32_MAX ||
        section_count > SIZE_MAX /
            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES ||
@@ -5931,11 +6287,9 @@ static int build_multi_asset_blob(const output_streams_t *streams,
         errno = EOVERFLOW;
         goto fail;
     }
-    blob = calloc(1, file_bytes);
-    if(!blob) {
-        errno = ENOMEM;
+    blob = allocate_asset_blob(file_bytes);
+    if(!blob)
         goto fail;
-    }
     store_le32(blob, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
     store_le16(blob + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
     store_le16(blob + 6, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
@@ -6654,6 +7008,8 @@ static int prepare_multi_asset_output(
     const gltf_animation_metadata_t *animations,
     size_t animation_count,
     const void *texture_section, size_t texture_section_bytes,
+    const source_model_t *source_models, const material_library_t *library,
+    int pvr_emissive,
     temporary_output_t *temporary,
     size_t *asset_bytes) {
     uint8_t *blob = NULL;
@@ -6666,6 +7022,8 @@ static int prepare_multi_asset_output(
     pvr_chunk_scene_hierarchy_view_t hierarchy_view;
     pvr_chunk_hierarchy_t hierarchy;
     pvr_chunk_texture_section_view_t texture_image_view;
+    pvr_chunk_layer_section_view_t layer_view = {0};
+    pvr_chunk_uv_section_view_t uv_view = {0};
     pvr_chunk_shape_section_view_t *shape_views = NULL;
     const pvr_chunk_shape_section_view_t **shape_view_pointers = NULL;
     pvr_chunk_model_view_t *model_views = NULL;
@@ -6680,6 +7038,7 @@ static int prepare_multi_asset_output(
            streams, model_count, lz4_vertices, include_cooked_cache,
            scene, metadata, animations, animation_count,
            texture_section, texture_section_bytes,
+           source_models, library, pvr_emissive,
            &blob, &blob_bytes) < 0 ||
        pvr_chunk_asset_open(blob, blob_bytes, &asset_view) < 0 ||
        pvr_chunk_scene_asset_open(
@@ -6730,11 +7089,24 @@ static int prepare_multi_asset_output(
     }
     /* Verify the generated bytes through the same coherent, persistent
        scene-loading path used by target applications. */
-    if(pvr_chunk_scene_asset_load(
+    size_t layer_index;
+    bool has_layers = pvr_chunk_asset_section_find_index(&asset_view,
+        PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS, 0, &layer_index) == 0;
+    if(!has_layers && errno != ENOENT)
+        goto out;
+    int loaded = has_layers ? pvr_chunk_scene_asset_load_layers_uv(
            &scene_asset_view, pvr_chunk_asset_lz4_decode, NULL,
            workspace, workspace_allocation, model_views, model_count,
            hierarchy_nodes, scene_asset_view.node_count,
-           &hierarchy) < 0)
+           &hierarchy, &layer_view, &uv_view) : pvr_chunk_scene_asset_load(
+           &scene_asset_view, pvr_chunk_asset_lz4_decode, NULL,
+           workspace, workspace_allocation, model_views, model_count,
+           hierarchy_nodes, scene_asset_view.node_count, &hierarchy);
+    if(loaded < 0)
+        goto out;
+    if(layer_view.entry_count &&
+       (!texture_section || pvr_chunk_layer_section_validate_images(
+            &layer_view, &texture_image_view) < 0))
         goto out;
     for(model = 0; model < model_count; ++model) {
         pvr_chunk_model_table_record_t record;
@@ -7329,6 +7701,7 @@ int main(int argc, char **argv) {
     int flip_winding = 0;
     int flip_v = 0;
     int join_strips = 0;
+    int pvr_emissive = 0;
     int emit_asset = 0;
     int lz4_vertices = 0;
     int section_directory = 0;
@@ -7361,6 +7734,8 @@ int main(int argc, char **argv) {
             flip_v = 1;
         else if(!strcmp(argv[argument], "--join-strips"))
             join_strips = 1;
+        else if(!strcmp(argv[argument], "--pvr-emissive"))
+            pvr_emissive = 1;
         else if(!strcmp(argv[argument], "--texture-id")) {
             if(argument + 1 >= argc || texture_identifier >= 0 ||
                materials.count ||
@@ -7572,6 +7947,15 @@ int main(int argc, char **argv) {
 
     input = argv[argument];
     gltf_input = source_is_gltf(input);
+    if(pvr_emissive && (!gltf_input || texture_identifier >= 0)) {
+        fprintf(stderr, "--pvr-emissive requires glTF-owned textures\n");
+        material_table_free(&materials);
+        material_library_free(&library);
+        return 2;
+    }
+    if(pvr_emissive)
+        fprintf(stderr, "PVR emissive profile: display-space additive "
+                "approximation; opaque surfaces only\n");
     if(gltf_input && (!emit_asset || !section_directory)) {
         fprintf(stderr,
                 "glTF input requires --emit-asset --section-directory\n");
@@ -7655,7 +8039,7 @@ int main(int argc, char **argv) {
 
     if((gltf_input ?
         load_gltf_source(input, &gltf_sources, flip_winding, flip_v,
-                         texture_identifier, &library, &scene,
+                         texture_identifier, pvr_emissive, &library, &scene,
                          &gltf_metadata) :
         load_obj_source(input, &source, flip_winding, flip_v,
                         texture_identifier, &materials, &library,
@@ -7823,7 +8207,7 @@ int main(int argc, char **argv) {
     else if(emit_asset) {
         int prepare_result;
 
-        if(gltf_input && (model_count > 1u ||
+        if(gltf_input && (pvr_emissive || model_count > 1u ||
                           gltf_metadata.animation_count > 1u)) {
             prepare_result = prepare_multi_asset_output(
                 asset_output, model_streams, model_count, lz4_vertices,
@@ -7833,6 +8217,7 @@ int main(int argc, char **argv) {
                 gltf_metadata.animation_count,
                 gltf_metadata.texture_section,
                 gltf_metadata.texture_section_bytes,
+                source_models, &library, pvr_emissive,
                 &vertex_temporary, &asset_bytes);
         }
         else {
