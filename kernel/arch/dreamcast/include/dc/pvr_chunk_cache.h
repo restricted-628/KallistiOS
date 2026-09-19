@@ -137,6 +137,17 @@ typedef struct pvr_chunk_two_volume_cache {
     float radius;
 } pvr_chunk_two_volume_cache_t;
 
+/** \brief Admitted immutable two-volume cache for repeated draws.
+
+    Initialize only with pvr_chunk_model_two_volume_cache_draw_prepare(). The
+    snapshot and its borrowed storage must remain immutable and accessible,
+    including during callbacks. Reprepare after rebuilding storage. No memory
+    is owned; do not manufacture or edit this structure.
+*/
+typedef struct pvr_chunk_two_volume_cache_draw {
+    pvr_chunk_two_volume_cache_t cache; /**< Read-only implementation snapshot. */
+} pvr_chunk_two_volume_cache_draw_t;
+
 /** \brief One retained triangle in a compact modifier-volume cache. */
 typedef struct pvr_chunk_cached_modifier_triangle {
     size_t first_corner;       /**< First of three deformation/index entries. */
@@ -430,6 +441,35 @@ int pvr_chunk_model_two_volume_cache_emit(
 */
 int pvr_chunk_model_two_volume_cache_emit_filtered(
     const pvr_chunk_two_volume_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result);
+
+/** \brief Admit a two-volume cache once, validating layout and base data.
+
+    Checks every strip and deformation record. Failure leaves \p draw
+    unchanged. The output may not overlap the cache descriptor or its storage.
+    Color packets remain packed at 32 bytes and textured packets at 64 bytes.
+*/
+int pvr_chunk_model_two_volume_cache_draw_prepare(
+    const pvr_chunk_two_volume_cache_t *cache,
+    pvr_chunk_two_volume_cache_draw_t *draw);
+
+/** \brief Draw an admitted two-volume cache without static rescans.
+
+    The ownership, callback, publication and dynamic-validation contract is
+    the same as pvr_chunk_model_cache_draw_emit(). The sink's format must match
+    the admitted cache. Workspace is still an array of maximum-sized unions,
+    but packets within it are tightly packed at the admitted vertex size.
+    A prepare callback receives a full temporary union, including zeroed unused
+    bytes for color packets; only the admitted packet size is published.
+*/
+int pvr_chunk_model_two_volume_cache_draw_emit(
+    const pvr_chunk_two_volume_cache_draw_t *draw,
     const matrix_t *object_to_screen, pvr_geometry_vertex_sink_t *sink,
     pvr_chunk_two_volume_vertex_t *workspace, size_t workspace_count,
     pvr_chunk_cache_filter_strip_t filter_strip,

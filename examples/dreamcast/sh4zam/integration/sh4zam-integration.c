@@ -141,6 +141,109 @@ static int invalid_cached_position(const pvr_chunk_render_state_t *state,
     return 0;
 }
 
+static int prepare_two_volume_probe(const pvr_chunk_render_state_t *state,
+    uint16_t index, const pvr_deform_vertex_t *deformation,
+    pvr_geometry_vertex_format_t format, pvr_chunk_two_volume_vertex_t *vertex,
+    void *data) {
+    (void)state; (void)index; (void)deformation;
+    if(data) {
+        vertex->color.x = NAN;
+        return 0;
+    }
+    if(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR) {
+        unsigned char *bytes = (unsigned char *)vertex;
+        for(size_t i = 32; i < sizeof(*vertex); ++i)
+            if(bytes[i]) return -1;
+        memset(bytes + 32, 0xcc, sizeof(*vertex) - 32);
+        vertex->color.argb1 ^= 0x1234;
+    }
+    else {
+        vertex->textured.u1 += 0.125f;
+        vertex->textured.argb1 ^= 0x1234;
+    }
+    return 0;
+}
+
+static bool verify_two_volume_draws(const pvr_chunk_model_t *base) {
+    static const uint16_t color[] = {
+        PVR_CHUNK_MATERIAL_DIFFUSE, 2, 0x2233, 0xff11,
+        PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME, 2, 0x5566, 0xff44,
+        PVR_CHUNK_STRIP_TWO_VOLUME, 5, 1, 3, 0, 1, 2, 0xff
+    };
+    static const uint16_t textured[] = {
+        PVR_CHUNK_MATERIAL_DIFFUSE, 2, 0x2233, 0xff11,
+        PVR_CHUNK_MATERIAL_DIFFUSE_TWO_VOLUME, 2, 0x5566, 0xff44,
+        PVR_CHUNK_STRIP_UV8_FIXED_TWO_VOLUME, 17, 1, 3,
+        0, 0, 0, 256, 256,
+        1, 128, 0, 64, 128,
+        2, 256, 128, 0, 64, 0xff
+    };
+    pvr_chunk_vertex_index_entry_t indices[256];
+    pvr_chunk_model_view_t view;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_two_volume_cache_t cache;
+    pvr_chunk_two_volume_cache_draw_t draw;
+    pvr_chunk_cache_result_t result;
+    pvr_geometry_vertex_sink_t sink;
+    uint8_t storage[2048] __attribute__((aligned(32)));
+    uint8_t expected[224] __attribute__((aligned(32)));
+    uint8_t actual[224] __attribute__((aligned(32)));
+    pvr_chunk_two_volume_vertex_t workspace[3] __attribute__((aligned(32)));
+    matrix_t matrix = {
+        { 2, 0, 0, 0 }, { 0, 3, 0, 0 },
+        { 0, 0, 1, 0 }, { 4, 5, 0, 1 }
+    };
+    shz_mat4x4_t saved, observed;
+
+    shz_xmtrx_store_4x4(&saved);
+    for(unsigned kind = 0; kind < 2; ++kind) {
+        pvr_chunk_model_t model = *base;
+        model.polygon_words = kind ? textured : color;
+        model.polygon_word_count = kind ? sizeof(textured) / sizeof(*textured) :
+                                          sizeof(color) / sizeof(*color);
+        if(pvr_chunk_model_open(&model, &view) < 0 ||
+           pvr_chunk_model_plan_build(&view, indices, 256, &plan) < 0 ||
+           pvr_chunk_model_two_volume_cache_build(&plan, storage, sizeof(storage),
+                                                  NULL, NULL, &cache) < 0 ||
+           pvr_chunk_model_two_volume_cache_draw_prepare(&cache, &draw) < 0 ||
+           cache.vertex_size != (kind ? 64u : 32u))
+            return false;
+        for(unsigned policy = 0; policy < 2; ++policy) {
+            pvr_chunk_cache_prepare_two_volume_vertex_t prepare =
+                policy ? prepare_two_volume_probe : NULL;
+            memset(expected, 0x5a, sizeof(expected));
+            memset(actual, 0x5a, sizeof(actual));
+            if(pvr_geometry_vertex_sink_init_memory(&sink, cache.format, expected, 3) < 0 ||
+               pvr_chunk_model_two_volume_cache_emit(&cache, &matrix, &sink,
+                   workspace, 3, NULL, NULL, prepare, NULL, &result) < 0 ||
+               pvr_geometry_vertex_sink_init_memory(&sink, cache.format, actual, 3) < 0 ||
+               pvr_chunk_model_two_volume_cache_draw_emit(&draw, &matrix, &sink,
+                   workspace, 3, NULL, NULL, NULL, prepare, NULL, &result) < 0 ||
+               result.emitted_vertices != 3 || result.emitted_strips != 1 ||
+               memcmp(expected, actual, sizeof(expected)))
+                return false;
+            shz_xmtrx_store_4x4(&observed);
+            if(memcmp(&saved, &observed, sizeof(saved))) return false;
+        }
+        for(unsigned rejection = 0; rejection < 2; ++rejection) {
+            matrix[3][3] = rejection ? 0 : 1;
+            if(pvr_geometry_vertex_sink_init_memory(&sink, cache.format, actual, 3) < 0)
+                return false;
+            errno = 0;
+            if(pvr_chunk_model_two_volume_cache_draw_emit(&draw, &matrix, &sink,
+                   workspace, 3, NULL, NULL, NULL,
+                   rejection ? NULL : prepare_two_volume_probe, &kind, &result) != -1 ||
+               errno != EDOM || sink.emitted_vertices || result.emitted_vertices ||
+               memcmp(expected, actual, sizeof(expected)))
+                return false;
+            shz_xmtrx_store_4x4(&observed);
+            if(memcmp(&saved, &observed, sizeof(saved))) return false;
+        }
+        matrix[3][3] = 1;
+    }
+    return true;
+}
+
 static void show_result(bool passed, const char *detail) {
     printf("RESULT: %s (%s)\n", passed ? "PASS" : "FAIL", detail);
     fflush(stdout);
@@ -401,6 +504,10 @@ int main(int argc, char **argv) {
         shz_kos_matrix_export(&established, &identity);
         puts("Admitted Compact draw, rejection, XMTRX: PASS");
     }
+
+    if(!verify_two_volume_draws(&compact_model))
+        FAIL("admitted two-volume cache");
+    puts("Admitted two-volume color/textured draws, rejection, XMTRX: PASS");
 
     /* Camera and frustum entry points retain their established checked
        contracts while their Dreamcast arithmetic runs through SH4ZAM. The

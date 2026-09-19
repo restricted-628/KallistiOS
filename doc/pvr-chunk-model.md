@@ -576,8 +576,8 @@ visible. The ordinary cache-to-workspace copy and sink transfer still exist.
 
 The `chunk_scene` example prepares each cooked cache at load time and uses this
 path for both host golden tests and target frames. CRCs are already checked by
-asset/section opening, not by these cached draw calls. Two-volume, modifier,
-toon/outline, and wireframe entry points do not yet use this admitted fast path.
+asset/section opening, not by these cached draw calls. Modifier, toon/outline,
+and wireframe entry points do not yet use this admitted fast path.
 This removes identifiable repeated work; hardware throughput still requires
 measurement and is not inferred from host or emulator correctness tests.
 
@@ -598,6 +598,46 @@ two-volume packets at their 32-byte size and textured packets at their 64-byte
 size instead of charging every model for a maximum-sized union. Both layouts
 retain the same canonical deformation/index sidecar and callback ownership as
 the ordinary cache.
+
+### Prepare-once two-volume draws
+
+`pvr_chunk_model_two_volume_cache_draw_prepare()` admits either two-volume
+layout into a caller-owned `pvr_chunk_two_volume_cache_draw_t`.
+`pvr_chunk_model_two_volume_cache_draw_emit()` then skips repeated immutable
+layout/strip/bounds/base-deformation scans, with the same lifetime, filtering,
+partial-progress and dynamic-validation contract as the ordinary admitted
+path. The snapshot and backing storage must remain immutable; reprepare after
+rebuilding storage. The older checked entry points remain available.
+
+Without a per-frame prepare callback, native 32/64-byte packets are copied
+directly into the packed workspace and their command/position fields are
+updated without an intermediate maximum-sized union. With a prepare callback,
+the full temporary union is deliberately retained: unused bytes above a
+32-byte color packet are zeroed and writable by that callback, and are never
+copied into a neighboring packet. Source indices are read only for callbacks;
+full deformation records are copied and revalidated only for resolvers.
+
+Both ordinary and two-volume admitted paths use the same private packed-XYZ
+projector. It reads/writes only the three position floats, preserving colors,
+UVs and other payload. Matrix/range/command validation is performed by the
+admitted caller, not repeated for each strip; changing positions, projected
+results and usable positive W remain checked. Sink-format matching and sink
+publication checks remain in place. This path does not apply to sprites or
+modifier packets, which have different position layouts.
+
+Two-volume regression fixtures compare all eight callback combinations in
+both formats byte-for-byte against checked emission, guard packed-buffer
+tails, and exercise filtering, malformed admission, format/capacity/overlap
+errors, NaN callbacks, invalid W, and multi-strip partial failures. The SH-4
+integration example also checks both formats and temporary-union behavior,
+including XMTRX restoration after successful and rejected draws. These are
+correctness fixtures, not physical-hardware throughput measurements.
+
+The two-volume extension passed the cache suite under GCC 14 GNU17/strict C23,
+Apple Clang strict C2x and ASan/UBSan on 2026-09-19, plus the geometry, scene
+integration and converter host regressions. Both Flycast interpreter and
+dynarec printed the two-volume integration PASS line. No upstream SH4ZAM
+source changes or serialized-cache format changes were required.
 
 Every cached ordinary or two-volume strip also retains the exact object-space
 AABB of its admitted reference-pose vertices. The filtered emission variants

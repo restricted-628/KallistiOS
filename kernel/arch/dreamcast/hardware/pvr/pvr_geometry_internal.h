@@ -8,11 +8,12 @@
 
 /* Internal admitted-cache path only. Caller has checked the finite matrix,
    aligned packed workspace range, count/capacity and disjointness, and has
-   assigned canonical vertex commands. Checks changing positions/projected
+   assigned vertex commands. Stride must be 32 or 64 bytes, for canonical or
+   two-volume packets whose XYZ fields start at byte 4 (not sprites/modifiers).
+   Checks changing positions/projected
    results and preserves XMTRX on both success and failure. No sink publication
    occurs here; workspace may contain a transformed prefix on failure. */
-int pvr_geometry_project_canonical_inplace(pvr_vertex_t *vertices,
-                                           size_t count,
-                                           const matrix_t *matrix);
+int pvr_geometry_project_packed_inplace(void *vertices, size_t count,
+                                       size_t stride, const matrix_t *matrix);
 
 #endif

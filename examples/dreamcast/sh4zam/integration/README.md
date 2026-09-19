@@ -57,6 +57,16 @@ XMTRX is checked after each successful or rejected admitted draw. Success adds:
 Admitted Compact draw, rejection, XMTRX: PASS
 ```
 
+The two-volume fixture covers both 32-byte color and 64-byte textured caches,
+with and without a prepare callback. It compares checked/admitted output,
+including buffer guards, and verifies the full temporary-union callback
+contract for packed color packets. NaN callback output and zero W are rejected
+without sink publication; XMTRX remains unchanged. Success adds:
+
+```text
+Admitted two-volume color/textured draws, rejection, XMTRX: PASS
+```
+
 Successful completion prints:
 
 ```text

@@ -1067,6 +1067,150 @@ static void test_two_volume_toon(
     assert(distinct_sets == sink.emitted_vertices);
 }
 
+static int prepare_admitted_two(const pvr_chunk_render_state_t *state,
+    uint16_t index, const pvr_deform_vertex_t *deformation,
+    pvr_geometry_vertex_format_t format, pvr_chunk_two_volume_vertex_t *vertex,
+    void *data) {
+    callback_state_t *callbacks = data;
+    (void)state;
+    assert(isfinite(deformation->position.x));
+    ++callbacks->prepares;
+    if(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR) {
+        /* A full union must be supplied even for tightly packed color data. */
+        unsigned char *bytes = (unsigned char *)vertex;
+        for(size_t i = 32; i < sizeof(*vertex); ++i)
+            assert(bytes[i] == 0);
+        memset(bytes + 32, 0xcc, sizeof(*vertex) - 32);
+        vertex->color.argb1 ^= index;
+    }
+    else {
+        vertex->textured.argb1 ^= index;
+        vertex->textured.u1 += 0.25f;
+    }
+    return 0;
+}
+
+static int prepare_invalid_two(const pvr_chunk_render_state_t *state,
+    uint16_t index, const pvr_deform_vertex_t *deformation,
+    pvr_geometry_vertex_format_t format, pvr_chunk_two_volume_vertex_t *vertex,
+    void *data) {
+    (void)state; (void)index; (void)deformation; (void)format; (void)data;
+    vertex->color.x = NAN;
+    return 0;
+}
+
+static void test_admitted_two(const pvr_chunk_two_volume_cache_t *cache) {
+    pvr_chunk_two_volume_cache_draw_t draw, unchanged;
+    pvr_chunk_two_volume_cache_t malformed = *cache;
+    alignas(32) unsigned char checked[3 * 64 + 32], admitted[3 * 64 + 32];
+    alignas(32) pvr_chunk_two_volume_vertex_t workspace[3];
+    alignas(32) matrix_t matrix;
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_cache_result_t expected, result;
+    callback_state_t callbacks, expected_callbacks;
+
+    memset(&draw, 0x5a, sizeof(draw));
+    memcpy(&unchanged, &draw, sizeof(draw));
+    malformed.vertex_size = cache->vertex_size == 32 ? 64 : 32;
+    assert(pvr_chunk_model_two_volume_cache_draw_prepare(&malformed, &draw) == -1);
+    assert(!memcmp(&draw, &unchanged, sizeof(draw)));
+    assert(pvr_chunk_model_two_volume_cache_draw_prepare(cache, NULL) == -1);
+    assert(pvr_chunk_model_two_volume_cache_draw_prepare(cache,
+        (pvr_chunk_two_volume_cache_draw_t *)(void *)cache->storage) == -1);
+    assert(pvr_chunk_model_two_volume_cache_draw_prepare(cache, &draw) == 0);
+    identity(&matrix);
+    matrix[0][0] = 2;
+    matrix[3][0] = 3;
+    matrix[0][3] = 0.25f;
+    for(unsigned mask = 0; mask < 8; ++mask) {
+        pvr_chunk_cache_begin_strip_t begin = mask & 1 ? begin_two_volume : NULL;
+        pvr_chunk_cache_resolve_vertex_t resolve = mask & 2 ? resolve_vertex : NULL;
+        pvr_chunk_cache_prepare_two_volume_vertex_t prepare =
+            mask & 4 ? prepare_admitted_two : NULL;
+        memset(checked, 0x5a, sizeof(checked));
+        memset(admitted, 0x5a, sizeof(admitted));
+        memset(workspace, 0x6b, sizeof(workspace));
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.fail_index = UINT16_MAX;
+        expected_callbacks = callbacks;
+        assert(pvr_geometry_vertex_sink_init_memory(&sink, cache->format,
+                                                     checked, 3) == 0);
+        assert(pvr_chunk_model_two_volume_cache_emit(cache, &matrix, &sink,
+            workspace, 3, begin, resolve, prepare, &expected_callbacks, &expected) == 0);
+        assert(pvr_geometry_vertex_sink_init_memory(&sink, cache->format,
+                                                     admitted, 3) == 0);
+        assert(pvr_chunk_model_two_volume_cache_draw_emit(&draw, &matrix, &sink,
+            workspace, 3, NULL, begin, resolve, prepare, &callbacks, &result) == 0);
+        assert(!memcmp(checked, admitted, sizeof(checked)));
+        assert(!memcmp(&expected, &result, sizeof(result)));
+        assert(!memcmp(&callbacks, &expected_callbacks, sizeof(callbacks)));
+        for(size_t i = 3 * cache->vertex_size; i < sizeof(admitted); ++i)
+            assert(admitted[i] == 0x5a);
+        for(size_t i = 3 * cache->vertex_size; i < sizeof(workspace); ++i)
+            assert(((unsigned char *)workspace)[i] == 0x6b);
+    }
+    for(int decision = -1; decision <= 0; ++decision) {
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.filter_result = decision;
+        assert(pvr_geometry_vertex_sink_init_memory(&sink, cache->format,
+                                                     admitted, 3) == 0);
+        assert(pvr_chunk_model_two_volume_cache_draw_emit(&draw, &matrix, &sink,
+            workspace, 3, filter_strip, begin_two_volume, resolve_vertex,
+            prepare_admitted_two, &callbacks, &result) == decision);
+        assert(!sink.emitted_vertices && !callbacks.begins &&
+               !callbacks.resolves && !callbacks.prepares);
+        assert(result.skipped_strips == (decision == 0 ? 1u : 0u));
+    }
+    for(unsigned failure = 0; failure < 7; ++failure) {
+        memset(admitted, 0x5a, sizeof(admitted));
+        memcpy(checked, admitted, sizeof(checked));
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.fail_index = 1;
+        identity(&matrix);
+        if(failure == 2) matrix[3][3] = 0;
+        if(failure == 3) matrix[0][0] = NAN;
+        assert(pvr_geometry_vertex_sink_init_memory(&sink, cache->format,
+                                                     admitted, 3) == 0);
+        if(failure == 6)
+            sink.format = cache->format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR ?
+                PVR_GEOMETRY_VERTEX_TWO_VOLUME_TEXTURED : PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR;
+        errno = 0;
+        assert(pvr_chunk_model_two_volume_cache_draw_emit(&draw, &matrix, &sink,
+            workspace, failure == 4 ? 2 : 3, NULL, begin_two_volume,
+            failure == 0 ? resolve_invalid : failure == 5 ? resolve_vertex : NULL,
+            failure == 1 ? prepare_invalid_two : NULL, &callbacks, &result) == -1);
+        assert(errno == (failure == 4 ? ENOSPC : failure == 5 ? ECANCELED :
+                        failure == 6 ? EINVAL : EDOM));
+        assert(!sink.emitted_vertices && !result.emitted_vertices && !callbacks.begins);
+        assert(!memcmp(checked, admitted, sizeof(checked)));
+    }
+    identity(&matrix);
+    assert(pvr_geometry_vertex_sink_init_memory(&sink, cache->format, workspace, 3) == 0);
+    assert(pvr_chunk_model_two_volume_cache_draw_emit(&draw, &matrix, &sink,
+        workspace, 3, NULL, NULL, NULL, NULL, NULL, &result) == -1 && errno == EINVAL);
+    assert(pvr_chunk_model_two_volume_cache_draw_emit(NULL, &matrix, &sink,
+        workspace, 3, NULL, NULL, NULL, NULL, NULL, &result) == -1 && errno == EINVAL);
+    {
+        alignas(32) unsigned char storage[2048];
+        pvr_chunk_two_volume_cache_t bad = *cache;
+        assert(cache->storage_bytes <= sizeof(storage));
+        memcpy(storage, cache->storage, cache->storage_bytes);
+        bad.storage = storage;
+#define REBASE_TWO(member, type) bad.member = (const type *)(const void *)(storage + \
+            ((const unsigned char *)cache->member - (const unsigned char *)cache->storage))
+        REBASE_TWO(strips, pvr_chunk_cached_strip_t);
+        REBASE_TWO(vertices, void);
+        REBASE_TWO(deform_vertices, pvr_deform_vertex_t);
+        REBASE_TWO(source_indices, uint16_t);
+#undef REBASE_TWO
+        pvr_deform_vertex_t *deformation = (pvr_deform_vertex_t *)(void *)bad.deform_vertices;
+        deformation[1].normal.x = NAN;
+        unchanged = draw;
+        assert(pvr_chunk_model_two_volume_cache_draw_prepare(&bad, &draw) == -1 && errno == EDOM);
+        assert(!memcmp(&draw, &unchanged, sizeof(draw)));
+    }
+}
+
 static void test_two_volume_cache(void) {
     pvr_chunk_model_t model = make_model(
         two_volume_textured_polygons,
@@ -1108,6 +1252,8 @@ static void test_two_volume_cache(void) {
     assert(cache.source_indices[0] == 1 && cache.source_indices[1] == 0 &&
            cache.source_indices[2] == 2);
     test_two_volume_cooked_section(&cache);
+
+    test_admitted_two(&cache);
 
     identity(&matrix);
     memset(&callbacks, 0, sizeof(callbacks));
@@ -1156,6 +1302,7 @@ static void test_two_volume_cache(void) {
     assert(pvr_chunk_model_two_volume_cache_build(
         &plan, storage, sizeof(storage), NULL, NULL, &cache) == 0);
     assert(cache.vertex_size == sizeof(pvr_vertex_pcm_t));
+    test_admitted_two(&cache);
     memset(&callbacks, 0, sizeof(callbacks));
     callbacks.fail_index = UINT16_MAX;
     assert(pvr_geometry_vertex_sink_init_memory(
@@ -1543,6 +1690,59 @@ static void test_admitted_multistrip(void) {
     }
 }
 
+static void test_admitted_two_multistrip(void) {
+    uint16_t commands[100];
+    pvr_chunk_model_view_t view;
+    pvr_chunk_vertex_index_entry_t entries[256];
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_two_volume_cache_t cache;
+    pvr_chunk_two_volume_cache_draw_t draw;
+    alignas(32) unsigned char storage[4096];
+    alignas(32) unsigned char checked[6 * 64 + 32], admitted[6 * 64 + 32];
+    alignas(32) pvr_chunk_two_volume_vertex_t workspace[3];
+    alignas(32) matrix_t matrix;
+    pvr_geometry_vertex_sink_t sink;
+    pvr_chunk_cache_result_t expected, result;
+    callback_state_t callbacks;
+
+    for(unsigned kind = 0; kind < 2; ++kind) {
+        const uint16_t *polys = kind ? two_volume_textured_polygons : two_volume_color_polygons;
+        size_t count = kind ? sizeof(two_volume_textured_polygons) / sizeof(*polys) :
+                              sizeof(two_volume_color_polygons) / sizeof(*polys);
+        assert(2 * count - 1 <= sizeof(commands) / sizeof(*commands));
+        memcpy(commands, polys, (count - 1) * sizeof(*polys));
+        memcpy(commands + count - 1, polys, count * sizeof(*polys));
+        pvr_chunk_model_t model = make_model(commands, 2 * count - 1);
+        assert(pvr_chunk_model_open(&model, &view) == 0);
+        assert(pvr_chunk_model_plan_build(&view, entries, 256, &plan) == 0);
+        assert(pvr_chunk_model_two_volume_cache_build(&plan, storage, sizeof(storage),
+                                                      NULL, NULL, &cache) == 0);
+        assert(cache.strip_count == 2);
+        assert(pvr_chunk_model_two_volume_cache_draw_prepare(&cache, &draw) == 0);
+        identity(&matrix);
+        for(unsigned fail = 0; fail < 2; ++fail) {
+            pvr_chunk_cache_resolve_vertex_t resolve = fail ? resolve_second_strip_invalid : NULL;
+            memset(checked, 0x5a, sizeof(checked));
+            memset(admitted, 0x5a, sizeof(admitted));
+            memset(&callbacks, 0, sizeof(callbacks));
+            assert(pvr_geometry_vertex_sink_init_memory(&sink, cache.format, checked, 6) == 0);
+            assert(pvr_chunk_model_two_volume_cache_emit(&cache, &matrix, &sink,
+                workspace, 3, begin_two_volume, resolve, prepare_admitted_two,
+                &callbacks, &expected) == (fail ? -1 : 0));
+            memset(&callbacks, 0, sizeof(callbacks));
+            assert(pvr_geometry_vertex_sink_init_memory(&sink, cache.format, admitted, 6) == 0);
+            assert(pvr_chunk_model_two_volume_cache_draw_emit(&draw, &matrix, &sink,
+                workspace, 3, NULL, begin_two_volume, resolve, prepare_admitted_two,
+                &callbacks, &result) == (fail ? -1 : 0));
+            assert(!memcmp(checked, admitted, sizeof(checked)));
+            assert(!memcmp(&expected, &result, sizeof(result)));
+            assert(result.emitted_strips == (fail ? 1u : 2u));
+            assert(sink.emitted_vertices == (fail ? 3u : 6u));
+            assert(callbacks.begins == (fail ? 1u : 2u));
+        }
+    }
+}
+
 int main(void) {
     test_independent_uv();
     test_independent_uv_near_clip();
@@ -1566,6 +1766,7 @@ int main(void) {
     pvr_frustum_classification_t classification;
 
     test_admitted_multistrip();
+    test_admitted_two_multistrip();
     assert(pvr_chunk_model_open(&model, &view) == 0);
     assert(pvr_chunk_model_plan_query(&view, &plan_requirements) == 0);
     assert(plan_requirements.vertex_index_entries == 256);

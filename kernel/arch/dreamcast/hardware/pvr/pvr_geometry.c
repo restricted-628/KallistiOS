@@ -130,9 +130,8 @@ static int project_position(const matrix_t *matrix, float x, float y, float z,
     return 0;
 }
 
-int pvr_geometry_project_canonical_inplace(pvr_vertex_t *vertices,
-                                           size_t count,
-                                           const matrix_t *matrix) {
+int pvr_geometry_project_packed_inplace(void *vertices, size_t count,
+                                       size_t stride, const matrix_t *matrix) {
     int status = 0;
 #ifdef __DREAMCAST__
     shz_mat4x4_t saved_xmtrx;
@@ -143,16 +142,19 @@ int pvr_geometry_project_canonical_inplace(pvr_vertex_t *vertices,
     shz_xmtrx_load_4x4(&transform);
 #endif
     for(size_t i = 0; i < count; ++i) {
+        uint8_t *packet = (uint8_t *)vertices + i * stride;
         float x, y, z;
 
-        if(project_position(matrix, vertices[i].x, vertices[i].y,
-                             vertices[i].z, &x, &y, &z) < 0) {
+        memcpy(&x, packet + 4u, sizeof(x));
+        memcpy(&y, packet + 8u, sizeof(y));
+        memcpy(&z, packet + 12u, sizeof(z));
+        if(project_position(matrix, x, y, z, &x, &y, &z) < 0) {
             status = -1;
             break;
         }
-        vertices[i].x = x;
-        vertices[i].y = y;
-        vertices[i].z = z;
+        memcpy(packet + 4u, &x, sizeof(x));
+        memcpy(packet + 8u, &y, sizeof(y));
+        memcpy(packet + 12u, &z, sizeof(z));
     }
 #ifdef __DREAMCAST__
     shz_xmtrx_load_4x4(&saved_xmtrx);
