@@ -1030,8 +1030,8 @@ to formats used directly by the Dreamcast's PowerVR (utils/pvrtex), a significan
 rewrite of wav2adpcm which converts standard sound data into the smaller ADPCM
 format used by the Dreamcast's AICA (utils/wav2adpcm), an example that
 demonstrates how to draw lines with quads via the pvr (pvr/pvrline), one for
-testing network speed (network/speedtest) and another on how to use libADX
-from kos-ports for audio playback (sound/libADX).
+testing network speed (network/speedtest) and another on compressed-audio
+playback with an optional kos-ports decoder.
 
 RELEASE NOTES for 2.1.0
 -----------------------

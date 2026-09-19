@@ -1,7 +1,7 @@
 # KallistiOS Toolchain Builder (`kos-chain`) with BSD #
 
 This document contains all the instructions to create a fully working
-toolchain targeting the **Sega Dreamcast** system under **Berkeley Software
+toolchain targeting the **Dreamcast** system under **Berkeley Software
 Distribution** (**BSD**).
 
 This document was written when using **FreeBSD** (`13.2`) but it should be

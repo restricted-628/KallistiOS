@@ -18,12 +18,11 @@ Toolchain components built through **KallistiOS Toolchain Builder** include:
 
 This utility is capable of building toolchains for the following targets:
 
-- **dreamcast**: `sh-elf` toolchain, targeting the SH4 primary CPU of the Sega
-Dreamcast, based on the Hitachi/Renesas SuperH architecture. This toolchain is
-required for Sega Dreamcast development.
-- **aica**: `arm-eabi` toolchain, targeting the Sega Dreamcast's AICA *Advanced
+- **dreamcast**: `sh-elf` toolchain, targeting the SH4 primary CPU of the Dreamcast, based on the Hitachi/Renesas SuperH architecture. This toolchain is
+required for Dreamcast development.
+- **aica**: `arm-eabi` toolchain, targeting the Dreamcast's AICA *Advanced
 Integrated Capable Audio* processor, based on an **ARM7** core. KallistiOS
-provides a precompiled sound driver for Sega Dreamcast, so the  `arm-eabi`
+provides a precompiled sound driver for Dreamcast, so the  `arm-eabi`
 toolchain is optional and only necessary for compiling custom AICA drivers.
 - **GameCube**: `powerpc-eabi` toolchain, the cross-compiler toolchain targeting
 the **IBM Gekko PowerPC (PPC) CPU** in the Nintendo GameCube. GameCube support

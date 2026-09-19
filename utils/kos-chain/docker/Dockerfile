@@ -34,7 +34,7 @@ RUN apk --update add --no-cache \
         python3 \
         && rm -rf /var/cache/apk/*
 
-# Making Sega Dreamcast toolchains
+# Making Dreamcast toolchains
 # You may adapt the KallistiOS repository URL if needed
 ARG platform=dreamcast
 ARG profile=stable

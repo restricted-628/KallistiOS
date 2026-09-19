@@ -806,7 +806,7 @@ typedef struct {
         struct {
             /* Block 0xE0 */
             uint16_t  blockid;        /* Should be 0xE0 */
-            uint8_t   prodname[4];    /* SEGA */
+            uint8_t   prodname[4];    /* Product identifier */
             uint8_t   method;
             uint8_t   unk1;           /* 0x00 */
             uint8_t   unk2[2];        /* 0x00 0x00 */
@@ -1128,7 +1128,7 @@ typedef struct {
                                        bit 0 = pulse dial (1) or tone dial (0),
                                        bit 7 = blind dial (1) or not (0) */
             uint8_t   unk2[2];        /* Might be padding (0x00 0x00) */
-            char      prodname[4];    /* Should be 'SEGA' */
+            char      prodname[4];    /* Fixed product identifier */
             char      ppp_login[28];
             char      ppp_passwd[16];
             char      ac1[5];         /* Area code for phone 1, in parenthesis */
@@ -1280,7 +1280,7 @@ int flashrom_get_pw_ispcfg(flashrom_ispcfg_t *out) {
 
     /* Grab block 0xC0 */
     if(flashrom_get_block(FLASHROM_PT_BLOCK_1, FLASHROM_B1_PW_PPP1, buffer) >= 0) {
-        /* Make sure the product id is "SEGA". */
+        /* Validate the fixed product identifier. */
         if(strncmp(isp->c0.prodname, "SEGA", 4)) {
             return -1;
         }

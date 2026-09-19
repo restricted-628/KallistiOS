@@ -1,7 +1,7 @@
 # KallistiOS Toolchain Builder (`kos-chain`) with macOS #
 
 This document contains all the instructions to create a fully working
-toolchains targeting the **Sega Dreamcast** system under **macOS**.
+toolchains targeting the **Dreamcast** system under **macOS**.
 
 This document was initially written while using **macOS** (`10.14 Mojave`) but
 it should be applicable on all modern **macOS** systems. Note that Apple

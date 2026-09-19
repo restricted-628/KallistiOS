@@ -1,7 +1,7 @@
 /* LibADX for KallistiOS ##version##
 
    libADXPlay.c
-   Simple "Hello World" style example of ADX playback.
+   Simple "Hello World" style example of compressed-audio playback.
 
    Copyright (C) 2012 Josh 'PH3NOM' Pearson <ph3nom.dcmc@gmail.com>
    Copyright (C) 2024 The KOS Team and contributors
@@ -18,7 +18,7 @@
 #include <kos/init.h>
 #include <kos.h>
 
-#include <adx/adx.h> /* ADX Decoder Library */
+#include <adx/adx.h> /* Compressed-audio decoder library */
 #include <adx/snddrv.h> /* Direct Access to Sound Driver */
 
 #define CONT_RESUME  0x01
@@ -64,7 +64,7 @@ int main(int argc, const char *argv[])
     bfont_draw_str(vram_s+o,640,1,"LibADX (C) PH3NOM 2012"); o+=640*48;
     printf("LibADX (C) PH3NOM 2012\n");
 
-    /* Start the ADX stream, with looping enabled */
+    /* Start the compressed-audio stream, with looping enabled */
     if( adx_dec( "/rd/test.adx", 1 ) < 1 )
     {
         printf("Invalid ADX file\n");

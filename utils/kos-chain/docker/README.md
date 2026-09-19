@@ -1,7 +1,7 @@
 # Dockerfile
 
 This directory contains a `Dockerfile` which demonstrates how to build a Docker
-image containing the minimal toolchains used for **Sega Dreamcast** development.
+image containing the minimal toolchains used for **Dreamcast** development.
 
 The Docker image foundation is based on [Alpine Linux](https://alpinelinux.org/).
 
@@ -13,7 +13,7 @@ Toolchains included in the image are
 * The normal host toolchain used for compiling various tools
 
 These images may be used to compile KallistiOS, the open source
-**Sega Dreamcast** development library.
+**Dreamcast** development library.
 
 To be clear, this `Dockerfile` doesn't build KallistiOS itself, only the
 required toolchains. KallistiOS itself is not part of the toolchains. KallistiOS

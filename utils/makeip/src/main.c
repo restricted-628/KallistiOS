@@ -115,7 +115,7 @@ void
 usage(int print_field_information)
 {
   printf("IP creator (makeip) v%s\n\n", MAKEIP_VERSION);
-  printf("Creates homebrew Sega Dreamcast bootstrap files (i.e. IP.BIN).\n\n");
+  printf("Creates homebrew Dreamcast bootstrap files (i.e. IP.BIN).\n\n");
   printf("Usage:\n");
   printf("\t%s [options] [ip_fields] <IP.BIN>\n", program_name_get());
   printf("\t%s [options] [ip_fields] <ip.txt> <IP.BIN>\n", program_name_get());

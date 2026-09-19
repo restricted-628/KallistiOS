@@ -45,7 +45,7 @@
 -img,40,50: /rd/dreamcast_photo.png
 
 = What is Dreamcast?
--txt,60,30: - The best video game console from Sega
+-txt,60,30: - The Dreamcast video game console
 -wait:
 -txt,60,90: - Released in November 1998
    - Hitachi SH4 at 200MHz
@@ -115,7 +115,7 @@
 
 Wikipedia says:
 "KallistiOS is a free, BSD license-based
- development system for the Sega Dreamcast
+ development system for the Dreamcast
  game console."
 
 -txt,40,280:

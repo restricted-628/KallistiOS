@@ -1,6 +1,6 @@
 # Dreampresent: The Dreamcast Presentation Tool
 
-This is a presentation tool that runs on **Sega Dreamcast**. It's written in 
+This is a presentation tool that runs on **Dreamcast**. It's written in
 **Ruby** and uses [mruby](https://mruby.org/).
 
 This tool was initially developed by [Yuji Yokoo](https://github.com/yujiyokoo) 

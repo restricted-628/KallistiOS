@@ -1,7 +1,7 @@
 # KallistiOS Toolchain Builder (`kos-chain`) with MinGW/MSYS #
 
 This document contains all the instructions to create a fully working
-toolchain targeting the **Sega Dreamcast** system under **MinGW/MSYS**.
+toolchain targeting the **Dreamcast** system under **MinGW/MSYS**.
 
 This document applies only on the legacy **MinGW/MSYS** environment provided
 by [MinGW - Minimalist GNU for Windows](https://sourceforge.net/projects/mingw/).
