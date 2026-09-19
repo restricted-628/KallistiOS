@@ -130,6 +130,8 @@ static bool close_enough(float actual, float expected) {
            fabsf(actual - expected) <= 0.0001f * scale;
 }
 
+#include "release-fixtures.h"
+
 static int invalid_cached_position(const pvr_chunk_render_state_t *state,
                                    uint16_t index,
                                    const pvr_deform_vertex_t *deformation,
@@ -671,10 +673,16 @@ int main(int argc, char **argv) {
     }
 
     shz_version_fields(shz_version_linked(), &major, &minor, &patch);
-    if(major != 0 || minor != 8 || patch != 0) {
+    if(major != 0 || minor != 8 || patch != 1) {
         FAIL("unexpected SH4ZAM version");
     }
 
-    show_result(true, "SH4ZAM 0.8 camera, frustum, geometry, and fibers");
+    if(!verify_release_memory())
+        FAIL("SH4ZAM 0.8.1 memory regression");
+    puts("SH4ZAM 0.8.1 memory copies and guards: PASS");
+    if(!verify_release_math())
+        FAIL("SH4ZAM 0.8.1 math regression");
+    puts("SH4ZAM 0.8.1 zero scales, screen init, strict u16 trig: PASS");
+    show_result(true, "SH4ZAM 0.8.1 camera, frustum, geometry, and fibers");
     return 0;
 }

@@ -3,8 +3,9 @@
 ## Scope and source ownership
 
 This pass follows the source-dependency migration on KOS master (`6f8b3394`).
-SH4ZAM remains an unmodified submodule at
-`0bacf4b336368c0b47864ce9eeb59e7c07904b51`. All changes in this pass are to KOS
+The original audit used unmodified SH4ZAM at
+`0bacf4b336368c0b47864ce9eeb59e7c07904b51`; the dependency is now pinned to
+official 0.8.1 (`be71e8a1428374498e8f5e7506c7e244375f4399`). All consumer changes are to KOS
 consumers, bridge assertions, tests, and documentation. Graphics-library
 extraction is deferred; no public matrix layouts or API contracts change.
 

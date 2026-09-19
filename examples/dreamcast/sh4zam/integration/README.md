@@ -1,6 +1,6 @@
 # First-class SH4ZAM integration
 
-This example verifies that the bundled SH4ZAM 0.8 library is available through
+This example verifies that the bundled SH4ZAM 0.8.1 library is available through
 the normal KOS include and link environment. Its Makefile deliberately does not
 add `-lsh4zam`; the standard grouped KOS libraries supply the implementation and
 discard unused sections normally.
@@ -91,10 +91,22 @@ untouched. Every target draw must preserve XMTRX. Success adds:
 Admitted toon/outline policies, clipping, rejection, XMTRX: PASS
 ```
 
+The 0.8.1 release probes also check header/library version agreement, generic
+memory copies for every source/destination offset 0..7 and size 0..132,
+aligned 2-byte/4-byte variants within their documented size constraints, return
+pointers and surrounding guards. Math probes cover each zero-scale axis,
+negative scales, screen initialization after NaN/Inf XMTRX contents, and
+cardinal unsigned-16-bit angles under the normal strict compiler policy.
+
+```text
+SH4ZAM 0.8.1 memory copies and guards: PASS
+SH4ZAM 0.8.1 zero scales, screen init, strict u16 trig: PASS
+```
+
 Successful completion prints:
 
 ```text
-RESULT: PASS (SH4ZAM 0.8 camera, frustum, geometry, and fibers)
+RESULT: PASS (SH4ZAM 0.8.1 camera, frustum, geometry, and fibers)
 ```
 
 The same result is shown on a green framebuffer for emulator or hardware
@@ -105,6 +117,22 @@ expected result in Flycast with both the SH-4 interpreter and dynarec. The
 compact-model extension subsequently passed in Flycast on 2026-09-08 with
 explicit interpreter and dynarec selections after the clean GCC 16.2.0 KOS
 build incorporating official master through `33c6e0ba`. Both runs printed the
-result above, covering model emission and matrix restoration as well as the
+then-current 0.8 result, covering model emission and matrix restoration as well as the
 earlier checks. This is an emulator correctness fixture, not a physical-device
 numerical or performance certification.
+
+The 0.8.1 upgrade was force-rebuilt with SH-4 GCC 16.2.0 on 2026-09-19.
+Interpreter and dynarec runs passed the complete integration fixture including
+the new release probes. The optional fast-math diagnostic failed in both
+modes; that failure is documented separately below rather than counted as a
+passing integration result.
+
+## Separate fast-math diagnostic
+
+After sourcing `environ.sh`, build `make fast-trig-probe.elf` in this directory.
+Only `fast-trig-call.c` is compiled with `-ffast-math`; the validator is strict.
+This diagnostic fails with official 0.8.1 because its new u16-angle fast path
+uses the wrong angle conversion. The normal integration executable does not
+enable that path. See the [adapter restriction](../../../../addons/libsh4zam/README.md#081-fast-math-restriction).
+Keep the failing probe separate; do not interpret it as a pass or silently
+change the expected trigonometric results to match the defect.

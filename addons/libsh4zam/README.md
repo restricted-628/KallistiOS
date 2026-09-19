@@ -8,8 +8,8 @@ adapter and integration documentation; the library is not a KOS-authored fork.
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`0bacf4b336368c0b47864ce9eeb59e7c07904b51` (0.8.0). It contains unmodified
-upstream source and history. No local source or documentation patches are
+`be71e8a1428374498e8f5e7506c7e244375f4399` (official `v0.8.1`). It contains
+unmodified upstream source and history. No local source or documentation patches are
 applied. Updating this dependency is a separate reviewed change, not an
 automatic checkout of its latest branch.
 
@@ -67,6 +67,10 @@ optimized stepping may differ. To choose the tested debug-oriented alternative:
 make -C addons/libsh4zam SHZ_FFT_CFLAGS=-Og
 ```
 
+The `-O0` failure and `-O2` success were reproduced again with the unmodified
+0.8.1 source. This release does not change the FFT translation unit; retain the
+adapter workaround rather than modifying upstream memory operands.
+
 Reproduction, after sourcing `environ.sh` (substitute any tested optimization):
 
 ```sh
@@ -74,6 +78,41 @@ kos-cc -O0 -std=gnu17 -Wextra -Werror -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT \
   -c addons/libsh4zam/upstream/source/sh4/shz_complex_sh4.c \
   -o /tmp/sh4zam-fft-probe.o
 ```
+
+## 0.8.1 fast-math restriction
+
+The official 0.8.1 `shz_sincosu16()` SH-4 fast-math path converts the 16-bit
+turn angle with `radians16 / SHZ_F_TAU`. The strict path passes that angle
+directly to FSCA. These are not equivalent: the corresponding radian angle is
+`radians16 * (SHZ_F_TAU / 65536.0f)`.
+
+The separate `examples/dreamcast/sh4zam/integration/fast-trig-probe.elf`
+reproducer compiles only the call under `-ffast-math`, with a strict validator.
+Under GCC 16.2/Flycast, angle 16384 returns approximately `(0.07260841,
+0.99736059)` instead of the quarter-turn pair `(1, 0)`. This is a known failing
+diagnostic, not a passing release gate and not a test of physical hardware.
+
+The default KOS environment does not enable `-ffast-math`, and no current KOS
+kernel caller uses this u16 pair routine. Do not enable its fast-math path
+with this pin. Applications using that routine should compile the calling
+translation unit without `-ffast-math` (and without `-Ofast`, which enables it).
+Upstream source remains unchanged; no project-wide compiler policy is silently
+overridden by this adapter.
+
+See the [standalone regression report](../../doc/sh4zam-0.8.1-fast-trig.md)
+for cardinal-angle results and reproduction instructions.
+
+## 0.8.1 upgrade validation
+
+The entire KOS target build was forced with SH-4 GCC 16.2.0 to rebuild inline
+header consumers as well as the addon archive. Header/library version checks
+and the complete SH4ZAM integration fixture passed in Flycast interpreter and
+dynarec modes, including the new release-specific memory/scale/screen probes.
+The rendered toon/outline and Compact scene examples passed in dynarec mode.
+Portable animation tests passed GCC 14 GNU17 and strict C23, Apple Clang strict
+C2x, and Clang ASan/UBSan; host scene and converter regressions also passed.
+The fast-math diagnostic above is an explicit exception, not included among
+these passing results. No physical-hardware certification is implied.
 
 ## Floating-point context
 
