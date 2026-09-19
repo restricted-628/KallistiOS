@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-# GIMP Plug-in for the Sega Dreamcast MR file format
+# GIMP Plug-in for the Dreamcast MR file format
 # Copyright (C) 2019 by BBHoodsta
 #
 # Encoding based on logotools(pngtomr.c) source code by Andrew Kieschnick (ADK)
@@ -239,7 +239,7 @@ register(
     'BBHoodsta', #author
     'BBHoodsta', #copyright
     '2019', #year
-    'Sega Dreamcast MR image',
+    'Dreamcast MR image',
     '*',
     [   #input args. Format (type, name, description, default [, extra])
     (PF_IMAGE, "image", "Input image", None),
@@ -260,7 +260,7 @@ register(
     'BBHoodsta', #author
     'BBHoodsta', #copyright
     '2019', #year
-    'Sega Dreamcast MR image',
+    'Dreamcast MR image',
     None, #image type
     [   #input args. Format (type, name, description, default [, extra])
     (PF_STRING, 'filename', 'The name of the file to load', None),

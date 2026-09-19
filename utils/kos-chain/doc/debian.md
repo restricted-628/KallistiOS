@@ -1,7 +1,7 @@
 # KallistiOS Toolchain Builder (`kos-chain`) with Debian #
 
 This document contains all the instructions to create a fully working
-toolchain targeting the **Sega Dreamcast** system under **Debian**.
+toolchain targeting the **Dreamcast** system under **Debian**.
 
 This document was written for **Debian** systems, but should apply to any
 **GNU/Linux** system derived from **Debian**, such as **Ubuntu** or **Mint**.

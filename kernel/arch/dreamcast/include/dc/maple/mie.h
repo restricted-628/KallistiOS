@@ -670,7 +670,7 @@ bool mie_get_eeprom(void *dst);
 */
 bool mie_set_eeprom(uint8_t *eeprom);
 
-/** \brief   Compute Sega NAOMI EEPROM CRC-16.
+/** \brief   Compute NAOMI EEPROM CRC-16.
     \ingroup mie_device
 
     CRC-16-CCITT variant with seed \c 0xDEBDEB00 and an extra round over a

@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The possibility to use an external `IP.TMPL` was restored by using the `-t`
   switch.
 - The embedded `IP.TMPL` file is now the **LiENUS** version instead of the
-  original file (which was using the copyrighted `AIP` library). 
+  original file (which used a copyrighted proprietary bootstrap support library).
 - The `ip.txt` template file was changed a bit: the **Hardware ID** and 
   **Maker ID** fields aren't necessary anymore. The **Device Info** field
   doesn't need to contains the fake `0000` **CRC**, only the `CD-ROM1/1` value

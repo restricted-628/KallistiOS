@@ -248,7 +248,7 @@ file).
 
 ### Does KOS have any kind of TCP/IP stack? Network support at all?
 
-Yes. There is a working driver for the Sega broadband adapter (an
+Yes. There is a working driver for the Dreamcast broadband adapter (an
 RTL8193C based 10/100 card) and the Lan Adapter on the DC. With regards
 to TCP/IP and friends, there is a built-in network stack provided in
 the kernel tree. There is also a PPP stack provided in the addons tree

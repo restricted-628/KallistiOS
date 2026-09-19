@@ -1,7 +1,6 @@
 # IP creator (`makeip`) additional resources
 
-**IP creator** (`makeip`) is an utility used for generating homebrew Sega
-Dreamcast bootstrap files, also known as IP for Initial Program. This file is
+**IP creator** (`makeip`) is an utility used for generating homebrew Dreamcast bootstrap files, also known as IP for Initial Program. This file is
 often known as `IP.BIN` files.
 
 This directory contains several useful resources:
@@ -21,8 +20,8 @@ you may change the bootstrap by passing the `-t` switch to **IP creator**.
    **IP.BIN Replacement** package by **LiENUS**. This is the default IP template
    embedded in the **IP creator** utility.
 * `ipalt.tmpl`: The original `IP.TMPL` provided with the original `makeip`
-   package. It uses the `AIP` library from Sega, which has been completely
-   removed in the **IP.BIN Replacement** version.
+   package. It contains the original proprietary bootstrap support library,
+   which has been completely removed in the **IP.BIN Replacement** version.
 
 ## IP fields templates (`inputs` directory)
 
