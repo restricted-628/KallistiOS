@@ -417,15 +417,7 @@
          add_symmetric_skew(v.x, v.y, v.z);
 --- a/source/sh4/shz_complex_sh4.c
 +++ b/source/sh4/shz_complex_sh4.c
-@@ -8,6 +8,7 @@
-  *
-  *  \author     2026 Falco Girgis
-  *  \copyright  MIT License
-+ *  \copyright  Copyright (C) 2026 Joseph Black
-  */
- 
- #include "sh4zam/shz_complex.h"
-@@ -97,9 +98,9 @@
+@@ -97,9 +97,9 @@
                  fmov.d  dr4, @%[x]
                  fmov.d  dr6, @%[y]
              )"
@@ -437,7 +429,7 @@
          }
          SHZ_FSCHG();
  
-@@ -128,10 +129,11 @@
+@@ -128,10 +128,11 @@
                  fmov.d  dr8, @%[z]
                  fmov.d  dr10, @%[w]
              )"
@@ -451,7 +443,7 @@
          }
          SHZ_FSCHG();
  
-@@ -176,16 +178,13 @@
+@@ -176,16 +177,13 @@
                  fmov.d  dr0, @%[c]
                  fmov.d  dr2, @%[d]
              )"
@@ -470,7 +462,7 @@
          }
  
          SHZ_FSCHG();
-@@ -279,14 +278,14 @@
+@@ -279,14 +277,14 @@
      SHZ_FSCHG();
      for(size_t i = 1; i < (size - 1); i++) {
          k = size >> 1;

@@ -2,7 +2,6 @@
 #
 # Bundled SH4ZAM 0.8.0 build
 # Copyright (C) 2025, 2026 Falco Girgis and SH4ZAM Contributors
-# Copyright (C) 2026 Joseph Black
 #
 
 TARGET = libsh4zam.a

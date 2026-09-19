@@ -4,6 +4,11 @@ KallistiOS builds SH4ZAM 0.8.0 as a first-class Dreamcast math component.
 The public C and C++ headers are installed under `addons/include/sh4zam`, and
 the static library is produced as `addons/lib/dreamcast/libsh4zam.a`.
 
+This is a KOS addon build of vendored upstream files, not a Git submodule.
+The addon build location and the source dependency mechanism are separate
+choices. Upstream authorship remains with Falco Girgis and SH4ZAM contributors;
+KOS integration files and the local patch inventory are maintained separately.
+
 The implementation is maintained as a distinct attributed component under
 its MIT license. KOS-facing graphics facilities may use it directly while
 preserving established KOS entry points where source or binary compatibility
@@ -36,10 +41,14 @@ The bundled source incorporates this revision with these local changes:
 - Whitespace normalization, balanced Doxygen conditional regions, and a
   distinct memory documentation group to avoid colliding with KOS groups.
 - C++ quaternion documentation/conditional-boundary correction.
-- GCC 16 FFT assembly operand-pressure fix: pointer inputs plus a memory
-  clobber replace redundant read/write memory operands. The arithmetic and
-  instruction sequence are unchanged. This patch is still local as of the
-  verified upstream revision (KOS commit `6df19052`).
+- Local GCC 16 FFT assembly operand-pressure workaround: pointer inputs plus
+  a broad memory clobber replace explicit read/write memory operands. The
+  assembly instruction sequence is unchanged, but the compiler's memory
+  dependency information differs. This is not a demonstrated performance
+  improvement. Reproduction of the original compiler failure and comparison
+  with upstream constraints remain required before retaining or revising it.
+  The patch is still local as of the verified upstream revision (KOS commit
+  `6df19052`).
 
 `source-lock.json` records upstream and bundled SHA-256 hashes for every
 vendored header, source file, and license. `local-changes.patch` records the

@@ -1,7 +1,7 @@
 {
   "upstream_url": "https://github.com/gyrovorbis/sh4zam",
   "upstream_revision": "0bacf4b336368c0b47864ce9eeb59e7c07904b51",
-  "patch_sha256": "8a34bdb78c8cd7bbd6f0c8b0c5edd2c69b1ca0f3ede0841b08da4d31c89c5a1a",
+  "patch_sha256": "eb5bee707fc13fa8b7702621468ad807d92bf03fd983f7326524400c532b51de",
   "files": [
     {
       "upstream_path": "LICENSE",
@@ -277,7 +277,7 @@
       "upstream_path": "source/sh4/shz_complex_sh4.c",
       "local_path": "addons/libsh4zam/source/sh4/shz_complex_sh4.c",
       "upstream_sha256": "be339f0297681fad56e1796141c1f708d0969bede6144e37c1d196485edeb851",
-      "bundled_sha256": "15256a2a22325d8aba086e42684f47c1277e1a7c3d5a5e53e4f87a0168329bdc"
+      "bundled_sha256": "622ea1676aa26cf582f27ff703e539a6ea512edc4204ed8b8c747eb27a3c024a"
     },
     {
       "upstream_path": "source/sh4/shz_mem_sh4.s",

@@ -8,7 +8,6 @@
  *
  *  \author     2026 Falco Girgis
  *  \copyright  MIT License
- *  \copyright  Copyright (C) 2026 Joseph Black
  */
 
 #include "sh4zam/shz_complex.h"
