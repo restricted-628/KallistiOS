@@ -78,6 +78,19 @@ checked path, and XMTRX remains unchanged after every draw. Success adds:
 Admitted modifier triangles, rejection, XMTRX: PASS
 ```
 
+The shared `utils/pvr-chunk-cache-test/toon-draw-fixtures.h` compares ordinary
+toon and outline checked/admitted paths across smooth, flat, and IGNORE_LIGHT
+strips, all three clipping policies, inside/intersecting/outside geometry, and
+all resolver/vertex-policy/profile-policy combinations. It checks output bytes,
+buffer guards, callback counts, progress and errno on success and partial
+failure, including capacity, overlap, malformed dynamic profiles, callback
+NaNs, and unusable W. No-resolver admitted draws leave deformation scratch
+untouched. Every target draw must preserve XMTRX. Success adds:
+
+```text
+Admitted toon/outline policies, clipping, rejection, XMTRX: PASS
+```
+
 Successful completion prints:
 
 ```text

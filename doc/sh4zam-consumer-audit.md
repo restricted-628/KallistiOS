@@ -93,7 +93,9 @@ and target tolerances are documented beside the example.
    Compact-model draw variants. Ordinary, two-volume, and modifier paths now
    have explicit one-time admission and in-place projection; see the
    [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
-   Toon/outline/wire variants still need their own audit.
+   Ordinary toon/outline now reuse the admitted draw view and borrow unchanged
+   deformation data; clipping and changing lighting/profile data stay checked.
+   Two-volume toon and wire variants still need their own audit.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.

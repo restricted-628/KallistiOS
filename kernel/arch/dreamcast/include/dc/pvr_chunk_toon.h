@@ -277,6 +277,51 @@ int pvr_chunk_model_cache_emit_outline(
     pvr_chunk_outline_resolve_profile_t resolve_profile,
     void *data, pvr_chunk_outline_result_t *result);
 
+/** \brief Band-shade an admitted ordinary cache without static rescans.
+
+    Use pvr_chunk_model_cache_draw_prepare() first and keep the draw snapshot
+    and borrowed cache storage immutable throughout draws and callbacks.
+    All other arguments and published-prefix semantics match
+    pvr_chunk_model_cache_emit_toon(). Profiles, lighting, callback output,
+    clipping and generated geometry remain dynamically checked. Without a
+    resolver, base deformations are borrowed directly and the deformation
+    scratch array is not populated; workspace size/alignment requirements are
+    unchanged. Scratch contents are not draw results. Visible triangles use
+    in-place projection with XMTRX preserved on success and failure.
+*/
+int pvr_chunk_model_cache_draw_emit_toon(
+    const pvr_chunk_cache_draw_t *draw,
+    const pvr_normal_matrix_t *normal_matrix,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_toon_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_toon_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_toon_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_toon_result_t *result);
+
+/** \brief Expand an admitted ordinary cache into an outline shell.
+
+    Shares the immutable lifetime and scratch contract of
+    pvr_chunk_model_cache_draw_emit_toon(). All other arguments, smooth/flat
+    expansion, clipping, and published-prefix behavior match
+    pvr_chunk_model_cache_emit_outline(). Profiles and changing geometry remain
+    checked. No material/culling policy or allocation is introduced.
+*/
+int pvr_chunk_model_cache_draw_emit_outline(
+    const pvr_chunk_cache_draw_t *draw,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_outline_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_outline_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_outline_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_outline_result_t *result);
+
 /** @} */
 
 __END_DECLS

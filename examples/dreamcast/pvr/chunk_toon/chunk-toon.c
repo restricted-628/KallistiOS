@@ -72,6 +72,7 @@ int main(int argc, char **argv) {
     pvr_chunk_cache_requirements_t cache_requirements;
     alignas(32) uint8_t cache_storage[512];
     pvr_chunk_model_cache_t cache;
+    pvr_chunk_cache_draw_t draw;
     pvr_poly_cxt_t polygon_context;
     pvr_poly_hdr_t polygon_header;
     pvr_poly_hdr_t outline_header;
@@ -111,6 +112,7 @@ int main(int argc, char **argv) {
     assert(pvr_chunk_model_cache_build(&plan, cache_storage,
                                        sizeof(cache_storage), NULL, NULL,
                                        &cache) == 0);
+    assert(pvr_chunk_model_cache_draw_prepare(&cache, &draw) == 0);
     assert(pvr_normal_matrix_build(&normal_matrix, &screen_identity) == 0);
     assert(pvr_frustum_init(&frustum, &screen_identity, 0.0f, 0.0f,
                             640.0f, 480.0f, 0.5f, 2.0f) == 0);
@@ -143,15 +145,15 @@ int main(int argc, char **argv) {
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
-        assert(pvr_chunk_model_cache_emit_outline(
-            &cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
+        assert(pvr_chunk_model_cache_draw_emit_outline(
+            &draw, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
             &outline_profile, &sink, &outline_workspace, NULL, begin_strip,
             NULL, NULL, NULL, &outline_header, &outline_result) == 0);
         assert(outline_result.emitted_strips == 1 &&
                outline_result.source_triangles == 1 &&
                outline_result.emitted_vertices == 3);
-        assert(pvr_chunk_model_cache_emit_toon(
-            &cache, &normal_matrix, &frustum,
+        assert(pvr_chunk_model_cache_draw_emit_toon(
+            &draw, &normal_matrix, &frustum,
             PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile, &sink, &workspace,
             NULL, begin_strip, NULL, NULL, NULL,
             &polygon_header, &result) == 0);

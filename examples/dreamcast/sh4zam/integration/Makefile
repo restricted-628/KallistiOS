@@ -12,7 +12,9 @@ all: rm-elf $(TARGET).elf
 include $(KOS_BASE)/Makefile.rules
 
 KOS_CFLAGS += -I$(KOS_BASE)/utils/animation-test
+KOS_CFLAGS += -I$(KOS_BASE)/utils/pvr-chunk-cache-test
 $(OBJS): $(KOS_BASE)/utils/animation-test/matrix-fixtures.h
+$(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/toon-draw-fixtures.h
 
 clean: rm-elf
 	-rm -f $(OBJS)

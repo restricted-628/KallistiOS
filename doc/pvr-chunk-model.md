@@ -577,8 +577,8 @@ visible. The ordinary cache-to-workspace copy and sink transfer still exist.
 The `chunk_scene` example prepares each cooked cache at load time and uses this
 path for both host golden tests and target frames. CRCs are already checked by
 asset/section opening, not by these cached draw calls. Two-volume and modifier
-caches have parallel admitted paths below; toon/outline and wireframe entry
-points still need their own audit.
+caches have parallel admitted paths below. Ordinary toon/outline policies also
+reuse this draw view; two-volume toon and wireframe still need their own audit.
 This removes identifiable repeated work; hardware throughput still requires
 measurement and is not inferred from host or emulator correctness tests.
 
@@ -590,6 +590,46 @@ changing NaN data, and invalid W. Geometry, converter, and scene-integration
 host regressions passed. The SH-4 integration fixture and `chunk_scene`
 reported PASS in Flycast interpreter and dynarec modes. The integration
 fixture explicitly checks XMTRX after successful and rejected prepared draws.
+
+### Admitted ordinary toon and outline policies
+
+An ordinary `pvr_chunk_cache_draw_t` prepared as above can also be passed to
+`pvr_chunk_model_cache_draw_emit_toon()` and
+`pvr_chunk_model_cache_draw_emit_outline()`. These are explicit alternatives to
+the existing checked policy emitters. They do not rescan immutable cache
+layout, strip bounds, or base deformation records each frame. The draw and
+borrowed storage must remain immutable and alive throughout every callback.
+
+Without a deformation resolver, these paths read base normals/positions
+directly from the cache instead of copying every deformation to scratch.
+The deformation workspace remains required at its original size/alignment,
+but is not populated in this case; scratch contents are not output. A resolver
+still receives a mutable copy and its result is checked. Assembly only reads
+source indices for callbacks; toon subdivision also reads them to retain
+reference provenance. Generated vertex packets still require mutable scratch.
+
+Profiles, lights, matrices, frusta, workspace ranges, capacity, callback output,
+and generated geometry remain dynamically checked. Smooth shading, flat face
+normals, IGNORE_LIGHT, threshold subdivision, outline expansion, strip winding,
+and all three clipping policies retain their checked-path behavior. Visible
+triangles use private in-place projection without redundant stream/matrix/
+command validation or packet staging. Intersecting triangles continue through
+the existing checked clipping implementation. XMTRX is preserved on success
+and failure. No partially projected triangle is submitted; earlier published
+triangles and the established progress counters remain visible on failure.
+
+The `chunk_toon` example admits once after cache construction and uses these
+entry points for both frame passes. No allocation, retained renderer state,
+automatic profile caching, or graphics-library extraction is introduced.
+
+Validation includes the shared host/SH-4 `toon-draw-fixtures.h` differential
+fixture: smooth/flat/unlit strips, clipping policies and visibility regions,
+callback combinations, buffer guards, unchanged borrowed deformation scratch,
+dynamic failures, and partial progress. The cache suite passed GCC 14 GNU17
+and strict C23, Apple Clang strict C2x, and Clang ASan/UBSan; standalone toon
+and geometry suites also passed. The SH-4 build and integration fixture passed
+in Flycast interpreter and dynarec modes with XMTRX checked after every draw.
+Physical-hardware correctness and throughput remain separate validation gates.
 
 Two-volume models use the parallel
 `pvr_chunk_model_two_volume_cache_query()`,

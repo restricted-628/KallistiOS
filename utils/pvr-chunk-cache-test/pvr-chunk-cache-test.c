@@ -18,6 +18,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "toon-draw-fixtures.h"
+
 #define VERTEX_HEADER(type, size) ((uint32_t)(type) | \
                                    ((uint32_t)(size) << 16))
 #define POLYGON_HEADER(type, flags) \
@@ -1977,6 +1979,7 @@ int main(void) {
     assert(pvr_chunk_model_cache_validate(&cache) == 0);
     test_ordinary_cooked_section(&cache);
     test_unlit_cooked_section();
+    assert(toon_draw_fixtures());
     test_toon_cache(&cache);
     test_outline_cache(&cache);
     test_wire_cache(&cache);

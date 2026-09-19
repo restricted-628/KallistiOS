@@ -23,7 +23,7 @@ SOURCES = pvr-chunk-cache-test.c \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) toon-draw-fixtures.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)
@@ -31,7 +31,7 @@ test: $(TARGET)
 
 dreamcast: $(DREAMCAST_TARGET)
 
-$(DREAMCAST_TARGET): pvr-chunk-cache-test.c
+$(DREAMCAST_TARGET): pvr-chunk-cache-test.c toon-draw-fixtures.h
 	kos-cc $(KOS_CSTD) -Wall -Wextra $< -lm -o $@
 
 clean:

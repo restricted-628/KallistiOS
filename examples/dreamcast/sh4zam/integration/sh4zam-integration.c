@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "matrix-fixtures.h"
+#include "toon-draw-fixtures.h"
 
 static shz_mat4x4_t matrix_sentinel;
 
@@ -614,6 +615,10 @@ int main(int argc, char **argv) {
     if(!verify_modifier_draws(&compact_model))
         FAIL("admitted modifier cache");
     puts("Admitted modifier triangles, rejection, XMTRX: PASS");
+
+    if(!toon_draw_fixtures())
+        FAIL("admitted toon/outline cache");
+    puts("Admitted toon/outline policies, clipping, rejection, XMTRX: PASS");
 
     /* Camera and frustum entry points retain their established checked
        contracts while their Dreamcast arithmetic runs through SH4ZAM. The
