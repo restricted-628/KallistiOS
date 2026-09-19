@@ -133,6 +133,37 @@ After sourcing `environ.sh`, build `make fast-trig-probe.elf` in this directory.
 Only `fast-trig-call.c` is compiled with `-ffast-math`; the validator is strict.
 This diagnostic fails with official 0.8.1 because its new u16-angle fast path
 uses the wrong angle conversion. The normal integration executable does not
-enable that path. See the [adapter restriction](../../../../addons/libsh4zam/README.md#081-fast-math-restriction).
+enable that path. See the [adapter restriction and helper](../../../../addons/libsh4zam/README.md#081-fast-math-restriction-and-local-helper).
 Keep the failing probe separate; do not interpret it as a pass or silently
 change the expected trigonometric results to match the defect.
+
+## Local KOS u16 helper regression
+
+`#include <kos/sh4zam.h>` supplies `kos_shz_sincosu16(angle)`. This explicit
+KOS helper routes 65536-units-per-turn inputs through SH4ZAM's radians API;
+it neither overrides the upstream function nor edits the submodule.
+
+The default example build also produces `u16-trig-test.elf`. Run it separately
+to validate all 65536 angles against strict double-precision `sin`/`cos`, with
+an absolute tolerance of `3e-4`. Callers are separate, non-LTO translation
+units built as strict C, fast-math C, Ofast C, and fast-math C++. Each lane
+also checks a constant quarter-turn. Success ends with:
+
+```text
+RESULT: PASS (KOS SH4ZAM u16 adapter)
+```
+
+Portable-backend tests use the same sources. From this directory, without
+needing a sourced KOS environment:
+
+```sh
+make -f Makefile.host-test CC=gcc-14 CXX=g++-14
+make -f Makefile.host-test clean
+make -f Makefile.host-test CC=clang CXX=clang++
+make -f Makefile.host-test clean
+```
+
+Keep compiler runs in separate build directories or clean between them. Host
+compiler overrides use `CFLAGS`, `CXXFLAGS`, and `LDFLAGS`; the validator always
+appends `-fno-fast-math -fno-lto`. These tests do not establish physical-hardware
+accuracy or performance.

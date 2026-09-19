@@ -2,8 +2,9 @@
 
 SH4ZAM is developed by Falco Girgis and the SH4ZAM contributors at
 https://github.com/gyrovorbis/sh4zam. Its upstream MIT license and author
-notices are preserved unchanged. This directory only supplies the KOS build
-adapter and integration documentation; the library is not a KOS-authored fork.
+notices are preserved unchanged. This directory supplies the KOS build
+adapter and integration documentation; separate KOS helpers live under
+`addons/include/kos/`. The library is not a KOS-authored fork.
 
 ## Source ownership and initialization
 
@@ -79,7 +80,7 @@ kos-cc -O0 -std=gnu17 -Wextra -Werror -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT \
   -o /tmp/sh4zam-fft-probe.o
 ```
 
-## 0.8.1 fast-math restriction
+## 0.8.1 fast-math restriction and local helper
 
 The official 0.8.1 `shz_sincosu16()` SH-4 fast-math path converts the 16-bit
 turn angle with `radians16 / SHZ_F_TAU`. The strict path passes that angle
@@ -96,8 +97,30 @@ The default KOS environment does not enable `-ffast-math`, and no current KOS
 kernel caller uses this u16 pair routine. Do not enable its fast-math path
 with this pin. Applications using that routine should compile the calling
 translation unit without `-ffast-math` (and without `-Ofast`, which enables it).
-Upstream source remains unchanged; no project-wide compiler policy is silently
-overridden by this adapter.
+Alternatively, opt into the KOS-side helper:
+
+```c
+#include <kos/sh4zam.h>
+shz_sincos_t pair = kos_shz_sincosu16(angle);
+```
+
+This helper converts 65536 turn units to radians and calls the public
+`shz_sincosf()` API. It supports fast-math without modifying upstream source,
+replacing upstream symbols, or changing project-wide compiler flags. Including
+the header alone does **not** fix calls to upstream `shz_sincosu16()`; use the
+`kos_` helper explicitly. No current kernel calls need migration.
+
+The helper consistently uses 65536 units per turn for constant/runtime inputs
+on all backends. Upstream's software and constant-u16 paths use 65535 instead;
+this small convention difference is intentional in the KOS helper to match
+the SH-4 turn encoding. Results remain approximate, not bit-identical across
+backends. The target test allows `3e-4` absolute error; this is a regression
+threshold, not a physical-hardware accuracy guarantee.
+
+The separate `u16-trig-test.elf` checks every 16-bit angle against a strict,
+double-precision reference in C strict/fast-math/Ofast and C++ fast-math modes,
+plus a constant quarter-turn in each mode. Its successful results do not
+supersede or hide the original upstream diagnostic failure.
 
 See the [standalone regression report](../../doc/sh4zam-0.8.1-fast-trig.md)
 for cardinal-angle results and reproduction instructions.
