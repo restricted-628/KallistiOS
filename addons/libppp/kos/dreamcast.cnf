@@ -1,1 +1,0 @@
-OBJS += ppp_scif.o ppp_modem.o
