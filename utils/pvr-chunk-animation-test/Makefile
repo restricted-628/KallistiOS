@@ -4,6 +4,7 @@ include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../pvr-model-convert \
 	-I../../kernel/arch/dreamcast/include
 LDLIBS += -lm
+CPPFLAGS += -isystem ../../addons/include
 
 TARGET = pvr-chunk-animation-test
 DREAMCAST_TARGET = pvr-chunk-animation-test.elf

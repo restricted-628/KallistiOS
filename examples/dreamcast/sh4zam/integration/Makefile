@@ -11,6 +11,9 @@ all: rm-elf $(TARGET).elf
 
 include $(KOS_BASE)/Makefile.rules
 
+KOS_CFLAGS += -I$(KOS_BASE)/utils/animation-test
+$(OBJS): $(KOS_BASE)/utils/animation-test/matrix-fixtures.h
+
 clean: rm-elf
 	-rm -f $(OBJS)
 

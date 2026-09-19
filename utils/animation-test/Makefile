@@ -2,6 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../../kernel/arch/dreamcast/include
+CPPFLAGS += -isystem ../../addons/include
 LDLIBS += -lm
 
 TARGET = animation-test
@@ -13,7 +14,7 @@ SOURCES = animation-test.c $(MATH_DIR)/animation.c \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) matrix-fixtures.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)

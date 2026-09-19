@@ -94,8 +94,18 @@ existing ownership and validation rules.
 
 On Dreamcast, vector interpolation, quaternion normalization and slerp,
 trigonometry, reciprocal square roots, and quaternion matrix construction use
-SH4ZAM without loading or changing XMTRX. Host tests use a scalar path with the
-same checked contract.
+SH4ZAM without loading or changing XMTRX. TRS matrix construction and camera
+roll now use the same SH4ZAM APIs on host and target, with SH4ZAM selecting its
+portable backend for host tools. Other host animation operations still retain
+their scalar reference paths. Host builds of `animation.c` therefore need the
+initialized SH4ZAM submodule and the `addons/include` search path.
+
+TRS construction scales the rotation columns with `shz_vec3_scale()` and sets
+translation with `shz_mat4x4_set_translation()`. It intentionally does not call
+`shz_mat4x4_apply_scale()`, which changes XMTRX. Camera roll uses one-off vector
+operations for Rodrigues rotation, retaining KOS's checked look-at convention.
+See [the consumer audit](sh4zam-consumer-audit.md) for validation and remaining
+performance gates.
 
 The layer allocates nothing, creates no thread, and performs no work unless
 called. Its only mutable state is an optional cursor supplied by the caller.

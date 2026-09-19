@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "matrix-fixtures.h"
 
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.00003f;
@@ -1050,6 +1051,10 @@ static void test_events_and_morph_binding(void) {
 }
 
 int main(void) {
+    const char *matrix_failure = verify_animation_matrices(NULL, 0.00003);
+    if(matrix_failure)
+        fprintf(stderr, "%s\n", matrix_failure);
+    assert(!matrix_failure);
     test_scalar_tracks();
     test_catmull_rom_tracks();
     test_cubic_hermite_tracks();

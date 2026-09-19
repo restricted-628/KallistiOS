@@ -18,6 +18,25 @@ matrix/vector types and SH4ZAM types. New performance-sensitive graphics code
 should keep SH4ZAM types throughout its transform pipeline and convert only at
 an established API boundary.
 
+The shared `utils/animation-test/matrix-fixtures.h` fixture also checks:
+
+- Non-unit quaternions, rotation order, nonuniform/negative/zero scales, and
+  translation against independently tabulated TRS matrices.
+- Oblique camera poses with zero, positive, negative, and quarter-turn roll
+  against a scalar double-precision reference.
+- Matrix composition with separate output, output aliasing either input, and
+  all three arguments aliasing the same matrix.
+- Rejected inputs leave output unchanged. Every checked operation leaves a
+  distinct 16-lane XMTRX sentinel unchanged.
+
+The target tolerance is `3e-4 * max(1, abs(expected))` per matrix element; the
+host fixture uses `3e-5`. Passing this finite fixture is not a bound over all
+possible inputs. Success prints an additional line:
+
+```text
+SH4ZAM TRS, rolled camera, compose aliasing, XMTRX: PASS
+```
+
 Finally, it attaches the current thread with
 `KFIBER_ATTACH_MATH_CONTEXT` and proves that the main fiber and a child fiber
 retain independent XMTRX matrices across two cooperative transfers. Lightweight

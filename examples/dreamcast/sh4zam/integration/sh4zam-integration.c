@@ -16,6 +16,16 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "matrix-fixtures.h"
+
+static shz_mat4x4_t matrix_sentinel;
+
+static bool matrix_state_unchanged(void) {
+    shz_mat4x4_t observed;
+
+    shz_xmtrx_store_4x4(&observed);
+    return !memcmp(&observed, &matrix_sentinel, sizeof(observed));
+}
 
 /* Use SCIF so emulator and hardware validation can capture a deterministic
    result without depending on a loader-provided debug console. */
@@ -232,6 +242,17 @@ int main(int argc, char **argv) {
         FAIL("thread FPSCR inheritance/isolation");
     }
     puts("SH4ZAM thread FPSCR inheritance/isolation: PASS");
+
+    /* Distinct values in every XMTRX lane detect partial clobbers too. */
+    for(unsigned c = 0; c < 4; ++c)
+        for(unsigned r = 0; r < 4; ++r)
+            matrix_sentinel.elem2D[c][r] = (float)(1 + c * 4 + r);
+    shz_xmtrx_load_4x4(&matrix_sentinel);
+    const char *matrix_failure = verify_animation_matrices(
+        matrix_state_unchanged, 0.0003);
+    if(matrix_failure)
+        FAIL(matrix_failure);
+    puts("SH4ZAM TRS, rolled camera, compose aliasing, XMTRX: PASS");
 
     shz_mat4x4_init_translation(&source, 4.0f, 5.0f, 6.0f);
     shz_kos_matrix_export(&established, &source);

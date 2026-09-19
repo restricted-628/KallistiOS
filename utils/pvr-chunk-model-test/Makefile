@@ -2,6 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../../kernel/arch/dreamcast/include
+CPPFLAGS += -isystem ../../addons/include
 LDLIBS += -lm
 
 TARGET = pvr-chunk-model-test

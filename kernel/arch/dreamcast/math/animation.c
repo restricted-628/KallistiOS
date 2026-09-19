@@ -6,9 +6,7 @@
 
 #include <dc/animation.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -1145,53 +1143,27 @@ int anim_transform_matrix_build(const anim_transform_t *transform,
     if(quaternion_normalize(&transform->rotation, &rotation) < 0)
         return -1;
 
-#ifdef __DREAMCAST__
     {
         shz_mat4x4_t shz_matrix;
 
         shz_mat4x4_init_rotation_quat(
             &shz_matrix, shz_quat_init(rotation.w, rotation.x,
                                        rotation.y, rotation.z));
-        shz_matrix.col[0].x *= transform->scale.x;
-        shz_matrix.col[0].y *= transform->scale.x;
-        shz_matrix.col[0].z *= transform->scale.x;
-        shz_matrix.col[1].x *= transform->scale.y;
-        shz_matrix.col[1].y *= transform->scale.y;
-        shz_matrix.col[1].z *= transform->scale.y;
-        shz_matrix.col[2].x *= transform->scale.z;
-        shz_matrix.col[2].y *= transform->scale.z;
-        shz_matrix.col[2].z *= transform->scale.z;
-        shz_matrix.pos.x = transform->translation.x;
-        shz_matrix.pos.y = transform->translation.y;
-        shz_matrix.pos.z = transform->translation.z;
-        shz_matrix.pos.w = 1.0f;
+        /* Scale the rotation columns for T * R * S. Unlike
+           shz_mat4x4_apply_scale(), these one-off operations preserve XMTRX
+           and leave the affine row (0, 0, 0, 1) intact. SH4ZAM selects its
+           portable implementation for host tools. */
+        shz_matrix.col[0].xyz = shz_vec3_scale(shz_matrix.col[0].xyz,
+                                              transform->scale.x);
+        shz_matrix.col[1].xyz = shz_vec3_scale(shz_matrix.col[1].xyz,
+                                              transform->scale.y);
+        shz_matrix.col[2].xyz = shz_vec3_scale(shz_matrix.col[2].xyz,
+                                              transform->scale.z);
+        shz_mat4x4_set_translation(&shz_matrix, transform->translation.x,
+                                   transform->translation.y,
+                                   transform->translation.z);
         shz_kos_matrix_export(&matrix, &shz_matrix);
     }
-#else
-    {
-        float w = rotation.w;
-        float x = rotation.x;
-        float y = rotation.y;
-        float z = rotation.z;
-
-        matrix[0][0] = (1.0f - 2.0f * (y * y + z * z)) * transform->scale.x;
-        matrix[0][1] = (2.0f * (x * y + w * z)) * transform->scale.x;
-        matrix[0][2] = (2.0f * (x * z - w * y)) * transform->scale.x;
-        matrix[0][3] = 0.0f;
-        matrix[1][0] = (2.0f * (x * y - w * z)) * transform->scale.y;
-        matrix[1][1] = (1.0f - 2.0f * (x * x + z * z)) * transform->scale.y;
-        matrix[1][2] = (2.0f * (y * z + w * x)) * transform->scale.y;
-        matrix[1][3] = 0.0f;
-        matrix[2][0] = (2.0f * (x * z + w * y)) * transform->scale.z;
-        matrix[2][1] = (2.0f * (y * z - w * x)) * transform->scale.z;
-        matrix[2][2] = (1.0f - 2.0f * (x * x + y * y)) * transform->scale.z;
-        matrix[2][3] = 0.0f;
-        matrix[3][0] = transform->translation.x;
-        matrix[3][1] = transform->translation.y;
-        matrix[3][2] = transform->translation.z;
-        matrix[3][3] = 1.0f;
-    }
-#endif
 
     if(!finite4(matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0]) ||
        !finite4(matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1]) ||
@@ -2145,16 +2117,14 @@ int anim_camera_view_matrix_build(const anim_camera_pose_t *camera,
                                   matrix_t *output) {
     anim_camera_pose_t rolled;
     mat_lookat_desc_t look_at;
-    float axis_x;
-    float axis_y;
-    float axis_z;
-    float length_squared;
+    shz_vec3_t axis;
+    shz_vec3_t up;
+    shz_vec3_t cross;
+    shz_vec3_t rolled_up;
+    shz_sincos_t rotation;
     float reciprocal_length;
     float sine;
     float cosine;
-    float cross_x;
-    float cross_y;
-    float cross_z;
     float dot;
 
     if(!camera_pose_valid(camera) || !output ||
@@ -2164,37 +2134,25 @@ int anim_camera_view_matrix_build(const anim_camera_pose_t *camera,
     }
 
     rolled = *camera;
-    axis_x = camera->target.x - camera->eye.x;
-    axis_y = camera->target.y - camera->eye.y;
-    axis_z = camera->target.z - camera->eye.z;
-    length_squared = axis_x * axis_x + axis_y * axis_y + axis_z * axis_z;
-#ifdef __DREAMCAST__
-    reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
-    {
-        shz_sincos_t rotation = shz_sincosf(camera->roll);
-
-        sine = rotation.sin;
-        cosine = rotation.cos;
-    }
-#else
-    reciprocal_length = 1.0f / sqrtf(length_squared);
-    sine = sinf(camera->roll);
-    cosine = cosf(camera->roll);
-#endif
-    axis_x *= reciprocal_length;
-    axis_y *= reciprocal_length;
-    axis_z *= reciprocal_length;
-    cross_x = axis_y * camera->up.z - axis_z * camera->up.y;
-    cross_y = axis_z * camera->up.x - axis_x * camera->up.z;
-    cross_z = axis_x * camera->up.y - axis_y * camera->up.x;
-    dot = axis_x * camera->up.x + axis_y * camera->up.y +
-          axis_z * camera->up.z;
-    rolled.up.x = camera->up.x * cosine + cross_x * sine +
-                  axis_x * dot * (1.0f - cosine);
-    rolled.up.y = camera->up.y * cosine + cross_y * sine +
-                  axis_y * dot * (1.0f - cosine);
-    rolled.up.z = camera->up.z * cosine + cross_z * sine +
-                  axis_z * dot * (1.0f - cosine);
+    axis = shz_vec3_sub(shz_vec3_init(camera->target.x, camera->target.y,
+                                     camera->target.z),
+                        shz_vec3_init(camera->eye.x, camera->eye.y,
+                                     camera->eye.z));
+    reciprocal_length = shz_vec3_magnitude_inv(axis);
+    axis = shz_vec3_scale(axis, reciprocal_length);
+    rotation = shz_sincosf(camera->roll);
+    sine = rotation.sin;
+    cosine = rotation.cos;
+    up = shz_vec3_init(camera->up.x, camera->up.y, camera->up.z);
+    cross = shz_vec3_cross(axis, up);
+    dot = shz_vec3_dot(axis, up);
+    /* Rodrigues rotation, using one-off vectors rather than loading XMTRX. */
+    rolled_up = shz_vec3_add(
+        shz_vec3_add(shz_vec3_scale(up, cosine), shz_vec3_scale(cross, sine)),
+        shz_vec3_scale(axis, dot * (1.0f - cosine)));
+    rolled.up.x = rolled_up.x;
+    rolled.up.y = rolled_up.y;
+    rolled.up.z = rolled_up.z;
     rolled.up.w = 0.0f;
     if(!camera_pose_valid(&rolled) ||
        !finite4(reciprocal_length, sine, cosine, dot)) {

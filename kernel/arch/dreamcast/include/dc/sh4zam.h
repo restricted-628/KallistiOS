@@ -40,13 +40,13 @@ static_assert(offsetof(vector_t, y) == offsetof(shz_vec4_t, y));
 static_assert(offsetof(vector_t, z) == offsetof(shz_vec4_t, z));
 static_assert(offsetof(vector_t, w) == offsetof(shz_vec4_t, w));
 #else
-_Static_assert(sizeof(matrix_t) == sizeof(shz_mat4x4_t));
-_Static_assert(_Alignof(matrix_t) == _Alignof(shz_mat4x4_t));
-_Static_assert(sizeof(vector_t) == sizeof(shz_vec4_t));
-_Static_assert(offsetof(vector_t, x) == offsetof(shz_vec4_t, x));
-_Static_assert(offsetof(vector_t, y) == offsetof(shz_vec4_t, y));
-_Static_assert(offsetof(vector_t, z) == offsetof(shz_vec4_t, z));
-_Static_assert(offsetof(vector_t, w) == offsetof(shz_vec4_t, w));
+_Static_assert(sizeof(matrix_t) == sizeof(shz_mat4x4_t), "matrix size");
+_Static_assert(_Alignof(matrix_t) == _Alignof(shz_mat4x4_t), "matrix alignment");
+_Static_assert(sizeof(vector_t) == sizeof(shz_vec4_t), "vector size");
+_Static_assert(offsetof(vector_t, x) == offsetof(shz_vec4_t, x), "vector x");
+_Static_assert(offsetof(vector_t, y) == offsetof(shz_vec4_t, y), "vector y");
+_Static_assert(offsetof(vector_t, z) == offsetof(shz_vec4_t, z), "vector z");
+_Static_assert(offsetof(vector_t, w) == offsetof(shz_vec4_t, w), "vector w");
 #endif
 
 /** \brief Import an established KOS matrix into a SH4ZAM matrix.

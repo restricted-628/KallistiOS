@@ -5,6 +5,7 @@ CC ?= cc
 PYTHON ?= python3
 CFLAGS ?= -O2
 include ../Makefile.host-test
+CPPFLAGS += -isystem ../../addons/include
 CPPFLAGS += -DCHUNK_SCENE_HOST -include host-support.h \
             -I../pvr-chunk-render-test/include \
             -I../../kernel/arch/dreamcast/include
