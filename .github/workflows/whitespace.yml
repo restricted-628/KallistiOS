@@ -1,0 +1,22 @@
+name: Whitespace check
+
+on: pull_request
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Whitespace check
+      run: |
+        git fetch origin ${{ github.base_ref }}:${{ github.base_ref }}
+        git diff ${{ github.base_ref }} | awk '
+          /^\+\+\+ / { f=$2; sub(/^b\//,"",f); next }
+          /^@@ /     { match($0,/\+[0-9]+/); ln=substr($0,RSTART+1,RLENGTH-1)+0; next }
+          /^\+/      { if($0 ~ / $/){ printf "::error file=%s,line=%d::Trailing whitespace\n", f, ln; rc=1 } ln++; next }
+          /^[ ]/     { ln++ }
+          END        { exit rc }
+        '

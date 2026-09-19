@@ -1,0 +1,8 @@
+*.o
+*.exe
+IP.BIN
+ip.bin
+makeip
+src/makeip
+src/ip.txt
+src/*.mr

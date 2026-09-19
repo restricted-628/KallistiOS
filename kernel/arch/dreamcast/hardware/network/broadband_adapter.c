@@ -1,0 +1,1179 @@
+/* KallistiOS ##version##
+
+   net/broadband_adapter.c
+
+   Copyright (C) 2001,2003,2005 Megan Potter
+   Copyright (C) 2004 Vincent Penne
+   Copyright (C) 2007, 2008, 2010 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
+
+ */
+
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <assert.h>
+#include <dc/net/broadband_adapter.h>
+#include <dc/asic.h>
+#include <dc/g2bus.h>
+#include <dc/gaps.h>
+#include <dc/flashrom.h>
+#include <dc/memory.h>
+#include <kos/cache.h>
+#include <kos/dbglog.h>
+#include <kos/irq.h>
+#include <kos/net.h>
+#include <kos/thread.h>
+#include <kos/sem.h>
+#include <kos/worker_thread.h>
+
+/* Configuration definitions */
+
+#define RX_BUFFER_SHIFT         1 /* 0 : 8Kb, 1 : 16Kb, 2 : 32Kb, 3 : 64Kb */
+
+#define RX_CONFIG_DEFAULT       (RT_ERTH(0) | RT_RXC_RXFTH(0) | \
+                                RT_RXC_RBLEN(RX_BUFFER_SHIFT) | RT_RXC_MXDMA(6) | \
+                                RT_RXC_WRAP)
+
+#define RX_BUFFER_LEN           (0x2000 << RX_BUFFER_SHIFT)
+
+#define TX_MAX_DMA_BURST        6 /* 2^(4+n) bytes from 0-7 (16b - 2Kb) */
+#define TX_CONFIG               (TX_MAX_DMA_BURST<<8)
+
+#define TX_BUFFER_OFFSET        (RX_BUFFER_LEN + 0x2000)
+#define TX_BUFFER_LEN           (0x800)
+#define TX_NB_BUFFERS           4
+
+/* This was originally set as ASIC_IRQB */
+#define BBA_ASIC_IRQ ASIC_IRQ_DEFAULT
+
+/* DMA transfer will be used only if the amount of bytes exceeds that threshold */
+#define DMA_THRESHOLD 128 // looks like a good value
+
+/* Since callbacks will be running with interrupts enabled,
+   it might be a good idea to protect bba_tx with a semaphore from inside.
+   I'm not sure lwip needs that, but dcplaya does when using both lwip and its
+   own dcload syscalls emulation.*/
+#define TX_SEMA 1
+
+/* If this is defined, the dma buffer will be located in P2 area, and no call to
+   dcache_inval_range need to be done before receiving data.
+   TODO : make some benchmark to see which method is faster */
+//#define USE_P2_AREA
+
+/*
+
+Contains a low-level ethernet driver for the "Broadband Adapter", which
+is principally a RealTek 8193C chip attached to the G2 external bus
+using a PCI bridge chip called "GAPS PCI". GAPS PCI might ought to be
+in its own module, but AFAIK this is the only peripheral to use this
+chip, and quite possibly will be the only peripheral to ever use it.
+
+Thanks to Andrew Kieschnick for finishing the driver info for the rtl8193c
+(mainly the transmit code, and lots of help with the error correction).
+Also thanks to the NetBSD sources for some info on register names.
+
+This driver has basically been rewritten since KOS 1.0.x.
+
+*/
+
+#define GAPS_BASE 0xa1000000
+
+int bba_probe(void) {
+    return gaps_probe();
+}
+
+/****************************************************************************/
+/* RTL8193C stuff */
+
+/* RTL8139C Config/Status info */
+struct {
+    uint16_t  cur_rx;     /* Current Rx read ptr */
+    uint16_t  cur_tx;     /* Current available Tx slot */
+    uint8_t   mac[6];     /* Mac address */
+} rtl;
+
+/* 8, 16, and 32 bit access to the PCI I/O space (configured by GAPS) */
+#define NIC(ADDR) (GAPS_BASE + 0x1700 + (ADDR))
+
+/* 8 and 32 bit access to the PCI MEMMAP space (configured by GAPS) */
+static uint32_t rtl_mem;
+
+/* TX buffer pointers */
+static uint32_t txdesc[TX_NB_BUFFERS];
+static gaps_sram_lease_t rx_lease = GAPS_SRAM_LEASE_INVALID;
+static gaps_sram_lease_t rx_guard_lease = GAPS_SRAM_LEASE_INVALID;
+static gaps_sram_lease_t tx_lease = GAPS_SRAM_LEASE_INVALID;
+static bool gaps_reference;
+static atomic_int dma_used;
+static uint8_t *next_dst;
+static uint8_t *next_src;
+static int next_len;
+
+/* Is the link stabilized? */
+static bool link_stable;
+static asic_evt_claim_t bba_irq_claim = ASIC_EVT_CLAIM_INVALID;
+
+/* Receive callback */
+static eth_rx_callback_t eth_rx_callback;
+
+/* Forward-declaration for IRQ handler */
+static void bba_irq_hnd(uint32_t code, void *data);
+
+/* Reads the MAC address of the BBA into the specified array */
+void bba_get_mac(uint8_t *arr) {
+    memcpy(arr, rtl.mac, 6);
+}
+
+/* Set an ethernet packet receive callback */
+void bba_set_rx_callback(eth_rx_callback_t cb) {
+    eth_rx_callback = cb;
+}
+
+static int rtl_is_ready(void *d) {
+    (void)d;
+    return !(g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RESET);
+}
+
+static int rtl_reset(void) {
+    /* Soft-reset the chip */
+    g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RESET);
+
+    /* Wait for it to come back */
+    if(!thd_poll(rtl_is_ready, NULL, 1000)) {
+        dbglog(DBG_ERROR, "bba: timed out on reset\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+static void bba_release_sram(void) {
+    if(tx_lease != GAPS_SRAM_LEASE_INVALID) {
+        if(gaps_sram_free(tx_lease) == 0)
+            tx_lease = GAPS_SRAM_LEASE_INVALID;
+        else
+            dbglog(DBG_ERROR, "bba: unable to release TX SRAM lease\n");
+    }
+    if(rx_guard_lease != GAPS_SRAM_LEASE_INVALID) {
+        if(gaps_sram_free(rx_guard_lease) == 0)
+            rx_guard_lease = GAPS_SRAM_LEASE_INVALID;
+        else
+            dbglog(DBG_ERROR, "bba: unable to release RX guard lease\n");
+    }
+    if(rx_lease != GAPS_SRAM_LEASE_INVALID) {
+        if(gaps_sram_free(rx_lease) == 0)
+            rx_lease = GAPS_SRAM_LEASE_INVALID;
+        else
+            dbglog(DBG_ERROR, "bba: unable to release RX SRAM lease\n");
+    }
+    if(gaps_reference) {
+        if(gaps_shutdown() == 0)
+            gaps_reference = false;
+        else
+            dbglog(DBG_ERROR, "bba: unable to release GAPS bridge\n");
+    }
+    rtl_mem = 0;
+    memset(txdesc, 0, sizeof(txdesc));
+}
+
+static int bba_acquire_sram(void) {
+    gaps_sram_info_t rx_info;
+    gaps_sram_info_t tx_info;
+    unsigned int i;
+
+    if(gaps_init() < 0)
+        return -1;
+    gaps_reference = true;
+
+    /* Preserve the proven device layout. The middle 8 KiB is a wrap guard
+       for the receive ring, not an independently usable hardware bank. */
+    if(gaps_sram_reserve(0, RX_BUFFER_LEN, &rx_lease) < 0
+            || gaps_sram_reserve(RX_BUFFER_LEN, 0x2000,
+                                 &rx_guard_lease) < 0
+            || gaps_sram_reserve(TX_BUFFER_OFFSET,
+                                 TX_BUFFER_LEN * TX_NB_BUFFERS,
+                                 &tx_lease) < 0
+            || gaps_sram_get_info(rx_lease, &rx_info) < 0
+            || gaps_sram_get_info(tx_lease, &tx_info) < 0) {
+        bba_release_sram();
+        return -1;
+    }
+
+    rtl_mem = MEM_AREA_P2_BASE + rx_info.physical_address;
+    for(i = 0; i < TX_NB_BUFFERS; ++i) {
+        txdesc[i] = MEM_AREA_P2_BASE + tx_info.physical_address
+            + i * TX_BUFFER_LEN;
+    }
+    return 0;
+}
+
+/*
+  Initializes the BBA
+
+  Returns 0 for success or -1 for failure.
+ */
+static int bba_hw_init(void) {
+    uint32_t tmp;
+
+    link_stable = false;
+
+    if(bba_acquire_sram() < 0)
+        return -1;
+
+    /* Read MAC address */
+    tmp = g2_read_32(NIC(RT_IDR0));
+    rtl.mac[0] = tmp & 0xff;
+    rtl.mac[1] = (tmp >> 8) & 0xff;
+    rtl.mac[2] = (tmp >> 16) & 0xff;
+    rtl.mac[3] = (tmp >> 24) & 0xff;
+    tmp = g2_read_32(NIC(RT_IDR0 + 4));
+    rtl.mac[4] = tmp & 0xff;
+    rtl.mac[5] = (tmp >> 8) & 0xff;
+    dbglog(DBG_INFO, "bba: MAC Address is %02x:%02x:%02x:%02x:%02x:%02x\n",
+           rtl.mac[0], rtl.mac[1], rtl.mac[2],
+           rtl.mac[3], rtl.mac[4], rtl.mac[5]);
+
+    /* Reset the chip and wait for it to come back */
+    if(rtl_reset() < 0)
+        goto fail;
+
+    /* Setup RX buffer */
+    g2_write_32(NIC(RT_RXBUF), rtl_mem & MEM_AREA_CACHE_MASK);
+
+    /* Setup TX buffers */
+    for(tmp=0; tmp<TX_NB_BUFFERS; tmp++)
+        g2_write_32(NIC(RT_TXADDR0 + (tmp*4)),
+                    txdesc[tmp] & MEM_AREA_CACHE_MASK);
+
+    /* Magic reset */
+    if(rtl_reset() < 0)
+        goto fail;
+
+    /* Perform some magic enable/disable dance */
+    g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE);
+
+    if(g2_read_8(NIC(RT_CHIPCMD)) == RT_CMD_RX_ENABLE) {
+        g2_write_8(NIC(RT_CHIPCMD), RT_CMD_TX_ENABLE);
+
+        if(g2_read_8(NIC(RT_CHIPCMD)) == RT_CMD_TX_ENABLE) {
+            /* Disable RX and TX */
+            g2_write_8(NIC(RT_CHIPCMD), 0);
+        }
+    }
+
+    /* Now a dance with the Multicast Register before Enabling */
+    g2_write_32(NIC(RT_MAR0), 0x55aaff00);
+    g2_write_32(NIC(RT_MAR4), 0xaa5500ff);
+
+    if((g2_read_32(NIC(RT_MAR0)) == 0x55aaff00) &&
+       (g2_read_32(NIC(RT_MAR4)) == 0xaa5500ff)) {
+        /* Enable receive and transmit functions */
+        g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE | RT_CMD_TX_ENABLE);
+
+        g2_write_32(NIC(RT_MAR0), 0xffffffff);
+        g2_write_32(NIC(RT_MAR4), 0xffffffff);
+    }
+
+    /* Disable all interrupts */
+    g2_write_16(NIC(RT_INTRMASK), 0);
+
+    /* Enable receive and transmit functions ... again*/
+    g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE | RT_CMD_TX_ENABLE);
+
+    /* Set Rx FIFO threshold to 1K, Rx size to 16k+16, 1024 byte DMA burst */
+    g2_write_32(NIC(RT_RXCONFIG), RX_CONFIG_DEFAULT);
+
+    /* Set Tx 1024 byte DMA burst */
+    g2_write_32(NIC(RT_TXCONFIG), TX_CONFIG);
+
+    /* Enable writing to the config registers */
+    g2_write_8(NIC(RT_CFG9346), 0xc0);
+
+    /* Old style would turn of LWACT and on DVRLOAD. New also disables LED0 and enables LED1 */
+    g2_write_8(NIC(RT_CONFIG1), (g2_read_8(NIC(RT_CONFIG1)) &
+        ~(RT_CONFIG1_LWACT | RT_CONFIG1_LED0)) | RT_CONFIG1_DVRLOAD | RT_CONFIG1_LED1);
+
+    /* Enable FIFO auto-clear */
+    g2_write_8(NIC(RT_CONFIG4), g2_read_8(NIC(RT_CONFIG4)) | RT_CONFIG4_RxFIFIOAC);
+
+    /* Disable Link-Down Power Saver */
+    g2_write_8(NIC(RT_CONFIG5), g2_read_8(NIC(RT_CONFIG5)) | RT_CONFIG5_LDPS);
+
+    /* Switch back to normal operation mode */
+    g2_write_8(NIC(RT_CFG9346), 0);
+
+    /* Filter out all multicast packets */
+    g2_write_32(NIC(RT_MAR0), 0);
+    g2_write_32(NIC(RT_MAR4), 0);
+
+    /* Disable all multi-interrupts */
+    g2_write_16(NIC(RT_MULTIINTR), 0);
+
+    /* Own the external interrupt until hardware shutdown. */
+    if(asic_evt_claim(ASIC_EVT_EXP_PCI, BBA_ASIC_IRQ, bba_irq_hnd,
+                      NULL, &bba_irq_claim) < 0) {
+        dbglog(DBG_ERROR, "bba: external interrupt is already owned\n");
+        g2_write_32(NIC(RT_RXCONFIG), 0);
+        g2_write_8(NIC(RT_CHIPCMD), 0);
+        goto fail;
+    }
+
+    /* Enable receive interrupts */
+    /* XXX need to handle more! */
+    g2_write_16(NIC(RT_INTRSTATUS), 0xffff);
+    g2_write_16(NIC(RT_INTRMASK), RT_INT_PCIERR |
+                RT_INT_TIMEOUT |
+                RT_INT_RXFIFO_OVERFLOW |
+                RT_INT_RXFIFO_UNDERRUN |    // +link change
+                RT_INT_RXBUF_OVERFLOW |
+                RT_INT_TX_ERR |
+                RT_INT_TX_OK |
+                RT_INT_RX_ERR |
+                RT_INT_RX_OK);
+
+    /* Reset RXMISSED counter */
+    g2_write_32(NIC(RT_RXMISSED), 0);
+
+    /* Enable RX/TX once more */
+    g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE | RT_CMD_TX_ENABLE);
+
+    /* Reset, Enable, and start auto-negotiation */
+    g2_write_16(NIC(RT_MII_BMCR), RT_MII_RESET | RT_MII_AN_ENABLE | RT_MII_AN_START);
+
+    /* Initialize status vars */
+    rtl.cur_tx = 0;
+    rtl.cur_rx = 0;
+
+    /* Enable receiving broadcast and physical match packets */
+    g2_write_32(NIC(RT_RXCONFIG), g2_read_32(NIC(RT_RXCONFIG)) | RT_RXC_APM | RT_RXC_AB);
+
+    return 0;
+
+fail:
+    g2_write_32(NIC(RT_RXCONFIG), 0);
+    g2_write_8(NIC(RT_CHIPCMD), 0);
+    bba_release_sram();
+    return -1;
+}
+
+static void rx_reset(void) {
+    rtl.cur_rx = g2_read_16(NIC(RT_RXBUFHEAD));
+    g2_write_16(NIC(RT_RXBUFTAIL), rtl.cur_rx - 16);
+
+    rtl.cur_rx = 0;
+    g2_write_8(NIC(RT_CHIPCMD), RT_CMD_TX_ENABLE);
+
+    g2_write_32(NIC(RT_RXCONFIG), RX_CONFIG_DEFAULT | RT_RXC_APM | RT_RXC_AB);
+
+    while(!(g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RX_ENABLE))
+        g2_write_8(NIC(RT_CHIPCMD), RT_CMD_TX_ENABLE | RT_CMD_RX_ENABLE);
+
+    g2_write_32(NIC(RT_RXCONFIG), RX_CONFIG_DEFAULT | RT_RXC_APM | RT_RXC_AB);
+    g2_write_16(NIC(RT_INTRSTATUS), 0xffff);
+}
+
+static void bba_hw_shutdown(void) {
+    g2_dma_status_t dma_status;
+
+    /* Disable receiver */
+    g2_write_32(NIC(RT_RXCONFIG), 0);
+    g2_write_8(NIC(RT_CHIPCMD), 0);
+
+    if(bba_irq_claim != ASIC_EVT_CLAIM_INVALID) {
+        (void)asic_evt_release(bba_irq_claim);
+        bba_irq_claim = ASIC_EVT_CLAIM_INVALID;
+    }
+
+    /* The SRAM lease must outlive any engine still referencing it. */
+    if(g2_dma_get_status(G2_DMA_CHAN_BBA, &dma_status) == 0
+            && (dma_status.state == G2_DMA_STATE_RUNNING
+                || dma_status.state == G2_DMA_STATE_SUSPENDED))
+        (void)g2_dma_cancel(G2_DMA_CHAN_BBA);
+    atomic_store(&dma_used, 0);
+    next_len = 0;
+    bba_release_sram();
+}
+
+#define RXBSZ       (64 * 1024) /* must be a power of two */
+#define MAX_PKTS    (RXBSZ / 32)
+#define RXBUF_EXTRA (2 * 1600)
+
+static struct pkt {
+    uint16_t pkt_size;
+    uint16_t offt;
+    uint8_t *rxbuff;
+} *rx_pkt;
+
+static uint8_t *rxbuff;
+static uint32_t rxbuff_pos;
+static int rxin;
+static int rxout;
+static uint32_t rx_size;
+
+static void bba_rx(void);
+
+static int bba_rxbuf_alloc(void) {
+    if(rxbuff)
+        return 0;
+
+    rx_pkt = calloc(MAX_PKTS, sizeof(*rx_pkt));
+    if(!rx_pkt)
+        return -1;
+
+    rxbuff = aligned_alloc(32, RXBSZ + RXBUF_EXTRA);
+    if(!rxbuff) {
+        free(rx_pkt);
+        rx_pkt = NULL;
+        return -1;
+    }
+
+    rxbuff_pos = 0;
+    rxin = 0;
+    rxout = 0;
+    return 0;
+}
+
+static void bba_rxbuf_free(void) {
+    free(rxbuff);
+    rxbuff = NULL;
+    free(rx_pkt);
+    rx_pkt = NULL;
+    rxbuff_pos = 0;
+    rxin = 0;
+    rxout = 0;
+}
+
+static semaphore_t tx_sema;
+
+static kthread_worker_t *rx_worker;
+
+static void rx_finish_enq(int room) {
+    /* Tell the chip where we are for overflow checking */
+    rtl.cur_rx = (rtl.cur_rx + rx_size + 4 + 3) & ~3;
+    g2_write_16(NIC(RT_RXBUFTAIL), (rtl.cur_rx - 16) & (RX_BUFFER_LEN - 1));
+
+    if(room > 0 && (((rxin + 1) % MAX_PKTS) != rxout)) {
+        rxin = (rxin + 1) % MAX_PKTS;
+        thd_worker_wakeup(rx_worker);
+        /* Only in IRQ context (unsafe from the TX drain). */
+        if(irq_inside_int())
+            thd_schedule(true);
+    }
+}
+
+static void bba_dma_cb(void *p) {
+    (void)p;
+
+    if(next_len) {
+        int length = next_len;
+        uint8_t *destination = next_dst;
+        uint8_t *source = next_src;
+
+        next_len = 0;
+        if(g2_dma_transfer(destination, source, length, 0,
+                           bba_dma_cb, 0,  /* callback */
+                           G2_DMA_TO_SH4,
+                           0, G2_DMA_CHAN_BBA, 0) < 0) {
+            dbglog(DBG_ERROR, "bba: unable to chain RX DMA\n");
+            dma_used = 0;
+            rx_reset();
+        }
+    }
+    else {
+        rx_finish_enq(1);
+
+        dma_used = 0;
+
+        bba_rx();
+    }
+}
+
+static int bba_copy_packet(uint8_t *dst, uint32_t s, int len) {
+    uint8_t *src = (uint8_t *) s;
+
+    assert(__is_aligned((uintptr_t)dst, 32));
+    assert(__is_aligned(s, 32));
+    assert(__is_aligned(len, 32));
+
+    if(len > DMA_THRESHOLD) {
+        /* Invalidate the dcache over the range of the data. */
+        if(!__is_defined(USE_P2_AREA))
+            dcache_inval_range((uint32_t) dst, len);
+
+        /* Prevent racing against the callback */
+        irq_disable_scoped();
+
+        if(!dma_used) {
+            dma_used = 1;
+            if(g2_dma_transfer(dst, src, len, 0,
+                               bba_dma_cb, 0,  /* callback */
+                               G2_DMA_TO_SH4,
+                               0, G2_DMA_CHAN_BBA, 0) < 0) {
+                dma_used = 0;
+                return -1;
+            }
+        }
+        else if(next_len) {
+            /* RX DMA is really busy - notify that we couldn't read the packet */
+            return -1;
+        }
+        else {
+            next_dst = dst;
+            next_src = src;
+            next_len = len;
+        }
+
+        return 0;
+    }
+    else {
+        g2_read_block_32((uint32_t *)dst, (uint32_t)src, len >> 2);
+        return !dma_used;
+    }
+}
+
+/* Compute the difference between the read head and the write head in a circular buffer */
+static inline unsigned int ptr_diff(const uint8_t *rd, const uint8_t *wr, size_t len) {
+    return (len + (uintptr_t)rd - (uintptr_t)wr) % len;
+}
+
+static int rx_enq(int ring_offset, size_t pkt_size) {
+    size_t aligned_size;
+    uint16_t offt;
+
+    /* If there's no one to receive it, don't bother. */
+    if(!eth_rx_callback)
+        return -1;
+
+    offt = ring_offset & 0x1f;
+    aligned_size = __align_up(pkt_size + offt, 32);
+
+    /* Do we have space for it? */
+    if(rxin != rxout
+       && ptr_diff(rx_pkt[rxout].rxbuff, rxbuff + rxbuff_pos, RXBSZ) < aligned_size) {
+        dbglog(DBG_WARNING, "No space in RX buffer\n");
+        return -1;
+    }
+
+    /* Get a pointer to the receive buffer where we will store the packet */
+    rx_pkt[rxin].rxbuff = rxbuff + rxbuff_pos;
+    if(__is_defined(USE_P2_AREA))
+        rx_pkt[rxin].rxbuff = (void *)(((uintptr_t)rx_pkt[rxin].rxbuff) | MEM_AREA_P2_BASE);
+
+    rx_pkt[rxin].pkt_size = pkt_size;
+    rx_pkt[rxin].offt = offt;
+
+    rxbuff_pos += aligned_size;
+    if(rxbuff_pos >= RXBSZ)
+        rxbuff_pos = 0;
+
+    return bba_copy_packet(rx_pkt[rxin].rxbuff,
+                           rtl_mem + (ring_offset & ~0x1f), aligned_size);
+}
+
+static int bba_link_is_stable(void *d) {
+    return *(int *)d;
+}
+
+static int bba_can_tx(void *d) {
+    (void)d;
+
+    if(!(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_HOST_OWNS)) {
+        if(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_ABORTED)
+            g2_write_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx),
+                        g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) | 1);
+        return 0;
+    }
+
+    return 1;
+}
+
+/* Copy a large outbound frame into the current TX buffer with G2 DMA. Keep interrupts
+   active until the transfer is complete */
+static bool bba_tx_dma(const uint8_t *pkt, int len) {
+    size_t total = __align_up(len, 4);
+    size_t aligned = __align_down(total, 32);
+    size_t remainder = total - aligned;
+    int expected = 0;
+
+    /* Take the single shared BBA DMA channel, if available. */
+    if(!atomic_compare_exchange_strong(&dma_used, &expected, 1))
+        return false;
+
+    dcache_wback_range((uintptr_t)pkt, aligned);
+
+    /* Blocking DMA copy into the current TX buffer. Keep interrupts active to
+       queue up RX packets. */
+    if(g2_dma_transfer((void *)pkt, (void *)txdesc[rtl.cur_tx], aligned,
+                       1,             /* block */
+                       NULL, NULL,    /* no callback */
+                       G2_DMA_TO_G2,
+                       0, G2_DMA_CHAN_BBA, 0) < 0) {
+        atomic_store(&dma_used, 0);
+        return false;
+    }
+
+    if(remainder) {
+        g2_fifo_wait();
+        g2_write_block_32((uint32_t *)(pkt + aligned),
+                          txdesc[rtl.cur_tx] + aligned, remainder >> 2);
+    }
+
+    irq_disable_scoped();
+    dma_used = 0;
+
+    /* Drain any queued RX packets received during TX transfer. */
+    if(!(g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RX_BUF_EMPTY))
+        bba_rx();
+
+    return true;
+}
+
+/* Transmit a single packet */
+static int bba_rtx(const uint8_t *pkt, int len, int wait)
+{
+    if(wait == BBA_TX_WAIT) {
+        assert(!irq_inside_int());
+
+        if(!link_stable)
+            thd_poll(bba_link_is_stable, &link_stable, 0);
+    } else if(!link_stable) {
+        return BBA_TX_AGAIN;
+    }
+
+    /* Wait till it's clear to transmit */
+    if(wait == BBA_TX_WAIT) {
+        thd_poll(bba_can_tx, NULL, 0);
+    }
+    else if(!(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_HOST_OWNS)) {
+        return BBA_TX_AGAIN;
+    }
+
+    /* Copy the packet out to RTL memory */
+    assert(__is_aligned((uintptr_t)pkt, 32));
+
+    /* Large frames go out via G2 DMA when the channel is free. Interrupt
+       context, small frames, or a channel busy with RX fall back to PIO. */
+    if(irq_inside_int() || len < DMA_THRESHOLD || !bba_tx_dma(pkt, len))
+        g2_write_block_32((uint32_t *)pkt, txdesc[rtl.cur_tx], (len + 3) >> 2);
+
+    /* All packets must be at least 60 bytes, pad them with null bytes if
+       they are not already of an appropriate size. */
+    if(len < 60) {
+        g2_memset_8(txdesc[rtl.cur_tx] + len, 0, 60 - len);
+        len = 60;
+    }
+
+    /* Transmit from the current TX buffer */
+    g2_write_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx), len);
+
+    /* Go to the next TX buffer */
+    rtl.cur_tx = (rtl.cur_tx + 1) % TX_NB_BUFFERS;
+
+    return BBA_TX_OK;
+}
+
+int bba_tx(const uint8_t *pkt, int len, int wait) {
+    int res;
+
+    if(!__is_defined(TX_SEMA))
+        return bba_rtx(pkt, len, wait);
+
+    if(sem_wait_irqsafe(&tx_sema)) {
+        //printf("bba_tx called from an irq while a thread was running it !\n");
+        return BBA_TX_OK;   /* sorry guys ... */
+    }
+
+    res = bba_rtx(pkt, len, wait);
+    sem_signal(&tx_sema);
+
+    return res;
+}
+
+static void bba_rx_process(void) {
+    /* Call the callback to process it */
+    eth_rx_callback(rx_pkt[rxout].rxbuff + rx_pkt[rxout].offt, rx_pkt[rxout].pkt_size);
+
+    rxout = (rxout + 1) % MAX_PKTS;
+}
+
+static void bba_rx_worker(void *dummy) {
+    (void)dummy;
+
+    while(rxout != rxin)
+        bba_rx_process();
+}
+
+static void bba_rx(void) {
+    uint32_t rx_status;
+    size_t pkt_size, ring_offset;
+
+    while(!(g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RX_BUF_EMPTY)) {
+        /* Get frame size and status */
+        ring_offset = rtl.cur_rx % RX_BUFFER_LEN;
+        rx_status = g2_read_32(rtl_mem + ring_offset);
+        rx_size = (rx_status >> 16) & 0xffff;
+        pkt_size = rx_size - 4;
+
+        if(rx_size == 0xfff0) {
+            dbglog(DBG_KDEBUG, "bba: early receive triggered\n");
+            break;
+        }
+
+        if((rx_status & 1) && (pkt_size <= 1514)) {
+            /* Add it to the rx queue */
+            int res = rx_enq(ring_offset + 4, pkt_size);
+
+            if(!res)
+                break;  /* will be finished in the dma callback */
+            else
+                rx_finish_enq(res);
+        }
+        else {
+            if(!(rx_status & 1)) {
+                dbglog(DBG_KDEBUG, "bba: frame receive error, status is %08lx; skipping\n", rx_status);
+            }
+
+            dbglog(DBG_KDEBUG, "bba: bogus packet receive detected; skipping packet\n");
+            rx_reset();
+            break;
+        }
+    }
+}
+
+static void bba_link_change(void) {
+    // This should really be a bit more complete, but this
+    // should be sufficient.
+
+    // Is our link there?
+    if(g2_read_16(NIC(RT_MII_BMSR)) & RT_MII_LINK) {
+        // We must have just finished an auto-negotiation.
+        dbglog(DBG_INFO, "bba: link stable\n");
+
+        // The link is back.
+        link_stable = true;
+    }
+    else {
+        dbglog(DBG_INFO, "bba: link lost\n");
+
+        // Do an auto-negotiation.
+        g2_write_16(NIC(RT_MII_BMCR),
+                    RT_MII_RESET |
+                    RT_MII_AN_ENABLE |
+                    RT_MII_AN_START);
+
+        // The link is gone.
+        link_stable = false;
+    }
+}
+
+/* Ethernet IRQ handler */
+static void bba_irq_hnd(uint32_t code, void *data) {
+    int intr, hnd;
+
+    (void)code;
+    (void)data;
+
+    /* Acknowledge 8193 interrupt, except RX ACK bits. We'll handle
+       those in the RX int handler. */
+    intr = g2_read_16(NIC(RT_INTRSTATUS));
+    g2_write_16(NIC(RT_INTRSTATUS), intr & ~RT_INT_RX_ACK);
+
+    /* Do processing */
+    hnd = 0;
+
+    if(intr & RT_INT_RX_ACK) {
+
+        if(!dma_used) {
+            bba_rx();
+        }
+
+        /* so that the irq is not called again and again */
+        g2_write_16(NIC(RT_INTRSTATUS), RT_INT_RX_ACK);
+
+        hnd = 1;
+    }
+
+    if(intr & RT_INT_TX_OK) {
+        hnd = 1;
+    }
+
+    if(intr & RT_INT_LINK_CHANGE) {
+        bba_link_change();
+        hnd = 1;
+    }
+
+    if(intr & RT_INT_RXBUF_OVERFLOW) {
+        dbglog(DBG_KDEBUG, "bba: RX overrun\n");
+        rx_reset();
+        hnd = 1;
+    }
+
+    // DMA complete ? doesn't look like, then what ? anyway, ignore it for now ...
+    if(intr == 0) {
+        hnd = 1;
+    }
+
+    if(!hnd) {
+        dbglog(DBG_KDEBUG, "bba: spurious interrupt, status is %08x\n", intr);
+    }
+}
+
+/****************************************************************************/
+/* Netcore interface */
+
+netif_t bba_if;
+
+static void set_ipv6_lladdr(void) {
+    /* Set up the IPv6 link-local address. This is done in accordance with
+       Section 4/5 of RFC 2464 based on the MAC Address of the adapter. */
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[0]  = 0xFE;
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[1]  = 0x80;
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[8]  = bba_if.mac_addr[0] ^ 0x02;
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[9]  = bba_if.mac_addr[1];
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[10] = bba_if.mac_addr[2];
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[11] = 0xFF;
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[12] = 0xFE;
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[13] = bba_if.mac_addr[3];
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[14] = bba_if.mac_addr[4];
+    bba_if.ip6_lladdr.__s6_addr.__s6_addr8[15] = bba_if.mac_addr[5];
+}
+
+/* They only ever made one GAPS peripheral, so this should suffice */
+static int bba_if_detect(netif_t *self) {
+    (void)self;
+
+    if(bba_if.flags & NETIF_DETECTED)
+        return 0;
+
+    if(!gaps_probe())
+        return -1;
+
+    bba_if.flags |= NETIF_DETECTED;
+    return 0;
+}
+
+static int bba_if_init(netif_t *self) {
+    (void)self;
+
+    if(bba_if.flags & NETIF_INITIALIZED)
+        return 0;
+
+    if(bba_hw_init() < 0)
+        return -1;
+
+    if(bba_rxbuf_alloc() < 0) {
+        bba_hw_shutdown();
+        return -1;
+    }
+
+    memcpy(bba_if.mac_addr, rtl.mac, 6);
+    set_ipv6_lladdr();
+    bba_if.flags |= NETIF_INITIALIZED;
+    return 0;
+}
+
+static int bba_if_shutdown(netif_t *self) {
+    (void)self;
+
+    if(!(bba_if.flags & NETIF_INITIALIZED))
+        return 0;
+
+    bba_hw_shutdown();
+    bba_rxbuf_free();
+
+    bba_if.flags &= ~(NETIF_INITIALIZED | NETIF_RUNNING);
+    return 0;
+}
+
+static const kthread_attr_t bba_rx_worker_attr = {
+    .label = "bba-rx-worker",
+    .prio = 1,
+};
+
+static int bba_if_start(netif_t *self) {
+    (void)self;
+
+    if(!(bba_if.flags & NETIF_INITIALIZED))
+        return -1;
+
+    if(bba_if.flags & NETIF_RUNNING)
+        return 0;
+
+    // Start the BBA RX thread.
+    assert(rx_worker == NULL);
+    rx_worker = thd_worker_create_ex(&bba_rx_worker_attr, bba_rx_worker, NULL);
+    if(!rx_worker) {
+        dbglog(DBG_ERROR, "bba: unable to create RX worker\n");
+        return -1;
+    }
+
+    /* We need something like this to get DHCP to work (since it doesn't
+       know anything about an activated and yet not-yet-receiving network
+       adapter =) */
+
+    /* Wait until the link is stabilized */
+    if(!thd_poll(bba_link_is_stable, &link_stable, 10000)) {
+        dbglog(DBG_ERROR, "bba: timed out waiting for link to stabilize\n");
+        thd_worker_destroy(rx_worker);
+        rx_worker = NULL;
+        return -1;
+    }
+
+    bba_if.flags |= NETIF_RUNNING;
+    return 0;
+}
+
+static int bba_if_stop(netif_t *self) {
+    (void)self;
+
+    if(!(bba_if.flags & NETIF_RUNNING))
+        return 0;
+
+    /* VP : Shutdown rx thread */
+    assert(rx_worker != NULL);
+    thd_worker_destroy(rx_worker);
+
+    rx_worker = NULL;
+
+    bba_if.flags &= ~NETIF_RUNNING;
+    return 0;
+}
+
+static int bba_if_tx(netif_t *self, const uint8_t *data, int len, int blocking) {
+    (void)self;
+
+    if(!(bba_if.flags & NETIF_RUNNING))
+        return -1;
+
+    if(bba_tx(data, len, blocking) != BBA_TX_OK)
+        return -1;
+
+    return 0;
+}
+
+/* We'll auto-commit for now */
+static int bba_if_tx_commit(netif_t *self) {
+    (void)self;
+    return 0;
+}
+
+static int bba_if_rx_poll(netif_t *self) {
+    int intr;
+
+    (void)self;
+
+    intr = g2_read_16(NIC(RT_INTRSTATUS));
+
+    if(intr & RT_INT_RX_ACK) {
+        bba_rx();
+
+        /* so that the irq is not called */
+        g2_write_16(NIC(RT_INTRSTATUS), RT_INT_RX_ACK);
+    }
+
+    if(rxout != rxin)
+        bba_rx_process();
+
+    return 0;
+}
+
+/* Don't need to hook anything here yet */
+static int bba_if_set_flags(netif_t *self, uint32_t flags_and, uint32_t flags_or) {
+    (void)self;
+    bba_if.flags = (bba_if.flags & flags_and) | flags_or;
+    return 0;
+}
+
+static int bba_if_set_mc(netif_t *self, const uint8_t *list, int count) {
+    uint32_t old;
+
+    (void)self;
+
+    if(count == 0) {
+        /* Clear the multicast address filter */
+        g2_write_32(NIC(RT_MAR0), 0);
+        g2_write_32(NIC(RT_MAR4), 0);
+
+        /* Disable multicast reception */
+        old = g2_read_32(NIC(RT_RXCONFIG));
+        g2_write_32(NIC(RT_RXCONFIG), old & ~RT_RXC_AM);
+    }
+    else {
+        int i, pos;
+        uint32_t tmp;
+        uint32_t mar[2] = { 0, 0 };
+
+        /* Go through each entry and add the value to the filter */
+        for(i = 0, pos = 0; i < count; ++i, pos += 6) {
+            tmp = net_crc32be(list + pos, 6) >> 26;
+            mar[tmp >> 5] |= (1 << (tmp & 0x1F));
+        }
+
+        /* Set the multicast address filter */
+        g2_write_32(NIC(RT_MAR0), mar[0]);
+        g2_write_32(NIC(RT_MAR4), mar[1]);
+
+        /* Enable multicast reception */
+        old = g2_read_32(NIC(RT_RXCONFIG));
+        g2_write_32(NIC(RT_RXCONFIG), old | RT_RXC_AM);
+    }
+
+    return 0;
+}
+
+/* We'll take packets from the interrupt handler and push them into netcore */
+static void bba_if_netinput(uint8_t *pkt, int pktsize) {
+    net_input(&bba_if, pkt, pktsize);
+}
+
+/* Set ISP configuration from the flashrom, as long as we're configured statically */
+static void bba_set_ispcfg(void) {
+    flashrom_ispcfg_t isp;
+
+    if(flashrom_get_ispcfg(&isp) == -1)
+        return;
+
+    if(isp.method != FLASHROM_ISP_STATIC)
+        return;
+
+    if((isp.valid_fields & FLASHROM_ISP_IP)) {
+        memcpy(bba_if.ip_addr, isp.ip, 4);
+    }
+
+    if((isp.valid_fields & FLASHROM_ISP_NETMASK)) {
+        memcpy(bba_if.netmask, isp.nm, 4);
+    }
+
+    if((isp.valid_fields & FLASHROM_ISP_GATEWAY)) {
+        memcpy(bba_if.gateway, isp.gw, 4);
+    }
+
+    if((isp.valid_fields & FLASHROM_ISP_DNS)) {
+        memcpy(bba_if.dns, isp.dns[0], 4);
+    }
+
+    if((isp.valid_fields & FLASHROM_ISP_BROADCAST)) {
+        memcpy(bba_if.broadcast, isp.bc, 4);
+    } else {
+        /* Default to 255.255.255.255 */
+        memset(bba_if.broadcast, 255, 4);
+    }
+}
+
+/* Initialize */
+int bba_init(void) {
+
+    /* Use the netcore callback */
+    bba_set_rx_callback(bba_if_netinput);
+
+    if(__is_defined(TX_SEMA))
+        sem_init(&tx_sema, 1);
+
+    /* VP : Initialize rx thread */
+    // Note: The thread itself is not created here, but when we actually
+    // activate the adapter. This way we don't have a spare thread
+    // laying around unless it's actually needed.
+    rx_worker = NULL;
+
+    /* Setup the structure */
+    bba_if.name = "bba";
+    bba_if.descr = "Broadband Adapter (HIT-0400)";
+    bba_if.index = 0;
+    bba_if.dev_id = 0;
+    bba_if.flags = NETIF_NO_FLAGS;
+    bba_if.if_detect = bba_if_detect;
+
+    /* Short circuit if no bba is detected */
+    if(bba_if.if_detect(&bba_if) < 0) {
+        dbglog(DBG_KDEBUG, "bba: no device detected\n");
+        return -1;
+    }
+
+    bba_get_mac(bba_if.mac_addr);
+    memset(bba_if.ip_addr, 0, sizeof(bba_if.ip_addr));
+    memset(bba_if.netmask, 0, sizeof(bba_if.netmask));
+    memset(bba_if.gateway, 0, sizeof(bba_if.gateway));
+    memset(bba_if.broadcast, 0, sizeof(bba_if.broadcast));
+    memset(bba_if.dns, 0, sizeof(bba_if.dns));
+    bba_if.mtu = 1500; /* The Ethernet v2 MTU */
+    memset(&bba_if.ip6_lladdr, 0, sizeof(bba_if.ip6_lladdr));
+    bba_if.ip6_addrs = NULL;
+    bba_if.ip6_addr_count = 0;
+    memset(&bba_if.ip6_gateway, 0, sizeof(bba_if.ip6_gateway));
+    bba_if.mtu6 = 0;
+    bba_if.hop_limit = 0;
+
+    bba_if.if_init = bba_if_init;
+    bba_if.if_shutdown = bba_if_shutdown;
+    bba_if.if_start = bba_if_start;
+    bba_if.if_stop = bba_if_stop;
+    bba_if.if_tx = bba_if_tx;
+    bba_if.if_tx_commit = bba_if_tx_commit;
+    bba_if.if_rx_poll = bba_if_rx_poll;
+    bba_if.if_set_flags = bba_if_set_flags;
+    bba_if.if_set_mc = bba_if_set_mc;
+
+    /* Attempt to set up our IP address et al from the flashrom */
+    bba_set_ispcfg();
+
+#if 0
+
+    if(bba_if.if_init(&bba_if) < 0) {
+        printf("bba: can't init broadband adapter\n");
+        return -1;
+    }
+
+    if(bba_if.if_start(&bba_if) < 0) {
+        printf("bba: can't start broadband adapter\n");
+        return -1;
+    }
+
+#endif
+
+    /* Append it to the chain */
+    return net_reg_device(&bba_if);
+}
+
+/* Shutdown */
+int bba_shutdown(void) {
+    /* Shutdown hardware */
+    if(bba_if.flags & NETIF_RUNNING)
+        bba_if.if_stop(&bba_if);
+    if(bba_if.flags & NETIF_INITIALIZED)
+        bba_if.if_shutdown(&bba_if);
+
+    if(__is_defined(TX_SEMA))
+        sem_destroy(&tx_sema);
+
+    return 0;
+}
+
+
+#if 0
+int module_init(int argc, char **argv) {
+    printf("bba: initializing\n");
+
+    if(bba_init() < 0)
+        return -1;
+
+    printf("bba: done initializing\n");
+    return 0;
+}
+
+int module_shutdown(void) {
+    printf("bba: exiting\n");
+
+    if(bba_shutdown() < 0)
+        return -1;
+
+    return 0;
+}
+
+#include <sys/module.h>
+int main(int argc, char **argv) {
+    return kos_do_module(module_init, module_shutdown, argc, argv);
+}
+#endif

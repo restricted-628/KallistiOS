@@ -1,0 +1,45 @@
+#include <kos/thread.h>
+#include <dc/video.h>
+#include <dc/biosfont.h>
+#include <dc/maple.h>
+#include <dc/maple/controller.h>
+#include <kos/init.h>
+
+KOS_INIT_FLAGS(INIT_DEFAULT | INIT_NET);
+
+static volatile bool main_shutdown = false;
+
+void httpd_shutdown(void);
+void httpd(void);
+void *do_httpd(void *foo) {
+    httpd();
+
+    /* If the daemon dies, shut down the host as well */
+    main_shutdown = true;
+
+    return NULL;
+}
+
+int main(int argc, char **argv) {
+    thd_create(true, do_httpd, NULL);
+
+    vid_clear(50, 0, 70);
+    bfont_draw_str(vram_s + 20 * 640 + 20, 640, 0, "KOSHttpd active");
+    bfont_draw_str(vram_s + 44 * 640 + 20, 640, 0, "Press START to quit.");
+
+    thd_sleep(1000 * 5);
+
+    while(!main_shutdown) {
+        MAPLE_FOREACH_BEGIN(MAPLE_FUNC_CONTROLLER, cont_state_t, st)
+
+        if(st->buttons & CONT_START)
+            main_shutdown = true;
+
+        MAPLE_FOREACH_END()
+    }
+
+    /* Request the httpd be shut down */
+    httpd_shutdown();
+
+    return 0;
+}

@@ -1,0 +1,52 @@
+#!/bin/sh
+
+# Make sure what mode we're in. The basic cc wrapper does a lot.
+ARGS=$*
+USEMODE=0
+for i in $ARGS; do
+	case "${i}" in
+		-o)
+			if [ $USEMODE != 2 ]; then
+				# Link
+				USEMODE=1
+			fi
+		;;
+		-c | -S | -E)
+			# Partial compile
+			USEMODE=2
+		;;
+		conftest.c | conftest.cc | conftest.cpp)
+			# Used in autoconf... we really probably need
+			# a better way to do this. (scan for any .c?)
+			USEMODE=1
+		;;
+		*)
+		;;
+	esac
+done
+
+case $USEMODE in
+	0)
+		# Unknown mode ... use default args and cross fingers.
+		if [ x${KOS_WRAPPERS_VERBOSE} = x"1" ]; then
+			echo ${DC_ARM_CC} "$@"
+		fi
+		exec ${DC_ARM_CC} "$@"
+	;;
+
+	1)
+		# In link mode, add all the extra processing.
+		if [ x${KOS_WRAPPERS_VERBOSE} = x"1" ]; then
+			echo ${DC_ARM_CC} ${DC_ARM_CFLAGS} ${DC_ARM_LDFLAGS} ${DC_ARM_START} "$@" ${DC_ARM_LIBS}
+		fi
+		exec ${DC_ARM_CC} ${DC_ARM_CFLAGS} ${DC_ARM_LDFLAGS} ${DC_ARM_START} "$@" ${DC_ARM_LIBS}
+	;;
+
+	2)
+		# In non-link mode, just go ahead and run CC.
+		if [ x${KOS_WRAPPERS_VERBOSE} = x"1" ]; then
+			echo ${DC_ARM_CC} ${DC_ARM_CFLAGS} "$@"
+		fi
+		exec ${DC_ARM_CC} ${DC_ARM_CFLAGS} "$@"
+	;;
+esac

@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec ${DC_ARM_LD} ${DC_ARM_LDFLAGS} "$@" ${DC_ARM_LIB_PATHS} ${DC_ARM_LIBS}

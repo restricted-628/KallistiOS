@@ -1,0 +1,28 @@
+.TH BINCNV 8 "Mar 2017" "Version 1.0"
+.SH NAME
+bincnv \- Test ELF to BIN converter
+.SH SYNOPSIS
+.B bincnv
+[
+.B \-d
+]
+.IR from
+.IR to
+
+.SH DESCRIPTION
+.B bincnv
+is used to test the ELF to BIN converter.
+Loads to VMA 0x8c010000. This is an exact functional duplicate of the routine
+in process/elf.c and is used for testing new changes first.
+.SH EXAMPLES
+
+.EX
+.B
+   bincnv from.elf to.bin
+.EE
+
+.SH AUTHOR
+This manual page was initially written by Stefan Galowicz <bogglez@protonmail.ch>,
+for the KOS project.
+.TP
+The program has been initially written by Megan Potter in 2000.

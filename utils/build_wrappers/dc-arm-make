@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec ${DC_ARM_MAKE} "$@"

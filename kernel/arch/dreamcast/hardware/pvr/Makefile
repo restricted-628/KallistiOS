@@ -1,0 +1,51 @@
+# KallistiOS ##version##
+#
+# arch/dreamcast/hardware/pvr/Makefile
+# (c)2002 Megan Potter
+#
+
+# Memory management
+OBJS := pvr_mem_core.o pvr_mem.o pvr_mem_reservation.o
+
+# Internal functions
+OBJS += pvr_buffers.o pvr_irq.o pvr_multipass_layout.o
+
+# Init / Shutdown / Globals / Misc
+OBJS += pvr_init_shutdown.o pvr_globals.o pvr_misc.o pvr_events.o
+
+# Fast Tile Accelerator upload function
+OBJS += pvr_send_to_ta.o
+
+# Fog
+OBJS += pvr_fog.o
+
+# Palette
+OBJS += pvr_palette.o
+
+# Primitives / scene management
+OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
+	pvr_material_recipe.o \
+	pvr_chunk_model.o pvr_chunk_asset.o pvr_chunk_asset_io.o \
+	pvr_chunk_hierarchy.o pvr_chunk_scene.o pvr_chunk_scene_asset.o \
+	pvr_chunk_render.o \
+	pvr_chunk_cache.o pvr_chunk_cache_asset.o pvr_chunk_animation_asset.o \
+	pvr_chunk_morph_animation_asset.o pvr_chunk_animation_catalog.o \
+	pvr_chunk_model_table.o \
+	pvr_chunk_volume_asset.o pvr_chunk_resource_asset.o pvr_chunk_layer_asset.o \
+	pvr_chunk_layer_binding.o pvr_chunk_layer_images.o pvr_chunk_uv_asset.o \
+	pvr_chunk_resource_binding.o pvr_chunk_texture_asset.o \
+	pvr_chunk_texture_binding.o \
+	pvr_chunk_route.o \
+	pvr_chunk_skin.o pvr_chunk_skin_asset.o pvr_chunk_skeleton_asset.o \
+	pvr_chunk_shape.o \
+	pvr_chunk_shape_asset.o \
+	pvr_chunk_binding.o pvr_lighting.o pvr_toon.o pvr_chunk_toon.o \
+	pvr_chunk_wire.o pvr_deform.o \
+	pvr_sprite_geometry.o pvr_cell.o pvr_cell_asset.o pvr_tilemap.o \
+	pvr_particle.o
+
+# Texture handling
+OBJS += pvr_texture.o pvr_texture_layout.o pvr_texture_reservation.o \
+	pvr_texture_residency.o pvr_texture_request.o pvr_dma.o
+
+include $(KOS_BASE)/Makefile.prefab

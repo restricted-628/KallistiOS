@@ -1,0 +1,25 @@
+# KallistiOS ##version##
+#
+# Root Makefile.prefab
+# (c)2000 Megan Potter
+#
+
+# Global KallistiOS Makefile include
+# Define "SUBDIRS" and "OBJS", and then include this file;
+#   it will handle a lot of your build process.
+
+ifeq (b$(BUILD_TARGET),b)
+	BUILD_TARGET = kernel
+endif
+
+defaultall: $(OBJS) subdirs
+	-cp $(OBJS) $(KOS_BASE)/$(BUILD_TARGET)/build/
+
+defaultclean: clean_subdirs
+	-rm -f $(OBJS) *.bck
+
+clean: defaultclean
+
+include $(KOS_BASE)/Makefile.rules
+
+

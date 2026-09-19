@@ -1,0 +1,304 @@
+# KallistiOS Examples
+This page serves as an index for all KallistiOS examples.
+
+- [**2ndmix**](2ndmix/): The flagship KallistiOS demo. It is a remixed version of _Stars_, the first publicly available homebrew Dreamcast demo!
+- basic
+  - asic-event-claim
+  - asserthnd
+  - breaking
+  - cache-safety
+  - dma
+    - g2-state
+    - speedtest
+  - exec
+  - fpu
+  - gdb_breaking
+  - independent-heap
+  - [**animation-playback**](basic/animation-playback/): Demonstrates opt-in,
+    caller-owned clip playback and object/camera/light binding
+  - [**camera-matrices**](basic/camera-matrices/): Demonstrates checked,
+    caller-owned perspective and look-at matrix construction
+  - [**collision**](basic/collision/): Demonstrates checked, allocation-free
+    ray, triangle, sphere, capsule, segment, plane, AABB, and OBB geometry
+  - [**matrix_stack**](basic/matrix_stack/): Demonstrates bounded caller-owned
+    transform hierarchy state
+  - memtest32
+  - mmu
+    - mapping-safety
+  - posix_resource
+  - stackprotector
+  - stacktrace
+  - sq-safety
+  - threading
+    - atomics
+    - barrier
+    - compiler_tls
+    - general
+    - once
+    - recursive_lock
+    - reentrant_mutex
+    - rwsem
+    - spinlock_test
+    - tls
+    - vblank-priority
+    - workqueue-safety
+  - watchdog
+- cdrom
+  - cdda-status
+  - direct-async
+  - direct-cdda
+  - direct-geometry
+  - direct-gaps-stage
+  - direct-lifecycle
+  - direct-read
+  - direct-recovery
+  - direct-status
+  - direct-iso9660
+  - media-recognition
+  - request
+  - sector-range
+  - stream
+- conio
+  - adventure
+  - basic
+  - conio_dbgio
+  - kosh
+  - wump
+- cpp
+  - [**chrono_probe**](cpp/chrono_probe/): Checks C++ clock domains and sleep/yield against KOS, without external assets.
+  - clock
+  - concurrency
+  - dcplib
+  - filesystem
+  - gltest
+  - modplug_test
+  - out_of_memory
+- dev
+  - devroot
+  - [**random**](dev/random/): Demonstrates generating random numbers using /dev/urandom
+- dreameye
+  - basic
+  - sd
+- filesystem
+  - browse
+  - iso9660-async
+  - pty
+  - sd
+- g1ata
+  - atatest
+- gldc
+  - 2D_tex_quad
+  - basic
+  - benchmarks
+  - nehe
+- [**hello**](hello/): demonstrates printing text to the console
+- keyboard
+  - keyrawtest
+  - keytest
+- libdream
+  - 320x240
+  - 640x480
+  - cdfs
+  - keyboard
+  - lcd
+  - mouse
+  - rgb888
+  - spu
+  - ta
+  - vmu
+- library
+- lightgun
+  - basic
+- lua
+  - basic
+- maple
+  - [**controller-snapshot**](maple/controller-snapshot/): Validates coherent controller samples, transitions, capability decoding, and callbacks
+  - [**keyboard-snapshot**](maple/keyboard-snapshot/): Validates keyboard metadata, key state, and coherent snapshots
+  - [**lightgun-capture**](maple/lightgun-capture/): Demonstrates scheduled light-gun capture and coherent aim snapshots
+  - [**mouse-snapshot**](maple/mouse-snapshot/): Validates full mouse conditions, metadata, transitions, and coherent snapshots
+- [**micropython**](micropython/): Demonstrates basic usage of the MicroPython kos-port
+- modem
+  - basic
+  - ppp
+- mruby
+  - dreampresent
+  - mrbtris
+- network
+  - basic
+  - dns-client
+  - httpd
+  - isp-settings
+  - ntp
+  - ping
+  - ping6
+  - speedtest
+  - udpecho6
+- objc
+  - runtime
+- parallax
+  - bubbles
+  - delay_cube
+  - font
+  - raster_melt
+  - rotocube
+  - serpent_dma
+  - sinus
+- [**png**](png/): - Demonstrates the use of PNG textures, gzip decompression, and drawing text
+- profiling
+  - gcov
+  - gprof
+- pthread
+  - general
+- pvr
+  - [**background_plane**](pvr/background_plane/): Replaces the solid
+    background with checked per-scene RGB triangle geometry and verifies its
+    configuration lifetime
+  - bumpmap
+  - [**cell_asset**](pvr/cell_asset/): Compiles a declarative cell manifest
+    into PCA1, then materializes, animates, priority-sorts, and routes one
+    resolved cell sprite across opaque, punch-through, and translucent lists
+  - cheap_shadow
+  - [**chunk_asset**](pvr/chunk_asset/): Generates a versioned compact-model
+    asset, cooperatively decodes LZ4 through an opt-in service, destroys that
+    service, and renders through caller-owned deformation and residency
+  - [**chunk_asset_disc**](pvr/chunk_asset_disc/): Reads a compact-model asset
+    through direct GD-DMA and optionally a leased GAPS/G2 staging path, then
+    verifies LZ4 decoding and reports separate transport and decode timings
+  - [**chunk_opacity**](pvr/chunk_opacity/): Compiles one glTF mesh with
+    opaque, masked, and blended materials, then routes its prepared strips to
+    the matching PVR lists without duplicating model storage
+  - [**chunk_resources**](pvr/chunk_resources/): Converts and embeds a compact
+    model, then resolves its texture identifiers through a pre-acquired
+    fixed-slot residency set, checked materials, and an admitted signed-light
+    diffuse-plus-specular render policy
+  - [**chunk_scene**](pvr/chunk_scene/): Compiles two models with an animated
+    skeleton and independent morph curves, checks numerical pose goldens, and
+    renders their prepared caches without introducing retained scene ownership
+  - [**chunk_skin**](pvr/chunk_skin/): Binds explicit normalized joint
+    influences, builds a reusable canonical source, and renders a moving
+    deformed pose through constant-time model-index lookup
+  - [**chunk_volume_asset**](pvr/chunk_volume_asset/): Opens pointer-free PCM2
+    volume data, binds its indices to a model, and iterates collision metadata
+    through the shared modifier-volume topology decoder
+  - [**chunk_toon**](pvr/chunk_toon/): Subdivides a prepared compact model at
+    a moving scalar shade threshold, preserving attributes and strip winding
+    without per-frame allocation
+  - [**chunk_wire**](pvr/chunk_wire/): Draws a prepared compact strip as full
+    mesh, outside-boundary, or consecutive-path wireframe geometry using
+    clipped constant-width screen-space quads
+  - [**clipping**](pvr/clipping/): Combines per-scene pixel bounds with a
+    checked tile-granular user-clip command
+  - fb_tex
+  - [**geometry_contract**](pvr/geometry_contract/): Projects caller-owned
+    geometry with bounded frustum clipping, checked material compilation, and
+    established PVR list sinks
+  - [**hybrid_lists**](pvr/hybrid_lists/): Flushes a buffered translucent list
+    beside direct opaque submission without replaying completed geometry
+  - [**material_state**](pvr/material_state/): Exercises checked clamp,
+    punch-through, palette, supersampling, and buffered-list controls
+  - [**multipass**](pvr/multipass/): Registers three direct geometry passes
+    under one bounded hardware scene
+  - [**multipass_dma**](pvr/multipass_dma/): Advances three independently
+    buffered passes through DMA and registration interrupts
+  - [**multipass_depth**](pvr/multipass_depth/): Checks depth clear/preserve
+    independently of retained color with direct, DMA and hybrid pixel tests
+  - [**portal**](pvr/portal/): Composes a clipped second view with foreground
+    occlusion, using separate disjoint-coverage and strict depth-clear routes
+  - [**multipass_hybrid**](pvr/multipass_hybrid/): Combines early list flushes
+    with hardware continuation across three registration passes
+  - modifier_volume
+  - modifier_volume_tex
+  - modifier_volume_zclip
+  - palette
+  - [**pipeline_status**](pvr/pipeline_status/): Checks coherent PVR state,
+    persistent fault records, and bounded interrupt-context event handlers
+  - [**particles**](pvr/particles/): Simulates a caller-owned particle pool and
+    emits hardware sprite cells plus colored polygon trails
+  - plasma
+  - [**material_recipes**](pvr/material_recipes/): Compiles ordered trilinear
+    and bump headers, plus selectable lightmap/emissive layers, with optional
+    numeric framebuffer and occlusion checks
+  - pvrline
+  - pvrmark
+  - pvrmark_strips
+  - pvrmark_strips_direct
+  - [**render_ticket**](pvr/render_ticket/): Tracks off-screen completion and
+    displayed framebuffer completion with immutable render identities
+  - [**sprite_cells**](pvr/sprite_cells/): Samples independent caller-owned
+    cell streams, composes and priority-sorts their state, and emits compact
+    textured PVR sprite packets through SH4ZAM-backed target paths
+  - strided_texture
+  - [**tilemap**](pvr/tilemap/): Compiles bounded rotated/scaled scrolling maps
+    with atlas flips, viewport clipping, wrap/clamp policies and list routing
+  - [**texture_reservation**](pvr/texture_reservation/): Packs multiple checked
+    surfaces into one caller-owned contiguous VRAM reservation
+  - [**texture_residency**](pvr/texture_residency/): Cycles three textures
+    through two pinned, generation-checked LRU slots using asynchronous DMA
+  - [**texture_surface**](pvr/texture_surface/): Validates caller-owned texture
+    layouts, bounded uploads/readback, asynchronous DMA, render targets, and
+    YUV conversion
+  - texture_render
+  - [**vq_palette**](pvr/vq_palette/): Uses a VQ codebook as an independent
+    per-texture 16-bit palette for a byte-indexed image
+  - [**vq_compact**](pvr/vq_compact/): Stores only the high VQ codebook entries
+    used by a texture and compiles its adjusted sampling address
+  - yuv_converter
+- raylib
+  - raytris
+- [**rumble**](rumble/): Validates typed vibration effects, device metadata, auto-stop, and asynchronous completion
+- sd
+  - ext2fs
+  - mke2fs
+- sh4zam
+  - bruces_balls
+  - [**integration**](sh4zam/integration/): Verifies the bundled SH4ZAM 0.8
+    library, default link integration, alias-safe KOS math bridges, and bounded
+    compact-model emission
+- sdl
+  - sound
+- sound
+  - cdda
+  - [**channel-sync**](sound/channel-sync/): Starts AICA channels 31 and 32
+    together through checked envelope-aware configurations and one
+    synchronized 64-channel key-on, then verifies coherent firmware snapshots
+  - [**dsp-control**](sound/dsp-control/): Validates checked DSP program
+    geometry, coherent state, effect-return control, and bounded clearing
+    without requiring authored effect content
+  - ghettoplay-vorbis
+  - hello-adx
+  - hello-mp3
+  - hello-ogg
+  - hello-opus
+  - multi-stream
+  - sfx
+  - sfxbuf
+  - [**spu-transfer**](sound/spu-transfer/): Validates queued DMA and exact-byte
+    PIO sound-RAM upload and readback requests
+  - [**stream-status**](sound/stream-status/): Exercises checked streaming,
+    silence-padded short reads, live controls, progress, underrun accounting,
+    and bounded teardown without external assets
+  - [**stream-service**](sound/stream-service/): Runs checked stream polling on
+    one optional thread with caller-owned stack storage and bounded ownership
+    teardown
+- tsunami
+  - banner
+  - font
+  - genmenu
+- video
+  - bfont
+  - bfont-glyph-query
+  - [**framebuffer-query**](video/framebuffer-query/): Validates displayed, drawing, and indexed framebuffer surfaces
+  - minifont
+  - [**mode-policy**](video/mode-policy/): Resolves cable-aware 50/60 Hz video modes without installing them
+  - multibuffer
+  - palmenu
+  - [**scanout-filter**](video/scanout-filter/): Validates physical scanout, display filters, and opt-in raster callbacks
+  - screenshot
+- vmu
+  - vmu_beep
+  - [**vmu_clock**](vmu/vmu_clock/): Validates civil-time rules and coherent
+    synchronous and asynchronous clock reads
+  - vmu_game
+  - [**vmu_lcd**](vmu/vmu_lcd/): Validates LCD descriptors, raw bitmap
+    ordering, orientation, and asynchronous completion
+  - vmu_pkg

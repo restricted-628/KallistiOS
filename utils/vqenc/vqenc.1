@@ -1,0 +1,68 @@
+.TH VQENC 1 "Mar 2017" "Version 1.0"
+.SH NAME
+vqenc \- Compress images using Dreamcast Vector Quantization
+.SH SYNOPSIS
+\fBvqenc\fR [\fIOPTION\fR]... [\fIFILE\fR]...
+
+.SH DESCRIPTION
+.B vqenc
+is used to compress image files using the Dreamcast's Vector
+Quantization algorithm. 
+At a small loss of quality this allows for textures of up to an
+eighth of the original size, resulting in more and higher
+resolution textures.
+
+.SH OPTIONS
+.TP
+.BR \-t ", " \-\-twiddle\fR
+Arrange pixels in a recursive Z-pattern.
+Makes texture filtering faster.
+Requires square texture dimensions.
+
+.TP
+.BR \-m ", " \-\-mipmap\fR
+Calculate and store recursively smaller versions of the image.
+Reduces bandwidth and makes texture filtering faster.
+Adds about a third of file size.
+
+.TP
+.BR \-v ", " \-\-verbose\fR
+Print more information during processing.
+
+.TP
+.BR \-d ", " \-\-debug\fR
+Print much more information.
+
+.TP
+.BR \-q ", " \-\-highq\fR
+Allow conversion to take more time to achieve higher quality.
+
+.TP
+.BR \-k ", " \-\-kmg\fR
+Convert [\fIFILE\fR] to \fB.kmg\fR format instead of \fB.vq\fR.
+
+.TP
+.BR \-a ", " \-\-alpha\fR
+Use 4 bit alpha channel (Dreamcast PVR texture format ARGB4444).
+
+.TP
+.BR \-b ", " \-\-amask\fR
+Use 1 bit alpha channel (Dreamcast PVR texture format ARGB1555).
+
+.SH EXAMPLES
+
+.EX
+.B
+   vqenc -t -m -q -a image.png
+.EE
+
+.SH AUTHOR
+This manual page was initially written by Stefan Galowicz <bogglez@protonmail.ch>,
+for the KOS project.
+.TP
+The program has been initially written by Jeffrey McBeth in 2002 and was modified
+by Megan Potter.
+
+.SH BUGS
+While the Dreamcast hardware can handle non-square VQ-compressed textures, this
+tool is not capable of producing them.

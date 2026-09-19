@@ -1,0 +1,508 @@
+--- a/include/sh4zam/inline/sh4/shz_matrix_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_matrix_sh4.inl.h
+@@ -470,3 +470,5 @@
+ }
+ 
+ #endif
++
++//! \endcond
+--- a/include/sh4zam/inline/sh4/shz_mem_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_mem_sh4.inl.h
+@@ -1,7 +1,7 @@
+ //! \cond INTERNAL
+ /*! \file
+     \brief SH4 implementation of the Memory API.
+-    \ingroup memory
++    \ingroup sh4zam_memory
+ 
+     This file contains the Dreamcast implementation routines for
+     SH4ZAM's memory API, which have been hand-optimized specifically
+@@ -813,3 +813,5 @@
+ }
+ 
+ #endif
++
++//! \endcond
+--- a/include/sh4zam/inline/sh4/shz_quat_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_quat_sh4.inl.h
+@@ -179,6 +179,7 @@
+                 shz_vec3_init(qz, vz, qx * vy - qy * vx)
+            );
+ }
+-//! \endcond
+ 
+ #endif
++
++//! \endcond
+--- a/include/sh4zam/inline/sh4/shz_scalar_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_scalar_sh4.inl.h
+@@ -128,6 +128,6 @@
+ }
+ #endif
+ 
++#endif
++
+ //! \endcond
+-
+-#endif
+--- a/include/sh4zam/inline/sh4/shz_trig_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_trig_sh4.inl.h
+@@ -76,6 +76,7 @@
+     return SHZ_INIT(shz_sincos_t, rsin, rcos);
+ #endif
+ }
+-//! \endcond
+ 
+ #endif
++
++//! \endcond
+--- a/include/sh4zam/inline/sh4/shz_vector_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_vector_sh4.inl.h
+@@ -455,6 +455,6 @@
+ #endif
+ }
+ 
++#endif
++
+ //! \endcond
+-
+-#endif
+--- a/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
+@@ -3073,7 +3073,7 @@
+         fldi1 fr12
+         ftrv  xmtrx,fv8
+ 
+-    
++
+         fldi0 fr13
+         fldi0 fr14
+         fldi0 fr15
+@@ -3578,3 +3578,5 @@
+ #endif
+ 
+ //! @}
++
++//! \endcond
+--- a/include/sh4zam/inline/shz_mem.inl.h
++++ b/include/sh4zam/inline/shz_mem.inl.h
+@@ -1,7 +1,7 @@
+ //! \cond INTERNAL
+ /*! \file
+  *  \brief   Memory API Implementation
+- *  \ingroup memory
++ *  \ingroup sh4zam_memory
+  *
+  *  Implementation of inlined memory API routines,
+  *  simply delegating to each back-end to implement
+--- a/include/sh4zam/inline/shz_vector.inl.h
++++ b/include/sh4zam/inline/shz_vector.inl.h
+@@ -831,4 +831,3 @@
+ }
+ 
+  //! \endcond
+- 
+--- a/include/sh4zam/inline/shz_xmtrx.inl.h
++++ b/include/sh4zam/inline/shz_xmtrx.inl.h
+@@ -1068,3 +1068,5 @@
+     shz_xmtrx_init_identity();
+     shz_xmtrx_apply_perspective(fov, aspect, znear);
+ }
++
++//! \endcond
+--- a/include/sh4zam/inline/sw/shz_matrix_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_matrix_sw.inl.h
+@@ -77,3 +77,5 @@
+ }
+ 
+ #endif
++
++//! \endcond
+--- a/include/sh4zam/inline/sw/shz_mem_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_mem_sw.inl.h
+@@ -1,7 +1,7 @@
+ //! \cond INTERNAL
+ /*! \file
+     \brief Software implementation of Quaternion API
+-    \ingroup memory
++    \ingroup sh4zam_memory
+ 
+     This file contains the generic implementation routines for
+     the memory API, which are platform-independent, shared,
+@@ -156,5 +156,7 @@
+                                                   const void* SHZ_RESTRICT src) SHZ_NOEXCEPT {
+     return memcpy(dst, src, 32);
+ }
++
++#endif
++
+ //! \endcond
+-#endif
+--- a/include/sh4zam/inline/sw/shz_quat_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_quat_sw.inl.h
+@@ -32,7 +32,7 @@
+ 
+     shz_vec3_t cross_qv = shz_vec3_cross(q.axis, v);
+ 
+-    return shz_vec3_dot3(shz_vec3_init(2.0f * dot_qqv.y, 
++    return shz_vec3_dot3(shz_vec3_init(2.0f * dot_qqv.y,
+                                       (q.w * q.w) - dot_qqv.x,
+                                       2.0f * q.w),
+                          shz_vec3_init(q.x, v.x, cross_qv.x),
+@@ -40,6 +40,6 @@
+                          shz_vec3_init(q.z, v.z, cross_qv.z));
+ }
+ 
++#endif
++
+ //! \endcond
+-
+-#endif
+--- a/include/sh4zam/inline/sw/shz_scalar_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_scalar_sw.inl.h
+@@ -56,6 +56,6 @@
+     return *(shz_alias_float_t*)&eax; // z as float
+ }
+ 
++#endif
++
+ //! \endcond
+-
+-#endif
+--- a/include/sh4zam/inline/sw/shz_trig_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_trig_sw.inl.h
+@@ -19,7 +19,7 @@
+ 
+ SHZ_FORCE_INLINE shz_sincos_t shz_sincosu16_sw(uint16_t radians16) SHZ_NOEXCEPT {
+     float radians = ((float)radians16 / 65535.0f) * 2.0f * SHZ_F_PI;
+- 
++
+     return SHZ_INIT(shz_sincos_t, sinf(radians), cosf(radians));
+ }
+ 
+@@ -30,6 +30,7 @@
+ SHZ_FORCE_INLINE shz_sincos_t shz_sincosf_deg_sw(float degrees) SHZ_NOEXCEPT {
+     return SHZ_INIT(shz_sincos_t, sinf(SHZ_DEG_TO_RAD(degrees)), cosf(SHZ_DEG_TO_RAD(degrees)));
+ }
+-//! \endcond
+ 
+ #endif
++
++//! \endcond
+--- a/include/sh4zam/inline/sw/shz_vector_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_vector_sw.inl.h
+@@ -25,7 +25,7 @@
+                                                    shz_vec3_t b,
+                                                    shz_vec3_t c) SHZ_NOEXCEPT {
+     shz_vec3_t r;
+-    
++
+     shz_vec3_t v0 = shz_vec3_sub(b, a);
+     shz_vec3_t v1 = shz_vec3_sub(c, a);
+     shz_vec3_t v2 = shz_vec3_sub(p, a);
+@@ -103,6 +103,6 @@
+     return res;
+ }
+ 
++#endif
++
+ //! \endcond
+-
+-#endif
+--- a/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
+@@ -1132,6 +1132,6 @@
+ #undef SHZ_XMTRX_MV3S_
+ #undef SHZ_XMTRX_MV2S_
+ 
++#endif
++
+ //! \endcond
+-
+-#endif
+--- a/include/sh4zam/shz_complex.h
++++ b/include/sh4zam/shz_complex.h
+@@ -27,7 +27,7 @@
+ 
+     The complex number API serves as a replacement for C and C++'s <complex.h>,
+     offering fast, accelerated approximations for each routine. The API also
+-    features shz_fft(), an SH4 optimized fast-fourier transform. 
++    features shz_fft(), an SH4 optimized fast-fourier transform.
+ */
+ 
+ /*! \name  Preprocessor
+@@ -148,7 +148,7 @@
+ 
+ /*! \name  Spherical Trigonometry
+     \brief Complex spherical trigonometric functions.
+-    @{   
++    @{
+ */
+ 
+ //! Calculates and returns the complex sine of \p c.
+--- a/include/sh4zam/shz_matrix.hpp
++++ b/include/sh4zam/shz_matrix.hpp
+@@ -334,7 +334,7 @@
+         SHZ_FORCE_INLINE void apply_scale(float x, float y, float z) noexcept {
+             shz_mat4x4_apply_scale(this, x, y, z);
+         }
+-        
++
+         SHZ_FORCE_INLINE void apply_scale(const vec3& v) noexcept {
+             apply_scale(v.x, v.y, v.z);
+         }
+--- a/include/sh4zam/shz_mem.h
++++ b/include/sh4zam/shz_mem.h
+@@ -1,6 +1,6 @@
+ /*! \file
+- *  \brief   Memory API 
+- *  \ingroup memory
++ *  \brief   Memory API
++ *  \ingroup sh4zam_memory
+  *
+  *  API built around copying, assigning, and working with memory.
+  *
+@@ -26,7 +26,7 @@
+ #include <stdbool.h>
+ #include <stddef.h>
+ 
+-/*! \defgroup memory Memory
++/*! \defgroup sh4zam_memory SH4ZAM Memory
+     \brief    Routines for managing memory.
+ 
+     This API provides the following types of memory routines:
+--- a/include/sh4zam/shz_mem.hpp
++++ b/include/sh4zam/shz_mem.hpp
+@@ -1,6 +1,6 @@
+ /*! \file
+  *  \brief   C++ Memory API
+- *  \ingroup memory
++ *  \ingroup sh4zam_memory
+  *
+  *  C++ wrapper API for copying, assigning, and working with memory.
+  *
+--- a/include/sh4zam/shz_quat.hpp
++++ b/include/sh4zam/shz_quat.hpp
+@@ -64,7 +64,7 @@
+         SHZ_FORCE_INLINE static quat identity() noexcept {
+             return shz_quat_identity();
+         }
+-        
++
+         //! C++ convenience wrapper for shz_quat_from_angles_xyz().
+         SHZ_FORCE_INLINE static quat from_angles_xyz(float x, float y, float z) noexcept {
+             return shz_quat_from_angles_xyz(x, y, z);
+@@ -137,12 +137,14 @@
+             const_cast<std::remove_cvref_t<T>&>(self) = quat(const_cast<shz_quat_t&>(other));
+             return std::forward<T>(self);
+         }
++#endif
+ 
+         /*! \name  Relational Operators
+             \brief Overloaded comparison operators
+             @{
+         */
+ 
++#ifdef SHZ_CPP23
+         //! Overloaded space-ship operator for auto-generating lexicographical comparison operators.
+         friend auto operator<=>(const quat& lhs, const quat& rhs) noexcept {
+             return std::lexicographical_compare_three_way(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
+--- a/include/sh4zam/shz_trig.h
++++ b/include/sh4zam/shz_trig.h
+@@ -43,13 +43,13 @@
+ 
+ SHZ_DECLS_BEGIN
+ 
+-/*! Pair representing the sine and cosine of a given angle. 
+- *  
++/*! Pair representing the sine and cosine of a given angle.
++ *
+  *  The SH4 provides a single instruction, `FSCA`, for retrieving fast
+  *  approximations of \b both the sine and cosine of a given angle. As such,
+  *  when you need both values, it's most efficient to grab them both at once as
+- *  a pair using this structure than it is to retrieve them separately. 
+- * 
++ *  a pair using this structure than it is to retrieve them separately.
++ *
+  *  \sa shz_sincosf(), shz_sincosf_deg()
+  */
+ typedef struct shz_sincos {
+--- a/include/sh4zam/shz_trig.hpp
++++ b/include/sh4zam/shz_trig.hpp
+@@ -73,7 +73,7 @@
+         SHZ_FORCE_INLINE float cotf() const noexcept { return shz_sincos_cotf(*this); }
+ 
+         // Conversion operator to a std::pair<> of two floats, for sine and cosine values.
+-        SHZ_FORCE_INLINE operator std::pair<float, float>() const noexcept { 
++        SHZ_FORCE_INLINE operator std::pair<float, float>() const noexcept {
+             return std::pair(sinf(), cosf());
+         }
+     };
+--- a/include/sh4zam/shz_vector.hpp
++++ b/include/sh4zam/shz_vector.hpp
+@@ -29,7 +29,7 @@
+ struct vec3;
+ struct vec4;
+ 
+-/*! Common C++ base structure inherited by all vector types. 
++/*! Common C++ base structure inherited by all vector types.
+ 
+     This struct template serves as the base class for all
+     concrete vector types, providing:
+--- a/include/sh4zam/shz_version.h
++++ b/include/sh4zam/shz_version.h
+@@ -3,7 +3,7 @@
+  *
+  *  This file provides the utility macros and constants needed for implementing
+  *  compile/link-time version checking of the SH4ZAM library.
+- * 
++ *
+  *  \author     2026 Falco Girgis
+  *  \copyright  MIT License
+  */
+--- a/include/sh4zam/shz_version.hpp
++++ b/include/sh4zam/shz_version.hpp
+@@ -3,7 +3,7 @@
+  *
+  *  This file provides the utility macros and constants needed for implementing
+  *  compile/link-time version checking of the SH4ZAM library using C++.
+- * 
++ *
+  *  \author     2026 Falco Girgis
+  *  \copyright  MIT License
+  */
+@@ -16,7 +16,7 @@
+ #include <string>
+ 
+ namespace shz {
+-    
++
+     //! Class representing a full SH4ZAM API version.
+     class version {
+         shz_version_t value_;    //!< Private packed value member.
+@@ -44,10 +44,10 @@
+ 
+         //! Extracts the major component value from a full version.
+         constexpr uint8_t major() const noexcept { return (value_ >> 24) & 0xff; }
+-        
++
+         //! Extracts the minor component value from a full version.
+         constexpr uint16_t minor() const noexcept { return (value_ >> 8) & 0xffff; }
+-        
++
+         //! Extracts the patch component value from a full version.
+         constexpr uint8_t patch() const noexcept { return value_ & 0xff; }
+     };
+--- a/include/sh4zam/shz_xmtrx.h
++++ b/include/sh4zam/shz_xmtrx.h
+@@ -593,7 +593,7 @@
+     This operation is equivalent to:
+         shz_xmtrx_load_4x4(matrix1);
+         shz_xmtrx_apply_4x4(matrix2);
+-    
++
+     However, it has been optimized and pipelined for performing the load
+     and multiply in parallel.
+ 
+--- a/include/sh4zam/shz_xmtrx.hpp
++++ b/include/sh4zam/shz_xmtrx.hpp
+@@ -830,7 +830,7 @@
+     SHZ_FORCE_INLINE static void add_symmetric_skew(float x, float y, float z) noexcept {
+         shz_xmtrx_add_symmetric_skew(x, y, z);
+     }
+-    
++
+     //! C++ wrapper around shz_xmtrx_add_symmetric_skew().
+     SHZ_FORCE_INLINE static void add_symmetric_skew(const vec3& v) noexcept {
+         add_symmetric_skew(v.x, v.y, v.z);
+--- a/source/sh4/shz_complex_sh4.c
++++ b/source/sh4/shz_complex_sh4.c
+@@ -8,6 +8,7 @@
+  *
+  *  \author     2026 Falco Girgis
+  *  \copyright  MIT License
++ *  \copyright  Copyright (C) 2026 Joseph Black
+  */
+ 
+ #include "sh4zam/shz_complex.h"
+@@ -97,9 +98,9 @@
+                 fmov.d  dr4, @%[x]
+                 fmov.d  dr6, @%[y]
+             )"
+-            : "+m" (s[i]), "+m" (s[i + stage])
++            :
+             : [x] "r" (&s[i]), [y] "r" (&s[i + stage])
+-            : "fr4", "fr5" ,"fr6", "fr7");
++            : "fr4", "fr5" ,"fr6", "fr7", "memory");
+         }
+         SHZ_FSCHG();
+ 
+@@ -128,10 +129,11 @@
+                 fmov.d  dr8, @%[z]
+                 fmov.d  dr10, @%[w]
+             )"
+-            : "+m" (s[i]), "+m" (s[i + stage]), "+m" (s[i + inc]), "+m" (s[i + inc + stage])
++            :
+             : [x] "r" (&s[i]), [y] "r" (&s[i + stage]),
+               [z] "r" (&s[i + inc]), [w] "r" (&s[i + inc + stage])
+-            : "fr4", "fr5" ,"fr6", "fr7", "fr8", "fr9", "fr10", "fr11");
++            : "fr4", "fr5" ,"fr6", "fr7", "fr8", "fr9", "fr10", "fr11",
++              "memory");
+         }
+         SHZ_FSCHG();
+ 
+@@ -176,16 +178,13 @@
+                 fmov.d  dr0, @%[c]
+                 fmov.d  dr2, @%[d]
+             )"
+-            : "+m" (s[i]), "+m" (s[i + stage]),
+-              "+m" (s[i + inc1]), "+m" (s[i + inc1 + stage]),
+-              "+m" (s[i + inc2]), "+m" (s[i + inc2 + stage]),
+-              "+m" (s[i + inc2 + inc1]), "+m" (s[i + inc2 + inc1 + stage])
++            :
+             : [x] "r" (&s[i]), [y] "r" (&s[i + stage]),
+               [z] "r" (&s[i + inc1]), [w] "r" (&s[i + inc1 + stage]),
+               [a] "r" (&s[i + inc2]), [b] "r" (&s[i + inc2 + stage]),
+               [c] "r" (&s[i + inc2 + inc1]), [d] "r" (&s[i + inc2 + inc1 + stage])
+             : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5",
+-              "fr6", "fr7", "fr8", "fr9", "fr10", "fr11");
++              "fr6", "fr7", "fr8", "fr9", "fr10", "fr11", "memory");
+         }
+ 
+         SHZ_FSCHG();
+@@ -279,14 +278,14 @@
+     SHZ_FSCHG();
+     for(size_t i = 1; i < (size - 1); i++) {
+         k = size >> 1;
+-        
++
+         while(k <= j) {
+             j -= k;
+             k >>= 1;
+         }
+-        
++
+         j += k;
+-        
++
+         if(i < j) {
+             asm(R"(
+                 fmov.d @%[i], xd0
+--- a/source/sh4/shz_mem_sh4.s
++++ b/source/sh4/shz_mem_sh4.s
+@@ -1,5 +1,5 @@
+ !! \file
+-!  \brief   ASM implementation of select memcpyN() routines. 
++!  \brief   ASM implementation of select memcpyN() routines.
+ !  \ingroup memory
+ !
+ !  This file contains the out-of-line assembly implementations of assorted
+@@ -49,7 +49,7 @@
+     fschg
+ .memset8_exit:
+     rts
+-    nop     
++    nop
+ 
+ !
+ ! void* shz_memcpy128_sh4_(void *dst, const void* src, size_t bytes)

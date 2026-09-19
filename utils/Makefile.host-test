@@ -1,0 +1,13 @@
+# KallistiOS ##version##
+#
+# Shared host-test compiler policy.
+# Copyright (C) 2026 Joseph Black
+
+# KOS targets GNU17 by default. Host tests use the same language mode for
+# their normal lane, while run-host-tests.sh supplies C23 plus -pedantic for
+# the separate language-conformance lane.
+HOST_CSTD ?= gnu17
+HOST_WARNINGS ?= -Wall -Wextra -Werror
+HOST_PEDANTIC ?=
+
+CFLAGS += -std=$(HOST_CSTD) $(HOST_WARNINGS) $(HOST_PEDANTIC)

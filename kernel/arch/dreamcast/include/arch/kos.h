@@ -1,0 +1,116 @@
+/* KallistiOS ##version##
+
+   arch/dreamcast/include/arch/kos.h
+   Copyright (C) 2025 Eric Fradella
+
+*/
+
+/** \file   arch/kos.h
+    \brief  Include everything this arch implementation has to offer!
+
+    This is the arch-specific implementation of kos.h, the universal header
+    file that includes all of KallistiOS's functionality.
+
+    This file is already included via the main kos.h, so there's no need
+    to include it yourself.
+
+    \author Eric Fradella
+*/
+
+#ifndef __ARCH_KOS_H
+#define __ARCH_KOS_H
+
+__BEGIN_DECLS
+
+#include <arch/gdb.h>
+#include <arch/mmu.h>
+
+#include <dc/asic.h>
+#include <dc/biosfont.h>
+#include <dc/cdrom.h>
+#include <dc/collision.h>
+#include <dc/expansion.h>
+#include <dc/fb_console.h>
+#include <dc/flashrom.h>
+#include <dc/fmath.h>
+#include <dc/fs_dcload.h>
+#include <dc/fs_iso9660.h>
+#include <dc/fs_vmu.h>
+#include <dc/g1ata.h>
+#include <dc/gdrom_direct.h>
+#include <dc/g2bus.h>
+#include <dc/maple.h>
+#include <dc/maple/controller.h>
+#include <dc/maple/dreameye.h>
+#include <dc/maple/keyboard.h>
+#include <dc/maple/lightgun.h>
+#include <dc/maple/mouse.h>
+#include <dc/maple/purupuru.h>
+#include <dc/maple/sip.h>
+#include <dc/maple/vmu.h>
+#include <dc/animation.h>
+#include <dc/matrix3d.h>
+#include <dc/matrix.h>
+#include <dc/matrix_stack.h>
+#include <dc/memory.h>
+#include <dc/modem/modem.h>
+#include <dc/net/broadband_adapter.h>
+#include <dc/net/lan_adapter.h>
+#include <dc/perfctr.h>
+#include <dc/pvr.h>
+#include <dc/pvr_frustum.h>
+#include <dc/pvr_geometry.h>
+#include <dc/pvr_chunk_model.h>
+#include <dc/pvr_chunk_asset.h>
+#include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_animation_catalog.h>
+#include <dc/pvr_chunk_morph_animation_asset.h>
+#include <dc/pvr_chunk_scene.h>
+#include <dc/pvr_chunk_asset_io.h>
+#include <dc/pvr_chunk_render.h>
+#include <dc/pvr_chunk_uv.h>
+#include <dc/pvr_chunk_uv_asset.h>
+#include <dc/pvr_chunk_cache.h>
+#include <dc/pvr_chunk_cache_asset.h>
+#include <dc/pvr_chunk_model_table.h>
+#include <dc/pvr_chunk_skin.h>
+#include <dc/pvr_chunk_skin_asset.h>
+#include <dc/pvr_chunk_skeleton_asset.h>
+#include <dc/pvr_chunk_shape.h>
+#include <dc/pvr_chunk_shape_asset.h>
+#include <dc/pvr_chunk_volume_asset.h>
+#include <dc/pvr_chunk_resource_asset.h>
+#include <dc/pvr_deform.h>
+#include <dc/pvr_lighting.h>
+#include <dc/pvr_toon.h>
+#include <dc/pvr_chunk_toon.h>
+#include <dc/pvr_chunk_wire.h>
+#include <dc/pvr_material.h>
+#include <dc/pvr_chunk_binding.h>
+#include <dc/pvr_chunk_layer_asset.h>
+#include <dc/pvr_particle.h>
+#include <dc/pvr_sprite_geometry.h>
+#include <dc/pvr_cell.h>
+#include <dc/pvr_tilemap.h>
+#include <dc/pvr_cell_asset.h>
+#include <dc/scif.h>
+#include <dc/sci.h>
+#include <dc/sd.h>
+#include <dc/sound/dsp.h>
+#include <dc/sound/stream.h>
+#include <dc/sound/stream_service.h>
+#include <dc/sound/sfxmgr.h>
+#include <dc/spu.h>
+#include <dc/sq.h>
+#include <dc/ubc.h>
+#include <dc/vblank.h>
+#include <dc/vec3f.h>
+#include <dc/video.h>
+#include <dc/vmu_fb.h>
+#include <dc/vmu_pkg.h>
+#include <dc/vmufs.h>
+#include <dc/wdt.h>
+
+__END_DECLS
+
+#endif

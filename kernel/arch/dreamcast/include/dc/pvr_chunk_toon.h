@@ -1,0 +1,283 @@
+/* KallistiOS ##version##
+
+   dc/pvr_chunk_toon.h
+   Copyright (C) 2026 Joseph Black
+*/
+
+/** \file    dc/pvr_chunk_toon.h
+    \brief   Topology-aware band shading for prepared compact models.
+    \ingroup pvr_chunk_render
+
+    Band shading is a render policy over ordinary compact-model draw caches;
+    it is deliberately not an asset record. Model geometry, deformation,
+    material state, textures, scene lifetime, and all work memory retain their
+    existing owners.
+*/
+
+#ifndef __DC_PVR_CHUNK_TOON_H
+#define __DC_PVR_CHUNK_TOON_H
+
+#include <kos/cdefs.h>
+__BEGIN_DECLS
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include <dc/pvr_chunk_cache.h>
+#include <dc/pvr_toon.h>
+
+/** \addtogroup pvr_chunk_render
+    @{
+*/
+
+/** \brief One material-independent band-shading profile.
+
+    N thresholds define N+1 bands. Each optional modulation array therefore
+    contains exactly `threshold_count + 1` packed ARGB entries. Base and offset
+    colors are multiplied independently, preserving per-reference color and
+    alpha discontinuities already retained by the compact cache.
+
+    The light direction is expressed in the destination space of the normal
+    matrix passed to pvr_chunk_model_cache_emit_toon().
+*/
+typedef struct pvr_chunk_toon_profile {
+    pvr_toon_light_t light;
+    pvr_toon_shade_equation_t equation;
+    const float *thresholds;
+    const uint32_t *argb_modulation;
+    const uint32_t *oargb_modulation;
+    size_t threshold_count;
+    float epsilon;
+} pvr_chunk_toon_profile_t;
+
+/** \brief Caller-owned scratch storage for one cached Toon draw.
+
+    The first four arrays require at least one entry per reference in the
+    largest cached strip. `toon_triangles` requires at least
+    pvr_toon_triangle_capacity() entries for the largest selected profile.
+    SPLIT clipping additionally requires PVR_FRUSTUM_CLIP_MAX_VERTICES entries
+    in `clip_vertices`. Vertex and deformation arrays require 32-byte base
+    alignment; the other arrays require their natural four-byte alignment.
+*/
+typedef struct pvr_chunk_toon_workspace {
+    pvr_vertex_t *vertices;
+    pvr_deform_vertex_t *deformations;
+    vector_t *normals;
+    float *shades;
+    size_t strip_capacity;
+    pvr_toon_triangle_t *toon_triangles;
+    size_t toon_triangle_capacity;
+    pvr_vertex_t *clip_vertices;
+    size_t clip_vertex_capacity;
+} pvr_chunk_toon_workspace_t;
+
+/** \brief Caller-owned scratch storage for a two-volume band draw.
+
+    `vertices`, `deformations`, `normals`, and `shades` require at least one
+    entry per reference in the largest cached strip. Both triangle arrays
+    follow the ordinary band-capacity rule and carry the outside and inside
+    attribute sets through the same deterministic partition. SPLIT clipping
+    requires two canonical
+    clip arrays and one two-volume packet array, each with at least
+    PVR_FRUSTUM_CLIP_MAX_VERTICES entries. All vertex arrays require 32-byte
+    base alignment.
+*/
+typedef struct pvr_chunk_two_volume_toon_workspace {
+    pvr_chunk_two_volume_vertex_t *vertices;
+    pvr_deform_vertex_t *deformations;
+    vector_t *normals;
+    float *shades;
+    size_t strip_capacity;
+    pvr_toon_triangle_t *toon_triangles;
+    pvr_toon_triangle_t *secondary_toon_triangles;
+    size_t toon_triangle_capacity;
+    pvr_vertex_t *clip_primary;
+    pvr_vertex_t *clip_secondary;
+    pvr_chunk_two_volume_vertex_t *clip_vertices;
+    size_t clip_vertex_capacity;
+} pvr_chunk_two_volume_toon_workspace_t;
+
+/** \brief Completed prefix from one cached band-shading draw. */
+typedef struct pvr_chunk_toon_result {
+    size_t visited_strips;
+    size_t skipped_strips;
+    size_t source_triangles;
+    size_t emitted_strips;
+    size_t emitted_triangles;
+    size_t emitted_vertices;
+    size_t generated_vertices;
+} pvr_chunk_toon_result_t;
+
+/** \brief Select a profile for one cached strip.
+
+    The supplied profile begins as a copy of the default profile. The callback
+    may replace any field with storage that remains valid until the current
+    strip has completed. Returning a negative value aborts the draw with its
+    complete prefix valid.
+*/
+typedef int (*pvr_chunk_toon_resolve_profile_t)(
+    const pvr_chunk_cached_strip_t *strip,
+    pvr_chunk_toon_profile_t *profile, void *data);
+
+/** \brief Optional inside-volume modulation for one band profile.
+
+    The ordinary profile arrays apply to the outside-volume attributes. Each
+    non-NULL array here contains `threshold_count + 1` entries and applies to
+    the corresponding inside-volume attribute. NULL preserves that attribute
+    unchanged, including on surfaces whose two volume states intentionally
+    use different authored colors.
+*/
+typedef struct pvr_chunk_two_volume_toon_modulation {
+    const uint32_t *argb_modulation;
+    const uint32_t *oargb_modulation;
+} pvr_chunk_two_volume_toon_modulation_t;
+
+/** \brief One material-independent inverted-shell outline profile.
+
+    Distance is measured in the cache's object space. Base and offset colors
+    replace prepared vertex colors after the optional per-frame callback.
+*/
+typedef struct pvr_chunk_outline_profile {
+    float distance;
+    uint32_t argb;
+    uint32_t oargb;
+} pvr_chunk_outline_profile_t;
+
+/** \brief Caller-owned scratch storage for one cached outline draw.
+
+    Vertex and deformation arrays require at least one entry per reference in
+    the largest cached strip and 32-byte base alignment. SPLIT clipping also
+    requires at least PVR_FRUSTUM_CLIP_MAX_VERTICES aligned clip entries.
+*/
+typedef struct pvr_chunk_outline_workspace {
+    pvr_vertex_t *vertices;
+    pvr_deform_vertex_t *deformations;
+    size_t strip_capacity;
+    pvr_vertex_t *clip_vertices;
+    size_t clip_vertex_capacity;
+} pvr_chunk_outline_workspace_t;
+
+/** \brief Completed prefix from one cached outline draw. */
+typedef struct pvr_chunk_outline_result {
+    size_t visited_strips;
+    size_t skipped_strips;
+    size_t source_triangles;
+    size_t dropped_triangles;
+    size_t emitted_strips;
+    size_t emitted_triangles;
+    size_t emitted_vertices;
+} pvr_chunk_outline_result_t;
+
+/** \brief Select an outline profile for one cached strip. */
+typedef int (*pvr_chunk_outline_resolve_profile_t)(
+    const pvr_chunk_cached_strip_t *strip,
+    pvr_chunk_outline_profile_t *profile, void *data);
+
+/** \brief Validate one band-shading profile without retaining it. */
+int pvr_chunk_toon_profile_validate(const pvr_chunk_toon_profile_t *profile);
+
+/** \brief Validate one inverted-shell outline profile without retaining it. */
+int pvr_chunk_outline_profile_validate(
+    const pvr_chunk_outline_profile_t *profile);
+
+/** \brief Emit an ordinary compact draw cache through geometric shade bands.
+
+    The emitter resolves the current position and normal for each reference,
+    applies the optional per-frame vertex callback, transforms normals in one
+    checked batch, and partitions every triangle at every crossed threshold.
+    Generated boundaries interpolate position, normal, floating UV, base
+    color, and offset color before the selected band modulation is applied.
+    Thus a binary profile produces a true hard boundary even when the original
+    triangle straddles its threshold.
+
+    Flat-shaded strips evaluate one geometric face normal and never introduce
+    an internal shade boundary. IGNORE_LIGHT strips bypass both banding and
+    modulation. Triangle-strip winding is preserved when independent
+    triangles are generated. Frustum classification, clipping, and projection
+    occur after band subdivision so generated attributes remain coherent.
+
+    No allocation or global matrix state is used. The callback and failure
+    rules match pvr_chunk_model_cache_emit_filtered(); a failure after output
+    begins leaves the complete prefix described by \p result and the sink.
+    `begin_strip` is required for non-memory sinks and runs only if that strip
+    has visible geometry. The normal matrix must transform object-space normals
+    into the same space as profile light directions. The frustum supplies the
+    complete object-to-screen matrix for every clipping policy.
+*/
+int pvr_chunk_model_cache_emit_toon(
+    const pvr_chunk_model_cache_t *cache,
+    const pvr_normal_matrix_t *normal_matrix,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_toon_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_toon_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_toon_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_toon_result_t *result);
+
+/** \brief Emit a prepared two-volume cache through geometric shade bands.
+
+    This is the lossless two-volume counterpart of
+    pvr_chunk_model_cache_emit_toon(). Both UV/color parameter sets survive
+    band subdivision and six-plane frustum clipping. The outside set uses the
+    ordinary profile modulation arrays; p secondary_modulation independently
+    controls the inside set. The cache and sink formats must match.
+
+    No parameter set is collapsed into the other and no modifier-volume state
+    is selected on the CPU. The Tile Accelerator therefore retains ownership
+    of the per-pixel outside/inside choice after all generated geometry has
+    been submitted.
+*/
+int pvr_chunk_model_two_volume_cache_emit_toon(
+    const pvr_chunk_two_volume_cache_t *cache,
+    const pvr_normal_matrix_t *normal_matrix,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_toon_profile_t *profile,
+    const pvr_chunk_two_volume_toon_modulation_t *secondary_modulation,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_toon_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_toon_result_t *result);
+
+/** \brief Emit an expanded inverted shell from an ordinary compact cache.
+
+    Current deformation and optional per-frame vertex policy are resolved once
+    per strip. Smooth strips expand along their resolved vertex normals. A
+    flat-shaded strip computes one geometric face normal per source triangle,
+    preventing unrelated reference normals from rounding a hard face. Every
+    triangle is then frustum-clipped and projected through the established
+    geometry sink.
+
+    This function emits the shell geometry; the required silhouette policy is
+    explicit in \p begin_strip. That callback must submit an untextured outline
+    material whose culling mode is the opposite of the ordinary surface pass,
+    so only the expanded back faces remain visible. Draw the outline before
+    the ordinary model. Object-space distance intentionally follows model
+    scale; applications needing constant screen thickness may resolve a
+    distance per strip or per draw.
+
+    No adjacency structure, allocation, global state, or model record is
+    introduced. A callback or sink failure leaves the complete prefix reported
+    by \p result valid.
+*/
+int pvr_chunk_model_cache_emit_outline(
+    const pvr_chunk_model_cache_t *cache,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_outline_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_outline_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_outline_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_outline_result_t *result);
+
+/** @} */
+
+__END_DECLS
+#endif /* __DC_PVR_CHUNK_TOON_H */

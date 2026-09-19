@@ -1,0 +1,3 @@
+gaps-sram-test
+*.o
+*.dSYM/

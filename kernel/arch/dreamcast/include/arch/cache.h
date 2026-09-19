@@ -1,0 +1,277 @@
+/* KallistiOS ##version##
+
+   arch/dreamcast/include/arch/cache.h
+   Copyright (C) 2001 Megan Potter
+   Copyright (C) 2014, 2016, 2023, 2026 Ruslan Rostovtsev
+   Copyright (C) 2023 Andy Barajas
+   Copyright (C) 2025 Eric Fradella
+   Copyright (C) 2026 Falco Girgis
+   Copyright (C) 2026 Joseph Black
+*/
+
+/** \file    arch/cache.h
+    \brief   Cache management functionality.
+    \ingroup system_cache
+
+    This file contains definitions for functions that manage the cache in the
+    Dreamcast, including functions to flush, invalidate, purge, prefetch and
+    allocate the caches.
+
+    \author Megan Potter
+    \author Ruslan Rostovtsev
+    \author Andy Barajas
+    \author Falco Girgis
+*/
+
+/* Keep this include above the macro guards */
+#include <kos/cache.h>
+
+#ifndef __ARCH_CACHE_H
+#define __ARCH_CACHE_H
+
+#include <kos/cdefs.h>
+__BEGIN_DECLS
+
+#include <kos/regfield.h>
+
+#include <dc/memory.h>
+
+#include <stdalign.h>
+#include <stdbool.h>
+#include <stdint.h>
+
+#define ARCH_CACHE_L1_ICACHE_SIZE       (8 * 1024)
+#define ARCH_CACHE_L1_ICACHE_ASSOC      1
+#define ARCH_CACHE_L1_ICACHE_LINESIZE   32
+
+#define ARCH_CACHE_L1_DCACHE_SIZE       (16 * 1024)
+#define ARCH_CACHE_L1_DCACHE_ASSOC      1
+#define ARCH_CACHE_L1_DCACHE_LINESIZE   32
+
+#define ARCH_CACHE_L2_CACHE_SIZE        0
+#define ARCH_CACHE_L2_CACHE_ASSOC       0
+#define ARCH_CACHE_L2_CACHE_LINESIZE    0
+
+void arch_icache_inval_range(uintptr_t start, size_t count);
+void arch_icache_sync_range(uintptr_t start, size_t count);
+
+/* Cache-control instructions are no-ops when their operand names P2. Convert
+   that direct, uncached alias back to the equivalent cacheable P1 address.
+   P0/P3 addresses are left intact because they may carry MMU translations. */
+static inline uintptr_t arch_cacheable_alias(uintptr_t address) {
+    if((address & ~MEM_AREA_CACHE_MASK) == MEM_AREA_P2_BASE)
+        return (address & MEM_AREA_CACHE_MASK) | MEM_AREA_P1_BASE;
+
+    return address;
+}
+
+static inline bool arch_cache_range(uintptr_t start, size_t count,
+                                    uintptr_t *first, uintptr_t *last) {
+    if(!count || count - 1 > UINTPTR_MAX - start)
+        return false;
+
+    *first = start & ~(uintptr_t)0x1f;
+    *last = (start + count - 1) & ~(uintptr_t)0x1f;
+    return true;
+}
+
+__depr("dcache_wback_sq is deprecated. Use sq_flush() from <dc/sq.h>")
+static __always_inline void dcache_wback_sq(void *src) {
+    __asm__ __volatile__("pref @%0\n"
+                         : /* No outputs */
+                         : "r" (src)
+                         : "memory"
+    );
+}
+
+static inline void arch_dcache_pref_line(const void *src) {
+    src = (const void *)arch_cacheable_alias((uintptr_t)src);
+    __builtin_prefetch(src);
+}
+
+static inline void arch_dcache_alloc_line_with_value(void *src, uintptr_t value) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
+    uintptr_t *ptr = (uintptr_t *)src;
+
+    __asm__ __volatile__("movca.l r0, @%8\n\t"
+             : "=m"(ptr[0]),
+               "=m"(ptr[1]),
+               "=m"(ptr[2]),
+               "=m"(ptr[3]),
+               "=m"(ptr[4]),
+               "=m"(ptr[5]),
+               "=m"(ptr[6]),
+               "=m"(ptr[7])
+             : "r" (ptr), "z"(value)
+    );
+}
+
+static inline void arch_dcache_alloc_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
+    uintptr_t *ptr = (uintptr_t *)src;
+
+    __asm__ __volatile__("movca.l r0, @%8\n\t"
+             : "=m"(ptr[0]),
+               "=m"(ptr[1]),
+               "=m"(ptr[2]),
+               "=m"(ptr[3]),
+               "=m"(ptr[4]),
+               "=m"(ptr[5]),
+               "=m"(ptr[6]),
+               "=m"(ptr[7])
+             : "r" (ptr)
+    );
+}
+
+static inline void arch_dcache_zero_alloc_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
+    uint32_t *ptr = (uint32_t *)((uintptr_t)src & ~0x1f);
+
+    arch_dcache_alloc_line_with_value(src, 0);
+
+    ptr[1] = ptr[2] = ptr[3] = ptr[4] = ptr[5] = ptr[6] = ptr[7] = 0;
+}
+
+static inline void arch_dcache_inval_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
+    uintptr_t *ptr = (uintptr_t *)src;
+
+    __asm__ __volatile__("ocbi @%8\n\t"
+             : "=m"(ptr[0]),
+               "=m"(ptr[1]),
+               "=m"(ptr[2]),
+               "=m"(ptr[3]),
+               "=m"(ptr[4]),
+               "=m"(ptr[5]),
+               "=m"(ptr[6]),
+               "=m"(ptr[7])
+             : "r" (ptr)
+    );
+}
+
+static inline void arch_dcache_purge_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
+    uintptr_t *ptr = (uintptr_t *)src;
+
+    __asm__ __volatile__("ocbp @%8\n\t"
+             : "+m"(ptr[0]),
+               "+m"(ptr[1]),
+               "+m"(ptr[2]),
+               "+m"(ptr[3]),
+               "+m"(ptr[4]),
+               "+m"(ptr[5]),
+               "+m"(ptr[6]),
+               "+m"(ptr[7])
+             : "r" (ptr)
+    );
+}
+
+static inline void arch_dcache_wback_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
+    uintptr_t *ptr = (uintptr_t *)src;
+
+    __asm__ __volatile__("ocbwb @%8\n\t"
+             : "+m"(ptr[0]),
+               "+m"(ptr[1]),
+               "+m"(ptr[2]),
+               "+m"(ptr[3]),
+               "+m"(ptr[4]),
+               "+m"(ptr[5]),
+               "+m"(ptr[6]),
+               "+m"(ptr[7])
+             : "r" (ptr)
+    );
+}
+
+static inline void arch_dcache_inval_range(uintptr_t start, size_t count) {
+    uintptr_t last;
+
+    if(!arch_cache_range(start, count, &start, &last))
+        return;
+
+    for(;;) {
+        arch_dcache_inval_line((void *)start);
+
+        if(start == last)
+            break;
+
+        start += 32;
+    }
+}
+
+static inline void arch_dcache_wback_all(void) {
+    unsigned int i;
+    volatile uint32_t *dca = (volatile uint32_t *)0xf4000008;
+
+    for (i = 0; i < 512; i++, dca += 8)
+        *dca &= ~BIT(1); /* Zero out U bit */
+}
+
+static inline void arch_dcache_wback_range(uintptr_t start, size_t count) {
+    uintptr_t last;
+
+    if(!arch_cache_range(start, count, &start, &last))
+        return;
+
+    if(count >= 65560) {
+        /* Above this magic threshold, it's just faster to flush the whole cache. */
+        arch_dcache_wback_all();
+    }
+    else {
+        for(;;) {
+            arch_dcache_wback_line((void *)start);
+
+            if(start == last)
+                break;
+
+            start += 32;
+        }
+    }
+}
+
+static inline void arch_dcache_purge_all(void) {
+    unsigned int i;
+
+    if(__is_defined(__OPTIMIZE_SIZE__)) {
+        volatile uint32_t *dca = (volatile uint32_t *)0xf4000008;
+
+        for (i = 0; i < 512; i++, dca += 8)
+            *dca = 0;
+    }
+    else {
+        alignas(32) static char buffer[ARCH_CACHE_L1_DCACHE_SIZE];
+        char *buf = buffer;
+
+        for(i = 0; i < ARCH_CACHE_L1_DCACHE_SIZE / 32; i++) {
+            arch_dcache_alloc_line(buf);
+            arch_dcache_inval_line(buf);
+            buf += 32;
+        }
+    }
+}
+
+static inline void arch_dcache_purge_range(uintptr_t start, size_t count) {
+    uintptr_t last;
+
+    if(!arch_cache_range(start, count, &start, &last))
+        return;
+
+    if(count >= 39936) {
+        /* Above this magic threshold, it's just faster to purge the whole cache. */
+        arch_dcache_purge_all();
+    }
+    else {
+        for(;;) {
+            arch_dcache_purge_line((void *)start);
+
+            if(start == last)
+                break;
+
+            start += 32;
+        }
+    }
+}
+
+__END_DECLS
+
+#endif  /* __ARCH_CACHE_H */
