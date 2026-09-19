@@ -90,10 +90,10 @@ and target tolerances are documented beside the example.
    multiply candidate, including emitted code, copy/register costs, and actual
    workload timing before choosing a replacement.
 2. Continue the consumer audit through skinning and remaining prepared
-   Compact-model draw variants. Ordinary and two-volume paths now have explicit
-   one-time admission and in-place packed projection; see the
+   Compact-model draw variants. Ordinary, two-volume, and modifier paths now
+   have explicit one-time admission and in-place projection; see the
    [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
-   Modifier/toon/outline/wire variants still need their own audit.
+   Toon/outline/wire variants still need their own audit.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.

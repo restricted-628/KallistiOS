@@ -191,6 +191,17 @@ typedef struct pvr_chunk_modifier_cache {
     float radius;
 } pvr_chunk_modifier_cache_t;
 
+/** \brief Admitted immutable modifier cache for repeated draws.
+
+    Initialize only with pvr_chunk_model_modifier_cache_draw_prepare(). This
+    snapshot and its borrowed storage must remain immutable and accessible,
+    including during callbacks. Reprepare after rebuilding storage. No memory
+    is owned; do not manufacture or edit this structure.
+*/
+typedef struct pvr_chunk_modifier_cache_draw {
+    pvr_chunk_modifier_cache_t cache; /**< Read-only implementation snapshot. */
+} pvr_chunk_modifier_cache_draw_t;
+
 /** \brief Progress from one cached compact-model emission. */
 typedef struct pvr_chunk_cache_result {
     size_t emitted_strips;
@@ -511,6 +522,33 @@ int pvr_chunk_model_modifier_cache_build(
 /** \brief Revalidate one published modifier-volume draw-cache descriptor. */
 int pvr_chunk_model_modifier_cache_validate(
     const pvr_chunk_modifier_cache_t *cache);
+
+/** \brief Validate static modifier structure and base deformations once.
+
+    Output must be aligned and disjoint from the source descriptor and storage.
+    Failure leaves it unchanged. No storage is copied or owned.
+*/
+int pvr_chunk_model_modifier_cache_draw_prepare(
+    const pvr_chunk_modifier_cache_t *cache,
+    pvr_chunk_modifier_cache_draw_t *draw);
+
+/** \brief Emit an admitted modifier cache without rescanning static data.
+
+    Requires the immutable lifetime contract of pvr_chunk_modifier_cache_draw_t.
+    Matrix, workspace/output ranges, sink/configuration, resolved deformations,
+    and all three changing/projected corner positions remain checked. The
+    64-byte packet layout, volume final modes, and callback behavior are the
+    same as the checked emitter below. A failing triangle is not published;
+    result counts only previously published triangles and completed volumes.
+*/
+int pvr_chunk_model_modifier_cache_draw_emit(
+    const pvr_chunk_modifier_cache_draw_t *draw,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink, pvr_modifier_vol_t *workspace,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_cache_result_t *result);
 
 /** \brief Project and emit a completed modifier-volume draw cache.
 

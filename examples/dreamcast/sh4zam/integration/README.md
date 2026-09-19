@@ -67,6 +67,17 @@ without sink publication; XMTRX remains unchanged. Success adds:
 Admitted two-volume color/textured draws, rejection, XMTRX: PASS
 ```
 
+The modifier fixture compares checked/admitted 64-byte triangles with and
+without a policy callback, including user words, packet fields, buffer guards,
+and numeric positions. It rejects NaN and zero W independently at each of the
+three corners of the second triangle. The first triangle remains published,
+the unfinished volume is not counted, the failing workspace matches the
+checked path, and XMTRX remains unchanged after every draw. Success adds:
+
+```text
+Admitted modifier triangles, rejection, XMTRX: PASS
+```
+
 Successful completion prints:
 
 ```text

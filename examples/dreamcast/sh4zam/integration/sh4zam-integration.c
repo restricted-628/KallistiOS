@@ -244,6 +244,108 @@ static bool verify_two_volume_draws(const pvr_chunk_model_t *base) {
     return true;
 }
 
+typedef struct modifier_probe {
+    unsigned calls;
+    int rejection;
+} modifier_probe_t;
+
+static int prepare_modifier_probe(
+    const uint16_t indices[3], const pvr_deform_vertex_t deformations[3],
+    const uint16_t *words, size_t word_count,
+    pvr_modifier_vol_t *triangle, void *data) {
+    modifier_probe_t *probe = data;
+    if(!indices || !deformations || word_count != 1 ||
+       words[0] != (probe->calls & 1 ? 0xbb : 0xaa)) {
+        errno = EILSEQ;
+        return -1;
+    }
+    triangle->d1 = 0x12340000 | indices[2];
+    if(probe->calls++ == 1) {
+        switch(probe->rejection) {
+            case 0: triangle->ax = NAN; break;
+            case 1: triangle->by = NAN; break;
+            case 2: triangle->cz = NAN; break;
+            case 3: triangle->az = -1; break;
+            case 4: triangle->bz = -1; break;
+            case 5: triangle->cz = -1; break;
+        }
+    }
+    return 0;
+}
+
+static bool verify_modifier_draws(const pvr_chunk_model_t *base) {
+    static const uint16_t polygons[] = {
+        PVR_CHUNK_VOLUME_TRIANGLES, 9, 0x4002,
+        0, 1, 2, 0xaa, 2, 1, 0, 0xbb, 0xff
+    };
+    pvr_chunk_model_t model = *base;
+    pvr_chunk_vertex_index_entry_t indices[256];
+    pvr_chunk_model_view_t view;
+    pvr_chunk_model_plan_t plan;
+    pvr_chunk_modifier_cache_t cache;
+    pvr_chunk_modifier_cache_draw_t draw;
+    pvr_chunk_modifier_cache_result_t result;
+    pvr_chunk_modifier_config_t config = {
+        PVR_LIST_OP_MOD, PVR_CULLING_NONE, PVR_MODIFIER_INCLUDE_LAST_POLY
+    };
+    pvr_geometry_vertex_sink_t sink;
+    uint8_t storage[2048] __attribute__((aligned(32)));
+    pvr_modifier_vol_t output[2][3] __attribute__((aligned(32)));
+    pvr_modifier_vol_t workspace[2] __attribute__((aligned(32)));
+    matrix_t matrix = {
+        { 2, 0, 0, 0 }, { 0, 3, 0, 0 },
+        { 0, 0, 1, 1 }, { 4, 5, 0, 1 }
+    };
+    shz_mat4x4_t saved, observed;
+
+    shz_xmtrx_store_4x4(&saved);
+    model.polygon_words = polygons;
+    model.polygon_word_count = sizeof(polygons) / sizeof(*polygons);
+    if(pvr_chunk_model_open(&model, &view) < 0 ||
+       pvr_chunk_model_plan_build(&view, indices, 256, &plan) < 0 ||
+       pvr_chunk_model_modifier_cache_build(&plan, storage, sizeof(storage),
+                                             NULL, NULL, &cache) < 0 ||
+       pvr_chunk_model_modifier_cache_draw_prepare(&cache, &draw) < 0)
+        return false;
+    /* -2: no callback; -1: successful callback; 0..5: bad A/B/C or W. */
+    for(int rejection = -2; rejection < 6; ++rejection) {
+        memset(output, 0x5a, sizeof(output));
+        for(unsigned admitted = 0; admitted < 2; ++admitted) {
+            modifier_probe_t probe = { 0, rejection };
+            pvr_chunk_cache_prepare_modifier_t prepare =
+                rejection == -2 ? NULL : prepare_modifier_probe;
+            if(pvr_geometry_vertex_sink_init_memory(&sink,
+                PVR_GEOMETRY_VERTEX_MODIFIER, output[admitted], 2) < 0)
+                return false;
+            errno = 0;
+            int rv = admitted ? pvr_chunk_model_modifier_cache_draw_emit(
+                &draw, &matrix, &config, &sink, workspace + admitted,
+                NULL, prepare, &probe, &result) :
+                pvr_chunk_model_modifier_cache_emit(&cache, &matrix, &config,
+                &sink, workspace + admitted, NULL, prepare, &probe, &result);
+            if(rv != (rejection < 0 ? 0 : -1) ||
+               (rejection >= 0 && errno != EDOM) ||
+               sink.emitted_vertices != (rejection < 0 ? 2u : 1u) ||
+               result.emitted_triangles != sink.emitted_vertices ||
+               result.emitted_volumes != (rejection < 0 ? 1u : 0u))
+                return false;
+            shz_xmtrx_store_4x4(&observed);
+            if(memcmp(&saved, &observed, sizeof(saved))) return false;
+            for(size_t i = 0; i < sizeof(output[admitted][2]); ++i)
+                if(((uint8_t *)&output[admitted][2])[i] != 0x5a) return false;
+        }
+        if(memcmp(output[0], output[1], sizeof(output[0])) ||
+           memcmp(workspace, workspace + 1, sizeof(*workspace)))
+            return false;
+        if(!close_enough(output[1][0].ax, 2.0f) ||
+           !close_enough(output[1][0].by, 2.0f) ||
+           !close_enough(output[1][0].cx, 4.0f) ||
+           !close_enough(output[1][0].cy, 8.0f))
+            return false;
+    }
+    return true;
+}
+
 static void show_result(bool passed, const char *detail) {
     printf("RESULT: %s (%s)\n", passed ? "PASS" : "FAIL", detail);
     fflush(stdout);
@@ -508,6 +610,10 @@ int main(int argc, char **argv) {
     if(!verify_two_volume_draws(&compact_model))
         FAIL("admitted two-volume cache");
     puts("Admitted two-volume color/textured draws, rejection, XMTRX: PASS");
+
+    if(!verify_modifier_draws(&compact_model))
+        FAIL("admitted modifier cache");
+    puts("Admitted modifier triangles, rejection, XMTRX: PASS");
 
     /* Camera and frustum entry points retain their established checked
        contracts while their Dreamcast arithmetic runs through SH4ZAM. The

@@ -162,6 +162,43 @@ int pvr_geometry_project_packed_inplace(void *vertices, size_t count,
     return status;
 }
 
+int pvr_geometry_project_modifier_inplace(pvr_modifier_vol_t *triangle,
+                                         const matrix_t *matrix) {
+    float ax, ay, az, bx, by, bz, cx, cy, cz;
+    int status;
+#ifdef __DREAMCAST__
+    shz_mat4x4_t saved_xmtrx;
+    shz_mat4x4_t transform;
+
+    shz_kos_matrix_import(&transform, matrix);
+    shz_xmtrx_store_4x4(&saved_xmtrx);
+    shz_xmtrx_load_4x4(&transform);
+#endif
+    status = project_position(matrix, triangle->ax, triangle->ay, triangle->az,
+                              &ax, &ay, &az);
+    if(!status)
+        status = project_position(matrix, triangle->bx, triangle->by,
+                                  triangle->bz, &bx, &by, &bz);
+    if(!status)
+        status = project_position(matrix, triangle->cx, triangle->cy,
+                                  triangle->cz, &cx, &cy, &cz);
+#ifdef __DREAMCAST__
+    shz_xmtrx_load_4x4(&saved_xmtrx);
+#endif
+    if(status < 0)
+        return -1;
+    triangle->ax = ax;
+    triangle->ay = ay;
+    triangle->az = az;
+    triangle->bx = bx;
+    triangle->by = by;
+    triangle->bz = bz;
+    triangle->cx = cx;
+    triangle->cy = cy;
+    triangle->cz = cz;
+    return 0;
+}
+
 int pvr_geometry_project_vertices(
     void *output, size_t output_capacity,
     const pvr_geometry_vertex_stream_t *stream,

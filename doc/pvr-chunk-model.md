@@ -576,8 +576,9 @@ visible. The ordinary cache-to-workspace copy and sink transfer still exist.
 
 The `chunk_scene` example prepares each cooked cache at load time and uses this
 path for both host golden tests and target frames. CRCs are already checked by
-asset/section opening, not by these cached draw calls. Modifier, toon/outline,
-and wireframe entry points do not yet use this admitted fast path.
+asset/section opening, not by these cached draw calls. Two-volume and modifier
+caches have parallel admitted paths below; toon/outline and wireframe entry
+points still need their own audit.
 This removes identifiable repeated work; hardware throughput still requires
 measurement and is not inferred from host or emulator correctness tests.
 
@@ -671,6 +672,40 @@ selects the modifier list, culling, and include/exclude-last mode; the cache
 does not capture scene state. Legacy polygon-cache control records remain
 unsupported because these explicit caches replace their hidden global-state
 purpose directly.
+
+### Prepare-once modifier-volume draws
+
+Call `pvr_chunk_model_modifier_cache_draw_prepare(&cache, &draw)` after building
+or materializing a modifier cache, then use
+`pvr_chunk_model_modifier_cache_draw_emit()`. The caller-owned
+`pvr_chunk_modifier_cache_draw_t` follows the same immutable snapshot/storage
+lifetime contract as ordinary and two-volume draws. Admission validates the
+entire triangle/corner/user-word layout, volume boundaries, and every base
+deformation once. Failure leaves the destination unchanged.
+
+The admitted emitter borrows the three contiguous base deformations directly
+unless a resolver needs mutable copies. Source indices are read only for
+callbacks. Matrix, configuration, sink, capacity, and buffer-overlap checks
+remain per draw; resolver output remains validated. A dedicated private
+projector checks all three changing corner positions and projected results,
+including usable positive W, before updating XYZ in the 64-byte workspace.
+It avoids generic stream revalidation and full-packet projection staging,
+preserves all other packet fields, and restores XMTRX on success or failure.
+The cache-to-workspace copy and sink transfer remain necessary.
+
+The existing publication helper still emits each triangle with its appropriate
+OTHER/include-last/exclude-last mode and checks transient scene/list readiness.
+A failed triangle never reaches the sink. Previously published triangles and
+completed-volume counts remain visible; a mid-volume failure does not count
+that volume as complete. The original checked emitter remains available.
+
+The modifier extension passed GCC 14 GNU17/strict C23, Apple Clang strict C2x,
+and Clang ASan/UBSan cache tests. Differential coverage includes all callback
+combinations, each rejected corner, partial-volume progress, both final modes,
+malformed admission, and dynamic range/capacity/configuration failures.
+Geometry, converter, and scene-integration regressions passed, as did the
+SH-4 build and integration fixture in Flycast interpreter and dynarec modes.
+These are correctness checks, not physical-hardware throughput measurements.
 
 `pvr_chunk_model_emit_two_volume()` provides the parallel bounded bridge for
 inside/outside parameter strips. It keeps primary and secondary texture and

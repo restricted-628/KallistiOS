@@ -2122,11 +2122,40 @@ int pvr_chunk_model_modifier_cache_validate(
     return modifier_cache_valid(cache);
 }
 
+int pvr_chunk_model_modifier_cache_draw_prepare(
+    const pvr_chunk_modifier_cache_t *cache,
+    pvr_chunk_modifier_cache_draw_t *draw) {
+    uintptr_t cache_start, cache_end, storage_start, storage_end;
+    uintptr_t draw_start, draw_end;
+
+    if(!draw || ((uintptr_t)draw &
+                 (_Alignof(pvr_chunk_modifier_cache_draw_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(modifier_cache_valid(cache) < 0 ||
+       address_range(cache, sizeof(*cache), &cache_start, &cache_end) < 0 ||
+       address_range(cache->storage, cache->storage_bytes,
+                      &storage_start, &storage_end) < 0 ||
+       address_range(draw, sizeof(*draw), &draw_start, &draw_end) < 0)
+        return -1;
+    if(ranges_overlap(draw_start, draw_end, cache_start, cache_end) ||
+       ranges_overlap(draw_start, draw_end, storage_start, storage_end)) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(size_t i = 0; i < cache->corner_count; ++i)
+        if(finite_deformation(cache->deform_vertices + i) < 0)
+            return -1;
+    draw->cache = *cache;
+    return 0;
+}
+
 static int modifier_cache_emit_preflight(
     const pvr_chunk_modifier_cache_t *cache, const matrix_t *matrix,
     const pvr_chunk_modifier_config_t *config,
     const pvr_geometry_vertex_sink_t *sink,
-    const pvr_modifier_vol_t *workspace) {
+    const pvr_modifier_vol_t *workspace, int admitted) {
     uintptr_t cache_start;
     uintptr_t cache_end;
     uintptr_t descriptor_start;
@@ -2139,7 +2168,8 @@ static int modifier_cache_emit_preflight(
     uintptr_t output_end = 0;
     size_t bytes;
 
-    if(modifier_cache_valid(cache) < 0 || matrix_valid(matrix) < 0 ||
+    if((!admitted && modifier_cache_valid(cache) < 0) ||
+       matrix_valid(matrix) < 0 ||
        pvr_chunk_render_modifier_sink_valid(sink) < 0 ||
        pvr_chunk_render_modifier_config_valid(config, sink) < 0)
         return -1;
@@ -2191,50 +2221,54 @@ static int modifier_cache_emit_preflight(
     return 0;
 }
 
-int pvr_chunk_model_modifier_cache_emit(
+static int modifier_cache_emit(
     const pvr_chunk_modifier_cache_t *cache,
     const matrix_t *object_to_screen,
     const pvr_chunk_modifier_config_t *config,
     pvr_geometry_vertex_sink_t *sink, pvr_modifier_vol_t *workspace,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_modifier_t prepare_triangle,
-    void *data, pvr_chunk_modifier_cache_result_t *result) {
+    void *data, pvr_chunk_modifier_cache_result_t *result, int admitted) {
     pvr_chunk_modifier_cache_result_t progress = { 0 };
     size_t triangle_index;
 
     if(result)
         *result = progress;
     if(modifier_cache_emit_preflight(cache, object_to_screen, config, sink,
-                                     workspace) < 0)
+                                     workspace, admitted) < 0)
         return -1;
 
     for(triangle_index = 0; triangle_index < cache->triangle_count;
         ++triangle_index) {
         const pvr_chunk_cached_modifier_triangle_t *descriptor =
             cache->triangles + triangle_index;
-        uint16_t indices[3];
-        pvr_deform_vertex_t deformations[3];
+        const uint16_t *indices = (resolve_vertex || prepare_triangle) ?
+            cache->source_indices + descriptor->first_corner : NULL;
+        pvr_deform_vertex_t resolved[3];
+        const pvr_deform_vertex_t *deformations =
+            cache->deform_vertices + descriptor->first_corner;
         pvr_geometry_vertex_stream_t stream;
         uint32_t mode = descriptor->final_in_volume ? config->final_mode :
                         PVR_MODIFIER_OTHER_POLY;
         size_t corner;
 
         *workspace = cache->packets[triangle_index];
+        if(resolve_vertex) {
+            memcpy(resolved, deformations, sizeof(resolved));
+            deformations = resolved;
+        }
         for(corner = 0; corner < 3u; ++corner) {
-            size_t cached_corner = descriptor->first_corner + corner;
-
-            indices[corner] = cache->source_indices[cached_corner];
-            deformations[corner] = cache->deform_vertices[cached_corner];
             if(resolve_vertex) {
                 errno = 0;
-                if(resolve_vertex(indices[corner], deformations + corner,
+                if(resolve_vertex(indices[corner], resolved + corner,
                                   data) < 0) {
                     if(!errno)
                         errno = EIO;
                     goto fail;
                 }
             }
-            if(finite_deformation(deformations + corner) < 0)
+            if((!admitted || resolve_vertex) &&
+               finite_deformation(deformations + corner) < 0)
                 goto fail;
         }
 
@@ -2264,8 +2298,10 @@ int pvr_chunk_model_modifier_cache_emit(
         stream.vertex_count = 1u;
         stream.stride = sizeof(*workspace);
         stream.format = PVR_GEOMETRY_VERTEX_MODIFIER;
-        if(pvr_geometry_project_vertices(workspace, 1u, &stream,
-                                         object_to_screen, NULL) < 0 ||
+        if((admitted ? pvr_geometry_project_modifier_inplace(
+                           workspace, object_to_screen) :
+                       pvr_geometry_project_vertices(workspace, 1u, &stream,
+                           object_to_screen, NULL)) < 0 ||
            pvr_chunk_render_publish_modifier(sink, config, workspace,
                                              mode) < 0)
             goto fail;
@@ -2285,4 +2321,36 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_modifier_cache_emit(
+    const pvr_chunk_modifier_cache_t *cache,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink, pvr_modifier_vol_t *workspace,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_cache_result_t *result) {
+    return modifier_cache_emit(cache, object_to_screen, config, sink, workspace,
+        resolve_vertex, prepare_triangle, data, result, 0);
+}
+
+int pvr_chunk_model_modifier_cache_draw_emit(
+    const pvr_chunk_modifier_cache_draw_t *draw,
+    const matrix_t *object_to_screen,
+    const pvr_chunk_modifier_config_t *config,
+    pvr_geometry_vertex_sink_t *sink, pvr_modifier_vol_t *workspace,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_modifier_t prepare_triangle,
+    void *data, pvr_chunk_modifier_cache_result_t *result) {
+    if(!draw || ((uintptr_t)draw &
+                  (_Alignof(pvr_chunk_modifier_cache_draw_t) - 1u)) ||
+       draw->cache.version != PVR_CHUNK_CACHE_VERSION) {
+        if(result)
+            memset(result, 0, sizeof(*result));
+        errno = EINVAL;
+        return -1;
+    }
+    return modifier_cache_emit(&draw->cache, object_to_screen, config, sink,
+        workspace, resolve_vertex, prepare_triangle, data, result, 1);
 }

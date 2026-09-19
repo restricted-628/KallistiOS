@@ -16,4 +16,10 @@
 int pvr_geometry_project_packed_inplace(void *vertices, size_t count,
                                        size_t stride, const matrix_t *matrix);
 
+/* Same admitted preconditions, but for one 64-byte, three-corner modifier
+   packet. Checks all corners before changing XYZ; leaves other fields intact.
+   Preserves XMTRX on success and failure. Does not publish to a sink. */
+int pvr_geometry_project_modifier_inplace(pvr_modifier_vol_t *triangle,
+                                         const matrix_t *matrix);
+
 #endif
