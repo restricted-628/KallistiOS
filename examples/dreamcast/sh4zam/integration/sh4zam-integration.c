@@ -7,6 +7,7 @@
 #include <kos.h>
 
 #include <dc/sh4zam.h>
+#include <dc/pvr_chunk_cache.h>
 
 #include <dc/biosfont.h>
 #include <dc/video.h>
@@ -126,6 +127,18 @@ static bool close_enough(float actual, float expected) {
 
     return isfinite(actual) && isfinite(expected) &&
            fabsf(actual - expected) <= 0.0001f * scale;
+}
+
+static int invalid_cached_position(const pvr_chunk_render_state_t *state,
+                                   uint16_t index,
+                                   const pvr_deform_vertex_t *deformation,
+                                   pvr_vertex_t *vertex, void *data) {
+    (void)state;
+    (void)index;
+    (void)deformation;
+    (void)data;
+    vertex->x = NAN;
+    return 0;
 }
 
 static void show_result(bool passed, const char *detail) {
@@ -345,6 +358,49 @@ int main(int argc, char **argv) {
     shz_xmtrx_store_4x4(&observed);
     if(memcmp(&observed, &source, sizeof(observed)))
         FAIL("compact model XMTRX restoration");
+
+    {
+        pvr_chunk_vertex_index_entry_t indices[256];
+        pvr_chunk_model_plan_t plan;
+        pvr_chunk_model_cache_t cache;
+        pvr_chunk_cache_draw_t draw;
+        pvr_chunk_cache_result_t result;
+        uint8_t storage[2048] __attribute__((aligned(32)));
+        pvr_vertex_t expected[3];
+
+        memcpy(expected, compact_output, sizeof(expected));
+        if(pvr_chunk_model_plan_build(&compact_view, indices, 256, &plan) < 0 ||
+           pvr_chunk_model_cache_build(&plan, storage, sizeof(storage),
+                                       NULL, NULL, &cache) < 0 ||
+           pvr_chunk_model_cache_draw_prepare(&cache, &draw) < 0 ||
+           pvr_geometry_sink_init_memory(&compact_sink, compact_output, 3) < 0 ||
+           pvr_chunk_model_cache_draw_emit(&draw, &established, &compact_sink,
+               compact_workspace, 3, NULL, NULL, NULL, NULL, NULL, &result) < 0 ||
+           result.emitted_vertices != 3 || result.emitted_strips != 1 ||
+           memcmp(expected, compact_output, sizeof(expected)))
+            FAIL("admitted compact draw equivalence");
+        shz_xmtrx_store_4x4(&observed);
+        if(memcmp(&observed, &source, sizeof(observed)))
+            FAIL("admitted compact draw XMTRX");
+        for(unsigned rejection = 0; rejection < 2; ++rejection) {
+            if(rejection)
+                established[3][3] = 0.0f;
+            if(pvr_geometry_sink_init_memory(&compact_sink, compact_output, 3) < 0)
+                FAIL("admitted compact sink");
+            errno = 0;
+            if(pvr_chunk_model_cache_draw_emit(&draw, &established, &compact_sink,
+                   compact_workspace, 3, NULL, NULL, NULL,
+                   rejection ? NULL : invalid_cached_position, NULL, &result) != -1 ||
+               errno != EDOM || compact_sink.emitted_vertices ||
+               memcmp(expected, compact_output, sizeof(expected)))
+                FAIL("admitted compact rejection");
+            shz_xmtrx_store_4x4(&observed);
+            if(memcmp(&observed, &source, sizeof(observed)))
+                FAIL("admitted rejected draw XMTRX");
+        }
+        shz_kos_matrix_export(&established, &identity);
+        puts("Admitted Compact draw, rejection, XMTRX: PASS");
+    }
 
     /* Camera and frustum entry points retain their established checked
        contracts while their Dreamcast arithmetic runs through SH4ZAM. The

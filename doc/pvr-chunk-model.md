@@ -541,6 +541,55 @@ geometry sink. Material and texture resolution remains an explicit strip
 callback, and scene/list ownership remains with the application. The cache
 creates no allocator, worker, fiber, texture namespace, or retained renderer.
 
+### Prepare-once ordinary draws
+
+For repeated draws of immutable storage, call
+`pvr_chunk_model_cache_draw_prepare(&cache, &draw)` once after building or
+materializing an ordinary cache, then use `pvr_chunk_model_cache_draw_emit()`.
+The caller-owned `pvr_chunk_cache_draw_t` snapshots the descriptor and borrows
+its storage. Admission validates layout, strips/bounds, and every base
+deformation record before publication. Failed admission leaves the destination
+unchanged. No allocation or global registration occurs.
+
+The draw snapshot and its storage must remain immutable and alive across all
+draws and callbacks. Rebuild and prepare again after changing storage. Do not
+manufacture or edit the draw structure. This is an explicit lifetime contract,
+not a security seal or an automatic mutation detector. The older checked
+`cache_emit`/`cache_emit_filtered` APIs remain available and unchanged in their
+validation behavior.
+
+| Work | Prepared draw path |
+| --- | --- |
+| Cache layout, strip topology/bounds, base deformation validation | Once at preparation |
+| Transform validity, workspace/output capacities and overlaps | Each draw |
+| Full deformation copy and validation | Only when a resolver produces changing data |
+| Projection input/result validity, positive usable W | Each emitted vertex |
+| Scene/list readiness and sink publication | Each submitted strip |
+
+Without a resolver, preparation/lighting callbacks borrow the admitted base
+deformation directly; without either vertex callback, the source-index array
+is not read. Canonical projection updates XYZ in the workspace directly,
+without restaging a full packet or repeating matrix/command/layout checks for
+each strip. It still preserves XMTRX, including on rejection. No partial
+failing strip reaches the sink; previously emitted strips and progress remain
+visible. The ordinary cache-to-workspace copy and sink transfer still exist.
+
+The `chunk_scene` example prepares each cooked cache at load time and uses this
+path for both host golden tests and target frames. CRCs are already checked by
+asset/section opening, not by these cached draw calls. Two-volume, modifier,
+toon/outline, and wireframe entry points do not yet use this admitted fast path.
+This removes identifiable repeated work; hardware throughput still requires
+measurement and is not inferred from host or emulator correctness tests.
+
+On 2026-09-19 the cache regression suite passed GCC 14 GNU17/strict C23,
+Apple Clang strict C2x, and Clang ASan/UBSan. Differential tests cover every
+combination of ordinary vertex callbacks, filtering, multi-strip success and
+partial progress, malformed admission, overlapping buffers, capacity failures,
+changing NaN data, and invalid W. Geometry, converter, and scene-integration
+host regressions passed. The SH-4 integration fixture and `chunk_scene`
+reported PASS in Flycast interpreter and dynarec modes. The integration
+fixture explicitly checks XMTRX after successful and rejected prepared draws.
+
 Two-volume models use the parallel
 `pvr_chunk_model_two_volume_cache_query()`,
 `pvr_chunk_model_two_volume_cache_build()`, and

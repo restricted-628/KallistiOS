@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_geometry.h>
+#include "pvr_geometry_internal.h"
 
 #ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
@@ -127,6 +128,36 @@ static int project_position(const matrix_t *matrix, float x, float y, float z,
         return -1;
     }
     return 0;
+}
+
+int pvr_geometry_project_canonical_inplace(pvr_vertex_t *vertices,
+                                           size_t count,
+                                           const matrix_t *matrix) {
+    int status = 0;
+#ifdef __DREAMCAST__
+    shz_mat4x4_t saved_xmtrx;
+    shz_mat4x4_t transform;
+
+    shz_kos_matrix_import(&transform, matrix);
+    shz_xmtrx_store_4x4(&saved_xmtrx);
+    shz_xmtrx_load_4x4(&transform);
+#endif
+    for(size_t i = 0; i < count; ++i) {
+        float x, y, z;
+
+        if(project_position(matrix, vertices[i].x, vertices[i].y,
+                             vertices[i].z, &x, &y, &z) < 0) {
+            status = -1;
+            break;
+        }
+        vertices[i].x = x;
+        vertices[i].y = y;
+        vertices[i].z = z;
+    }
+#ifdef __DREAMCAST__
+    shz_xmtrx_load_4x4(&saved_xmtrx);
+#endif
+    return status;
 }
 
 int pvr_geometry_project_vertices(

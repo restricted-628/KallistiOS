@@ -60,6 +60,7 @@ typedef struct model_state {
     alignas(32) pvr_deform_vertex_t deformed[VERTICES];
     pvr_chunk_skin_general_pose_t pose;
     pvr_chunk_model_cache_t cache;
+    pvr_chunk_cache_draw_t draw;
     void *cache_storage;
 } model_state_t;
 
@@ -188,7 +189,8 @@ static int model_load(size_t index) {
         return failure("cache-query");
     m->cache_storage = aligned_alloc(cache_req.alignment, cache_req.bytes);
     if(!m->cache_storage || pvr_chunk_cache_section_materialize_ordinary(
-           &cache_view, m->cache_storage, cache_req.bytes, &m->cache) < 0)
+           &cache_view, m->cache_storage, cache_req.bytes, &m->cache) < 0 ||
+       pvr_chunk_model_cache_draw_prepare(&m->cache, &m->draw) < 0)
         return failure("cache");
     m->pose.binding = &m->skin_binding;
     m->pose.vertices = m->deformed;
@@ -356,8 +358,8 @@ static int check_pose(float time) {
            must survive deformation, and indices must still select the
            correct posed vertex even if strip order differs from input order. */
         if(pvr_geometry_sink_init_memory(&sink, output, VERTICES) < 0 ||
-           pvr_chunk_model_cache_emit(&m->cache, &identity, &sink,
-                                         workspace, VERTICES, NULL, resolve,
+           pvr_chunk_model_cache_draw_emit(&m->draw, &identity, &sink,
+                                         workspace, VERTICES, NULL, NULL, resolve,
                                          NULL, m, &emitted) < 0 ||
            require(emitted.emitted_vertices == VERTICES &&
                    emitted.emitted_strips == 1) < 0)
@@ -423,9 +425,9 @@ static int render(void) {
                 { 0, 0, 1, 0 }, { i ? 430 : 150, 260, 1, 1 }
             };
             pvr_chunk_cache_result_t result;
-            if(pvr_chunk_model_cache_emit(
-                   &app.model[i].cache, &screen, &sink, workspace, VERTICES,
-                   begin_strip, resolve, NULL, &app.model[i], &result) < 0 ||
+            if(pvr_chunk_model_cache_draw_emit(
+                   &app.model[i].draw, &screen, &sink, workspace, VERTICES,
+                   NULL, begin_strip, resolve, NULL, &app.model[i], &result) < 0 ||
                require(result.emitted_strips == 1 &&
                        result.emitted_vertices == VERTICES) < 0)
                 goto fail;

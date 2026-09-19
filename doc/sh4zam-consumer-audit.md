@@ -89,9 +89,11 @@ and target tolerances are documented beside the example.
 1. Compare the current composition implementation with an XMTRX-preserving
    multiply candidate, including emitted code, copy/register costs, and actual
    workload timing before choosing a replacement.
-2. Continue the consumer audit through skinning, projection, and prepared
-   Compact-model draw paths. Verify where validation and copies actually run;
-   do not extrapolate from source snippets or importer-only work.
+2. Continue the consumer audit through skinning and remaining prepared
+   Compact-model draw variants. The ordinary path now has explicit one-time
+   admission and in-place canonical projection; see the
+   [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
+   Two-volume/modifier/toon/wire variants still need their own audit.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.

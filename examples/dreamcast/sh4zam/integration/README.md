@@ -48,6 +48,15 @@ through their SH4ZAM target paths. It verifies that the caller's prior XMTRX
 matrix is restored after complete and rejected geometry projection and remains
 untouched by compact-model and one-off camera/frustum operations.
 
+It additionally builds and admits an ordinary draw cache, compares its output
+byte-for-byte with the checked immediate path, and rejects both a NaN produced
+by a per-frame callback and zero homogeneous W without publishing a strip.
+XMTRX is checked after each successful or rejected admitted draw. Success adds:
+
+```text
+Admitted Compact draw, rejection, XMTRX: PASS
+```
+
 Successful completion prints:
 
 ```text

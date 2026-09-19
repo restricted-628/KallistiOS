@@ -20,6 +20,12 @@ into the ordinary prepared-cache renderer. Skin output is already in scene
 world space; the mesh hierarchy transform must not be applied a second time.
 The left/right screen placement is an explicit application display transform.
 
+Each ordinary cooked cache is admitted once with
+`pvr_chunk_model_cache_draw_prepare()` during loading. Host golden checks and
+target frames then call `pvr_chunk_model_cache_draw_emit()`, avoiding static
+strip/base-data rescans. The cache and draw snapshot stay immutable; animated
+resolver output is still checked each frame.
+
 ## Checks and expected result
 
 Before rendering, the example evaluates times 0, .25, .5, 1, 1.5, and 2 seconds.

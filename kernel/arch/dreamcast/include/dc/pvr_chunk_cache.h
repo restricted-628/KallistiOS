@@ -83,6 +83,18 @@ typedef struct pvr_chunk_model_cache {
     float radius;
 } pvr_chunk_model_cache_t;
 
+/** \brief Admitted ordinary cache for repeated draws without static rescans.
+
+    Initialize only with pvr_chunk_model_cache_draw_prepare(). This snapshot
+    and its borrowed cache storage must remain immutable and accessible until
+    the last draw completes, including throughout callbacks. Rebuild and
+    prepare again after any storage change. It owns no memory and may be
+    copied by value; changing its fields or manufacturing one is unsupported.
+*/
+typedef struct pvr_chunk_cache_draw {
+    pvr_chunk_model_cache_t cache; /**< Read-only implementation snapshot. */
+} pvr_chunk_cache_draw_t;
+
 /** \brief Exact storage required by one two-volume draw cache.
 
     `vertex_size` is 32 bytes for color packets and 64 bytes for textured
@@ -335,6 +347,37 @@ int pvr_chunk_model_cache_emit(
 */
 int pvr_chunk_model_cache_emit_filtered(
     const pvr_chunk_model_cache_t *cache,
+    const matrix_t *object_to_screen, pvr_geometry_sink_t *sink,
+    pvr_vertex_t *workspace, size_t workspace_count,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    void *data, pvr_chunk_cache_result_t *result);
+
+/** \brief Admit immutable ordinary cache data once for repeated draws.
+
+    Checks layout, every strip, and every retained deformation record before
+    publishing the snapshot. Failure leaves \p draw unchanged. The output may
+    not overlap the cache descriptor or its storage. No allocation occurs.
+*/
+int pvr_chunk_model_cache_draw_prepare(const pvr_chunk_model_cache_t *cache,
+                                      pvr_chunk_cache_draw_t *draw);
+
+/** \brief Draw an admitted ordinary cache, optionally filtering strips.
+
+    Unlike pvr_chunk_model_cache_emit_filtered(), this does not rescan immutable
+    cache layout, strip metadata, bounds, or base deformation records. Matrix,
+    sink, capacity and alias preflight still runs per call; sink publication
+    retains its transient-state checks. Resolver output
+    and projected coordinates remain checked; unsafe W is never submitted.
+    Callback order, progress, workspace requirements and strip publication
+    match the checked API. Callbacks must not change the draw snapshot, cache
+    storage, transform, sink, or workspace except through their documented
+    output arguments. Pass NULL for any unused callback.
+*/
+int pvr_chunk_model_cache_draw_emit(
+    const pvr_chunk_cache_draw_t *draw,
     const matrix_t *object_to_screen, pvr_geometry_sink_t *sink,
     pvr_vertex_t *workspace, size_t workspace_count,
     pvr_chunk_cache_filter_strip_t filter_strip,
