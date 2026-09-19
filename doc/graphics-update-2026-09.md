@@ -911,3 +911,32 @@ is made for this host-importer change.
 This is a bounded importer checkpoint, not a claim that all graphics or glTF
 features are complete. Image-fidelity and physical-hardware sampling remain
 separate validation gates.
+
+## September 19: SH4ZAM dependency ownership
+
+SH4ZAM now comes from an unmodified upstream Git submodule at the same
+`0bacf4b336368c0b47864ce9eeb59e7c07904b51` pin. The former copied headers,
+sources, hash manifest, and local patch are superseded by that Git dependency.
+The KOS addon adapter, public include paths, archive name, and graphics API
+remain in place. Build artifacts live outside the upstream checkout. Earlier
+entries describing a bundled maintenance patch are historical, not the current
+source arrangement; see `addons/libsh4zam/README.md` for current instructions.
+
+The upstream FFT constraints compile unchanged with the current SH-4 GCC
+16.2.0 at `-O1`, `-O2`, `-O3`, `-Os`, and `-Og`. At `-O0`, the eight-point
+routine fails with an impossible `GENERAL_REGS` allocation. The adapter now
+defaults only that source to `-O2`, retaining debug information. This replaces
+the broad memory-clobber source patch with a documented build requirement;
+it is not a measured hardware performance claim or proof of the historical
+failure's exact build configuration. Upstream formatting and documentation
+changes are also no longer carried locally.
+
+This is dependency maintenance, not the pending graphics hot-path audit or
+the extraction of high-level rendering into a separate library.
+
+Validation: full forced KOS/addon rebuild, an addon debug build with general
+`-O0` flags and the FFT-only override, C++17/C++23 bridge links, geometry and
+matrix host tests, ten dependency-identity tests, and both SH4ZAM example builds
+pass. The integration fixture reports PASS in Flycast interpreter and dynarec
+modes. Doxygen completes with warnings; this is not a warning-free docs claim.
+No physical-hardware timing or performance measurement was made.

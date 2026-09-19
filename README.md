@@ -51,6 +51,11 @@ KallistiOS also features a package manager called [**_kos-ports_**](https://gith
 ## Getting Started
 A beginner's guide to development for the Dreamcast along with detailed instructions for installing KOS and the required toolchains can be found on [dreamcast.wiki](https://dreamcast.wiki/Getting_Started_with_Dreamcast_development). Additional documentation can be found in the docs folder.
 
+This branch uses a pinned SH4ZAM submodule. Clone with `--recurse-submodules`,
+or run `git submodule update --init --recursive` in an existing checkout before
+building. After changing revisions, run the same command to select their pinned
+dependencies. See [the SH4ZAM build adapter](addons/libsh4zam/README.md).
+
 ## Licensing
 KallistiOS itself is licensed under the BSD-like **KOS License**. **Attribution is not optional**. Additionally, this distribution contains code licensed under various free software licenses.
 See [LICENSE.md](doc/LICENSE.md) for more information on licensing, as well as [LICENSE.KOS](doc/license/LICENSE.KOS) for the actual **KOS License** text.
@@ -86,4 +91,3 @@ Once you've set up the environment and are ready to begin developing, a good pla
 [Simulant Discord Chat](https://discord.gg/bpDZHT78PA): Home to the official Discord channel of KOS  
 [DCEmulation Forums](http://dcemulation.org/phpBB/viewforum.php?f=29): Goldmine of Dreamcast development information and history  
 IRC Channel: irc.libera.chat `#dreamcastdev`
-
