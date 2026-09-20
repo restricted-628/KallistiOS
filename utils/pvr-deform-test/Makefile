@@ -2,6 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../../kernel/arch/dreamcast/include
+CPPFLAGS += -isystem ../../addons/include
 LDLIBS += -lm
 
 TARGET = pvr-deform-test
@@ -12,7 +13,7 @@ SOURCES = pvr-deform-test.c \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) skin-fixtures.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)

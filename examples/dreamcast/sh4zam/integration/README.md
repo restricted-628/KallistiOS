@@ -37,6 +37,21 @@ possible inputs. Success prints an additional line:
 SH4ZAM TRS, rolled camera, compose aliasing, XMTRX: PASS
 ```
 
+The shared `utils/pvr-deform-test/skin-fixtures.h` tests fixed-four and
+variable-span skinning against independent double-precision arithmetic.
+It covers nonsymmetric position/normal matrices, normalized weight blending,
+in-place output, inactive weights, output guards, rejected inputs, and XMTRX
+preservation. Absolute component tolerances are `3e-4` on target and `2e-5`
+on host. Success adds:
+
+```text
+SH4ZAM skinning, spans, in-place, rejection, XMTRX: PASS
+```
+
+On 2026-09-19 this skin fixture and the full integration example passed
+Flycast interpreter and dynarec after the skinning host-backend consolidation.
+No hardware performance or numerical certification is implied.
+
 Finally, it attaches the current thread with
 `KFIBER_ATTACH_MATH_CONTEXT` and proves that the main fiber and a child fiber
 retain independent XMTRX matrices across two cooperative transfers. Lightweight

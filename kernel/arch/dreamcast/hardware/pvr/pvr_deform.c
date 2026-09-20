@@ -6,9 +6,7 @@
 
 #include <dc/pvr_deform.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -16,10 +14,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#ifdef __DREAMCAST__
 _Static_assert(sizeof(pvr_normal_matrix_t) == sizeof(shz_mat3x3_t),
                "normal matrix bridge must preserve all components");
-#endif
 _Static_assert(sizeof(pvr_skin_span_t) == 8u,
                "skin spans must occupy 8 bytes");
 _Static_assert(sizeof(pvr_skin_weight_t) == 8u,
@@ -341,13 +337,14 @@ static void skin_accumulate(const pvr_deform_vertex_t *source,
     float ny;
     float nz;
 
-#ifdef __DREAMCAST__
     {
         shz_mat4x4_t position_matrix;
         shz_mat3x3_t normal_matrix;
         shz_vec3_t transformed_position;
         shz_vec3_t transformed_normal;
 
+        /* One-off transforms preserve XMTRX. Let SH4ZAM select its portable
+           backend for host tools so they exercise the same integration. */
         shz_kos_matrix_import(&position_matrix, position);
         memcpy(&normal_matrix, normal, sizeof(normal_matrix));
         transformed_position = shz_mat4x4_transform_point3(
@@ -365,26 +362,6 @@ static void skin_accumulate(const pvr_deform_vertex_t *source,
         ny = transformed_normal.y;
         nz = transformed_normal.z;
     }
-#else
-    px = (*position)[0][0] * source->position.x +
-         (*position)[1][0] * source->position.y +
-         (*position)[2][0] * source->position.z + (*position)[3][0];
-    py = (*position)[0][1] * source->position.x +
-         (*position)[1][1] * source->position.y +
-         (*position)[2][1] * source->position.z + (*position)[3][1];
-    pz = (*position)[0][2] * source->position.x +
-         (*position)[1][2] * source->position.y +
-         (*position)[2][2] * source->position.z + (*position)[3][2];
-    nx = normal->column[0][0] * source->normal.x +
-         normal->column[1][0] * source->normal.y +
-         normal->column[2][0] * source->normal.z;
-    ny = normal->column[0][1] * source->normal.x +
-         normal->column[1][1] * source->normal.y +
-         normal->column[2][1] * source->normal.z;
-    nz = normal->column[0][2] * source->normal.x +
-         normal->column[1][2] * source->normal.y +
-         normal->column[2][2] * source->normal.z;
-#endif
     vertex->position.x += px * weight;
     vertex->position.y += py * weight;
     vertex->position.z += pz * weight;

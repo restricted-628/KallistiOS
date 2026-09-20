@@ -5,6 +5,7 @@ CPPFLAGS += -I../pvr-deform-test/include \
 	-I../pvr-model-convert \
 	-I../../kernel/arch/dreamcast/include
 LDLIBS += -lm
+CPPFLAGS += -isystem ../../addons/include
 
 TARGET = pvr-chunk-skin-test
 SOURCES = pvr-chunk-skin-test.c \

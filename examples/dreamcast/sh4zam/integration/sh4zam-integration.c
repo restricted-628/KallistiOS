@@ -19,6 +19,7 @@
 #include <string.h>
 #include "matrix-fixtures.h"
 #include "toon-draw-fixtures.h"
+#include "skin-fixtures.h"
 
 static shz_mat4x4_t matrix_sentinel;
 
@@ -474,6 +475,11 @@ int main(int argc, char **argv) {
     if(matrix_failure)
         FAIL(matrix_failure);
     puts("SH4ZAM TRS, rolled camera, compose aliasing, XMTRX: PASS");
+    const char *skin_failure = verify_skin_matrices(
+        matrix_state_unchanged, 0.0003);
+    if(skin_failure)
+        FAIL(skin_failure);
+    puts("SH4ZAM skinning, spans, in-place, rejection, XMTRX: PASS");
 
     shz_mat4x4_init_translation(&source, 4.0f, 5.0f, 6.0f);
     shz_kos_matrix_export(&established, &source);

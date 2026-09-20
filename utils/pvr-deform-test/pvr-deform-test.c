@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "skin-fixtures.h"
 
 static int close_enough(float actual, float expected) {
     return isfinite(actual) && fabsf(actual - expected) <= 0.00002f;
@@ -245,6 +246,11 @@ static void test_skin_spans(void) {
 }
 
 int main(void) {
+    const char *failure = verify_skin_matrices(NULL, 0.00002);
+    if(failure) {
+        fprintf(stderr, "%s\n", failure);
+        return 1;
+    }
     test_bounds();
     test_morph();
     test_skin();

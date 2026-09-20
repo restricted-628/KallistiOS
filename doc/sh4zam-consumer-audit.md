@@ -1,4 +1,4 @@
-# SH4ZAM consumer audit: checked animation matrices
+# SH4ZAM consumer audit: checked animation matrices and skinning
 
 ## Scope and source ownership
 
@@ -9,8 +9,8 @@ official 0.8.1 and is now temporarily pinned to PR #70's
 `0c1ccb5f5614314e36e2fec3179c8ca3ae844770` for the u16 fast-math fix, pending
 upstream review. See the addon README for source provenance. All changes in
 this consumer audit are to KOS consumers, bridge assertions, tests, and
-documentation. Graphics-library
-extraction is deferred; no public matrix layouts or API contracts change.
+documentation. Graphics-library extraction is deferred; no public matrix
+layouts or API contracts change.
 
 ## Verified findings and changes
 
@@ -35,6 +35,43 @@ extraction is deferred; no public matrix layouts or API contracts change.
 Other animation host fallback paths and other graphics consumers are not
 converted by this pass. Validation remains at the checked API boundaries;
 removing those checks requires a separately defined trusted/batched path.
+
+## Skinning follow-up
+
+The fixed-four and variable-span Compact skin APIs delegate to
+`pvr_skin_apply()` and `pvr_skin_apply_spans()` in `pvr_deform.c`. Their common
+accumulator already used SH4ZAM's one-off point/normal transforms on Dreamcast;
+this was not a remaining scalar KOS transform on the target. The duplicate
+host formulas are now removed, letting SH4ZAM choose its portable backend.
+Alias-safe matrix imports and the XMTRX-preserving target path remain intact.
+The host normal-normalization fallback remains separate from SH-4 FSRRA.
+
+`utils/pvr-deform-test/skin-fixtures.h` now runs on host and target. It compares
+both skin APIs against independent double-precision arithmetic using three
+vertices, four distinct nonsymmetric joint matrices, separate normal matrices,
+non-unit weight totals, repeated joints in a six-entry span, and an inactive
+out-of-range joint. It checks in-place and separate output, canonical W values,
+an output guard, and no publication on invalid active joints or NaN palettes.
+The target additionally verifies all 16 XMTRX lanes after successful and
+rejected calls. Absolute tolerances are `2e-5` on host and `3e-4` on SH-4;
+these fixtures do not establish a universal numerical error bound.
+
+On 2026-09-19 the deformation suite passed GCC 14 GNU17/strict C23, Apple
+Clang strict C2x, and Clang ASan/UBSan. Compact skin, shape, and scene-integration
+host suites passed GCC 14. The incremental KOS build and force-built integration
+example passed SH-4 GCC 16.2.0; the full integration fixture passed Flycast
+interpreter and dynarec, including the new skin/XMTRX checks. No new upstream
+defect was demonstrated. This pass changes no upstream source.
+As a negative control, temporarily transposing the normal transform made the
+new scalar-reference fixture fail; restoring the intended call passed again.
+
+The target accumulator remains 368 bytes, fixed-four apply 1128 bytes, and
+span apply 1356 bytes with this toolchain, unchanged from before the host
+consolidation. FIPR remains in the accumulator. This is not a speedup claim.
+Per-influence matrix import/copy cost and repeated validation of mutable
+palettes/weights remain performance-audit items. Removing validation requires
+an explicit prepared-data lifetime/invalidation contract; the checked APIs
+still accept caller-mutated data each call.
 
 ## Generated-code evidence
 
@@ -93,8 +130,10 @@ and target tolerances are documented beside the example.
 1. Compare the current composition implementation with an XMTRX-preserving
    multiply candidate, including emitted code, copy/register costs, and actual
    workload timing before choosing a replacement.
-2. Continue the consumer audit through skinning and remaining prepared
-   Compact-model draw variants. Ordinary, two-volume, and modifier paths now
+2. Continue the skinning performance audit (prepared palettes/weights and
+   per-influence matrix imports); the checked transform integration is now
+   covered by the shared fixture above. Audit remaining prepared Compact-model
+   draw variants. Ordinary, two-volume, and modifier paths now
    have explicit one-time admission and in-place projection; see the
    [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
    Ordinary toon/outline now reuse the admitted draw view and borrow unchanged
