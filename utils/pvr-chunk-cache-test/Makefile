@@ -2,7 +2,7 @@ CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
-	-I../../kernel/arch/dreamcast/include
+	-I../../kernel/arch/dreamcast/include -DWIRE_COUNT_PROJECTION
 LDLIBS += -lm
 
 TARGET = pvr-chunk-cache-test
@@ -13,7 +13,7 @@ SOURCES = pvr-chunk-cache-test.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache_asset.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_toon.c \
-	../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_wire.c \
+	wire-projection-probe.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_geometry.c \
 	../../kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c \
@@ -23,7 +23,8 @@ SOURCES = pvr-chunk-cache-test.c \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) toon-draw-fixtures.h wire-draw-fixtures.h two-volume-toon-fixtures.h
+$(TARGET): $(SOURCES) toon-draw-fixtures.h wire-draw-fixtures.h two-volume-toon-fixtures.h \
+           ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_wire.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)

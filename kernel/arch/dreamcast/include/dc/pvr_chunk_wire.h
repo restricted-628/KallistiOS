@@ -126,8 +126,12 @@ int pvr_chunk_model_cache_emit_wire(
     Without \p resolve_vertex, deformation data is borrowed read-only from the
     cache instead of copied into workspace; workspace contents after drawing
     are unspecified. Workspace capacity and non-overlap requirements are the
-    same as for pvr_chunk_model_cache_emit_wire(). Clipping and projection are
-    unchanged; this does not assume every edge is visible.
+    same as for pvr_chunk_model_cache_emit_wire(). SPLIT and DROP still clip
+    each segment before projection. ASSUME_VISIBLE reuses up to three recently
+    projected strip-reference positions, without changing projection math.
+    This local reuse is cleared per strip and after \p begin_strip; flags and
+    colors are still assembled per edge. No extra caller storage is needed.
+    Only the explicit ASSUME_VISIBLE policy assumes every edge is visible.
 */
 int pvr_chunk_model_cache_draw_emit_wire(
     const pvr_chunk_cache_draw_t *draw, const pvr_frustum_t *frustum,

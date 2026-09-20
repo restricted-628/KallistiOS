@@ -86,7 +86,8 @@ clean: rm-elf
 rm-elf:
 	-rm -f $(TARGET).elf $(TARGET).bin
 
-$(TARGET).elf: $(OBJS)
+$(TARGET).elf: $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a \
+              $(KOS_BASE)/addons/lib/$(KOS_ARCH)/libsh4zam.a
 	kos-cc -o $(TARGET).elf $(OBJS)
 
 run: $(TARGET).elf

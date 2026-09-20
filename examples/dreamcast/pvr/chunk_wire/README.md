@@ -12,6 +12,9 @@ performs no allocation in its frame loop.
 The cache is admitted once with `pvr_chunk_model_cache_draw_prepare()` and
 frames use `pvr_chunk_model_cache_draw_emit_wire()`. Cache storage stays
 immutable for the loop; only the topology profile changes. This avoids full
-cache rescans and copies of unchanged deformation records. Per-edge clipping,
-projection, and line expansion retain their checked behavior. Success is
+cache rescans and copies of unchanged deformation records. Its explicit
+ASSUME_VISIBLE policy now reuses recently projected endpoints across neighboring
+edges, clearing reuse after the header callback. Projection arithmetic and
+line expansion retain their checked behavior; SPLIT/DROP callers still clip
+homogeneous segments before projection. Success is
 reported on screen and through SCIF after all 360 frames and pipeline checks.

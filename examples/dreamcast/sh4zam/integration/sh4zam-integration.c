@@ -616,7 +616,7 @@ int main(int argc, char **argv) {
         }
         shz_kos_matrix_export(&established, &identity);
         puts("Admitted Compact draw, rejection, XMTRX: PASS");
-        if(!wire_draw_fixtures(&cache))
+        if(!wire_draw_fixtures(&cache) || !wire_long_draw_fixtures())
             FAIL("admitted wire cache");
         puts("Admitted wire policies, clipping, rejection, XMTRX: PASS");
     }

@@ -103,6 +103,16 @@ XMTRX is preserved after successful and rejected wire calls. Success adds:
 Admitted wire policies, clipping, rejection, XMTRX: PASS
 ```
 
+The wire fixture also covers eight-reference strips with repeated source
+indices, all topologies with and without a begin callback, and the admitted
+ASSUME_VISIBLE endpoint-reuse path. Begin-time matrix/workspace changes must
+invalidate reused positions. A late zero-W endpoint retains the earlier emitted
+edge; a degenerate first edge does not call begin. Checked/admitted output,
+errno, progress and XMTRX still agree. Host-only instrumentation counts actual
+projection requests: reuse cannot increase them in these cases, and no-callback
+path topology projects exactly one endpoint per strip reference. No production
+instrumentation or extra caller workspace is introduced.
+
 The two-volume fixture covers both 32-byte color and 64-byte textured caches,
 with and without a prepare callback. It compares checked/admitted output,
 including buffer guards, and verifies the full temporary-union callback

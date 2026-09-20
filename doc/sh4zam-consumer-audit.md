@@ -331,9 +331,9 @@ They include filtered strips, callback errors, NaN deformation/vertex/profile
 output, zero projection W, insufficient capacity, overlapping workspace, and
 null admission.
 They also prove deformation scratch stays untouched without a resolver.
-Host coverage includes triangle and four-reference strips; target integration
-uses a triangle and verifies all XMTRX lanes after every draw. Reducing
-repeated per-edge transformation remains separate work.
+Host coverage initially included triangle and four-reference strips; the
+endpoint-reuse follow-up below adds an eight-reference strip on host and target.
+Target integration verifies all XMTRX lanes after every draw.
 
 On 2026-09-19 the wire fixtures and cache suite passed GCC 14 strict C23,
 Apple Clang strict C2x, and Clang GNU17 with ASan/UBSan. The SH-4 GCC 16.2.0
@@ -342,6 +342,40 @@ The integration example passed in Flycast interpreter and dynarec modes; the
 360-frame wire example passed its draw and pipeline checks in dynarec mode.
 These are correctness checks, not physical-hardware timing or image-quality
 certification. No upstream SH4ZAM defect was demonstrated in this pass.
+
+### ASSUME_VISIBLE endpoint reuse
+
+Admitted wire draws now keep a three-slot, per-strip cache of projected
+positions for the explicit ASSUME_VISIBLE policy. Reference-topology edges
+span at most two indices, allowing neighboring edges to reuse endpoints without
+allocation, a public layout change, or writing additional caller scratch.
+Only positions are reused; flags, colors and line expansion remain per edge.
+The existing checked geometry projector handles cache misses, preserving its
+arithmetic and XMTRX save/restore. SPLIT/DROP are unchanged: clipped endpoints
+depend on the complete segment and cannot reuse already-projected coordinates.
+
+Projection stays lazy, in original edge order, so an unusable later endpoint
+does not discard an already emitted prefix. Reuse is cleared after begin-strip
+callbacks, which may change the live matrix or workspace, and at every strip.
+Repeated source indices are keyed by strip-reference index, not source identity,
+because per-reference vertex policies can produce different positions/colors.
+
+Shared regression cases cover no-begin and begin callbacks, longer strips and
+slot eviction, matrix/workspace mutation during begin, a zero-W later endpoint,
+and a degenerate first edge. Host-only instrumentation delegates to the real
+projector and counts requested endpoints: no tested draw requests more than
+the checked path, and a no-begin path draw requests exactly N endpoints rather
+than 2(N-1). Mesh/boundary cases also require a reduction without a begin
+callback. This demonstrates less repeated work, not a hardware speed claim.
+Reducing SPLIT/DROP homogeneous transforms remains separate work.
+
+On 2026-09-20 the cache suite passed GCC 14 GNU17/strict C23, Clang strict
+C2x and Clang GNU17 with ASan/UBSan. The full SH-4 GCC 16.2.0 KOS build and
+both example links passed. Integration completed in Flycast interpreter and
+dynarec; the 360-frame wire scene completed in dynarec. The integration link
+now tracks both library archives so a library-only update cannot silently
+reuse an old test executable. SH4ZAM's pinned source remains unmodified.
+Physical Dreamcast correctness and throughput remain unverified.
 
 ## Two-volume toon packet correction
 

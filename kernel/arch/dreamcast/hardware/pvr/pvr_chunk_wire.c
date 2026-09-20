@@ -358,6 +358,56 @@ static int project_edge(
     return 0;
 }
 
+/* Reference-topology edges span at most two indices. Three direct-mapped
+   slots therefore retain adjacent endpoints without allocation or changing
+   caller workspace. Cache positions only: edge flags and colors stay fresh. */
+typedef struct wire_projection_cache {
+    struct { float x, y, z; } positions[3];
+    size_t indices[3];
+} wire_projection_cache_t;
+
+static void projection_cache_clear(wire_projection_cache_t *cache) {
+    for(size_t i = 0; i < 3u; ++i)
+        cache->indices[i] = SIZE_MAX;
+}
+
+static int project_edge_reuse(
+    pvr_vertex_t projected[2], const pvr_vertex_t source[2],
+    const size_t indices[2], const matrix_t *matrix,
+    wire_projection_cache_t *cache) {
+    size_t slots[2] = { indices[0] % 3u, indices[1] % 3u };
+    int missing[2] = {
+        cache->indices[slots[0]] != indices[0],
+        cache->indices[slots[1]] != indices[1]
+    };
+
+    if(missing[0] || missing[1]) {
+        size_t first = missing[0] ? 0u : 1u;
+        size_t count = missing[0] && missing[1] ? 2u : 1u;
+        pvr_geometry_stream_t stream = { source + first, count, sizeof(source[0]) };
+
+        /* Retain the checked projection's arithmetic, failure ordering and
+           XMTRX restoration; batch both endpoints when neither is cached. */
+        if(pvr_geometry_project(projected + first, count, &stream, matrix, NULL) < 0)
+            return -1;
+    }
+    for(size_t i = 0; i < 2u; ++i) {
+        if(missing[i]) {
+            cache->positions[slots[i]].x = projected[i].x;
+            cache->positions[slots[i]].y = projected[i].y;
+            cache->positions[slots[i]].z = projected[i].z;
+            cache->indices[slots[i]] = indices[i];
+        }
+        else {
+            projected[i] = source[i];
+            projected[i].x = cache->positions[slots[i]].x;
+            projected[i].y = cache->positions[slots[i]].y;
+            projected[i].z = cache->positions[slots[i]].z;
+        }
+    }
+    return 0;
+}
+
 static int cache_emit_wire(
     const pvr_chunk_model_cache_t *cache, const pvr_frustum_t *frustum,
     pvr_chunk_clip_policy_t clip_policy,
@@ -384,6 +434,11 @@ static int cache_emit_wire(
         size_t edge_count;
         size_t edge;
         int strip_started = 0;
+        wire_projection_cache_t projection_cache;
+        int reuse_projection = admitted &&
+            clip_policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE;
+
+        projection_cache_clear(&projection_cache);
 
         ++progress.visited_strips;
         if(filter_strip) {
@@ -435,9 +490,17 @@ static int cache_emit_wire(
                 source[0].argb = source[1].argb = profile.argb;
                 source[0].oargb = source[1].oargb = profile.oargb;
             }
-            if(project_edge(projected, source, frustum, clip_policy,
-                            &segment) < 0)
-                goto fail;
+            if(reuse_projection) {
+                if(project_edge_reuse(projected, source, indices,
+                                      &frustum->object_to_screen,
+                                      &projection_cache) < 0)
+                    goto fail;
+                segment.visible = 1;
+                segment.clipped = 0;
+            }
+            else if(project_edge(projected, source, frustum, clip_policy,
+                                 &segment) < 0)
+                    goto fail;
             if(segment.clipped)
                 ++progress.clipped_edges;
             if(!segment.visible) {
@@ -458,6 +521,9 @@ static int cache_emit_wire(
                         errno = EIO;
                     goto fail;
                 }
+                /* The callback can change live transform/workspace inputs.
+                   No projected endpoint may survive across that boundary. */
+                projection_cache_clear(&projection_cache);
             }
             if(pvr_geometry_sink_emit(sink, quad,
                                       PVR_GEOMETRY_LINE_VERTICES) < 0)

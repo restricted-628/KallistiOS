@@ -589,9 +589,14 @@ and borrows immutable deformation records when no resolver is supplied.
 Memory-sink worst-case capacity is still calculated from strip counts each
 draw, and changing frustums, profiles, workspaces, sinks and callback results
 remain checked. The checked wire API also avoids validating the cache a second
-time merely to calculate sink capacity. Homogeneous clipping before projection,
-per-edge math, and XMTRX preservation are unchanged. The `chunk_wire` example
-uses this path; workspace contents after the draw are unspecified.
+time merely to calculate sink capacity. SPLIT/DROP retain homogeneous clipping
+before per-edge projection. Admitted ASSUME_VISIBLE draws reuse up to three
+recently projected strip-reference positions; the same checked projection math
+is used for misses. Reuse is cleared per strip and after `begin_strip`, while
+edge flags/colors and expansion remain per-edge. This requires no new caller
+workspace or allocation and preserves valid-prefix errors and XMTRX. The
+`chunk_wire` example uses this path; workspace contents after drawing remain
+unspecified. Fewer projected endpoints are not a measured hardware speedup.
 
 On 2026-09-19 the cache regression suite passed GCC 14 GNU17/strict C23,
 Apple Clang strict C2x, and Clang ASan/UBSan. Differential tests cover every

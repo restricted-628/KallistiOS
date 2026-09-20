@@ -2088,6 +2088,7 @@ int main(void) {
     test_modifier_cache();
     test_reference_normal_cache();
     test_wire_topologies();
+    assert(wire_long_draw_fixtures());
     puts("pvr-chunk-cache-test: PASS");
     return 0;
 }
