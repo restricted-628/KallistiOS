@@ -2,6 +2,7 @@ include kos.h
 include dc/sound/sound.h
 include dc/maple/mie.h
 include dc/expansion.h
+include dc/pvr_skin_prepared.h
 
 # Cache management
 arch_icache_inval_range
@@ -827,6 +828,9 @@ pvr_morph_apply
 pvr_deform_bounds_calculate
 pvr_skin_apply
 pvr_skin_apply_spans
+pvr_skin_palette_prepare
+pvr_skin_apply_prepared_palette
+pvr_skin_apply_spans_prepared_palette
 pvr_normal_matrix_build
 pvr_normal_transform
 pvr_environment_map_uv

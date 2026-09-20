@@ -4,9 +4,7 @@
    Copyright (C) 2026 Joseph Black
 */
 
-#include <dc/pvr_deform.h>
-
-#include <dc/sh4zam.h>
+#include <dc/pvr_skin_prepared.h>
 
 #include <errno.h>
 #include <float.h>
@@ -324,12 +322,156 @@ static int normal_matrix_finite(const pvr_normal_matrix_t *matrix) {
     return 1;
 }
 
+#define SKIN_PALETTE_VERSION UINT32_C(0x53504c01)
+
+static int palette_ranges(const pvr_skin_palette_t *palette,
+                          size_t *position_bytes, size_t *normal_bytes) {
+    if(!palette || !palette->position_matrices || !palette->normal_matrices ||
+       !palette->joint_count ||
+       ((uintptr_t)palette->position_matrices & (_Alignof(matrix_t) - 1u)) ||
+       ((uintptr_t)palette->normal_matrices &
+        (_Alignof(pvr_normal_matrix_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(palette->joint_count > SIZE_MAX / sizeof(matrix_t) ||
+       palette->joint_count > SIZE_MAX / sizeof(pvr_normal_matrix_t)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *position_bytes = palette->joint_count * sizeof(matrix_t);
+    *normal_bytes = palette->joint_count * sizeof(pvr_normal_matrix_t);
+    if(!address_range(palette->position_matrices, *position_bytes) ||
+       !address_range(palette->normal_matrices, *normal_bytes)) {
+        errno = ERANGE;
+        return -1;
+    }
+    return 0;
+}
+
+static int palette_values(const pvr_skin_palette_t *palette) {
+    for(size_t i = 0; i < palette->joint_count; ++i) {
+        if(!matrix_finite(palette->position_matrices + i) ||
+           !normal_matrix_finite(palette->normal_matrices + i)) {
+            errno = EDOM;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+int pvr_skin_palette_prepare(const pvr_skin_palette_t *palette,
+    pvr_skin_prepared_joint_t *storage, size_t joint_capacity,
+    pvr_skin_prepared_palette_t *prepared) {
+    size_t position_bytes, normal_bytes, storage_bytes;
+    pvr_skin_prepared_palette_t snapshot;
+
+    if(!storage || !prepared ||
+       ((uintptr_t)storage & (_Alignof(pvr_skin_prepared_joint_t) - 1u)) ||
+       ((uintptr_t)prepared & (_Alignof(pvr_skin_prepared_palette_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(palette_ranges(palette, &position_bytes, &normal_bytes) < 0)
+        return -1;
+    if(joint_capacity < palette->joint_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(palette->joint_count > SIZE_MAX / sizeof(*storage)) {
+        errno = ERANGE;
+        return -1;
+    }
+    storage_bytes = palette->joint_count * sizeof(*storage);
+    if(!address_range(storage, storage_bytes) ||
+       !address_range(prepared, sizeof(*prepared)) ||
+       !address_range(palette, sizeof(*palette))) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(ranges_overlap(storage, storage_bytes, prepared, sizeof(*prepared)) ||
+       ranges_overlap(storage, storage_bytes, palette, sizeof(*palette)) ||
+       ranges_overlap(prepared, sizeof(*prepared), palette, sizeof(*palette)) ||
+       ranges_overlap(storage, storage_bytes,
+                      palette->position_matrices, position_bytes) ||
+       ranges_overlap(storage, storage_bytes,
+                      palette->normal_matrices, normal_bytes) ||
+       ranges_overlap(prepared, sizeof(*prepared),
+                      palette->position_matrices, position_bytes) ||
+       ranges_overlap(prepared, sizeof(*prepared),
+                      palette->normal_matrices, normal_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(palette_values(palette) < 0)
+        return -1;
+    snapshot.joints = storage;
+    snapshot.joint_count = palette->joint_count;
+    snapshot.version = SKIN_PALETTE_VERSION;
+    for(size_t i = 0; i < palette->joint_count; ++i) {
+        shz_kos_matrix_import(&storage[i].position,
+                              palette->position_matrices + i);
+        memcpy(&storage[i].normal, palette->normal_matrices + i,
+               sizeof(storage[i].normal));
+    }
+    *prepared = snapshot;
+    return 0;
+}
+
+static int skin_palette_preflight(const pvr_skin_palette_t *palette,
+    const pvr_skin_prepared_palette_t *prepared, const void *output,
+    size_t output_bytes, size_t *joint_count) {
+    size_t position_bytes, normal_bytes;
+
+    if(prepared) {
+        size_t bytes;
+        if(((uintptr_t)prepared &
+            (_Alignof(pvr_skin_prepared_palette_t) - 1u)) ||
+           prepared->version != SKIN_PALETTE_VERSION || !prepared->joints ||
+           !prepared->joint_count ||
+           ((uintptr_t)prepared->joints &
+            (_Alignof(pvr_skin_prepared_joint_t) - 1u))) {
+            errno = EINVAL;
+            return -1;
+        }
+        if(prepared->joint_count > SIZE_MAX / sizeof(*prepared->joints)) {
+            errno = ERANGE;
+            return -1;
+        }
+        bytes = prepared->joint_count * sizeof(*prepared->joints);
+        if(!address_range(prepared->joints, bytes) ||
+           !address_range(prepared, sizeof(*prepared))) {
+            errno = ERANGE;
+            return -1;
+        }
+        if(ranges_overlap(prepared->joints, bytes, output, output_bytes) ||
+           ranges_overlap(prepared, sizeof(*prepared), output, output_bytes)) {
+            errno = EINVAL;
+            return -1;
+        }
+        *joint_count = prepared->joint_count;
+        return 0;
+    }
+    if(palette_ranges(palette, &position_bytes, &normal_bytes) < 0)
+        return -1;
+    if(ranges_overlap(palette->position_matrices, position_bytes,
+                      output, output_bytes) ||
+       ranges_overlap(palette->normal_matrices, normal_bytes,
+                      output, output_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(palette_values(palette) < 0)
+        return -1;
+    *joint_count = palette->joint_count;
+    return 0;
+}
+
 static void skin_accumulate(const pvr_deform_vertex_t *source,
                             const pvr_skin_palette_t *palette,
+                            const pvr_skin_prepared_palette_t *prepared,
                             uint16_t joint, float weight,
                             pvr_deform_vertex_t *vertex) {
-    const matrix_t *position = palette->position_matrices + joint;
-    const pvr_normal_matrix_t *normal = palette->normal_matrices + joint;
     float px;
     float py;
     float pz;
@@ -340,19 +482,31 @@ static void skin_accumulate(const pvr_deform_vertex_t *source,
     {
         shz_mat4x4_t position_matrix;
         shz_mat3x3_t normal_matrix;
+        const shz_mat4x4_t *position;
+        const shz_mat3x3_t *normal;
         shz_vec3_t transformed_position;
         shz_vec3_t transformed_normal;
 
         /* One-off transforms preserve XMTRX. Let SH4ZAM select its portable
            backend for host tools so they exercise the same integration. */
-        shz_kos_matrix_import(&position_matrix, position);
-        memcpy(&normal_matrix, normal, sizeof(normal_matrix));
+        if(prepared) {
+            position = &prepared->joints[joint].position;
+            normal = &prepared->joints[joint].normal;
+        }
+        else {
+            shz_kos_matrix_import(&position_matrix,
+                                  palette->position_matrices + joint);
+            memcpy(&normal_matrix, palette->normal_matrices + joint,
+                   sizeof(normal_matrix));
+            position = &position_matrix;
+            normal = &normal_matrix;
+        }
         transformed_position = shz_mat4x4_transform_point3(
-            &position_matrix,
+            position,
             shz_vec3_init(source->position.x, source->position.y,
                           source->position.z));
         transformed_normal = shz_mat3x3_transform_vec3(
-            &normal_matrix,
+            normal,
             shz_vec3_init(source->normal.x, source->normal.y,
                           source->normal.z));
         px = transformed_position.x;
@@ -370,17 +524,17 @@ static void skin_accumulate(const pvr_deform_vertex_t *source,
     vertex->normal.z += nz * weight;
 }
 
-int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
+static int skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
                    const pvr_deform_stream_t *vertices,
                    const pvr_skin_stream_t *influences,
                    const pvr_skin_palette_t *palette,
-                   pvr_deform_result_t *result) {
+                   pvr_deform_result_t *result,
+                   const pvr_skin_prepared_palette_t *prepared) {
     pvr_deform_result_t progress = { 0 };
     size_t input_bytes;
     size_t output_bytes;
     size_t influence_bytes;
-    size_t position_bytes;
-    size_t normal_bytes;
+    size_t joint_count;
     size_t i;
 
     if(result)
@@ -388,52 +542,30 @@ int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
     if(stream_preflight(vertices, output, output_capacity, &input_bytes,
                         &output_bytes) < 0)
         return -1;
-    if(!influences || !palette || !influences->influences ||
+    if(!influences || !influences->influences ||
        influences->vertex_count != vertices->vertex_count ||
        ((uintptr_t)influences->influences &
         (_Alignof(pvr_skin_influences_t) - 1u)) ||
        influences->stride < sizeof(pvr_skin_influences_t) ||
-       (influences->stride & 3u) || !palette->position_matrices ||
-       !palette->normal_matrices || !palette->joint_count ||
-       ((uintptr_t)palette->position_matrices &
-        (_Alignof(matrix_t) - 1u)) ||
-       ((uintptr_t)palette->normal_matrices &
-        (_Alignof(pvr_normal_matrix_t) - 1u))) {
+       (influences->stride & 3u)) {
         errno = EINVAL;
         return -1;
     }
     if(range_size(influences->vertex_count, influences->stride,
                   sizeof(pvr_skin_influences_t), &influence_bytes) < 0 ||
-       !address_range(influences->influences, influence_bytes) ||
-       palette->joint_count > SIZE_MAX / sizeof(matrix_t) ||
-       palette->joint_count > SIZE_MAX / sizeof(pvr_normal_matrix_t)) {
-        errno = ERANGE;
-        return -1;
-    }
-    position_bytes = palette->joint_count * sizeof(matrix_t);
-    normal_bytes = palette->joint_count * sizeof(pvr_normal_matrix_t);
-    if(!address_range(palette->position_matrices, position_bytes) ||
-       !address_range(palette->normal_matrices, normal_bytes)) {
+       !address_range(influences->influences, influence_bytes)) {
         errno = ERANGE;
         return -1;
     }
     if(ranges_overlap(influences->influences, influence_bytes,
-                      output, output_bytes) ||
-       ranges_overlap(palette->position_matrices, position_bytes,
-                      output, output_bytes) ||
-       ranges_overlap(palette->normal_matrices, normal_bytes,
                       output, output_bytes)) {
         errno = EINVAL;
         return -1;
     }
 
-    for(i = 0; i < palette->joint_count; ++i) {
-        if(!matrix_finite(palette->position_matrices + i) ||
-           !normal_matrix_finite(palette->normal_matrices + i)) {
-            errno = EDOM;
-            return -1;
-        }
-    }
+    if(skin_palette_preflight(palette, prepared, output, output_bytes,
+                              &joint_count) < 0)
+        return -1;
     for(i = 0; i < influences->vertex_count; ++i) {
         const pvr_skin_influences_t *influence =
             (const pvr_skin_influences_t *)
@@ -445,7 +577,7 @@ int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
             if(!isfinite(influence->weight[slot]) ||
                influence->weight[slot] < 0.0f ||
                (influence->weight[slot] > 0.0f &&
-                influence->joint[slot] >= palette->joint_count)) {
+                influence->joint[slot] >= joint_count)) {
                 errno = EILSEQ;
                 return -1;
             }
@@ -478,8 +610,8 @@ int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
             if(influence->weight[slot] == 0.0f)
                 continue;
             weight = influence->weight[slot] / total;
-            skin_accumulate(source, palette, influence->joint[slot], weight,
-                            &vertex);
+            skin_accumulate(source, palette, prepared, influence->joint[slot],
+                            weight, &vertex);
         }
         if(!finite3(vertex.position.x, vertex.position.y, vertex.position.z) ||
            normalize(&vertex.normal.x, &vertex.normal.y, &vertex.normal.z) < 0) {
@@ -501,19 +633,19 @@ skin_fail:
     return -1;
 }
 
-int pvr_skin_apply_spans(pvr_deform_vertex_t *output,
+static int skin_apply_spans(pvr_deform_vertex_t *output,
                          size_t output_capacity,
                          const pvr_deform_stream_t *vertices,
                          const pvr_skin_span_stream_t *influences,
                          const pvr_skin_palette_t *palette,
-                         pvr_deform_result_t *result) {
+                         pvr_deform_result_t *result,
+                         const pvr_skin_prepared_palette_t *prepared) {
     pvr_deform_result_t progress = { 0 };
     size_t input_bytes;
     size_t output_bytes;
     size_t span_bytes;
     size_t weight_bytes;
-    size_t position_bytes;
-    size_t normal_bytes;
+    size_t joint_count;
     size_t i;
 
     if(result)
@@ -521,7 +653,7 @@ int pvr_skin_apply_spans(pvr_deform_vertex_t *output,
     if(stream_preflight(vertices, output, output_capacity, &input_bytes,
                         &output_bytes) < 0)
         return -1;
-    if(!influences || !palette || !influences->spans ||
+    if(!influences || !influences->spans ||
        !influences->weights || !influences->weight_count ||
        influences->vertex_count != vertices->vertex_count ||
        ((uintptr_t)influences->spans &
@@ -529,51 +661,32 @@ int pvr_skin_apply_spans(pvr_deform_vertex_t *output,
        ((uintptr_t)influences->weights &
         (_Alignof(pvr_skin_weight_t) - 1u)) ||
        influences->stride < sizeof(pvr_skin_span_t) ||
-       (influences->stride & 3u) || !palette->position_matrices ||
-       !palette->normal_matrices || !palette->joint_count ||
-       ((uintptr_t)palette->position_matrices &
-        (_Alignof(matrix_t) - 1u)) ||
-       ((uintptr_t)palette->normal_matrices &
-        (_Alignof(pvr_normal_matrix_t) - 1u))) {
+       (influences->stride & 3u)) {
         errno = EINVAL;
         return -1;
     }
     if(range_size(influences->vertex_count, influences->stride,
                   sizeof(pvr_skin_span_t), &span_bytes) < 0 ||
-       influences->weight_count > SIZE_MAX / sizeof(pvr_skin_weight_t) ||
-       palette->joint_count > SIZE_MAX / sizeof(matrix_t) ||
-       palette->joint_count > SIZE_MAX / sizeof(pvr_normal_matrix_t)) {
+       influences->weight_count > SIZE_MAX / sizeof(pvr_skin_weight_t)) {
         errno = ERANGE;
         return -1;
     }
     weight_bytes = influences->weight_count * sizeof(pvr_skin_weight_t);
-    position_bytes = palette->joint_count * sizeof(matrix_t);
-    normal_bytes = palette->joint_count * sizeof(pvr_normal_matrix_t);
     if(!address_range(influences->spans, span_bytes) ||
-       !address_range(influences->weights, weight_bytes) ||
-       !address_range(palette->position_matrices, position_bytes) ||
-       !address_range(palette->normal_matrices, normal_bytes)) {
+       !address_range(influences->weights, weight_bytes)) {
         errno = ERANGE;
         return -1;
     }
     if(ranges_overlap(influences->spans, span_bytes, output, output_bytes) ||
        ranges_overlap(influences->weights, weight_bytes,
-                      output, output_bytes) ||
-       ranges_overlap(palette->position_matrices, position_bytes,
-                      output, output_bytes) ||
-       ranges_overlap(palette->normal_matrices, normal_bytes,
                       output, output_bytes)) {
         errno = EINVAL;
         return -1;
     }
 
-    for(i = 0; i < palette->joint_count; ++i) {
-        if(!matrix_finite(palette->position_matrices + i) ||
-           !normal_matrix_finite(palette->normal_matrices + i)) {
-            errno = EDOM;
-            return -1;
-        }
-    }
+    if(skin_palette_preflight(palette, prepared, output, output_bytes,
+                              &joint_count) < 0)
+        return -1;
 
     /* Validate every span and referenced weight before an in-place output can
        overwrite the vertex stream. Individual source values remain bounded
@@ -598,7 +711,7 @@ int pvr_skin_apply_spans(pvr_deform_vertex_t *output,
             if(weight->reserved || !isfinite(weight->weight) ||
                weight->weight < 0.0f ||
                (weight->weight > 0.0f &&
-                weight->joint >= palette->joint_count)) {
+                weight->joint >= joint_count)) {
                 errno = EILSEQ;
                 return -1;
             }
@@ -631,7 +744,7 @@ int pvr_skin_apply_spans(pvr_deform_vertex_t *output,
 
             if(weight->weight == 0.0f)
                 continue;
-            skin_accumulate(source, palette, weight->joint,
+            skin_accumulate(source, palette, prepared, weight->joint,
                             weight->weight / total, &vertex);
         }
         if(!finite3(vertex.position.x, vertex.position.y,
@@ -654,4 +767,35 @@ span_fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_skin_apply(pvr_deform_vertex_t *output, size_t output_capacity,
+    const pvr_deform_stream_t *vertices, const pvr_skin_stream_t *influences,
+    const pvr_skin_palette_t *palette, pvr_deform_result_t *result) {
+    return skin_apply(output, output_capacity, vertices, influences, palette,
+                      result, NULL);
+}
+
+int pvr_skin_apply_spans(pvr_deform_vertex_t *output, size_t output_capacity,
+    const pvr_deform_stream_t *vertices,
+    const pvr_skin_span_stream_t *influences,
+    const pvr_skin_palette_t *palette, pvr_deform_result_t *result) {
+    return skin_apply_spans(output, output_capacity, vertices, influences,
+                            palette, result, NULL);
+}
+
+int pvr_skin_apply_prepared_palette(pvr_deform_vertex_t *output,
+    size_t output_capacity, const pvr_deform_stream_t *vertices,
+    const pvr_skin_stream_t *influences,
+    const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result) {
+    return skin_apply(output, output_capacity, vertices, influences, NULL,
+                      result, palette);
+}
+
+int pvr_skin_apply_spans_prepared_palette(pvr_deform_vertex_t *output,
+    size_t output_capacity, const pvr_deform_stream_t *vertices,
+    const pvr_skin_span_stream_t *influences,
+    const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result) {
+    return skin_apply_spans(output, output_capacity, vertices, influences, NULL,
+                            result, palette);
 }

@@ -15,6 +15,7 @@ KOS_CFLAGS += -I$(KOS_BASE)/utils/animation-test
 KOS_CFLAGS += -I$(KOS_BASE)/utils/pvr-chunk-cache-test
 KOS_CFLAGS += -I$(KOS_BASE)/utils/pvr-deform-test
 $(OBJS): $(KOS_BASE)/utils/pvr-deform-test/skin-fixtures.h
+$(OBJS): $(KOS_BASE)/kernel/arch/dreamcast/include/dc/pvr_skin_prepared.h
 $(OBJS): $(KOS_BASE)/utils/animation-test/matrix-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/toon-draw-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/wire-draw-fixtures.h

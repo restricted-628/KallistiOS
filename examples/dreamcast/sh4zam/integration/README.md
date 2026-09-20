@@ -41,7 +41,12 @@ The shared `utils/pvr-deform-test/skin-fixtures.h` tests fixed-four and
 variable-span skinning against independent double-precision arithmetic.
 It covers nonsymmetric position/normal matrices, normalized weight blending,
 in-place output, inactive weights, output guards, rejected inputs, and XMTRX
-preservation. Absolute component tolerances are `3e-4` on target and `2e-5`
+preservation. It exercises both checked and prepared palettes, verifies that
+preparation copies the original matrices, and rejects late invalid joints
+without modifying the prior snapshot or storage. Checked/prepared results
+match byte-for-byte for dynamic vertex/weight failures and valid-prefix
+publication. Capacity, overlapping output, invalid descriptors and storage
+guards are also checked. Absolute component tolerances are `3e-4` on target and `2e-5`
 on host. Success adds:
 
 ```text

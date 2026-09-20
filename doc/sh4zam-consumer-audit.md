@@ -65,13 +65,57 @@ defect was demonstrated. This pass changes no upstream source.
 As a negative control, temporarily transposing the normal transform made the
 new scalar-reference fixture fail; restoring the intended call passed again.
 
-The target accumulator remains 368 bytes, fixed-four apply 1128 bytes, and
+After the host consolidation, the target accumulator remained 368 bytes,
+fixed-four apply 1128 bytes, and
 span apply 1356 bytes with this toolchain, unchanged from before the host
 consolidation. FIPR remains in the accumulator. This is not a speedup claim.
 Per-influence matrix import/copy cost and repeated validation of mutable
-palettes/weights remain performance-audit items. Removing validation requires
+palettes/weights remained performance-audit items. Removing validation requires
 an explicit prepared-data lifetime/invalidation contract; the checked APIs
 still accept caller-mutated data each call.
+
+### Prepared skin palettes
+
+The opt-in `dc/pvr_skin_prepared.h` API now validates and imports position and
+normal matrices once per sampled pose with `pvr_skin_palette_prepare()`.
+Caller-owned `pvr_skin_prepared_joint_t` storage contains actual SH4ZAM matrix
+types, not casts of KOS storage. The source arrays are copied; the prepared
+descriptor and imported joints must remain immutable during all applications.
+Reprepare when the pose changes, and reuse it across meshes sharing the pose.
+Failed preparation leaves existing storage and the descriptor untouched.
+
+`pvr_skin_apply_prepared_palette()` and its variable-span counterpart skip
+palette value scans and per-influence imports. The existing checked APIs
+remain available. Both paths share blending arithmetic, weight/index checks,
+changing source validation, normal normalization, and valid-prefix errors.
+The new path rejects output overlap with the prepared descriptor or joints.
+Weight validation and per-vertex normalization of weight sums still repeat;
+an immutable influence plan is separate future work.
+
+SH-4 GCC 16.2.0 (`-O2`, GNU17, `-m4-single`) emits a prepared branch that
+directly addresses each 104-byte imported joint and bypasses the two `memcpy`
+calls (64-byte position and 36-byte normal) in the checked branch. FIPR remains
+in the shared accumulator. That accumulator is now 408 bytes versus 368
+before, and retains stack space needed by the checked branch. No stack or
+elapsed-time reduction is claimed. Preparation cost, storage and reuse count
+must be included in a physical-hardware throughput comparison.
+
+The shared host/SH-4 skin fixture covers checked and prepared fixed-four/span
+APIs against the independent scalar oracle, including in-place output and
+inactive out-of-range joints. It mutates the original matrices after
+preparation to verify copy ownership. Differential cases compare output,
+errno and valid-prefix progress for changing vertices, zero normals, malformed
+weights, invalid strides and short output. Transaction tests reject late NaN
+matrices, insufficient or overlapping storage and invalid descriptors without
+publication. Every target case checks XMTRX preservation.
+
+On 2026-09-19 the deformation suite passed GCC 14 GNU17/strict C23, Apple
+Clang strict C2x, and Clang ASan/UBSan. Compact skin, shape and scene integration
+host suites passed GCC 14. The KOS build, exported symbols, integration and
+updated `chunk_skin` example built with SH-4 GCC 16.2.0; the public header also
+passed a target C++ syntax check. The full integration fixture passed Flycast
+interpreter/dynarec and the 120-frame skin example passed dynarec. The approved
+SH4ZAM source pin remains clean. No upstream bug or hardware speedup is claimed.
 
 ## Generated-code evidence
 
@@ -130,9 +174,9 @@ and target tolerances are documented beside the example.
 1. Compare the current composition implementation with an XMTRX-preserving
    multiply candidate, including emitted code, copy/register costs, and actual
    workload timing before choosing a replacement.
-2. Continue the skinning performance audit (prepared palettes/weights and
-   per-influence matrix imports); the checked transform integration is now
-   covered by the shared fixture above. Audit remaining prepared Compact-model
+2. Continue the skinning performance audit with immutable influence plans;
+   prepared palettes now remove palette rescans and per-influence imports
+   when explicitly used, as tested above. Audit remaining prepared Compact-model
    draw variants. Ordinary, two-volume, and modifier paths now
    have explicit one-time admission and in-place projection; see the
    [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).

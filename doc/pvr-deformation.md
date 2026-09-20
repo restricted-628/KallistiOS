@@ -44,7 +44,42 @@ The palette has one point-transform matrix and one inverse-transpose normal
 matrix per joint. Build normal matrices with `pvr_normal_matrix_build()` when
 the corresponding point transform can contain nonuniform scale. Every matrix,
 active weight, and active index is validated before the first output write;
-invalid skinning input therefore leaves all output untouched.
+invalid palette or influence input therefore leaves all output untouched.
+Source vertex and arithmetic failures are checked while deforming and retain
+the reported valid output prefix.
+
+## Prepare a shared palette once per pose
+
+Include `dc/pvr_skin_prepared.h` to opt into caller-owned SH4ZAM palette
+storage. Allocate `pvr_skin_prepared_joint_t joints[joint_count]` with its
+natural alignment, and prepare a `pvr_skin_prepared_palette_t` with
+`pvr_skin_palette_prepare(&palette, joints, joint_count, &prepared)` after
+sampling the current position and inverse-transpose normal matrices.
+
+Preparation validates every matrix before writing any destination and imports
+each joint once. The original KOS matrices are copied, not borrowed; changing
+or freeing them does not change the prepared pose. The descriptor and imported
+joint storage must remain intact and immutable until all applications finish.
+Reprepare when the pose changes, then reuse it for every mesh sharing that
+palette. A zeroed or hand-authored descriptor is not an admitted palette.
+Failed preparation leaves both the descriptor and joint storage unchanged.
+
+`pvr_skin_apply_prepared_palette()` and
+`pvr_skin_apply_spans_prepared_palette()` use the same fixed-four and variable-
+span streams as the checked APIs. They skip palette component rescans and
+per-active-influence KOS-to-SH4ZAM imports. They still validate changing weights,
+active indices, source vertices, capacities and overlaps, normalize the blend,
+and preserve valid-prefix failure reporting. Output must not overlap the
+prepared descriptor or joint array. Exact canonical in-place vertex processing
+remains supported. Preparation and application both preserve XMTRX.
+
+Compact skins can pass their canonical source arrays through
+`pvr_deform_stream_t` and `pvr_skin_stream_t` (or `pvr_skin_span_stream_t` for
+general skins). The `chunk_skin` example demonstrates this after sampling each
+pose. No model format or existing `pvr_chunk_skin_apply()` contract changes.
+Weight admission/normalization is still repeated; it is not part of palette
+preparation. The extra imported storage and preparation have a cost, so reuse
+counts and physical-hardware timings must guide performance decisions.
 
 ## Execution and ownership
 

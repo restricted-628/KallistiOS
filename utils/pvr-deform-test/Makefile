@@ -13,7 +13,8 @@ SOURCES = pvr-deform-test.c \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) skin-fixtures.h
+$(TARGET): $(SOURCES) skin-fixtures.h \
+          ../../kernel/arch/dreamcast/include/dc/pvr_skin_prepared.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)
