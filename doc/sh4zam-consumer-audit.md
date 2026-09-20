@@ -351,7 +351,7 @@ span at most two indices, allowing neighboring edges to reuse endpoints without
 allocation, a public layout change, or writing additional caller scratch.
 Only positions are reused; flags, colors and line expansion remain per edge.
 The existing checked geometry projector handles cache misses, preserving its
-arithmetic and XMTRX save/restore. SPLIT/DROP are unchanged: clipped endpoints
+arithmetic and XMTRX save/restore. That first pass left SPLIT/DROP unchanged: clipped endpoints
 depend on the complete segment and cannot reuse already-projected coordinates.
 
 Projection stays lazy, in original edge order, so an unusable later endpoint
@@ -367,7 +367,7 @@ projector and counts requested endpoints: no tested draw requests more than
 the checked path, and a no-begin path draw requests exactly N endpoints rather
 than 2(N-1). Mesh/boundary cases also require a reduction without a begin
 callback. This demonstrates less repeated work, not a hardware speed claim.
-Reducing SPLIT/DROP homogeneous transforms remains separate work.
+The subsequent SPLIT/DROP follow-up below reuses original homogeneous positions.
 
 On 2026-09-20 the cache suite passed GCC 14 GNU17/strict C23, Clang strict
 C2x and Clang GNU17 with ASan/UBSan. The full SH-4 GCC 16.2.0 KOS build and
@@ -376,6 +376,39 @@ dynarec; the 360-frame wire scene completed in dynarec. The integration link
 now tracks both library archives so a library-only update cannot silently
 reuse an old test executable. SH4ZAM's pinned source remains unmodified.
 Physical Dreamcast correctness and throughput remain unverified.
+
+### SPLIT/DROP homogeneous endpoint reuse
+
+Admitted SPLIT/DROP draws now share the same three-slot local-storage budget,
+but cache original transformed X/Y/W instead of screen-space positions. A
+private frustum entry point shares the public segment clipper's validation,
+arithmetic, intersection/attribute interpolation, projection and publication
+logic. It reuses a position only for an unchanged strip reference. Neither
+intersections nor interpolated colors are stored in the cache. Public API
+layouts and the checked wire entry point remain unchanged.
+
+The cache is cleared per strip and after begin callbacks. Every edge still
+validates its live frustum and endpoint attributes. Misses use the existing
+SH4ZAM FIPR transform, importing its matrix only when the edge has a miss;
+XMTRX remains untouched. Lazy processing retains the emitted prefix on a later
+overflow. The private helper adds no dynamic-link export or upstream change.
+
+The shared wire fixture exercises all policies/topologies on three-, four-
+and eight-reference strips, with and without callbacks. Two segments sharing
+a behind-near endpoint have independently checked distinct intersections and
+interpolated colors. Other cases cover begin-time matrix/workspace changes,
+degenerate first edges and finite-input transform overflow on a later endpoint.
+Host probes count requested cache misses: a no-begin path requests N transforms
+instead of 2(N-1) for every policy. These are operation-count checks, not
+hardware timing measurements. The rendered wire scene now exercises all nine
+policy/topology combinations over 360 frames, including side-plane crossings.
+
+On 2026-09-20 both the geometry and draw-cache host suites passed GCC 14
+GNU17/strict C23, Clang strict C2x, and Clang GNU17 with ASan/UBSan. The full
+SH-4 GCC 16.2.0 build and both example links passed. Integration completed in
+Flycast interpreter and dynarec; the updated 360-frame wire scene passed in
+dynarec. SH4ZAM source verification remained clean. No physical-hardware
+numerical or performance certification is implied.
 
 ## Two-volume toon packet correction
 

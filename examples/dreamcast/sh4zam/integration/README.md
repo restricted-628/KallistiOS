@@ -113,6 +113,15 @@ projection requests: reuse cannot increase them in these cases, and no-callback
 path topology projects exactly one endpoint per strip reference. No production
 instrumentation or extra caller workspace is introduced.
 
+The same reuse checks now include SPLIT/DROP's original homogeneous X/Y/W
+cache. Two near-plane-crossing edges share an endpoint but require different
+intersections and interpolated colors; independent expectations check both.
+Begin-time mutation, degenerate edges and late transform overflow retain
+checked output/progress/error behavior across all clip policies. Host probes
+count requested homogeneous cache misses (not completed instructions on error)
+as well as ASSUME_VISIBLE projection requests. Per-edge clipping is never
+replaced by reuse of an intersection or a perspective-divided endpoint.
+
 The two-volume fixture covers both 32-byte color and 64-byte textured caches,
 with and without a prepare callback. It compares checked/admitted output,
 including buffer guards, and verifies the full temporary-union callback

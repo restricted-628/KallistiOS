@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_frustum.h>
+#include "pvr_frustum_internal.h"
 
 #ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
@@ -566,14 +567,16 @@ static int clip_plane(const pvr_frustum_t *frustum, size_t plane,
     return 0;
 }
 
-int pvr_frustum_clip_segment(
+static int clip_segment(
     pvr_vertex_t output[2], const pvr_vertex_t input[2],
     const pvr_frustum_t *frustum, uint32_t attributes,
-    pvr_frustum_segment_result_t *result) {
+    pvr_frustum_segment_result_t *result,
+    pvr_frustum_segment_cache_t *cache, const size_t indices[2]) {
     pvr_frustum_segment_result_t progress = { 0, 0 };
     alignas(32) pvr_vertex_t staged[2];
     clip_vertex_t endpoints[2];
     position_transform_t transform;
+    int transform_ready = 0;
     size_t vertex;
     size_t plane;
 
@@ -591,7 +594,6 @@ int pvr_frustum_clip_segment(
         return -1;
     }
 
-    position_transform_init(&transform, &frustum->object_to_screen);
     for(vertex = 0; vertex < 2u; ++vertex) {
         if(input[vertex].flags != PVR_CMD_VERTEX &&
            input[vertex].flags != PVR_CMD_VERTEX_EOL) {
@@ -606,11 +608,29 @@ int pvr_frustum_clip_segment(
             errno = EDOM;
             return -1;
         }
-        if(!transform_position(&transform, input[vertex].x,
-                               input[vertex].y, input[vertex].z,
-                               endpoints + vertex)) {
-            errno = ERANGE;
-            return -1;
+        size_t slot = cache ? indices[vertex] % 3u : 0;
+        if(cache && cache->indices[slot] == indices[vertex]) {
+            endpoints[vertex].x = cache->positions[slot].x;
+            endpoints[vertex].y = cache->positions[slot].y;
+            endpoints[vertex].w = cache->positions[slot].w;
+        }
+        else {
+            if(!transform_ready) {
+                position_transform_init(&transform, &frustum->object_to_screen);
+                transform_ready = 1;
+            }
+            if(!transform_position(&transform, input[vertex].x,
+                                   input[vertex].y, input[vertex].z,
+                                   endpoints + vertex)) {
+                errno = ERANGE;
+                return -1;
+            }
+            if(cache) {
+                cache->positions[slot].x = endpoints[vertex].x;
+                cache->positions[slot].y = endpoints[vertex].y;
+                cache->positions[slot].w = endpoints[vertex].w;
+                cache->indices[slot] = indices[vertex];
+            }
         }
         endpoints[vertex].u = input[vertex].u;
         endpoints[vertex].v = input[vertex].v;
@@ -692,6 +712,21 @@ int pvr_frustum_clip_segment(
     if(result)
         *result = progress;
     return 0;
+}
+
+int pvr_frustum_clip_segment(
+    pvr_vertex_t output[2], const pvr_vertex_t input[2],
+    const pvr_frustum_t *frustum, uint32_t attributes,
+    pvr_frustum_segment_result_t *result) {
+    return clip_segment(output, input, frustum, attributes, result, NULL, NULL);
+}
+
+int pvr_frustum_clip_segment_cached(
+    pvr_vertex_t output[2], const pvr_vertex_t input[2],
+    const pvr_frustum_t *frustum, uint32_t attributes,
+    pvr_frustum_segment_result_t *result,
+    pvr_frustum_segment_cache_t *cache, const size_t indices[2]) {
+    return clip_segment(output, input, frustum, attributes, result, cache, indices);
 }
 
 int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,

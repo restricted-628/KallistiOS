@@ -25,6 +25,7 @@ all: $(TARGET)
 
 $(TARGET): $(SOURCES) toon-draw-fixtures.h wire-draw-fixtures.h two-volume-toon-fixtures.h \
            ../../kernel/arch/dreamcast/hardware/pvr/pvr_chunk_wire.c
+$(TARGET): ../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum_internal.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)

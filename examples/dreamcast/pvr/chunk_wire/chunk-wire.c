@@ -110,16 +110,23 @@ int main(int argc, char **argv) {
     assert(pvr_geometry_sink_init_current(&sink) == 0);
 
     for(frame = 0; frame < 360u; ++frame) {
+        pvr_chunk_clip_policy_t clip_policy =
+            (pvr_chunk_clip_policy_t)((frame % 120u) / 40u);
         profile.topology = (pvr_chunk_wire_topology_t)(frame / 120u);
+        /* Cut the right half for SPLIT/DROP; retain a left-side visible edge
+           in every topology so the current-list header path is exercised. */
+        frustum.right = clip_policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE ? 640.0f : 320.0f;
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
         assert(pvr_chunk_model_cache_draw_emit_wire(
-            &draw, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
+            &draw, &frustum, clip_policy,
             &profile, &sink, &workspace, NULL, begin_strip,
             NULL, NULL, NULL, &polygon_header, &result) == 0);
         assert(result.emitted_edges > 0 && result.emitted_vertices ==
                result.emitted_edges * PVR_GEOMETRY_LINE_VERTICES);
+        if(clip_policy != PVR_CHUNK_CLIP_ASSUME_VISIBLE)
+            assert(result.clipped_edges > 0);
         assert(pvr_list_finish() == 0);
         assert(pvr_scene_finish() == 0);
     }

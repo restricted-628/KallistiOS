@@ -49,3 +49,5 @@ OBJS += pvr_texture.o pvr_texture_layout.o pvr_texture_reservation.o \
 	pvr_texture_residency.o pvr_texture_request.o pvr_dma.o
 
 include $(KOS_BASE)/Makefile.prefab
+
+pvr_frustum.o pvr_chunk_wire.o: pvr_frustum_internal.h

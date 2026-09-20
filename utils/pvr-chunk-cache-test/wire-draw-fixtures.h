@@ -88,6 +88,13 @@ static int wire_reuse_prepare(const pvr_chunk_render_state_t *state,
     v->x = p->scenario == 5 && i == 1 ? 0.0f : (float)(i & 1u);
     v->y = (float)(i / 2u);
     v->z = p->scenario >= 4 && i == 2 ? 0.0f : 1.0f;
+    if(p->scenario == 6) {
+        v->x = i == 0 ? -0.5f : i == 1 ? 0.0f : 0.5f;
+        v->y = i == 1 ? 1.0f : 0.0f;
+        v->z = i == 1 ? 0.0f : 1.0f;
+    }
+    /* Finite source coordinates whose matrix product overflows on endpoint 2. */
+    if(p->scenario == 7 && i == 2) v->z = 3.0e38f;
     v->argb = UINT32_C(0xff010203) + i * UINT32_C(0x00102030);
     v->oargb = i * UINT32_C(0x00030201);
     return 0;
@@ -126,12 +133,15 @@ static bool wire_reuse_boundaries(const pvr_chunk_model_cache_t *cache) {
     WIRE_CHECK(pvr_chunk_model_cache_draw_prepare(cache, &draw) == 0);
     WIRE_CHECK(pvr_chunk_model_cache_wire_capacity(cache, &capacity) == 0);
     WIRE_CHECK(capacity <= 128 && cache->maximum_strip_vertices <= 8);
-    for(unsigned scenario = 0; scenario < 6; ++scenario) {
+    for(unsigned policy = 0; policy < 3; ++policy)
+    for(unsigned scenario = 0; scenario < 8; ++scenario) {
+        if(scenario == 6 && policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE) continue;
         for(unsigned admitted = 0; admitted < 2; ++admitted) {
             matrix_t matrix = {
                 { 1, 0, 0, 0 }, { 0, 1, 0, 0 },
                 { 0, 0, 1, 1 }, { 0, 0, 0, 0 }
             };
+            if(scenario == 7) matrix[2][3] = 2.0f;
             pvr_frustum_t frustum;
             pvr_geometry_sink_t sink;
             wire_reuse_probe_t probe = { &frustum, vertices, scenario, 0, 0 };
@@ -141,12 +151,12 @@ static bool wire_reuse_boundaries(const pvr_chunk_model_cache_t *cache) {
             errno = 0;
             if(admitted)
                 rc[admitted] = pvr_chunk_model_cache_draw_emit_wire(&draw, &frustum,
-                    PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile, &sink, &workspace,
+                    (pvr_chunk_clip_policy_t)policy, &profile, &sink, &workspace,
                     NULL, wire_reuse_begin, NULL, wire_reuse_prepare, NULL, &probe,
                     results + admitted);
             else
                 rc[admitted] = pvr_chunk_model_cache_emit_wire(cache, &frustum,
-                    PVR_CHUNK_CLIP_ASSUME_VISIBLE, &profile, &sink, &workspace,
+                    (pvr_chunk_clip_policy_t)policy, &profile, &sink, &workspace,
                     NULL, wire_reuse_begin, NULL, wire_reuse_prepare, NULL, &probe,
                     results + admitted);
             errors[admitted] = errno;
@@ -161,11 +171,35 @@ static bool wire_reuse_boundaries(const pvr_chunk_model_cache_t *cache) {
         WIRE_CHECK(begins[0] == begins[1]);
         WIRE_CHECK(!memcmp(results, results + 1, sizeof(results[0])));
         WIRE_CHECK(!memcmp(output[0], output[1], sizeof(output[0])));
-        if(scenario < 2) WIRE_CHECK(rc[0] == 0 && emitted[0] >= 8);
-        else WIRE_CHECK(rc[0] == -1 && errors[0] == EDOM &&
+        if(scenario == 7) {
+            WIRE_CHECK(rc[0] == -1 && errors[0] == ERANGE &&
+                       results[0].source_edges == 2 && emitted[0] == 4);
+        }
+        else if(policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE || scenario == 3) {
+            if(scenario < 2) WIRE_CHECK(rc[0] == 0 && emitted[0] >= 8);
+            else WIRE_CHECK(rc[0] == -1 && errors[0] == EDOM &&
                        results[0].source_edges == 2 &&
                        emitted[0] == (scenario == 5 ? 0u : 4u) &&
                        begins[0] == (scenario == 5 ? 0u : 1u));
+        }
+        else {
+            WIRE_CHECK(rc[0] == 0);
+            if(scenario == 6) {
+                WIRE_CHECK(results[0].clipped_edges == 2);
+                if(policy == PVR_CHUNK_CLIP_DROP) WIRE_CHECK(emitted[0] == 0);
+                else {
+                    WIRE_CHECK(emitted[0] == 8);
+                    /* Two different near-plane intersections from the same
+                       source endpoint: caching either intersection is wrong. */
+                    WIRE_CHECK(fabsf((output[1][2].x + output[1][3].x) * 0.5f + 0.5f) < 0.0003f);
+                    WIRE_CHECK(fabsf((output[1][4].x + output[1][5].x) * 0.5f - 0.5f) < 0.0003f);
+                    WIRE_CHECK(fabsf(output[1][2].y - 1.0f) < 0.0003f &&
+                               fabsf(output[1][4].y - 1.0f) < 0.0003f);
+                    WIRE_CHECK(output[1][2].argb == UINT32_C(0xff09121b) &&
+                               output[1][4].argb == UINT32_C(0xff19324b));
+                }
+            }
+        }
     }
     return true;
 }
@@ -268,7 +302,7 @@ static bool wire_draw_fixtures(const pvr_chunk_model_cache_t *cache) {
         WIRE_CHECK(!memcmp(output[0], output[1], sizeof(output[0])));
 #ifdef WIRE_COUNT_PROJECTION
         WIRE_CHECK(projections[1] <= projections[0]);
-        if(!failure && policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE && !(callbacks & 8)) {
+        if(!failure && !(callbacks & 8)) {
             WIRE_CHECK(projections[1] < projections[0]);
             if(topology == PVR_CHUNK_WIRE_PATH)
                 WIRE_CHECK(projections[1] == cache->vertex_count);

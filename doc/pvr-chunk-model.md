@@ -589,10 +589,11 @@ and borrows immutable deformation records when no resolver is supplied.
 Memory-sink worst-case capacity is still calculated from strip counts each
 draw, and changing frustums, profiles, workspaces, sinks and callback results
 remain checked. The checked wire API also avoids validating the cache a second
-time merely to calculate sink capacity. SPLIT/DROP retain homogeneous clipping
-before per-edge projection. Admitted ASSUME_VISIBLE draws reuse up to three
-recently projected strip-reference positions; the same checked projection math
-is used for misses. Reuse is cleared per strip and after `begin_strip`, while
+time merely to calculate sink capacity. Admitted SPLIT/DROP draws reuse up to
+three original homogeneous X/Y/W positions, retaining clipping, interpolation
+and perspective division separately for each edge. Admitted ASSUME_VISIBLE
+draws reuse projected positions instead. Both use the same transform arithmetic
+on misses. Reuse is cleared per strip and after `begin_strip`, while
 edge flags/colors and expansion remain per-edge. This requires no new caller
 workspace or allocation and preserves valid-prefix errors and XMTRX. The
 `chunk_wire` example uses this path; workspace contents after drawing remain

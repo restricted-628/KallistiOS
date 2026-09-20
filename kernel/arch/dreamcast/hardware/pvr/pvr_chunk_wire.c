@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_wire.h>
+#include "pvr_frustum_internal.h"
 
 #include <errno.h>
 #include <math.h>
@@ -434,11 +435,17 @@ static int cache_emit_wire(
         size_t edge_count;
         size_t edge;
         int strip_started = 0;
-        wire_projection_cache_t projection_cache;
+        union {
+            wire_projection_cache_t projected;
+            pvr_frustum_segment_cache_t homogeneous;
+        } position_cache;
         int reuse_projection = admitted &&
             clip_policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE;
 
-        projection_cache_clear(&projection_cache);
+        if(reuse_projection)
+            projection_cache_clear(&position_cache.projected);
+        else
+            pvr_frustum_segment_cache_clear(&position_cache.homogeneous);
 
         ++progress.visited_strips;
         if(filter_strip) {
@@ -493,10 +500,18 @@ static int cache_emit_wire(
             if(reuse_projection) {
                 if(project_edge_reuse(projected, source, indices,
                                       &frustum->object_to_screen,
-                                      &projection_cache) < 0)
+                                      &position_cache.projected) < 0)
                     goto fail;
                 segment.visible = 1;
                 segment.clipped = 0;
+            }
+            else if(admitted) {
+                if(pvr_frustum_clip_segment_cached(projected, source, frustum,
+                        PVR_FRUSTUM_CLIP_ALL, &segment,
+                        &position_cache.homogeneous, indices) < 0)
+                    goto fail;
+                if(clip_policy == PVR_CHUNK_CLIP_DROP && segment.clipped)
+                    segment.visible = 0;
             }
             else if(project_edge(projected, source, frustum, clip_policy,
                                  &segment) < 0)
@@ -523,7 +538,10 @@ static int cache_emit_wire(
                 }
                 /* The callback can change live transform/workspace inputs.
                    No projected endpoint may survive across that boundary. */
-                projection_cache_clear(&projection_cache);
+                if(reuse_projection)
+                    projection_cache_clear(&position_cache.projected);
+                else
+                    pvr_frustum_segment_cache_clear(&position_cache.homogeneous);
             }
             if(pvr_geometry_sink_emit(sink, quad,
                                       PVR_GEOMETRY_LINE_VERTICES) < 0)

@@ -14,7 +14,7 @@ SOURCES = pvr-geometry-test.c \
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES)
+$(TARGET): $(SOURCES) ../../kernel/arch/dreamcast/hardware/pvr/pvr_frustum_internal.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)
