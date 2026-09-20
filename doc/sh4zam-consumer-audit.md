@@ -141,7 +141,7 @@ The new SH-4 apply symbol is 716 bytes with GCC 16.2.0 (`-O2`, GNU17,
 `-m4-single`). Its disassembly has no weight-division call; it calls the same
 XMTRX-preserving accumulator and checked normal normalization. The old checked
 and palette-only paths are unchanged. This is removed repeated work, not a
-measured hardware speedup. Variable-length spans remain a separate follow-up.
+measured hardware speedup. Variable-length spans use the separate path below.
 
 Shared host/SH-4 fixtures compare output bytes, errno and progress against
 the palette-only checked-weight path for strided records, repeated joints,
@@ -159,6 +159,54 @@ new exports and both examples, and accepted the public header in C++. The full
 integration fixture passed Flycast interpreter/dynarec; the 120-frame skin
 example passed dynarec. SH4ZAM remains unmodified at the approved PR #70 pin.
 Physical-hardware correctness and throughput are not established by these runs.
+
+### Variable-span immutable weight plans
+
+`pvr_skin_spans_prepare_query()` validates a strided span stream and reports
+exact capacities for its independent normalized runs. `pvr_skin_spans_prepare()`
+revalidates and copies those runs into caller-owned storage. Shared/overlapping
+source spans are expanded independently: their normalization totals can differ.
+Only originally zero weights are omitted; order, repeated joints and positive
+weights rounded to zero are retained. Unreferenced source weights are ignored,
+matching checked skinning. The query guards total storage overflow, and failed
+query/preparation leaves every destination unchanged.
+
+`pvr_skin_apply_spans_prepared()` pairs this immutable mesh plan with a prepared
+pose palette. It checks counts, addresses and output overlap in constant-size
+framing, then checks changing vertices and arithmetic while skinning. It does
+not rescan span/weight/index values or recompute weight sums/divisions. Original
+span/weight arrays are not borrowed. Rebuilding is required after influence or
+vertex/joint mapping changes, while pose-only changes refresh just the palette.
+The older APIs remain checked alternatives. The `chunk_scene` example now
+prepares each general-skin plan at load time and palettes per sampled pose.
+
+The SH-4 apply symbol is 760 bytes with GCC 16.2.0 (`-O2`, GNU17,
+`-m4-single`); its disassembly contains no weight-division call and still calls
+the shared XMTRX-preserving accumulator and dynamic normal normalization.
+Expanded runs can cost more storage than shared input weights; this design
+does not claim a net hardware throughput gain without measuring representative
+content and pose reuse.
+
+The shared `skin-span-plan-fixtures.h` checks exact query sizes, independently
+normalized overlapping spans, repeated joints, omitted zero slots, ignored
+unreferenced malformed records, empty plans, copied ownership and guards.
+Checked/prepared bytes, errno and valid-prefix progress agree for in-place and
+separate output, NaN vertices, zero normals, short output and invalid stride.
+Independent double-precision expectations also check successful poses.
+Transactional failures cover late malformed spans/weights, overflowed totals,
+capacities, alignment, overlap, address-size overflow and invalid descriptors.
+Positive weights rounded to zero retain checked overflow rejection; target
+calls preserve XMTRX.
+
+On 2026-09-20 the expanded deformation suite passed GCC 14 GNU17/strict C23,
+Apple Clang strict C2x and Clang ASan/UBSan. Compact skin and shape host
+regressions also passed GCC 14. The scene host golden and failure-cleanup
+suite passed GCC 14 using the new path. SH-4 GCC 16.2.0 built KOS,
+all three exports and both examples; the header also passed a target C++ syntax
+check. The full integration fixture and 240-frame scene both passed Flycast
+interpreter and dynarec, including scene pose goldens and final PVR fault checks.
+The approved SH4ZAM source pin remains clean; no upstream defect or measured
+physical-hardware speedup is claimed.
 
 ## Generated-code evidence
 
@@ -217,8 +265,8 @@ and target tolerances are documented beside the example.
 1. Compare the current composition implementation with an XMTRX-preserving
    multiply candidate, including emitted code, copy/register costs, and actual
    workload timing before choosing a replacement.
-2. Continue the skinning performance audit with variable-span influence plans;
-   the fixed-four plan now validates and normalizes weights once per mesh.
+2. Measure prepared skinning with representative mesh/pose reuse: fixed-four
+   and variable-span plans now validate and normalize weights once per mesh;
    prepared palettes now remove palette rescans and per-influence imports
    when explicitly used, as tested above. Audit remaining prepared Compact-model
    draw variants. Ordinary, two-volume, and modifier paths now

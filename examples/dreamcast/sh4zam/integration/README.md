@@ -59,6 +59,15 @@ Success adds:
 SH4ZAM skinning, spans, in-place, rejection, XMTRX: PASS
 ```
 
+`skin-span-plan-fixtures.h` extends that same check to variable-length plans:
+overlapping/shared spans with different normalization totals, repeated joints,
+omitted zero slots, unreferenced malformed weights, empty plans, copied input
+ownership, exact query capacities, transactional failures, output overlap and
+dynamic valid-prefix errors. Prepared output matches the checked span path
+byte-for-byte and the independent scalar oracle. Active weights rounded to
+zero retain checked overflow rejection. Every apply is checked for XMTRX
+preservation on target.
+
 On 2026-09-19 this skin fixture and the full integration example passed
 Flycast interpreter and dynarec after the skinning host-backend consolidation.
 No hardware performance or numerical certification is implied.

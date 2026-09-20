@@ -26,6 +26,15 @@ target frames then call `pvr_chunk_model_cache_draw_emit()`, avoiding static
 strip/base-data rescans. The cache and draw snapshot stay immutable; animated
 resolver output is still checked each frame.
 
+General-skin spans are also validated and normalized once during model loading
+with `pvr_skin_spans_prepare_query()` / `pvr_skin_spans_prepare()`. Fixed fixture
+arrays hold the queried run and weight counts. Each sampled palette is imported
+once per model with `pvr_skin_palette_prepare()`, then
+`pvr_skin_apply_spans_prepared()` skins the changing morphed vertices. The weight
+plan stays immutable across poses; its original decoded inputs are not borrowed.
+Output arithmetic and changing vertex data remain checked. This removes static
+weight scans/divisions, not the dynamic morph or skeleton evaluation work.
+
 ## Checks and expected result
 
 Before rendering, the example evaluates times 0, .25, .5, 1, 1.5, and 2 seconds.

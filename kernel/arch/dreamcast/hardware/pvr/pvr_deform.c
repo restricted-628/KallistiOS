@@ -324,6 +324,7 @@ static int normal_matrix_finite(const pvr_normal_matrix_t *matrix) {
 
 #define SKIN_PALETTE_VERSION UINT32_C(0x53504c01)
 #define SKIN_INFLUENCES_VERSION UINT32_C(0x53494e01)
+#define SKIN_SPANS_VERSION UINT32_C(0x53535001)
 
 static int palette_ranges(const pvr_skin_palette_t *palette,
                           size_t *position_bytes, size_t *normal_bytes) {
@@ -958,6 +959,255 @@ int pvr_skin_apply_prepared(pvr_deform_vertex_t *output, size_t output_capacity,
         }
         vertex.position.w = 1.0f;
         vertex.normal.w = 0.0f;
+        memcpy(output + i, &vertex, sizeof(vertex));
+        ++progress.deformed_vertices;
+    }
+    if(result)
+        *result = progress;
+    return 0;
+fail:
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+typedef struct skin_region {
+    const void *pointer;
+    size_t bytes;
+} skin_region_t;
+
+/* Range framing: sources may alias each other, destinations may
+   alias neither sources nor one another. Empty regions occupy no storage. */
+static int skin_destinations_disjoint(const skin_region_t *sources,
+    size_t source_count, const skin_region_t *destinations, size_t count) {
+    for(size_t i = 0; i < count; ++i) {
+        if(!address_range(destinations[i].pointer, destinations[i].bytes)) {
+            errno = ERANGE;
+            return -1;
+        }
+        if(!destinations[i].bytes)
+            continue;
+        for(size_t j = 0; j < source_count; ++j) {
+            if(sources[j].bytes && ranges_overlap(destinations[i].pointer,
+                destinations[i].bytes, sources[j].pointer, sources[j].bytes)) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
+        for(size_t j = 0; j < i; ++j) {
+            if(destinations[j].bytes && ranges_overlap(destinations[i].pointer,
+                destinations[i].bytes, destinations[j].pointer, destinations[j].bytes)) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int skin_spans_scan(const pvr_skin_span_stream_t *influences,
+    size_t joint_count, skin_region_t sources[3],
+    pvr_skin_span_plan_requirements_t *requirements) {
+    size_t span_bytes, weight_bytes, active_count = 0;
+    if(!influences || !joint_count ||
+       ((uintptr_t)influences & (_Alignof(pvr_skin_span_stream_t) - 1u)) ||
+       !influences->spans || !influences->weights || !influences->weight_count ||
+       ((uintptr_t)influences->spans & (_Alignof(pvr_skin_span_t) - 1u)) ||
+       ((uintptr_t)influences->weights & (_Alignof(pvr_skin_weight_t) - 1u)) ||
+       influences->stride < sizeof(pvr_skin_span_t) || (influences->stride & 3u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(range_size(influences->vertex_count, influences->stride,
+                  sizeof(pvr_skin_span_t), &span_bytes) < 0 ||
+       influences->weight_count > SIZE_MAX / sizeof(pvr_skin_weight_t) ||
+       influences->vertex_count > SIZE_MAX / sizeof(pvr_skin_prepared_span_t)) {
+        errno = ERANGE;
+        return -1;
+    }
+    weight_bytes = influences->weight_count * sizeof(pvr_skin_weight_t);
+    sources[0] = (skin_region_t){ influences, sizeof(*influences) };
+    sources[1] = (skin_region_t){ influences->spans, span_bytes };
+    sources[2] = (skin_region_t){ influences->weights, weight_bytes };
+    for(size_t i = 0; i < 3; ++i) {
+        if(!address_range(sources[i].pointer, sources[i].bytes)) {
+            errno = ERANGE;
+            return -1;
+        }
+    }
+    for(size_t i = 0; i < influences->vertex_count; ++i) {
+        const pvr_skin_span_t *span = (const pvr_skin_span_t *)
+            ((const uint8_t *)influences->spans + i * influences->stride);
+        float total = 0.0f;
+        size_t active = 0;
+        if(span->reserved || !span->weight_count ||
+           span->first_weight > influences->weight_count ||
+           span->weight_count > influences->weight_count - span->first_weight) {
+            errno = EILSEQ;
+            return -1;
+        }
+        for(size_t s = 0; s < span->weight_count; ++s) {
+            const pvr_skin_weight_t *weight = influences->weights + span->first_weight + s;
+            if(weight->reserved || !isfinite(weight->weight) || weight->weight < 0 ||
+               (weight->weight > 0 && weight->joint >= joint_count)) {
+                errno = EILSEQ;
+                return -1;
+            }
+            total += weight->weight;
+            if(weight->weight > 0)
+                ++active;
+        }
+        if(!isfinite(total) || total <= FLT_MIN) {
+            errno = EILSEQ;
+            return -1;
+        }
+        if(active > SIZE_MAX / sizeof(pvr_skin_weight_t) - active_count) {
+            errno = ERANGE;
+            return -1;
+        }
+        active_count += active;
+    }
+    requirements->span_count = influences->vertex_count;
+    requirements->weight_count = active_count;
+    return 0;
+}
+
+int pvr_skin_spans_prepare_query(const pvr_skin_span_stream_t *influences,
+    size_t joint_count, pvr_skin_span_plan_requirements_t *requirements) {
+    skin_region_t sources[3];
+    pvr_skin_span_plan_requirements_t calculated;
+    if(!requirements || ((uintptr_t)requirements &
+                         (_Alignof(pvr_skin_span_plan_requirements_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(skin_spans_scan(influences, joint_count, sources, &calculated) < 0)
+        return -1;
+    const skin_region_t destination = { requirements, sizeof(*requirements) };
+    if(skin_destinations_disjoint(sources, 3, &destination, 1) < 0)
+        return -1;
+    *requirements = calculated;
+    return 0;
+}
+
+int pvr_skin_spans_prepare(const pvr_skin_span_stream_t *influences,
+    size_t joint_count, pvr_skin_prepared_span_t *spans, size_t span_capacity,
+    pvr_skin_weight_t *weights, size_t weight_capacity,
+    pvr_skin_prepared_spans_t *prepared) {
+    skin_region_t sources[3];
+    pvr_skin_span_plan_requirements_t requirements;
+    pvr_skin_prepared_spans_t snapshot;
+    size_t next = 0;
+    if(!spans || !weights || !prepared ||
+       ((uintptr_t)spans & (_Alignof(pvr_skin_prepared_span_t) - 1u)) ||
+       ((uintptr_t)weights & (_Alignof(pvr_skin_weight_t) - 1u)) ||
+       ((uintptr_t)prepared & (_Alignof(pvr_skin_prepared_spans_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(skin_spans_scan(influences, joint_count, sources, &requirements) < 0)
+        return -1;
+    if(span_capacity < requirements.span_count || weight_capacity < requirements.weight_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    const skin_region_t destinations[] = {
+        { spans, requirements.span_count * sizeof(*spans) },
+        { weights, requirements.weight_count * sizeof(*weights) },
+        { prepared, sizeof(*prepared) }
+    };
+    if(skin_destinations_disjoint(sources, 3, destinations, 3) < 0)
+        return -1;
+    for(size_t i = 0; i < requirements.span_count; ++i) {
+        const pvr_skin_span_t *source = (const pvr_skin_span_t *)
+            ((const uint8_t *)influences->spans + i * influences->stride);
+        float total = 0;
+        spans[i].first_weight = next;
+        for(size_t s = 0; s < source->weight_count; ++s)
+            total += influences->weights[source->first_weight + s].weight;
+        for(size_t s = 0; s < source->weight_count; ++s) {
+            const pvr_skin_weight_t *weight = influences->weights + source->first_weight + s;
+            if(weight->weight == 0)
+                continue;
+            weights[next++] = (pvr_skin_weight_t){ weight->joint, 0, weight->weight / total };
+        }
+        spans[i].weight_count = next - spans[i].first_weight;
+    }
+    snapshot.spans = spans;
+    snapshot.weights = weights;
+    snapshot.vertex_count = requirements.span_count;
+    snapshot.weight_count = requirements.weight_count;
+    snapshot.joint_count = joint_count;
+    snapshot.version = SKIN_SPANS_VERSION;
+    *prepared = snapshot;
+    return 0;
+}
+
+int pvr_skin_apply_spans_prepared(pvr_deform_vertex_t *output,
+    size_t output_capacity, const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_spans_t *influences,
+    const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result) {
+    pvr_deform_result_t progress = { 0 };
+    size_t input_bytes, output_bytes, span_bytes, weight_bytes, joint_count;
+    if(result)
+        *result = progress;
+    if(stream_preflight(vertices, output, output_capacity, &input_bytes, &output_bytes) < 0)
+        return -1;
+    if(!influences || ((uintptr_t)influences &
+                       (_Alignof(pvr_skin_prepared_spans_t) - 1u)) ||
+       influences->version != SKIN_SPANS_VERSION ||
+       !influences->spans || !influences->weights ||
+       influences->vertex_count != vertices->vertex_count ||
+       ((uintptr_t)influences->spans & (_Alignof(pvr_skin_prepared_span_t) - 1u)) ||
+       ((uintptr_t)influences->weights & (_Alignof(pvr_skin_weight_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(influences->vertex_count > SIZE_MAX / sizeof(*influences->spans) ||
+       influences->weight_count > SIZE_MAX / sizeof(*influences->weights)) {
+        errno = ERANGE;
+        return -1;
+    }
+    span_bytes = influences->vertex_count * sizeof(*influences->spans);
+    weight_bytes = influences->weight_count * sizeof(*influences->weights);
+    const skin_region_t sources[] = {
+        { influences, sizeof(*influences) },
+        { influences->spans, span_bytes }, { influences->weights, weight_bytes }
+    };
+    for(size_t i = 0; i < 3; ++i) {
+        if(!address_range(sources[i].pointer, sources[i].bytes)) {
+            errno = ERANGE;
+            return -1;
+        }
+    }
+    const skin_region_t destination = { output, output_bytes };
+    if(skin_destinations_disjoint(sources, 3, &destination, 1) < 0 ||
+       skin_palette_preflight(NULL, palette, output, output_bytes, &joint_count) < 0)
+        return -1;
+    if(influences->joint_count != joint_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(size_t i = 0; i < vertices->vertex_count; ++i) {
+        const pvr_deform_vertex_t *source = (const pvr_deform_vertex_t *)
+            ((const uint8_t *)vertices->vertices + i * vertices->stride);
+        const pvr_skin_prepared_span_t *span = influences->spans + i;
+        pvr_deform_vertex_t vertex = { 0 };
+        if(!vertex_finite(source)) {
+            errno = EDOM;
+            goto fail;
+        }
+        for(size_t s = 0; s < span->weight_count; ++s) {
+            const pvr_skin_weight_t *weight = influences->weights + span->first_weight + s;
+            skin_accumulate(source, NULL, palette, weight->joint, weight->weight, &vertex);
+        }
+        if(!finite3(vertex.position.x, vertex.position.y, vertex.position.z) ||
+           normalize(&vertex.normal.x, &vertex.normal.y, &vertex.normal.z) < 0) {
+            errno = ERANGE;
+            goto fail;
+        }
+        vertex.position.w = 1;
+        vertex.normal.w = 0;
         memcpy(output + i, &vertex, sizeof(vertex));
         ++progress.deformed_vertices;
     }

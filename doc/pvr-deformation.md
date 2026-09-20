@@ -110,8 +110,40 @@ Changing the pose alone does not require rebuilding weights, but palette joint
 indices must keep the same meaning. This runtime representation is not an
 asset format. Result storage must be disjoint from inputs/output. The
 `chunk_skin` example prepares weights once outside the frame loop and the
-palette once per sampled pose. Variable-length spans still use the checked
-weight path and are a separate follow-up. No hardware speedup is inferred.
+palette once per sampled pose. Variable-length plans use the separate API
+below. No hardware speedup is inferred.
+
+## Prepare variable-length spans once per mesh
+
+Call `pvr_skin_spans_prepare_query()` with a strided span stream and joint count
+to obtain exact span/weight array capacities. Allocate naturally aligned
+`pvr_skin_prepared_span_t` and `pvr_skin_weight_t` arrays of those sizes, then
+call `pvr_skin_spans_prepare()` to populate them and a
+`pvr_skin_prepared_spans_t` descriptor. Preparation revalidates the sources;
+query results never authorize changed or malformed inputs. Failed query or
+preparation leaves every destination unchanged. No allocation is hidden.
+
+Each span has its own normalized run. Shared or overlapping source spans are
+expanded independently because their totals can differ. Only originally zero
+weights are omitted; active weights rounded to zero remain in the run and
+still execute. Order and repeated joint indices are preserved. Unreferenced
+source weights are ignored, matching the checked API. These choices can make
+the prepared weight array larger than the original shared array; use the
+query, not the source weight count, for allocation.
+
+`pvr_skin_apply_spans_prepared()` combines the immutable plan with a prepared
+palette. It avoids static span/index/weight validation and weight sums/divisions
+on each pose, while preserving dynamic source and arithmetic checks, canonical
+in-place processing, valid-prefix failure behavior and XMTRX. Output must not
+overlap either prepared descriptor or any backing array; result storage must
+be disjoint from all inputs/output. Counts and joint-index meaning must agree.
+
+Original source spans/weights are copied and may be changed or freed after
+preparation. Keep the prepared arrays and descriptor alive and immutable, and
+rebuild after changing influences, vertex order/count or joint count/meaning.
+Pose-only changes refresh the palette, not the weight plan. The `chunk_scene`
+example demonstrates admission at load time with morph-before-skinning each
+frame. Neither representation changes PCM2 or extracts a new addon library.
 
 ## Execution and ownership
 

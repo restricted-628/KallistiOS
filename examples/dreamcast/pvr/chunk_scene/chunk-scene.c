@@ -16,6 +16,7 @@
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_skeleton_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
+#include <dc/pvr_skin_prepared.h>
 #include <errno.h>
 #include <math.h>
 #include <stdalign.h>
@@ -41,11 +42,16 @@ typedef struct model_state {
     pvr_chunk_skin_general_binding_t skin_binding;
     alignas(32) uint8_t skin_storage[512];
     pvr_chunk_skin_general_source_t skin_source;
+    pvr_skin_prepared_span_t prepared_spans[VERTICES];
+    pvr_skin_weight_t prepared_weights[VERTICES];
+    pvr_skin_prepared_spans_t skin_plan;
     pvr_chunk_skeleton_joint_t joints[JOINTS];
     pvr_chunk_skeleton_t skeleton;
     alignas(32) matrix_t positions[JOINTS];
     pvr_normal_matrix_t normals[JOINTS];
     pvr_skin_palette_t palette;
+    pvr_skin_prepared_joint_t prepared_joints[JOINTS];
+    pvr_skin_prepared_palette_t prepared_palette;
     pvr_chunk_shape_section_view_t shape_view;
     pvr_chunk_shape_target_t shape_target;
     pvr_chunk_shape_delta_t shape_delta;
@@ -156,6 +162,19 @@ static int model_load(size_t index) {
            &m->skin_binding, m->skin_storage, sizeof(m->skin_storage),
            &m->skin_source) < 0)
         return failure("skin");
+
+    const pvr_skin_span_stream_t influences = {
+        m->skin_source.spans, m->skin_source.vertex_count,
+        sizeof(*m->skin_source.spans), m->skin_source.weights,
+        m->skin_source.weight_count
+    };
+    pvr_skin_span_plan_requirements_t prepared_req;
+    if(pvr_skin_spans_prepare_query(&influences, JOINTS, &prepared_req) < 0 ||
+       require(prepared_req.span_count <= VERTICES &&
+               prepared_req.weight_count <= VERTICES) < 0 ||
+       pvr_skin_spans_prepare(&influences, JOINTS, m->prepared_spans, VERTICES,
+           m->prepared_weights, VERTICES, &m->skin_plan) < 0)
+        return failure("skin-prepare");
 
     if(section(PVR_CHUNK_ASSET_SECTION_SKELETON,
                  record.skeleton_ordinal, &data, &bytes) < 0 ||
@@ -290,7 +309,9 @@ static int sample(float time) {
         return failure("hierarchy-pose");
     for(i = 0; i < MODELS; ++i) {
         model_state_t *m = &app.model[i];
-        pvr_chunk_skin_general_source_t posed = m->skin_source;
+        const pvr_deform_stream_t posed = {
+            m->morphed, m->skin_source.vertex_count, sizeof(*m->morphed)
+        };
         if(pvr_chunk_skeleton_palette_build(
                &m->skeleton, app.world, NODES, m->positions, JOINTS,
                m->normals, JOINTS, &m->palette) < 0 ||
@@ -301,9 +322,10 @@ static int sample(float time) {
                                    m->morphed, VERTICES,
                                    &deform_result) < 0)
             return failure("deform-pose");
-        posed.vertices = m->morphed;
-        if(pvr_chunk_skin_general_apply(&posed, &m->palette, m->deformed,
-                                          VERTICES, &deform_result) < 0)
+        if(pvr_skin_palette_prepare(&m->palette, m->prepared_joints, JOINTS,
+                                    &m->prepared_palette) < 0 ||
+           pvr_skin_apply_spans_prepared(m->deformed, VERTICES, &posed,
+               &m->skin_plan, &m->prepared_palette, &deform_result) < 0)
             return failure("skin-pose");
     }
     return 0;

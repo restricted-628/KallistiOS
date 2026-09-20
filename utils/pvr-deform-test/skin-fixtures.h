@@ -63,6 +63,8 @@ static bool skin_matches(const pvr_deform_vertex_t *actual,
     return actual->position.w == 1.0f && actual->normal.w == 0.0f;
 }
 
+#include "skin-span-plan-fixtures.h"
+
 static const char *verify_skin_weight_plan(const pvr_skin_palette_t *palette,
     const pvr_deform_vertex_t original[3], bool (*state_unchanged)(void),
     double tolerance) {
@@ -458,6 +460,8 @@ static const char *verify_skin_matrices(bool (*state_unchanged)(void),
         if(state_unchanged && !state_unchanged())
             return "skin prepared rejection XMTRX";
     }
-    return verify_skin_weight_plan(&palette, original, state_unchanged, tolerance);
+    const char *failure = verify_skin_weight_plan(&palette, original, state_unchanged, tolerance);
+    if(failure) return failure;
+    return verify_skin_span_plan(&palette, original, state_unchanged, tolerance);
 }
 #endif

@@ -126,5 +126,76 @@ int pvr_skin_apply_prepared(pvr_deform_vertex_t *output, size_t output_capacity,
     const pvr_skin_prepared_influences_t *influences,
     const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result);
 
+/** \brief Runtime span into a prepared plan's normalized weight records. */
+typedef struct pvr_skin_prepared_span {
+    size_t first_weight;
+    size_t weight_count;
+} pvr_skin_prepared_span_t;
+
+/** \brief Exact array capacities for a variable-span influence plan. */
+typedef struct pvr_skin_span_plan_requirements {
+    size_t span_count;
+    size_t weight_count;
+} pvr_skin_span_plan_requirements_t;
+
+/** \brief Immutable, copied variable-span weights for one mesh.
+
+    Every stored weight was positive in the source, even if its normalized
+    value rounded to zero. Shared/overlapping source spans are expanded into
+    independent normalized runs, preserving source order and repeated joints.
+    Only originally zero weights are omitted. Both arrays and this descriptor
+    must remain alive and immutable throughout application. Rebuild after
+    changing influences, vertex order/count, or palette joint count/meaning.
+    The original arrays are not borrowed. This is not a serialized format.
+*/
+typedef struct pvr_skin_prepared_spans {
+    const pvr_skin_prepared_span_t *spans;
+    const pvr_skin_weight_t *weights;
+    size_t vertex_count;
+    size_t weight_count;
+    size_t joint_count;
+    uint32_t version;
+} pvr_skin_prepared_spans_t;
+
+/** \brief Validate spans and query exact prepared capacities.
+
+    Counts include only positive source weights, counted separately per span.
+    Requirements remain unchanged on failure and must not overlap the input
+    descriptor or arrays. Unreferenced source weights are ignored, matching
+    pvr_skin_apply_spans(). No allocation or XMTRX modification occurs.
+*/
+int pvr_skin_spans_prepare_query(const pvr_skin_span_stream_t *influences,
+    size_t joint_count, pvr_skin_span_plan_requirements_t *requirements);
+
+/** \brief Validate, copy and normalize variable-span weights once per mesh.
+
+    Query capacities with pvr_skin_spans_prepare_query(). Supply naturally
+    aligned arrays of those sizes. All sources are checked again before any
+    destination write; inputs must remain stable throughout preparation.
+    Destination arrays and descriptor must be mutually disjoint and must not
+    overlap any input descriptor/array. All destinations remain unchanged on
+    failure. No original storage is retained, and no memory is allocated.
+*/
+int pvr_skin_spans_prepare(const pvr_skin_span_stream_t *influences,
+    size_t joint_count, pvr_skin_prepared_span_t *spans, size_t span_capacity,
+    pvr_skin_weight_t *weights, size_t weight_capacity,
+    pvr_skin_prepared_spans_t *prepared);
+
+/** \brief Skin with immutable variable-span weights and a prepared palette.
+
+    Counts must match the current vertex stream and palette. Spans, weights
+    and indices are not rescanned, and weights are not renormalized. Every
+    stored weight executes, including positive-source weights rounded to zero.
+    Dynamic source checking, arithmetic, valid-prefix errors, canonical
+    in-place processing and XMTRX preservation match pvr_skin_apply_spans().
+    Output must not overlap prepared descriptors or backing arrays. Result
+    storage must be disjoint from all inputs/output. Successful preparation
+    and immutable lifetime requirements cannot be replaced by version markers.
+*/
+int pvr_skin_apply_spans_prepared(pvr_deform_vertex_t *output,
+    size_t output_capacity, const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_spans_t *influences,
+    const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result);
+
 __END_DECLS
 #endif /* __DC_PVR_SKIN_PREPARED_H */
