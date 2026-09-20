@@ -281,11 +281,19 @@ extraction. Lack of a physical console does not block this implementation work.
    loaded glTF/PCM2 meshes, sampled animation/morph/skinning, checked lighting,
    prepared draws, and PVR submission at 1/16/256 mesh pairs. It measures
    shared versus independent poses with separate CPU-stage/admission timings.
-   It still uses tiny meshes; larger geometry, clipping-heavy and textured
-   throughput workloads remain open rather than being implied by its counts.
+   It still uses tiny meshes; its instance counts do not establish large-mesh,
+   clipping-heavy, or textured throughput coverage on their own.
    On 2026-09-20 its shared host checks passed GCC/Clang GNU17, strict
    C23/C2x, and ASan/UBSan; both Flycast modes completed all six cases and
    final cleanup. See the [workload methodology](../examples/dreamcast/pvr/chunk_scene/README.md#authored-asset-draw-workload).
+   The new [grid workload](../examples/dreamcast/pvr/chunk_grid/README.md)
+   adds 1,024 triangles in 66-vertex strips and independently checked side
+   and near/far-W SPLIT/DROP clipping. This closes the static larger-geometry
+   and clipping fixture gap, not larger skinned or textured throughput coverage.
+   Its host GNU17, strict C23/C2x, sanitizer and rejection/cleanup checks passed
+   on 2026-09-20; Flycast interpreter/dynarec each passed six cases and 120
+   rendered frames. This adds validation coverage, not a production-code fix
+   or hardware performance claim.
 3. Reconcile examples, tests, exports, documentation, and explicit limitations
    against the completed implementation. Keep new optional features separate
    from defects that must be fixed to close this work.
