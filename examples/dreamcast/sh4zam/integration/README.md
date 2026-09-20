@@ -212,6 +212,84 @@ The main integration fixture and direct fast-math probe both passed in
 Flycast interpreter and dynarec modes; the helper's full-angle sweep passed
 all four lanes on GCC 14 host and Flycast dynarec. Hardware remains untested.
 
+## Skinning workload benchmark
+
+After sourcing `environ.sh`, build `make skin-bench.elf` here and run that ELF
+separately with debug-console capture. It uses the existing production skin
+APIs; it changes no production math, source dependency, or public interface.
+
+The twelve synthetic cases combine 64/256 canonical out-of-place vertices,
+one/four distinct meshes sharing a 16-joint pose, and fixed-one, fixed-four or
+variable-one-through-eight positive influences per vertex. Each mesh has its
+own source vertices, weights, prepared plan and destination. Two precomputed
+poses alternate for pose-update tests. Their position matrices include rotation,
+nonuniform scale and translation; normal matrices use the corresponding
+inverse-transpose linear transform. This is not an asset-derived workload.
+
+Three lanes compare the fully checked API, prepared palette only, and prepared
+palette plus immutable weight plan. Separate measurements prevent setup from
+being hidden inside an apply-only comparison:
+
+| Mode | Timed work |
+| --- | --- |
+| `weight-setup` | Prepare all meshes' plans eight times; span capacity queries are included. |
+| `palette-setup` | Prepare one 16-joint palette eight times, alternating poses. |
+| `apply` | Apply all meshes twice at a fixed, already-prepared pose; no setup. |
+| `pose+apply` | Two alternating-pose frames; prepared lanes prepare one palette per frame and share it across meshes. |
+
+Weight plans remain prepared across pose changes. In the checked lane,
+`pose+apply` selects the existing raw pose arrays and lets the checked API
+perform its usual scans/imports; it does not pay an artificial preparation
+charge. Animation sampling and raw-matrix construction are outside all timing.
+For per-frame costs, divide `apply`/`pose+apply` microseconds by the reported
+iterations, **not** by mesh count unless computing a per-mesh average. Divide
+setup samples by their iteration count for one preparation of the reported
+group. Compare `pose+apply` directly when judging preparation amortization.
+
+Five trials rotate lane order after warmup. Each line reports raw microseconds;
+summaries give min/median/max. Interrupts remain enabled, inputs stay resident
+in ordinary RAM, there is no cache flush or empty-loop subtraction, and the
+non-LTO harness calls the real library. API return/progress checks are inside
+the timed loops; logging, buffer resets and full numerical/state checks are
+outside. Timed setup output is consumed by a real apply after the timer stops.
+The setup measurements are warm repeated preparation, not cold loading.
+
+Before timing, both poses and every lane are compared to an independent
+double-precision skinning/normalization oracle. Every timed apply sample checks
+the final frame's output for every mesh, including untouched output tails and
+exact homogeneous W fields. Absolute component tolerance is `3e-4` on SH-4 and
+`2e-5` on host, for these finite cases only. SH-4 checks all 16 XMTRX lanes and
+FPSCR FR/SZ/PR/DN/rounding modes (not sticky arithmetic flags) after runs.
+`weights_bytes` and `palette_bytes` report live prepared backing-array payload,
+excluding descriptors, original inputs, outputs and the harness's larger
+maximum-capacity static buffers; they are not total resident-memory figures.
+
+The host correctness lane runs the same datasets, oracle and scheduling without
+timers or simulated accelerator state. From the repository root:
+
+```sh
+make -C utils/skin-bench-test -B test CC=gcc-14
+make -C utils/skin-bench-test -B test CC=gcc-14 HOST_CSTD=c23 HOST_PEDANTIC=-pedantic
+make -C utils/skin-bench-test -B test CC=clang HOST_CSTD=c2x HOST_PEDANTIC=-pedantic
+make -C utils/skin-bench-test -B test CC=clang CFLAGS='-O1 -g -std=gnu17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer'
+```
+
+Success ends with:
+
+```text
+RESULT: PASS (skinning workload benchmark; production unchanged)
+```
+
+Capture the complete log and hardware, compiler, KOS/SH4ZAM revisions and build
+flags for a hardware run. **Emulator timing is not Dreamcast speed evidence.**
+No DMA, PVR submission, rasterization, asset loading, animation sampling,
+in-place/strided streams, OCRAM, or real-game frame rate is measured here.
+
+On 2026-09-20 all twelve cases passed GCC 14 GNU17/strict C23, Clang strict
+C2x and Clang GNU17 with ASan/UBSan. The SH-4 GCC 16.2.0 build completed all
+480 timed samples with passing result/state checks in both Flycast interpreter
+and dynarec. Production code and the pinned SH4ZAM source were unchanged.
+
 ## Matrix composition comparison
 
 After sourcing `environ.sh`, build and run `compose-bench.elf` separately.

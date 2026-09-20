@@ -7,7 +7,7 @@
 TARGET = sh4zam-integration
 OBJS = $(TARGET).o
 
-all: rm-elf $(TARGET).elf u16-trig-test.elf fast-trig-probe.elf compose-bench.elf
+all: rm-elf $(TARGET).elf u16-trig-test.elf fast-trig-probe.elf compose-bench.elf skin-bench.elf
 
 include $(KOS_BASE)/Makefile.rules
 
@@ -23,8 +23,16 @@ $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/wire-draw-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/two-volume-toon-fixtures.h
 $(OBJS): release-fixtures.h
 
-# Experimental candidate stays outside libkallisti; do not fold the measured
-# calls across translation units or use fast-math for the reference checks.
+# Synthetic skinning measurements call the real library with strict oracle
+# checks and no cross-translation-unit folding.
+skin-bench.elf: skin-bench.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a \
+                $(KOS_BASE)/addons/lib/$(KOS_ARCH)/libsh4zam.a
+	kos-cc -fno-lto -o $@ skin-bench.o
+
+skin-bench.o: skin-bench.c $(KOS_BASE)/kernel/arch/dreamcast/include/dc/pvr_skin_prepared.h
+	kos-cc -fno-fast-math -fno-lto -c $< -o $@
+
+# Experimental composition candidate stays outside libkallisti.
 compose-bench.elf: compose-bench.o compose-candidate.o \
                   $(KOS_BASE)/lib/dreamcast/libkallisti.a \
                   $(KOS_BASE)/addons/lib/dreamcast/libsh4zam.a
@@ -78,6 +86,7 @@ u16-trig-cpp.o: u16-trig-call.c
 	kos-c++ -x c++ -O2 -ffast-math -fno-lto -DTRIG_CALL=trig_cpp -DTRIG_CONSTANT_CALL=trig_cpp_constant -c $< -o $@
 
 clean: rm-elf
+	-rm -f skin-bench.elf skin-bench.o
 	-rm -f compose-bench.elf compose-bench.o compose-candidate.o
 	-rm -f $(OBJS)
 	-rm -f fast-trig-probe.elf fast-trig-probe.o fast-trig-call.o

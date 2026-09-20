@@ -266,7 +266,9 @@ and target tolerances are documented beside the example.
    before choosing a replacement. The benchmark-only XMTRX-preserving multiply
    candidate and emitted-code comparison are described below; host and emulator
    correctness checks do not establish a hardware performance winner.
-2. Measure prepared skinning with representative mesh/pose reuse: fixed-four
+2. Collect physical-hardware results with the new synthetic skinning benchmark
+   described below, then add asset-derived scenes and end-to-end GPU work.
+   It separates setup, apply and per-pose costs with one/four-mesh reuse. Fixed-four
    and variable-span plans now validate and normalize weights once per mesh;
    prepared palettes now remove palette rescans and per-influence imports
    when explicitly used, as tested above. Audit remaining prepared Compact-model
@@ -282,6 +284,34 @@ and target tolerances are documented beside the example.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.
+
+## Skinning workload benchmark
+
+`examples/dreamcast/sh4zam/integration/skin-bench.elf` compares checked,
+prepared-palette and fully prepared weight-plan consumers. Its twelve synthetic
+cases combine 64/256 vertices, one/four meshes per pose and one/four/variable
+one-through-eight influences. It reports plan preparation, palette preparation,
+apply-only and pose-plus-apply costs independently, including prepared storage
+payload. A pose is prepared once per frame and shared across that frame's meshes;
+immutable weights persist across poses. Sampling/raw-matrix construction is not
+timed. See the [methodology](../examples/dreamcast/sh4zam/integration/README.md#skinning-workload-benchmark).
+
+Independent double-precision results check both alternating poses and every
+lane before timing. Timed samples retain result/tail, XMTRX and FP control-mode
+checks outside their measured intervals; returned progress is checked inside
+the common call loop. Setup results are consumed after timing, preventing a
+successful timing report for a plan/palette that cannot skin correctly.
+The shared host suite is discovered by the normal host-test runner.
+
+These benchmarks add no production optimization and make no hardware speed
+claim. Resident synthetic arrays are not a proxy for asset streaming, strided
+or in-place workloads, GPU submission, rasterization, or a complete game frame.
+
+On 2026-09-20 the shared benchmark suite passed GCC 14 GNU17/strict C23,
+Clang strict C2x and Clang GNU17 with ASan/UBSan. SH-4 GCC 16.2.0 built the
+target, and Flycast interpreter and dynarec each completed all twelve cases
+and 480 timed samples with passing correctness/state checks. Physical-hardware
+timing remains open; no production code or SH4ZAM source changed.
 
 ## Matrix composition comparison harness
 
