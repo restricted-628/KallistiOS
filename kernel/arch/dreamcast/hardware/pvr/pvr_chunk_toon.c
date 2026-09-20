@@ -952,17 +952,24 @@ static int assemble_two_volume_strip(
     pvr_chunk_two_volume_vertex_t *vertices,
     pvr_deform_vertex_t *deformations,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
-    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex, void *data) {
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex, void *data,
+    int admitted) {
     size_t index;
 
     for(index = 0; index < strip->vertex_count; ++index) {
         size_t cached_index = strip->first_vertex + index;
-        uint16_t source_index = cache->source_indices[cached_index];
+        uint16_t source_index = (resolve_vertex || prepare_vertex) ?
+            cache->source_indices[cached_index] : 0;
+        const pvr_deform_vertex_t *deformation =
+            cache->deform_vertices + cached_index;
         uint32_t command = index + 1u == strip->vertex_count ?
                            PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
         pvr_chunk_two_volume_vertex_t vertex;
 
-        deformations[index] = cache->deform_vertices[cached_index];
+        if(!admitted || resolve_vertex) {
+            deformations[index] = *deformation;
+            deformation = deformations + index;
+        }
         if(resolve_vertex) {
             errno = 0;
             if(resolve_vertex(source_index, deformations + index, data) < 0) {
@@ -971,18 +978,18 @@ static int assemble_two_volume_strip(
                 return -1;
             }
         }
-        if(finite_deformation(deformations + index) < 0)
+        if((!admitted || resolve_vertex) && finite_deformation(deformation) < 0)
             return -1;
         memset(&vertex, 0, sizeof(vertex));
         memcpy(&vertex, (const uint8_t *)cache->vertices +
                cached_index * cache->vertex_size, cache->vertex_size);
-        vertex.color.x = deformations[index].position.x;
-        vertex.color.y = deformations[index].position.y;
-        vertex.color.z = deformations[index].position.z;
+        vertex.color.x = deformation->position.x;
+        vertex.color.y = deformation->position.y;
+        vertex.color.z = deformation->position.z;
         if(prepare_vertex) {
             errno = 0;
             if(prepare_vertex(&strip->state, source_index,
-                              deformations + index, cache->format,
+                              deformation, cache->format,
                               &vertex, data) < 0) {
                 if(!errno)
                     errno = EIO;
@@ -1246,7 +1253,7 @@ static int two_volume_project_or_clip(
     }
 }
 
-int pvr_chunk_model_two_volume_cache_emit_toon(
+static int two_volume_cache_emit_toon(
     const pvr_chunk_two_volume_cache_t *cache,
     const pvr_normal_matrix_t *normal_matrix,
     const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
@@ -1258,7 +1265,7 @@ int pvr_chunk_model_two_volume_cache_emit_toon(
     pvr_chunk_cache_begin_strip_t begin_strip,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
-    void *data, pvr_chunk_toon_result_t *result) {
+    void *data, pvr_chunk_toon_result_t *result, int admitted) {
     pvr_chunk_toon_result_t progress = { 0 };
     size_t required_triangles = 0;
     size_t strip_index;
@@ -1268,7 +1275,7 @@ int pvr_chunk_model_two_volume_cache_emit_toon(
     if(clip_policy < PVR_CHUNK_CLIP_SPLIT ||
        clip_policy > PVR_CHUNK_CLIP_ASSUME_VISIBLE ||
        transforms_valid(normal_matrix, frustum) < 0 ||
-       pvr_chunk_model_two_volume_cache_validate(cache) < 0 ||
+       (!admitted && pvr_chunk_model_two_volume_cache_validate(cache) < 0) ||
        two_volume_toon_sink_valid(cache, sink) < 0 ||
        pvr_chunk_toon_profile_validate(profile) < 0 ||
        pvr_toon_triangle_capacity(profile->threshold_count,
@@ -1287,6 +1294,8 @@ int pvr_chunk_model_two_volume_cache_emit_toon(
     for(strip_index = 0; strip_index < cache->strip_count; ++strip_index) {
         const pvr_chunk_cached_strip_t *strip = cache->strips + strip_index;
         pvr_normal_stream_t normal_stream;
+        const pvr_deform_vertex_t *deformations = admitted && !resolve_vertex ?
+            cache->deform_vertices + strip->first_vertex : workspace->deformations;
         size_t triangle_index;
         int strip_started = 0;
 
@@ -1308,9 +1317,9 @@ int pvr_chunk_model_two_volume_cache_emit_toon(
         }
         if(assemble_two_volume_strip(
                cache, strip, workspace->vertices, workspace->deformations,
-               resolve_vertex, prepare_vertex, data) < 0)
+               resolve_vertex, prepare_vertex, data, admitted) < 0)
             goto two_fail;
-        normal_stream.normals = &workspace->deformations[0].normal;
+        normal_stream.normals = &deformations[0].normal;
         normal_stream.normal_count = strip->vertex_count;
         normal_stream.stride = sizeof(workspace->deformations[0]);
         if(!(strip->state.strip_flags & PVR_CHUNK_STRIP_FLAT_SHADED) &&
@@ -1392,7 +1401,7 @@ int pvr_chunk_model_two_volume_cache_emit_toon(
                     const vector_t *normal =
                         strip->state.strip_flags &
                         PVR_CHUNK_STRIP_IGNORE_LIGHT ?
-                        &workspace->deformations[index].normal :
+                        &deformations[index].normal :
                         workspace->normals + index;
                     float shade = strip->state.strip_flags &
                         PVR_CHUNK_STRIP_IGNORE_LIGHT ? 0.0f :
@@ -1497,6 +1506,50 @@ two_fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_two_volume_cache_emit_toon(
+    const pvr_chunk_two_volume_cache_t *cache,
+    const pvr_normal_matrix_t *normal_matrix,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_toon_profile_t *profile,
+    const pvr_chunk_two_volume_toon_modulation_t *secondary_modulation,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_toon_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_toon_result_t *result) {
+    return two_volume_cache_emit_toon(cache, normal_matrix, frustum, clip_policy,
+        profile, secondary_modulation, sink, workspace, filter_strip,
+        begin_strip, resolve_vertex, prepare_vertex, data, result, 0);
+}
+
+int pvr_chunk_model_two_volume_cache_draw_emit_toon(
+    const pvr_chunk_two_volume_cache_draw_t *draw,
+    const pvr_normal_matrix_t *normal_matrix,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_toon_profile_t *profile,
+    const pvr_chunk_two_volume_toon_modulation_t *secondary_modulation,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_toon_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_toon_result_t *result) {
+    if(!draw ||
+       ((uintptr_t)draw & (_Alignof(pvr_chunk_two_volume_cache_draw_t) - 1u)) ||
+       draw->cache.version != PVR_CHUNK_CACHE_VERSION) {
+        if(result)
+            memset(result, 0, sizeof(*result));
+        errno = EINVAL;
+        return -1;
+    }
+    return two_volume_cache_emit_toon(&draw->cache, normal_matrix, frustum,
+        clip_policy, profile, secondary_modulation, sink, workspace,
+        filter_strip, begin_strip, resolve_vertex, prepare_vertex, data, result, 1);
 }
 
 static int outline_workspace_valid(

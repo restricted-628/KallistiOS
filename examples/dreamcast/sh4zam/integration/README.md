@@ -121,8 +121,12 @@ The shared two-volume toon packet regression exercises both 32-byte color
 and 64-byte textured formats with smooth, flat and unlit strips; all three
 clipping policies; shade-band subdivision; and inside/crossing triangles.
 It checks packed commands, both color/UV sets, exact unlit positions and
-clipped area, output guards, and NaN/zero-W/capacity rejection. It verifies
-XMTRX after each call. Success adds:
+clipped area, output guards, and NaN/zero-W/capacity rejection. It also compares
+checked emission against the admitted two-volume toon entry point, including
+resolver/prepare combinations, filtering, callback errors, invalid profiles
+and workspace overlap. Output bytes, errno, progress and callback counts must
+match. Admitted draws without a resolver leave deformation scratch untouched.
+It verifies XMTRX after each call. Success adds:
 
 ```text
 Two-volume toon color/textured packets, clipping, XMTRX: PASS

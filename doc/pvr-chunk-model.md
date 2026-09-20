@@ -578,7 +578,8 @@ The `chunk_scene` example prepares each cooked cache at load time and uses this
 path for both host golden tests and target frames. CRCs are already checked by
 asset/section opening, not by these cached draw calls. Two-volume and modifier
 caches have parallel admitted paths below. Ordinary toon/outline policies also
-reuse this draw view, as does wireframe; two-volume toon still needs its audit.
+reuse this draw view, as does wireframe; two-volume toon reuses the parallel
+two-volume draw view.
 This removes identifiable repeated work; hardware throughput still requires
 measurement and is not inferred from host or emulator correctness tests.
 
@@ -689,6 +690,30 @@ Apple Clang strict C2x and ASan/UBSan on 2026-09-19, plus the geometry, scene
 integration and converter host regressions. Both Flycast interpreter and
 dynarec printed the two-volume integration PASS line. No upstream SH4ZAM
 source changes or serialized-cache format changes were required.
+
+### Admitted two-volume toon policy
+
+The same `pvr_chunk_two_volume_cache_draw_t` can be passed to
+`pvr_chunk_model_two_volume_cache_draw_emit_toon()`. It skips full immutable
+cache validation and borrows base deformation records when no resolver runs.
+The snapshot and backing storage must stay immutable throughout the draw,
+including callbacks; reprepare after rebuilding storage. The existing checked
+toon API remains available.
+
+Resolver output is copied to scratch and validated. Without a resolver,
+deformation scratch remains required at its original capacity/alignment but
+is not populated; its contents are not output. Mutable normal transforms,
+lighting/modulation profiles, frustums, callback vertices, workspace ranges
+and sink capacity remain checked. Smooth/flat/unlit shading, band splitting,
+both color/UV sets, and all three clipping policies are unchanged. Generated
+union vertices are packed to 32-byte color packets before projection or
+submission; textured packets remain 64 bytes. XMTRX is preserved.
+
+Shared host/SH-4 regressions compare this entry point with checked emission
+byte-for-byte, including callback counts, errno, progress, output guards and
+dynamic rejection cases. Independent color/UV, position and clipped-area
+checks remain alongside the differential tests. Avoided scans and copies are
+not a measured physical-hardware throughput claim.
 
 Every cached ordinary or two-volume strip also retains the exact object-space
 AABB of its admitted reference-pose vertices. The filtered emission variants

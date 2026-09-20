@@ -139,8 +139,9 @@ and target tolerances are documented beside the example.
    Ordinary toon/outline now reuse the admitted draw view and borrow unchanged
    deformation data; clipping and changing lighting/profile data stay checked.
    Wire now reuses admission and borrows unchanged deformation records as
-   described below. Two-volume toon packet packing is now corrected and
-   tested below; its prepare-once optimization remains outstanding.
+   described below. Two-volume toon now also reuses its existing admission
+   view and borrows unchanged deformation records; packet packing and
+   checked/admitted equivalence are tested below.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.
@@ -169,8 +170,8 @@ output, zero projection W, insufficient capacity, overlapping workspace, and
 null admission.
 They also prove deformation scratch stays untouched without a resolver.
 Host coverage includes triangle and four-reference strips; target integration
-uses a triangle and verifies all XMTRX lanes after every draw. Two-volume toon
-and reducing repeated per-edge transformation remain separate work.
+uses a triangle and verifies all XMTRX lanes after every draw. Reducing
+repeated per-edge transformation remains separate work.
 
 On 2026-09-19 the wire fixtures and cache suite passed GCC 14 strict C23,
 Apple Clang strict C2x, and Clang GNU17 with ASan/UBSan. The SH-4 GCC 16.2.0
@@ -203,12 +204,35 @@ insufficient sink capacity, and XMTRX preservation. The unlit cases also have
 independent position and area expectations (area 2 before clipping, 1.75 after
 the selected left-plane clip), preventing success-only or shared-bug tests.
 
-This is a correctness fix, not the planned prepare-once optimization. The
-remaining two-volume toon work is cache admission and borrowing unchanged
-deformation records; dynamic shading/clipping checks still need to remain.
+This packet correction is independent of the prepare-once optimization below.
 
 On 2026-09-19 the complete cache suite passed GCC 14 GNU17/strict C23,
 Apple Clang strict C2x, and Clang GNU17 with ASan/UBSan. The incremental
 SH-4 GCC 16.2.0 KOS build and integration example built successfully, and
 the full integration fixture passed Flycast interpreter and dynarec with
 the new packet checks. No physical-hardware rendering or speed claim is made.
+
+## Prepare-once two-volume toon follow-up
+
+`pvr_chunk_model_two_volume_cache_draw_emit_toon()` reuses the existing
+`pvr_chunk_two_volume_cache_draw_t` snapshot. It skips repeated static-cache
+validation and, without a resolver, borrows the immutable deformation records
+instead of copying and revalidating them. Source indices are read for vertex
+callbacks only. The checked API remains available, and changing transforms,
+profiles, workspace/sink ranges, callback output, shading and clipping retain
+their validation. This does not change the SH4ZAM math or its XMTRX contract.
+
+The shared two-volume toon fixture now compares checked/admitted output bytes,
+progress, errno and callback counts for both packed formats, three shading
+modes, all clip policies, inside/crossing triangles, and resolver/prepare
+combinations. It covers filter skips/errors, begin errors, NaN deformation or
+vertex output, invalid profiles, zero W, sink capacity and workspace overlap.
+Admitted no-resolver draws leave deformation scratch untouched. The independent
+packet/position/area assertions from the correction remain in place.
+
+On 2026-09-19 the expanded cache suite passed GCC 14 GNU17/strict C23,
+Apple Clang strict C2x, and Clang GNU17 with ASan/UBSan. The SH-4 GCC 16.2.0
+KOS build exported the new entry point, and the rebuilt integration example
+completed with RESULT: PASS in Flycast interpreter and dynarec modes.
+The SH4ZAM source check remained clean at the approved PR #70 pin. No
+upstream defect or physical-hardware throughput improvement is claimed.

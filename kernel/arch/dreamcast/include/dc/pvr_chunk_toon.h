@@ -249,6 +249,33 @@ int pvr_chunk_model_two_volume_cache_emit_toon(
     pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
     void *data, pvr_chunk_toon_result_t *result);
 
+/** \brief Emit an admitted two-volume cache through geometric shade bands.
+
+    Prepare \p draw once with pvr_chunk_model_two_volume_cache_draw_prepare().
+    The snapshot and borrowed storage must stay immutable and accessible,
+    including throughout callbacks; reprepare after rebuilding storage.
+    This skips full static-cache validation and borrows base deformation
+    records when no resolver runs. Callback arguments and output, changing
+    normal matrices, lighting profiles, frustums, workspace and sink remain
+    checked. Both parameter sets and packed packet formats follow the checked
+    pvr_chunk_model_two_volume_cache_emit_toon() contract. Scratch contents
+    after drawing are unspecified; capacities and non-overlap rules are
+    unchanged. No memory is allocated or retained by this call.
+*/
+int pvr_chunk_model_two_volume_cache_draw_emit_toon(
+    const pvr_chunk_two_volume_cache_draw_t *draw,
+    const pvr_normal_matrix_t *normal_matrix,
+    const pvr_frustum_t *frustum, pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_toon_profile_t *profile,
+    const pvr_chunk_two_volume_toon_modulation_t *secondary_modulation,
+    pvr_geometry_vertex_sink_t *sink,
+    pvr_chunk_two_volume_toon_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_two_volume_vertex_t prepare_vertex,
+    void *data, pvr_chunk_toon_result_t *result);
+
 /** \brief Emit an expanded inverted shell from an ordinary compact cache.
 
     Current deformation and optional per-frame vertex policy are resolved once

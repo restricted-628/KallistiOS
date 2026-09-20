@@ -53,6 +53,141 @@ static int tvt_resolve(uint16_t index, pvr_deform_vertex_t *vertex, void *data) 
     return 0;
 }
 
+typedef struct tvt_probe {
+    unsigned failure, filters, begins, resolves, prepares;
+} tvt_probe_t;
+
+static int tvt_count_prepare(const pvr_chunk_render_state_t *state,
+    uint16_t index, const pvr_deform_vertex_t *deformation,
+    pvr_geometry_vertex_format_t format, pvr_chunk_two_volume_vertex_t *vertex,
+    void *data) {
+    tvt_probe_t *p = data;
+    ++p->prepares;
+    return tvt_prepare(state, index, deformation, format, vertex, &p->failure);
+}
+static int tvt_count_resolve(uint16_t index, pvr_deform_vertex_t *vertex,
+                             void *data) {
+    tvt_probe_t *p = data;
+    ++p->resolves;
+    tvt_resolve(index, vertex, NULL);
+    if(p->failure == 4 && index == 1) vertex->normal.z = NAN;
+    return 0;
+}
+static int tvt_filter(const pvr_chunk_cached_strip_t *strip, void *data) {
+    tvt_probe_t *p = data;
+    (void)strip;
+    ++p->filters;
+    if(p->failure == 5) return 0;
+    if(p->failure == 6) { errno = ECANCELED; return -1; }
+    return 1;
+}
+static int tvt_begin(const pvr_chunk_cached_strip_t *strip, void *data) {
+    tvt_probe_t *p = data;
+    (void)strip;
+    ++p->begins;
+    if(p->failure == 7) { errno = ECANCELED; return -1; }
+    return 0;
+}
+
+static bool two_volume_toon_draw_compare(
+    const pvr_chunk_two_volume_cache_t *cache,
+    const pvr_normal_matrix_t *normal_matrix, const matrix_t *matrix,
+    const pvr_chunk_toon_profile_t *profile,
+    pvr_chunk_two_volume_toon_workspace_t *workspace) {
+    pvr_chunk_two_volume_cache_draw_t draw;
+    alignas(32) static uint8_t output[2][64 * 64 + 32];
+    pvr_deform_vertex_t untouched[3];
+    const uint32_t outside[2] = { 0xff808080, 0xffffffff };
+    const uint32_t inside[2] = { 0xff404040, 0xff909090 };
+    const pvr_chunk_two_volume_toon_modulation_t modulation = { inside, inside };
+#ifdef __DREAMCAST__
+    shz_mat4x4_t saved, observed;
+    shz_xmtrx_store_4x4(&saved);
+#endif
+    TVT_CHECK(workspace->strip_capacity == 3);
+    TVT_CHECK(pvr_chunk_model_two_volume_cache_draw_prepare(cache, &draw) == 0);
+    memset(untouched, 0xa5, sizeof(untouched));
+    for(unsigned policy = 0; policy < 3; ++policy)
+    for(unsigned crossing = 0; crossing < 2; ++crossing)
+    for(unsigned callbacks = 0; callbacks < 4; ++callbacks)
+    for(unsigned failure = 0; failure < 10; ++failure) {
+        pvr_frustum_t frustum;
+        pvr_chunk_toon_profile_t p = *profile;
+        pvr_chunk_toon_result_t results[2] = { { 0 }, { 0 } };
+        tvt_probe_t probes[2] = { { 0 }, { 0 } };
+        int status[2] = { -1, -1 }, errors[2] = { 0, 0 };
+        size_t counts[2] = { 0, 0 };
+        TVT_CHECK(pvr_frustum_init(&frustum, matrix,
+            crossing ? -.5f : -2.0f, -2, 2, 2, .5f, 2) == 0);
+        if(failure == 2) frustum.object_to_screen[3][3] = 0;
+        p.argb_modulation = outside;
+        p.oargb_modulation = outside;
+        if(failure == 8) p.epsilon = -1;
+        for(unsigned admitted = 0; admitted < 2; ++admitted) {
+            pvr_geometry_vertex_sink_t sink;
+            pvr_chunk_two_volume_toon_workspace_t w = *workspace;
+            probes[admitted].failure = failure;
+            memset(output[admitted], 0x5a, sizeof(output[admitted]));
+            memcpy(w.deformations, untouched, sizeof(untouched));
+            TVT_CHECK(pvr_geometry_vertex_sink_init_memory(&sink, cache->format,
+                output[admitted], failure == 3 ? 1 : 64) == 0);
+            if(failure == 9) w.vertices = (void *)output[admitted];
+            errno = 0;
+            if(admitted)
+                status[admitted] = pvr_chunk_model_two_volume_cache_draw_emit_toon(
+                    &draw, normal_matrix, &frustum, (pvr_chunk_clip_policy_t)policy,
+                    &p, &modulation, &sink, &w, tvt_filter, tvt_begin,
+                    callbacks & 1 ? tvt_count_resolve : NULL,
+                    callbacks & 2 ? tvt_count_prepare : NULL,
+                    probes + admitted, results + admitted);
+            else
+                status[admitted] = pvr_chunk_model_two_volume_cache_emit_toon(
+                    cache, normal_matrix, &frustum, (pvr_chunk_clip_policy_t)policy,
+                    &p, &modulation, &sink, &w, tvt_filter, tvt_begin,
+                    callbacks & 1 ? tvt_count_resolve : NULL,
+                    callbacks & 2 ? tvt_count_prepare : NULL,
+                    probes + admitted, results + admitted);
+            errors[admitted] = errno;
+            counts[admitted] = sink.emitted_vertices;
+            if(admitted && !(callbacks & 1))
+                TVT_CHECK(!memcmp(w.deformations, untouched, sizeof(untouched)));
+            for(size_t i = counts[admitted] * cache->vertex_size;
+                i < sizeof(output[admitted]); ++i)
+                TVT_CHECK(output[admitted][i] == 0x5a);
+#ifdef __DREAMCAST__
+            shz_xmtrx_store_4x4(&observed);
+            TVT_CHECK(!memcmp(&saved, &observed, sizeof(saved)));
+#endif
+        }
+        TVT_CHECK(status[0] == status[1] && errors[0] == errors[1] &&
+                   counts[0] == counts[1]);
+        TVT_CHECK(!memcmp(results, results + 1, sizeof(results[0])));
+        TVT_CHECK(!memcmp(probes, probes + 1, sizeof(probes[0])));
+        TVT_CHECK(!memcmp(output[0], output[1], sizeof(output[0])));
+        if(!failure || failure == 5) TVT_CHECK(status[0] == 0);
+        if(failure == 5) TVT_CHECK(!counts[0]);
+        if((failure == 1 && (callbacks & 2)) ||
+           (failure == 4 && (callbacks & 1)))
+            TVT_CHECK(status[0] == -1 && errors[0] == EILSEQ);
+        if(failure == 2 && policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE)
+            TVT_CHECK(status[0] == -1 && errors[0] == EDOM);
+        if(failure == 3) TVT_CHECK(!counts[0]);
+        if(failure == 6 || (failure == 7 && probes[0].begins))
+            TVT_CHECK(status[0] == -1 && errors[0] == ECANCELED);
+        if(failure == 8 || failure == 9)
+            TVT_CHECK(status[0] == -1 && errors[0] == EINVAL);
+    }
+    pvr_chunk_toon_result_t rejected;
+    const pvr_chunk_toon_result_t zero = { 0 };
+    memset(&rejected, 0x5a, sizeof(rejected));
+    errno = 0;
+    TVT_CHECK(pvr_chunk_model_two_volume_cache_draw_emit_toon(NULL, NULL, NULL,
+        PVR_CHUNK_CLIP_SPLIT, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+        NULL, &rejected) == -1 && errno == EINVAL);
+    TVT_CHECK(!memcmp(&rejected, &zero, sizeof(zero)));
+    return true;
+}
+
 static bool two_volume_toon_fixtures(void) {
     static const uint32_t source[] = {
         PVR_CHUNK_VERTEX_XYZ | (10u << 16), 0x00030000,
@@ -123,6 +258,8 @@ static bool two_volume_toon_fixtures(void) {
         TVT_CHECK(pvr_chunk_model_plan_build(&view, indices, 256, &plan) == 0);
         TVT_CHECK(pvr_chunk_model_two_volume_cache_build(
             &plan, storage, sizeof(storage), NULL, NULL, &cache) == 0);
+        TVT_CHECK(two_volume_toon_draw_compare(&cache, &normal_matrix, &matrix,
+                                               &profile, &workspace));
         for(unsigned policy = 0; policy < 3; ++policy)
         for(unsigned crossing = 0; crossing < 2; ++crossing)
         for(unsigned failure = 0; failure < 4; ++failure) {
