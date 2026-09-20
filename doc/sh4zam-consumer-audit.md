@@ -139,7 +139,8 @@ and target tolerances are documented beside the example.
    Ordinary toon/outline now reuse the admitted draw view and borrow unchanged
    deformation data; clipping and changing lighting/profile data stay checked.
    Wire now reuses admission and borrows unchanged deformation records as
-   described below. Two-volume toon still needs its own audit.
+   described below. Two-volume toon packet packing is now corrected and
+   tested below; its prepare-once optimization remains outstanding.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.
@@ -178,3 +179,36 @@ The integration example passed in Flycast interpreter and dynarec modes; the
 360-frame wire example passed its draw and pipeline checks in dynarec mode.
 These are correctness checks, not physical-hardware timing or image-quality
 certification. No upstream SH4ZAM defect was demonstrated in this pass.
+
+## Two-volume toon packet correction
+
+The audit found a KOS-side correctness defect before introducing an admitted
+toon path. `prepare_two_volume_triangle()` and the parallel-attribute clip
+assembler produce full 64-byte union entries. Color-only projection and sinks
+expect consecutive 32-byte packets, so they read union padding as a vertex
+command. The existing toon test covered only 64-byte textured packets.
+
+A new color-only regression failed on the prior implementation with `EILSEQ`
+on a valid, inside triangle. Color packets are now compacted after all
+union-indexed reads and before in-place projection, and clipped color output
+is compacted before sink submission. Textured packets keep their 64-byte
+layout. Callbacks still receive complete unions, including zeroed unused
+color-packet tail bytes. No SH4ZAM code or public packet representation changes.
+
+`two-volume-toon-fixtures.h` runs on host and SH-4. It covers both formats,
+smooth/flat/IGNORE_LIGHT strips, all three clipping policies, shade-band
+splitting, and inside/crossing geometry. It checks both attribute sets, packed
+command positions, untouched output tails, invalid callback XYZ, zero W,
+insufficient sink capacity, and XMTRX preservation. The unlit cases also have
+independent position and area expectations (area 2 before clipping, 1.75 after
+the selected left-plane clip), preventing success-only or shared-bug tests.
+
+This is a correctness fix, not the planned prepare-once optimization. The
+remaining two-volume toon work is cache admission and borrowing unchanged
+deformation records; dynamic shading/clipping checks still need to remain.
+
+On 2026-09-19 the complete cache suite passed GCC 14 GNU17/strict C23,
+Apple Clang strict C2x, and Clang GNU17 with ASan/UBSan. The incremental
+SH-4 GCC 16.2.0 KOS build and integration example built successfully, and
+the full integration fixture passed Flycast interpreter and dynarec with
+the new packet checks. No physical-hardware rendering or speed claim is made.

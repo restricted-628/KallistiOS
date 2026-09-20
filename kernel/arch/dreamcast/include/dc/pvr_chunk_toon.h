@@ -81,6 +81,11 @@ typedef struct pvr_chunk_toon_workspace {
     clip arrays and one two-volume packet array, each with at least
     PVR_FRUSTUM_CLIP_MAX_VERTICES entries. All vertex arrays require 32-byte
     base alignment.
+
+    Scratch entries use full unions while attributes are assembled. Before
+    projection/submission, color-only output is packed at 32-byte intervals;
+    textured output uses 64-byte intervals. Scratch contents after a draw are
+    unspecified and must not be interpreted as a retained union array.
 */
 typedef struct pvr_chunk_two_volume_toon_workspace {
     pvr_chunk_two_volume_vertex_t *vertices;

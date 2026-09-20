@@ -117,6 +117,17 @@ untouched. Every target draw must preserve XMTRX. Success adds:
 Admitted toon/outline policies, clipping, rejection, XMTRX: PASS
 ```
 
+The shared two-volume toon packet regression exercises both 32-byte color
+and 64-byte textured formats with smooth, flat and unlit strips; all three
+clipping policies; shade-band subdivision; and inside/crossing triangles.
+It checks packed commands, both color/UV sets, exact unlit positions and
+clipped area, output guards, and NaN/zero-W/capacity rejection. It verifies
+XMTRX after each call. Success adds:
+
+```text
+Two-volume toon color/textured packets, clipping, XMTRX: PASS
+```
+
 The 0.8.1 release probes also check header/library version agreement, generic
 memory copies for every source/destination offset 0..7 and size 0..132,
 aligned 2-byte/4-byte variants within their documented size constraints, return

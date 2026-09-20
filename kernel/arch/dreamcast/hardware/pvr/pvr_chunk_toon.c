@@ -1129,6 +1129,16 @@ static void two_volume_canonical_pair(
     }
 }
 
+/* Scratch entries are full unions, but projection and sinks consume packed
+   packets. Compact color entries only after all union-indexed reads finish.
+   Forward moves cannot overwrite a later source entry (32 <= 64 bytes). */
+static void pack_two_volume_colors(pvr_chunk_two_volume_vertex_t *vertices,
+                                   size_t count) {
+    for(size_t i = 1; i < count; ++i)
+        memmove((uint8_t *)vertices + i * sizeof(pvr_vertex_pcm_t),
+                &vertices[i].color, sizeof(pvr_vertex_pcm_t));
+}
+
 static int two_volume_project_or_clip(
     pvr_chunk_two_volume_vertex_t triangle[3],
     pvr_geometry_vertex_format_t format,
@@ -1152,6 +1162,8 @@ static int two_volume_project_or_clip(
         two_volume_canonical_pair(triangle + corner, format,
                                   primary + corner, secondary + corner);
     if(policy == PVR_CHUNK_CLIP_ASSUME_VISIBLE) {
+        if(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR)
+            pack_two_volume_colors(triangle, 3u);
         if(pvr_geometry_project_vertices(triangle, 3u, &stream,
                                          &frustum->object_to_screen,
                                          NULL) < 0)
@@ -1167,6 +1179,8 @@ static int two_volume_project_or_clip(
         policy == PVR_CHUNK_CLIP_DROP))
         return 0;
     if(classification == PVR_FRUSTUM_INSIDE) {
+        if(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR)
+            pack_two_volume_colors(triangle, 3u);
         if(pvr_geometry_project_vertices(triangle, 3u, &stream,
                                          &frustum->object_to_screen,
                                          NULL) < 0)
@@ -1223,6 +1237,9 @@ static int two_volume_project_or_clip(
                 destination->textured.oargb1 = second->oargb;
             }
         }
+        if(format == PVR_GEOMETRY_VERTEX_TWO_VOLUME_COLOR)
+            pack_two_volume_colors(workspace->clip_vertices,
+                                    first_result.output_vertices);
         *output = workspace->clip_vertices;
         *output_count = first_result.output_vertices;
         return 0;

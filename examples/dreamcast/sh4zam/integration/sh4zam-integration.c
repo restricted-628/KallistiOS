@@ -21,6 +21,7 @@
 #include "toon-draw-fixtures.h"
 #include "skin-fixtures.h"
 #include "wire-draw-fixtures.h"
+#include "two-volume-toon-fixtures.h"
 
 static shz_mat4x4_t matrix_sentinel;
 
@@ -631,6 +632,9 @@ int main(int argc, char **argv) {
     if(!toon_draw_fixtures())
         FAIL("admitted toon/outline cache");
     puts("Admitted toon/outline policies, clipping, rejection, XMTRX: PASS");
+    if(!two_volume_toon_fixtures())
+        FAIL("two-volume toon packets");
+    puts("Two-volume toon color/textured packets, clipping, XMTRX: PASS");
 
     /* Camera and frustum entry points retain their established checked
        contracts while their Dreamcast arithmetic runs through SH4ZAM. The

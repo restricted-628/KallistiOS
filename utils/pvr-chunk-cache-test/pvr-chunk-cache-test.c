@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "toon-draw-fixtures.h"
+#include "two-volume-toon-fixtures.h"
 
 #define VERTEX_HEADER(type, size) ((uint32_t)(type) | \
                                    ((uint32_t)(size) << 16))
@@ -1982,6 +1983,7 @@ int main(void) {
     test_ordinary_cooked_section(&cache);
     test_unlit_cooked_section();
     assert(toon_draw_fixtures());
+    assert(two_volume_toon_fixtures());
     test_toon_cache(&cache);
     test_outline_cache(&cache);
     test_wire_cache(&cache);
