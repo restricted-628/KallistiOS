@@ -9,21 +9,33 @@ adapter and integration documentation; separate KOS helpers live under
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`be71e8a1428374498e8f5e7506c7e244375f4399` (official `v0.8.1`). It contains
-unmodified upstream source and history. No local source or documentation patches are
-applied. Updating this dependency is a separate reviewed change, not an
-automatic checkout of its latest branch.
+`0c1ccb5f5614314e36e2fec3179c8ca3ae844770` from
+`https://github.com/restricted-628/sh4zam.git`, the exact commit submitted in
+[upstream PR #70](https://github.com/gyrovorbis/sh4zam/pull/70). This temporary
+pin is official `v0.8.1` (`be71e8a1428374498e8f5e7506c7e244375f4399`) plus
+Falco's suggested fast-math u16 conversion fix and its regression tests. It
+is **not an official release or a claim of upstream approval**. Upstream
+history, author notices, and license are retained; no build-time source
+patches are applied. Updating the dependency remains a separate reviewed
+change, not an automatic checkout of a moving branch.
+
+After PR #70 is merged, select and test an official commit containing the fix,
+restore the official `.gitmodules` URL, and remove the exact-commit exception
+in `utils/check-sh4zam-source.py`. Do not assume a squash/rebase merge will
+retain this PR commit's SHA. The KOS-side helper can remain for compatibility.
 
 Clone KOS with `--recurse-submodules`. For existing checkouts, or after changing
 KOS revisions, run from the KOS root:
 
 ```sh
+git submodule sync -- addons/libsh4zam/upstream
 git submodule update --init --recursive
 python3 utils/check-sh4zam-source.py
 ```
 
-The checker verifies the Git index's pinned revision, clean upstream checkout,
-official repository URL, public header symlink, and unchanged license copy.
+The checker verifies the Git index's pinned revision, clean submodule checkout,
+official repository URL or this exact temporary fork/commit pair, public
+header symlink, and unchanged license copy. Other fork revisions are rejected.
 It replaces the former copied-source hash manifest and maintenance patch.
 Ordinary GitHub source ZIPs and `git archive` do not embed submodule contents;
 use a recursive clone, or explicitly include the pinned dependency when making
@@ -90,14 +102,16 @@ directly to FSCA. These are not equivalent: the corresponding radian angle is
 The separate `examples/dreamcast/sh4zam/integration/fast-trig-probe.elf`
 reproducer compiles only the call under `-ffast-math`, with a strict validator.
 Under GCC 16.2/Flycast, angle 16384 returns approximately `(0.07260841,
-0.99736059)` instead of the quarter-turn pair `(1, 0)`. This is a known failing
-diagnostic, not a passing release gate and not a test of physical hardware.
+0.99736059)` instead of the quarter-turn pair `(1, 0)` on official 0.8.1.
+With the temporary PR #70 pin it is now expected to report `RESULT: PASS`;
+the test's expected values and tolerance have not changed. The default example
+build includes this direct-API regression. It is not a physical-hardware test.
 
 The default KOS environment does not enable `-ffast-math`, and no current KOS
-kernel caller uses this u16 pair routine. Do not enable its fast-math path
-with this pin. Applications using that routine should compile the calling
-translation unit without `-ffast-math` (and without `-Ofast`, which enables it).
-Alternatively, opt into the KOS-side helper:
+kernel caller uses this u16 pair routine. The temporary PR pin fixes the direct
+SH-4 fast-math call, so it no longer requires disabling `-ffast-math`/`-Ofast`.
+If reverting to the unmodified 0.8.1 tag, that restriction applies again.
+The previously provided KOS-side helper remains available:
 
 ```c
 #include <kos/sh4zam.h>
@@ -107,8 +121,8 @@ shz_sincos_t pair = kos_shz_sincosu16(angle);
 This helper converts 65536 turn units to radians and calls the public
 `shz_sincosf()` API. It supports fast-math without modifying upstream source,
 replacing upstream symbols, or changing project-wide compiler flags. Including
-the header alone does **not** fix calls to upstream `shz_sincosu16()`; use the
-`kos_` helper explicitly. No current kernel calls need migration.
+the header alone does **not** redirect calls to `shz_sincosu16()`; the current
+submodule pin supplies that function's fix. No kernel calls need migration.
 
 The helper consistently uses 65536 units per turn for constant/runtime inputs
 on all backends. Upstream's software and constant-u16 paths use 65535 instead;
@@ -119,8 +133,8 @@ threshold, not a physical-hardware accuracy guarantee.
 
 The separate `u16-trig-test.elf` checks every 16-bit angle against a strict,
 double-precision reference in C strict/fast-math/Ofast and C++ fast-math modes,
-plus a constant quarter-turn in each mode. Its successful results do not
-supersede or hide the original upstream diagnostic failure.
+plus a constant quarter-turn in each mode. It remains separate from the
+direct-API regression so both entry points continue to be covered.
 
 See the [standalone regression report](../../doc/sh4zam-0.8.1-fast-trig.md)
 for cardinal-angle results and reproduction instructions.
@@ -134,8 +148,18 @@ dynarec modes, including the new release-specific memory/scale/screen probes.
 The rendered toon/outline and Compact scene examples passed in dynarec mode.
 Portable animation tests passed GCC 14 GNU17 and strict C23, Apple Clang strict
 C2x, and Clang ASan/UBSan; host scene and converter regressions also passed.
-The fast-math diagnostic above is an explicit exception, not included among
-these passing results. No physical-hardware certification is implied.
+The fast-math diagnostic failed on that original release; the subsequent
+temporary PR pin fixes it as described above. No physical-hardware
+certification is implied.
+
+The temporary PR #70 pin was separately validated on 2026-09-19: the addon
+and all integration executables were force-rebuilt with SH-4 GCC 16.2.0.
+The main integration fixture and direct fast-math probe passed in both
+Flycast interpreter and dynarec modes. The KOS helper's 65536-angle sweep
+passed all four compiler lanes on GCC 14 host and Flycast dynarec. A fresh
+clone fetched the exact dependency commit, and source-policy checks passed.
+This scoped revalidation did not repeat the full KOS kernel build or run on
+physical hardware.
 
 ## Floating-point context
 

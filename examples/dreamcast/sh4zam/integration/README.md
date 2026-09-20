@@ -127,15 +127,22 @@ the new release probes. The optional fast-math diagnostic failed in both
 modes; that failure is documented separately below rather than counted as a
 passing integration result.
 
-## Separate fast-math diagnostic
+The subsequent temporary PR #70 pin was force-rebuilt on the same date.
+The main integration fixture and direct fast-math probe both passed in
+Flycast interpreter and dynarec modes; the helper's full-angle sweep passed
+all four lanes on GCC 14 host and Flycast dynarec. Hardware remains untested.
+
+## Direct API fast-math regression
 
 After sourcing `environ.sh`, build `make fast-trig-probe.elf` in this directory.
 Only `fast-trig-call.c` is compiled with `-ffast-math`; the validator is strict.
 This diagnostic fails with official 0.8.1 because its new u16-angle fast path
-uses the wrong angle conversion. The normal integration executable does not
-enable that path. See the [adapter restriction and helper](../../../../addons/libsh4zam/README.md#081-fast-math-restriction-and-local-helper).
-Keep the failing probe separate; do not interpret it as a pass or silently
-change the expected trigonometric results to match the defect.
+uses the wrong angle conversion. KOS now temporarily pins the exact commit
+in [SH4ZAM PR #70](https://github.com/gyrovorbis/sh4zam/pull/70), containing
+Falco's suggested fix. The default example build includes the probe and it
+must now report `RESULT: PASS (SH4ZAM fast-math u16 trig)`. Expected values
+and tolerance are unchanged. See the [adapter restriction and helper](../../../../addons/libsh4zam/README.md#081-fast-math-restriction-and-local-helper)
+for source provenance and the policy if reverting to the official 0.8.1 tag.
 
 ## Local KOS u16 helper regression
 
