@@ -29,6 +29,8 @@ def run(executable, source, success, stage=None):
         if "--grid" in sys.argv:
             assert "grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS" in result.stdout
             assert "rotation_scale=PASS normal_goldens=PASS lighting_goldens=PASS" in result.stdout
+            if "--clip" in sys.argv:
+                assert "clip_checks=72 planes=6 pose_bounds=PASS area_uv_color=PASS guards=PASS" in result.stdout
         else:
             assert "workload_checks=18 packet_guards=PASS lighting=PASS" in result.stdout
     if stage:

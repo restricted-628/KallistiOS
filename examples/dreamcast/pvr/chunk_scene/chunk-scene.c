@@ -376,6 +376,9 @@ static int resolve(uint16_t index, pvr_deform_vertex_t *vertex, void *data) {
 
 #ifdef CHUNK_SCENE_GRID
 #include "grid-goldens.h"
+#ifdef CHUNK_SCENE_CLIP
+#include "grid-clipping.h"
+#endif
 #define SCENE_SHADE grid_shade
 #else
 #define SCENE_SHADE NULL
@@ -489,12 +492,23 @@ static int begin_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
     return pvr_prim(&draw_header, sizeof(draw_header));
 }
 
+#ifdef CHUNK_SCENE_CLIP
+static int clip_begin_strip(const pvr_chunk_render_state_t *state,
+                            const pvr_chunk_strip_view_t *strip, void *data) {
+    (void)state;
+    (void)strip;
+    return begin_strip(NULL, data);
+}
+#endif
+
 #ifndef CHUNK_SCENE_WORKLOAD
 static int render(void) {
     pvr_poly_cxt_t context;
     pvr_geometry_sink_t sink;
     pvr_pipeline_status_t pipeline;
+#ifndef CHUNK_SCENE_CLIP
     alignas(32) pvr_vertex_t workspace[STRIP_VERTICES];
+#endif
 #ifdef CHUNK_SCENE_GRID
     pvr_txr_surface_t texture = {0};
     alignas(32) uint16_t pixels[64 * 64];
@@ -519,6 +533,9 @@ static int render(void) {
                     pvr_txr_surface_pvr_format(&texture), 64, 64,
                     texture.vram, PVR_FILTER_BILINEAR);
     context.txr.env = PVR_TXRENV_MODULATE;
+#ifdef CHUNK_SCENE_CLIP
+    context.gen.specular = PVR_SPECULAR_ENABLE;
+#endif
 #else
     pvr_poly_cxt_col(&context, PVR_LIST_OP_POLY);
 #endif
@@ -526,9 +543,18 @@ static int render(void) {
     pvr_poly_compile(&draw_header, &context);
     if(pvr_geometry_sink_init_current(&sink) < 0)
         goto fail;
+#ifdef CHUNK_SCENE_CLIP
+    for(frame = 0; frame < GRID_CLIP_CASES * 24; ++frame) {
+#else
     for(frame = 0; frame < 240; ++frame) {
+#endif
         size_t i;
-        if(sample((float)frame / 120.0f) < 0 || pvr_wait_ready() < 0)
+#ifdef CHUNK_SCENE_CLIP
+        const float time = 2.0f * (frame % 24) / 23.0f;
+#else
+        const float time = (float)frame / 120.0f;
+#endif
+        if(sample(time) < 0 || pvr_wait_ready() < 0)
             goto fail;
         pvr_scene_begin();
         scene_open = 1;
@@ -536,6 +562,19 @@ static int render(void) {
             goto fail;
         list_open = 1;
         for(i = 0; i < MODELS; ++i) {
+#ifdef CHUNK_SCENE_CLIP
+            pvr_chunk_model_plan_t plan;
+            pvr_frustum_t frustum;
+            pvr_chunk_clip_policy_t policy;
+            pvr_chunk_render_result_t result;
+            grid_clip_context_t clip = { &app.model[i], 0 };
+            if(grid_clip_plan(clip.model, &plan) < 0 ||
+               grid_clip_frustum(frame / 24, i, &frustum, &policy) < 0 ||
+               grid_clip_emit(&plan, &frustum, policy, &sink, 1, &clip,
+                              clip_begin_strip, &result) < 0 ||
+               require(result.emitted_vertices <= GRID_CLIP_CAPACITY) < 0)
+                goto fail;
+#else
             /* Only application display placement follows the world-space
                skin result. The +.25 root must not be applied twice. */
             alignas(32) matrix_t screen = {
@@ -549,6 +588,7 @@ static int render(void) {
                require(result.emitted_strips == STRIPS &&
                        result.emitted_vertices == PACKETS) < 0)
                 goto fail;
+#endif
         }
         if(pvr_list_finish() < 0)
             goto fail;
@@ -562,7 +602,9 @@ static int render(void) {
        require(pipeline.faults.mask == PVR_FAULT_NONE) < 0)
         goto fail;
     puts("KOSSCENE rendered=1 inspecting=1");
-#ifdef CHUNK_SCENE_GRID
+#ifdef CHUNK_SCENE_CLIP
+    puts("KOSSCENE clip_frames=144 cases=6 faults=0");
+#elif defined(CHUNK_SCENE_GRID)
     puts("KOSSCENE grid_frames=240 triangles_per_frame=1024 packets_per_frame=1088 faults=0");
 #endif
     thd_sleep(10000);
@@ -646,6 +688,10 @@ int main(int argc, char **argv) {
 #ifdef CHUNK_SCENE_GRID
     puts("KOSSCENE grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS");
     puts("KOSSCENE rotation_scale=PASS normal_goldens=PASS lighting_goldens=PASS");
+#endif
+#ifdef CHUNK_SCENE_CLIP
+    if(grid_clip_check() < 0)
+        goto out;
 #endif
 #if !defined(CHUNK_SCENE_GRID) && (defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD))
     if(workload_check() < 0)

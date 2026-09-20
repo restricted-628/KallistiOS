@@ -9,7 +9,7 @@ PYTHON ?= python3
 OBJS = chunk-scene.o chunk-scene-asset.o
 
 .PHONY: all clean run dist
-all: $(TARGET) chunk-workload.elf chunk-skin-grid.elf
+all: $(TARGET) chunk-workload.elf chunk-skin-grid.elf chunk-skin-clip.elf
 
 include $(KOS_BASE)/Makefile.rules
 
@@ -42,6 +42,12 @@ chunk-skin-grid.o: chunk-scene.c grid-goldens.h
 chunk-skin-grid.elf: chunk-skin-grid.o skin-grid-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $@ chunk-skin-grid.o skin-grid-asset.o
 
+chunk-skin-clip.o: chunk-scene.c grid-goldens.h grid-clipping.h
+	kos-cc $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_GRID -DCHUNK_SCENE_CLIP -c $< -o $@
+
+chunk-skin-clip.elf: chunk-skin-clip.o skin-grid-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
+	kos-cc -o $@ chunk-skin-clip.o skin-grid-asset.o
+
 chunk-scene.o: scene-workload.h
 
 chunk-workload.o: chunk-scene.c scene-workload.h
@@ -57,10 +63,12 @@ run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
 
 clean:
+	-rm -f chunk-skin-clip.elf chunk-skin-clip.o
 	-rm -f chunk-skin-grid.elf chunk-skin-grid.o skin-grid-asset.o skin-grid-asset.c skin-grid.pcm skin-grid.gltf
 	-rm -f $(TARGET) $(OBJS) chunk-workload.elf chunk-workload.o chunk-scene.pcm chunk-scene-asset.c
 
 dist: all
+	-rm -f chunk-skin-clip.o
 	-rm -f chunk-skin-grid.o skin-grid-asset.o skin-grid-asset.c skin-grid.pcm skin-grid.gltf
 	-rm -f $(OBJS) chunk-workload.o chunk-scene.pcm chunk-scene-asset.c
-	$(KOS_STRIP) $(TARGET) chunk-workload.elf chunk-skin-grid.elf
+	$(KOS_STRIP) $(TARGET) chunk-workload.elf chunk-skin-grid.elf chunk-skin-clip.elf

@@ -13,6 +13,7 @@ LDLIBS += -lm
 
 TARGET = pvr-chunk-scene-integration-test
 GRID_TARGET = pvr-chunk-skin-grid-test
+CLIP_TARGET = pvr-chunk-skin-clip-test
 EXAMPLE = ../../examples/dreamcast/pvr/chunk_scene
 PVR = ../../kernel/arch/dreamcast/hardware/pvr
 MATH = ../../kernel/arch/dreamcast/math
@@ -35,13 +36,16 @@ SOURCES = $(EXAMPLE)/chunk-scene.c host-support.c \
           $(MATH)/matrix_compose.c $(MATH)/matrix_camera.c
 
 .PHONY: all test clean
-all: $(TARGET) $(GRID_TARGET)
+all: $(TARGET) $(GRID_TARGET) $(CLIP_TARGET)
 
 $(TARGET): $(SOURCES) host-support.h $(EXAMPLE)/scene-workload.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 $(GRID_TARGET): $(SOURCES) host-support.h $(EXAMPLE)/grid-goldens.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_GRID $(SOURCES) $(LDLIBS) -o $@
+
+$(CLIP_TARGET): $(SOURCES) host-support.h $(EXAMPLE)/grid-goldens.h $(EXAMPLE)/grid-clipping.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_GRID -DCHUNK_SCENE_CLIP $(SOURCES) $(LDLIBS) -o $@
 
 skin-grid.gltf: $(EXAMPLE)/chunk-scene.gltf $(EXAMPLE)/generate-skin-grid.py
 	$(PYTHON) $(EXAMPLE)/generate-skin-grid.py $< $@
@@ -57,11 +61,12 @@ fixture.pcm: $(EXAMPLE)/chunk-scene.gltf ../pvr-model-convert/pvr-model-convert
 ../pvr-model-convert/pvr-model-convert: ../pvr-model-convert/pvr-model-convert.c
 	$(MAKE) -C ../pvr-model-convert
 
-test: $(TARGET) fixture.pcm $(GRID_TARGET) skin-grid.pcm
+test: $(TARGET) fixture.pcm $(GRID_TARGET) skin-grid.pcm $(CLIP_TARGET)
 	$(PYTHON) test.py ./$(TARGET) fixture.pcm
 	$(PYTHON) test.py ./$(GRID_TARGET) skin-grid.pcm --grid
+	$(PYTHON) test.py ./$(CLIP_TARGET) skin-grid.pcm --grid --clip
 	$(PYTHON) test-workload-log.py
 	$(PYTHON) test-skin-grid.py
 
 clean:
-	rm -f $(TARGET) fixture.pcm $(GRID_TARGET) skin-grid.gltf skin-grid.pcm
+	rm -f $(TARGET) fixture.pcm $(GRID_TARGET) $(CLIP_TARGET) skin-grid.gltf skin-grid.pcm

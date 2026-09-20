@@ -21,12 +21,18 @@ MARKERS = (
     "KOSSCENE grid_frames=240 triangles_per_frame=1024 packets_per_frame=1088 faults=0",
     "KOSSCENE result=PASS errno=0",
 )
+CLIP_MARKERS = MARKERS[:3] + (
+    "KOSSCENE clip_checks=72 planes=6 pose_bounds=PASS area_uv_color=PASS guards=PASS",
+    MARKERS[3],
+    "KOSSCENE clip_frames=144 cases=6 faults=0",
+    MARKERS[-1],
+)
 
 
-def check_log(content):
+def check_log(content, markers=MARKERS):
     records = [line.strip() for line in content.splitlines()
                if line.startswith("KOSSCENE ")]
-    assert records == list(MARKERS), records
+    assert records == list(markers), records
 
 
 class GridTests(unittest.TestCase):
@@ -79,24 +85,33 @@ class GridTests(unittest.TestCase):
                           (2, "rotation"), (2, "scale")])
 
     def test_log(self):
-        check_log("unrelated boot output\n" + "\n".join(MARKERS))
-        for index in range(len(MARKERS)):
+        for markers in (MARKERS, CLIP_MARKERS):
+            check_log("unrelated boot output\n" + "\n".join(markers), markers)
+            for index in range(len(markers)):
+                with self.assertRaises(AssertionError):
+                    check_log("\n".join(markers[:index] + markers[index + 1:]), markers)
+            for bad in (markers + (markers[-1],), tuple(reversed(markers)),
+                        markers + ("KOSSCENE result=FAIL errno=5",),
+                        tuple(line.replace("grid_frames=240", "grid_frames=239")
+                                  .replace("clip_frames=144", "clip_frames=143") for line in markers)):
+                with self.assertRaises(AssertionError):
+                    check_log("\n".join(bad), markers)
+        for key, value in (("clip_checks=72", "clip_checks=71"), ("planes=6", "planes=5"),
+                           ("area_uv_color=PASS", "area_uv_color=FAIL"), ("cases=6", "cases=5"),
+                           ("pose_bounds=PASS", "pose_bounds=FAIL"),
+                           ("guards=PASS", "guards=FAIL"), ("faults=0", "faults=1")):
             with self.assertRaises(AssertionError):
-                check_log("\n".join(MARKERS[:index] + MARKERS[index + 1:]))
-        for bad in (MARKERS + (MARKERS[-1],), tuple(reversed(MARKERS)),
-                    MARKERS + ("KOSSCENE result=FAIL errno=5",),
-                    tuple(line.replace("grid_frames=240", "grid_frames=239") for line in MARKERS)):
-            with self.assertRaises(AssertionError):
-                check_log("\n".join(bad))
+                check_log("\n".join(CLIP_MARKERS).replace(key, value), CLIP_MARKERS)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--log":
+    if len(sys.argv) > 1 and sys.argv[1] in ("--log", "--clip-log"):
         if len(sys.argv) < 3:
-            raise SystemExit("usage: test-skin-grid.py --log SERIAL_LOG [SERIAL_LOG ...]")
+            raise SystemExit("usage: test-skin-grid.py {--log|--clip-log} SERIAL_LOG [SERIAL_LOG ...]")
         for argument in sys.argv[2:]:
             path = pathlib.Path(argument)
-            check_log(path.read_text(errors="replace"))
-            print(f"{path.name}: grid goldens, 240 frames, and final cleanup PASS")
+            markers = CLIP_MARKERS if sys.argv[1] == "--clip-log" else MARKERS
+            check_log(path.read_text(errors="replace"), markers)
+            print(f"{path.name}: complete grid report and final cleanup PASS")
     else:
         unittest.main()

@@ -191,7 +191,8 @@ certification or a performance benchmark. It uses only two joints, positive
 non-singular scales, a single-axis rotation, one sparse position delta per mesh,
 and one small resident texture. It does not establish many-joint scaling,
 negative/singular scale policy, normal morph deltas, texture streaming/bandwidth,
-clipping of skinned models, or physical-hardware performance. Hardware testing and addon
+physical-hardware performance. The separate fixture below adds clipping of skinned
+models. Hardware testing and addon
 extraction remain deferred.
 
 The tilted-normal fixture exposed a converter bug: glTF normals were retained
@@ -199,6 +200,63 @@ only as strip attributes, so indexed skin/morph source construction fell back
 to +Z. The converter now also emits glTF per-vertex normals in the existing
 indexed normal-bearing record types. Rebuild previously converted PCM2 assets
 to obtain the fix; old assets are not silently repaired by the runtime.
+
+## Animated model clipping
+
+`chunk-skin-clip.elf` reuses the textured grid, serialized animation, independent
+pose/normal goldens, and checked lighting above. It adds six cases: wholly
+visible, side-plane SPLIT/DROP, depth-plane SPLIT/DROP, and wholly outside.
+Each model occupies its own half-screen pane. Depth cases vary homogeneous W
+with both X and Z, so rotation/scale/morph affect the near/far crossings.
+
+Clipping uses `pvr_chunk_model_emit_clipped_prepared()`, with a callback resolving
+the completed skinned pose before projection. This is the **prepared vertex-index
+plan** path, not the admitted cooked-cache draw path used by `chunk-skin-grid`.
+The clipped emitter still traverses the strip stream. This fixture does not add
+a clipped cooked-cache API or claim to optimize that traversal.
+
+After each pose, the example scans its completed positions once with
+`pvr_deform_bounds_calculate()`. A private copy of the admitted plan receives that
+center/radius, while borrowing the original immutable streams/index table. The
+asset, rest-pose plan, and cache remain unchanged. Both whole-model rejection
+and the wholly-inside clipping bypass require a conservative **current-pose**
+bound; the serialized rest-pose sphere alone is not safe for animation.
+
+Before rendering, 72 memory-sink checks cover six poses, two models, and six
+cases. Independent double-precision formulas reconstruct the authored triangles
+and clip convex polygons in a different plane order, comparing projected area
+with a tolerance of 0.5 square pixels plus 0.005 percent. UV coordinates locate
+each emitted point in an original grid triangle; barycentric reconstruction then
+checks position (0.02 pixels), reciprocal W (0.0002), lit base color, and a
+synthetic offset-color gradient. Packed colors allow four code points for
+successive intersection quantization and lighting rounding; base alpha is exact.
+All six plane crossings must occur. These are numerical checks, not screenshot
+comparisons.
+
+The checks also require raw/prepared emission byte parity, expected strip or
+independent-triangle terminators, exact DROP counts, no callback on whole-model
+rejection, and guarded output tails. A one-packet-short sink must fail with
+ENOSPC, report its valid prefix, and leave its capacity guard intact. Existing
+truncated-asset and second-model skin-corruption cleanup tests cover this new
+executable too. The original grid and small-scene tests remain in the host suite.
+
+The target renders 24 animated frames per case (144 total), drains rendering,
+checks PVR fault state, holds the last frame, and frees owned storage before final
+PASS. The final wholly-outside case is intentionally blank. Scratch is bounded:
+34 strip vertices, 21 clip vertices, caller-owned pose arrays, and no per-frame
+allocation. The two temporary worst-case conformance output buffers are allocated
+before PVR initialization and released before rendering. Per-vertex lighting and
+raw-path parity are conformance costs, not a performance benchmark.
+
+```sh
+python3 utils/pvr-chunk-scene-integration-test/test-skin-grid.py --clip-log run.log
+```
+
+The serial checker requires all checks, 144 frames, six cases, zero PVR faults,
+and final cleanup PASS, rejecting missing/duplicate/reordered or altered records.
+Emulator execution cannot establish physical-console performance or pixel-level
+visual correctness. Many-joint scaling, mirrored/singular transforms, normal
+morph deltas, texture streaming, and hardware validation remain separate work.
 
 ## Recorded validation
 
@@ -247,3 +305,17 @@ both logs, the original small scene passed a dynarec smoke test, and the host
 and target grid PCM2 files were byte-identical. The SH4ZAM source-pin check
 remained clean. This was targeted converter/integration validation, not a full
 host-suite sweep, visual certification, or physical-hardware validation.
+
+The animated-clipping follow-up on 2026-09-20 passed the complete scene
+integration suite (small scene, textured grid, and clipped grid) under GCC 14
+and Clang GNU17, GCC 14 strict C23, Clang strict C2x, and Clang ASan/UBSan,
+including truncated-input and second-model corruption cleanup. Generator and
+positive/negative serial-checker tests passed. SH-4 GCC 16.2 built all four
+scene ELFs. Flycast interpreter and dynarec each passed all 72 clipping checks,
+144 rendered frames, zero reported PVR faults, and final cleanup; the serial
+checker accepted both complete logs. The original small scene passed a dynarec
+smoke run, host/target grid assets were byte-identical, and the SH4ZAM pin check
+remained clean. No new runtime defect was exposed by this fixture, and neither
+the core clipping implementation nor SH4ZAM was changed. Physical hardware,
+pixel-level visual verification, and a full repository host-suite sweep were
+not part of this batch.

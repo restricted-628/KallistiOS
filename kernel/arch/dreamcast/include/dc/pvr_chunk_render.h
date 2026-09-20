@@ -122,7 +122,8 @@ typedef enum pvr_chunk_clip_policy {
 
     This is an allocation-free whole-model visibility test. A dynamic
     deformation path must ensure the retained center and radius conservatively
-    enclose the current pose before using an OUTSIDE result to skip rendering.
+    enclose the current pose before trusting OUTSIDE to skip rendering or
+    INSIDE to bypass per-triangle clipping.
     pvr_deform_bounds_calculate() produces a safe current-pose sphere for
     direct use with pvr_frustum_classify_sphere().
 */
@@ -300,6 +301,13 @@ int pvr_chunk_model_emit_prepared_filtered(
     the ordinary strip path. Intersecting models expand each source strip into
     independent triangles. SPLIT clips and interpolates UV/base/offset color;
     DROP omits every triangle not wholly inside the frustum.
+
+    If prepare_vertex changes positions (for example, skinning or morphing),
+    the retained sphere must conservatively enclose those resulting positions.
+    Callers may copy the admitted view/plan and replace only the copy's model
+    center/radius with current-pose bounds from pvr_deform_bounds_calculate().
+    Keep the borrowed streams/index storage immutable. A rest-pose sphere is
+    not sufficient: it can incorrectly reject the pose or bypass clipping.
 
     SPLIT requires a 32-byte-aligned clip workspace with at least
     PVR_FRUSTUM_CLIP_MAX_VERTICES entries. DROP and ASSUME_VISIBLE do not use
