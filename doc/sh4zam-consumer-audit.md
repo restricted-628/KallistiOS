@@ -89,8 +89,8 @@ palette value scans and per-influence imports. The existing checked APIs
 remain available. Both paths share blending arithmetic, weight/index checks,
 changing source validation, normal normalization, and valid-prefix errors.
 The new path rejects output overlap with the prepared descriptor or joints.
-Weight validation and per-vertex normalization of weight sums still repeat;
-an immutable influence plan is separate future work.
+Weight validation and per-vertex normalization of weight sums still repeat in
+these palette-only APIs; the fixed-four weight-plan path below removes them.
 
 SH-4 GCC 16.2.0 (`-O2`, GNU17, `-m4-single`) emits a prepared branch that
 directly addresses each 104-byte imported joint and bypasses the two `memcpy`
@@ -116,6 +116,49 @@ updated `chunk_skin` example built with SH-4 GCC 16.2.0; the public header also
 passed a target C++ syntax check. The full integration fixture passed Flycast
 interpreter/dynarec and the 120-frame skin example passed dynarec. The approved
 SH4ZAM source pin remains clean. No upstream bug or hardware speedup is claimed.
+
+### Fixed-four immutable weight plans
+
+`pvr_skin_influences_prepare()` validates a strided fixed-four influence
+stream against its joint count and copies normalized records into caller-owned
+storage. All source values are checked before any destination write, so a
+late malformed record leaves the old plan and storage intact. Original
+influence arrays may change or be released afterward. Plan records retain
+slot order and an active mask: a positive weight that rounds to zero during
+division must still execute its transform, including any overflow-times-zero
+failure that the checked path would report.
+
+`pvr_skin_apply_prepared()` combines this immutable mesh plan with an immutable
+pose palette. Counts must match. Weight scans, weight sums/divisions, palette
+component scans and per-influence imports are skipped. Source vertices,
+arithmetic, output capacity and overlap remain checked, with the same in-place
+and valid-prefix behavior. Joint index meaning must remain stable; changes to
+weights, ordering, indices or counts require rebuilding the plan. Pose-only
+changes require refreshing the palette, not the weights. The `chunk_skin`
+example demonstrates these two separate preparation lifetimes.
+
+The new SH-4 apply symbol is 716 bytes with GCC 16.2.0 (`-O2`, GNU17,
+`-m4-single`). Its disassembly has no weight-division call; it calls the same
+XMTRX-preserving accumulator and checked normal normalization. The old checked
+and palette-only paths are unchanged. This is removed repeated work, not a
+measured hardware speedup. Variable-length spans remain a separate follow-up.
+
+Shared host/SH-4 fixtures compare output bytes, errno and progress against
+the palette-only checked-weight path for strided records, repeated joints,
+inactive out-of-range indices, in-place output, NaN positions, zero normals,
+short output and invalid vertex stride. Successful values also match the
+independent double-precision oracle. Tests poison the original weights after
+preparation, check guards and transactional rejection, and specifically prove
+that an active weight rounded to zero retains overflow rejection. Target
+preparation and application checks preserve all XMTRX lanes.
+
+On 2026-09-19 the expanded deformation suite passed GCC 14 GNU17/strict C23,
+Apple Clang strict C2x and Clang ASan/UBSan. Existing Compact skin and shape
+host regressions also passed GCC 14. SH-4 GCC 16.2.0 built KOS, both
+new exports and both examples, and accepted the public header in C++. The full
+integration fixture passed Flycast interpreter/dynarec; the 120-frame skin
+example passed dynarec. SH4ZAM remains unmodified at the approved PR #70 pin.
+Physical-hardware correctness and throughput are not established by these runs.
 
 ## Generated-code evidence
 
@@ -174,7 +217,8 @@ and target tolerances are documented beside the example.
 1. Compare the current composition implementation with an XMTRX-preserving
    multiply candidate, including emitted code, copy/register costs, and actual
    workload timing before choosing a replacement.
-2. Continue the skinning performance audit with immutable influence plans;
+2. Continue the skinning performance audit with variable-span influence plans;
+   the fixed-four plan now validates and normalizes weights once per mesh.
    prepared palettes now remove palette rescans and per-influence imports
    when explicitly used, as tested above. Audit remaining prepared Compact-model
    draw variants. Ordinary, two-volume, and modifier paths now

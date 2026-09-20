@@ -125,6 +125,8 @@ int main(int argc, char **argv) {
     };
     pvr_skin_prepared_joint_t imported_joints[2];
     pvr_skin_prepared_palette_t prepared_palette;
+    pvr_skin_prepared_influence_t prepared_weights[3];
+    pvr_skin_prepared_influences_t weight_plan;
     alignas(32) pvr_deform_vertex_t deformed[3];
     pvr_deform_result_t deform_result;
     pvr_poly_cxt_t polygon_context;
@@ -210,6 +212,8 @@ int main(int argc, char **argv) {
     const pvr_skin_stream_t skin_weights = {
         source.influences, source.vertex_count, sizeof(*source.influences)
     };
+    assert(pvr_skin_influences_prepare(&skin_weights, source.joint_count,
+                                       prepared_weights, 3, &weight_plan) == 0);
 
     for(frame = 0; frame < 120u; ++frame) {
         position_matrices[1][3][0] = 48.0f * sinf((float)frame * 0.08f);
@@ -217,8 +221,8 @@ int main(int argc, char **argv) {
            sharing it. This example has just one mesh. */
         assert(pvr_skin_palette_prepare(&palette, imported_joints, 2,
                                         &prepared_palette) == 0);
-        assert(pvr_skin_apply_prepared_palette(deformed, 3, &skin_vertices,
-            &skin_weights, &prepared_palette, &deform_result) == 0);
+        assert(pvr_skin_apply_prepared(deformed, 3, &skin_vertices,
+            &weight_plan, &prepared_palette, &deform_result) == 0);
         assert(deform_result.deformed_vertices == 3);
 
         assert(pvr_wait_ready() == 0);

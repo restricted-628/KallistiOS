@@ -77,9 +77,41 @@ Compact skins can pass their canonical source arrays through
 `pvr_deform_stream_t` and `pvr_skin_stream_t` (or `pvr_skin_span_stream_t` for
 general skins). The `chunk_skin` example demonstrates this after sampling each
 pose. No model format or existing `pvr_chunk_skin_apply()` contract changes.
-Weight admission/normalization is still repeated; it is not part of palette
-preparation. The extra imported storage and preparation have a cost, so reuse
-counts and physical-hardware timings must guide performance decisions.
+Weight admission/normalization is still repeated by the palette-only APIs;
+it is not part of palette preparation. The extra imported storage and
+preparation have a cost, so reuse counts and physical-hardware timings must
+guide performance decisions.
+
+## Prepare fixed-four weights once per mesh
+
+`pvr_skin_influences_prepare()` accepts the existing strided four-influence
+stream, the palette joint count, caller-owned `pvr_skin_prepared_influence_t`
+storage (one record per vertex), and a `pvr_skin_prepared_influences_t` output
+descriptor. It checks every weight and active joint before writing either
+destination, then copies indices and normalizes weights once. Failed
+preparation leaves the previous descriptor and storage unchanged. Original
+influence arrays are not borrowed and may be changed or released afterward.
+
+Pass this immutable plan and a prepared pose palette to
+`pvr_skin_apply_prepared()`. Vertex and joint counts must match. Weight scans,
+weight-sum calculation/division, palette component scans and matrix imports
+are absent from the per-vertex application path. Changing source vertices,
+arithmetic, output capacity and overlap remain checked. Canonical in-place
+deformation and valid-prefix failures follow the existing checked contract.
+
+An active-slot mask preserves positive source weights whose normalized value
+rounds to zero. Such slots still perform their transforms, matching checked
+arithmetic (including overflow multiplied by zero); genuinely zero-weight
+slots remain ignored, including out-of-range indices. Slot order is retained.
+
+The descriptor and records must remain immutable for every application;
+rebuild after changing weights, indices, vertex ordering/count, or joint count.
+Changing the pose alone does not require rebuilding weights, but palette joint
+indices must keep the same meaning. This runtime representation is not an
+asset format. Result storage must be disjoint from inputs/output. The
+`chunk_skin` example prepares weights once outside the frame loop and the
+palette once per sampled pose. Variable-length spans still use the checked
+weight path and are a separate follow-up. No hardware speedup is inferred.
 
 ## Execution and ownership
 

@@ -831,6 +831,8 @@ pvr_skin_apply_spans
 pvr_skin_palette_prepare
 pvr_skin_apply_prepared_palette
 pvr_skin_apply_spans_prepared_palette
+pvr_skin_influences_prepare
+pvr_skin_apply_prepared
 pvr_normal_matrix_build
 pvr_normal_transform
 pvr_environment_map_uv

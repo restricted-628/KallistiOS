@@ -8,6 +8,7 @@
 #include <dc/pvr_skin_prepared.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <float.h>
 #include <math.h>
 #include <string.h>
 
@@ -60,6 +61,167 @@ static bool skin_matches(const pvr_deform_vertex_t *actual,
            fabs(n[r] - normal[r]) > tolerance)
             return false;
     return actual->position.w == 1.0f && actual->normal.w == 0.0f;
+}
+
+static const char *verify_skin_weight_plan(const pvr_skin_palette_t *palette,
+    const pvr_deform_vertex_t original[3], bool (*state_unchanged)(void),
+    double tolerance) {
+    struct { pvr_skin_influences_t value; uint32_t guard[2]; } source[3];
+    pvr_skin_stream_t stream = { source, 3, sizeof(source[0]) };
+    pvr_skin_prepared_influence_t records[4], saved_records[4];
+    pvr_skin_prepared_influences_t plan, saved_plan;
+    pvr_skin_prepared_joint_t joints[4];
+    pvr_skin_prepared_palette_t pose;
+    pvr_deform_vertex_t output[2][4], input[3];
+    pvr_deform_stream_t vertices = { input, 3, sizeof(input[0]) };
+    pvr_deform_result_t results[2];
+
+    for(size_t i = 0; i < 3; ++i) {
+        source[i].value = (pvr_skin_influences_t){
+            { 2, 0, 2, UINT16_MAX }, { 2.0f + i, 3, 1, 0 }
+        };
+        source[i].guard[0] = source[i].guard[1] = UINT32_C(0x5a5a5a5a);
+    }
+    memset(records, 0x5a, sizeof(records));
+    if(pvr_skin_palette_prepare(palette, joints, 4, &pose) ||
+       pvr_skin_influences_prepare(&stream, 4, records, 3, &plan))
+        return "weight plan preparation";
+    memcpy(saved_records, records, sizeof(records));
+    memcpy(&saved_plan, &plan, sizeof(plan));
+    for(size_t b = 0; b < sizeof(records[3]); ++b)
+        if(((const uint8_t *)(records + 3))[b] != 0x5a)
+            return "weight plan preparation guard";
+    if(state_unchanged && !state_unchanged())
+        return "weight plan preparation XMTRX";
+
+    for(unsigned in_place = 0; in_place < 2; ++in_place)
+    for(unsigned failure = 0; failure < 5; ++failure) {
+        int status[2], errors[2];
+        for(unsigned admitted = 0; admitted < 2; ++admitted) {
+            memcpy(input, original, sizeof(input));
+            memset(output[admitted], 0x5a, sizeof(output[admitted]));
+            if(in_place) memcpy(output[admitted], original, sizeof(input));
+            vertices.vertices = in_place ? output[admitted] : input;
+            pvr_deform_vertex_t *changing = in_place ? output[admitted] : input;
+            if(failure == 1) changing[1].position.x = NAN;
+            if(failure == 2) memset(&changing[1].normal, 0, sizeof(changing[1].normal));
+            if(failure == 4) vertices.stride = sizeof(input[0]) - 4;
+            /* The admitted plan owns a copy. The original may now be invalid. */
+            if(admitted) source[0].value.weight[0] = NAN;
+            errno = 0;
+            status[admitted] = admitted ?
+                pvr_skin_apply_prepared(output[admitted], failure == 3 ? 2 : 3,
+                    &vertices, &plan, &pose, &results[admitted]) :
+                pvr_skin_apply_prepared_palette(output[admitted], failure == 3 ? 2 : 3,
+                    &vertices, &stream, &pose, &results[admitted]);
+            errors[admitted] = errno;
+            source[0].value.weight[0] = 2;
+            vertices.stride = sizeof(input[0]);
+            if(state_unchanged && !state_unchanged())
+                return "weight plan application XMTRX";
+        }
+        const int expected[] = { 0, EDOM, ERANGE, ENOSPC, EINVAL };
+        if(status[0] != (failure ? -1 : 0) || errors[0] != expected[failure] ||
+           status[0] != status[1] || errors[0] != errors[1] ||
+           results[0].deformed_vertices != results[1].deformed_vertices ||
+           results[1].deformed_vertices != (failure == 0 ? 3u : failure < 3 ? 1u : 0u) ||
+           memcmp(output[0], output[1], sizeof(output[0])))
+            return "weight plan checked/prepared equivalence";
+        for(size_t b = 0; b < sizeof(output[1][3]); ++b)
+            if(((const uint8_t *)&output[1][3])[b] != 0x5a)
+                return "weight plan output guard";
+        if(!failure) for(size_t v = 0; v < 3; ++v) {
+            double p[3], n[3];
+            pvr_skin_weight_t weights[4];
+            for(size_t s = 0; s < 4; ++s)
+                weights[s] = (pvr_skin_weight_t){
+                    source[v].value.joint[s], 0, source[v].value.weight[s]
+                };
+            skin_reference(original + v, palette, weights, 4, p, n);
+            if(!skin_matches(output[1] + v, p, n, tolerance))
+                return "weight plan scalar reference";
+        }
+        if(memcmp(records, saved_records, sizeof(records)))
+            return "weight plan storage mutated by application";
+    }
+
+    for(unsigned failure = 0; failure < 11; ++failure) {
+        pvr_skin_influences_t saved = source[2].value;
+        if(failure == 0) source[2].value.weight[0] = NAN;
+        if(failure == 1) source[2].value.weight[0] = -1;
+        if(failure == 2) memset(source[2].value.weight, 0, sizeof(saved.weight));
+        if(failure == 3) source[2].value.joint[0] = 4;
+        if(failure == 4)
+            source[2].value.weight[0] = source[2].value.weight[1] = FLT_MAX;
+        errno = 0;
+        int rc = pvr_skin_influences_prepare(failure == 10 ? NULL : &stream,
+            failure == 9 ? 0 : 4,
+            failure == 6 ? (void *)source :
+            failure == 7 ? (void *)((uint8_t *)records + 1) : records,
+            failure == 5 ? 2 : 3, failure == 8 ? (void *)records : &plan);
+        source[2].value = saved;
+        if(rc != -1 || errno != (failure < 5 ? EILSEQ :
+                                 failure == 5 ? ENOSPC : EINVAL) ||
+           memcmp(records, saved_records, sizeof(records)) ||
+           memcmp(&plan, &saved_plan, sizeof(plan)))
+            return "weight plan preparation transaction";
+        if(state_unchanged && !state_unchanged())
+            return "weight plan rejection XMTRX";
+    }
+
+    memcpy(input, original, sizeof(input));
+    vertices.vertices = input;
+    for(unsigned failure = 0; failure < 6; ++failure) {
+        pvr_skin_prepared_influences_t bad = plan;
+        if(failure == 0) bad.version = 0;
+        if(failure == 1) --bad.joint_count;
+        if(failure == 2) --bad.vertex_count;
+        memset(output[0], 0x5a, sizeof(output[0]));
+        memcpy(output[1], output[0], sizeof(output[0]));
+        pvr_deform_vertex_t *destination = failure == 3 ? (void *)records :
+            failure == 4 ? (void *)&bad : output[0];
+        errno = 0;
+        int rc = pvr_skin_apply_prepared(destination, 3, &vertices,
+            failure == 5 ? NULL : &bad, &pose, results);
+        if(rc != -1 || errno != EINVAL || results[0].deformed_vertices ||
+           memcmp(records, saved_records, sizeof(records)) ||
+           memcmp(output[0], output[1], sizeof(output[0])))
+            return "weight plan admission/overlap rejection";
+    }
+
+    /* Small positive weight rounds to zero after normalization. It still
+       participates: overflow * zero must not be silently skipped. */
+    matrix_t extreme_positions[2] = { { { 0 } }, { { 0 } } };
+    pvr_normal_matrix_t extreme_normals[2] = { { { { 0 } } }, { { { 0 } } } };
+    for(size_t j = 0; j < 2; ++j) for(size_t a = 0; a < 3; ++a) {
+        extreme_positions[j][a][a] = 1;
+        extreme_normals[j].column[a][a] = 1;
+    }
+    extreme_positions[1][0][0] = FLT_MAX;
+    pvr_skin_palette_t extreme = { extreme_positions, extreme_normals, 2 };
+    pvr_skin_influences_t tiny = { { 0, 1, 0, 0 }, { FLT_MAX, FLT_MIN, 0, 0 } };
+    pvr_skin_stream_t tiny_stream = { &tiny, 1, sizeof(tiny) };
+    pvr_deform_vertex_t point = { { 2, 0, 0, 1 }, { 0, 0, 1, 0 } };
+    vertices = (pvr_deform_stream_t){ &point, 1, sizeof(point) };
+    if(pvr_skin_palette_prepare(&extreme, joints, 2, &pose) ||
+       pvr_skin_influences_prepare(&tiny_stream, 2, records, 1, &plan) ||
+       records[0].active_mask != 3 || records[0].weight[1] != 0)
+        return "weight plan underflow preparation";
+    for(unsigned admitted = 0; admitted < 2; ++admitted) {
+        memset(output[admitted], 0x5a, sizeof(output[admitted]));
+        errno = 0;
+        int rc = admitted ?
+            pvr_skin_apply_prepared(output[admitted], 1, &vertices, &plan, &pose, results) :
+            pvr_skin_apply_prepared_palette(output[admitted], 1, &vertices,
+                &tiny_stream, &pose, results);
+        if(rc != -1 || errno != ERANGE || results[0].deformed_vertices)
+            return "weight plan underflow changed arithmetic failure";
+        if(state_unchanged && !state_unchanged())
+            return "weight plan underflow XMTRX";
+    }
+    if(memcmp(output[0], output[1], sizeof(output[0])))
+        return "weight plan underflow output";
+    return NULL;
 }
 
 static const char *verify_skin_matrices(bool (*state_unchanged)(void),
@@ -296,6 +458,6 @@ static const char *verify_skin_matrices(bool (*state_unchanged)(void),
         if(state_unchanged && !state_unchanged())
             return "skin prepared rejection XMTRX";
     }
-    return NULL;
+    return verify_skin_weight_plan(&palette, original, state_unchanged, tolerance);
 }
 #endif

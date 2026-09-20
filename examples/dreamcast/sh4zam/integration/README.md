@@ -47,7 +47,13 @@ without modifying the prior snapshot or storage. Checked/prepared results
 match byte-for-byte for dynamic vertex/weight failures and valid-prefix
 publication. Capacity, overlapping output, invalid descriptors and storage
 guards are also checked. Absolute component tolerances are `3e-4` on target and `2e-5`
-on host. Success adds:
+on host.
+
+The same fixture also tests the fixed-four immutable weight plan. It compares
+checked/prepared output, errors and progress with strided weights and in-place
+vertices, checks copied ownership and failed preparation transactions, and
+preserves the overflow behavior of active weights that normalize to zero.
+Success adds:
 
 ```text
 SH4ZAM skinning, spans, in-place, rejection, XMTRX: PASS

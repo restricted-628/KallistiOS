@@ -323,6 +323,7 @@ static int normal_matrix_finite(const pvr_normal_matrix_t *matrix) {
 }
 
 #define SKIN_PALETTE_VERSION UINT32_C(0x53504c01)
+#define SKIN_INFLUENCES_VERSION UINT32_C(0x53494e01)
 
 static int palette_ranges(const pvr_skin_palette_t *palette,
                           size_t *position_bytes, size_t *normal_bytes) {
@@ -798,4 +799,173 @@ int pvr_skin_apply_spans_prepared_palette(pvr_deform_vertex_t *output,
     const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result) {
     return skin_apply_spans(output, output_capacity, vertices, influences, NULL,
                             result, palette);
+}
+
+static int influence_total(const pvr_skin_influences_t *influence,
+                            size_t joint_count, float *sum) {
+    float total = 0.0f;
+    for(size_t slot = 0; slot < 4; ++slot) {
+        float weight = influence->weight[slot];
+        if(!isfinite(weight) || weight < 0.0f ||
+           (weight > 0.0f && influence->joint[slot] >= joint_count)) {
+            errno = EILSEQ;
+            return -1;
+        }
+        total += weight;
+    }
+    if(!isfinite(total) || total <= FLT_MIN) {
+        errno = EILSEQ;
+        return -1;
+    }
+    *sum = total;
+    return 0;
+}
+
+int pvr_skin_influences_prepare(const pvr_skin_stream_t *influences,
+    size_t joint_count, pvr_skin_prepared_influence_t *storage,
+    size_t vertex_capacity, pvr_skin_prepared_influences_t *prepared) {
+    size_t input_bytes, storage_bytes;
+    pvr_skin_prepared_influences_t snapshot;
+
+    if(!influences || !storage || !prepared || !joint_count ||
+       ((uintptr_t)influences & (_Alignof(pvr_skin_stream_t) - 1u)) ||
+       !influences->influences ||
+       ((uintptr_t)influences->influences &
+        (_Alignof(pvr_skin_influences_t) - 1u)) ||
+       influences->stride < sizeof(pvr_skin_influences_t) ||
+       (influences->stride & 3u) ||
+       ((uintptr_t)storage & (_Alignof(pvr_skin_prepared_influence_t) - 1u)) ||
+       ((uintptr_t)prepared & (_Alignof(pvr_skin_prepared_influences_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(vertex_capacity < influences->vertex_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(range_size(influences->vertex_count, influences->stride,
+                  sizeof(pvr_skin_influences_t), &input_bytes) < 0 ||
+       influences->vertex_count > SIZE_MAX / sizeof(*storage)) {
+        errno = ERANGE;
+        return -1;
+    }
+    storage_bytes = influences->vertex_count * sizeof(*storage);
+    if(!address_range(influences->influences, input_bytes) ||
+       !address_range(storage, storage_bytes) ||
+       !address_range(influences, sizeof(*influences)) ||
+       !address_range(prepared, sizeof(*prepared))) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(ranges_overlap(storage, storage_bytes, prepared, sizeof(*prepared)) ||
+       ranges_overlap(storage, storage_bytes, influences, sizeof(*influences)) ||
+       ranges_overlap(prepared, sizeof(*prepared), influences, sizeof(*influences)) ||
+       ranges_overlap(storage, storage_bytes, influences->influences, input_bytes) ||
+       ranges_overlap(prepared, sizeof(*prepared), influences->influences, input_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(size_t i = 0; i < influences->vertex_count; ++i) {
+        const pvr_skin_influences_t *source = (const pvr_skin_influences_t *)
+            ((const uint8_t *)influences->influences + i * influences->stride);
+        float total;
+        if(influence_total(source, joint_count, &total) < 0)
+            return -1;
+    }
+    for(size_t i = 0; i < influences->vertex_count; ++i) {
+        const pvr_skin_influences_t *source = (const pvr_skin_influences_t *)
+            ((const uint8_t *)influences->influences + i * influences->stride);
+        float total = source->weight[0] + source->weight[1] +
+                      source->weight[2] + source->weight[3];
+        pvr_skin_prepared_influence_t record = { { 0 }, 0, { 0 } };
+        for(size_t slot = 0; slot < 4; ++slot) {
+            if(source->weight[slot] == 0.0f)
+                continue;
+            record.active_mask |= 1u << slot;
+            record.joint[slot] = source->joint[slot];
+            record.weight[slot] = source->weight[slot] / total;
+        }
+        storage[i] = record;
+    }
+    snapshot.influences = storage;
+    snapshot.vertex_count = influences->vertex_count;
+    snapshot.joint_count = joint_count;
+    snapshot.version = SKIN_INFLUENCES_VERSION;
+    *prepared = snapshot;
+    return 0;
+}
+
+int pvr_skin_apply_prepared(pvr_deform_vertex_t *output, size_t output_capacity,
+    const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_influences_t *influences,
+    const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result) {
+    pvr_deform_result_t progress = { 0 };
+    size_t input_bytes, output_bytes, influence_bytes, joint_count;
+
+    if(result)
+        *result = progress;
+    if(stream_preflight(vertices, output, output_capacity, &input_bytes,
+                        &output_bytes) < 0)
+        return -1;
+    if(!influences ||
+       ((uintptr_t)influences & (_Alignof(pvr_skin_prepared_influences_t) - 1u)) ||
+       influences->version != SKIN_INFLUENCES_VERSION || !influences->influences ||
+       influences->vertex_count != vertices->vertex_count ||
+       ((uintptr_t)influences->influences &
+        (_Alignof(pvr_skin_prepared_influence_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(influences->vertex_count > SIZE_MAX / sizeof(*influences->influences)) {
+        errno = ERANGE;
+        return -1;
+    }
+    influence_bytes = influences->vertex_count * sizeof(*influences->influences);
+    if(!address_range(influences->influences, influence_bytes) ||
+       !address_range(influences, sizeof(*influences))) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(ranges_overlap(influences->influences, influence_bytes, output, output_bytes) ||
+       ranges_overlap(influences, sizeof(*influences), output, output_bytes)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(skin_palette_preflight(NULL, palette, output, output_bytes, &joint_count) < 0)
+        return -1;
+    if(influences->joint_count != joint_count) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(size_t i = 0; i < vertices->vertex_count; ++i) {
+        const pvr_deform_vertex_t *source = (const pvr_deform_vertex_t *)
+            ((const uint8_t *)vertices->vertices + i * vertices->stride);
+        const pvr_skin_prepared_influence_t *influence = influences->influences + i;
+        pvr_deform_vertex_t vertex = { 0 };
+        if(!vertex_finite(source)) {
+            errno = EDOM;
+            goto fail;
+        }
+        for(size_t slot = 0; slot < 4; ++slot) {
+            if(influence->active_mask & (1u << slot))
+                skin_accumulate(source, NULL, palette, influence->joint[slot],
+                                influence->weight[slot], &vertex);
+        }
+        if(!finite3(vertex.position.x, vertex.position.y, vertex.position.z) ||
+           normalize(&vertex.normal.x, &vertex.normal.y, &vertex.normal.z) < 0) {
+            errno = ERANGE;
+            goto fail;
+        }
+        vertex.position.w = 1.0f;
+        vertex.normal.w = 0.0f;
+        memcpy(output + i, &vertex, sizeof(vertex));
+        ++progress.deformed_vertices;
+    }
+    if(result)
+        *result = progress;
+    return 0;
+fail:
+    if(result)
+        *result = progress;
+    return -1;
 }
