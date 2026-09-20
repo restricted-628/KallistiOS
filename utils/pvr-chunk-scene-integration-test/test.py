@@ -28,6 +28,7 @@ def run(executable, source, success, stage=None):
         assert "models=2 joints=2 morph_bindings=2 pose_goldens=6" in result.stdout
         if "--grid" in sys.argv:
             assert "grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS" in result.stdout
+            assert "rotation_scale=PASS normal_goldens=PASS lighting_goldens=PASS" in result.stdout
         else:
             assert "workload_checks=18 packet_guards=PASS lighting=PASS" in result.stdout
     if stage:

@@ -136,15 +136,20 @@ that a log came from physical hardware or validate the timer's accuracy.
 
 `chunk-skin-grid.elf` reuses the same serialized scene loader and pose pipeline,
 but `generate-skin-grid.py` expands each mesh into a 16-by-16-cell grid. It
-preserves the original authored hierarchy, inverse binds, clip, and opposing
-morph curves. The generated glTF and PCM2 are build products, not external or
+preserves the original authored hierarchy, inverse binds, translation, and
+opposing morph curves, and adds tip-joint rotation/scale tracks to the clip.
+The generated glTF and PCM2 are build products, not external or
 proprietary model assets.
 
 Across both meshes there are 578 source vertices, 1,024 triangles, and 32
 joined strips of 34 vertices each (1,088 emitted packets per frame). Two-joint
 weights vary continuously by row; interior vertices exercise both influences.
-Each mesh still has one sparse morph delta, on its last vertex. Normals point
-along +Z and generated triangles have matching winding.
+Each mesh still has one sparse morph delta, on its last vertex. The grid lies
+on Z=X/2, with unit normal (-1,0,2)/sqrt(5) and matching triangle winding.
+Over the 0..1..2 second clip the tip rotates 0..90..0 degrees about Y while
+its scale changes (1,1,1)..(2,1.5,.5)..(1,1,1). The tilted input normal makes
+using a position matrix instead of an inverse-transpose normal matrix visible
+even for vertices influenced by only the tip joint.
 
 The converter binds UV0 to authored texture ID 7. The application verifies that
 binding and the bounded cache layout once during loading, then allocates and
@@ -154,8 +159,20 @@ texture is released after rendering drains. No texture lookup, upload, static
 strip validation, or heap allocation is added to the frame loop.
 
 The six pose goldens independently derive every source vertex's expected
-position from its grid row, joint blend, and mesh-specific morph curve. Packet
-checks verify source-index resolution, position, material color, every strip
+position and normal from scalar double-precision formulas in `grid-goldens.h`,
+not the matrix/animation/skinning helpers under test. They cover inverse-bind
+pivot order, T*R*S composition, morph-before-skin order, and a root translation
+applied only once. The normal contract is to blend the joint inverse-transpose
+results and then normalize, not to reconstruct geometric normals from the
+deformed triangles. Position, normal components, and normal squared length
+use a 0.0005 absolute tolerance.
+
+Both the memory-sink checks and target rendering apply a +Z directional light
+with .2 ambient and .65 diffuse intensity. Independent packed-color goldens
+allow one RGB code point at quantization boundaries and require exact alpha.
+The callback exercises the existing checked lighting API one sample at a time;
+this is a conformance path, not an optimized lighting-throughput benchmark.
+Packet checks verify source-index resolution, position, lit material color, every strip
 terminator, UV coordinates, and an output-tail guard. The host suite also checks
 the generator's winding, weights, and sparse delta, plus truncated input and
 second-model skin corruption cleanup. These checks run alongside the original
@@ -170,12 +187,18 @@ python3 utils/pvr-chunk-scene-integration-test/test-skin-grid.py --log run.log
 ```
 
 This is larger combined-path conformance coverage, not a game-asset importer
-certification or a performance benchmark. It uses only two joints, translation
-animation, one sparse delta per mesh, and one small resident texture. It does
-not establish many-joint scaling, rotational skinning coverage, texture
-streaming/bandwidth, clipping of skinned models, lighting under changing
-normals, or physical-hardware performance. Hardware testing and addon
+certification or a performance benchmark. It uses only two joints, positive
+non-singular scales, a single-axis rotation, one sparse position delta per mesh,
+and one small resident texture. It does not establish many-joint scaling,
+negative/singular scale policy, normal morph deltas, texture streaming/bandwidth,
+clipping of skinned models, or physical-hardware performance. Hardware testing and addon
 extraction remain deferred.
+
+The tilted-normal fixture exposed a converter bug: glTF normals were retained
+only as strip attributes, so indexed skin/morph source construction fell back
+to +Z. The converter now also emits glTF per-vertex normals in the existing
+indexed normal-bearing record types. Rebuild previously converted PCM2 assets
+to obtain the fix; old assets are not silently repaired by the runtime.
 
 ## Recorded validation
 
@@ -206,3 +229,21 @@ smoke test. Host/target grid PCM2 files were byte-identical. These are targeted
 integration and execution results, not visual certification, a full host-suite
 sweep, or physical-hardware validation. No SDK implementation or SH4ZAM pin was
 changed in this batch.
+
+The rotation/scale/lighting follow-up on 2026-09-20 first reproduced a +Z
+fallback normal at time zero on the tilted grid, then passed after the indexed
+glTF normal fix. The scene suite passed GCC 14/Clang GNU17, GCC 14 strict C23,
+Clang strict C2x, and Clang ASan/UBSan. The converter's complete regression
+suite and new indexed-normal/mixed-layout/4-, 6-, and 7-word boundary tests
+passed Clang GNU17, GCC 14 strict C23, Clang strict C2x, and Clang ASan/UBSan.
+The strict Clang converter build used the existing test-runner exception
+`HOST_LZ4_WARNINGS=-Wno-constant-logical-operand` for bundled LZ4; no dependency
+source was changed.
+
+SH-4 GCC 16.2 rebuilt all three scene ELFs. Flycast interpreter and dynarec
+each passed the TRS, normal, lighting, UV, and packet checks, all 240 rendered
+frames, zero reported PVR faults, and final cleanup. The serial checker accepted
+both logs, the original small scene passed a dynarec smoke test, and the host
+and target grid PCM2 files were byte-identical. The SH4ZAM source-pin check
+remained clean. This was targeted converter/integration validation, not a full
+host-suite sweep, visual certification, or physical-hardware validation.

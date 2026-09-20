@@ -54,6 +54,16 @@ seams remain distinct because the importer does not merge source vertices.
 OBJ's independently indexed per-reference attributes likewise preserve UV and
 hard-normal discontinuities without duplicating the canonical position batch.
 
+glTF per-vertex normals are also retained as 32-bit floats in the indexed
+`XYZ_NORMAL` or `XYZ_NORMAL_ARGB` records. Skin and morph source builders read
+these indexed attributes; strip-only normals are insufficient for that path
+and previously caused the builders to fall back to +Z. Mixed primitives with
+and without normals use separate record runs. Batches obey the 16-bit payload
+limit using the actual 3/4/6/7-word vertex stride. Strip normals remain present
+for corner-aware rendering; this does not collapse OBJ hard-normal seams into
+an arbitrary indexed normal. Existing PCM2 assets need reconversion to receive
+the glTF normal fix; no binary format version change is required.
+
 `KHR_materials_unlit`, whether optional or required, emits authored
 `PVR_CHUNK_STRIP_UNLIT` intent. Standard immediate and prepared render-policy
 bindings retain base color and alpha without scene lighting, depth cue or

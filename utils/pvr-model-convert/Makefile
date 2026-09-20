@@ -5,6 +5,7 @@
 #
 
 CC ?= cc
+PYTHON ?= python3
 CFLAGS ?= -O2
 include ../Makefile.host-test
 CFLAGS += $(HOST_LZ4_WARNINGS)
@@ -55,6 +56,7 @@ $(TARGET): $(SOURCES) pvr-uv-ir.h pvr-reference-ir.h
 test: $(TARGET)
 	$(MAKE) -C ../pvr-model-inspect
 	./test.py ./$(TARGET) ../pvr-model-inspect/pvr-model-inspect
+	$(PYTHON) test-vertex-normals.py ./$(TARGET)
 
 install: $(TARGET)
 	install -m 755 $(TARGET) $(DC_TOOLS_BASE)/

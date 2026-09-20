@@ -6,6 +6,7 @@ Copyright (C) 2026 Joseph Black
 
 import base64
 import json
+import math
 import pathlib
 import struct
 import sys
@@ -15,6 +16,7 @@ import unittest
 MARKERS = (
     "KOSSCENE models=2 joints=2 morph_bindings=2 pose_goldens=6",
     "KOSSCENE grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS",
+    "KOSSCENE rotation_scale=PASS normal_goldens=PASS lighting_goldens=PASS",
     "KOSSCENE rendered=1 inspecting=1",
     "KOSSCENE grid_frames=240 triangles_per_frame=1024 packets_per_frame=1088 faults=0",
     "KOSSCENE result=PASS errno=0",
@@ -39,6 +41,7 @@ class GridTests(unittest.TestCase):
                                       data, view["byteOffset"])
 
         positions = values(0, "f")
+        normals = values(1, "f")
         weights = values(3, "f")
         indices = values(4, "H")
         uvs = values(11, "f")
@@ -50,13 +53,30 @@ class GridTests(unittest.TestCase):
                              (1 - row / 16, row / 16, 0, 0))
             self.assertEqual(uvs[vertex * 2:vertex * 2 + 2],
                              (column / 16, row / 16))
-        # All 512 triangles have distinct positions and +Z winding matching
+            self.assertEqual(positions[vertex * 3 + 2], positions[vertex * 3] / 2)
+            self.assertAlmostEqual(normals[vertex * 3], -1 / math.sqrt(5), places=6)
+            self.assertEqual(normals[vertex * 3 + 1], 0)
+            self.assertAlmostEqual(normals[vertex * 3 + 2], 2 / math.sqrt(5), places=6)
+        # All 512 triangles have distinct positions and winding matching
         # the fixture normals, independently of converter strip joining.
         for start in range(0, len(indices), 3):
             a, b, c = (positions[v * 3:v * 3 + 3] for v in indices[start:start + 3])
             cross_z = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+            cross_x = (b[1] - a[1]) * (c[2] - a[2]) - (b[2] - a[2]) * (c[1] - a[1])
             self.assertEqual(cross_z, 1 / 64)
+            self.assertEqual(cross_x, -1 / 128)
         self.assertEqual(values(5, "f"), (0,) * (288 * 3) + (0.5, 0, 0))
+        self.assertEqual(values(13, "f"), (1, 1, 1, 2, 1.5, 0.5, 1, 1, 1))
+        rotations = values(12, "f")
+        self.assertEqual(rotations[:4], (0, 0, 0, 1))
+        self.assertEqual(rotations[8:], (0, 0, 0, 1))
+        self.assertAlmostEqual(rotations[5], math.sqrt(0.5), places=6)
+        self.assertAlmostEqual(rotations[7], math.sqrt(0.5), places=6)
+        animation = scene["animations"][0]
+        self.assertEqual([(c["target"]["node"], c["target"]["path"])
+                          for c in animation["channels"]],
+                         [(2, "translation"), (3, "weights"), (4, "weights"),
+                          (2, "rotation"), (2, "scale")])
 
     def test_log(self):
         check_log("unrelated boot output\n" + "\n".join(MARKERS))

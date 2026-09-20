@@ -40,7 +40,7 @@ all: $(TARGET) $(GRID_TARGET)
 $(TARGET): $(SOURCES) host-support.h $(EXAMPLE)/scene-workload.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
-$(GRID_TARGET): $(SOURCES) host-support.h
+$(GRID_TARGET): $(SOURCES) host-support.h $(EXAMPLE)/grid-goldens.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_GRID $(SOURCES) $(LDLIBS) -o $@
 
 skin-grid.gltf: $(EXAMPLE)/chunk-scene.gltf $(EXAMPLE)/generate-skin-grid.py
@@ -54,7 +54,7 @@ fixture.pcm: $(EXAMPLE)/chunk-scene.gltf ../pvr-model-convert/pvr-model-convert
 	../pvr-model-convert/pvr-model-convert --emit-asset --section-directory \
 		--cooked-cache $< $@
 
-../pvr-model-convert/pvr-model-convert:
+../pvr-model-convert/pvr-model-convert: ../pvr-model-convert/pvr-model-convert.c
 	$(MAKE) -C ../pvr-model-convert
 
 test: $(TARGET) fixture.pcm $(GRID_TARGET) skin-grid.pcm

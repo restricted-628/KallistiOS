@@ -956,13 +956,15 @@ f 1/1/1 2/2/1 3/3/1
             color_vertex_descriptor[2]:
             color_vertex_descriptor[2] + color_vertex_descriptor[3]
         ]
-        assert len(color_vertices) == 60
+        assert len(color_vertices) == 96
         assert struct.unpack_from("<I", color_vertices, 0)[0] == (
-            35 | (13 << 16)
+            42 | (22 << 16)
         )
-        assert struct.unpack_from("<I", color_vertices, 20)[0] == 0x80800000
-        assert struct.unpack_from("<I", color_vertices, 36)[0] == 0xff008000
-        assert struct.unpack_from("<I", color_vertices, 52)[0] == 0xff000080
+        for vertex in range(3):
+            assert struct.unpack_from("<3f", color_vertices, 20 + vertex * 28) == (0, 0, 1)
+        assert struct.unpack_from("<I", color_vertices, 32)[0] == 0x80800000
+        assert struct.unpack_from("<I", color_vertices, 60)[0] == 0xff008000
+        assert struct.unpack_from("<I", color_vertices, 88)[0] == 0xff000080
 
         # Required and optional unlit use the same stream flag. PBR fallback
         # fields must not relight the base color or require vertex normals.
@@ -989,8 +991,14 @@ f 1/1/1 2/2/1 3/3/1
                         for i in range(struct.unpack_from("<I", unlit_bytes, 32)[0])]
             vertex_section = next(s for s in sections if s[0] == 1)
             polygon_section = next(s for s in sections if s[0] == 2)
-            assert unlit_bytes[vertex_section[2]:
-                               vertex_section[2] + vertex_section[3]] == color_vertices
+            unlit_vertices = unlit_bytes[vertex_section[2]:vertex_section[2] + vertex_section[3]]
+            assert len(unlit_vertices) == 60
+            assert struct.unpack_from("<I", unlit_vertices)[0] == 35 | (13 << 16)
+            for vertex in range(3):
+                # Removing NORMAL changes the indexed record layout, not
+                # authored positions or colors (including non-opaque alpha).
+                assert unlit_vertices[8 + vertex * 16:20 + vertex * 16] == color_vertices[8 + vertex * 28:20 + vertex * 28]
+                assert unlit_vertices[20 + vertex * 16:24 + vertex * 16] == color_vertices[32 + vertex * 28:36 + vertex * 28]
             words = struct.unpack_from(f"<{polygon_section[3] // 2}H",
                                        unlit_bytes, polygon_section[2])
             # DIFFUSE record (four words), followed by an INDEX strip.
@@ -1045,7 +1053,7 @@ f 1/1/1 2/2/1 3/3/1
             color3_vertex_descriptor[2]:
             color3_vertex_descriptor[2] + color3_vertex_descriptor[3]
         ]
-        assert struct.unpack_from("<I", color3_vertices, 20)[0] == 0xff800000
+        assert struct.unpack_from("<I", color3_vertices, 32)[0] == 0xff800000
 
         multi_gltf_binary = (
             gltf_binary +

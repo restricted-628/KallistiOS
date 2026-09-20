@@ -13,7 +13,7 @@ all: $(TARGET) chunk-workload.elf chunk-skin-grid.elf
 
 include $(KOS_BASE)/Makefile.rules
 
-$(MODEL_CONVERTER):
+$(MODEL_CONVERTER): $(KOS_BASE)/utils/pvr-model-convert/pvr-model-convert.c
 	$(MAKE) -C $(KOS_BASE)/utils/pvr-model-convert CC="$(HOST_CC)"
 
 $(BIN2C):
@@ -36,7 +36,7 @@ skin-grid.pcm: skin-grid.gltf $(MODEL_CONVERTER)
 skin-grid-asset.c: skin-grid.pcm $(BIN2C)
 	$(BIN2C) $< $@ skin_grid_asset
 
-chunk-skin-grid.o: chunk-scene.c
+chunk-skin-grid.o: chunk-scene.c grid-goldens.h
 	kos-cc $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_GRID -c $< -o $@
 
 chunk-skin-grid.elf: chunk-skin-grid.o skin-grid-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a

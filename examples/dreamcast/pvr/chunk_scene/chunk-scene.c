@@ -17,6 +17,7 @@
 #include <dc/pvr_chunk_skeleton_asset.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_skin_prepared.h>
+#include <dc/pvr_lighting.h>
 #include <errno.h>
 #include <math.h>
 #include <stdalign.h>
@@ -35,6 +36,7 @@
 #define STRIPS 16u
 #define STRIP_VERTICES 34u
 #define SOURCE_BYTES (VERTICES * 128u)
+#define CLIP_TRACKS 3u
 #else
 #define VERTICES 3u
 #define WEIGHTS VERTICES
@@ -42,6 +44,7 @@
 #define STRIPS 1u
 #define STRIP_VERTICES 3u
 #define SOURCE_BYTES 512u
+#define CLIP_TRACKS 1u
 #endif
 #define PACKETS (STRIPS * STRIP_VERTICES)
 /* The prepared source-index table is page-granular. */
@@ -93,8 +96,8 @@ static struct {
     pvr_chunk_hierarchy_node_t nodes[NODES];
     pvr_chunk_hierarchy_t hierarchy;
     model_state_t model[MODELS];
-    pvr_chunk_animation_key_t keys[3];
-    anim_track_view_t track[1];
+    pvr_chunk_animation_key_t keys[3u * CLIP_TRACKS];
+    anim_track_view_t track[CLIP_TRACKS];
     anim_transform_tracks_t transforms[NODES];
     anim_visibility_tracks_t visibility[NODES];
     anim_clip_view_t clip;
@@ -294,7 +297,7 @@ static int scene_load(const void *source, size_t source_bytes) {
        pvr_chunk_animation_section_open(data, bytes, &animation_view) < 0 ||
        require(animation_view.transform_count == NODES) < 0 ||
        pvr_chunk_animation_section_materialize(
-           &animation_view, app.keys, 3, app.track, 1, app.transforms,
+           &animation_view, app.keys, 3u * CLIP_TRACKS, app.track, CLIP_TRACKS, app.transforms,
            NODES, app.visibility, NODES, &app.clip) < 0)
         return failure("clip");
     if(section(PVR_CHUNK_ASSET_SECTION_MORPH_ANIMATION,
@@ -371,6 +374,13 @@ static int resolve(uint16_t index, pvr_deform_vertex_t *vertex, void *data) {
     return pvr_chunk_skin_general_pose_vertex_get(&m->pose, index, vertex);
 }
 
+#ifdef CHUNK_SCENE_GRID
+#include "grid-goldens.h"
+#define SCENE_SHADE grid_shade
+#else
+#define SCENE_SHADE NULL
+#endif
+
 static int check_pose(float time) {
     float bend = time <= 1.0f ? time : 2.0f - time;
     size_t i;
@@ -378,6 +388,9 @@ static int check_pose(float time) {
 
     if(sample(time) < 0)
         return -1;
+#ifdef CHUNK_SCENE_GRID
+    const grid_oracle_t oracle = grid_oracle(time);
+#endif
     for(i = 0; i < MODELS; ++i) {
         alignas(32) static const matrix_t identity = {
             { 1, 0, 0, 0 }, { 0, 1, 0, 0 },
@@ -396,11 +409,21 @@ static int check_pose(float time) {
         for(vertex = 0; vertex < VERTICES; ++vertex) {
             pvr_deform_vertex_t v;
 #ifdef CHUNK_SCENE_GRID
-            float fraction = (float)(vertex / 17u) / 16.0f;
-            float x = (float)(vertex % 17u) / 8.0f - 0.75f + fraction * bend;
-            float y = fraction * 2.0f - 1.0f;
-            if(vertex + 1u == VERTICES)
-                x += 0.5f * weight;
+            grid_expected_t expected = grid_expected(&oracle, vertex, weight);
+            if(pvr_chunk_skin_general_pose_vertex_get(
+                   &app.model[i].pose, (uint16_t)vertex, &v) < 0)
+                return failure("grid-vertex-get");
+            if(grid_check_vertex(&v, &expected) < 0) {
+                printf("grid mismatch time=%g model=%u vertex=%u "
+                       "position=(%g,%g,%g) expected=(%g,%g,%g) "
+                       "normal=(%g,%g,%g) expected=(%g,%g,%g)\n",
+                       (double)time, (unsigned)i, (unsigned)vertex,
+                       (double)v.position.x, (double)v.position.y, (double)v.position.z,
+                       expected.x, expected.y, expected.z,
+                       (double)v.normal.x, (double)v.normal.y, (double)v.normal.z,
+                       expected.nx, expected.ny, expected.nz);
+                return failure("grid-transform-golden");
+            }
 #else
             float x = vertex == 0 ? -0.75f : 1.25f;
             float y = -1.0f;
@@ -408,7 +431,6 @@ static int check_pose(float time) {
                 x = 0.25f + bend + 0.5f * weight;
                 y = 1.0f;
             }
-#endif
             if(pvr_chunk_skin_general_pose_vertex_get(
                    &app.model[i].pose, (uint16_t)vertex, &v) < 0 ||
                require(fabsf(v.position.x - x) < 0.0001f &&
@@ -416,6 +438,7 @@ static int check_pose(float time) {
                        fabsf(v.position.z) < 0.0001f &&
                        fabsf(v.normal.z - 1.0f) < 0.0001f) < 0)
                 return failure("vertex-golden");
+#endif
         }
         /* Exercise the same prepared emitter on a host memory sink. Colors
            must survive deformation, and indices must still select the
@@ -424,7 +447,7 @@ static int check_pose(float time) {
         if(pvr_geometry_sink_init_memory(&sink, output, PACKETS) < 0 ||
            pvr_chunk_model_cache_draw_emit(&m->draw, &identity, &sink,
                                          workspace, STRIP_VERTICES, NULL, NULL, resolve,
-                                         NULL, m, &emitted) < 0 ||
+                                         SCENE_SHADE, m, &emitted) < 0 ||
            require(emitted.emitted_vertices == PACKETS &&
                    emitted.emitted_strips == STRIPS &&
                    memcmp(&output[PACKETS], &guard, sizeof(guard)) == 0) < 0)
@@ -435,12 +458,18 @@ static int check_pose(float time) {
                require(fabsf(output[vertex].x - v.position.x) < 0.0001f &&
                        fabsf(output[vertex].y - v.position.y) < 0.0001f &&
                        fabsf(output[vertex].z - 1.0f) < 0.0001f &&
+#ifndef CHUNK_SCENE_GRID
                        output[vertex].argb == m->cache.vertices[vertex].argb &&
+#endif
                        output[vertex].flags == ((vertex + 1) % STRIP_VERTICES == 0 ?
                            PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX)) < 0)
                 return failure("packet-golden");
 #ifdef CHUNK_SCENE_GRID
             uint16_t source = m->cache.source_indices[vertex];
+            grid_expected_t expected = grid_expected(&oracle, source, weight);
+            if(grid_check_color(output[vertex].argb, m->cache.vertices[vertex].argb,
+                                &expected) < 0)
+                return failure("grid-lighting-golden");
             if(require(fabsf(output[vertex].u - (float)(source % 17u) / 16.0f) < 0.0001f &&
                        fabsf(output[vertex].v - (float)(source / 17u) / 16.0f) < 0.0001f) < 0)
                 return failure("uv-golden");
@@ -516,7 +545,7 @@ static int render(void) {
             pvr_chunk_cache_result_t result;
             if(pvr_chunk_model_cache_draw_emit(
                    &app.model[i].draw, &screen, &sink, workspace, STRIP_VERTICES,
-                   NULL, begin_strip, resolve, NULL, &app.model[i], &result) < 0 ||
+                   NULL, begin_strip, resolve, SCENE_SHADE, &app.model[i], &result) < 0 ||
                require(result.emitted_strips == STRIPS &&
                        result.emitted_vertices == PACKETS) < 0)
                 goto fail;
@@ -616,6 +645,7 @@ int main(int argc, char **argv) {
     puts("KOSSCENE models=2 joints=2 morph_bindings=2 pose_goldens=6");
 #ifdef CHUNK_SCENE_GRID
     puts("KOSSCENE grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS");
+    puts("KOSSCENE rotation_scale=PASS normal_goldens=PASS lighting_goldens=PASS");
 #endif
 #if !defined(CHUNK_SCENE_GRID) && (defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD))
     if(workload_check() < 0)

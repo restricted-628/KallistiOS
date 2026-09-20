@@ -6,7 +6,8 @@
    The source boundary is intentionally narrower than OBJ as a whole. Vertex
    positions become indexed 32-bit records. Per-corner UVs and normals become
    16-bit strip attributes, so independently indexed OBJ attributes do not
-   require vertex duplication. OBJ faces must already be triangles; glTF's
+   require vertex duplication. glTF also retains its per-vertex normals in
+   indexed records for skin/morph source construction. OBJ faces must already be triangles; glTF's
    explicitly defined triangle, strip, and fan topology is lowered without
    guessing polygon triangulation or material-name policy.
 
@@ -59,7 +60,6 @@
 
 #define MAX_POSITION_COUNT 65536u
 #define MAX_GLTF_SCENE_NODE_COUNT 65536u
-#define MAX_VERTEX_BATCH ((UINT16_MAX - 1u) / 3u)
 #define MAX_STRIP_COUNT UINT16_C(0x3fff)
 #define MAX_C_SYMBOL_LENGTH 31u
 
@@ -94,6 +94,7 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
 
 typedef struct source_position {
     float value[3];
+    size_t normal; /* glTF per-vertex normal, or SIZE_MAX for absent/OBJ. */
 } source_position_t;
 
 typedef struct source_texcoord {
@@ -1521,6 +1522,7 @@ static int gltf_append_position_value(source_model_t *model,
         return -1;
     }
     memcpy(position.value, value, sizeof(position.value));
+    position.normal = SIZE_MAX;
     if(reserve_array(&allocation, &model->position_capacity,
                      model->position_count + 1u,
                      sizeof(*model->positions)) < 0)
@@ -1849,6 +1851,8 @@ static int gltf_append_primitive(const cgltf_data *data,
            (!cgltf_accessor_read_float(normals, vertex, normal, 3) ||
             gltf_append_normal_value(model, normal) < 0))
             return -1;
+        if(normals)
+            model->positions[position_base + vertex].normal = normal_base + vertex;
         if(model->has_colors) {
             if(colors && !cgltf_accessor_read_float(
                              colors, vertex, color,
@@ -3424,7 +3428,7 @@ static int parse_corner(char *token, const source_model_t *model,
 }
 
 static int append_position(source_model_t *model, char *cursor) {
-    source_position_t position;
+    source_position_t position = { .normal = SIZE_MAX };
     void *allocation = model->positions;
     size_t component;
 
@@ -3959,26 +3963,45 @@ static uint8_t material_record_type(
     return PVR_CHUNK_MATERIAL_DIFFUSE;
 }
 
+/* Keep one record layout per batch, including mixed glTF primitives with
+   and without normals. Payload limits depend on the actual emitted stride. */
+static size_t vertex_batch(const source_model_t *model, size_t first,
+                           size_t *stride, uint8_t *type) {
+    int normal = model->positions[first].normal != SIZE_MAX;
+    size_t count = 0;
+    *stride = 3u + (normal ? 3u : 0u) + (model->has_colors ? 1u : 0u);
+    *type = normal ? (model->has_colors ? PVR_CHUNK_VERTEX_XYZ_NORMAL_ARGB :
+                                        PVR_CHUNK_VERTEX_XYZ_NORMAL) :
+                    (model->has_colors ? PVR_CHUNK_VERTEX_XYZ_ARGB : PVR_CHUNK_VERTEX_XYZ);
+    while(first + count < model->position_count &&
+          count < (UINT16_MAX - 1u) / *stride &&
+          (model->positions[first + count].normal != SIZE_MAX) == normal)
+        ++count;
+    return count;
+}
+
 static int calculate_sizes(const source_model_t *model,
                            const strip_plan_t *plan,
                            const material_library_t *library,
                            output_streams_t *streams) {
-    size_t vertex_batches =
-        (model->position_count + MAX_VERTEX_BATCH - 1u) / MAX_VERTEX_BATCH;
-    size_t vertex_stride = model->has_colors ? 4u : 3u;
-    size_t vertex_words;
+    size_t vertex_words = 1u;
     size_t polygon_words = 1u;
     size_t first = 0;
     int active_texture = -1;
     size_t active_material = SIZE_MAX;
 
-    if(model->position_count >
-       (SIZE_MAX - 1u - 2u * vertex_batches) / vertex_stride) {
-        errno = EOVERFLOW;
-        return -1;
+    for(size_t position = 0; position < model->position_count;) {
+        size_t stride;
+        uint8_t type;
+        size_t count = vertex_batch(model, position, &stride, &type);
+        size_t addition = 2u + stride * count;
+        if(addition > SIZE_MAX - vertex_words) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        vertex_words += addition;
+        position += count;
     }
-    vertex_words = 1u + 2u * vertex_batches +
-                   vertex_stride * model->position_count;
 
     if(!library->count) {
         polygon_words += 4u;
@@ -4247,18 +4270,14 @@ static int generate_streams(const source_model_t *model,
     vertex_output = streams->vertex_words;
     first = 0;
     while(first < model->position_count) {
-        size_t count = model->position_count - first;
-        size_t vertex_stride = model->has_colors ? 4u : 3u;
+        size_t vertex_stride;
+        uint8_t type;
+        size_t count = vertex_batch(model, first, &vertex_stride, &type);
         size_t payload_words;
         size_t position;
 
-        if(count > MAX_VERTEX_BATCH)
-            count = MAX_VERTEX_BATCH;
         payload_words = 1u + vertex_stride * count;
-        *vertex_output++ = (model->has_colors ?
-                            PVR_CHUNK_VERTEX_XYZ_ARGB :
-                            PVR_CHUNK_VERTEX_XYZ) |
-                           ((uint32_t)payload_words << 16);
+        *vertex_output++ = type | ((uint32_t)payload_words << 16);
         *vertex_output++ = ((uint32_t)count << 16) | (uint32_t)first;
         for(position = 0; position < count; ++position) {
             size_t component;
@@ -4266,6 +4285,12 @@ static int generate_streams(const source_model_t *model,
             for(component = 0; component < 3u; ++component) {
                 *vertex_output++ = float_word(
                     model->positions[first + position].value[component]);
+            }
+            if(model->positions[first + position].normal != SIZE_MAX) {
+                const source_normal_t *normal =
+                    &model->normals[model->positions[first + position].normal];
+                for(component = 0; component < 3u; ++component)
+                    *vertex_output++ = float_word(normal->value[component]);
             }
             if(model->has_colors)
                 *vertex_output++ = quantize_argb(
