@@ -25,7 +25,11 @@ def run(executable, source, success, stage=None):
     assert result.returncode == (0 if success else 1), result
     assert expected in result.stdout, result
     if success:
-        assert "workload_checks=18 packet_guards=PASS lighting=PASS" in result.stdout
+        assert "models=2 joints=2 morph_bindings=2 pose_goldens=6" in result.stdout
+        if "--grid" in sys.argv:
+            assert "grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS" in result.stdout
+        else:
+            assert "workload_checks=18 packet_guards=PASS lighting=PASS" in result.stdout
     if stage:
         assert f"KOSSCENE stage={stage} " in result.stdout, result
 

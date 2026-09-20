@@ -6,7 +6,7 @@ sparse-morph, animation-catalog, transform-clip, morph-weight, and cooked-cache
 APIs. It does not introduce a scene graph, renderer, resource manager, or new
 library API.
 
-The fixture has two opaque, untextured triangles with different materials, a
+The original fixture has two opaque, untextured triangles with different materials, a
 translated root, and two joints. The base vertices follow the base joint; the
 top vertex follows the animated tip joint. Each model has one sparse shape
 target. The two mesh instances have opposing, independently serialized morph
@@ -132,6 +132,51 @@ The checker rejects missing/duplicate cases, missing stages, wrong counts,
 unsorted summary statistics, and a missing final PASS. It cannot establish
 that a log came from physical hardware or validate the timer's accuracy.
 
+## Animated textured grid integration
+
+`chunk-skin-grid.elf` reuses the same serialized scene loader and pose pipeline,
+but `generate-skin-grid.py` expands each mesh into a 16-by-16-cell grid. It
+preserves the original authored hierarchy, inverse binds, clip, and opposing
+morph curves. The generated glTF and PCM2 are build products, not external or
+proprietary model assets.
+
+Across both meshes there are 578 source vertices, 1,024 triangles, and 32
+joined strips of 34 vertices each (1,088 emitted packets per frame). Two-joint
+weights vary continuously by row; interior vertices exercise both influences.
+Each mesh still has one sparse morph delta, on its last vertex. Normals point
+along +Z and generated triangles have matching winding.
+
+The converter binds UV0 to authored texture ID 7. The application verifies that
+binding and the bounded cache layout once during loading, then allocates and
+uploads a 64-by-64 RGB565 checker texture before rendering. A single opaque,
+bilinear, modulated texture header serves both authored material colors. The
+texture is released after rendering drains. No texture lookup, upload, static
+strip validation, or heap allocation is added to the frame loop.
+
+The six pose goldens independently derive every source vertex's expected
+position from its grid row, joint blend, and mesh-specific morph curve. Packet
+checks verify source-index resolution, position, material color, every strip
+terminator, UV coordinates, and an output-tail guard. The host suite also checks
+the generator's winding, weights, and sparse delta, plus truncated input and
+second-model skin corruption cleanup. These checks run alongside the original
+triangle and repeated-instance tests, which are unchanged in purpose.
+
+The target draws 240 animated frames, checks PVR fault state, holds the last
+image for ten seconds, and releases all owned resources before final PASS.
+Check a complete serial report with:
+
+```sh
+python3 utils/pvr-chunk-scene-integration-test/test-skin-grid.py --log run.log
+```
+
+This is larger combined-path conformance coverage, not a game-asset importer
+certification or a performance benchmark. It uses only two joints, translation
+animation, one sparse delta per mesh, and one small resident texture. It does
+not establish many-joint scaling, rotational skinning coverage, texture
+streaming/bandwidth, clipping of skinned models, lighting under changing
+normals, or physical-hardware performance. Hardware testing and addon
+extraction remain deferred.
+
 ## Recorded validation
 
 On 2026-09-05, the full GNU17 host sweep passed 52/52 suites. This integration
@@ -149,3 +194,15 @@ all six workload cases, 192 rendered frames, and final cleanup with passing
 serial-log verification. The original small scene also completed a dynarec
 smoke run. These are execution checks; no new visual or hardware-performance
 certification is claimed.
+
+Also on 2026-09-20, the animated textured grid and original scene host tests
+passed GCC 14/Clang GNU17, GCC 14 strict C23, Clang strict C2x, and Clang
+ASan/UBSan, including both malformed-input cleanup paths. Generator invariants
+and positive/negative serial-log tests passed. SH-4 GCC 16.2 built all three
+scene ELFs. Flycast interpreter and dynarec each passed the grid goldens,
+240 rendered frames, zero reported PVR faults, and final cleanup; the serial
+checker accepted both logs. The original small scene also passed a dynarec
+smoke test. Host/target grid PCM2 files were byte-identical. These are targeted
+integration and execution results, not visual certification, a full host-suite
+sweep, or physical-hardware validation. No SDK implementation or SH4ZAM pin was
+changed in this batch.

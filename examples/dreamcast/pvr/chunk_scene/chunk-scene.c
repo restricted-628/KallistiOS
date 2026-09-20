@@ -27,23 +27,39 @@
 /* Deliberately bounded fixture storage, not a general scene manager. */
 #define MODELS 2u
 #define NODES 5u
-#define VERTICES 3u
 #define JOINTS 2u
-/* The prepared index is page-granular even for this three-vertex fixture. */
-#define LOOKUP PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE
+#ifdef CHUNK_SCENE_GRID
+#define VERTICES 289u
+#define WEIGHTS (2u * VERTICES)
+#define TRIANGLES 512u
+#define STRIPS 16u
+#define STRIP_VERTICES 34u
+#define SOURCE_BYTES (VERTICES * 128u)
+#else
+#define VERTICES 3u
+#define WEIGHTS VERTICES
+#define TRIANGLES 1u
+#define STRIPS 1u
+#define STRIP_VERTICES 3u
+#define SOURCE_BYTES 512u
+#endif
+#define PACKETS (STRIPS * STRIP_VERTICES)
+/* The prepared source-index table is page-granular. */
+#define LOOKUP (((VERTICES + PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE - 1u) / \
+                 PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE) * PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE)
 
 typedef struct model_state {
     pvr_chunk_model_plan_t plan;
     pvr_chunk_vertex_index_entry_t entries[LOOKUP];
     pvr_chunk_skin_span_t spans[VERTICES];
-    pvr_chunk_skin_weight_t weights[VERTICES];
+    pvr_chunk_skin_weight_t weights[WEIGHTS];
     pvr_chunk_skin_general_t skin;
     uint32_t skin_lookup[LOOKUP];
     pvr_chunk_skin_general_binding_t skin_binding;
-    alignas(32) uint8_t skin_storage[512];
+    alignas(32) uint8_t skin_storage[SOURCE_BYTES];
     pvr_chunk_skin_general_source_t skin_source;
     pvr_skin_prepared_span_t prepared_spans[VERTICES];
-    pvr_skin_weight_t prepared_weights[VERTICES];
+    pvr_skin_weight_t prepared_weights[WEIGHTS];
     pvr_skin_prepared_spans_t skin_plan;
     pvr_chunk_skeleton_joint_t joints[JOINTS];
     pvr_chunk_skeleton_t skeleton;
@@ -58,7 +74,7 @@ typedef struct model_state {
     pvr_chunk_shape_set_t shapes;
     uint32_t shape_lookup[LOOKUP];
     pvr_chunk_shape_binding_t shape_binding;
-    alignas(32) uint8_t shape_storage[512];
+    alignas(32) uint8_t shape_storage[SOURCE_BYTES];
     pvr_chunk_shape_source_t shape_source;
     anim_morph_target_tracks_t morph_tracks;
     pvr_morph_target_t morph_target;
@@ -136,7 +152,7 @@ static int model_load(size_t index) {
     size_t bytes;
 
     if(require(app.models[index].info.vertex_entries == VERTICES &&
-               app.models[index].info.triangles == 1) < 0 ||
+               app.models[index].info.triangles == TRIANGLES) < 0 ||
        pvr_chunk_model_table_record_get(&app.scene.model_table, index,
                                           &record) < 0 ||
        pvr_chunk_model_plan_query(&app.models[index], &plan_req) < 0 ||
@@ -149,7 +165,7 @@ static int model_load(size_t index) {
                  record.skin_general_ordinal, &data, &bytes) < 0 ||
        pvr_chunk_skin_general_section_open(data, bytes, &skin_view) < 0 ||
        pvr_chunk_skin_general_section_materialize(
-           &skin_view, m->spans, VERTICES, m->weights, VERTICES,
+           &skin_view, m->spans, VERTICES, m->weights, WEIGHTS,
            &m->skin) < 0 ||
        require(m->skin.joint_count == JOINTS &&
                m->skin.span_count == VERTICES) < 0 ||
@@ -171,9 +187,9 @@ static int model_load(size_t index) {
     pvr_skin_span_plan_requirements_t prepared_req;
     if(pvr_skin_spans_prepare_query(&influences, JOINTS, &prepared_req) < 0 ||
        require(prepared_req.span_count <= VERTICES &&
-               prepared_req.weight_count <= VERTICES) < 0 ||
+               prepared_req.weight_count <= WEIGHTS) < 0 ||
        pvr_skin_spans_prepare(&influences, JOINTS, m->prepared_spans, VERTICES,
-           m->prepared_weights, VERTICES, &m->skin_plan) < 0)
+           m->prepared_weights, WEIGHTS, &m->skin_plan) < 0)
         return failure("skin-prepare");
 
     if(section(PVR_CHUNK_ASSET_SECTION_SKELETON,
@@ -211,6 +227,21 @@ static int model_load(size_t index) {
            &cache_view, m->cache_storage, cache_req.bytes, &m->cache) < 0 ||
        pvr_chunk_model_cache_draw_prepare(&m->cache, &m->draw) < 0)
         return failure("cache");
+    if(require(m->cache.vertex_count == PACKETS &&
+               m->cache.strip_count == STRIPS &&
+               m->cache.maximum_strip_vertices == STRIP_VERTICES) < 0)
+        return failure("cache-layout");
+    for(size_t strip = 0; strip < STRIPS; ++strip) {
+        if(require(m->cache.strips[strip].first_vertex == strip * STRIP_VERTICES &&
+                   m->cache.strips[strip].vertex_count == STRIP_VERTICES) < 0)
+            return failure("strip-layout");
+#ifdef CHUNK_SCENE_GRID
+        /* Resolve this fixture's sole texture binding once, before drawing. */
+        if(require((m->cache.strips[strip].state.present & PVR_CHUNK_RENDER_TEXTURE) &&
+                   m->cache.strips[strip].state.texture.identifier == 7) < 0)
+            return failure("texture-binding");
+#endif
+    }
     m->pose.binding = &m->skin_binding;
     m->pose.vertices = m->deformed;
     m->pose.vertex_count = VERTICES;
@@ -332,8 +363,9 @@ static int sample(float time) {
 }
 
 /* Independent authored expectations: root X=.25, tip joint X rises 0..1..0,
-   only the top vertex follows that joint, and the two morph curves oppose
-   each other. Resolve original indices instead of assuming dense-cache order. */
+   and the two morph curves oppose each other. The triangle's top vertex
+   follows the tip; the grid blends the two joints by row. Resolve original
+   indices instead of assuming dense-cache order. */
 static int resolve(uint16_t index, pvr_deform_vertex_t *vertex, void *data) {
     model_state_t *m = data;
     return pvr_chunk_skin_general_pose_vertex_get(&m->pose, index, vertex);
@@ -351,8 +383,9 @@ static int check_pose(float time) {
             { 1, 0, 0, 0 }, { 0, 1, 0, 0 },
             { 0, 0, 1, 0 }, { 0, 0, 0, 1 }
         };
-        alignas(32) pvr_vertex_t workspace[VERTICES];
-        alignas(32) pvr_vertex_t output[VERTICES];
+        alignas(32) pvr_vertex_t workspace[STRIP_VERTICES];
+        alignas(32) pvr_vertex_t output[PACKETS + 1u];
+        const pvr_vertex_t guard = { .flags = 0xdeadbeef };
         pvr_geometry_sink_t sink;
         pvr_chunk_cache_result_t emitted;
         model_state_t *m = &app.model[i];
@@ -362,12 +395,20 @@ static int check_pose(float time) {
             return failure("weight-golden");
         for(vertex = 0; vertex < VERTICES; ++vertex) {
             pvr_deform_vertex_t v;
+#ifdef CHUNK_SCENE_GRID
+            float fraction = (float)(vertex / 17u) / 16.0f;
+            float x = (float)(vertex % 17u) / 8.0f - 0.75f + fraction * bend;
+            float y = fraction * 2.0f - 1.0f;
+            if(vertex + 1u == VERTICES)
+                x += 0.5f * weight;
+#else
             float x = vertex == 0 ? -0.75f : 1.25f;
             float y = -1.0f;
             if(vertex == 2) {
                 x = 0.25f + bend + 0.5f * weight;
                 y = 1.0f;
             }
+#endif
             if(pvr_chunk_skin_general_pose_vertex_get(
                    &app.model[i].pose, (uint16_t)vertex, &v) < 0 ||
                require(fabsf(v.position.x - x) < 0.0001f &&
@@ -379,23 +420,31 @@ static int check_pose(float time) {
         /* Exercise the same prepared emitter on a host memory sink. Colors
            must survive deformation, and indices must still select the
            correct posed vertex even if strip order differs from input order. */
-        if(pvr_geometry_sink_init_memory(&sink, output, VERTICES) < 0 ||
+        output[PACKETS] = guard;
+        if(pvr_geometry_sink_init_memory(&sink, output, PACKETS) < 0 ||
            pvr_chunk_model_cache_draw_emit(&m->draw, &identity, &sink,
-                                         workspace, VERTICES, NULL, NULL, resolve,
+                                         workspace, STRIP_VERTICES, NULL, NULL, resolve,
                                          NULL, m, &emitted) < 0 ||
-           require(emitted.emitted_vertices == VERTICES &&
-                   emitted.emitted_strips == 1) < 0)
+           require(emitted.emitted_vertices == PACKETS &&
+                   emitted.emitted_strips == STRIPS &&
+                   memcmp(&output[PACKETS], &guard, sizeof(guard)) == 0) < 0)
             return failure("cache-golden");
-        for(vertex = 0; vertex < VERTICES; ++vertex) {
+        for(vertex = 0; vertex < PACKETS; ++vertex) {
             pvr_deform_vertex_t v;
             if(resolve(m->cache.source_indices[vertex], &v, m) < 0 ||
                require(fabsf(output[vertex].x - v.position.x) < 0.0001f &&
                        fabsf(output[vertex].y - v.position.y) < 0.0001f &&
                        fabsf(output[vertex].z - 1.0f) < 0.0001f &&
                        output[vertex].argb == m->cache.vertices[vertex].argb &&
-                       output[vertex].flags == (vertex + 1 == VERTICES ?
+                       output[vertex].flags == ((vertex + 1) % STRIP_VERTICES == 0 ?
                            PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX)) < 0)
                 return failure("packet-golden");
+#ifdef CHUNK_SCENE_GRID
+            uint16_t source = m->cache.source_indices[vertex];
+            if(require(fabsf(output[vertex].u - (float)(source % 17u) / 16.0f) < 0.0001f &&
+                       fabsf(output[vertex].v - (float)(source / 17u) / 16.0f) < 0.0001f) < 0)
+                return failure("uv-golden");
+#endif
         }
     }
     return 0;
@@ -407,8 +456,7 @@ static pvr_poly_hdr_t draw_header;
 static int begin_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
     (void)strip;
     (void)data;
-    /* This fixture has only opaque, untextured strips; their authored colors
-       are retained in the cooked vertices. One header policy serves both. */
+    /* A single application-owned opaque material policy serves both models. */
     return pvr_prim(&draw_header, sizeof(draw_header));
 }
 
@@ -417,7 +465,11 @@ static int render(void) {
     pvr_poly_cxt_t context;
     pvr_geometry_sink_t sink;
     pvr_pipeline_status_t pipeline;
-    alignas(32) pvr_vertex_t workspace[VERTICES];
+    alignas(32) pvr_vertex_t workspace[STRIP_VERTICES];
+#ifdef CHUNK_SCENE_GRID
+    pvr_txr_surface_t texture = {0};
+    alignas(32) uint16_t pixels[64 * 64];
+#endif
     unsigned frame;
     int scene_open = 0;
     int list_open = 0;
@@ -426,7 +478,21 @@ static int render(void) {
     if(pvr_init_defaults() < 0)
         return -1;
     pvr_set_bg_color(0.02f, 0.02f, 0.08f);
+#ifdef CHUNK_SCENE_GRID
+    for(unsigned y = 0; y < 64; ++y)
+        for(unsigned x = 0; x < 64; ++x)
+            pixels[y * 64 + x] = ((x / 8u) ^ (y / 8u)) & 1u ? 0xffff : 0x4208;
+    if(pvr_txr_surface_alloc(&texture, 64, 64, PVR_TXR_SURFACE_RGB565,
+                            PVR_TXR_SURFACE_TWIDDLED, false) < 0 ||
+       pvr_txr_load_ex_checked(pixels, texture.vram, 64, 64, PVR_TXRLOAD_16BPP) < 0)
+        goto fail;
+    pvr_poly_cxt_txr(&context, PVR_LIST_OP_POLY,
+                    pvr_txr_surface_pvr_format(&texture), 64, 64,
+                    texture.vram, PVR_FILTER_BILINEAR);
+    context.txr.env = PVR_TXRENV_MODULATE;
+#else
     pvr_poly_cxt_col(&context, PVR_LIST_OP_POLY);
+#endif
     context.gen.culling = PVR_CULLING_NONE;
     pvr_poly_compile(&draw_header, &context);
     if(pvr_geometry_sink_init_current(&sink) < 0)
@@ -449,10 +515,10 @@ static int render(void) {
             };
             pvr_chunk_cache_result_t result;
             if(pvr_chunk_model_cache_draw_emit(
-                   &app.model[i].draw, &screen, &sink, workspace, VERTICES,
+                   &app.model[i].draw, &screen, &sink, workspace, STRIP_VERTICES,
                    NULL, begin_strip, resolve, NULL, &app.model[i], &result) < 0 ||
-               require(result.emitted_strips == 1 &&
-                       result.emitted_vertices == VERTICES) < 0)
+               require(result.emitted_strips == STRIPS &&
+                       result.emitted_vertices == PACKETS) < 0)
                 goto fail;
         }
         if(pvr_list_finish() < 0)
@@ -467,7 +533,13 @@ static int render(void) {
        require(pipeline.faults.mask == PVR_FAULT_NONE) < 0)
         goto fail;
     puts("KOSSCENE rendered=1 inspecting=1");
+#ifdef CHUNK_SCENE_GRID
+    puts("KOSSCENE grid_frames=240 triangles_per_frame=1024 packets_per_frame=1088 faults=0");
+#endif
     thd_sleep(10000);
+#ifdef CHUNK_SCENE_GRID
+    pvr_txr_surface_release(&texture);
+#endif
     return pvr_shutdown();
 fail:
     error = errno;
@@ -476,6 +548,9 @@ fail:
     if(scene_open)
         pvr_scene_finish();
     pvr_wait_render_done();
+#ifdef CHUNK_SCENE_GRID
+    pvr_txr_surface_release(&texture);
+#endif
     pvr_shutdown();
     errno = error;
     return -1;
@@ -483,7 +558,7 @@ fail:
 #endif
 #endif
 
-#if defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD)
+#if !defined(CHUNK_SCENE_GRID) && (defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD))
 #include "scene-workload.h"
 #endif
 
@@ -519,12 +594,19 @@ int main(int argc, char **argv) {
     fclose(file);
     data = storage;
 #else
+#ifdef CHUNK_SCENE_GRID
+    extern const unsigned char skin_grid_asset_data[];
+    extern const int skin_grid_asset_size;
+    data = skin_grid_asset_data;
+    bytes = (size_t)skin_grid_asset_size;
+#else
     extern const unsigned char chunk_scene_asset_data[];
     extern const int chunk_scene_asset_size;
-    (void)argc;
-    (void)argv;
     data = chunk_scene_asset_data;
     bytes = (size_t)chunk_scene_asset_size;
+#endif
+    (void)argc;
+    (void)argv;
 #endif
     if(scene_load(data, bytes) < 0)
         goto out;
@@ -532,7 +614,10 @@ int main(int argc, char **argv) {
         if(check_pose(times[i]) < 0)
             goto out;
     puts("KOSSCENE models=2 joints=2 morph_bindings=2 pose_goldens=6");
-#if defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD)
+#ifdef CHUNK_SCENE_GRID
+    puts("KOSSCENE grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS");
+#endif
+#if !defined(CHUNK_SCENE_GRID) && (defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD))
     if(workload_check() < 0)
         goto out;
 #endif

@@ -12,6 +12,7 @@ CPPFLAGS += -DCHUNK_SCENE_HOST -include host-support.h \
 LDLIBS += -lm
 
 TARGET = pvr-chunk-scene-integration-test
+GRID_TARGET = pvr-chunk-skin-grid-test
 EXAMPLE = ../../examples/dreamcast/pvr/chunk_scene
 PVR = ../../kernel/arch/dreamcast/hardware/pvr
 MATH = ../../kernel/arch/dreamcast/math
@@ -34,10 +35,20 @@ SOURCES = $(EXAMPLE)/chunk-scene.c host-support.c \
           $(MATH)/matrix_compose.c $(MATH)/matrix_camera.c
 
 .PHONY: all test clean
-all: $(TARGET)
+all: $(TARGET) $(GRID_TARGET)
 
 $(TARGET): $(SOURCES) host-support.h $(EXAMPLE)/scene-workload.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
+
+$(GRID_TARGET): $(SOURCES) host-support.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_GRID $(SOURCES) $(LDLIBS) -o $@
+
+skin-grid.gltf: $(EXAMPLE)/chunk-scene.gltf $(EXAMPLE)/generate-skin-grid.py
+	$(PYTHON) $(EXAMPLE)/generate-skin-grid.py $< $@
+
+skin-grid.pcm: skin-grid.gltf ../pvr-model-convert/pvr-model-convert
+	../pvr-model-convert/pvr-model-convert --emit-asset --section-directory \
+		--cooked-cache --join-strips --texture-id 7 $< $@
 
 fixture.pcm: $(EXAMPLE)/chunk-scene.gltf ../pvr-model-convert/pvr-model-convert
 	../pvr-model-convert/pvr-model-convert --emit-asset --section-directory \
@@ -46,9 +57,11 @@ fixture.pcm: $(EXAMPLE)/chunk-scene.gltf ../pvr-model-convert/pvr-model-convert
 ../pvr-model-convert/pvr-model-convert:
 	$(MAKE) -C ../pvr-model-convert
 
-test: $(TARGET) fixture.pcm
+test: $(TARGET) fixture.pcm $(GRID_TARGET) skin-grid.pcm
 	$(PYTHON) test.py ./$(TARGET) fixture.pcm
+	$(PYTHON) test.py ./$(GRID_TARGET) skin-grid.pcm --grid
 	$(PYTHON) test-workload-log.py
+	$(PYTHON) test-skin-grid.py
 
 clean:
-	rm -f $(TARGET) fixture.pcm
+	rm -f $(TARGET) fixture.pcm $(GRID_TARGET) skin-grid.gltf skin-grid.pcm
