@@ -24,6 +24,8 @@ def run(executable, source, success, stage=None):
     expected = "KOSSCENE result=PASS" if success else "KOSSCENE result=FAIL"
     assert result.returncode == (0 if success else 1), result
     assert expected in result.stdout, result
+    if success:
+        assert "workload_checks=18 packet_guards=PASS lighting=PASS" in result.stdout
     if stage:
         assert f"KOSSCENE stage={stage} " in result.stdout, result
 

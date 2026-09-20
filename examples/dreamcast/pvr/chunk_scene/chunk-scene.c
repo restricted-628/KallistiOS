@@ -412,6 +412,7 @@ static int begin_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
     return pvr_prim(&draw_header, sizeof(draw_header));
 }
 
+#ifndef CHUNK_SCENE_WORKLOAD
 static int render(void) {
     pvr_poly_cxt_t context;
     pvr_geometry_sink_t sink;
@@ -480,6 +481,11 @@ fail:
     return -1;
 }
 #endif
+#endif
+
+#if defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD)
+#include "scene-workload.h"
+#endif
 
 int main(int argc, char **argv) {
     static const float times[] = { 0, 0.25f, 0.5f, 1, 1.5f, 2 };
@@ -526,8 +532,16 @@ int main(int argc, char **argv) {
         if(check_pose(times[i]) < 0)
             goto out;
     puts("KOSSCENE models=2 joints=2 morph_bindings=2 pose_goldens=6");
+#if defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD)
+    if(workload_check() < 0)
+        goto out;
+#endif
 #ifndef CHUNK_SCENE_HOST
+#ifdef CHUNK_SCENE_WORKLOAD
+    if(render_workload() < 0)
+#else
     if(render() < 0)
+#endif
         goto out;
 #endif
     result = 0;

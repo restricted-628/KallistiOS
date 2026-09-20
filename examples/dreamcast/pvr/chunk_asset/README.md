@@ -43,6 +43,16 @@ models. This is an end-to-end composition example, not retained scene
 ownership: every cache, texture, deformation buffer, pose, list, and lifetime
 remains explicit application state.
 
+The immutable cooked cache is admitted with
+`pvr_chunk_model_cache_draw_prepare()` once before PVR startup. General-skin
+spans are queried and prepared once into bounded caller-owned arrays. This
+fixture's identity joint never changes, so its palette is also prepared once;
+an application with moving joints must prepare its palette after each new pose.
+Frames use `pvr_skin_apply_spans_prepared()` and
+`pvr_chunk_model_cache_draw_emit()`. Changing morphed vertices, transforms,
+lighting, texture bindings, and sink state retain their runtime checks. These
+changes remove repeated static admission, not validation of dynamic data.
+
 The example renders 120 frames of a lit checker-textured triangle, then holds
 the final image for ten seconds without submitting more frames. This allows
 visual inspection before cleanup clears VRAM. It then stays on a green PASS

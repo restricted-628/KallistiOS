@@ -36,7 +36,7 @@ SOURCES = $(EXAMPLE)/chunk-scene.c host-support.c \
 .PHONY: all test clean
 all: $(TARGET)
 
-$(TARGET): $(SOURCES) host-support.h
+$(TARGET): $(SOURCES) host-support.h $(EXAMPLE)/scene-workload.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
 fixture.pcm: $(EXAMPLE)/chunk-scene.gltf ../pvr-model-convert/pvr-model-convert
@@ -48,6 +48,7 @@ fixture.pcm: $(EXAMPLE)/chunk-scene.gltf ../pvr-model-convert/pvr-model-convert
 
 test: $(TARGET) fixture.pcm
 	$(PYTHON) test.py ./$(TARGET) fixture.pcm
+	$(PYTHON) test-workload-log.py
 
 clean:
 	rm -f $(TARGET) fixture.pcm

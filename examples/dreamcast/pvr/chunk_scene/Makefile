@@ -8,7 +8,7 @@ HOST_CC ?= cc
 OBJS = chunk-scene.o chunk-scene-asset.o
 
 .PHONY: all clean run dist
-all: $(TARGET)
+all: $(TARGET) chunk-workload.elf
 
 include $(KOS_BASE)/Makefile.rules
 
@@ -26,6 +26,14 @@ chunk-scene-asset.c: chunk-scene.pcm $(BIN2C)
 
 chunk-scene-asset.o: chunk-scene-asset.c
 
+chunk-scene.o: scene-workload.h
+
+chunk-workload.o: chunk-scene.c scene-workload.h
+	kos-cc $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_WORKLOAD -c $< -o $@
+
+chunk-workload.elf: chunk-workload.o chunk-scene-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
+	kos-cc -o $@ chunk-workload.o chunk-scene-asset.o
+
 $(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $@ $(OBJS)
 
@@ -33,8 +41,8 @@ run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
 
 clean:
-	-rm -f $(TARGET) $(OBJS) chunk-scene.pcm chunk-scene-asset.c
+	-rm -f $(TARGET) $(OBJS) chunk-workload.elf chunk-workload.o chunk-scene.pcm chunk-scene-asset.c
 
-dist: $(TARGET)
-	-rm -f $(OBJS) chunk-scene.pcm chunk-scene-asset.c
-	$(KOS_STRIP) $(TARGET)
+dist: all
+	-rm -f $(OBJS) chunk-workload.o chunk-scene.pcm chunk-scene-asset.c
+	$(KOS_STRIP) $(TARGET) chunk-workload.elf

@@ -72,6 +72,66 @@ Physical hardware is still required to validate numerical tolerances and
 cache/store-queue behavior outside emulator coverage. This fixture does not
 claim exhaustive content-import or rendering-policy coverage.
 
+## Authored-asset draw workload
+
+The same Makefile also builds `chunk-workload.elf` from the same scene loader
+and pose code. This is a repeated-instance workload, **not** a larger or more
+complex asset: the two original three-vertex meshes are loaded once and reused
+in grids of 1, 16, and 256 pairs (2, 32, and 512 triangles per frame).
+
+Each grid runs two cases. Shared-pose mode samples the hierarchy, morphs, and
+skinning once per frame and reuses those two completed meshes for every pair.
+Independent-pose mode samples each pair at its own deterministic clip phase;
+scratch is reused only after that pair has been submitted. Both run the same
+prepared-cache path, a checked ambient-plus-directional lighting callback, and
+direct PVR list submission. Screen placement is applied after world-space
+skinning. No per-frame allocation, asset reload, texture binding, or new
+renderer API is introduced. This exercises draw-call/pose scaling; it does not
+exercise large strips, many joints, texture bandwidth, clipping, streaming,
+OCRAM, or independently retained instance state. Those are separate workloads.
+
+Before any target rendering, the workload ELF and the host suite run 18
+memory-sink checks: three grids, two pose modes, and three frame phases. The
+original `chunk-scene.elf` keeps its small conformance loop. The independent
+pose goldens above are retained. Workload checks verify projected coordinates,
+the analytically expected 0.75 lighting factor on the authored +Z normals,
+vertex command flags, emitted counts, and a guarded output tail.
+
+Each target case has eight warmup frames followed by 24 measured frames.
+`KOSWORKLOAD` serial records report min/median/max microseconds for:
+
+- `pose`: accumulated sampling, hierarchy, palette, morph, and skin work;
+- `draw`: accumulated prepared emission, lighting, and direct submission;
+- `ready`: time waiting for PVR admission before opening the frame;
+- `cpu-frame`: scene/list begin through scene finish, excluding `ready`.
+
+The CPU-frame interval includes per-draw result checks, placement, bookkeeping,
+and timer overhead, so it is not simply pose plus draw. Interrupts stay enabled;
+pose/draw intervals include any interruption while they execute. Timers around
+every pose and draw add overhead, especially at the smallest sizes. There are
+no serial writes inside the frame loop. The median is the integer mean of the
+middle two sorted samples. Cases run in fixed ascending-size, shared/independent
+order; this is not a randomized comparative benchmark. Each case drains rendering
+before reporting and verifies persistent PVR fault state. `drain_us` includes
+that final wait and status check, not the sum of all GPU rendering times. GPU
+work overlaps CPU work and frame admission may include display synchronization;
+these numbers are not standalone GPU time or uncapped game FPS.
+
+There are six cases and 192 submitted frames in total. The final 256-pair image
+is held for ten seconds before cleanup. Host tests deliberately have no timing
+source. Flycast runs establish execution/correctness only; physical-console
+performance measurements remain deferred.
+
+Check complete serial logs (including the final cleanup result) with:
+
+```sh
+python3 utils/pvr-chunk-scene-integration-test/check-workload-log.py run.log
+```
+
+The checker rejects missing/duplicate cases, missing stages, wrong counts,
+unsorted summary statistics, and a missing final PASS. It cannot establish
+that a log came from physical hardware or validate the timer's accuracy.
+
 ## Recorded validation
 
 On 2026-09-05, the full GNU17 host sweep passed 52/52 suites. This integration
@@ -80,3 +140,12 @@ truncation and second-model corruption cleanup. The SH-4 example built and
 passed its numerical checks and render completion in Flycast interpreter and
 dynarec modes; both colored models were visually inspected. Doxygen built
 successfully. No physical-hardware result is implied by these checks.
+
+On 2026-09-20, the added workload checks and existing malformed-asset cleanup
+tests passed GCC 14/Clang GNU17, GCC 14 strict C23, Clang strict C2x, and
+Clang ASan/UBSan. The serial-log checker passed positive and negative tests.
+SH-4 GCC 16.2 built both ELFs; Flycast interpreter and dynarec each completed
+all six workload cases, 192 rendered frames, and final cleanup with passing
+serial-log verification. The original small scene also completed a dynarec
+smoke run. These are execution checks; no new visual or hardware-performance
+certification is claimed.

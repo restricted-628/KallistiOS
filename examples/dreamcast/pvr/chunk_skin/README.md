@@ -14,6 +14,10 @@ draw cache resolves each retained original model index through that pose,
 shades from the deformed normal, projects its already assembled PVR-native
 vertex run, and emits the triangle through the established PVR list sink.
 Neither compact stream is reparsed in the frame loop.
+The immutable cache is admitted once with
+`pvr_chunk_model_cache_draw_prepare()`; frames use
+`pvr_chunk_model_cache_draw_emit()` so static cache metadata is not rescanned.
+Dynamic pose resolution, shading, projection, and sink checks are retained.
 
 The example allocates no hidden runtime state and starts no worker or service.
 It prints `RESULT: PASS (explicit compact skinning)` after checking the

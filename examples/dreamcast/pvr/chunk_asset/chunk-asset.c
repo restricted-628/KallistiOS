@@ -5,6 +5,7 @@
 */
 
 #include <kos.h>
+#include <dc/pvr_skin_prepared.h>
 #include <kos/pvr_chunk_asset_lz4.h>
 #include <kos/pvr_chunk_asset_lz4_service.h>
 
@@ -168,7 +169,13 @@ static int render_asset(
     alignas(32) uint8_t skin_workspace[256];
     pvr_chunk_skin_general_binding_t skin_binding;
     pvr_chunk_skin_general_source_t skin_source;
-    pvr_chunk_skin_general_source_t posed_skin_source;
+    pvr_skin_prepared_span_t prepared_spans[3];
+    pvr_skin_weight_t prepared_weights[3];
+    pvr_skin_prepared_spans_t skin_plan;
+    pvr_skin_span_plan_requirements_t prepared_requirements;
+    pvr_skin_prepared_joint_t prepared_joint;
+    pvr_skin_prepared_palette_t prepared_palette;
+    pvr_chunk_cache_draw_t draw;
     alignas(8) matrix_t joint_matrix;
     pvr_normal_matrix_t joint_normal;
     pvr_skin_palette_t palette;
@@ -251,6 +258,31 @@ static int render_asset(
     palette.position_matrices = &joint_matrix;
     palette.normal_matrices = &joint_normal;
     palette.joint_count = 1;
+    /* The cooked cache, weights, and identity joint are immutable throughout
+       this fixture. Admit them before PVR startup, not during every draw. */
+    const pvr_skin_span_stream_t influences = {
+        skin_source.spans, skin_source.vertex_count,
+        sizeof(*skin_source.spans), skin_source.weights,
+        skin_source.weight_count
+    };
+    const pvr_deform_stream_t posed_vertices = {
+        morphed, skin_source.vertex_count, sizeof(*morphed)
+    };
+    if(pvr_skin_spans_prepare_query(&influences, 1,
+                                    &prepared_requirements) < 0)
+        return -1;
+    if(skin_source.vertex_count != 3 ||
+       prepared_requirements.span_count > 3 ||
+       prepared_requirements.weight_count > 3) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(pvr_skin_spans_prepare(&influences, 1, prepared_spans, 3,
+                               prepared_weights, 3, &skin_plan) < 0 ||
+       pvr_skin_palette_prepare(&palette, &prepared_joint, 1,
+                                 &prepared_palette) < 0 ||
+       pvr_chunk_model_cache_draw_prepare(cache, &draw) < 0)
+        return -1;
     render_context.pose.binding = &skin_binding;
     render_context.pose.vertices = deformed;
     render_context.pose.vertex_count = 3;
@@ -325,10 +357,8 @@ static int render_asset(
         if(pvr_chunk_shape_apply(&shape_source, &morph_target, 1,
                                  morphed, 3, &deform_result) < 0)
             goto render_fail;
-        posed_skin_source = skin_source;
-        posed_skin_source.vertices = morphed;
-        if(pvr_chunk_skin_general_apply(
-               &posed_skin_source, &palette, deformed, 3,
+        if(pvr_skin_apply_spans_prepared(
+               deformed, 3, &posed_vertices, &skin_plan, &prepared_palette,
                &deform_result) < 0 ||
            anim_clip_sample(animation, time, local_pose, 1,
                             &animation_result) < 0 ||
@@ -363,9 +393,9 @@ static int render_asset(
         if(pvr_list_begin(PVR_LIST_OP_POLY) < 0)
             goto render_fail;
         list_open = 1;
-        if(pvr_chunk_model_cache_emit(
-               cache, &world[0], &sink, render_workspace, 3,
-               render_begin, render_resolve, render_prepare,
+        if(pvr_chunk_model_cache_draw_emit(
+               &draw, &world[0], &sink, render_workspace, 3,
+               NULL, render_begin, render_resolve, render_prepare,
                &render_context, &render_result) < 0)
             goto render_fail;
         if(render_result.emitted_strips != 1 ||

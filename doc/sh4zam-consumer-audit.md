@@ -262,28 +262,64 @@ and target tolerances are documented beside the example.
 
 ## Remaining work
 
-1. Run the new composition comparison harness on physical Dreamcast hardware
-   before choosing a replacement. The benchmark-only XMTRX-preserving multiply
-   candidate and emitted-code comparison are described below; host and emulator
-   correctness checks do not establish a hardware performance winner.
-2. Collect physical-hardware results with the new synthetic skinning benchmark
-   described below, then add asset-derived scenes and end-to-end GPU work.
-   It separates setup, apply and per-pose costs with one/four-mesh reuse. Fixed-four
-   and variable-span plans now validate and normalize weights once per mesh;
-   prepared palettes now remove palette rescans and per-influence imports
-   when explicitly used, as tested above. Audit remaining prepared Compact-model
-   draw variants. Ordinary, two-volume, and modifier paths now
-   have explicit one-time admission and in-place projection; see the
+### Active software completion
+
+As requested on 2026-09-20, finish the software before graphics-library
+extraction. Lack of a physical console does not block this implementation work.
+
+1. Finish the bounded consumer audit: examples should use admitted draws and
+   prepared skinning when their ownership permits it, while dynamic inputs
+   retain their checks. Ordinary, two-volume, modifier, toon/outline,
+   two-volume toon, and wire paths already have admission support; this is an
+   integration check, not a request to rewrite those renderers. See the
    [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
-   Ordinary toon/outline now reuse the admitted draw view and borrow unchanged
-   deformation data; clipping and changing lighting/profile data stay checked.
-   Wire now reuses admission and borrows unchanged deformation records as
-   described below. Two-volume toon now also reuses its existing admission
-   view and borrows unchanged deformation records; packet packing and
-   checked/admitted equivalence are tested below.
-3. Add representative throughput scenes and collect physical-hardware
-   numerical, image, and timing results. Neither host nor emulator PASS closes
-   this gate.
+2. Add asset-derived throughput workloads and end-to-end GPU submission to
+   complement the synthetic skinning benchmark and tiny conformance scenes.
+   Exercise loading, animation/deformation, clipping, shading, and submission;
+   validate on host and emulator without claiming hardware performance.
+   The `chunk_scene/chunk-workload.elf` repeated-instance workload now connects
+   loaded glTF/PCM2 meshes, sampled animation/morph/skinning, checked lighting,
+   prepared draws, and PVR submission at 1/16/256 mesh pairs. It measures
+   shared versus independent poses with separate CPU-stage/admission timings.
+   It still uses tiny meshes; larger geometry, clipping-heavy and textured
+   throughput workloads remain open rather than being implied by its counts.
+   On 2026-09-20 its shared host checks passed GCC/Clang GNU17, strict
+   C23/C2x, and ASan/UBSan; both Flycast modes completed all six cases and
+   final cleanup. See the [workload methodology](../examples/dreamcast/pvr/chunk_scene/README.md#authored-asset-draw-workload).
+3. Reconcile examples, tests, exports, documentation, and explicit limitations
+   against the completed implementation. Keep new optional features separate
+   from defects that must be fixed to close this work.
+
+### Deferred until after software completion / hardware availability
+
+- Physical numerical, image, timing, DMA/cache, and rendering validation.
+  Neither host nor emulator PASS closes these gates.
+- Hardware-driven optimization choices, including the XMTRX-preserving matrix
+  multiply candidate. Keep production composition unchanged until measured.
+- Migration from the temporary SH4ZAM PR fix pin to an accepted official
+  upstream revision, after checking its contents; no dependency change is
+  required for the current software cleanup.
+- Splitting the completed higher-level graphics work into KOS-ports/addon
+  libraries. Do not make that refactor a prerequisite for finishing it.
+
+### Example admission follow-up
+
+`chunk_asset` and `chunk_skin` now admit their immutable ordinary caches once
+before rendering. The asset example also prepares its fixed general-skin
+weights and constant identity palette once; animated morph output remains
+checked on every skin operation. `chunk_skin` keeps its existing per-pose
+palette preparation because its joint matrix changes each frame. Both retain
+dynamic resolver and lighting callbacks, progress checks, and PVR fault checks.
+No production renderer API, SH4ZAM source, or per-frame allocation was added.
+
+On 2026-09-20 both changed examples rebuilt with SH-4 GCC 16.2 and reached
+their serial PASS result in Flycast interpreter and dynarec modes. The asset
+fixture completed its 120-frame render, resource release, and shutdown; the
+skin fixture completed its deformation/progress and PVR fault checks. These
+are emulator execution checks, not a new physical or visual certification.
+The deformation, cache, skin-binding, render, and composed-scene GNU17 host
+tests passed; deformation, cache, and composed-scene also passed GCC 14 strict
+C23 and Clang ASan/UBSan. No hardware timing or throughput claim is made.
 
 ## Skinning workload benchmark
 

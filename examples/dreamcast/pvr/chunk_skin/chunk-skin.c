@@ -118,6 +118,7 @@ int main(int argc, char **argv) {
     pvr_chunk_cache_requirements_t cache_requirements;
     alignas(32) uint8_t cache_storage[512];
     pvr_chunk_model_cache_t cache;
+    pvr_chunk_cache_draw_t draw;
     alignas(8) matrix_t position_matrices[2];
     pvr_normal_matrix_t normal_matrices[2];
     pvr_skin_palette_t palette = {
@@ -163,6 +164,7 @@ int main(int argc, char **argv) {
     assert(pvr_chunk_model_cache_build(&plan, cache_storage,
                                        sizeof(cache_storage), NULL, NULL,
                                        &cache) == 0);
+    assert(pvr_chunk_model_cache_draw_prepare(&cache, &draw) == 0);
 
     identity(position_matrices + 0);
     identity(position_matrices + 1);
@@ -228,9 +230,9 @@ int main(int argc, char **argv) {
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
-        assert(pvr_chunk_model_cache_emit(
-            &cache, &screen_identity, &sink, render_workspace, 3,
-            begin_strip, resolve_vertex, prepare_vertex,
+        assert(pvr_chunk_model_cache_draw_emit(
+            &draw, &screen_identity, &sink, render_workspace, 3,
+            NULL, begin_strip, resolve_vertex, prepare_vertex,
             &render_context, &render_result) == 0);
         assert(render_result.emitted_strips == 1 &&
                render_result.emitted_vertices == 3);
