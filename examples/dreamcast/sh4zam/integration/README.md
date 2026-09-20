@@ -193,6 +193,57 @@ The main integration fixture and direct fast-math probe both passed in
 Flycast interpreter and dynarec modes; the helper's full-angle sweep passed
 all four lanes on GCC 14 host and Flycast dynarec. Hardware remains untested.
 
+## Matrix composition comparison
+
+After sourcing `environ.sh`, build and run `compose-bench.elf` separately.
+It compares production `mat_compose()` (`kos-compose`) with an example-private
+SH4ZAM `shz_mat4x4_mult()` wrapper (`saved-xmtrx`). The wrapper saves/restores
+XMTRX and retains the alias-safe imports/exports and argument checks. It is
+not linked into libkallisti and does not replace the production implementation.
+
+Both implementations must pass the same deterministic full-4x4 input set,
+five input/output alias arrangements, and six null/misaligned rejection cases.
+Results are compared with an independent double-precision multiply, using
+`3e-4 * (1 + abs(expected))` on target and `2e-5 * (1 + abs(expected))` on host.
+These finite tests do not establish an all-input numerical bound. Tests check
+output guards, unchanged output on failure, all 16 XMTRX lanes and unchanged
+FPSCR FR/SZ/PR/DN/rounding modes; sticky arithmetic flags are not compared.
+The host uses SH4ZAM's actual software XMTRX backend and KOS's scalar compose
+fallback, so it validates contracts rather than SH-4 instruction behavior.
+
+On target, timing follows correctness checks for three 32-matrix workloads:
+independent pairs, a parent chain, and destination-aliases-left multiplication.
+Each sample contains 128 batches (4096 calls). Seven samples alternate which
+implementation runs first after warmup; raw microseconds and min/median/max
+are printed. Interrupts stay enabled. No empty-loop time is subtracted.
+The in-place workload includes its common batch-reset copy. Validation and
+printing are outside each timer interval, and separate non-LTO translation
+units keep the calls real. Capture the complete debug-console output along
+with the hardware, compiler, KOS/dependency revisions and build flags.
+
+Success ends with:
+
+```text
+RESULT: PASS (matrix composition comparison; production unchanged)
+```
+
+From the repository root, host correctness lanes are:
+
+```sh
+make -C utils/matrix-compose-test -B test CC=gcc-14
+make -C utils/matrix-compose-test -B test CC=gcc-14 HOST_CSTD=c23 HOST_PEDANTIC=-pedantic
+make -C utils/matrix-compose-test -B test CC=clang HOST_CSTD=c2x HOST_PEDANTIC=-pedantic
+make -C utils/matrix-compose-test -B test CC=clang CFLAGS='-O1 -g -std=gnu17 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer'
+```
+
+The shared host runner discovers this suite automatically. The pinned upstream
+software `.c` file lacks a final newline; only that object's Clang build disables
+the formatting warning. Upstream source stays untouched. On 2026-09-20 all four
+lanes passed, and the SH-4 GCC 16.2.0 executable passed Flycast interpreter and
+dynarec, including every timed sample's correctness checks. **Emulator timings
+are not physical Dreamcast speed evidence.** No production replacement is
+selected until hardware measurements establish the tradeoff.
+
 ## Direct API fast-math regression
 
 After sourcing `environ.sh`, build `make fast-trig-probe.elf` in this directory.

@@ -7,7 +7,7 @@
 TARGET = sh4zam-integration
 OBJS = $(TARGET).o
 
-all: rm-elf $(TARGET).elf u16-trig-test.elf fast-trig-probe.elf
+all: rm-elf $(TARGET).elf u16-trig-test.elf fast-trig-probe.elf compose-bench.elf
 
 include $(KOS_BASE)/Makefile.rules
 
@@ -22,6 +22,19 @@ $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/toon-draw-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/wire-draw-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/two-volume-toon-fixtures.h
 $(OBJS): release-fixtures.h
+
+# Experimental candidate stays outside libkallisti; do not fold the measured
+# calls across translation units or use fast-math for the reference checks.
+compose-bench.elf: compose-bench.o compose-candidate.o \
+                  $(KOS_BASE)/lib/dreamcast/libkallisti.a \
+                  $(KOS_BASE)/addons/lib/dreamcast/libsh4zam.a
+	kos-cc -fno-lto -o $@ compose-bench.o compose-candidate.o
+
+compose-bench.o: compose-bench.c compose-candidate.h
+	kos-cc -fno-fast-math -fno-lto -c $< -o $@
+
+compose-candidate.o: compose-candidate.c compose-candidate.h
+	kos-cc -fno-fast-math -fno-lto -c $< -o $@
 
 # Direct API regression: PR #70 fixes the failure in the official 0.8.1 pin.
 # Keep the caller separate from its strict validator and disable LTO.
@@ -65,6 +78,7 @@ u16-trig-cpp.o: u16-trig-call.c
 	kos-c++ -x c++ -O2 -ffast-math -fno-lto -DTRIG_CALL=trig_cpp -DTRIG_CONSTANT_CALL=trig_cpp_constant -c $< -o $@
 
 clean: rm-elf
+	-rm -f compose-bench.elf compose-bench.o compose-candidate.o
 	-rm -f $(OBJS)
 	-rm -f fast-trig-probe.elf fast-trig-probe.o fast-trig-call.o
 	-rm -f u16-trig-test.elf $(U16_OBJS)

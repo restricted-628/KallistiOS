@@ -262,9 +262,10 @@ and target tolerances are documented beside the example.
 
 ## Remaining work
 
-1. Compare the current composition implementation with an XMTRX-preserving
-   multiply candidate, including emitted code, copy/register costs, and actual
-   workload timing before choosing a replacement.
+1. Run the new composition comparison harness on physical Dreamcast hardware
+   before choosing a replacement. The benchmark-only XMTRX-preserving multiply
+   candidate and emitted-code comparison are described below; host and emulator
+   correctness checks do not establish a hardware performance winner.
 2. Measure prepared skinning with representative mesh/pose reuse: fixed-four
    and variable-span plans now validate and normalize weights once per mesh;
    prepared palettes now remove palette rescans and per-influence imports
@@ -281,6 +282,31 @@ and target tolerances are documented beside the example.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.
+
+## Matrix composition comparison harness
+
+`examples/dreamcast/sh4zam/integration/compose-bench.elf` compares production
+composition against a private save/multiply/restore candidate. It measures
+independent pairs, parent chains and in-place composition with repeated,
+alternating-order trials. Its shared host/target correctness gates cover full
+4x4 matrices, aliasing, rejected arguments, output guards, independent
+double-precision results, XMTRX and FP control-mode preservation. See the
+[example methodology](../examples/dreamcast/sh4zam/integration/README.md#matrix-composition-comparison).
+
+With SH-4 GCC 16.2.0 at the current `-O2`/`-m4-single` policy, object inspection
+finds 16 FIPR instructions in production `mat_compose()` (688-byte symbol).
+The candidate wrapper is 208 bytes but additionally calls upstream's assembly
+load/apply/store routine, which contains four FTRV instructions. That callee
+must not be omitted when comparing code or runtime cost. Both wrappers retain
+three 64-byte memcpy calls for matrix imports/export. The candidate additionally
+saves and restores 64 bytes of XMTRX state. Its own stack reservation plus saved
+registers is 284 bytes versus 348 bytes in production, excluding callees.
+These are emitted-code observations for this build, not cycle estimates.
+
+On 2026-09-20 GCC 14 GNU17/strict C23, Clang strict C2x and Clang GNU17 with
+ASan/UBSan passed. The SH-4 executable passed Flycast interpreter and dynarec,
+including all timed sample checks. Physical hardware timing remains open.
+Production math, public APIs and upstream SH4ZAM source remain unchanged.
 
 ## Wireframe follow-up
 
