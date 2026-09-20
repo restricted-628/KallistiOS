@@ -124,15 +124,11 @@ static int mesh_edge_count(size_t vertex_count, size_t *edges) {
     return 0;
 }
 
-int pvr_chunk_model_cache_wire_capacity(
+static int wire_capacity(
     const pvr_chunk_model_cache_t *cache, size_t *vertices) {
     size_t total_edges = 0;
     size_t strip_index;
 
-    if(vertices)
-        *vertices = 0;
-    if(!vertices || pvr_chunk_model_cache_validate(cache) < 0)
-        return -1;
     for(strip_index = 0; strip_index < cache->strip_count; ++strip_index) {
         size_t edges;
 
@@ -153,13 +149,25 @@ int pvr_chunk_model_cache_wire_capacity(
     return 0;
 }
 
+int pvr_chunk_model_cache_wire_capacity(
+    const pvr_chunk_model_cache_t *cache, size_t *vertices) {
+    if(!vertices) {
+        errno = EINVAL;
+        return -1;
+    }
+    *vertices = 0;
+    if(pvr_chunk_model_cache_validate(cache) < 0)
+        return -1;
+    return wire_capacity(cache, vertices);
+}
+
 static int preflight(const pvr_chunk_model_cache_t *cache,
                      const pvr_frustum_t *frustum,
                      pvr_chunk_clip_policy_t clip_policy,
                      const pvr_chunk_wire_profile_t *default_profile,
                      const pvr_geometry_sink_t *sink,
                      const pvr_chunk_wire_workspace_t *workspace,
-                     pvr_chunk_cache_begin_strip_t begin_strip) {
+                     pvr_chunk_cache_begin_strip_t begin_strip, int admitted) {
     address_range_t ranges[9];
     size_t range_count = 0;
     size_t required_vertices;
@@ -168,7 +176,7 @@ static int preflight(const pvr_chunk_model_cache_t *cache,
 
     if(clip_policy < PVR_CHUNK_CLIP_SPLIT ||
        clip_policy > PVR_CHUNK_CLIP_ASSUME_VISIBLE ||
-       pvr_chunk_model_cache_validate(cache) < 0 ||
+       (!admitted && pvr_chunk_model_cache_validate(cache) < 0) ||
        frustum_valid(frustum) < 0 ||
        pvr_chunk_wire_profile_validate(default_profile) < 0 ||
        sink_valid(sink) < 0 || !workspace ||
@@ -183,7 +191,7 @@ static int preflight(const pvr_chunk_model_cache_t *cache,
         return -1;
     }
     if(sink->kind == PVR_GEOMETRY_SINK_MEMORY) {
-        if(pvr_chunk_model_cache_wire_capacity(cache, &required_vertices) < 0)
+        if(wire_capacity(cache, &required_vertices) < 0)
             return -1;
         if(required_vertices > sink->destination.memory.capacity -
                                sink->emitted_vertices) {
@@ -230,15 +238,20 @@ static int assemble_strip(
     const pvr_chunk_cached_strip_t *strip,
     pvr_chunk_wire_workspace_t *workspace,
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
-    pvr_chunk_cache_prepare_vertex_t prepare_vertex, void *data) {
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex, void *data, int admitted) {
     size_t index;
 
     for(index = 0; index < strip->vertex_count; ++index) {
         size_t cached_index = strip->first_vertex + index;
-        uint16_t source_index = cache->source_indices[cached_index];
+        uint16_t source_index = (resolve_vertex || prepare_vertex) ?
+            cache->source_indices[cached_index] : 0;
+        const pvr_deform_vertex_t *deformation =
+            cache->deform_vertices + cached_index;
 
-        workspace->deformations[index] =
-            cache->deform_vertices[cached_index];
+        if(!admitted || resolve_vertex) {
+            workspace->deformations[index] = *deformation;
+            deformation = workspace->deformations + index;
+        }
         if(resolve_vertex) {
             errno = 0;
             if(resolve_vertex(source_index, workspace->deformations + index,
@@ -248,19 +261,19 @@ static int assemble_strip(
                 return -1;
             }
         }
-        if(finite_deformation(workspace->deformations + index) < 0)
+        if((!admitted || resolve_vertex) && finite_deformation(deformation) < 0)
             return -1;
         workspace->vertices[index] = cache->vertices[cached_index];
         workspace->vertices[index].x =
-            workspace->deformations[index].position.x;
+            deformation->position.x;
         workspace->vertices[index].y =
-            workspace->deformations[index].position.y;
+            deformation->position.y;
         workspace->vertices[index].z =
-            workspace->deformations[index].position.z;
+            deformation->position.z;
         if(prepare_vertex) {
             errno = 0;
             if(prepare_vertex(&strip->state, source_index,
-                              workspace->deformations + index,
+                              deformation,
                               workspace->vertices + index, data) < 0) {
                 if(!errno)
                     errno = EIO;
@@ -345,7 +358,7 @@ static int project_edge(
     return 0;
 }
 
-int pvr_chunk_model_cache_emit_wire(
+static int cache_emit_wire(
     const pvr_chunk_model_cache_t *cache, const pvr_frustum_t *frustum,
     pvr_chunk_clip_policy_t clip_policy,
     const pvr_chunk_wire_profile_t *default_profile,
@@ -355,14 +368,14 @@ int pvr_chunk_model_cache_emit_wire(
     pvr_chunk_cache_resolve_vertex_t resolve_vertex,
     pvr_chunk_cache_prepare_vertex_t prepare_vertex,
     pvr_chunk_wire_resolve_profile_t resolve_profile,
-    void *data, pvr_chunk_wire_result_t *result) {
+    void *data, pvr_chunk_wire_result_t *result, int admitted) {
     pvr_chunk_wire_result_t progress = { 0 };
     size_t strip_index;
 
     if(result)
         *result = progress;
     if(preflight(cache, frustum, clip_policy, default_profile, sink,
-                 workspace, begin_strip) < 0)
+                 workspace, begin_strip, admitted) < 0)
         return -1;
 
     for(strip_index = 0; strip_index < cache->strip_count; ++strip_index) {
@@ -398,7 +411,7 @@ int pvr_chunk_model_cache_emit_wire(
         }
         if(pvr_chunk_wire_profile_validate(&profile) < 0 ||
            assemble_strip(cache, strip, workspace, resolve_vertex,
-                          prepare_vertex, data) < 0)
+                          prepare_vertex, data, admitted) < 0)
             goto fail;
 
         edge_count = topology_edge_count(strip->vertex_count,
@@ -464,4 +477,43 @@ fail:
     if(result)
         *result = progress;
     return -1;
+}
+
+int pvr_chunk_model_cache_emit_wire(
+    const pvr_chunk_model_cache_t *cache, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_wire_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_wire_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_wire_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_wire_result_t *result) {
+    return cache_emit_wire(cache, frustum, clip_policy, default_profile,
+        sink, workspace, filter_strip, begin_strip, resolve_vertex,
+        prepare_vertex, resolve_profile, data, result, 0);
+}
+
+int pvr_chunk_model_cache_draw_emit_wire(
+    const pvr_chunk_cache_draw_t *draw, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_wire_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_wire_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_wire_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_wire_result_t *result) {
+    if(!draw || ((uintptr_t)draw & (_Alignof(pvr_chunk_cache_draw_t) - 1u)) ||
+       draw->cache.version != PVR_CHUNK_CACHE_VERSION) {
+        if(result)
+            memset(result, 0, sizeof(*result));
+        errno = EINVAL;
+        return -1;
+    }
+    return cache_emit_wire(&draw->cache, frustum, clip_policy, default_profile,
+        sink, workspace, filter_strip, begin_strip, resolve_vertex,
+        prepare_vertex, resolve_profile, data, result, 1);
 }

@@ -138,7 +138,43 @@ and target tolerances are documented beside the example.
    [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
    Ordinary toon/outline now reuse the admitted draw view and borrow unchanged
    deformation data; clipping and changing lighting/profile data stay checked.
-   Two-volume toon and wire variants still need their own audit.
+   Wire now reuses admission and borrows unchanged deformation records as
+   described below. Two-volume toon still needs its own audit.
 3. Add representative throughput scenes and collect physical-hardware
    numerical, image, and timing results. Neither host nor emulator PASS closes
    this gate.
+
+## Wireframe follow-up
+
+`pvr_chunk_model_cache_draw_emit_wire()` now accepts the existing prepared
+ordinary-cache view. It removes full cache/base-deformation scans and avoids
+copying unchanged deformation records when no resolver runs. Vertex callbacks
+still receive the original deformation values, borrowed read-only. The checked
+API remains available, but no longer validates a memory-sink cache twice just
+to compute worst-case capacity. The public capacity query remains checked.
+
+The wire path already reaches SH4ZAM through geometry projection and frustum
+segment clipping on Dreamcast. This pass does not replace that math. It retains
+homogeneous clipping before projection, all three clip policies, per-edge
+projection/expansion, and validation of mutable inputs. Memory-sink sizing still
+visits strip descriptors each draw; no throughput gain is claimed without
+hardware timing. The rendered `chunk_wire` example admits its cache once.
+
+Shared checked/admitted fixtures compare output bytes, errno, progress,
+callback counts, and guards across three clip policies, three topologies,
+two color modes, and all resolver/vertex/profile callback combinations.
+They include filtered strips, callback errors, NaN deformation/vertex/profile
+output, zero projection W, insufficient capacity, overlapping workspace, and
+null admission.
+They also prove deformation scratch stays untouched without a resolver.
+Host coverage includes triangle and four-reference strips; target integration
+uses a triangle and verifies all XMTRX lanes after every draw. Two-volume toon
+and reducing repeated per-edge transformation remain separate work.
+
+On 2026-09-19 the wire fixtures and cache suite passed GCC 14 strict C23,
+Apple Clang strict C2x, and Clang GNU17 with ASan/UBSan. The SH-4 GCC 16.2.0
+KOS build and both examples linked, including the new exported entry point.
+The integration example passed in Flycast interpreter and dynarec modes; the
+360-frame wire example passed its draw and pipeline checks in dynarec mode.
+These are correctness checks, not physical-hardware timing or image-quality
+certification. No upstream SH4ZAM defect was demonstrated in this pass.

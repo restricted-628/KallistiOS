@@ -9,6 +9,7 @@
 #include <assert.h>
 #include <stdalign.h>
 #include <stdint.h>
+#include <stdio.h>
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
@@ -68,6 +69,7 @@ int main(int argc, char **argv) {
     pvr_chunk_cache_requirements_t requirements;
     alignas(32) uint8_t cache_storage[1024];
     pvr_chunk_model_cache_t cache;
+    pvr_chunk_cache_draw_t draw;
     pvr_poly_cxt_t polygon_context;
     pvr_poly_hdr_t polygon_header;
     pvr_frustum_t frustum;
@@ -87,6 +89,7 @@ int main(int argc, char **argv) {
 
     (void)argc;
     (void)argv;
+    (void)dbgio_dev_select("scif");
     assert(pvr_chunk_model_open(&model, &view) == 0);
     assert(pvr_chunk_model_plan_build(&view, plan_entries, 256, &plan) == 0);
     assert(pvr_chunk_model_cache_query(&plan, &requirements) == 0);
@@ -94,6 +97,7 @@ int main(int argc, char **argv) {
     assert(pvr_chunk_model_cache_build(&plan, cache_storage,
                                        sizeof(cache_storage), NULL, NULL,
                                        &cache) == 0);
+    assert(pvr_chunk_model_cache_draw_prepare(&cache, &draw) == 0);
     assert(pvr_frustum_init(&frustum, &screen_identity, 0.0f, 0.0f,
                             640.0f, 480.0f, 0.5f, 2.0f) == 0);
 
@@ -110,8 +114,8 @@ int main(int argc, char **argv) {
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
-        assert(pvr_chunk_model_cache_emit_wire(
-            &cache, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
+        assert(pvr_chunk_model_cache_draw_emit_wire(
+            &draw, &frustum, PVR_CHUNK_CLIP_ASSUME_VISIBLE,
             &profile, &sink, &workspace, NULL, begin_strip,
             NULL, NULL, NULL, &polygon_header, &result) == 0);
         assert(result.emitted_edges > 0 && result.emitted_vertices ==
@@ -128,5 +132,6 @@ int main(int argc, char **argv) {
     bfont_draw_str(vram_s + vid_mode->width * BFONT_HEIGHT +
                    BFONT_THIN_WIDTH * 2, vid_mode->width, 1,
                    "RESULT: PASS (compact wireframe policies)");
+    puts("RESULT: PASS (compact wireframe policies)");
     return 0;
 }

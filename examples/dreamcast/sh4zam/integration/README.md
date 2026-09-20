@@ -72,6 +72,17 @@ XMTRX is checked after each successful or rejected admitted draw. Success adds:
 Admitted Compact draw, rejection, XMTRX: PASS
 ```
 
+The shared wire fixture compares checked/admitted output, callback counts,
+progress, errno and output guards across every clip policy, topology, color
+mode, and resolver/vertex/profile callback combination. It checks callback
+errors, NaN output, zero projection W, capacity and overlap rejection, and
+verifies deformation scratch is not written when no resolver is supplied.
+XMTRX is preserved after successful and rejected wire calls. Success adds:
+
+```text
+Admitted wire policies, clipping, rejection, XMTRX: PASS
+```
+
 The two-volume fixture covers both 32-byte color and 64-byte textured caches,
 with and without a prepare callback. It compares checked/admitted output,
 including buffer guards, and verifies the full temporary-union callback

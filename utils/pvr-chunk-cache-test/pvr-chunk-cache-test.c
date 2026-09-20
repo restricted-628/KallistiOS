@@ -8,6 +8,7 @@
 #include <dc/pvr_chunk_cache_asset.h>
 #include <dc/pvr_chunk_toon.h>
 #include <dc/pvr_chunk_wire.h>
+#include "wire-draw-fixtures.h"
 #include <dc/pvr_chunk_uv.h>
 
 #include <assert.h>
@@ -955,6 +956,7 @@ static void test_wire_topologies(void) {
                                        NULL, NULL, &cache) == 0);
     assert(pvr_chunk_model_cache_wire_capacity(&cache, &capacity) == 0 &&
            capacity == 20);
+    assert(wire_draw_fixtures(&cache));
     identity(&matrix);
     assert(pvr_frustum_init(&frustum, &matrix, -2.0f, -2.0f,
                             2.0f, 2.0f, 0.5f, 2.0f) == 0);
@@ -1983,6 +1985,7 @@ int main(void) {
     test_toon_cache(&cache);
     test_outline_cache(&cache);
     test_wire_cache(&cache);
+    assert(wire_draw_fixtures(&cache));
 
     identity(&matrix);
     assert(pvr_frustum_init(&frustum, &matrix, -1.0f, -1.0f,

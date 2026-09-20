@@ -578,9 +578,19 @@ The `chunk_scene` example prepares each cooked cache at load time and uses this
 path for both host golden tests and target frames. CRCs are already checked by
 asset/section opening, not by these cached draw calls. Two-volume and modifier
 caches have parallel admitted paths below. Ordinary toon/outline policies also
-reuse this draw view; two-volume toon and wireframe still need their own audit.
+reuse this draw view, as does wireframe; two-volume toon still needs its audit.
 This removes identifiable repeated work; hardware throughput still requires
 measurement and is not inferred from host or emulator correctness tests.
+
+Wireframe callers can use `pvr_chunk_model_cache_draw_emit_wire()` with the
+same admitted ordinary draw view. It skips full cache/base-deformation rescans
+and borrows immutable deformation records when no resolver is supplied.
+Memory-sink worst-case capacity is still calculated from strip counts each
+draw, and changing frustums, profiles, workspaces, sinks and callback results
+remain checked. The checked wire API also avoids validating the cache a second
+time merely to calculate sink capacity. Homogeneous clipping before projection,
+per-edge math, and XMTRX preservation are unchanged. The `chunk_wire` example
+uses this path; workspace contents after the draw are unspecified.
 
 On 2026-09-19 the cache regression suite passed GCC 14 GNU17/strict C23,
 Apple Clang strict C2x, and Clang ASan/UBSan. Differential tests cover every

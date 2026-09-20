@@ -117,6 +117,30 @@ int pvr_chunk_model_cache_emit_wire(
     pvr_chunk_wire_resolve_profile_t resolve_profile,
     void *data, pvr_chunk_wire_result_t *result);
 
+/** \brief Emit an admitted ordinary cache as wireframe without static rescans.
+
+    Initialize \p draw with pvr_chunk_model_cache_draw_prepare(). Its snapshot
+    and borrowed storage must remain immutable and accessible throughout the
+    draw, including callbacks. Rebuild and prepare again after storage changes.
+    Frustum, profiles, workspace, sink and callback output remain checked.
+    Without \p resolve_vertex, deformation data is borrowed read-only from the
+    cache instead of copied into workspace; workspace contents after drawing
+    are unspecified. Workspace capacity and non-overlap requirements are the
+    same as for pvr_chunk_model_cache_emit_wire(). Clipping and projection are
+    unchanged; this does not assume every edge is visible.
+*/
+int pvr_chunk_model_cache_draw_emit_wire(
+    const pvr_chunk_cache_draw_t *draw, const pvr_frustum_t *frustum,
+    pvr_chunk_clip_policy_t clip_policy,
+    const pvr_chunk_wire_profile_t *default_profile,
+    pvr_geometry_sink_t *sink, pvr_chunk_wire_workspace_t *workspace,
+    pvr_chunk_cache_filter_strip_t filter_strip,
+    pvr_chunk_cache_begin_strip_t begin_strip,
+    pvr_chunk_cache_resolve_vertex_t resolve_vertex,
+    pvr_chunk_cache_prepare_vertex_t prepare_vertex,
+    pvr_chunk_wire_resolve_profile_t resolve_profile,
+    void *data, pvr_chunk_wire_result_t *result);
+
 /** @} */
 
 __END_DECLS

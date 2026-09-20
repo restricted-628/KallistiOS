@@ -17,6 +17,7 @@ KOS_CFLAGS += -I$(KOS_BASE)/utils/pvr-deform-test
 $(OBJS): $(KOS_BASE)/utils/pvr-deform-test/skin-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/animation-test/matrix-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/toon-draw-fixtures.h
+$(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/wire-draw-fixtures.h
 $(OBJS): release-fixtures.h
 
 # Direct API regression: PR #70 fixes the failure in the official 0.8.1 pin.
