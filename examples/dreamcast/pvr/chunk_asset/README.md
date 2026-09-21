@@ -22,6 +22,11 @@ At runtime the application parses the bounded header, queries exact caller-
 owned decode workspace, and opts into one LZ4 service fiber on a shared service
 executor. Its deliberately tiny test budget publishes at most 16 bytes between
 cooperative yields, making the example exercise multiple decode steps. The
+job explicitly admits only independent frames with at most 64 KiB blocks and
+131076 bytes of decoder scratch via `PVR_CHUNK_ASSET_LZ4_COMPACT_LIMITS`.
+This scratch cap excludes the destination, context, job, and service storage;
+it is not the example's total RAM footprint. General LZ4 callers remain free
+to choose other limits or use the original unrestricted entry points. The
 normal asset loader then checks both decoded CRCs and passes the streams through
 compact-model admission without decoding the vertex partition twice.
 The cooked section avoids repeating compact stream traversal and indexed

@@ -416,12 +416,29 @@ selected fiber stack, and yields between decode steps. It creates neither an
 executor nor a thread. Executor shutdown converts active and queued work into
 terminal cancellation before returning.
 
+Decoder/job creation prepares all upstream frame scratch before submission;
+subsequent steps allocate nothing. Each queued job owns its prepared scratch,
+so queue length must be included in application memory accounting. Normal
+service execution also yields after completed, failed, and cancelled jobs;
+shutdown cancellation drains without yielding. Allocation failures are ENOMEM,
+not encoded-data corruption.
+
+Applications can inspect advertised frame requirements with
+`pvr_chunk_asset_lz4_get_requirements()` and opt into per-decoder limits through
+the state/job `*_create_with_limits()` functions. The example now uses
+`PVR_CHUNK_ASSET_LZ4_COMPACT_LIMITS`: independent blocks at most 64 KiB and
+131076 bytes of frame scratch. Oversized or linked frames fail with EFBIG
+before scratch allocation; small wrapper/context allocations can precede
+that check. Original entry points retain general frame compatibility. The
+query reads headers, not payloads, and its scratch count excludes all other
+heap overhead and borrowed buffers. This is not a total/queued-memory budget.
+
 An output budget bounds bytes published during one cooperative step. The Frame
 decoder may internally decompress a complete block while satisfying a smaller
-destination, so CPU work is additionally capped by the encoded block size. The
-converter fixes blocks at 64 KiB and makes them independent. This is a useful
-latency ceiling, not a claim that CPU time scales exactly with the output
-budget.
+destination; a large budget can process multiple blocks. The converter fixes
+blocks at 64 KiB and makes them independent. Neither the output budget nor that
+converter setting constitutes a CPU-time or input-work limit for arbitrary
+accepted frames.
 
 ## Hierarchies
 

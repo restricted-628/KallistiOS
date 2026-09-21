@@ -138,6 +138,8 @@ static void lz4_service_entry(fiber_service_t *fiber_service, void *data) {
             irq_restore(irq);
             service->active = NULL;
             finish_job(job, PVR_CHUNK_ASSET_LZ4_JOB_CANCELLED, ECANCELED);
+            if(fiber_service_yield(fiber_service) < 0)
+                break;
             continue;
         }
         job->status.state = PVR_CHUNK_ASSET_LZ4_JOB_RUNNING;
@@ -165,9 +167,11 @@ static void lz4_service_entry(fiber_service_t *fiber_service, void *data) {
             service->active = NULL;
             finish_job(job, PVR_CHUNK_ASSET_LZ4_JOB_FAILED, saved_errno);
         }
-        else if(fiber_service_yield(fiber_service) < 0) {
-            service->active = NULL;
-            finish_job(job, PVR_CHUNK_ASSET_LZ4_JOB_CANCELLED, ECANCELED);
+        /* A completed/failed job is work too. Without this yield, callbacks
+           can continuously refill the FIFO and starve sibling services. On
+           stop, the common shutdown path finalizes any remaining active job.
+           Do not touch job here: a terminal job may already be destroyed. */
+        if(fiber_service_yield(fiber_service) < 0) {
             break;
         }
     }
@@ -276,10 +280,11 @@ int pvr_chunk_asset_lz4_service_destroy(
     return 0;
 }
 
-pvr_chunk_asset_lz4_job_t *pvr_chunk_asset_lz4_job_create(
+pvr_chunk_asset_lz4_job_t *pvr_chunk_asset_lz4_job_create_with_limits(
     const pvr_chunk_asset_section_t *section, void *destination,
     size_t destination_bytes,
     const pvr_chunk_asset_lz4_dictionary_t *dictionary,
+    const pvr_chunk_asset_lz4_limits_t *limits,
     pvr_chunk_asset_lz4_job_callback_t callback, void *callback_data) {
     pvr_chunk_asset_lz4_job_t *job;
     pvr_chunk_asset_lz4_progress_t progress;
@@ -293,10 +298,13 @@ pvr_chunk_asset_lz4_job_t *pvr_chunk_asset_lz4_job_create(
         errno = ENOMEM;
         return NULL;
     }
-    job->decoder = pvr_chunk_asset_lz4_state_create(
-        section, destination, destination_bytes, dictionary);
+    job->decoder = pvr_chunk_asset_lz4_state_create_with_limits(
+        section, destination, destination_bytes, dictionary, limits);
     if(!job->decoder) {
+        int error = errno;
+
         free(job);
+        errno = error;
         return NULL;
     }
     if(pvr_chunk_asset_lz4_state_get_progress(job->decoder, &progress) < 0) {
@@ -309,6 +317,16 @@ pvr_chunk_asset_lz4_job_t *pvr_chunk_asset_lz4_job_create(
     job->callback = callback;
     job->callback_data = callback_data;
     return job;
+}
+
+pvr_chunk_asset_lz4_job_t *pvr_chunk_asset_lz4_job_create(
+    const pvr_chunk_asset_section_t *section, void *destination,
+    size_t destination_bytes,
+    const pvr_chunk_asset_lz4_dictionary_t *dictionary,
+    pvr_chunk_asset_lz4_job_callback_t callback, void *callback_data) {
+    return pvr_chunk_asset_lz4_job_create_with_limits(
+        section, destination, destination_bytes, dictionary, NULL,
+        callback, callback_data);
 }
 
 int pvr_chunk_asset_lz4_job_destroy(pvr_chunk_asset_lz4_job_t *job) {

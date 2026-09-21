@@ -60,8 +60,11 @@ typedef void (*pvr_chunk_asset_lz4_job_callback_t)(
     The service borrows its fiber stack. Queue storage is allocated once by
     this call; submission, cancellation, stepping, and completion allocate
     nothing. The positive output budget limits bytes published between
-    cooperative yields. The upstream decoder may internally process at most
-    one frame block while satisfying that budget.
+    cooperative yields. A yield also follows each completed, failed, or
+    cancelled job during normal service execution. Shutdown instead drains
+    cancellations before returning. The upstream decoder can internally
+    process a whole frame block for a small budget, or multiple blocks for a
+    large budget; this is not a CPU time limit. Callbacks must not block.
 
     The returned adapter must outlive the executor. Release it only after
     fiber_service_executor_destroy() has stopped and joined the service.
@@ -94,13 +97,29 @@ int pvr_chunk_asset_lz4_service_destroy(
 /** \brief Allocate an unsubmitted decode job.
 
     All buffers and dictionary storage are borrowed through terminal callback
-    completion. Creating the job allocates its LZ4 Frame context. The callback
-    is optional and must not block the shared service executor.
+    completion. Creating the job allocates its decoder and all frame scratch
+    storage, so each queued job already owns that memory. See the state-create
+    documentation for size accounting. The callback is optional and must not
+    block the shared service executor.
 */
 pvr_chunk_asset_lz4_job_t *pvr_chunk_asset_lz4_job_create(
     const pvr_chunk_asset_section_t *section, void *destination,
     size_t destination_bytes,
     const pvr_chunk_asset_lz4_dictionary_t *dictionary,
+    pvr_chunk_asset_lz4_job_callback_t callback, void *callback_data);
+
+/** \brief Create a job with per-decoder frame and scratch admission limits.
+
+    NULL limits preserve job_create() behavior. EFBIG rejects a valid header
+    outside the limits before scratch allocation. The small job, decoder, and
+    upstream context may be allocated before rejection. Limits do not account
+    for aggregate queued-job memory or borrowed source/output/dictionary data.
+*/
+pvr_chunk_asset_lz4_job_t *pvr_chunk_asset_lz4_job_create_with_limits(
+    const pvr_chunk_asset_section_t *section, void *destination,
+    size_t destination_bytes,
+    const pvr_chunk_asset_lz4_dictionary_t *dictionary,
+    const pvr_chunk_asset_lz4_limits_t *limits,
     pvr_chunk_asset_lz4_job_callback_t callback, void *callback_data);
 
 /** \brief Destroy an unsubmitted or fully finalized job.

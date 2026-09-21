@@ -6,6 +6,8 @@
 
 #include <kos/pvr_chunk_asset_lz4.h>
 
+/* Error classification is a static API of the pinned LZ4 release. */
+#define LZ4F_STATIC_LINKING_ONLY
 #include <lz4frame.h>
 
 #include <errno.h>
@@ -60,20 +62,112 @@ static int state_fail(pvr_chunk_asset_lz4_state_t *state, int error) {
     return -1;
 }
 
-pvr_chunk_asset_lz4_state_t *pvr_chunk_asset_lz4_state_create(
+static int frame_errno(size_t result) {
+    return LZ4F_getErrorCode(result) == LZ4F_ERROR_allocation_failed ?
+           ENOMEM : EILSEQ;
+}
+
+static int validate_section(const pvr_chunk_asset_section_t *section,
+                           const pvr_chunk_asset_lz4_dictionary_t *dictionary) {
+    if(!section || !section->stored_data || !section->stored_bytes ||
+       !section->decoded_bytes ||
+       section->codec != PVR_CHUNK_ASSET_CODEC_LZ4_FRAME) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(section->dictionary_id &&
+       (!dictionary || !dictionary->data || !dictionary->size ||
+        dictionary->id != section->dictionary_id)) {
+        errno = ENOENT;
+        return -1;
+    }
+    return 0;
+}
+
+/* Keep sizing tied to the pinned upstream dstage_init implementation. Never
+   infer an opaque context size; the public estimate covers scratch only. */
+static int read_header(LZ4F_dctx *context,
+                       const pvr_chunk_asset_section_t *section,
+                       const pvr_chunk_asset_lz4_dictionary_t *dictionary,
+                       pvr_chunk_asset_lz4_requirements_t *requirements,
+                       size_t *header_bytes) {
+    LZ4F_frameInfo_t info = LZ4F_INIT_FRAMEINFO;
+    size_t input_bytes = section->stored_bytes;
+    size_t block_bytes;
+    size_t result = LZ4F_getFrameInfo(context, &info, section->stored_data,
+                                     &input_bytes);
+
+    if(LZ4F_isError(result) || info.frameType != LZ4F_frame ||
+       (info.contentSize && info.contentSize != section->decoded_bytes) ||
+       info.dictID != section->dictionary_id || !result) {
+        errno = LZ4F_isError(result) ? frame_errno(result) : EILSEQ;
+        return -1;
+    }
+    switch(info.blockSizeID) {
+        case LZ4F_max64KB: block_bytes = 64u * 1024u; break;
+        case LZ4F_max256KB: block_bytes = 256u * 1024u; break;
+        case LZ4F_max1MB: block_bytes = 1024u * 1024u; break;
+        case LZ4F_max4MB: block_bytes = 4u * 1024u * 1024u; break;
+        default:
+            errno = EILSEQ;
+            return -1;
+    }
+    *requirements = (pvr_chunk_asset_lz4_requirements_t) {
+        .stored_bytes = section->stored_bytes,
+        .decoded_bytes = section->decoded_bytes,
+        .dictionary_bytes = section->dictionary_id ? dictionary->size : 0,
+        .block_bytes = block_bytes,
+        .scratch_bytes = 2 * block_bytes + 4 +
+                         (info.blockMode == LZ4F_blockLinked ? 131072u : 0),
+        .independent_blocks = info.blockMode == LZ4F_blockIndependent
+    };
+    *header_bytes = input_bytes;
+    return 0;
+}
+
+int pvr_chunk_asset_lz4_get_requirements(
+    const pvr_chunk_asset_section_t *section,
+    const pvr_chunk_asset_lz4_dictionary_t *dictionary,
+    pvr_chunk_asset_lz4_requirements_t *requirements) {
+    LZ4F_dctx *context;
+    size_t result;
+    size_t header_bytes;
+    int status;
+    int error;
+
+    if(!requirements) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(validate_section(section, dictionary) < 0)
+        return -1;
+    result = LZ4F_createDecompressionContext(&context, LZ4F_VERSION);
+    if(LZ4F_isError(result)) {
+        errno = frame_errno(result);
+        return -1;
+    }
+    status = read_header(context, section, dictionary, requirements,
+                         &header_bytes);
+    error = errno;
+    LZ4F_freeDecompressionContext(context);
+    if(status < 0)
+        errno = error;
+    return status;
+}
+
+pvr_chunk_asset_lz4_state_t *pvr_chunk_asset_lz4_state_create_with_limits(
     const pvr_chunk_asset_section_t *section, void *destination,
     size_t destination_bytes,
-    const pvr_chunk_asset_lz4_dictionary_t *dictionary) {
+    const pvr_chunk_asset_lz4_dictionary_t *dictionary,
+    const pvr_chunk_asset_lz4_limits_t *limits) {
     pvr_chunk_asset_lz4_state_t *state;
-    LZ4F_frameInfo_t info = LZ4F_INIT_FRAMEINFO;
-    size_t input_bytes;
+    pvr_chunk_asset_lz4_requirements_t requirements;
     size_t result;
     int overlap;
 
-    if(!section || !section->stored_data || !section->stored_bytes ||
-       !section->decoded_bytes || !destination ||
-       section->codec != PVR_CHUNK_ASSET_CODEC_LZ4_FRAME ||
-       destination_bytes != section->decoded_bytes) {
+    if(validate_section(section, dictionary) < 0)
+        return NULL;
+    if(!destination || destination_bytes != section->decoded_bytes) {
         errno = EINVAL;
         return NULL;
     }
@@ -83,13 +177,6 @@ pvr_chunk_asset_lz4_state_t *pvr_chunk_asset_lz4_state_create(
         errno = overlap < 0 ? EOVERFLOW : EINVAL;
         return NULL;
     }
-    if(section->dictionary_id &&
-       (!dictionary || !dictionary->data || !dictionary->size ||
-        dictionary->id != section->dictionary_id)) {
-        errno = ENOENT;
-        return NULL;
-    }
-
     state = calloc(1, sizeof(*state));
     if(!state) {
         errno = ENOMEM;
@@ -102,24 +189,66 @@ pvr_chunk_asset_lz4_state_t *pvr_chunk_asset_lz4_state_create(
     result = LZ4F_createDecompressionContext(&state->context, LZ4F_VERSION);
     if(LZ4F_isError(result)) {
         free(state);
-        errno = ENOMEM;
+        errno = frame_errno(result);
         return NULL;
     }
 
-    input_bytes = section->stored_bytes;
-    result = LZ4F_getFrameInfo(state->context, &info, section->stored_data,
-                               &input_bytes);
-    if(LZ4F_isError(result) || info.frameType != LZ4F_frame ||
-       (info.contentSize && info.contentSize != destination_bytes) ||
-       info.dictID != section->dictionary_id || !result) {
+    if(read_header(state->context, section, dictionary, &requirements,
+                    &state->source_offset) < 0) {
+        int error = errno;
+
         LZ4F_freeDecompressionContext(state->context);
         free(state);
-        errno = EILSEQ;
+        errno = error;
         return NULL;
     }
-    state->source_offset = input_bytes;
+    if(limits &&
+       ((limits->max_block_bytes &&
+         requirements.block_bytes > limits->max_block_bytes) ||
+        (limits->max_scratch_bytes &&
+         requirements.scratch_bytes > limits->max_scratch_bytes) ||
+        (limits->require_independent_blocks && !requirements.independent_blocks))) {
+        LZ4F_freeDecompressionContext(state->context);
+        free(state);
+        errno = EFBIG;
+        return NULL;
+    }
+
+    /* getFrameInfo() admits the header but leaves allocation to dstage_init.
+       Prime that stage without consuming payload or publishing output, so a
+       successfully created state cannot first discover ENOMEM on its fiber.
+       Keep non-NULL pointers even for these zero-sized buffers. */
+    {
+        size_t source_bytes = 0;
+        size_t output_bytes = 0;
+
+        /* Install the dictionary before leaving dstage_init: upstream only
+           accepts a new dictionary through that stage, not on later calls. */
+        result = LZ4F_decompress_usingDict(
+            state->context, destination, &output_bytes,
+            (const uint8_t *)section->stored_data + state->source_offset,
+            &source_bytes,
+            section->dictionary_id ? dictionary->data : NULL,
+            section->dictionary_id ? dictionary->size : 0, NULL);
+        if(LZ4F_isError(result)) {
+            int error = frame_errno(result);
+
+            LZ4F_freeDecompressionContext(state->context);
+            free(state);
+            errno = error;
+            return NULL;
+        }
+    }
     state->hint = result;
     return state;
+}
+
+pvr_chunk_asset_lz4_state_t *pvr_chunk_asset_lz4_state_create(
+    const pvr_chunk_asset_section_t *section, void *destination,
+    size_t destination_bytes,
+    const pvr_chunk_asset_lz4_dictionary_t *dictionary) {
+    return pvr_chunk_asset_lz4_state_create_with_limits(
+        section, destination, destination_bytes, dictionary, NULL);
 }
 
 int pvr_chunk_asset_lz4_state_step(pvr_chunk_asset_lz4_state_t *state,
@@ -164,7 +293,7 @@ int pvr_chunk_asset_lz4_state_step(pvr_chunk_asset_lz4_state_t *state,
                 NULL);
         }
         if(LZ4F_isError(result))
-            return state_fail(state, EILSEQ);
+            return state_fail(state, frame_errno(result));
 
         state->crc = crc32_update(state->crc,
                                   state->destination + state->output_offset,

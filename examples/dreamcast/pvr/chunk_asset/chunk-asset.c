@@ -518,6 +518,8 @@ int main(void) {
     pvr_chunk_asset_lz4_service_t *decode_service = NULL;
     pvr_chunk_asset_lz4_job_t *job = NULL;
     pvr_chunk_asset_lz4_job_status_t status;
+    const pvr_chunk_asset_lz4_limits_t decode_limits =
+        PVR_CHUNK_ASSET_LZ4_COMPACT_LIMITS;
     fiber_service_executor_t *executor = NULL;
     decoded_section_t decoded;
     void *workspace = NULL;
@@ -571,9 +573,9 @@ int main(void) {
     decoded.stored_data = asset.vertex.stored_data;
     decoded.decoded_data = (uint8_t *)workspace + requirements.vertex_offset;
     decoded.decoded_bytes = asset.vertex.decoded_bytes;
-    job = pvr_chunk_asset_lz4_job_create(
+    job = pvr_chunk_asset_lz4_job_create_with_limits(
         &asset.vertex, decoded.decoded_data, decoded.decoded_bytes, NULL,
-        decode_complete, NULL);
+        &decode_limits, decode_complete, NULL);
     if(!job || pvr_chunk_asset_lz4_service_submit(decode_service, job) < 0)
         goto out;
     while(!decode_done)
