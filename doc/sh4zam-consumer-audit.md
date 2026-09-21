@@ -260,23 +260,26 @@ existing geometry/frustum/fiber/FPSCR integration checks. This is emulator
 correctness evidence, not physical Dreamcast certification. Host tolerances
 and target tolerances are documented beside the example.
 
-## Remaining work
+## Software completion and deferred work
 
-### Active software completion
+### Scoped software completion
 
 As requested on 2026-09-20, finish the software before graphics-library
 extraction. Lack of a physical console does not block this implementation work.
+The bounded cleanup/integration checklist below is now closed with the
+software-validation evidence recorded here. This is not certification of every
+possible asset, rendering policy, or physical-console behavior.
 
-1. Finish the bounded consumer audit: examples should use admitted draws and
-   prepared skinning when their ownership permits it, while dynamic inputs
-   retain their checks. Ordinary, two-volume, modifier, toon/outline,
-   two-volume toon, and wire paths already have admission support; this is an
-   integration check, not a request to rewrite those renderers. See the
-   [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
-2. Add asset-derived throughput workloads and end-to-end GPU submission to
+1. The bounded example consumer audit is reconciled below. Repeated ordinary,
+   toon/outline, and wire draws now use admission, and fixed skin weights use
+   prepared plans while changing palettes are prepared per pose. Keep dynamic
+   input checks. The remaining stream/checked calls are explicit clipping,
+   differential, or benchmark lanes, not accidental per-frame static rescans.
+   See the [draw-cache contract](pvr-chunk-model.md#prepare-once-ordinary-draws).
+2. Asset-derived workloads and end-to-end GPU submission now
    complement the synthetic skinning benchmark and tiny conformance scenes.
-   Exercise loading, animation/deformation, clipping, shading, and submission;
-   validate on host and emulator without claiming hardware performance.
+   They exercise loading, animation/deformation, clipping, shading, and
+   submission on host and emulator without claiming hardware performance.
    The `chunk_scene/chunk-workload.elf` repeated-instance workload now connects
    loaded glTF/PCM2 meshes, sampled animation/morph/skinning, checked lighting,
    prepared draws, and PVR submission at 1/16/256 mesh pairs. It measures
@@ -294,9 +297,76 @@ extraction. Lack of a physical console does not block this implementation work.
    on 2026-09-20; Flycast interpreter/dynarec each passed six cases and 120
    rendered frames. This adds validation coverage, not a production-code fix
    or hardware performance claim.
-3. Reconcile examples, tests, exports, documentation, and explicit limitations
-   against the completed implementation. Keep new optional features separate
-   from defects that must be fixed to close this work.
+   The [animated textured grid](../examples/dreamcast/pvr/chunk_scene/README.md#animated-textured-grid-integration)
+   then added 578 source vertices, 1,024 triangles, blended skinning, independent
+   morph curves, rotation/non-uniform scale, lighting and UV goldens, and 240
+   submitted frames. Its tilted normals exposed and verified the fix for lost
+   indexed glTF normals during conversion. The
+   [animated clipping fixture](../examples/dreamcast/pvr/chunk_scene/README.md#animated-model-clipping)
+   adds current-pose bounds, all six clipping planes, SPLIT/DROP, 72 independent
+   area/UV/color/guard checks, and 144 submitted frames. Both passed host
+   compiler/sanitizer lanes and Flycast interpreter/dynarec execution. These
+   close the combined-path integration gaps above, not hardware throughput
+   measurement or exhaustive content support.
+3. Keep the examples, exports, tests and limitations reconciled with this
+   bounded implementation. Validation evidence for this closeout is recorded
+   below. Expanded end-to-end coverage for many joints, mirrored/singular
+   inputs, normal morphing, and texture streaming, plus a clipped cooked-cache
+   API, are optional extensions rather than newly introduced prerequisites
+   for this software cleanup.
+
+### Repeated-draw consumer inventory
+
+The 2026-09-20 audit searches C/C++ examples, including the SH4ZAM integration
+fixtures, for checked, indexed-stream, cached-draw, and skinning calls. It does
+not convert unrelated legacy KOS examples into Compact-model consumers.
+
+| Consumer | Repeated work and intentional exceptions |
+| --- | --- |
+| `pvr/chunk_asset`, `pvr/chunk_skin` | Ordinary caches admitted once; fixed influences prepared once. Constant asset palette prepared once; changing skin palette prepared per pose. Resolver/lighting checks retained. |
+| `pvr/chunk_scene` and workload/grid variants | Ordinary cache and skin plans prepared at load; palettes prepared per sampled pose. Clipped variant deliberately uses the indexed clipping emitter with current-pose bounds. |
+| `pvr/chunk_toon`, `pvr/chunk_wire` | Existing admitted toon/outline and wire entry points; no migration needed. |
+| `pvr/chunk_resources` | Migrated repeated indexed-stream draws to an admitted ordinary cache, retaining the diffuse/specular policy and the generation-checked residency pin. Raw/cached packet parity runs once before rendering. |
+| `pvr/chunk_opacity` | Migrated all three list passes to one admitted cache and cached material filters. One-time parity checks cover all three authored opacity routes. |
+| `pvr/chunk_grid`, clipped `pvr/chunk_scene` | Raw/prepared clipping parity is intentional. No clipped cooked-cache draw API exists; these are not silently converted into unclipped draws. |
+| `sh4zam/integration` and `skin-bench` | Checked/admitted two-volume, modifier, ordinary and skinning lanes are explicit differential/benchmark coverage; retain both sides. |
+
+`material_recipes` prepares a small application-owned recipe fixture directly;
+it is not a Compact model-stream draw consumer. No example was found repeatedly
+using an unprepared skin path outside the intentional benchmark lane. The two
+remaining ordinary stream consumers above now allocate cache storage once and
+release it after rendering, without new production APIs, per-frame allocations,
+or SH4ZAM source changes. Dynamic material/list/residency checks are not removed.
+
+### Closeout validation (2026-09-20)
+
+Against master `e5d1c417` plus this consumer/documentation closeout:
+
+- `sh utils/run-host-tests.sh gnu17 clang`: **64/64 PASS**.
+- `sh utils/run-host-tests.sh c23 gcc-14`: **64/64 PASS**, using strict C23
+  and `-pedantic`. These are two full complementary compiler/language lanes,
+  not a claim that all four compiler/language combinations were rerun here.
+- Compact resource-binding and cache suites also passed Clang ASan/UBSan.
+- The root KOS build, both changed examples, and SH4ZAM integration targets
+  built with SH-4 GCC 16.2. No new public API or export was needed. All 25
+  audited prepared-draw/skin/cached-binding symbols matched the implementation
+  archive, export-stub archive, and generated runtime export-name table.
+- `chunk_resources` and `chunk_opacity` each passed Flycast interpreter and
+  dynarec: startup packet parity/guards, 120 rendered frames, persistent PVR
+  fault checks, resource release, shutdown, and final serial PASS. Resource
+  residency pin/count/statistic assertions remained enabled. The opacity
+  reference sink reserves all 12 model vertices for the stream emitter's
+  conservative preflight, while checking that only four are written per pass.
+- The SH4ZAM/KOS integration ELF passed both emulator modes, including its
+  prepared/checked draw, skinning, register-preservation, memory-guard, and
+  rejection fixtures. These are execution checks, not new screenshot-based
+  visual certification or physical-hardware timing results.
+- Doxygen completed, with 47 warnings outside the changed files (including
+  existing group/tag and link-resolution warnings); this is not a warning-free
+  documentation build. The changed Markdown cross-reference targets exist.
+- `utils/check-sh4zam-source.py` still reports the approved clean temporary
+  PR-fix pin `0c1ccb5f5614314e36e2fec3179c8ca3ae844770`. No upstream source,
+  dependency pin, core renderer implementation, or matrix layout changed.
 
 ### Deferred until after software completion / hardware availability
 

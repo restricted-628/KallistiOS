@@ -453,6 +453,23 @@ and preserved per-model colors. This complements `chunk_asset`'s compressed
 service-loading, residency, and lighting composition; neither example adds
 retained scene ownership or constitutes exhaustive import conformance.
 
+The same scene now has a 578-vertex, 1,024-triangle textured-grid variant with
+blended skinning, opposing morph curves, rotation/non-uniform scale, and
+independent position/normal/lighting/UV goldens. A separate clipped-grid variant
+checks current-pose bounds, all six planes, split/drop policies, projected area,
+interpolated UV/base/offset color, and guarded short-sink behavior. See the
+[scene integration contracts and validation record](../examples/dreamcast/pvr/chunk_scene/README.md).
+These are bounded combined-path conformance fixtures, not proof of arbitrary
+asset support or physical-console throughput.
+
+The [consumer closeout inventory](sh4zam-consumer-audit.md#repeated-draw-consumer-inventory)
+distinguishes admitted repeated draws from intentional checked/stream
+comparison paths. Texture-resource and opacity examples now prepare caches
+once, preserving dynamic policy and lifetime checks. The clipped path still
+uses a prepared vertex-index plan; adding clipped cooked-cache emission is an
+optional extension rather than a hidden condition of software completion.
+Hardware validation and graphics-library extraction remain deferred separately.
+
 Each tranche requires host tests for structure, bounds, interpolation, and
 packing; a complete Dreamcast cross-build; focused emulator execution for the
 public example; and an explicit physical-hardware list for timing or numerical

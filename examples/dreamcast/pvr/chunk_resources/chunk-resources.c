@@ -11,6 +11,7 @@
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
@@ -57,10 +58,41 @@ static void build_texture(void) {
     }
 }
 
+/* Keep the stream path as a one-time differential check, not a frame cost. */
+static void check_draw(const pvr_chunk_model_plan_t *plan,
+                       const pvr_chunk_cache_draw_t *draw,
+                       pvr_chunk_render_policy_binding_t *policy) {
+    alignas(32) pvr_vertex_t immediate[5] = {0}, cached[5] = {0};
+    alignas(32) pvr_vertex_t workspace[4];
+    const pvr_vertex_t guard = { .flags = 0xdeadbeef };
+    pvr_geometry_sink_t sink;
+    pvr_chunk_render_result_t reference;
+    pvr_chunk_cache_result_t result;
+
+    immediate[4] = cached[4] = guard;
+    assert(pvr_geometry_sink_init_memory(&sink, immediate, 4) == 0);
+    assert(pvr_chunk_model_emit_prepared(plan, &screen_identity, &sink,
+        workspace, 4, NULL, pvr_chunk_render_policy_binding_prepare_vertex,
+        policy, &reference) == 0);
+    assert(reference.emitted_strips == 1 && reference.emitted_vertices == 4);
+    assert(pvr_geometry_sink_init_memory(&sink, cached, 4) == 0);
+    assert(pvr_chunk_model_cache_draw_emit(draw, &screen_identity, &sink,
+        workspace, 4, NULL, NULL, NULL,
+        pvr_chunk_render_policy_binding_prepare_cached_vertex, policy, &result) == 0);
+    assert(result.emitted_strips == 1 && result.emitted_vertices == 4);
+    assert(memcmp(immediate, cached, sizeof(immediate)) == 0);
+    assert(memcmp(cached + 4, &guard, sizeof(guard)) == 0);
+    puts("KOSRESOURCES cached_parity=PASS guards=PASS");
+}
+
 int main(int argc, char **argv) {
     pvr_chunk_model_view_t model_view;
     pvr_chunk_model_plan_t model_plan;
     pvr_chunk_model_plan_requirements_t plan_requirements;
+    pvr_chunk_cache_requirements_t cache_requirements;
+    pvr_chunk_model_cache_t cache;
+    pvr_chunk_cache_draw_t draw;
+    void *cache_storage;
     pvr_chunk_vertex_index_entry_t
         vertex_index[PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE];
     pvr_txr_residency_t residency;
@@ -78,7 +110,7 @@ int main(int argc, char **argv) {
     pvr_chunk_render_policy_binding_t policy_binding;
     pvr_geometry_sink_t sink;
     alignas(32) pvr_vertex_t workspace[4];
-    pvr_chunk_render_result_t render_result;
+    pvr_chunk_cache_result_t render_result;
     pvr_pipeline_status_t status;
     pvr_txr_residency_status_t residency_status;
     unsigned int frame;
@@ -112,6 +144,13 @@ int main(int argc, char **argv) {
         sizeof(vertex_index) / sizeof(vertex_index[0]), &model_plan) == 0);
     assert(model_view.info.maximum_strip_vertices <=
            sizeof(workspace) / sizeof(workspace[0]));
+    assert(pvr_chunk_model_cache_query(&model_plan, &cache_requirements) == 0);
+    cache_storage = aligned_alloc(cache_requirements.alignment,
+                                   cache_requirements.bytes);
+    assert(cache_storage);
+    assert(pvr_chunk_model_cache_build(&model_plan, cache_storage,
+        cache_requirements.bytes, NULL, NULL, &cache) == 0);
+    assert(pvr_chunk_model_cache_draw_prepare(&cache, &draw) == 0);
 
     pvr_poly_cxt_col(&context, PVR_LIST_OP_POLY);
     context.gen.culling = PVR_CULLING_NONE;
@@ -138,16 +177,17 @@ int main(int argc, char **argv) {
     policy_config.begin_strip_data = &material_binding;
     assert(pvr_chunk_render_policy_binding_init(
         &policy_binding, &policy_config) == 0);
+    check_draw(&model_plan, &draw, &policy_binding);
     assert(pvr_geometry_sink_init_current(&sink) == 0);
 
     for(frame = 0; frame < 120u; ++frame) {
         assert(pvr_wait_ready() == 0);
         pvr_scene_begin();
         assert(pvr_list_begin(PVR_LIST_OP_POLY) == 0);
-        assert(pvr_chunk_model_emit_prepared(
-            &model_plan, &screen_identity, &sink, workspace, 4,
-            pvr_chunk_render_policy_binding_begin_strip,
-            pvr_chunk_render_policy_binding_prepare_vertex,
+        assert(pvr_chunk_model_cache_draw_emit(
+            &draw, &screen_identity, &sink, workspace, 4, NULL,
+            pvr_chunk_render_policy_binding_begin_cached_strip, NULL,
+            pvr_chunk_render_policy_binding_prepare_cached_vertex,
             &policy_binding, &render_result) == 0);
         assert(render_result.emitted_strips == 1 &&
                render_result.emitted_vertices == 4);
@@ -168,6 +208,7 @@ int main(int argc, char **argv) {
     assert(status.faults.mask == PVR_FAULT_NONE);
     assert(pvr_txr_residency_destroy(&residency) == 0);
     assert(pvr_shutdown() == 0);
+    free(cache_storage);
 
     vid_clear(0, 64, 0);
     bfont_draw_str(vram_s + vid_mode->width * BFONT_HEIGHT +

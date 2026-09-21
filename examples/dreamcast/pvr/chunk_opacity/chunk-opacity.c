@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
@@ -31,6 +32,35 @@ static const pvr_list_t pass_lists[] = {
     PVR_LIST_TR_POLY
 };
 
+/* Prove cached pass routing preserves each authored strip's complete packets. */
+static void check_draw(const pvr_chunk_model_plan_t *plan,
+                       const pvr_chunk_cache_draw_t *draw,
+                       pvr_chunk_material_binding_t *binding) {
+    /* Stream preflight reserves the full 12-vertex model before filtering. */
+    alignas(32) pvr_vertex_t immediate[13] = {0}, cached[13] = {0};
+    alignas(32) pvr_vertex_t workspace[4];
+    const pvr_vertex_t guard = { .flags = 0xdeadbeef };
+    pvr_geometry_sink_t sink;
+    pvr_chunk_render_result_t reference;
+    pvr_chunk_cache_result_t result;
+
+    for(size_t i = 4; i < 13; ++i)
+        immediate[i] = cached[i] = guard;
+    assert(pvr_geometry_sink_init_memory(&sink, immediate, 12) == 0);
+    assert(pvr_chunk_model_emit_prepared_filtered(plan, &screen_identity, &sink,
+        workspace, 4, pvr_chunk_material_binding_filter_strip, NULL, NULL,
+        binding, &reference) == 0);
+    assert(reference.emitted_strips == 1 && reference.emitted_vertices == 4);
+    assert(pvr_geometry_sink_init_memory(&sink, cached, 12) == 0);
+    assert(pvr_chunk_model_cache_draw_emit(draw, &screen_identity, &sink,
+        workspace, 4, pvr_chunk_material_binding_filter_cached_strip,
+        NULL, NULL, NULL, binding, &result) == 0);
+    assert(result.emitted_strips == 1 && result.emitted_vertices == 4);
+    assert(memcmp(immediate, cached, sizeof(immediate)) == 0);
+    for(size_t i = 4; i < 13; ++i)
+        assert(memcmp(cached + i, &guard, sizeof(guard)) == 0);
+}
+
 int main(int argc, char **argv) {
     const pvr_init_params_t pvr_params = {
         .opb_sizes = {
@@ -46,6 +76,10 @@ int main(int argc, char **argv) {
     pvr_chunk_model_view_t model_view;
     pvr_chunk_model_plan_t model_plan;
     pvr_chunk_model_plan_requirements_t requirements;
+    pvr_chunk_cache_requirements_t cache_requirements;
+    pvr_chunk_model_cache_t cache;
+    pvr_chunk_cache_draw_t draw;
+    void *cache_storage;
     pvr_chunk_vertex_index_entry_t
         vertex_index[PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE];
     pvr_chunk_material_binding_t binding[3];
@@ -93,6 +127,13 @@ int main(int argc, char **argv) {
     assert(pvr_chunk_model_plan_build(
         &model_view, vertex_index,
         sizeof(vertex_index) / sizeof(vertex_index[0]), &model_plan) == 0);
+    assert(pvr_chunk_model_cache_query(&model_plan, &cache_requirements) == 0);
+    cache_storage = aligned_alloc(cache_requirements.alignment,
+                                   cache_requirements.bytes);
+    assert(cache_storage);
+    assert(pvr_chunk_model_cache_build(&model_plan, cache_storage,
+        cache_requirements.bytes, NULL, NULL, &cache) == 0);
+    assert(pvr_chunk_model_cache_draw_prepare(&cache, &draw) == 0);
 
     for(pass = 0; pass < 3; ++pass) {
         pvr_poly_cxt_col(&context, pass_lists[pass]);
@@ -103,7 +144,9 @@ int main(int argc, char **argv) {
         assert(pvr_chunk_material_binding_init(
             &binding[pass], &context, &textures,
             PVR_GEOMETRY_SINK_CURRENT_LIST) == 0);
+        check_draw(&model_plan, &draw, &binding[pass]);
     }
+    puts("KOSOPACITY cached_parity=PASS passes=3 guards=PASS");
     assert(pvr_geometry_sink_init_current(&sink) == 0);
 
     for(frame = 0; frame < 120; ++frame) {
@@ -111,15 +154,15 @@ int main(int argc, char **argv) {
         pvr_scene_begin();
 
         for(pass = 0; pass < 3; ++pass) {
-            pvr_chunk_render_result_t result;
+            pvr_chunk_cache_result_t result;
 
             assert(pvr_list_begin(pass_lists[pass]) == 0);
-            assert(pvr_chunk_model_emit_prepared_filtered(
-                &model_plan, &screen_identity, &sink, workspace,
+            assert(pvr_chunk_model_cache_draw_emit(
+                &draw, &screen_identity, &sink, workspace,
                 sizeof(workspace) / sizeof(workspace[0]),
-                pvr_chunk_material_binding_filter_strip,
-                pvr_chunk_material_binding_begin_strip,
-                NULL, &binding[pass], &result) == 0);
+                pvr_chunk_material_binding_filter_cached_strip,
+                pvr_chunk_material_binding_begin_cached_strip,
+                NULL, NULL, &binding[pass], &result) == 0);
             assert(result.emitted_strips == 1);
             assert(result.emitted_vertices == 4);
             assert(pvr_list_finish() == 0);
@@ -134,6 +177,7 @@ int main(int argc, char **argv) {
     assert(pvr_get_pipeline_status(&status) == 0);
     assert(status.faults.mask == PVR_FAULT_NONE);
     assert(pvr_shutdown() == 0);
+    free(cache_storage);
     free(asset_workspace);
 
     vid_clear(0, 64, 0);
