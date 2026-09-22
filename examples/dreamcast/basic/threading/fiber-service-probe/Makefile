@@ -5,10 +5,10 @@
 #
 
 TARGET = fiber-service-probe.elf
-OBJS = fiber-service-probe.o
+OBJS = fiber-service-probe.o fiber-service-math.o
 KOS_CFLAGS += -std=c11
 
-all: rm-elf $(TARGET)
+all: $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
@@ -18,7 +18,7 @@ clean: rm-elf
 rm-elf:
 	-rm -f $(TARGET)
 
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $(TARGET) $(OBJS)
 
 run: $(TARGET)

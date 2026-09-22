@@ -78,6 +78,48 @@ Services must keep work between waits or yields bounded. Shutdown can deliver
 `ECANCELED` to a suspended service and drain a cooperative service, but it
 cannot safely force a service that never yields to release the executor thread.
 
+## Floating-point and matrix state
+
+Service fibers can execute normal ABI-conforming floating-point code without
+enabling a separate FPU facility. Cooperative switching preserves the SH-4
+callee-saved floating-point registers (FR12-FR15), while kernel preemption
+saves/restores both FPU register banks, FPSCR, and FPUL as part of the owning
+thread's interrupt context. These are two different switching boundaries.
+
+XMTRX is not fiber-local under the default lightweight policy. A sibling
+service may replace its contents while a service is waiting or yielding. For
+services that retain matrix state across those boundaries, create the executor
+with the existing fiber math-context option:
+
+```c
+fiber_service_executor_t *executor =
+    fiber_service_executor_create_ex(KFIBER_ATTACH_MATH_CONTEXT);
+```
+
+The executor attaches this policy on its own thread before creating services;
+calling `fiber_attach_ex()` on the application thread does not configure a
+different executor thread. It is also too late to upgrade attachment from
+inside a running service (`EBUSY`). The original executor constructor remains
+equivalent to `create_ex(KFIBER_ATTACH_DEFAULT)`.
+
+Math-context mode preserves all 16 XMTRX registers on cooperative transfers,
+including waits, yields, service return, and resumption during shutdown.
+New service contexts begin with the identity matrix; the dispatcher captures
+its thread's current matrix. The cost is one 64-byte, 32-byte-aligned context
+for each service and for the dispatcher (plus allocator overhead), and a matrix
+store/load per transfer. Context allocation happens during startup; switching
+does not allocate. This is an executor-wide, immutable policy, not a runtime
+per-job toggle.
+
+This option does **not** make a complete private FPU environment for each
+fiber. FPSCR and FPUL remain shared across cooperative calls, and caller-saved
+registers retain normal C ABI rules. Restore any temporary precision, register
+bank, transfer-size, rounding, or exception-mode changes before waiting,
+yielding, or returning. Do not yield in the middle of non-ABI assembly or while
+an ordinary KOS mutex/store-queue transaction is held. An FPU-using media decoder
+must still be checked against these contracts; enabling this flag alone is not
+evidence of successful Sofdec playback or sufficient real-time throughput.
+
 ## Service mailboxes
 
 Each service may configure one bounded mailbox before its executor starts. The

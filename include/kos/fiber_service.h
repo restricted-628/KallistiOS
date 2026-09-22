@@ -26,6 +26,7 @@
 __BEGIN_DECLS
 
 #include <kos/thread.h>
+#include <kos/fiber.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -74,8 +75,33 @@ typedef enum fiber_service_state {
     FIBER_SERVICE_STOPPED  = 6
 } fiber_service_state_t;
 
-/** \brief Allocate an unstarted service executor. */
+/** \brief Allocate an unstarted executor using KFIBER_ATTACH_DEFAULT.
+
+    Ordinary ABI-conforming floating-point code is supported. XMTRX is not
+    fiber-local in this mode; reload it after any cooperative transfer if its
+    contents are needed again, or opt into math-context preservation below.
+*/
 fiber_service_executor_t *fiber_service_executor_create(void);
+
+/** \brief Allocate an executor with an explicit fiber-context policy.
+
+    Flags are kfiber_attach_flags_t values, applied on the executor's owning
+    thread before any service fibers are created. Unknown bits fail with
+    EINVAL. The policy is immutable and applies to the dispatcher and every
+    service, including services that do not themselves use matrix operations.
+
+    KFIBER_ATTACH_MATH_CONTEXT preserves Dreamcast XMTRX across yields, waits,
+    and service return. It adds a 64-byte, 32-byte-aligned allocation for each
+    service and the dispatcher, plus matrix save/load work per fiber transfer.
+    These allocations occur at executor start, not during switching.
+
+    This is not a private complete FPU environment: FPSCR and FPUL are not
+    independently preserved by a cooperative transfer. Code must restore the
+    normal ABI FPU mode before yielding, waiting, or returning. Thread
+    preemption continues to use the normal full kernel register context.
+*/
+fiber_service_executor_t *fiber_service_executor_create_ex(
+    unsigned int fiber_flags);
 
 /** \brief Add a persistent service before starting its executor.
 

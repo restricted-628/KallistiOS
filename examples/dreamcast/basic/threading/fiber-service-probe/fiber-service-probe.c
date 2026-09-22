@@ -37,6 +37,8 @@ static volatile bool service_c_cancelled;
 static volatile uint64_t service_b_elapsed;
 static volatile bool failed;
 
+int test_service_math(void);
+
 static bool wait_for_state(fiber_service_t *service,
                            fiber_service_state_t state) {
     uint64_t deadline = timer_ms_gettime64() + TEST_TIMEOUT_MS;
@@ -83,6 +85,12 @@ static void service_a_entry(fiber_service_t *service, void *data) {
 
     (void)data;
     check_executor_identity();
+    /* The legacy constructor must remain lightweight and cannot be upgraded
+       from inside a service after attachment has already happened. */
+    errno = 0;
+    if(fiber_get_attach_flags() != KFIBER_ATTACH_DEFAULT ||
+       fiber_attach_ex(KFIBER_ATTACH_MATH_CONTEXT) || errno != EBUSY)
+        failed = true;
     service_tls = 0x51ce51ceu;
 
     sq = sq_lock(service_stacks[0]);
@@ -190,6 +198,9 @@ int main(int argc, char **argv) {
        !service_c_cancelled)
         failed = true;
     executor = NULL;
+
+    if(test_service_math() < 0)
+        failed = true;
 
     if(failed) {
         printf("Fiber service probe failed: irq=%u b=%u/%llu shutdown=%u\n",

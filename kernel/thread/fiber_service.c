@@ -64,6 +64,7 @@ struct fiber_service_executor {
     volatile bool stopping;
     volatile int start_result;
     volatile int start_error;
+    unsigned int fiber_flags;
 };
 
 static bool stack_ranges_overlap(uintptr_t a, size_t a_size,
@@ -105,7 +106,7 @@ static void service_entry(void *data) {
 static int create_service_fibers(fiber_service_executor_t *executor) {
     fiber_service_t *service;
 
-    executor->main_fiber = fiber_attach();
+    executor->main_fiber = fiber_attach_ex(executor->fiber_flags);
     if(!executor->main_fiber)
         return -1;
 
@@ -299,8 +300,15 @@ static void *service_executor_thread(void *data) {
     return NULL;
 }
 
-fiber_service_executor_t *fiber_service_executor_create(void) {
-    fiber_service_executor_t *executor = calloc(1, sizeof(*executor));
+fiber_service_executor_t *fiber_service_executor_create_ex(
+    unsigned int fiber_flags) {
+    fiber_service_executor_t *executor;
+
+    if(fiber_flags & ~KFIBER_ATTACH_MATH_CONTEXT) {
+        errno = EINVAL;
+        return NULL;
+    }
+    executor = calloc(1, sizeof(*executor));
 
     if(!executor) {
         errno = ENOMEM;
@@ -311,7 +319,12 @@ fiber_service_executor_t *fiber_service_executor_create(void) {
     sem_init(&executor->work, 0);
     sem_init(&executor->started, 0);
     executor->state = EXECUTOR_CREATED;
+    executor->fiber_flags = fiber_flags;
     return executor;
+}
+
+fiber_service_executor_t *fiber_service_executor_create(void) {
+    return fiber_service_executor_create_ex(KFIBER_ATTACH_DEFAULT);
 }
 
 fiber_service_t *fiber_service_add(fiber_service_executor_t *executor,

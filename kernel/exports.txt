@@ -209,6 +209,7 @@ fiber_mutex_unlock
 
 # Fiber service executors
 fiber_service_executor_create
+fiber_service_executor_create_ex
 fiber_service_add
 fiber_service_queue_configure
 fiber_service_executor_start
