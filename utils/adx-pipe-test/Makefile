@@ -3,8 +3,8 @@ CFLAGS ?= -O2
 include ../Makefile.host-test
 SOUND = ../../kernel/arch/dreamcast/sound
 INCLUDE = ../../kernel/arch/dreamcast/include
-SOURCES = $(SOUND)/snd_adx.c $(SOUND)/snd_adx_pipe.c
-HEADERS = $(INCLUDE)/dc/sound/adx.h $(INCLUDE)/dc/sound/adx_pipe.h
+SOURCES = $(SOUND)/snd_adx.c $(SOUND)/snd_adx_pipe.c $(SOUND)/snd_adx_input.c
+HEADERS = $(INCLUDE)/dc/sound/adx.h $(INCLUDE)/dc/sound/adx_pipe.h $(INCLUDE)/dc/sound/adx_input.h
 
 .PHONY: all test clean
 all: test

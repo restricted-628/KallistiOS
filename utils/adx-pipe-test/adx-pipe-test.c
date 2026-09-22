@@ -3,6 +3,7 @@
    Synthetic, asset-free SPSC and backpressure tests.
 */
 #include <dc/sound/adx_pipe.h>
+#include <dc/sound/adx_input.h>
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
@@ -192,6 +193,152 @@ static void cancel_concurrent(void) {
     assert(r.producer == SND_ADX_CANCELLED && r.frames == 32 && r.drained);
 }
 
+static void input_edges(void) {
+    uint8_t storage[128];
+    int16_t pcm[64], out[64];
+    snd_adx_input_t q;
+    snd_adx_pipe_t p;
+    assert(snd_adx_input_init(NULL, storage, 128) < 0);
+    assert(snd_adx_input_init(&q, NULL, 128) < 0);
+    assert(snd_adx_input_init(&q, storage, 127) < 0);
+    assert(snd_adx_input_init(&q, storage, 16) < 0);
+    size_t bytes = fixture(2, 33);
+    for(size_t length = 0; length <= bytes; ++length)
+    for(size_t fragment = 1; fragment <= 37; fragment += 6) {
+        snd_adx_input_init(&q, storage, 32);
+        snd_adx_pipe_init(&p, pcm, 64, 32);
+        q.write_cursor = q.read_cursor = UINT32_MAX - 6;
+        size_t loaded = 0, produced = 0;
+        for(size_t steps = 0; steps < 1000; ++steps) {
+            size_t take = length - loaded;
+            if(take > fragment)
+                take = fragment;
+            loaded += snd_adx_input_write(&q, encoded + loaded, take);
+            if(loaded == length)
+                assert(!snd_adx_input_close(&q, SND_ADX_INPUT_EOF));
+            snd_adx_input_result_t r = snd_adx_input_step(&q, &p);
+            snd_adx_pipe_result_t read = snd_adx_pipe_read(&p, out, 32);
+            produced += read.frames;
+            if(r.codec.status >= SND_ADX_DONE) {
+                assert(r.codec.status == (length == bytes ? SND_ADX_DONE : SND_ADX_TRUNCATED));
+                assert(produced == (length == bytes ? 33u : length >= 72 ? 32u : 0u));
+                break;
+            }
+            assert(steps < 999);
+        }
+    }
+    /* Closed input with two already-buffered physical spans must not park. */
+    bytes = fixture(1, 1);
+    snd_adx_input_init(&q, storage, 128);
+    snd_adx_pipe_init(&p, pcm, 64, 32);
+    q.write_cursor = q.read_cursor = 123;
+    assert(snd_adx_input_write(&q, encoded, bytes) == bytes);
+    assert(!snd_adx_input_close(&q, SND_ADX_INPUT_EOF));
+    assert(snd_adx_input_close(&q, SND_ADX_INPUT_FAILED) < 0);
+    assert(snd_adx_input_write(&q, encoded, 1) == 0);
+    snd_adx_input_result_t r = snd_adx_input_step(&q, &p);
+    assert(r.codec.status == SND_ADX_MORE && r.codec.consumed == 5);
+    r = snd_adx_input_step(&q, &p);
+    assert(r.codec.status == SND_ADX_MORE && p.decoder.header_ready);
+    r = snd_adx_input_step(&q, &p);
+    assert(r.codec.status == SND_ADX_DONE && r.codec.frames == 1);
+
+    /* An I/O error is observable separately, not a successful/truncated EOF. */
+    snd_adx_input_init(&q, storage, 128);
+    snd_adx_pipe_init(&p, pcm, 64, 32);
+    assert(snd_adx_input_close(&q, SND_ADX_INPUT_OPEN) < 0);
+    assert(!snd_adx_input_close(&q, SND_ADX_INPUT_FAILED));
+    r = snd_adx_input_step(&q, &p);
+    assert(r.input == SND_ADX_INPUT_FAILED && r.codec.status == SND_ADX_CANCELLED);
+    assert(snd_adx_input_step(NULL, &p).codec.status == SND_ADX_BAD_ARGUMENT);
+
+    /* Source failure while PCM is full must acknowledge without losing PCM. */
+    fixture(2, 33);
+    snd_adx_input_init(&q, storage, 128);
+    snd_adx_pipe_init(&p, pcm, 64, 32);
+    assert(snd_adx_input_write(&q, encoded, 72) == 72);
+    assert(snd_adx_input_step(&q, &p).codec.status == SND_ADX_MORE);
+    assert(snd_adx_input_step(&q, &p).codec.frames == 32);
+    assert(!snd_adx_input_close(&q, SND_ADX_INPUT_FAILED));
+    r = snd_adx_input_step(&q, &p);
+    assert(r.input == SND_ADX_INPUT_FAILED && r.codec.status == SND_ADX_CANCELLED);
+    snd_adx_pipe_result_t read = snd_adx_pipe_read(&p, out, 32);
+    assert(read.frames == 32 && read.drained && read.producer == SND_ADX_CANCELLED);
+
+    /* A late loader error remains visible but cannot rewrite codec DONE. */
+    bytes = fixture(1, 1);
+    snd_adx_input_init(&q, storage, 128);
+    snd_adx_pipe_init(&p, pcm, 64, 32);
+    assert(snd_adx_input_write(&q, encoded, bytes) == bytes);
+    assert(snd_adx_input_step(&q, &p).codec.status == SND_ADX_MORE);
+    assert(snd_adx_input_step(&q, &p).codec.status == SND_ADX_DONE);
+    assert(!snd_adx_input_close(&q, SND_ADX_INPUT_FAILED));
+    r = snd_adx_input_step(&q, &p);
+    assert(r.input == SND_ADX_INPUT_FAILED && r.codec.status == SND_ADX_DONE);
+}
+
+typedef struct input_context {
+    context_t output;
+    snd_adx_input_t input;
+    uint8_t storage[128];
+    size_t fragment;
+} input_context_t;
+
+static void *load_bytes(void *opaque) {
+    input_context_t *c = opaque;
+    size_t pos = 0;
+    while(pos != c->output.bytes) {
+        size_t take = c->output.bytes - pos;
+        if(take > c->fragment)
+            take = c->fragment;
+        pos += snd_adx_input_write(&c->input, encoded + pos, take);
+        sched_yield();
+    }
+    assert(!snd_adx_input_close(&c->input, SND_ADX_INPUT_EOF));
+    return NULL;
+}
+
+static void *decode_bytes(void *opaque) {
+    input_context_t *c = opaque;
+    for(;;) {
+        snd_adx_input_result_t r = snd_adx_input_step(&c->input, &c->output.pipe);
+        if(r.codec.status >= SND_ADX_DONE) {
+            assert(r.codec.status == SND_ADX_DONE);
+            return NULL;
+        }
+        sched_yield();
+    }
+}
+
+static void input_concurrent(unsigned channels, size_t fragment) {
+    input_context_t c;
+    c.output.bytes = fixture(channels, FRAMES);
+    c.fragment = fragment;
+    reference(c.output.bytes, channels);
+    snd_adx_input_init(&c.input, c.storage, 128);
+    snd_adx_pipe_init(&c.output.pipe, c.output.ring, 256, 64);
+    c.input.write_cursor = c.input.read_cursor = UINT32_MAX - 21;
+    pthread_t loader, decoder;
+    assert(!pthread_create(&loader, NULL, load_bytes, &c));
+    assert(!pthread_create(&decoder, NULL, decode_bytes, &c));
+    size_t frames = 0;
+    for(;;) {
+        int16_t out[34];
+        snd_adx_pipe_result_t r = snd_adx_pipe_read(&c.output.pipe, out, 17);
+        assert(frames + r.frames <= FRAMES);
+        memcpy(actual + frames * channels, out, r.frames * channels * 2);
+        frames += r.frames;
+        if(r.drained) {
+            assert(r.producer == SND_ADX_DONE);
+            break;
+        }
+        sched_yield();
+    }
+    assert(!pthread_join(loader, NULL));
+    assert(!pthread_join(decoder, NULL));
+    assert(frames == FRAMES && !memcmp(actual, expected, FRAMES * channels * 2));
+}
+
 int main(void) {
     controls();
     for(unsigned channels = 1; channels <= 2; ++channels)
@@ -200,6 +347,11 @@ int main(void) {
         concurrent(channels, capacity, true);
     }
     cancel_concurrent();
-    puts("ADX pipe: backpressure, closure, cancellation, stereo/mono, concurrent wrap PASS");
+    input_edges();
+    for(unsigned channels = 1; channels <= 2; ++channels) {
+        input_concurrent(channels, 3);
+        input_concurrent(channels, 137);
+    }
+    puts("ADX pipeline: input/PCM backpressure, EOF, cancellation, three-thread wrap PASS");
     return 0;
 }

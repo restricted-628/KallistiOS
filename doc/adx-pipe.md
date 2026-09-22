@@ -35,9 +35,9 @@ than spinning or blocking the carrier thread. After a consumer read releases
 space, wake that service with `fiber_service_wake`. Its coalesced pending wake
 must be preserved if it arrives just before the producer parks. Yield after
 successful bounded decode steps so other ready services can run. If input is
-not memory-resident, an independent bounded input producer must wake the
-decoder when new bytes arrive; do not perform ordinary blocking file reads on
-the shared executor.
+not memory-resident, use the [bounded compressed-input queue](adx-input.md)
+with an independent loader that wakes the decoder when new bytes arrive; do
+not perform ordinary blocking file reads on the shared executor.
 
 Use the existing ordinary sound polling thread (or main) for start, poll,
 status and stop operations. These APIs still contain blocking synchronization;
@@ -95,8 +95,8 @@ core has its own independent-decoder differential tests.
 [The synthetic ADX fiber example](../examples/dreamcast/sound/adx-fiber/README.md)
 connects the pipe to real KOS sound APIs and a second runnable fiber. It is a
 target integration probe, not verified audible playback. Required next gates:
-target execution, audible continuity and scheduling measurements, forced
-lower/upper-bank buffers, external input queues, and resource-safe recovery
+physical target execution, audible continuity and scheduling measurements,
+forced lower/upper-bank buffers, actual storage input, and resource-safe recovery
 from actual audio/DMA errors. No Sofdec demux, video, seek, or looping is added
 by this bridge.
 
@@ -106,4 +106,5 @@ and a separate ThreadSanitizer run. Tests include cancellation requested from
 another thread while the producer is backpressured on a full ring. The existing
 ADX core suite still passes. SH-4 GCC 16.2 built the full KOS tree and linked the
 synthetic playback probe; the pipe object has no allocator or out-of-line atomic
-helper references. No emulator or physical audio run was performed.
+helper references. Subsequent emulator results are recorded in the example's
+README; physical audio validation remains open.

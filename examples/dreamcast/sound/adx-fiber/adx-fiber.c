@@ -4,6 +4,7 @@
 */
 #include <kos.h>
 #include <dc/sound/adx_pipe.h>
+#include <dc/sound/adx_input.h>
 #include <dc/sound/stream.h>
 #include <errno.h>
 #include <stdalign.h>
@@ -15,8 +16,11 @@
 #define FRAMES (RATE * 2u + 1u)
 #define RING_FRAMES 8192u
 #define SOUND_BYTES 8192u
+#define INPUT_BYTES (36u + ((FRAMES + 31u) / 32u) * 18u)
 
-static uint8_t encoded[36 + ((FRAMES + 31) / 32) * 18];
+static uint8_t header[36], input_storage[2048], loader_pending[127];
+static snd_adx_input_t compressed;
+static size_t source_position, pending_size, pending_used;
 static alignas(32) int16_t ring[RING_FRAMES * 2];
 static alignas(32) int16_t scratch[SOUND_BYTES / 2];
 static alignas(32) uint8_t decode_stack[8192], other_stack[8192];
@@ -34,33 +38,61 @@ static void put32(uint8_t *p, uint32_t value) {
 }
 
 static void make_synthetic_adx(void) {
-    encoded[0] = 0x80; encoded[3] = 32;
-    encoded[4] = 3; encoded[5] = 18; encoded[6] = 4; encoded[7] = 1;
-    put32(encoded + 8, RATE); put32(encoded + 12, FRAMES);
-    encoded[16] = 1; encoded[17] = 244; encoded[18] = 5;
-    memcpy(encoded + 30, "(c)CRI", 6);
-    for(size_t at = 36; at < sizeof(encoded); at += 18) {
-        encoded[at + 1] = 15;
-        for(unsigned i = 2; i < 18; ++i)
-            encoded[at + i] = (i < 10) ? 0x11 : 0xff;
+    header[0] = 0x80; header[3] = 32;
+    header[4] = 3; header[5] = 18; header[6] = 4; header[7] = 1;
+    put32(header + 8, RATE); put32(header + 12, FRAMES);
+    header[16] = 1; header[17] = 244; header[18] = 5;
+    memcpy(header + 30, "(c)CRI", 6);
+}
+
+/* Bounded, nonblocking synthetic feeder on main. A real blocking file reader
+   belongs on a separate ordinary loader thread, not this audio-poll owner or
+   the decoder fiber. Retain pending suffixes and close FAILED on I/O errors. */
+static void feed_input(void) {
+    if(snd_adx_input_get_end(&compressed) != SND_ADX_INPUT_OPEN)
+        return;
+    for(unsigned budget = 0; budget < 4; ++budget) {
+        if(pending_used == pending_size) {
+            if(source_position == INPUT_BYTES) {
+                snd_adx_input_close(&compressed, SND_ADX_INPUT_EOF);
+                fiber_service_wake(decoder_service);
+                return;
+            }
+            pending_size = INPUT_BYTES - source_position;
+            if(pending_size > sizeof(loader_pending))
+                pending_size = sizeof(loader_pending);
+            for(size_t i = 0; i < pending_size; ++i) {
+                size_t offset = source_position + i;
+                if(offset < sizeof(header))
+                    loader_pending[i] = header[offset];
+                else {
+                    unsigned byte = (offset - sizeof(header)) % 18;
+                    loader_pending[i] = byte == 0 ? 0 : byte == 1 ? 15 :
+                                        byte < 10 ? 0x11 : 0xff;
+                }
+            }
+            source_position += pending_size;
+            pending_used = 0;
+        }
+        size_t accepted = snd_adx_input_write(&compressed,
+                            loader_pending + pending_used, pending_size - pending_used);
+        pending_used += accepted;
+        if(!accepted)
+            return;
+        fiber_service_wake(decoder_service);
     }
 }
 
 static void decode_service(fiber_service_t *self, void *unused) {
-    size_t pos = 0;
     (void)unused;
     for(;;) {
         if(fiber_service_stop_requested(self))
             snd_adx_pipe_request_cancel(&pipe_state);
-        size_t count = sizeof(encoded) - pos;
-        if(count > 127)
-            count = 127;
-        snd_adx_result_t r = snd_adx_pipe_decode(&pipe_state, encoded + pos,
-                                         count, pos + count == sizeof(encoded));
-        pos += r.consumed;
+        snd_adx_input_result_t step = snd_adx_input_step(&compressed, &pipe_state);
+        snd_adx_result_t r = step.codec;
         if(r.status >= SND_ADX_DONE)
             return;
-        if(r.status == SND_ADX_NEED_OUTPUT) {
+        if(r.status == SND_ADX_NEED_OUTPUT || r.status == SND_ADX_NEED_INPUT) {
             /* Wake requests are latched: consumer progress just before this
                wait must not be lost. Cancellation also wakes this service. */
             if(fiber_service_wait(self, 0) < 0)
@@ -122,6 +154,8 @@ int main(int argc, char **argv) {
     make_synthetic_adx();
     if(snd_adx_pipe_init(&pipe_state, ring, RING_FRAMES * 2, RING_FRAMES) < 0)
         return EXIT_FAILURE;
+    if(snd_adx_input_init(&compressed, input_storage, sizeof(input_storage)) < 0)
+        return EXIT_FAILURE;
 
     executor = fiber_service_executor_create_ex(KFIBER_ATTACH_MATH_CONTEXT);
     if(!executor)
@@ -136,6 +170,7 @@ int main(int argc, char **argv) {
 
     uint64_t deadline = timer_ms_gettime64() + 5000;
     for(;;) {
+        feed_input();
         snd_adx_pipe_result_t r = snd_adx_pipe_read(&pipe_state, NULL, 0);
         if(r.producer >= SND_ADX_INVALID)
             goto cleanup;
@@ -165,6 +200,7 @@ int main(int argc, char **argv) {
     uint32_t other_before = __atomic_load_n(&other_steps, __ATOMIC_RELAXED);
     deadline = timer_ms_gettime64() + 10000;
     while(timer_ms_gettime64() < deadline) {
+        feed_input();
         /* Main is the ordinary audio thread. Blocking sound APIs never run
            on the shared fiber executor. Only this owner controls the stream. */
         if(snd_stream_poll_ex(stream) < 0 && errno != ENODATA)
