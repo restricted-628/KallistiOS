@@ -1,6 +1,7 @@
 include kos.h
 include dc/sound/sound.h
 include dc/sound/adx.h
+include dc/sound/adx_pipe.h
 include dc/maple/mie.h
 include dc/expansion.h
 include dc/pvr_skin_prepared.h
@@ -9,6 +10,11 @@ include dc/pvr_skin_prepared.h
 snd_adx_init
 snd_adx_decode
 snd_adx_cancel
+snd_adx_pipe_init
+snd_adx_pipe_decode
+snd_adx_pipe_read
+snd_adx_pipe_get_info
+snd_adx_pipe_request_cancel
 
 # Cache management
 arch_icache_inval_range

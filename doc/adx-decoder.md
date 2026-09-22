@@ -81,6 +81,11 @@ handoff, bounded input/PCM queues, starvation/stop/drain contracts, A/V timing,
 and hardware validation of lower/upper-bank DMA. No physical playback or
 performance result is implied by host tests or an SH-4 build.
 
+Follow-up: the [bounded PCM bridge](adx-pipe.md) now supplies the
+single-producer/single-consumer handoff and a synthetic fiber/audio integration
+probe. It keeps existing blocking audio controls off the shared executor;
+actual target playback and external input streaming remain validation/work gates.
+
 ### Bring-up results (2026-09-22)
 
 - Host suite passed GCC 14.4 GNU17/C23 and Apple Clang 16 GNU17/C2x, including

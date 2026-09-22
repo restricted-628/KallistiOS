@@ -7,6 +7,7 @@
 
 OBJS = snd_iface.o \
 	snd_adx.o \
+	snd_adx_pipe.o \
 	snd_dsp.o \
 	snd_dsp_program.o \
 	snd_sfxmgr.o \
