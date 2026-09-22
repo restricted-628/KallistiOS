@@ -1,8 +1,14 @@
 include kos.h
 include dc/sound/sound.h
+include dc/sound/adx.h
 include dc/maple/mie.h
 include dc/expansion.h
 include dc/pvr_skin_prepared.h
+
+# Bounded ADX memory decoding
+snd_adx_init
+snd_adx_decode
+snd_adx_cancel
 
 # Cache management
 arch_icache_inval_range

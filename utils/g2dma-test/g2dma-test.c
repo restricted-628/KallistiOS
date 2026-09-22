@@ -48,6 +48,7 @@ typedef struct test_dma_regs {
 
 uint32_t g2_test_dma_registers[sizeof(test_dma_regs_t) / sizeof(uint32_t)];
 uint32_t g2_test_fifo_status;
+unsigned int g2_test_mem_size = HW_MEM_16;
 
 static uint32_t suspend_state[4];
 static uint32_t irq_depth;
@@ -435,6 +436,57 @@ static void test_transfer_completion(void) {
     CHECK(!status.callback_pending && status.result == 0);
 }
 
+static void test_retail_32mb_ranges(void) {
+    static const uintptr_t addresses[] = {
+        0x8d000000u, 0xad000000u, 0x8dffffe0u, 0xadffffe0u
+    };
+    g2_dma_status_t status;
+    unsigned int before;
+    size_t i;
+
+    /* A RAM-modded retail board still has retail VRAM and sound RAM. */
+    CHECK(hardware_sys_mode(NULL) == HW_TYPE_RETAIL);
+    for(i = 0; i < sizeof(addresses) / sizeof(addresses[0]); ++i) {
+        g2_test_mem_size = HW_MEM_16;
+        errno = 0;
+        CHECK(g2_dma_transfer((void *)addresses[i], (void *)0x00800000u,
+                              32, 0, NULL, NULL, G2_DMA_TO_G2, 0,
+                              G2_DMA_CHAN_SPU, 0) < 0 && errno == EFAULT);
+
+        g2_test_mem_size = HW_MEM_32;
+        before = cache_wbacks;
+        CHECK(g2_dma_transfer((void *)addresses[i], (void *)0x00800000u,
+                              32, 0, NULL, NULL, G2_DMA_TO_G2, 0,
+                              G2_DMA_CHAN_SPU, 0) == 0);
+        CHECK(g2_dma_get_status(G2_DMA_CHAN_SPU, &status) == 0);
+        CHECK(status.root_region == G2_DMA_ROOT_SYSTEM_RAM);
+        CHECK(registers()->dma[G2_DMA_CHAN_SPU].sh4_addr ==
+              (addresses[i] & 0x1fffffffu));
+        CHECK(cache_wbacks == before + (addresses[i] < 0xa0000000u ? 1u : 0u));
+        CHECK(g2_dma_cancel(G2_DMA_CHAN_SPU) == 0);
+    }
+
+    /* Upper bank readback and a transfer crossing the old 16 MiB boundary. */
+    CHECK(g2_dma_transfer((void *)0x8d000000u, (void *)0x00800000u,
+                          32, 0, NULL, NULL, G2_DMA_TO_SH4, 0,
+                          G2_DMA_CHAN_SPU, 0) == 0);
+    CHECK(g2_dma_cancel(G2_DMA_CHAN_SPU) == 0);
+    CHECK(g2_dma_transfer((void *)0x8cffffe0u, (void *)0x00800000u,
+                          64, 0, NULL, NULL, G2_DMA_TO_G2, 0,
+                          G2_DMA_CHAN_SPU, 0) == 0);
+    CHECK(g2_dma_cancel(G2_DMA_CHAN_SPU) == 0);
+
+    errno = 0;
+    CHECK(g2_dma_transfer((void *)0x8dffffe0u, (void *)0x00800000u,
+                          64, 0, NULL, NULL, G2_DMA_TO_G2, 0,
+                          G2_DMA_CHAN_SPU, 0) < 0 && errno == EFAULT);
+    errno = 0;
+    CHECK(g2_dma_transfer((void *)0xa4800000u, (void *)0x00800000u,
+                          32, 0, NULL, NULL, G2_DMA_TO_G2, 0,
+                          G2_DMA_CHAN_SPU, 0) < 0 && errno == EFAULT);
+    g2_test_mem_size = HW_MEM_16;
+}
+
 static void test_suspend_cancel_and_wait(void) {
     g2_dma_status_t status;
     unsigned int callback_before = callback_count;
@@ -589,6 +641,7 @@ int main(void) {
 
     test_validation_and_status();
     test_transfer_completion();
+    test_retail_32mb_ranges();
     test_suspend_cancel_and_wait();
     test_blocking_transfer();
     test_callback_chaining();

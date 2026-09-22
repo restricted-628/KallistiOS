@@ -53,6 +53,13 @@ transfer is active.
 
 ## Address and length rules
 
+Main-RAM spans are sized from `HW_MEMSIZE`, not a fixed 16 MiB limit. Both
+the canonical physical image at `0x0c000000` and the existing index-mirror
+image at `0x0e000000` use that size. A single request may not wrap between
+the images. Retail/development board type continues to govern VRAM capacity;
+adding main RAM does not increase VRAM. Software bounds tests do not establish
+physical upper-bank GD-ROM DMA correctness on a modified console.
+
 - Direct DMA destinations must be 32-byte aligned system RAM, PVR RAM, or a
   range inside an explicitly supplied bridge-SRAM lease.
 - System RAM receives cache invalidation before and after DMA. PVR RAM and

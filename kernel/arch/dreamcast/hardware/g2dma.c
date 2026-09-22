@@ -21,6 +21,8 @@
 #include <kos/sem.h>
 #include <kos/thread.h>
 
+#include "dma_memory.h"
+
 #if !defined(__NAOMI__) && !defined(G2DMA_NO_GAPS)
 #include "gaps_internal.h"
 #endif
@@ -87,9 +89,6 @@ static bool dma_lifecycle_busy;
 static volatile g2_dma_reg_t * const g2_dma = (g2_dma_reg_t *)G2_DMA_REG_BASE;
 
 #define DMA_SIZE_MASK 0x7fffffffu
-#define SH4_RAM_PHYSICAL_BASE 0x0c000000u
-#define SH4_RAM_RETAIL_SIZE   0x01000000u
-#define SH4_RAM_DEVELOP_SIZE  0x02000000u
 #define VRAM_64_PHYSICAL_BASE 0x04000000u
 #define VRAM_32_PHYSICAL_BASE 0x05000000u
 #define VRAM_RETAIL_SIZE      0x00800000u
@@ -124,16 +123,12 @@ static g2_dma_root_region_t dma_root_range_classify(const void *address,
                                                      size_t length) {
     uintptr_t virtual_address = (uintptr_t)address;
     uintptr_t physical_address = virtual_address & MEM_AREA_CACHE_MASK;
-    uintptr_t ram_top = SH4_RAM_PHYSICAL_BASE
-        + (hardware_sys_mode(NULL) == HW_TYPE_RETAIL
-           ? SH4_RAM_RETAIL_SIZE : SH4_RAM_DEVELOP_SIZE);
     uintptr_t vram_size = hardware_sys_mode(NULL) == HW_TYPE_RETAIL
         ? VRAM_RETAIL_SIZE : VRAM_DEVELOP_SIZE;
 
     if(!dma_root_alias_valid(virtual_address))
         return G2_DMA_ROOT_INVALID;
-    if(dma_range_valid(physical_address, length,
-                       SH4_RAM_PHYSICAL_BASE, ram_top))
+    if(dc_dma_main_ram_contains(physical_address, length, HW_MEMSIZE, false))
         return G2_DMA_ROOT_SYSTEM_RAM;
     if(dma_range_valid(physical_address, length,
                        VRAM_64_PHYSICAL_BASE,
@@ -254,7 +249,8 @@ static void dma_gaps_reset(uint32_t channel) {
         0x0C400000 - 0x0C4F0000
 
     Current range (0x4659007F):
-        0x0C000000 - 0x0CFFFFFF (Effectively disabling mem protection)
+        0x08000000 - 0x0FFFFFFF (Effectively disabling mem protection)
+        Software admission independently limits system RAM to HW_MEMSIZE.
 
     How its calculated:
 

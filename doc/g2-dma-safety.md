@@ -15,6 +15,13 @@ the outer lock restores the original owner state.
 
 ## Submission contract
 
+Main-RAM admission uses `HW_MEMSIZE`, independently of the retail/development
+board type used to size PVR RAM. A 32 MiB retail RAM mod may submit canonical
+upper-bank buffers without pretending it has development-board VRAM or sound
+RAM. Cache aliases are still checked separately, and a transfer cannot cross
+the detected RAM end. Host range/register tests cover this distinction; real
+32 MiB DMA behavior remains a hardware-validation gate.
+
 `g2_dma_transfer()` rejects zero-length, non-32-byte-multiple, oversized,
 invalid-direction, and out-of-range transfers. It no longer rounds an invalid
 length upward beyond the caller's buffer. A blocking transfer is rejected from

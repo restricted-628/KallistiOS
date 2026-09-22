@@ -17,6 +17,7 @@ OBJS := g2dma-test.o g2dma.o
 all: test
 
 g2dma.o: $(ROOT)/kernel/arch/dreamcast/hardware/g2dma.c \
+	$(ROOT)/kernel/arch/dreamcast/hardware/dma_memory.h include/arch/arch.h \
 	$(ROOT)/kernel/arch/dreamcast/hardware/gaps_internal.h g2dma-test-shim.h
 	$(CC) $(CFLAGS) $(INCLUDES) -include g2dma-test-shim.h -c -o $@ $<
 

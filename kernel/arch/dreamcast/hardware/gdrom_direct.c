@@ -29,6 +29,7 @@
 #include "gdrom_direct_internal.h"
 #include "gdrom_spi.h"
 #include "gaps_internal.h"
+#include "dma_memory.h"
 
 /* Register ordering in this file is a load-bearing part of the transport.
 
@@ -1777,10 +1778,10 @@ static gdrom_dma_destination_t dma_destination_classify(
     if(!dma_destination_alias_valid(virtual_address))
         return GDROM_DMA_DESTINATION_INVALID;
 
-    /* Keep both system-RAM images accepted by the existing transport. */
-    if(dma_range_contains(physical, size, 0x0c000000u, 0x0d000000u)
-            || dma_range_contains(physical, size,
-                                  0x0e000000u, 0x0f000000u))
+    /* Main RAM size is independent of retail/development VRAM capacity.
+       Preserve the existing index-mirror policy without truncating the
+       canonical upper bank on 32 MiB systems. */
+    if(dc_dma_main_ram_contains(physical, size, HW_MEMSIZE, true))
         return GDROM_DMA_DESTINATION_SYSTEM_RAM;
 
     if(dma_range_contains(physical, size,
