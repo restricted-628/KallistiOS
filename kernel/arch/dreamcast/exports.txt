@@ -34,6 +34,9 @@ cdrom_sector_range_open
 cdrom_bios_sector_range_open
 cdrom_stream_session_start
 cdrom_bios_stream_session_start
+cdrom_bios_seek_async
+cdrom_bios_cdda_get_status
+cdrom_bios_cdda_get_status_async
 
 # ASIC
 asic_evt_set_handler

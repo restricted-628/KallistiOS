@@ -15,6 +15,11 @@
 
 typedef struct gdrom_direct_stream gdrom_direct_stream_t;
 
+/* Translate a failed direct operation to the common ERR_* vocabulary.
+   Shared by direct request executors and legacy convenience wrappers. */
+int gdrom_direct_failure_result_internal(
+    int error, const gdrom_direct_result_t *result);
+
 /* Execute one direct DMA segment with cancellation, wakeup, and progress
    owned by request. This is intentionally private: public callers use the
    normal direct sync/async entry points. */

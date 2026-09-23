@@ -1031,18 +1031,30 @@ cdrom_request_t *cdrom_read_sectors_async(
 /** \brief    Move the GD-ROM pickup asynchronously.
     \ingroup  gdrom
 
-    This submits a typed \ref CD_CMD_SEEK request for a disc FAD. It is useful
-    as a scheduling hint before a later read and does not transfer data.
+    This submits a direct SPI seek for a disc FAD, with no BIOS fallback. It
+    is a scheduling hint before a later read and does not transfer data.
+    The request identifies `CDROM_REQUEST_BACKEND_DIRECT`. The filesystem's
+    backend selection does not change this path.
 
-    \param  sector          Destination sector (FAD).
-    \param  timeout         Timeout after the command starts, in milliseconds,
-                            or zero for no timeout.
+    \param  sector          Destination sector (FAD), at least 150.
+    \param  timeout         Required nonzero command timeout in milliseconds.
     \param  callback        Optional completion callback in thread context.
     \param  callback_data   User data passed to the callback.
 
     \return                 A request handle, or NULL with errno set.
 */
 cdrom_request_t *cdrom_seek_async(
+    uint32_t sector, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a pickup seek explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Same arguments as cdrom_seek_async(), but retains the legacy BIOS request
+    contract, including zero timeout for an unbounded wait. The returned
+    request identifies `CDROM_REQUEST_BACKEND_BIOS`.
+*/
+cdrom_request_t *cdrom_bios_seek_async(
     uint32_t sector, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data);
 
@@ -1147,9 +1159,11 @@ typedef struct cdrom_cdda_status {
 /** \brief Read and decode the current CDDA playback status synchronously.
     \ingroup gdrom
 
-    This is the typed counterpart to reading `CD_SUB_Q_CHANNEL` with
-    cdrom_get_subcode(). It reports playback state, track/index, track-relative
-    time, and absolute FAD without exposing the BIOS byte layout.
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback,
+    independently of the filesystem backend selection. Mandatory transport
+    recovery has its own bounded cleanup time. Reports playback state,
+    track/index, track-relative time, and absolute FAD. Use
+    gdrom_direct_cdda_get_status() to choose a timeout or retain raw diagnostics.
 
     \param status          Destination for the decoded status.
 
@@ -1157,21 +1171,41 @@ typedef struct cdrom_cdda_status {
 */
 int cdrom_cdda_get_status(cdrom_cdda_status_t *status);
 
+/** \brief Read typed CDDA status explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains the legacy synchronous, unbounded BIOS query. Returns the same
+    `ERR_*` result vocabulary as cdrom_cdda_get_status().
+*/
+int cdrom_bios_cdda_get_status(cdrom_cdda_status_t *status);
+
 /** \brief Queue a typed CDDA playback-status query.
     \ingroup gdrom
 
+    Uses direct SPI, independently of the filesystem selection, with no BIOS
+    fallback. The request identifies `CDROM_REQUEST_BACKEND_DIRECT`.
     `status` is populated during driver finalization before the request becomes
     terminal or its callback runs. It must remain valid until completion and
     has undefined contents unless the request completes successfully.
 
     \param status          Destination for the decoded status.
-    \param timeout         Command timeout in milliseconds, or zero for none.
+    \param timeout         Required nonzero command timeout in milliseconds.
     \param callback        Optional completion callback in thread context.
     \param callback_data   User data passed to the callback.
 
     \return                A queued request, or NULL with errno set.
 */
 cdrom_request_t *cdrom_cdda_get_status_async(
+    cdrom_cdda_status_t *status, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Queue typed CDDA status explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Same output lifetime and callback rules as cdrom_cdda_get_status_async(),
+    but retains the BIOS backend and permits zero timeout for no deadline.
+*/
+cdrom_request_t *cdrom_bios_cdda_get_status_async(
     cdrom_cdda_status_t *status, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data);
 

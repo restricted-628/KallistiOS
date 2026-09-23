@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Routed async pickup seek and sync/async typed CDDA status directly through
+  SPI by default. Explicit `cdrom_bios_seek_async`,
+  `cdrom_bios_cdda_get_status`, and `cdrom_bios_cdda_get_status_async` retain
+  the BIOS contracts. Direct async timeouts must be nonzero; synchronous
+  typed status uses 10000 ms plus bounded recovery. No silent BIOS fallback.
+
 * Switched extended specular lighting to SH4ZAM's `shz_powf`, removing its libm
   power exception. This deliberately accepts the fast approximation for both
   integer and fractional shininess; contributions still saturate only at final

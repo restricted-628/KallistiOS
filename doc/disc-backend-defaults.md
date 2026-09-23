@@ -1,6 +1,6 @@
 # Direct disc defaults (fork policy)
 
-The default paths in this first policy change are:
+The direct-default paths implemented so far are:
 
 | Entry point | Default | Explicit BIOS selection |
 | --- | --- | --- |
@@ -8,6 +8,8 @@ The default paths in this first policy change are:
 | Cached media sampling | Direct SPI | Follows the `/cd` selection |
 | `cdrom_sector_range_open` | Direct, 2048-byte Mode-1 sectors | `cdrom_bios_sector_range_open` |
 | `cdrom_stream_session_start` | Direct, 2048-byte Mode-1 sectors | `cdrom_bios_stream_session_start` |
+| `cdrom_seek_async` | Direct SPI seek | `cdrom_bios_seek_async` |
+| `cdrom_cdda_get_status`, `cdrom_cdda_get_status_async` | Direct SPI Q-channel query | `cdrom_bios_cdda_get_status`, `cdrom_bios_cdda_get_status_async` |
 
 The raw constructors do not inherit the filesystem's selection or the BIOS
 sector-size setting. Use the format-selecting `gdrom_direct_*` constructors
@@ -21,12 +23,22 @@ Shutting down and reinitializing the filesystem restores the direct default.
 Enum values are unchanged; zero still means an explicit BIOS selection, not
 "use the default".
 
+Seek and typed CDDA queries likewise do not inherit `/cd` selection. Direct
+async calls require a nonzero timeout; the explicit BIOS calls retain zero
+for no timeout. The synchronous typed query uses a 10000 ms primary-command
+timeout (bounded recovery may take additional time) and preserves the common
+`ERR_*` return vocabulary, including atomically captured drive sense. Use
+`gdrom_direct_cdda_get_status` when a custom timeout or raw trace is needed.
+The BIOS-only internal seek helpers used by explicitly selected BIOS ranges
+and filesystem descriptors are unchanged.
+
 ## Compatibility work still outstanding
 
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
 BIOS-command submission, reinitialization/sector-mode control, synchronous
-reads, legacy streams, and their BIOS request helpers retain their current
-contracts. They require a separate compatibility/routing pass before the fork
+reads, raw subcode, playback controls, legacy streams, and their BIOS request
+helpers retain their current contracts. They require a separate
+compatibility/routing pass before the fork
 can claim that every generic convenience API defaults to direct. Applications
 needing the new direct behavior should use the default paths above or the
 explicit `gdrom_direct_*` API in the meantime.
@@ -50,3 +62,13 @@ example links passed. The 14-check routing probe passed with Flycast v2.7 in
 both interpreter and dynarec modes. The pure SPI packet tests passed with GCC
 14 GNU17/C23 and Clang ASan/UBSan. The full self-boot ISO9660 I/O test and
 physical-drive tests were not run for this policy change.
+
+The follow-up seek/typed-status routing pass adds
+`examples/dreamcast/cdrom/convenience-routing`. All 54 checks pass in both
+Flycast interpreter and dynarec modes, including explicit BIOS paths,
+submission failures without fallback, Q-channel decoding, and error/sense
+translation. The 14-check default probe and four-case G1 ownership probe also
+pass in both modes after relinking. The full SH-4 GCC 16.2 build, both affected
+driver units with `-Werror`, and the request/CDDA-status example builds pass.
+These routing tests use transport spies; live mixed-backend playback and
+physical-drive behavior remain untested in this pass.

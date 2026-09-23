@@ -2232,8 +2232,8 @@ static void direct_request_progress(size_t bytes, void *data) {
     cdrom_request_update_direct_progress(data, bytes);
 }
 
-static int direct_request_result(int error,
-                                 const gdrom_direct_result_t *result) {
+int gdrom_direct_failure_result_internal(
+    int error, const gdrom_direct_result_t *result) {
     if(error == ECANCELED)
         return ERR_ABORTED;
     if(error == ETIMEDOUT)
@@ -2263,7 +2263,7 @@ static int direct_mode_execute(cdrom_request_t *request, void *data) {
 
     if(rv == 0)
         return ERR_OK;
-    return direct_request_result(errno, result);
+    return gdrom_direct_failure_result_internal(errno, result);
 }
 
 cdrom_request_t *gdrom_direct_get_mode_async(
@@ -2331,7 +2331,7 @@ static int direct_reinitialize_execute(cdrom_request_t *request, void *data) {
                 break;
         }
     }
-    return direct_request_result(errno, transport);
+    return gdrom_direct_failure_result_internal(errno, transport);
 }
 
 cdrom_request_t *gdrom_direct_reinitialize_async(
@@ -2378,7 +2378,7 @@ static int direct_cdda_execute(cdrom_request_t *request, void *data) {
 
     if(rv == 0)
         return ERR_OK;
-    return direct_request_result(errno, result);
+    return gdrom_direct_failure_result_internal(errno, result);
 }
 
 static cdrom_request_t *submit_direct_cdda(
@@ -2859,7 +2859,7 @@ static int direct_request_execute(cdrom_request_t *request, void *data) {
                                GAPS_SRAM_DMA_OWNER_G1,
                                &physical_address) < 0) {
             memset(result, 0, sizeof(*result));
-            return direct_request_result(errno, result);
+            return gdrom_direct_failure_result_internal(errno, result);
         }
         pinned = true;
         rv = read_sectors_dma_internal(
@@ -2885,7 +2885,7 @@ static int direct_request_execute(cdrom_request_t *request, void *data) {
     if(rv == 0)
         return ERR_OK;
 
-    return direct_request_result(errno, result);
+    return gdrom_direct_failure_result_internal(errno, result);
 }
 
 cdrom_request_t *gdrom_direct_read_sectors_dma_async(
@@ -2984,7 +2984,7 @@ static int direct_seek_execute(cdrom_request_t *request, void *data) {
     if(seek_internal(seek->fad, seek->timeout, result,
                      direct_request_cancelled, request) == 0)
         return ERR_OK;
-    return direct_request_result(errno, result);
+    return gdrom_direct_failure_result_internal(errno, result);
 }
 
 cdrom_request_t *gdrom_direct_seek_async_internal(

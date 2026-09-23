@@ -1444,6 +1444,13 @@ cdrom_request_t *cdrom_read_sectors_async_internal(
 cdrom_request_t *cdrom_seek_async(
     uint32_t sector, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data) {
+    return gdrom_direct_seek_async(sector, timeout, NULL, callback,
+                                    callback_data);
+}
+
+cdrom_request_t *cdrom_bios_seek_async(
+    uint32_t sector, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data) {
     return cdrom_seek_async_internal(sector, timeout, NULL, NULL, callback,
                                      callback_data);
 }
@@ -1704,6 +1711,14 @@ void cdrom_decode_cdda_status_internal(
 }
 
 int cdrom_cdda_get_status(cdrom_cdda_status_t *status) {
+    gdrom_direct_result_t transport = { 0 };
+
+    if(gdrom_direct_cdda_get_status(status, 10000, &transport) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, &transport);
+}
+
+int cdrom_bios_cdda_get_status(cdrom_cdda_status_t *status) {
     uint8_t subcode[14];
     int result;
 
@@ -1731,6 +1746,13 @@ static void cdda_status_finalize(
 }
 
 cdrom_request_t *cdrom_cdda_get_status_async(
+    cdrom_cdda_status_t *status, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data) {
+    return gdrom_direct_cdda_get_status_async(
+        status, timeout, NULL, callback, callback_data);
+}
+
+cdrom_request_t *cdrom_bios_cdda_get_status_async(
     cdrom_cdda_status_t *status, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data) {
     cdda_status_request_t *cdda;
