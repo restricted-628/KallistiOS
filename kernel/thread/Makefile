@@ -6,6 +6,7 @@
 
 OBJS =  sem.o cond.o mutex.o genwait.o
 OBJS += thread.o rwsem.o once.o tls.o barrier.o
+OBJS += fiber.o fiber_sync.o
 OBJS += oneshot_timer.o worker.o workqueue.o
 SUBDIRS = 
 

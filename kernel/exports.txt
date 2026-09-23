@@ -166,6 +166,30 @@ thd_get_errno
 thd_set_mode
 thd_block_now
 
+# Cooperative fibers (no service executor dependency)
+fiber_attach
+fiber_attach_ex
+fiber_get_attach_flags
+fiber_create
+fiber_destroy
+fiber_switch
+fiber_current
+fiber_main
+fiber_get_data
+fiber_get_state
+fiber_set_switch_callback
+fiber_event_create
+fiber_event_destroy
+fiber_event_wait
+fiber_event_set
+fiber_event_clear
+fiber_event_is_set
+fiber_mutex_create
+fiber_mutex_destroy
+fiber_mutex_lock
+fiber_mutex_trylock
+fiber_mutex_unlock
+
 # Libraries
 #library_print_list
 #library_by_libid

@@ -28,10 +28,16 @@ static uintptr_t arch_stk_scan_end(uintptr_t sp) {
 
     if(thd_current && thd_current->stack && thd_current->stack_size) {
         uintptr_t stack_base = (uintptr_t)thd_current->stack;
-        uintptr_t stack_end = stack_base + thd_current->stack_size;
+        if(sp >= stack_base && sp - stack_base < thd_current->stack_size) {
+            scan_end = stack_base + thd_current->stack_size;
+        }
+        else {
+            size_t stack_size;
 
-        if(sp >= stack_base && sp < stack_end)
-            scan_end = stack_end;
+            if(_thd_continuation_stack_bounds(thd_current, sp, &stack_base,
+                                              &stack_size))
+                scan_end = stack_base + stack_size;
+        }
     }
 
     if(scan_end > _arch_mem_top)

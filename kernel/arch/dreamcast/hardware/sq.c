@@ -11,10 +11,12 @@
 #include <assert.h>
 
 #include <arch/mmu.h>
+#include <arch/fiber.h>
 #include <dc/sq.h>
 #include <kos/cache.h>
 #include <kos/dbglog.h>
 #include <kos/mutex.h>
+#include <kos/thread.h>
 
 
 /*
@@ -54,6 +56,12 @@
     SET_QACR_REGS_INNER(QACR_EXTERN_BITS(dest0), QACR_EXTERN_BITS(dest1))
 
 static mutex_t sq_mutex = RECURSIVE_MUTEX_INITIALIZER;
+
+bool arch_fiber_cooperative_state_switchable(void) {
+    /* Transfer callers mask interrupts. Sibling fibers share a thread identity
+       and must not inherit one another's recursive SQ transaction ownership. */
+    return !thd_current || !sq_mutex.count || sq_mutex.holder != thd_current;
+}
 
 typedef struct sq_state {
     uint32_t dest;

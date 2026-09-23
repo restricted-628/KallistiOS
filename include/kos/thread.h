@@ -261,6 +261,19 @@ typedef struct __attribute__((aligned(32))) kthread {
     void *rv;
 } kthread_t;
 
+/** \cond */
+/* Registered lazily by the cooperative runtime. No fields are added to
+   kthread_t, and ordinary thread-stack checks do not query the resolver. */
+typedef bool (*kthread_continuation_stack_resolver_t)(const kthread_t *thd,
+                                                     uintptr_t sp,
+                                                     uintptr_t *base,
+                                                     size_t *size);
+void _thd_continuation_stack_resolver_set(
+    kthread_continuation_stack_resolver_t resolver);
+bool _thd_continuation_stack_bounds(const kthread_t *thd, uintptr_t sp,
+                                   uintptr_t *base, size_t *size);
+/** \endcond */
+
 /** \brief   Thread creation attributes.
 
     This structure allows you to specify the various attributes for a thread to

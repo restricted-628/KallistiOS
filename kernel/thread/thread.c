@@ -88,6 +88,28 @@ static semaphore_t thd_reap_sem;
 /* Number of threads active in the system. */
 static size_t thd_count = 0;
 
+/* Optional cooperative-context provider. Registration occurs only when a
+   runtime is first attached, so this does not pull the runtime into programs
+   which never use it. No fiber-specific fields are added to kthread_t. */
+static kthread_continuation_stack_resolver_t continuation_stack_resolver;
+
+void _thd_continuation_stack_resolver_set(
+        kthread_continuation_stack_resolver_t resolver) {
+    irq_mask_t old_irq = irq_disable();
+
+    assert_msg(!continuation_stack_resolver ||
+               continuation_stack_resolver == resolver,
+               "Multiple cooperative stack resolvers registered");
+    continuation_stack_resolver = resolver;
+    irq_restore(old_irq);
+}
+
+bool _thd_continuation_stack_bounds(const kthread_t *thd, uintptr_t sp,
+                                   uintptr_t *base, size_t *size) {
+    return continuation_stack_resolver &&
+           continuation_stack_resolver(thd, sp, base, size);
+}
+
 /* The idle task */
 static kthread_t *thd_idle_thd = NULL;
 
@@ -629,14 +651,18 @@ static inline void thd_schedule_inner(kthread_t *thd, uint64_t now) {
     _impure_ptr = &thd->thd_reent;
     thd->state = STATE_RUNNING;
 
-    /* Make sure the thread hasn't underrun its stack */
+    /* Only an SP outside the ordinary thread stack queries the optional
+       cooperative runtime. Preserve soft-gUSA's raw saved restart registers. */
     if(thd_current->stack && thd_current->stack_size) {
-        /* soft-gUSA may temporarily keep a restart marker in raw r15. */
-        if(irq_context_stack_pointer(&thd_current->context) <
-           (uintptr_t)thd_current->stack) {
-            thd_pslist(printf);
-            thd_pslist_queue(printf);
-            assert_msg(0, "Thread stack underrun");
+        uintptr_t stack_base = (uintptr_t)thd_current->stack;
+        uintptr_t sp = irq_context_stack_pointer(&thd_current->context);
+
+        if((sp < stack_base || sp - stack_base > thd_current->stack_size) &&
+           !_thd_continuation_stack_bounds(thd_current, sp, NULL, NULL)) {
+            /* The scheduler may run with VFS stdout unavailable. */
+            thd_pslist(dbgio_printf);
+            thd_pslist_queue(dbgio_printf);
+            assert_msg(0, "Thread context escaped valid stack bounds");
         }
     }
 
