@@ -139,7 +139,10 @@ typedef struct pvr_lighting_extended_stream {
     Ambient and light RGB values remain nonnegative. Light intensity may be
     signed: negative values subtract diffuse light but never create specular
     highlights. Specular uses a Blinn-Phong half vector and an exponent in
-    `[1, 128]`.
+    `[1, 128]`. Its power term uses SH4ZAM's fast `shz_powf` approximation,
+    including for fractional exponents. It does not promise libm-equivalent
+    highlight brightness/width or an exact unit response at a half-vector dot
+    of one. Specular contributions accumulate before final color saturation.
 
     When depth-cue alpha is enabled, Euclidean distance from `view_position`
     is clamped to `[depth_near, depth_far]`, the corresponding near/far factors

@@ -48,14 +48,16 @@ pointer casts. Domain-specific scalar arithmetic, including the scaled robust
 inverse-transpose normal-matrix construction, is not a legacy KOS math call
 and is not replaced with an operation having different failure semantics.
 
-## Pending specular power decision
+## Specular power policy
 
-The one explicit libm transcendental exception is the runtime specular
-`powf` call in `pvr_lighting.c`, pending upstream guidance. This is standard
-libm, not KOS `fmath`. The supported shininess interval is [1, 128], including
-noninteger exponents. SH4ZAM 0.9.0 documents `shz_powf` as an approximation,
-and its runtime path does not preserve the unit endpoint at these exponents.
-An isolated host probe on GCC 14 and Apple Clang produced:
+The runtime specular power calculation in `pvr_lighting.c` now calls
+`shz_powf` directly, with no libm fallback or local modification to SH4ZAM.
+The project deliberately accepts the upstream fast approximation for graphics;
+the supported shininess interval remains [1, 128], including noninteger
+exponents. This removes the previous libm power exception.
+
+The approximation does not preserve the mathematical unit endpoint at these
+exponents. An isolated host probe on GCC 14 and Apple Clang produced:
 
 | Runtime expression | Mathematical result | `shz_powf` result |
 | --- | ---: | ---: |
@@ -64,12 +66,30 @@ An isolated host probe on GCC 14 and Apple Clang produced:
 | 1 raised to 128 | 1 | 163.539 |
 
 Compile-time constant arguments can take a different builtin path. These
-numbers are host evidence, not SH-4 hardware measurements. The lighting
-regression test checks unchanged unit specular response across representative
-integer and fractional shininess values. No upstream fix or intended error
-budget is assumed while waiting for the maintainer's response.
+numbers are host evidence, not SH-4 hardware measurements. Tests now check
+runtime-SH4ZAM agreement for unit and off-axis inputs at integer and fractional
+shininess, zero contribution for nonpositive incidence, and final packed-color
+saturation. They do not require exact unit response or libm agreement.
+Contributions are accumulated before the existing final color saturation;
+there is no added per-light clamp or normalization of the approximation.
 
-## Validation
+Visual highlight quality and the actual lighting-path speedup remain physical-
+hardware validation items. Selecting the faster-design implementation is not
+a claim that either has already been measured on our renderer.
+
+## Specular switch validation
+
+- Lighting and Compact binding regressions pass with GCC 14 GNU17/C23 and
+  Clang AddressSanitizer/UndefinedBehaviorSanitizer.
+- Six downstream suites pass with GCC GNU17: Compact binding, prepared cache,
+  scene integration, skin planning, affine skeletons, and fixed-four scenes.
+- The full GCC 16.2 SH-4 build and SH4ZAM integration-example link pass; the
+  lighting unit also compiles with `-Werror` and has no unresolved `powf` call.
+- The upstream SH4ZAM submodule remains unmodified at the pinned v0.9.0 commit.
+
+These are software checks, not physical-console appearance or speed tests.
+
+## Prior integration validation
 
 - GCC 16.2 SH-4 KOS build and forced integration-example rebuild: passed.
 - All five updated graphics examples build and link.

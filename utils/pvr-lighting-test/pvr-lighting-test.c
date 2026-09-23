@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_lighting.h>
+#include <sh4zam/shz_scalar.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -223,6 +224,20 @@ static void test_lighting(void) {
     assert(memcmp(output, unchanged, sizeof(output)) == 0);
 }
 
+/* Match the selected runtime backend, not an idealized libm power curve.
+   Volatile inputs prevent the upstream constant-expression builtin path. */
+static uint32_t expected_specular(float cosine, float exponent) {
+    volatile float x = cosine;
+    volatile float p = exponent;
+    float power = cosine > 0.0f ? shz_powf(x, p) : 0.0f;
+    uint32_t packed;
+
+    assert(isfinite(power) && power >= 0.0f);
+    assert(pvr_color_pack_argb(&packed, 0.0f, power * 0.5f,
+                               power * 0.25f, power * 0.125f) == 0);
+    return packed;
+}
+
 static void test_extended_lighting(void) {
     pvr_light_t lights[2];
     pvr_light_t reversed[2];
@@ -295,19 +310,29 @@ static void test_extended_lighting(void) {
                                        &result) == 0);
     assert(result.shaded_samples == 1);
     assert(output[0].argb == UINT32_C(0xcc806030));
-    assert(output[0].oargb == UINT32_C(0x00804020));
+    assert(output[0].oargb == expected_specular(1.0f, 17.0f));
 
-    /* A unit half-vector dot must retain unit specular response across the
-       supported shininess range, including runtime (not folded) exponents. */
+    /* Exercise unit and off-axis highlights across supported integer and
+       fractional shininess. Bright approximate results saturate only when
+       packed; we intentionally do not normalize the SH4ZAM power curve. */
     {
         const float exponents[] = { 1.0f, 2.0f, 8.5f, 32.0f, 128.0f };
+        const float cosines[] = { 0.0f, 0.5f, 0.95f, 0.99f, 1.0f };
         for(size_t i = 0; i < sizeof(exponents) / sizeof(*exponents); ++i) {
             context.specular_exponent = exponents[i];
-            assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
-                                               NULL) == 0);
-            assert(output[0].oargb == UINT32_C(0x00804020));
+            for(size_t j = 0; j < sizeof(cosines) / sizeof(*cosines); ++j) {
+                samples[0].normal.x = sqrtf(1.0f - cosines[j] * cosines[j]);
+                samples[0].normal.z = cosines[j];
+                assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
+                                                   NULL) == 0);
+                assert(output[0].oargb == expected_specular(cosines[j], exponents[i]));
+            }
         }
+        assert(output[0].oargb == UINT32_C(0x00ffffff));
+        samples[0].normal.x = 0.0f;
+        samples[0].normal.z = 1.0f;
         context.specular_exponent = 17.0f;
+        assert(pvr_lighting_apply_extended(output, 2, &stream, &context, NULL) == 0);
     }
 
     /* Swapping these exact bright/dark terms must not expose intermediate
@@ -324,7 +349,7 @@ static void test_extended_lighting(void) {
     assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
                                        &result) == 0);
     assert(output[0].argb == UINT32_C(0x7a806030));
-    assert(output[0].oargb == UINT32_C(0x00804020));
+    assert(output[0].oargb == expected_specular(1.0f, 17.0f));
 
     /* A malformed later sample retains the complete first output. */
     stream.sample_count = 2;

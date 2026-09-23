@@ -8,6 +8,7 @@
 #include <dc/pvr_chunk_layer_asset.h>
 
 #include <assert.h>
+#include <sh4zam/shz_scalar.h>
 #include <errno.h>
 #include <float.h>
 #include <math.h>
@@ -514,7 +515,18 @@ static void test_render_policy_binding(void) {
         &binding) == 0);
     assert(vertex.u == 0.5f && vertex.v == 0.75f);
     assert(vertex.argb == UINT32_C(0x7a806030));
-    assert(vertex.oargb == UINT32_C(0x00804020));
+    {
+        /* Compact exponent encoding is 1 + the stored byte. Preserve the
+           selected runtime SH4ZAM response through material color packing. */
+        volatile float cosine = 1.0f;
+        volatile float exponent = 1.0f + state.specular_exponent;
+        float scale = 0.5f * shz_powf(cosine, exponent);
+        uint32_t expected;
+        assert(pvr_color_pack_argb(&expected, 0.0f, scale,
+                                   scale * (128.0f / 255.0f),
+                                   scale * (64.0f / 255.0f)) == 0);
+        assert(vertex.oargb == expected);
+    }
     assert(policy_vertex_calls == 1);
 
     state.strip_flags = PVR_CHUNK_STRIP_IGNORE_LIGHT |

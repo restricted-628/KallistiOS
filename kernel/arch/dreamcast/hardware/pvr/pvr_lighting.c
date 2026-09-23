@@ -788,10 +788,10 @@ static int lighting_apply_extended(
                                        half_y * half_reciprocal_length,
                                        half_z * half_reciprocal_length);
                     if(normal_half > 0.0f) {
-                        /* Keep libm precision for arbitrary shininess in
-                           [1, 128]. SH4ZAM 0.9.0's approximate shz_powf does
-                           not preserve this lobe's range or x=1 endpoint. */
-                        specular_scale = powf(saturate(normal_half),
+                        /* Deliberately use SH4ZAM's fast approximation.
+                           Accumulate first; normal color packing saturates
+                           the final result, not each light's contribution. */
+                        specular_scale = shz_powf(saturate(normal_half),
                             context->specular_exponent) * light->intensity *
                             attenuation * sample->specular_intensity;
                         if(!isfinite(specular_scale) ||

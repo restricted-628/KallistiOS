@@ -11,6 +11,11 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Switched extended specular lighting to SH4ZAM's `shz_powf`, removing its libm
+  power exception. This deliberately accepts the fast approximation for both
+  integer and fractional shininess; contributions still saturate only at final
+  color packing. Rendered quality and SH-4 speedup await hardware validation.
+
 * Changed this fork's `/cd`, media-sampler, raw-range, and staged-session
   defaults to direct disc access. BIOS filesystem access now requires explicit
   selection; `cdrom_bios_sector_range_open` and
