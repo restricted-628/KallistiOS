@@ -119,6 +119,8 @@ static inline void mmu_ldtlb_wait(void) {
 void mmu_reset_itlb(void);
 void mmu_invalidate_tlb(uint32_t virt, uint32_t asid);
 void mmu_set_sq_addr_asm(uint32_t ptel1, uint32_t ptel2);
+/* P2 address-array scan; independent of virtual cache color and active ASID. */
+void mmu_purge_phys_page(uint32_t physical);
 
 /* Defined below */
 static mmupage_t *map_virt(mmucontext_t *context, int virtpage);
@@ -188,7 +190,7 @@ void mmu_context_destroy(mmucontext_t *context) {
                         uintptr_t physical =
                             (uintptr_t)page->physical << MMU_IND_BITS;
 
-                        dcache_purge_range(physical | 0x80000000u, PAGESIZE);
+                        mmu_purge_phys_page(physical);
                     }
 
                     mmu_invalidate_tlb(virtpage << MMU_IND_BITS,
@@ -324,9 +326,10 @@ static void purge_cached_range(mmucontext_t *context,
             uintptr_t physical =
                 (uintptr_t)page->physical << MMU_IND_BITS;
 
-            /* P1 spans the complete 29-bit physical address space and lets
-               the cache operation retire lines from an inactive context. */
-            dcache_purge_range(physical | 0x80000000u, PAGESIZE);
+            /* The virtual index may differ from P1's physical index, both
+               with 4 KiB coloring and with OIX virtual bit 25. Scan tags so
+               inactive contexts and opposite-color dirty lines retire too. */
+            mmu_purge_phys_page(physical);
         }
     }
 }
@@ -1008,6 +1011,8 @@ void mmu_init_basic(void) {
      * later. */
     mmu_page_map_static(0xe0100000, 0, PAGE_SIZE_1M, MMU_KERNEL_RDWR, false);
     mmu_page_map_static(0xe0000000, 0, PAGE_SIZE_1M, MMU_KERNEL_RDWR, false);
+    /* Kernel SQ mappings are global, not tied to startup ASID zero. */
+    mmu_set_sq_addr(NULL);
 
     /* Clear the ITLB */
     mmu_reset_itlb();
@@ -1074,5 +1079,7 @@ void mmu_set_sq_addr(void *addr) {
     uint32_t ppn2 = ppn1 + 0x00100000;
 
     /* Direct TLB array writes are only architecturally guaranteed from P2. */
-    mmu_set_sq_addr_asm(ppn1 | 0x1fc, ppn2 | 0x1fc);
+    /* SH=1 keeps these kernel-owned mappings usable after selecting a
+       translated decoder context with a nonzero ASID. SQMD still bars users. */
+    mmu_set_sq_addr_asm(ppn1 | 0x1fe, ppn2 | 0x1fe);
 }

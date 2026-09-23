@@ -5,6 +5,7 @@
 */
 
 #include <dc/matrix3d.h>
+#include <sh4zam/shz_xmtrx.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -53,11 +54,13 @@ static void fill_matrix(matrix_t *matrix, float value) {
     }
 }
 
-void mat_apply(const matrix_t *src) {
-    matrix_t result;
+static void load_current(const matrix_t *src) {
+    shz_xmtrx_load_unaligned_4x4((const float *)*src);
+}
 
-    assert(mat_compose(&result, &current_matrix, src) == 0);
-    memcpy(&current_matrix, &result, sizeof(current_matrix));
+static void expect_current(const matrix_t *expected) {
+    shz_xmtrx_store_unaligned_4x4((float *)current_matrix);
+    expect_matrix(&current_matrix, expected);
 }
 
 static void test_compose(void) {
@@ -120,9 +123,9 @@ static void test_perspective(void) {
     assert(mat_perspective_build(&result, &desc) == 0);
     expect_matrix(&result, &expected);
 
-    memcpy(&current_matrix, &identity, sizeof(current_matrix));
+    load_current(&identity);
     assert(mat_perspective_apply(&desc) == 0);
-    expect_matrix(&current_matrix, &expected);
+    expect_current(&expected);
 
     fill_matrix(&unchanged, 19.0f);
     memcpy(&result, &unchanged, sizeof(result));
@@ -145,10 +148,10 @@ static void test_perspective(void) {
     assert(mat_perspective_build(&result, &desc) == -1 && errno == ERANGE);
     assert(memcmp(&result, &unchanged, sizeof(result)) == 0);
 
-    memcpy(&current_matrix, &identity, sizeof(current_matrix));
+    load_current(&identity);
     errno = 0;
     assert(mat_perspective_apply(&desc) == -1 && errno == ERANGE);
-    expect_matrix(&current_matrix, &identity);
+    expect_current(&identity);
 
     errno = 0;
     assert(mat_perspective_build(NULL, &desc) == -1 && errno == EINVAL);
@@ -174,9 +177,9 @@ static void test_lookat(void) {
     assert(mat_lookat_build(&result, &desc) == 0);
     expect_matrix(&result, &expected);
 
-    memcpy(&current_matrix, &identity, sizeof(current_matrix));
+    load_current(&identity);
     assert(mat_lookat_apply(&desc) == 0);
-    expect_matrix(&current_matrix, &expected);
+    expect_current(&expected);
 
     fill_matrix(&unchanged, 23.0f);
     memcpy(&result, &unchanged, sizeof(result));
@@ -200,10 +203,10 @@ static void test_lookat(void) {
     assert(mat_lookat_build(&result, &desc) == -1 && errno == ERANGE);
     assert(memcmp(&result, &unchanged, sizeof(result)) == 0);
 
-    memcpy(&current_matrix, &identity, sizeof(current_matrix));
+    load_current(&identity);
     errno = 0;
     assert(mat_lookat_apply(&desc) == -1 && errno == ERANGE);
-    expect_matrix(&current_matrix, &identity);
+    expect_current(&identity);
 
     errno = 0;
     assert(mat_lookat_build(NULL, &desc) == -1 && errno == EINVAL);

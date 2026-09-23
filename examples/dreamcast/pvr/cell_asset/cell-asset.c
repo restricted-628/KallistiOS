@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <sh4zam/shz_trig.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -161,7 +162,7 @@ int main(int argc, char **argv) {
         size_t produced_total = 0;
         float time = (float)frame / 60.0f;
 
-        sprite.rotation = 0.06f * sinf(time * 1.5f);
+        sprite.rotation = 0.06f * shz_sinf(time * 1.5f);
         assert(pvr_cell_stream_list_sample(
             &sprite, &runtime.stream_list, time, sampled, sample_workspace,
             CELL_COUNT, &sample_result) == 0);

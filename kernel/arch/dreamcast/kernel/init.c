@@ -21,6 +21,7 @@
 #include <kos/platform.h>
 #include <kos/timer.h>
 #include <arch/arch.h>
+#include <arch/mmu.h>
 #include <arch/gdb.h>
 #include <arch/rtc.h>
 #include <dc/cache.h>
@@ -146,6 +147,21 @@ KOS_INIT_FLAG_WEAK(fs_rnd_shutdown, true);
 KOS_INIT_FLAG_WEAK(library_init, true);
 KOS_INIT_FLAG_WEAK(library_shutdown, true);
 
+/* P1 kernel code/data keep their direct mapping. Applications explicitly map
+   P0 workspaces; enabling translation does not create a process address space. */
+void arch_init_mmu(void) {
+    if(!mmu_enabled())
+        mmu_init();
+}
+
+void arch_shutdown_mmu(void) {
+    if(mmu_enabled())
+        mmu_shutdown();
+}
+
+KOS_INIT_FLAG_WEAK(arch_init_mmu, true);
+KOS_INIT_FLAG_WEAK(arch_shutdown_mmu, true);
+
 /* Auto-init stuff: override with a non-weak symbol if you don't want all of
    this to be linked into your code (and do the same with the
    arch_auto_shutdown function too). */
@@ -157,6 +173,8 @@ int  __weak_symbol arch_auto_init(void) {
        and use ints for dbgio receive. */
     irq_init();         /* IRQs */
     irq_disable();      /* Turn on exceptions */
+
+    KOS_INIT_FLAG_CALL(arch_init_mmu);
 
     ubc_init();
 
@@ -280,6 +298,7 @@ void  __weak_symbol arch_auto_shutdown(void) {
     /* Nothing below this point needs a thread, callback, or interrupt-driven
        hardware cleanup operation. */
     irq_disable();
+    KOS_INIT_FLAG_CALL(arch_shutdown_mmu);
     timer_shutdown();
     rtc_shutdown();
 }

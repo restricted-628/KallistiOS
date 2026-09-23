@@ -44,7 +44,7 @@ compose-bench.o: compose-bench.c compose-candidate.h
 compose-candidate.o: compose-candidate.c compose-candidate.h
 	kos-cc -fno-fast-math -fno-lto -c $< -o $@
 
-# Direct API regression: PR #70 fixes the failure in the official 0.8.1 pin.
+# Direct API regression: v0.9.0 fixes the original 0.8.1 failure.
 # Keep the caller separate from its strict validator and disable LTO.
 fast-trig-probe.elf: fast-trig-probe.o fast-trig-call.o
 	kos-cc -fno-fast-math -fno-lto -o $@ $^
@@ -55,7 +55,7 @@ fast-trig-call.o: fast-trig-call.c
 fast-trig-probe.o: fast-trig-probe.c
 	kos-cc -fno-fast-math -fno-lto -c $< -o $@
 
-# KOS helper regression: keep the validator strict and calls in separate TUs
+# Upstream API and KOS helper regression: strict validator, separate TUs
 # without LTO so runtime arguments cannot become constant-folded test cases.
 U16_OBJS = u16-trig-test.o u16-trig-strict.o u16-trig-fast.o \
            u16-trig-ofast.o u16-trig-cpp.o

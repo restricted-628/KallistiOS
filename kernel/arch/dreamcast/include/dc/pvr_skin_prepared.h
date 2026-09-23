@@ -25,7 +25,8 @@ typedef struct pvr_skin_prepared_joint {
 
 /** \brief Immutable snapshot referencing caller-owned imported joints.
 
-    Initialize only with pvr_skin_palette_prepare(). Neither the descriptor
+    Initialize only with pvr_skin_palette_prepare() or
+    pvr_chunk_skeleton_palette_build_affine(). Neither the descriptor
     nor its joint storage may change during application. Source KOS matrices
     are copied, not borrowed, and may be changed or released after preparation.
     Reprepare after sampling a new pose; reuse the snapshot across all meshes

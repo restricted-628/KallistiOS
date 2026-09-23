@@ -7,9 +7,7 @@
 #include <dc/pvr_geometry.h>
 #include "pvr_geometry_internal.h"
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -93,7 +91,6 @@ static int project_position(const matrix_t *matrix, float x, float y, float z,
         errno = EDOM;
         return -1;
     }
-#ifdef __DREAMCAST__
     (void)matrix;
     {
         shz_vec4_t transformed = shz_xmtrx_transform_vec4(
@@ -103,14 +100,6 @@ static int project_position(const matrix_t *matrix, float x, float y, float z,
         ty = transformed.y;
         tw = transformed.w;
     }
-#else
-    tx = (*matrix)[0][0] * x + (*matrix)[1][0] * y +
-         (*matrix)[2][0] * z + (*matrix)[3][0];
-    ty = (*matrix)[0][1] * x + (*matrix)[1][1] * y +
-         (*matrix)[2][1] * z + (*matrix)[3][1];
-    tw = (*matrix)[0][3] * x + (*matrix)[1][3] * y +
-         (*matrix)[2][3] * z + (*matrix)[3][3];
-#endif
     if(!isfinite(tx) || !isfinite(ty) || !isfinite(tw)) {
         errno = ERANGE;
         return -1;
@@ -133,14 +122,12 @@ static int project_position(const matrix_t *matrix, float x, float y, float z,
 int pvr_geometry_project_packed_inplace(void *vertices, size_t count,
                                        size_t stride, const matrix_t *matrix) {
     int status = 0;
-#ifdef __DREAMCAST__
     shz_mat4x4_t saved_xmtrx;
     shz_mat4x4_t transform;
 
     shz_kos_matrix_import(&transform, matrix);
     shz_xmtrx_store_4x4(&saved_xmtrx);
     shz_xmtrx_load_4x4(&transform);
-#endif
     for(size_t i = 0; i < count; ++i) {
         uint8_t *packet = (uint8_t *)vertices + i * stride;
         float x, y, z;
@@ -156,9 +143,7 @@ int pvr_geometry_project_packed_inplace(void *vertices, size_t count,
         memcpy(packet + 8u, &y, sizeof(y));
         memcpy(packet + 12u, &z, sizeof(z));
     }
-#ifdef __DREAMCAST__
     shz_xmtrx_load_4x4(&saved_xmtrx);
-#endif
     return status;
 }
 
@@ -166,14 +151,12 @@ int pvr_geometry_project_modifier_inplace(pvr_modifier_vol_t *triangle,
                                          const matrix_t *matrix) {
     float ax, ay, az, bx, by, bz, cx, cy, cz;
     int status;
-#ifdef __DREAMCAST__
     shz_mat4x4_t saved_xmtrx;
     shz_mat4x4_t transform;
 
     shz_kos_matrix_import(&transform, matrix);
     shz_xmtrx_store_4x4(&saved_xmtrx);
     shz_xmtrx_load_4x4(&transform);
-#endif
     status = project_position(matrix, triangle->ax, triangle->ay, triangle->az,
                               &ax, &ay, &az);
     if(!status)
@@ -182,9 +165,7 @@ int pvr_geometry_project_modifier_inplace(pvr_modifier_vol_t *triangle,
     if(!status)
         status = project_position(matrix, triangle->cx, triangle->cy,
                                   triangle->cz, &cx, &cy, &cz);
-#ifdef __DREAMCAST__
     shz_xmtrx_load_4x4(&saved_xmtrx);
-#endif
     if(status < 0)
         return -1;
     triangle->ax = ax;
@@ -210,10 +191,8 @@ int pvr_geometry_project_vertices(
     size_t output_bytes;
     size_t vertex_size;
     size_t i;
-#ifdef __DREAMCAST__
     shz_mat4x4_t saved_xmtrx;
     shz_mat4x4_t transform;
-#endif
 
     if(result)
         *result = progress;
@@ -270,14 +249,12 @@ int pvr_geometry_project_vertices(
         return -1;
     }
 
-#ifdef __DREAMCAST__
     /* A geometry stream amortizes one XMTRX load across every vertex. Preserve
        the caller's matrix so this checked memory-to-memory API remains free of
        observable accelerator state even on a rejected vertex. */
     shz_kos_matrix_import(&transform, matrix);
     shz_xmtrx_store_4x4(&saved_xmtrx);
     shz_xmtrx_load_4x4(&transform);
-#endif
 
     for(i = 0; i < stream->vertex_count; ++i) {
         const uint8_t *source = (const uint8_t *)stream->vertices +
@@ -378,18 +355,14 @@ int pvr_geometry_project_vertices(
         ++progress.produced_vertices;
     }
 
-#ifdef __DREAMCAST__
     shz_xmtrx_load_4x4(&saved_xmtrx);
-#endif
     if(result)
         *result = progress;
 
     return 0;
 
 fail:
-#ifdef __DREAMCAST__
     shz_xmtrx_load_4x4(&saved_xmtrx);
-#endif
     if(result)
         *result = progress;
 
@@ -469,11 +442,7 @@ int pvr_geometry_expand_line(
             *result = progress;
         return 0;
     }
-#ifdef __DREAMCAST__
     inverse_length = shz_inv_sqrtf_fsrra(length_squared);
-#else
-    inverse_length = 1.0f / sqrtf(length_squared);
-#endif
     scale = inverse_length * width * 0.5f;
     nx = -dy * scale;
     ny = dx * scale;

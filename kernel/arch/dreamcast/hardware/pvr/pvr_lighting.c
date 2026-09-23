@@ -6,9 +6,7 @@
 
 #include <dc/pvr_lighting.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -159,9 +157,7 @@ int pvr_normal_transform(vector_t *output, size_t output_capacity,
     size_t column;
     size_t row;
     size_t i;
-#ifdef __DREAMCAST__
     shz_mat3x3_t transform;
-#endif
 
     if(result)
         *result = progress;
@@ -214,16 +210,13 @@ int pvr_normal_transform(vector_t *output, size_t output_capacity,
         return -1;
     }
 
-#ifdef __DREAMCAST__
     memcpy(&transform, matrix, sizeof(transform));
-#endif
 
     for(i = 0; i < stream->normal_count; ++i) {
         const vector_t *source = (const vector_t *)
             ((const uint8_t *)stream->normals + i * stream->stride);
         vector_t normal;
         float length_squared;
-#ifdef __DREAMCAST__
         shz_vec3_t transformed;
 
         transformed = shz_mat3x3_transform_vec3(
@@ -234,34 +227,11 @@ int pvr_normal_transform(vector_t *output, size_t output_capacity,
             errno = EDOM;
             goto fail;
         }
-        transformed = shz_vec3_normalize(transformed);
+        transformed = shz_vec3_scale(transformed,
+                                     shz_inv_sqrtf_fsrra(length_squared));
         normal.x = transformed.x;
         normal.y = transformed.y;
         normal.z = transformed.z;
-#else
-        float reciprocal_length;
-
-        normal.x = matrix->column[0][0] * source->x +
-                   matrix->column[1][0] * source->y +
-                   matrix->column[2][0] * source->z;
-        normal.y = matrix->column[0][1] * source->x +
-                   matrix->column[1][1] * source->y +
-                   matrix->column[2][1] * source->z;
-        normal.z = matrix->column[0][2] * source->x +
-                   matrix->column[1][2] * source->y +
-                   matrix->column[2][2] * source->z;
-        length_squared = normal.x * normal.x + normal.y * normal.y +
-                         normal.z * normal.z;
-        if(!finite3(normal.x, normal.y, normal.z) ||
-           !isfinite(length_squared) || length_squared <= FLT_MIN) {
-            errno = EDOM;
-            goto fail;
-        }
-        reciprocal_length = 1.0f / sqrtf(length_squared);
-        normal.x *= reciprocal_length;
-        normal.y *= reciprocal_length;
-        normal.z *= reciprocal_length;
-#endif
         normal.w = 0.0f;
         if(!finite3(normal.x, normal.y, normal.z)) {
             errno = ERANGE;
@@ -385,12 +355,8 @@ static int context_valid(const pvr_lighting_context_t *context) {
 }
 
 static float dot3(const vector_t *lhs, float x, float y, float z) {
-#ifdef __DREAMCAST__
     return shz_vec3_dot(shz_vec3_init(lhs->x, lhs->y, lhs->z),
                         shz_vec3_init(x, y, z));
-#else
-    return lhs->x * x + lhs->y * y + lhs->z * z;
-#endif
 }
 
 int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
@@ -506,11 +472,7 @@ int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
             if(length_squared <= FLT_MIN)
                 continue;
 
-#ifdef __DREAMCAST__
             reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
-#else
-            reciprocal_length = 1.0f / sqrtf(length_squared);
-#endif
             if(light->kind == PVR_LIGHT_POINT) {
                 float distance = length_squared * reciprocal_length;
                 float denominator;
@@ -718,12 +680,8 @@ static int lighting_apply_extended(
             goto fail;
         }
         if(view_length_squared > FLT_MIN) {
-#ifdef __DREAMCAST__
             view_reciprocal_length = shz_inv_sqrtf_fsrra(
                 view_length_squared);
-#else
-            view_reciprocal_length = 1.0f / sqrtf(view_length_squared);
-#endif
         }
 
         if(context->flags & PVR_LIGHTING_EXTENDED_DEPTH_CUE_ALPHA) {
@@ -773,11 +731,7 @@ static int lighting_apply_extended(
             }
             if(length_squared <= FLT_MIN)
                 continue;
-#ifdef __DREAMCAST__
             reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
-#else
-            reciprocal_length = 1.0f / sqrtf(length_squared);
-#endif
 
             if(light->kind == PVR_LIGHT_POINT) {
                 float distance = length_squared * reciprocal_length;
@@ -827,18 +781,16 @@ static int lighting_apply_extended(
                     float normal_half;
                     float specular_scale;
 
-#ifdef __DREAMCAST__
                     half_reciprocal_length = shz_inv_sqrtf_fsrra(
                         half_length_squared);
-#else
-                    half_reciprocal_length = 1.0f /
-                                             sqrtf(half_length_squared);
-#endif
                     normal_half = dot3(&sample->normal,
                                        half_x * half_reciprocal_length,
                                        half_y * half_reciprocal_length,
                                        half_z * half_reciprocal_length);
                     if(normal_half > 0.0f) {
+                        /* Keep libm precision for arbitrary shininess in
+                           [1, 128]. SH4ZAM 0.9.0's approximate shz_powf does
+                           not preserve this lobe's range or x=1 endpoint. */
                         specular_scale = powf(saturate(normal_half),
                             context->specular_exponent) * light->intensity *
                             attenuation * sample->specular_intensity;

@@ -6,9 +6,7 @@
 
 #include <dc/pvr_particle.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -410,15 +408,10 @@ int pvr_particle_emit_sprite_instances(
 }
 
 static void particle_sincos(float angle, float *sine, float *cosine) {
-#ifdef __DREAMCAST__
     shz_sincos_t value = shz_sincosf(angle);
 
     *sine = value.sin;
     *cosine = value.cos;
-#else
-    *sine = sinf(angle);
-    *cosine = cosf(angle);
-#endif
 }
 
 static void set_vertex(pvr_vertex_t *vertex, const point_t *position,
@@ -588,9 +581,6 @@ static int trail_segment(const pvr_particle_t *first,
                    description->facing.y * dx;
     float side_length_squared = side_x * side_x + side_y * side_y +
                                 side_z * side_z;
-#ifndef __DREAMCAST__
-    float inverse_side_length;
-#endif
     float first_half_width;
     float second_half_width;
     point_t corner[4];
@@ -602,21 +592,14 @@ static int trail_segment(const pvr_particle_t *first,
     }
     if(length_squared <= FLT_MIN || side_length_squared <= FLT_MIN)
         return 0;
-#ifdef __DREAMCAST__
     {
-        shz_vec3_t side = shz_vec3_normalize(
-            shz_vec3_init(side_x, side_y, side_z));
+        shz_vec3_t side = shz_vec3_scale(shz_vec3_init(side_x, side_y, side_z),
+                                        shz_inv_sqrtf_fsrra(side_length_squared));
 
         side_x = side.x;
         side_y = side.y;
         side_z = side.z;
     }
-#else
-    inverse_side_length = 1.0f / sqrtf(side_length_squared);
-    side_x *= inverse_side_length;
-    side_y *= inverse_side_length;
-    side_z *= inverse_side_length;
-#endif
     first_half_width = description->width * first->scale_x * 0.5f;
     second_half_width = description->width * second->scale_x * 0.5f;
     if(!finite3(side_x, side_y, side_z) ||

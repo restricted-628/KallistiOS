@@ -9,10 +9,6 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 SUBMODULE = "addons/libsh4zam/upstream"
 UPSTREAM_URL = "https://github.com/gyrovorbis/sh4zam.git"
-# Temporary exception for https://github.com/gyrovorbis/sh4zam/pull/70.
-# Remove this exception when returning to an official upstream revision.
-PR70_URL = "https://github.com/restricted-628/sh4zam.git"
-PR70_REVISION = "0c1ccb5f5614314e36e2fec3179c8ca3ae844770"
 
 
 def git(root, *args):
@@ -33,8 +29,8 @@ def verify(root):
     revision = entry[1]
     url = git(root, "config", "--file", ".gitmodules", "--get",
               f"submodule.{SUBMODULE}.url")
-    if url != UPSTREAM_URL and (url, revision) != (PR70_URL, PR70_REVISION):
-        raise ValueError("SH4ZAM source is neither official upstream nor the exact approved PR #70 pin")
+    if url != UPSTREAM_URL:
+        raise ValueError("SH4ZAM source must use the official repository")
     if Path(git(upstream, "rev-parse", "--show-toplevel")).resolve() != upstream:
         raise ValueError("SH4ZAM path is not its own repository")
     if git(upstream, "rev-parse", "HEAD") != revision:

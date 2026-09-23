@@ -6,9 +6,7 @@
 
 #include <dc/collision.h>
 
-#ifdef __DREAMCAST__
-#include <dc/fmath.h>
-#endif
+#include <sh4zam/shz_vector.h>
 
 #include <errno.h>
 #include <float.h>
@@ -52,30 +50,21 @@ static xyz_t subtract(const point_t *lhs, const point_t *rhs) {
 }
 
 static xyz_t cross(xyz_t lhs, xyz_t rhs) {
-    xyz_t value = {
-        lhs.y * rhs.z - lhs.z * rhs.y,
-        lhs.z * rhs.x - lhs.x * rhs.z,
-        lhs.x * rhs.y - lhs.y * rhs.x
-    };
+    shz_vec3_t product = shz_vec3_cross(shz_vec3_init(lhs.x, lhs.y, lhs.z),
+                                      shz_vec3_init(rhs.x, rhs.y, rhs.z));
+    xyz_t value = { product.x, product.y, product.z };
 
     return value;
 }
 
 static float dot(xyz_t lhs, xyz_t rhs) {
-#ifdef __DREAMCAST__
-    return fipr(lhs.x, lhs.y, lhs.z, 0.0f,
-                rhs.x, rhs.y, rhs.z, 0.0f);
-#else
-    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
-#endif
+    return shz_vec3_dot(shz_vec3_init(lhs.x, lhs.y, lhs.z),
+                        shz_vec3_init(rhs.x, rhs.y, rhs.z));
 }
 
 static float magnitude_squared(xyz_t value) {
-#ifdef __DREAMCAST__
-    return fipr_magnitude_sqr(value.x, value.y, value.z, 0.0f);
-#else
-    return dot(value, value);
-#endif
+    shz_vec3_t vector = shz_vec3_init(value.x, value.y, value.z);
+    return shz_vec3_dot(vector, vector);
 }
 
 static float clamp01(float value) {
@@ -133,11 +122,7 @@ static int unit_xyz(xyz_t input, xyz_t *output) {
         errno = ERANGE;
         return -1;
     }
-#ifdef __DREAMCAST__
-    inverse_length = frsqrt(length_squared);
-#else
-    inverse_length = 1.0f / sqrtf(length_squared);
-#endif
+    inverse_length = shz_inv_sqrtf_fsrra(length_squared);
     output->x = input.x * inverse_length;
     output->y = input.y * inverse_length;
     output->z = input.z * inverse_length;
@@ -476,11 +461,7 @@ int collision_plane_from_points(const point_t *first, const point_t *second,
         return -1;
     }
 
-#ifdef __DREAMCAST__
-    inverse_length = frsqrt(length_squared);
-#else
-    inverse_length = 1.0f / sqrtf(length_squared);
-#endif
+    inverse_length = shz_inv_sqrtf_fsrra(length_squared);
     normal.x *= inverse_length;
     normal.y *= inverse_length;
     normal.z *= inverse_length;
@@ -758,7 +739,7 @@ int collision_ray_intersects_triangle(
     direction_cross = cross(direction, second_edge);
     determinant = dot(first_edge, direction_cross);
     limit = 64.0f * FLT_EPSILON *
-            sqrtf(magnitude_squared(first_edge) *
+            shz_sqrtf(magnitude_squared(first_edge) *
                   magnitude_squared(second_edge));
     if(!isfinite(determinant) || !isfinite(limit)) {
         errno = ERANGE;

@@ -11,6 +11,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <sh4zam/shz_trig.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -353,7 +354,7 @@ static int render_asset(
 
         morph_target.deltas = shape_source.deltas;
         morph_target.stride = sizeof(shape_source.deltas[0]);
-        morph_target.weight = 0.5f + 0.5f * sinf(time * F_PI * 2.0f);
+        morph_target.weight = 0.5f + 0.5f * shz_sinf(time * F_PI * 2.0f);
         if(pvr_chunk_shape_apply(&shape_source, &morph_target, 1,
                                  morphed, 3, &deform_result) < 0)
             goto render_fail;

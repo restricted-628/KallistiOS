@@ -22,3 +22,5 @@ test: $(TARGET)
 
 clean:
 	rm -rf $(TARGET) $(TARGET).dSYM
+
+include ../Makefile.sh4zam-state

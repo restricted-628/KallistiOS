@@ -6,9 +6,7 @@
 
 #include <dc/pvr_toon.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -25,38 +23,22 @@ static int finite_vector(const vector_t *value) {
 
 static int normalize_xyz(vector_t *output, const vector_t *input) {
     float length_squared;
-#ifdef __DREAMCAST__
     shz_vec3_t value;
-#else
-    float reciprocal;
-#endif
 
     if(!finite_vector(input)) {
         errno = EDOM;
         return -1;
     }
-#ifdef __DREAMCAST__
     value = shz_vec3_init(input->x, input->y, input->z);
     length_squared = shz_vec3_dot(value, value);
-#else
-    length_squared = input->x * input->x + input->y * input->y +
-                     input->z * input->z;
-#endif
     if(!isfinite(length_squared) || length_squared <= FLT_MIN) {
         errno = EDOM;
         return -1;
     }
-#ifdef __DREAMCAST__
-    value = shz_vec3_normalize(value);
+    value = shz_vec3_scale(value, shz_inv_sqrtf_fsrra(length_squared));
     output->x = value.x;
     output->y = value.y;
     output->z = value.z;
-#else
-    reciprocal = 1.0f / sqrtf(length_squared);
-    output->x = input->x * reciprocal;
-    output->y = input->y * reciprocal;
-    output->z = input->z * reciprocal;
-#endif
     output->w = 0.0f;
     if(!isfinite(output->x) || !isfinite(output->y) ||
        !isfinite(output->z)) {
@@ -72,13 +54,8 @@ static int ranges_overlap(uintptr_t first, size_t first_bytes,
 }
 
 static float vector_dot(const vector_t *first, const vector_t *second) {
-#ifdef __DREAMCAST__
     return shz_vec3_dot(shz_vec3_init(first->x, first->y, first->z),
                         shz_vec3_init(second->x, second->y, second->z));
-#else
-    return first->x * second->x + first->y * second->y +
-           first->z * second->z;
-#endif
 }
 
 static int shade_admitted(float *shade, const vector_t *unit_normal,
@@ -670,7 +647,6 @@ int pvr_toon_outline_expand(point_t *output, const point_t *position,
         errno = EINVAL;
         return -1;
     }
-#ifdef __DREAMCAST__
     {
         shz_vec3_t source = shz_vec3_init(normal->x, normal->y, normal->z);
         shz_vec3_t result;
@@ -682,28 +658,11 @@ int pvr_toon_outline_expand(point_t *output, const point_t *position,
         }
         result = shz_vec3_add(
             shz_vec3_init(position->x, position->y, position->z),
-            shz_vec3_scale(shz_vec3_normalize(source), distance));
+            shz_vec3_scale(source, distance * shz_inv_sqrtf_fsrra(length_squared)));
         expanded.x = result.x;
         expanded.y = result.y;
         expanded.z = result.z;
     }
-#else
-    {
-        float reciprocal;
-
-        length_squared = normal->x * normal->x +
-                         normal->y * normal->y +
-                         normal->z * normal->z;
-        if(!isfinite(length_squared) || length_squared <= FLT_MIN) {
-            errno = EDOM;
-            return -1;
-        }
-        reciprocal = distance / sqrtf(length_squared);
-        expanded.x = position->x + normal->x * reciprocal;
-        expanded.y = position->y + normal->y * reciprocal;
-        expanded.z = position->z + normal->z * reciprocal;
-    }
-#endif
     expanded.w = 1.0f;
     if(!finite_vector(&expanded)) {
         errno = ERANGE;

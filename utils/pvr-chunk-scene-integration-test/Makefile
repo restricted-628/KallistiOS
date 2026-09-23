@@ -25,6 +25,7 @@ SOURCES = $(EXAMPLE)/chunk-scene.c host-support.c \
           $(PVR)/pvr_chunk_layer_asset.c \
           $(PVR)/pvr_chunk_uv_asset.c \
           $(PVR)/pvr_chunk_skin_asset.c $(PVR)/pvr_chunk_skeleton_asset.c \
+          $(PVR)/pvr_chunk_skeleton_affine.c \
           $(PVR)/pvr_chunk_shape.c $(PVR)/pvr_chunk_shape_asset.c \
           $(PVR)/pvr_chunk_animation_asset.c \
           $(PVR)/pvr_chunk_morph_animation_asset.c \
@@ -70,3 +71,5 @@ test: $(TARGET) fixture.pcm $(GRID_TARGET) skin-grid.pcm $(CLIP_TARGET)
 
 clean:
 	rm -f $(TARGET) fixture.pcm $(GRID_TARGET) $(CLIP_TARGET) skin-grid.gltf skin-grid.pcm
+
+include ../Makefile.sh4zam-state

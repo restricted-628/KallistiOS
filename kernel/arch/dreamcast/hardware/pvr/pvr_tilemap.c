@@ -6,9 +6,7 @@
 
 #include <dc/pvr_tilemap.h>
 #include <dc/pvr_frustum.h>
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -116,14 +114,9 @@ static int prepare(const pvr_tilemap_t *map, const pvr_tilemap_view_t *view,
         return -1;
     window->sources[4] = *view_range;
 
-#ifdef __DREAMCAST__
     shz_sincos_t angle = shz_sincosf(view->rotation);
     sine = angle.sin;
     cosine = angle.cos;
-#else
-    sine = sinf(view->rotation);
-    cosine = cosf(view->rotation);
-#endif
     window->a = cosine * view->scale_x;
     window->b = -sine * view->scale_y;
     window->c = sine * view->scale_x;

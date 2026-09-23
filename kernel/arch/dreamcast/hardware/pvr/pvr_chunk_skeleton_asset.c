@@ -6,7 +6,7 @@
 
 #include <dc/pvr_chunk_skeleton_asset.h>
 
-#include <dc/matrix.h>
+#include <dc/sh4zam.h>
 
 #include <errno.h>
 #include <math.h>
@@ -354,19 +354,18 @@ int pvr_chunk_skeleton_palette_build(
             errno = EDOM;
             return -1;
         }
-        if(mat_compose(&position, &world_matrices[joint->node_index],
-                       &joint->inverse_bind) < 0 ||
-           pvr_normal_matrix_build(&normal, &position) < 0)
+        shz_kos_matrix_compose_unchecked(&position,
+            &world_matrices[joint->node_index], &joint->inverse_bind);
+        if(pvr_normal_matrix_build(&normal, &position) < 0)
             return -1;
     }
 
     for(index = 0; index < skeleton->joint_count; ++index) {
         const pvr_chunk_skeleton_joint_t *joint = &skeleton->joints[index];
 
-        if(mat_compose(&position_matrices[index],
-                       &world_matrices[joint->node_index],
-                       &joint->inverse_bind) < 0 ||
-           pvr_normal_matrix_build(&normal_matrices[index],
+        shz_kos_matrix_compose_unchecked(&position_matrices[index],
+            &world_matrices[joint->node_index], &joint->inverse_bind);
+        if(pvr_normal_matrix_build(&normal_matrices[index],
                                    &position_matrices[index]) < 0)
             return -1;
     }

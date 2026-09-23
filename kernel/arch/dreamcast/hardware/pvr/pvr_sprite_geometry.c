@@ -6,9 +6,7 @@
 
 #include <dc/pvr_sprite_geometry.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -200,17 +198,12 @@ static int build_packet(const pvr_sprite_cell_t *cell,
     float v_bottom = cell->v1;
     size_t i;
 
-#ifdef __DREAMCAST__
     {
         shz_sincos_t value = shz_sincosf(instance->rotation);
 
         sine = value.sin;
         cosine = value.cos;
     }
-#else
-    sine = sinf(instance->rotation);
-    cosine = cosf(instance->rotation);
-#endif
     if(!isfinite(sine) || !isfinite(cosine)) {
         errno = ERANGE;
         return -1;

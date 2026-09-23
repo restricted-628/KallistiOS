@@ -9,6 +9,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <sh4zam/shz_trig.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -218,7 +219,7 @@ int main(int argc, char **argv) {
                                        prepared_weights, 3, &weight_plan) == 0);
 
     for(frame = 0; frame < 120u; ++frame) {
-        position_matrices[1][3][0] = 48.0f * sinf((float)frame * 0.08f);
+        position_matrices[1][3][0] = 48.0f * shz_sinf((float)frame * 0.08f);
         /* Prepare once after sampling the pose, then reuse for every mesh
            sharing it. This example has just one mesh. */
         assert(pvr_skin_palette_prepare(&palette, imported_joints, 2,

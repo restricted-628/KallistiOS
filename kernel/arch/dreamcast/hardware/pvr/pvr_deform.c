@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_skin_prepared.h>
+#include "pvr_skin_internal.h"
 
 #include <errno.h>
 #include <float.h>
@@ -139,11 +140,7 @@ static int normalize(float *x, float *y, float *z) {
 
     if(!isfinite(length_squared) || length_squared <= FLT_MIN)
         return -1;
-#ifdef __DREAMCAST__
     reciprocal = shz_inv_sqrtf_fsrra(length_squared);
-#else
-    reciprocal = 1.0f / sqrtf(length_squared);
-#endif
     *x *= reciprocal;
     *y *= reciprocal;
     *z *= reciprocal;
@@ -322,7 +319,6 @@ static int normal_matrix_finite(const pvr_normal_matrix_t *matrix) {
     return 1;
 }
 
-#define SKIN_PALETTE_VERSION UINT32_C(0x53504c01)
 #define SKIN_INFLUENCES_VERSION UINT32_C(0x53494e01)
 #define SKIN_SPANS_VERSION UINT32_C(0x53535001)
 

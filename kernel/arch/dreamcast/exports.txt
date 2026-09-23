@@ -6,6 +6,7 @@ include dc/sound/adx_input.h
 include dc/maple/mie.h
 include dc/expansion.h
 include dc/pvr_skin_prepared.h
+include dc/pvr_chunk_skeleton_affine.h
 
 # Bounded ADX memory decoding
 snd_adx_init
@@ -25,6 +26,8 @@ snd_adx_input_step
 # Cache management
 arch_icache_inval_range
 arch_icache_sync_range
+arch_dcache_purge_all_indexed
+arch_dcache_wback_all_indexed
 
 # ASIC
 asic_evt_set_handler
@@ -771,6 +774,9 @@ pvr_chunk_skeleton_section_open
 pvr_chunk_skeleton_section_joint_get
 pvr_chunk_skeleton_section_materialize
 pvr_chunk_skeleton_palette_build
+pvr_chunk_skeleton_affine_prepare
+pvr_chunk_skeleton_pose_prepare_affine
+pvr_chunk_skeleton_palette_build_affine
 pvr_chunk_skin_general_section_open
 pvr_chunk_skin_general_section_span_get
 pvr_chunk_skin_general_section_weight_get

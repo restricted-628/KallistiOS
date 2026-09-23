@@ -67,6 +67,26 @@ static inline void shz_kos_matrix_export(matrix_t *dst,
     memcpy(dst, src, sizeof(*src));
 }
 
+/** \brief Compose validated legacy-storage matrices using SH4ZAM directly.
+
+    The caller must supply valid, aligned matrix objects. This is an unchecked
+    storage bridge, not a second validation boundary. Output may alias either
+    input. One-off transforms preserve XMTRX; shz_mat4x4_mult() does not.
+    Prefer native SH4ZAM storage when an existing public ABI is not involved.
+*/
+static inline void shz_kos_matrix_compose_unchecked(matrix_t *out,
+                                                   const matrix_t *lhs,
+                                                   const matrix_t *rhs) {
+    shz_mat4x4_t left, right, result;
+    shz_kos_matrix_import(&left, lhs);
+    shz_kos_matrix_import(&right, rhs);
+    result.col[0] = shz_mat4x4_transform_vec4(&left, right.col[0]);
+    result.col[1] = shz_mat4x4_transform_vec4(&left, right.col[1]);
+    result.col[2] = shz_mat4x4_transform_vec4(&left, right.col[2]);
+    result.col[3] = shz_mat4x4_transform_vec4(&left, right.col[3]);
+    shz_kos_matrix_export(out, &result);
+}
+
 /** \brief Import an established KOS four-component vector. */
 static inline shz_vec4_t shz_kos_vec4_import(const vector_t *src) {
     shz_vec4_t dst;

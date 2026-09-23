@@ -39,6 +39,9 @@ counter; producer starvation is separately counted only while decoding is live.
 
 ## Emulator results (2026-09-22)
 
+The table below predates the translated-workspace change; it is not evidence
+that the new MMU/OIX path passed.
+
 SH-4 GCC 16.2 build, Flycast with HLE boot and serial output, synthetic chunk-fed
 input. Host audio was muted; no listening test was performed. The runner closed
 the emulator after observing the target result (the application remains open
@@ -57,3 +60,38 @@ physical console and does not force upper-RAM placement. Flycast's expanded-RAM
 setting does not establish physical bank wiring or cache-alias correctness.
 Repeat on stock and modded machines, verify audible output and stop behavior,
 then add explicit lower/upper-bank placement tests.
+
+## MMU-on workspace bring-up
+
+Default builds now keep decoder/pipe state in a dedicated 4 KiB translated P0
+page at `0x0e000000`, backed by an owned canonical RAM allocation. All callers
+use that single translated view. Input, PCM, stacks, and DMA scratch remain
+disjoint P1 storage. The allocation's initial P1 cache lines are purged before
+handoff; teardown joins users, retires the mapping, then checks an uncached
+completion marker before freeing the allocation. The decoder itself remains
+allocation-free and does not manage MMU/cache state.
+
+Setup footprint on SH-4 is 4,096 bytes of backing storage plus a 4,100-byte
+root context and one 6,144-byte second-level table (excluding allocator
+metadata). A production application should reuse its owned context/table
+rather than allocate a new address space per decoder. Default MMU startup
+itself allocates none of these objects.
+
+Build explicit controls with `-B` (make does not track command-line changes):
+
+```sh
+make -B ADX_MAPPED=1 ADX_OIX=0 # translated state, ordinary cache
+make -B ADX_MAPPED=1 ADX_OIX=1 # translated state, virtual A25 selects OIX half
+make -B ADX_MAPPED=0 ADX_OIX=0 # direct-P1 control, MMU still on
+```
+
+The standalone probe requires startup MMU, no existing context, and OIX/ORA off.
+It owns the context and optional OIX transition for the whole test, not per
+fiber switch. It refuses a runtime that does not apply the mapping, rather
+than substituting P1 and printing a false translated PASS. An MMU-on direct
+control PASS is not a translated-workspace PASS. No physical-hardware cache
+performance or 32 MiB compatibility claim follows from these controls.
+
+This exercises the native ADX core, not an implemented Sofdec video decoder.
+See [MMU policy](../../../../doc/mmu-mapping.md) and the
+[cache lifecycle test](../../basic/mmu/oix-workspace/README.md).

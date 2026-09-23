@@ -11,8 +11,9 @@
     \ingroup mmu
 
     This file defines the interface to the Memory Management Unit (MMU) in the
-    SH4. The MMU, while not used normally by KOS, is available for virtual
-    memory use, if you so desire. While using this functionality is probably
+    SH4. This fork enables it with INIT_MMU in the default startup flags;
+    applications still explicitly create and own translated mappings.
+    While using this functionality is probably
     overkill for most homebrew, there are a few very interesting things that
     this functionality could be used for (like mapping large files into memory
     that wouldn't otherwise fit).
@@ -21,7 +22,8 @@
     address translation. KOS implements the page table as a sparse, two-level
     page table. By default, pages are 4KB in size. Each top-level page table
     entry has 512 2nd level entries (there are 1024 entries in the top-level
-    entry). This works out to about 2KB of space needed for one top-level entry.
+    entry). With the precompiled PTE words, each populated second-level table
+    costs 6 KiB, in addition to the approximately 4 KiB root context on SH-4.
 
     The SH4 itself has 4 TLB entries for instruction fetches, and 64 "unified"
     TLB entries (for combined instructions + data). Essentially, the UTLB acts
@@ -55,7 +57,7 @@ __BEGIN_DECLS
 #include <sys/uio.h>
 
 /** \defgroup mmu   MMU
-    \brief          Driver for the SH4's MMU (disabled by default).
+    \brief          Driver for the SH4's MMU (INIT_MMU enables startup).
     \ingroup        system
 
     Since the software has to handle TLB misses on the SH-4, we have freedom
@@ -66,15 +68,14 @@ __BEGIN_DECLS
     Page tables (per-process) are a sparse two-level array. The virtual address
     space is 2^31 bytes, or 2^(31-12)=2^19 pages, so there must be
     a possibility of having that many page entries per process space. A full
-    page table for a process would be 1M, so this is obviously too big!! Thus
+    page table would require 6 MiB for the current 12-byte page records, hence
     the sparse array.
 
     The bottom layer of the page tables consists of a sub-context array for
-    512 pages, which translates into 2K of storage space. The process then
-    has the possibility of using one or more of the 512 top-level slots. For
-    a very small process (using one page for code/data and one for stack), it
-    should be possible to achieve a page table footprint of one page. The tables
-    can grow from there as necessary.
+    512 pages, which translates into 6 KiB of storage space. A context may
+    populate any of its 1024 top-level slots. On SH-4 the root costs 4100 bytes;
+    one populated slot adds 6144 bytes, independent of how many pages in that
+    slot are mapped. The tables grow as necessary and are application-owned.
 
     Virtual addresses are broken up as follows:
     - Bits 30 - 21     10 bits top-level page directory

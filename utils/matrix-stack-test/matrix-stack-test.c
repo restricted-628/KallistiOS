@@ -5,6 +5,7 @@
 */
 
 #include <dc/matrix_stack.h>
+#include <sh4zam/shz_xmtrx.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -15,14 +16,6 @@
 
 alignas(32) static matrix_t current_matrix;
 
-void mat_store(matrix_t *out) {
-    memcpy(out, &current_matrix, sizeof(*out));
-}
-
-void mat_load(const matrix_t *src) {
-    memcpy(&current_matrix, src, sizeof(current_matrix));
-}
-
 static void fill_current(float base) {
     size_t row;
     size_t column;
@@ -31,11 +24,14 @@ static void fill_current(float base) {
         for(column = 0; column < 4; ++column)
             current_matrix[row][column] = base + (float)(row * 4 + column);
     }
+    shz_xmtrx_load_unaligned_4x4((const float *)current_matrix);
 }
 
 static void expect_current(float base) {
     size_t row;
     size_t column;
+
+    shz_xmtrx_store_unaligned_4x4((float *)current_matrix);
 
     for(row = 0; row < 4; ++row) {
         for(column = 0; column < 4; ++column) {

@@ -1,0 +1,17 @@
+# Shared software XMTRX state for host graphics consumers. Include after the
+# test's targets so this object does not change its default make goal.
+SHZ_HOST_SOURCE = ../../addons/libsh4zam/upstream/source/sw/shz_xmtrx_sw.c
+SHZ_HOST_HEADERS = $(wildcard ../../addons/include/sh4zam/*.h \
+                   ../../addons/include/sh4zam/inline/*.h \
+                   ../../addons/include/sh4zam/inline/sw/*.h)
+ifneq (,$(findstring clang,$(shell $(CC) --version)))
+SHZ_HOST_WARNINGS = -Wno-newline-eof
+endif
+sh4zam-state.o: $(SHZ_HOST_SOURCE) $(SHZ_HOST_HEADERS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SHZ_HOST_WARNINGS) -c $< -o $@
+$(TARGET) $(GRID_TARGET) $(CLIP_TARGET): sh4zam-state.o $(SHZ_HOST_HEADERS)
+LDLIBS := $(filter-out -lm,$(LDLIBS)) sh4zam-state.o -lm
+.PHONY: clean-sh4zam-state
+clean: clean-sh4zam-state
+clean-sh4zam-state:
+	$(RM) sh4zam-state.o

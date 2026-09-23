@@ -14,7 +14,10 @@ test: $(BUILD_DIR)/u16-trig-test
 $(BUILD_DIR):
 	mkdir -p $@
 
-$(OBJS): $(ROOT)/addons/include/kos/sh4zam.h | $(BUILD_DIR)
+SHZ_HEADERS = $(wildcard $(ROOT)/addons/include/sh4zam/*.h \
+              $(ROOT)/addons/include/sh4zam/inline/*.h \
+              $(ROOT)/addons/include/sh4zam/inline/sw/*.h)
+$(OBJS): $(ROOT)/addons/include/kos/sh4zam.h $(SHZ_HEADERS) | $(BUILD_DIR)
 
 $(BUILD_DIR)/test.o: u16-trig-test.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fno-fast-math -fno-lto -c $< -o $@

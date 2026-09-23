@@ -7,6 +7,7 @@
 #include <kos.h>
 #include <assert.h>
 #include <math.h>
+#include <sh4zam/shz_trig.h>
 #include <stdalign.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -122,9 +123,9 @@ int main(void) {
         view.address_y = phase == 3 ? PVR_TILEMAP_CLIP : phase;
         view.scroll_x = (float)frame * .61f - 48;
         view.scroll_y = (float)frame * .37f - 24;
-        view.rotation = .32f * sinf((float)frame * .017f);
-        view.scale_x = .95f + .13f * cosf((float)frame * .023f);
-        view.scale_y = .9f + .12f * sinf((float)frame * .019f);
+        view.rotation = .32f * shz_sinf((float)frame * .017f);
+        view.scale_x = .95f + .13f * shz_cosf((float)frame * .023f);
+        view.scale_y = .9f + .12f * shz_sinf((float)frame * .019f);
         assert(pvr_tilemap_compile(vertices, VERTEX_CAPACITY, draws,
                                   DRAW_CAPACITY, &map, &view, &result) == 0);
         if(frame % 90 == 0)

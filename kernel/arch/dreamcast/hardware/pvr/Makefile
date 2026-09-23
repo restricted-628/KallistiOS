@@ -37,6 +37,7 @@ OBJS += pvr_prim.o pvr_scene.o pvr_geometry.o pvr_frustum.o pvr_material.o \
 	pvr_chunk_texture_binding.o \
 	pvr_chunk_route.o \
 	pvr_chunk_skin.o pvr_chunk_skin_asset.o pvr_chunk_skeleton_asset.o \
+	pvr_chunk_skeleton_affine.o \
 	pvr_chunk_shape.o \
 	pvr_chunk_shape_asset.o \
 	pvr_chunk_binding.o pvr_lighting.o pvr_toon.o pvr_chunk_toon.o \
@@ -51,3 +52,4 @@ OBJS += pvr_texture.o pvr_texture_layout.o pvr_texture_reservation.o \
 include $(KOS_BASE)/Makefile.prefab
 
 pvr_frustum.o pvr_chunk_wire.o: pvr_frustum_internal.h
+pvr_deform.o pvr_chunk_skeleton_affine.o: pvr_skin_internal.h

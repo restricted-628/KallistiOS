@@ -8,6 +8,7 @@
 
 #include <assert.h>
 #include <math.h>
+#include <sh4zam/shz_trig.h>
 #include <stdalign.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -135,9 +136,9 @@ int main(int argc, char **argv) {
     assert(pvr_geometry_sink_init_current(&sink) == 0);
 
     for(frame = 0; frame < 240u; ++frame) {
+        shz_sincos_t angle = shz_sincosf((float)frame * 0.035f);
         vector_t direction = {
-            sinf((float)frame * 0.035f), 0.0f,
-            cosf((float)frame * 0.035f), 0.0f
+            angle.sin, 0.0f, angle.cos, 0.0f
         };
 
         assert(pvr_toon_light_init(&profile.light, &direction,

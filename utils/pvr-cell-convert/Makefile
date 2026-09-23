@@ -36,3 +36,5 @@ install: $(TARGET)
 clean:
 	rm -f $(TARGET)
 	rm -rf $(TARGET).dSYM
+
+include ../Makefile.sh4zam-state

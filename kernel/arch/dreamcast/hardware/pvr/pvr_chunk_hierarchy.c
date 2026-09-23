@@ -5,6 +5,7 @@
 */
 
 #include <dc/pvr_chunk_model.h>
+#include <dc/sh4zam.h>
 
 #include <errno.h>
 #include <math.h>
@@ -281,8 +282,8 @@ static int hierarchy_traverse(
             local = local_transforms ? local_transforms + i :
                                        &node->local_transform;
 
-        if(mat_compose(&composed, parent, local) < 0 ||
-           !matrix_finite(&composed)) {
+        shz_kos_matrix_compose_unchecked(&composed, parent, local);
+        if(!matrix_finite(&composed)) {
             errno = ERANGE;
             return -1;
         }

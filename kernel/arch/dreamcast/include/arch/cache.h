@@ -35,6 +35,7 @@ __BEGIN_DECLS
 #include <kos/regfield.h>
 
 #include <dc/memory.h>
+#include <dc/cache.h>
 
 #include <stdalign.h>
 #include <stdbool.h>
@@ -54,6 +55,9 @@ __BEGIN_DECLS
 
 void arch_icache_inval_range(uintptr_t start, size_t count);
 void arch_icache_sync_range(uintptr_t start, size_t count);
+/* P2, interrupt-safe tag scan; handles OIX and skips OCRAM entries. */
+void arch_dcache_purge_all_indexed(void);
+void arch_dcache_wback_all_indexed(void);
 
 /* Cache-control instructions are no-ops when their operand names P2. Convert
    that direct, uncached alias back to the equivalent cacheable P1 address.
@@ -200,11 +204,9 @@ static inline void arch_dcache_inval_range(uintptr_t start, size_t count) {
 }
 
 static inline void arch_dcache_wback_all(void) {
-    unsigned int i;
-    volatile uint32_t *dca = (volatile uint32_t *)0xf4000008;
-
-    for (i = 0; i < 512; i++, dca += 8)
-        *dca &= ~BIT(1); /* Zero out U bit */
+    /* Non-associative: a physical tag must not be reinterpreted as a
+       translated P0 address by an associative array write. */
+    arch_dcache_wback_all_indexed();
 }
 
 static inline void arch_dcache_wback_range(uintptr_t start, size_t count) {
@@ -232,11 +234,10 @@ static inline void arch_dcache_wback_range(uintptr_t start, size_t count) {
 static inline void arch_dcache_purge_all(void) {
     unsigned int i;
 
-    if(__is_defined(__OPTIMIZE_SIZE__)) {
-        volatile uint32_t *dca = (volatile uint32_t *)0xf4000008;
-
-        for (i = 0; i < 512; i++, dca += 8)
-            *dca = 0;
+    if(__is_defined(__OPTIMIZE_SIZE__) ||
+       (*(volatile uint32_t *)0xff00001c & (CCR_OIX | CCR_ORA))) {
+        /* A canonical eviction buffer cannot reach OIX's other half. */
+        arch_dcache_purge_all_indexed();
     }
     else {
         alignas(32) static char buffer[ARCH_CACHE_L1_DCACHE_SIZE];

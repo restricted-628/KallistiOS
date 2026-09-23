@@ -39,3 +39,5 @@ $(DREAMCAST_TARGET): pvr-chunk-cache-test.c toon-draw-fixtures.h wire-draw-fixtu
 clean:
 	rm -f $(TARGET) $(DREAMCAST_TARGET)
 	rm -rf $(TARGET).dSYM
+
+include ../Makefile.sh4zam-state

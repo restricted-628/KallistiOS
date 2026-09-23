@@ -35,3 +35,5 @@ pvr-tilemap-test.elf: pvr-tilemap-test.c $(HEADERS) \
 
 clean:
 	$(RM) $(TARGET) pvr-tilemap-test.elf
+
+include ../Makefile.sh4zam-state

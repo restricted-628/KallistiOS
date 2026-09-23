@@ -18,10 +18,12 @@ SOURCES = matrix-stack-test.c $(MATH_DIR)/matrix_stack.c
 all: test
 
 $(TARGET): $(SOURCES)
-	$(CC) $(CFLAGS) $(INCLUDES) $(SOURCES) -o $@
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $(SOURCES) $(LDLIBS) -o $@
 
 test: $(TARGET)
 	./$(TARGET)
 
 clean:
 	$(RM) $(TARGET)
+
+include ../Makefile.sh4zam-state

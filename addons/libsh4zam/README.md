@@ -9,20 +9,22 @@ adapter and integration documentation; separate KOS helpers live under
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`0c1ccb5f5614314e36e2fec3179c8ca3ae844770` from
-`https://github.com/restricted-628/sh4zam.git`, the exact commit submitted in
-[upstream PR #70](https://github.com/gyrovorbis/sh4zam/pull/70). This temporary
-pin is official `v0.8.1` (`be71e8a1428374498e8f5e7506c7e244375f4399`) plus
-Falco's suggested fast-math u16 conversion fix and its regression tests. It
-is **not an official release or a claim of upstream approval**. Upstream
-history, author notices, and license are retained; no build-time source
-patches are applied. Updating the dependency remains a separate reviewed
-change, not an automatic checkout of a moving branch.
+`0fd3a1e1fa0809d33198c062632b1494ec2f57df`, official **v0.9.0**, from
+`https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
+and license are retained; no build-time source patches are applied. Updating
+the dependency remains a separate reviewed change, not an automatic checkout
+of a moving branch.
 
-After PR #70 is merged, select and test an official commit containing the fix,
-restore the official `.gitmodules` URL, and remove the exact-commit exception
-in `utils/check-sh4zam-source.py`. Do not assume a squash/rebase merge will
-retain this PR commit's SHA. The KOS-side helper can remain for compatibility.
+This replaces the temporary PR #70 pin
+`0c1ccb5f5614314e36e2fec3179c8ca3ae844770`. The official release uses inline
+FSCA for runtime SH-4 u16 calls even with fast-math, and fixes the portable
+and constant-input paths to use 65536 units per turn. The temporary fork URL
+and checker exception have been removed. `kos_shz_sincosu16()` remains for
+source compatibility; new code can call the upstream API directly.
+
+The earlier v0.8.1 tag changed upstream after our original integration. Old
+reports identify the exact tested commit, `be71e8a1428374498e8f5e7506c7e244375f4399`,
+and must not be interpreted as results for the subsequently moved tag.
 
 Clone KOS with `--recurse-submodules`. For existing checkouts, or after changing
 KOS revisions, run from the KOS root:
@@ -34,8 +36,8 @@ python3 utils/check-sh4zam-source.py
 ```
 
 The checker verifies the Git index's pinned revision, clean submodule checkout,
-official repository URL or this exact temporary fork/commit pair, public
-header symlink, and unchanged license copy. Other fork revisions are rejected.
+official repository URL, public header symlink, and unchanged license copy.
+Fork URLs are rejected.
 It replaces the former copied-source hash manifest and maintenance patch.
 Ordinary GitHub source ZIPs and `git archive` do not embed submodule contents;
 use a recursive clone, or explicitly include the pinned dependency when making
@@ -80,8 +82,8 @@ optimized stepping may differ. To choose the tested debug-oriented alternative:
 make -C addons/libsh4zam SHZ_FFT_CFLAGS=-Og
 ```
 
-The `-O0` failure and `-O2` success were reproduced again with the unmodified
-0.8.1 source. This release does not change the FFT translation unit; retain the
+The `-O0` failure and `-O2` success were reproduced with the original 0.8.1
+source. Version 0.9.0 does not change the FFT translation unit; retain the
 adapter workaround rather than modifying upstream memory operands.
 
 Reproduction, after sourcing `environ.sh` (substitute any tested optimization):
@@ -92,7 +94,7 @@ kos-cc -O0 -std=gnu17 -Wextra -Werror -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT \
   -o /tmp/sh4zam-fft-probe.o
 ```
 
-## 0.8.1 fast-math restriction and local helper
+## Historical 0.8.1 fast-math issue and compatibility helper
 
 The official 0.8.1 `shz_sincosu16()` SH-4 fast-math path converts the 16-bit
 turn angle with `radians16 / SHZ_F_TAU`. The strict path passes that angle
@@ -103,14 +105,14 @@ The separate `examples/dreamcast/sh4zam/integration/fast-trig-probe.elf`
 reproducer compiles only the call under `-ffast-math`, with a strict validator.
 Under GCC 16.2/Flycast, angle 16384 returns approximately `(0.07260841,
 0.99736059)` instead of the quarter-turn pair `(1, 0)` on official 0.8.1.
-With the temporary PR #70 pin it is now expected to report `RESULT: PASS`;
+With official v0.9.0 it is expected to report `RESULT: PASS`;
 the test's expected values and tolerance have not changed. The default example
 build includes this direct-API regression. It is not a physical-hardware test.
 
 The default KOS environment does not enable `-ffast-math`, and no current KOS
-kernel caller uses this u16 pair routine. The temporary PR pin fixes the direct
-SH-4 fast-math call, so it no longer requires disabling `-ffast-math`/`-Ofast`.
-If reverting to the unmodified 0.8.1 tag, that restriction applies again.
+kernel caller uses this u16 pair routine. Official v0.9.0 fixes the direct
+SH-4 fast-math call, so it does not require disabling `-ffast-math`/`-Ofast`.
+If reverting to the originally tested 0.8.1 commit, that restriction applies again.
 The previously provided KOS-side helper remains available:
 
 ```c
@@ -122,24 +124,31 @@ This helper converts 65536 turn units to radians and calls the public
 `shz_sincosf()` API. It supports fast-math without modifying upstream source,
 replacing upstream symbols, or changing project-wide compiler flags. Including
 the header alone does **not** redirect calls to `shz_sincosu16()`; the current
-submodule pin supplies that function's fix. No kernel calls need migration.
+official release supplies that function's fix. No kernel calls need migration.
 
 The helper consistently uses 65536 units per turn for constant/runtime inputs
-on all backends. Upstream's software and constant-u16 paths use 65535 instead;
-this small convention difference is intentional in the KOS helper to match
-the SH-4 turn encoding. Results remain approximate, not bit-identical across
-backends. The target test allows `3e-4` absolute error; this is a regression
-threshold, not a physical-hardware accuracy guarantee.
+on all backends. Upstream v0.9.0 now uses the same 65536-unit convention in
+its software and constant-u16 paths. Results remain approximate, not bit-identical
+across backends. Tests allow `3e-4` absolute error for the compatibility helper
+and `1e-6` for the direct u16 API; these are regression thresholds, not
+physical-hardware accuracy guarantees.
 
-The separate `u16-trig-test.elf` checks every 16-bit angle against a strict,
-double-precision reference in C strict/fast-math/Ofast and C++ fast-math modes,
-plus a constant quarter-turn in each mode. It remains separate from the
-direct-API regression so both entry points continue to be covered.
+The separate `u16-trig-test.elf` checks both the upstream API and compatibility
+helper at every 16-bit angle against a strict, double-precision reference in
+C strict/fast-math/Ofast and C++ fast-math modes, plus a constant quarter-turn
+in each of these eight lanes. The smaller direct-API reproducer is retained.
 
 See the [standalone regression report](../../doc/sh4zam-0.8.1-fast-trig.md)
 for cardinal-angle results and reproduction instructions.
 
-## 0.8.1 upgrade validation
+## 0.9.0 upgrade validation
+
+See [the integration report](../../doc/sh4zam-0.9.0-upgrade.md) for the forced
+target rebuild, expanded matrix/trig checks, compiler lanes, and emulator
+results. The pinned upstream checkout is unmodified. No physical-hardware
+performance or accuracy certification is implied.
+
+## Historical 0.8.1 upgrade validation
 
 The entire KOS target build was forced with SH-4 GCC 16.2.0 to rebuild inline
 header consumers as well as the addon archive. Header/library version checks

@@ -43,3 +43,5 @@ $(DREAMCAST_TARGET): pvr-chunk-animation-test.c \
 clean:
 	rm -f $(TARGET) $(DREAMCAST_TARGET)
 	rm -rf $(TARGET).dSYM
+
+include ../Makefile.sh4zam-state

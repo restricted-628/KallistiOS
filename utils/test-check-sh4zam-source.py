@@ -88,6 +88,13 @@ class SourceIdentityTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "link directly"):
             checker.verify(self.root)
 
+    def test_former_temporary_fork_rejected(self):
+        git(self.root, "config", "--file", ".gitmodules",
+            f"submodule.{checker.SUBMODULE}.url",
+            "https://github.com/restricted-628/sh4zam.git")
+        with self.assertRaisesRegex(ValueError, "official repository"):
+            checker.verify(self.root)
+
     def test_changed_license(self):
         (self.root / "addons/libsh4zam/LICENSE").write_text("Wrong license\n")
         with self.assertRaisesRegex(ValueError, "license copy differs"):

@@ -63,3 +63,5 @@ install: $(TARGET)
 
 clean:
 	rm -f $(TARGET)
+
+include ../Makefile.sh4zam-state

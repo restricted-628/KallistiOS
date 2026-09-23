@@ -16,8 +16,10 @@
     unit short of a full turn. Constant and runtime arguments use the same
     convention on SH-4 and on the portable backend.
 
-    This explicit helper avoids the SH4ZAM 0.8.1 SH-4 fast-math u16 conversion
-    discrepancy by using its public radians API. It does not replace or modify
+    Retained for source compatibility with the original SH4ZAM 0.8.1 workaround.
+    SH4ZAM 0.9.0 fixes the direct u16 API, including its portable and constant
+    paths; new callers can use shz_sincosu16() directly. This helper continues
+    to use the public radians API. It does not replace or modify
     upstream shz_sincosu16(). Fast-math remains enabled for the caller; SH4ZAM
     and the compiler still select the radians implementation. Results are
     approximate, not promised bit-identical across compiler modes/backends.

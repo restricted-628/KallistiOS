@@ -22,7 +22,7 @@ HEADERS = ../../kernel/arch/dreamcast/include/dc/pvr_chunk_uv_asset.h \
 .PHONY: all test clean dreamcast
 all: $(TARGET)
 $(TARGET): $(SOURCES) $(HEADERS)
-	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) -lm -o $@
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 test: $(TARGET)
 	./$(TARGET)
 dreamcast: pvr-chunk-uv-asset-test.elf
@@ -35,3 +35,5 @@ pvr-chunk-uv-asset-test.elf: pvr-chunk-uv-asset-test.c \
 		../pvr-model-convert/pvr-reference-ir.c -lm -o $@
 clean:
 	$(RM) $(TARGET) pvr-chunk-uv-asset-test.elf
+
+include ../Makefile.sh4zam-state

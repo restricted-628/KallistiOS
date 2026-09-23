@@ -1,6 +1,6 @@
 # First-class SH4ZAM integration
 
-This example verifies that the bundled SH4ZAM 0.8.1 library is available through
+This example verifies that the bundled SH4ZAM 0.9.0 library is available through
 the normal KOS include and link environment. Its Makefile deliberately does not
 add `-lsh4zam`; the standard grouped KOS libraries supply the implementation and
 discard unused sections normally.
@@ -171,22 +171,26 @@ It verifies XMTRX after each call. Success adds:
 Two-volume toon color/textured packets, clipping, XMTRX: PASS
 ```
 
-The 0.8.1 release probes also check header/library version agreement, generic
+The release probes also check header/library version agreement, generic
 memory copies for every source/destination offset 0..7 and size 0..132,
 aligned 2-byte/4-byte variants within their documented size constraints, return
 pointers and surrounding guards. Math probes cover each zero-scale axis,
 negative scales, screen initialization after NaN/Inf XMTRX contents, and
 cardinal unsigned-16-bit angles under the normal strict compiler policy.
+The 0.9.0 probes add non-affine scale extraction (nonzero W lanes), one-off
+vec3 transformation with XMTRX preservation, and an independent scalar oracle
+for compact 3x4 load/store, transpose, forward/reverse products and fused products.
 
 ```text
-SH4ZAM 0.8.1 memory copies and guards: PASS
-SH4ZAM 0.8.1 zero scales, screen init, strict u16 trig: PASS
+SH4ZAM 0.9.0 memory copies and guards: PASS
+SH4ZAM 0.9.0 scales, screen init, strict u16 trig: PASS
+SH4ZAM 0.9.0 XMTRX 3x4 scalar oracle: PASS
 ```
 
 Successful completion prints:
 
 ```text
-RESULT: PASS (SH4ZAM 0.8.1 camera, frustum, geometry, and fibers)
+RESULT: PASS (SH4ZAM 0.9.0 camera, frustum, geometry, and fibers)
 ```
 
 The same result is shown on a green framebuffer for emulator or hardware
@@ -345,15 +349,15 @@ selected until hardware measurements establish the tradeoff.
 
 After sourcing `environ.sh`, build `make fast-trig-probe.elf` in this directory.
 Only `fast-trig-call.c` is compiled with `-ffast-math`; the validator is strict.
-This diagnostic fails with official 0.8.1 because its new u16-angle fast path
-uses the wrong angle conversion. KOS now temporarily pins the exact commit
-in [SH4ZAM PR #70](https://github.com/gyrovorbis/sh4zam/pull/70), containing
-Falco's suggested fix. The default example build includes the probe and it
+This diagnostic fails with the originally tested 0.8.1 commit because its new
+u16-angle fast path uses the wrong angle conversion. KOS now pins official
+v0.9.0, which uses inline FSCA for runtime SH-4 u16 calls even with fast-math.
+The default example build includes the probe and it
 must now report `RESULT: PASS (SH4ZAM fast-math u16 trig)`. Expected values
-and tolerance are unchanged. See the [adapter restriction and helper](../../../../addons/libsh4zam/README.md#081-fast-math-restriction-and-local-helper)
-for source provenance and the policy if reverting to the official 0.8.1 tag.
+and tolerance are unchanged. See the [adapter documentation](../../../../addons/libsh4zam/README.md)
+for source provenance and the policy if reverting to the original 0.8.1 commit.
 
-## Local KOS u16 helper regression
+## Upstream and KOS u16 regression
 
 `#include <kos/sh4zam.h>` supplies `kos_shz_sincosu16(angle)`. This explicit
 KOS helper routes 65536-units-per-turn inputs through SH4ZAM's radians API;
@@ -361,12 +365,15 @@ it neither overrides the upstream function nor edits the submodule.
 
 The default example build also produces `u16-trig-test.elf`. Run it separately
 to validate all 65536 angles against strict double-precision `sin`/`cos`, with
-an absolute tolerance of `3e-4`. Callers are separate, non-LTO translation
-units built as strict C, fast-math C, Ofast C, and fast-math C++. Each lane
+an absolute tolerance of `3e-4` for the radians-based compatibility helper and
+`1e-6` for the upstream integer-turn API (tight enough to reject the old
+65535 divisor). Callers are separate, non-LTO translation
+units built as strict C, fast-math C, Ofast C, and fast-math C++. Both the
+upstream API and KOS helper run in each mode (eight lanes total). Each lane
 also checks a constant quarter-turn. Success ends with:
 
 ```text
-RESULT: PASS (KOS SH4ZAM u16 adapter)
+RESULT: PASS (SH4ZAM upstream and KOS u16 APIs)
 ```
 
 Portable-backend tests use the same sources. From this directory, without

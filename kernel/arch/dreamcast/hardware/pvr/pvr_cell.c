@@ -6,9 +6,7 @@
 
 #include <dc/pvr_cell.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -489,7 +487,6 @@ int pvr_cell_sprite_apply_transform(const pvr_cell_sprite_t *sprite,
         errno = EINVAL;
         return -1;
     }
-#ifdef __DREAMCAST__
     {
         shz_quat_t rotation = shz_quat_normalize(shz_quat_init(
             transform->rotation.w, transform->rotation.x,
@@ -499,20 +496,6 @@ int pvr_cell_sprite_apply_transform(const pvr_cell_sprite_t *sprite,
         y = rotation.y;
         z_angle = shz_quat_angle_z(rotation);
     }
-#else
-    {
-        float inverse_magnitude = (float)(1.0 / sqrt(magnitude_squared));
-        float w;
-        float z;
-
-        w = transform->rotation.w * inverse_magnitude;
-        x = transform->rotation.x * inverse_magnitude;
-        y = transform->rotation.y * inverse_magnitude;
-        z = transform->rotation.z * inverse_magnitude;
-        z_angle = atan2f(2.0f * (w * z + x * y),
-                         1.0f - 2.0f * (y * y + z * z));
-    }
-#endif
     if(fabsf(x) > 0.0001f || fabsf(y) > 0.0001f) {
         errno = ENOTSUP;
         return -1;
@@ -629,17 +612,12 @@ int pvr_cell_sprite_resolve(const pvr_cell_sprite_t *sprite,
         }
     }
 
-#ifdef __DREAMCAST__
     {
         shz_sincos_t value = shz_sincosf(sprite->rotation);
 
         sine = value.sin;
         cosine = value.cos;
     }
-#else
-    sine = sinf(sprite->rotation);
-    cosine = cosf(sprite->rotation);
-#endif
     if(!isfinite(sine) || !isfinite(cosine)) {
         errno = ERANGE;
         return -1;
@@ -911,17 +889,12 @@ static int build_colored_quad(const pvr_sprite_cell_t *cell,
     float cosine;
     size_t i;
 
-#ifdef __DREAMCAST__
     {
         shz_sincos_t value = shz_sincosf(instance->rotation);
 
         sine = value.sin;
         cosine = value.cos;
     }
-#else
-    sine = sinf(instance->rotation);
-    cosine = cosf(instance->rotation);
-#endif
     if(!isfinite(sine) || !isfinite(cosine)) {
         errno = ERANGE;
         return -1;

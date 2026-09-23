@@ -297,6 +297,19 @@ static void test_extended_lighting(void) {
     assert(output[0].argb == UINT32_C(0xcc806030));
     assert(output[0].oargb == UINT32_C(0x00804020));
 
+    /* A unit half-vector dot must retain unit specular response across the
+       supported shininess range, including runtime (not folded) exponents. */
+    {
+        const float exponents[] = { 1.0f, 2.0f, 8.5f, 32.0f, 128.0f };
+        for(size_t i = 0; i < sizeof(exponents) / sizeof(*exponents); ++i) {
+            context.specular_exponent = exponents[i];
+            assert(pvr_lighting_apply_extended(output, 2, &stream, &context,
+                                               NULL) == 0);
+            assert(output[0].oargb == UINT32_C(0x00804020));
+        }
+        context.specular_exponent = 17.0f;
+    }
+
     /* Swapping these exact bright/dark terms must not expose intermediate
        saturation between lights. */
     reversed[0] = lights[1];

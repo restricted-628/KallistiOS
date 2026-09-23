@@ -6,9 +6,7 @@
 
 #include <dc/matrix3d.h>
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -41,12 +39,8 @@ static int matrix_finite(const matrix_t *matrix) {
 }
 
 static int vec3_normalize(vec3_t *vector) {
-    float length_squared = vector->x * vector->x +
-                           vector->y * vector->y +
-                           vector->z * vector->z;
-#ifndef __DREAMCAST__
-    float reciprocal;
-#endif
+    shz_vec3_t input = shz_vec3_init(vector->x, vector->y, vector->z);
+    float length_squared = shz_vec3_dot(input, input);
 
     if(!isfinite(length_squared)) {
         errno = ERANGE;
@@ -58,10 +52,9 @@ static int vec3_normalize(vec3_t *vector) {
         return -1;
     }
 
-#ifdef __DREAMCAST__
     {
-        shz_vec3_t normalized = shz_vec3_normalize(
-            shz_vec3_init(vector->x, vector->y, vector->z));
+        shz_vec3_t normalized = shz_vec3_scale(input,
+            shz_inv_sqrtf_fsrra(length_squared));
 
         if(!isfinite(normalized.x) || !isfinite(normalized.y) ||
            !isfinite(normalized.z)) {
@@ -74,45 +67,19 @@ static int vec3_normalize(vec3_t *vector) {
         vector->z = normalized.z;
         return 0;
     }
-#else
-    reciprocal = 1.0f / sqrtf(length_squared);
-    if(!isfinite(reciprocal)) {
-        errno = ERANGE;
-        return -1;
-    }
-
-    vector->x *= reciprocal;
-    vector->y *= reciprocal;
-    vector->z *= reciprocal;
-    return 0;
-#endif
 }
 
 static vec3_t vec3_cross(const vec3_t *lhs, const vec3_t *rhs) {
-#ifdef __DREAMCAST__
     shz_vec3_t result = shz_vec3_cross(
         shz_vec3_init(lhs->x, lhs->y, lhs->z),
         shz_vec3_init(rhs->x, rhs->y, rhs->z));
     vec3_t output = { result.x, result.y, result.z };
 
     return output;
-#else
-    vec3_t result = {
-        lhs->y * rhs->z - lhs->z * rhs->y,
-        lhs->z * rhs->x - lhs->x * rhs->z,
-        lhs->x * rhs->y - lhs->y * rhs->x
-    };
-
-    return result;
-#endif
 }
 
 static float scalar_divide(float numerator, float denominator) {
-#ifdef __DREAMCAST__
     return shz_divf(numerator, denominator);
-#else
-    return numerator / denominator;
-#endif
 }
 
 int mat_perspective_build(matrix_t *out,
@@ -173,9 +140,12 @@ int mat_perspective_build(matrix_t *out,
                                   denominator);
     frustum[3][3] = 1.0f;
 
-    if(!matrix_finite(&frustum) ||
-       mat_compose(&result, &screen, &frustum) < 0 ||
-       !matrix_finite(&result)) {
+    if(!matrix_finite(&frustum)) {
+        errno = ERANGE;
+        return -1;
+    }
+    shz_kos_matrix_compose_unchecked(&result, &screen, &frustum);
+    if(!matrix_finite(&result)) {
         errno = ERANGE;
         return -1;
     }
@@ -190,7 +160,7 @@ int mat_perspective_apply(const mat_perspective_desc_t *desc) {
     if(mat_perspective_build(&matrix, desc) < 0)
         return -1;
 
-    mat_apply(&matrix);
+    shz_xmtrx_apply_unaligned_4x4((const float *)matrix);
     return 0;
 }
 
@@ -260,8 +230,8 @@ int mat_lookat_build(matrix_t *out, const mat_lookat_desc_t *desc) {
     translation[3][1] = -desc->eye.y;
     translation[3][2] = -desc->eye.z;
 
-    if(mat_compose(&result, &orientation, &translation) < 0 ||
-       !matrix_finite(&result)) {
+    shz_kos_matrix_compose_unchecked(&result, &orientation, &translation);
+    if(!matrix_finite(&result)) {
         errno = ERANGE;
         return -1;
     }
@@ -276,6 +246,6 @@ int mat_lookat_apply(const mat_lookat_desc_t *desc) {
     if(mat_lookat_build(&matrix, desc) < 0)
         return -1;
 
-    mat_apply(&matrix);
+    shz_xmtrx_apply_unaligned_4x4((const float *)matrix);
     return 0;
 }

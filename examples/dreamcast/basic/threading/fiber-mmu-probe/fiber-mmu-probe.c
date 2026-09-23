@@ -72,7 +72,15 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    expected_context = mmu_cxt_current;
+    if(mmu_cxt_current) {
+        printf("Probe requires ownership of the MMU context\n");
+        goto out;
+    }
+    expected_context = mmu_context_create(7);
+    if(!expected_context)
+        goto out;
+    mmu_use_table(expected_context);
+    mmu_switch_context(expected_context);
     for(size_t i = 0; i < sizeof(sq_source); ++i)
         sq_source[i] = (uint8_t)(i ^ 0xa5u);
 
@@ -101,12 +109,14 @@ int main(int argc, char **argv) {
         goto out;
     }
 
-    printf("KOSFIBERMMU sequence=%u sq=1\n", sequence);
+    printf("KOSFIBERMMU sequence=%u sq=1 asid=7\n", sequence);
     result = EXIT_SUCCESS;
 
 out:
     if(test_fiber && fiber_get_state(test_fiber) != KFIBER_STATE_RUNNING)
         fiber_destroy(test_fiber);
+    if(expected_context)
+        mmu_context_destroy(expected_context);
     if(initialized_mmu)
         mmu_shutdown();
     return result;

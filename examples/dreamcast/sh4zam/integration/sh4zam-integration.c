@@ -687,16 +687,19 @@ int main(int argc, char **argv) {
     }
 
     shz_version_fields(shz_version_linked(), &major, &minor, &patch);
-    if(major != 0 || minor != 8 || patch != 1) {
+    if(major != 0 || minor != 9 || patch != 0) {
         FAIL("unexpected SH4ZAM version");
     }
 
     if(!verify_release_memory())
-        FAIL("SH4ZAM 0.8.1 memory regression");
-    puts("SH4ZAM 0.8.1 memory copies and guards: PASS");
+        FAIL("SH4ZAM 0.9.0 memory regression");
+    puts("SH4ZAM 0.9.0 memory copies and guards: PASS");
     if(!verify_release_math())
-        FAIL("SH4ZAM 0.8.1 math regression");
-    puts("SH4ZAM 0.8.1 zero scales, screen init, strict u16 trig: PASS");
-    show_result(true, "SH4ZAM 0.8.1 camera, frustum, geometry, and fibers");
+        FAIL("SH4ZAM 0.9.0 math regression");
+    puts("SH4ZAM 0.9.0 scales, screen init, strict u16 trig: PASS");
+    if(!verify_release_3x4())
+        FAIL("SH4ZAM 0.9.0 XMTRX 3x4 regression");
+    puts("SH4ZAM 0.9.0 XMTRX 3x4 scalar oracle: PASS");
+    show_result(true, "SH4ZAM 0.9.0 camera, frustum, geometry, and fibers");
     return 0;
 }

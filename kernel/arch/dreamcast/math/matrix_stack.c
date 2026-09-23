@@ -5,6 +5,7 @@
 */
 
 #include <dc/matrix_stack.h>
+#include <sh4zam/shz_xmtrx.h>
 
 #include <errno.h>
 #include <stdint.h>
@@ -51,7 +52,7 @@ int mat_stack_push(mat_stack_t *stack) {
         return -1;
     }
 
-    mat_store(&stack->storage[stack->depth]);
+    shz_xmtrx_store_unaligned_4x4((float *)stack->storage[stack->depth]);
     ++stack->depth;
     return 0;
 }
@@ -68,7 +69,7 @@ int mat_stack_pop(mat_stack_t *stack) {
     }
 
     --stack->depth;
-    mat_load(&stack->storage[stack->depth]);
+    shz_xmtrx_load_unaligned_4x4((const float *)stack->storage[stack->depth]);
     return 0;
 }
 
@@ -83,6 +84,6 @@ int mat_stack_restore(const mat_stack_t *stack) {
         return -1;
     }
 
-    mat_load(&stack->storage[stack->depth - 1u]);
+    shz_xmtrx_load_unaligned_4x4((const float *)stack->storage[stack->depth - 1u]);
     return 0;
 }

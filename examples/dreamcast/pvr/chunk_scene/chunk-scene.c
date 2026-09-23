@@ -15,6 +15,7 @@
 #include <dc/pvr_chunk_scene.h>
 #include <dc/pvr_chunk_skin_asset.h>
 #include <dc/pvr_chunk_skeleton_asset.h>
+#include <dc/pvr_chunk_skeleton_affine.h>
 #include <dc/pvr_chunk_shape_asset.h>
 #include <dc/pvr_skin_prepared.h>
 #include <dc/pvr_lighting.h>
@@ -64,11 +65,8 @@ typedef struct model_state {
     pvr_skin_prepared_span_t prepared_spans[VERTICES];
     pvr_skin_weight_t prepared_weights[WEIGHTS];
     pvr_skin_prepared_spans_t skin_plan;
-    pvr_chunk_skeleton_joint_t joints[JOINTS];
-    pvr_chunk_skeleton_t skeleton;
-    alignas(32) matrix_t positions[JOINTS];
-    pvr_normal_matrix_t normals[JOINTS];
-    pvr_skin_palette_t palette;
+    pvr_chunk_skeleton_affine_joint_t affine_joints[JOINTS];
+    pvr_chunk_skeleton_affine_t affine_skeleton;
     pvr_skin_prepared_joint_t prepared_joints[JOINTS];
     pvr_skin_prepared_palette_t prepared_palette;
     pvr_chunk_shape_section_view_t shape_view;
@@ -103,6 +101,8 @@ static struct {
     anim_clip_view_t clip;
     anim_transform_t local[NODES];
     alignas(32) matrix_t world[NODES];
+    shz_mat3x4_t affine_world[NODES];
+    pvr_chunk_skeleton_affine_pose_t affine_pose;
     anim_scalar_hermite_key_t morph_keys[6];
     anim_track_view_t morph_tracks[MODELS];
     pvr_chunk_shape_channel_t channels[MODELS];
@@ -148,6 +148,8 @@ static int model_load(size_t index) {
     pvr_chunk_skin_general_section_view_t skin_view;
     pvr_chunk_skin_general_requirements_t skin_req;
     pvr_chunk_skeleton_section_view_t skeleton_view;
+    pvr_chunk_skeleton_joint_t joints[JOINTS];
+    pvr_chunk_skeleton_t skeleton;
     pvr_chunk_shape_requirements_t shape_req;
     pvr_chunk_cache_section_view_t cache_view;
     pvr_chunk_cache_section_requirements_t cache_req;
@@ -201,7 +203,9 @@ static int model_load(size_t index) {
        require(skeleton_view.node_count == NODES &&
                skeleton_view.joint_count == JOINTS) < 0 ||
        pvr_chunk_skeleton_section_materialize(
-           &skeleton_view, m->joints, JOINTS, &m->skeleton) < 0)
+           &skeleton_view, joints, JOINTS, &skeleton) < 0 ||
+       pvr_chunk_skeleton_affine_prepare(&skeleton, m->affine_joints, JOINTS,
+                                         &m->affine_skeleton) < 0)
         return failure("skeleton");
 
     if(section(PVR_CHUNK_ASSET_SECTION_MORPH_TARGETS,
@@ -339,16 +343,18 @@ static int sample(float time) {
                           &animation_result) < 0 ||
        pvr_chunk_hierarchy_traverse_poses(
            &app.hierarchy, app.local, NODES, NULL, app.world, NODES,
-           NULL, NULL, NULL) < 0)
+           NULL, NULL, NULL) < 0 ||
+       pvr_chunk_skeleton_pose_prepare_affine(app.world, NODES,
+           app.affine_world, NODES, &app.affine_pose) < 0)
         return failure("hierarchy-pose");
     for(i = 0; i < MODELS; ++i) {
         model_state_t *m = &app.model[i];
         const pvr_deform_stream_t posed = {
             m->morphed, m->skin_source.vertex_count, sizeof(*m->morphed)
         };
-        if(pvr_chunk_skeleton_palette_build(
-               &m->skeleton, app.world, NODES, m->positions, JOINTS,
-               m->normals, JOINTS, &m->palette) < 0 ||
+        if(pvr_chunk_skeleton_palette_build_affine(
+               &m->affine_skeleton, &app.affine_pose, m->prepared_joints,
+               JOINTS, &m->prepared_palette) < 0 ||
            anim_morph_targets_sample(&m->morph_tracks, 1, time,
                                        &m->morph_target, 1,
                                        &morph_result) < 0 ||
@@ -356,9 +362,7 @@ static int sample(float time) {
                                    m->morphed, VERTICES,
                                    &deform_result) < 0)
             return failure("deform-pose");
-        if(pvr_skin_palette_prepare(&m->palette, m->prepared_joints, JOINTS,
-                                    &m->prepared_palette) < 0 ||
-           pvr_skin_apply_spans_prepared(m->deformed, VERTICES, &posed,
+        if(pvr_skin_apply_spans_prepared(m->deformed, VERTICES, &posed,
                &m->skin_plan, &m->prepared_palette, &deform_result) < 0)
             return failure("skin-pose");
     }

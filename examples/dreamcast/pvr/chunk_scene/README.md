@@ -6,6 +6,14 @@ sparse-morph, animation-catalog, transform-clip, morph-weight, and cooked-cache
 APIs. It does not introduce a scene graph, renderer, resource manager, or new
 library API.
 
+Skeleton setup now prepares compact SH4ZAM 3x4 inverse-bind snapshots. Each
+sampled hierarchy pose is packed once and shared by both models; fused affine
+composition builds each prepared skin palette directly, eliminating separate
+position/normal palette arrays and their later import. Projection and the
+existing prepared skinning ABI remain unchanged. See
+[`sh4zam-affine-skeleton.md`](../../../../doc/sh4zam-affine-skeleton.md)
+for the lifetime contract, fallback, and validation scope.
+
 The original fixture has two opaque, untextured triangles with different materials, a
 translated root, and two joints. The base vertices follow the base joint; the
 top vertex follows the animated tip joint. Each model has one sparse shape

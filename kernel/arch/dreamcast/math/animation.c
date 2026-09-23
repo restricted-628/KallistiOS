@@ -66,10 +66,8 @@ static int quaternion_valid(const anim_quaternion_t *quaternion) {
     if(!quaternion || !finite4(quaternion->w, quaternion->x,
                                quaternion->y, quaternion->z))
         return 0;
-    magnitude_squared = quaternion->w * quaternion->w +
-                        quaternion->x * quaternion->x +
-                        quaternion->y * quaternion->y +
-                        quaternion->z * quaternion->z;
+    magnitude_squared = shz_quat_magnitude_sqr(shz_quat_init(
+        quaternion->w, quaternion->x, quaternion->y, quaternion->z));
     return isfinite(magnitude_squared) && magnitude_squared > FLT_MIN;
 }
 
@@ -550,7 +548,6 @@ int anim_track_sample_vector(const anim_track_view_t *view, float time,
             value = interpolated;
         }
         else {
-#ifdef __DREAMCAST__
             shz_vec4_t interpolated = shz_vec4_lerp(
                 shz_vec4_init(value.x, value.y, value.z, value.w),
                 shz_vec4_init(next->x, next->y, next->z, next->w), factor);
@@ -559,12 +556,6 @@ int anim_track_sample_vector(const anim_track_view_t *view, float time,
             value.y = interpolated.y;
             value.z = interpolated.z;
             value.w = interpolated.w;
-#else
-            value.x += (next->x - value.x) * factor;
-            value.y += (next->y - value.y) * factor;
-            value.z += (next->z - value.z) * factor;
-            value.w += (next->w - value.w) * factor;
-#endif
         }
     }
     if(!finite4(value.x, value.y, value.z, value.w)) {
@@ -773,36 +764,29 @@ int anim_event_track_open(const anim_event_track_t *track,
 static int quaternion_normalize(const anim_quaternion_t *source,
                                 anim_quaternion_t *output) {
     anim_quaternion_t normalized;
+    shz_quat_t input;
+    float magnitude_squared;
 
-    if(!quaternion_valid(source)) {
+    if(!source || !finite4(source->w, source->x, source->y, source->z)) {
+        errno = EDOM;
+        return -1;
+    }
+    input = shz_quat_init(source->w, source->x, source->y, source->z);
+    magnitude_squared = shz_quat_magnitude_sqr(input);
+    if(!isfinite(magnitude_squared) || magnitude_squared <= FLT_MIN) {
         errno = EDOM;
         return -1;
     }
 
-#ifdef __DREAMCAST__
     {
-        shz_quat_t value = shz_quat_normalize(shz_quat_init(
-            source->w, source->x, source->y, source->z));
+        shz_quat_t value = shz_quat_scale(input,
+            shz_inv_sqrtf_fsrra(magnitude_squared));
 
         normalized.w = value.w;
         normalized.x = value.x;
         normalized.y = value.y;
         normalized.z = value.z;
     }
-#else
-    {
-        float magnitude_squared = source->w * source->w +
-                                  source->x * source->x +
-                                  source->y * source->y +
-                                  source->z * source->z;
-        float reciprocal_magnitude = 1.0f / sqrtf(magnitude_squared);
-
-        normalized.w = source->w * reciprocal_magnitude;
-        normalized.x = source->x * reciprocal_magnitude;
-        normalized.y = source->y * reciprocal_magnitude;
-        normalized.z = source->z * reciprocal_magnitude;
-    }
-#endif
 
     if(!finite4(normalized.w, normalized.x, normalized.y, normalized.z)) {
         errno = ERANGE;
@@ -816,7 +800,6 @@ static anim_quaternion_t quaternion_multiply(anim_quaternion_t lhs,
                                              anim_quaternion_t rhs) {
     anim_quaternion_t product;
 
-#ifdef __DREAMCAST__
     {
         shz_quat_t value = shz_quat_mult(
             shz_quat_init(lhs.w, lhs.x, lhs.y, lhs.z),
@@ -827,16 +810,6 @@ static anim_quaternion_t quaternion_multiply(anim_quaternion_t lhs,
         product.y = value.y;
         product.z = value.z;
     }
-#else
-    product.w = lhs.w * rhs.w - lhs.x * rhs.x -
-                lhs.y * rhs.y - lhs.z * rhs.z;
-    product.x = lhs.w * rhs.x + lhs.x * rhs.w +
-                lhs.y * rhs.z - lhs.z * rhs.y;
-    product.y = lhs.w * rhs.y - lhs.x * rhs.z +
-                lhs.y * rhs.w + lhs.z * rhs.x;
-    product.z = lhs.w * rhs.z + lhs.x * rhs.y -
-                lhs.y * rhs.x + lhs.z * rhs.w;
-#endif
     return product;
 }
 
@@ -861,7 +834,6 @@ int anim_euler_to_quaternion(const vector_t *angles,
         errno = EINVAL;
         return -1;
     }
-#ifdef __DREAMCAST__
     {
         shz_sincos_t x = shz_sincosf(angles->x * 0.5f);
         shz_sincos_t y = shz_sincosf(angles->y * 0.5f);
@@ -874,14 +846,6 @@ int anim_euler_to_quaternion(const vector_t *angles,
         sin_z = z.sin;
         cos_z = z.cos;
     }
-#else
-    sin_x = sinf(angles->x * 0.5f);
-    cos_x = cosf(angles->x * 0.5f);
-    sin_y = sinf(angles->y * 0.5f);
-    cos_y = cosf(angles->y * 0.5f);
-    sin_z = sinf(angles->z * 0.5f);
-    cos_z = cosf(angles->z * 0.5f);
-#endif
     axis_x = (anim_quaternion_t){ cos_x, sin_x, 0.0f, 0.0f };
     axis_y = (anim_quaternion_t){ cos_y, 0.0f, sin_y, 0.0f };
     axis_z = (anim_quaternion_t){ cos_z, 0.0f, 0.0f, sin_z };
@@ -908,7 +872,6 @@ static int quaternion_slerp(const anim_quaternion_t *from,
        quaternion_normalize(to, &rhs) < 0)
         return -1;
 
-#ifdef __DREAMCAST__
     {
         shz_quat_t value = shz_quat_slerp(
             shz_quat_init(lhs.w, lhs.x, lhs.y, lhs.z),
@@ -919,47 +882,6 @@ static int quaternion_slerp(const anim_quaternion_t *from,
         result.y = value.y;
         result.z = value.z;
     }
-#else
-    {
-        float dot = lhs.w * rhs.w + lhs.x * rhs.x +
-                    lhs.y * rhs.y + lhs.z * rhs.z;
-
-        if(dot < 0.0f) {
-            lhs.w = -lhs.w;
-            lhs.x = -lhs.x;
-            lhs.y = -lhs.y;
-            lhs.z = -lhs.z;
-            dot = -dot;
-        }
-        if(dot > 1.0f)
-            dot = 1.0f;
-
-        if(dot > 0.9995f) {
-            result.w = lhs.w + (rhs.w - lhs.w) * factor;
-            result.x = lhs.x + (rhs.x - lhs.x) * factor;
-            result.y = lhs.y + (rhs.y - lhs.y) * factor;
-            result.z = lhs.z + (rhs.z - lhs.z) * factor;
-        }
-        else {
-            float angle = acosf(dot);
-            float sine = sinf(angle);
-            float lhs_weight;
-            float rhs_weight;
-
-            if(!isfinite(angle) || !isfinite(sine) ||
-               fabsf(sine) <= FLT_MIN) {
-                errno = ERANGE;
-                return -1;
-            }
-            lhs_weight = sinf((1.0f - factor) * angle) / sine;
-            rhs_weight = sinf(factor * angle) / sine;
-            result.w = lhs.w * lhs_weight + rhs.w * rhs_weight;
-            result.x = lhs.x * lhs_weight + rhs.x * rhs_weight;
-            result.y = lhs.y * lhs_weight + rhs.y * rhs_weight;
-            result.z = lhs.z * lhs_weight + rhs.z * rhs_weight;
-        }
-    }
-#endif
 
     return quaternion_normalize(&result, output);
 }
@@ -1088,7 +1010,6 @@ int anim_transform_blend(const anim_transform_t *from,
         return -1;
     }
 
-#ifdef __DREAMCAST__
     {
         shz_vec3_t translation = shz_vec3_lerp(
             shz_vec3_init(from->translation.x, from->translation.y,
@@ -1106,17 +1027,6 @@ int anim_transform_blend(const anim_transform_t *from,
         blended.scale.y = scale.y;
         blended.scale.z = scale.z;
     }
-#else
-    blended.translation.x = from->translation.x +
-        (to->translation.x - from->translation.x) * weight;
-    blended.translation.y = from->translation.y +
-        (to->translation.y - from->translation.y) * weight;
-    blended.translation.z = from->translation.z +
-        (to->translation.z - from->translation.z) * weight;
-    blended.scale.x = from->scale.x + (to->scale.x - from->scale.x) * weight;
-    blended.scale.y = from->scale.y + (to->scale.y - from->scale.y) * weight;
-    blended.scale.z = from->scale.z + (to->scale.z - from->scale.z) * weight;
-#endif
     blended.translation.w = 1.0f;
     blended.scale.w = 0.0f;
     if(quaternion_slerp(&from->rotation, &to->rotation, weight,
@@ -2179,13 +2089,8 @@ int anim_camera_projection_matrix_build(const anim_camera_pose_t *camera,
         errno = EINVAL;
         return -1;
     }
-#ifdef __DREAMCAST__
     tangent = shz_tanf(camera->vertical_fov * 0.5f);
     perspective.cot_half_fov = shz_invf(tangent);
-#else
-    tangent = tanf(camera->vertical_fov * 0.5f);
-    perspective.cot_half_fov = 1.0f / tangent;
-#endif
     if(!isfinite(tangent) || tangent <= FLT_MIN ||
        !isfinite(perspective.cot_half_fov)) {
         errno = ERANGE;

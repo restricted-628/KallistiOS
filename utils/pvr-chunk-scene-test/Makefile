@@ -54,3 +54,5 @@ pvr-chunk-scene-test.elf: pvr-chunk-scene-test.c \
 clean:
 	rm -f $(TARGET) pvr-chunk-scene-test.elf
 	rm -rf $(TARGET).dSYM
+
+include ../Makefile.sh4zam-state

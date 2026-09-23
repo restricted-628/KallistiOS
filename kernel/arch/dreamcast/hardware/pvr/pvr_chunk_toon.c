@@ -8,9 +8,7 @@
 
 #include "pvr_geometry_internal.h"
 
-#ifdef __DREAMCAST__
 #include <dc/sh4zam.h>
-#endif
 
 #include <errno.h>
 #include <float.h>
@@ -324,7 +322,6 @@ static int face_normal(vector_t *normal,
     float bz = vertices[2].z - vertices[0].z;
     float length_squared;
 
-#ifdef __DREAMCAST__
     {
         shz_vec3_t result = shz_vec3_cross(shz_vec3_init(ax, ay, az),
                                            shz_vec3_init(bx, by, bz));
@@ -334,13 +331,6 @@ static int face_normal(vector_t *normal,
         normal->z = result.z;
         length_squared = shz_vec3_dot(result, result);
     }
-#else
-    normal->x = ay * bz - az * by;
-    normal->y = az * bx - ax * bz;
-    normal->z = ax * by - ay * bx;
-    length_squared = normal->x * normal->x + normal->y * normal->y +
-                     normal->z * normal->z;
-#endif
     normal->w = 0.0f;
     if(!isfinite(length_squared)) {
         errno = ERANGE;

@@ -34,3 +34,5 @@ test: $(TARGET) grid.pcm
 
 clean:
 	rm -f $(TARGET) grid.obj grid.pcm
+
+include ../Makefile.sh4zam-state

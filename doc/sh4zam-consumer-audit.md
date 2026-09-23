@@ -5,9 +5,10 @@
 This pass follows the source-dependency migration on KOS master (`6f8b3394`).
 The original audit used unmodified SH4ZAM at
 `0bacf4b336368c0b47864ce9eeb59e7c07904b51`; the dependency subsequently moved to
-official 0.8.1 and is now temporarily pinned to PR #70's
-`0c1ccb5f5614314e36e2fec3179c8ca3ae844770` for the u16 fast-math fix, pending
-upstream review. See the addon README for source provenance. All changes in
+official 0.8.1, then PR #70's temporary u16 fix, and now official v0.9.0 at
+`0fd3a1e1fa0809d33198c062632b1494ec2f57df`. See the addon README and
+[0.9.0 integration report](sh4zam-0.9.0-upgrade.md) for current provenance.
+Dated results below retain the revision used for each earlier audit. All changes in
 this consumer audit are to KOS consumers, bridge assertions, tests, and
 documentation. Graphics-library extraction is deferred; no public matrix
 layouts or API contracts change.

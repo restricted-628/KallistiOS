@@ -1,7 +1,7 @@
 /* KallistiOS ##version##
    Copyright (C) 2026 Joseph Black
 
-   KOS-side regression probes for the unmodified SH4ZAM 0.8.1 dependency.
+   KOS-side regression probes for the unmodified SH4ZAM release dependency.
 */
 #ifndef SH4ZAM_RELEASE_FIXTURES_H
 #define SH4ZAM_RELEASE_FIXTURES_H
@@ -87,6 +87,98 @@ static bool verify_release_math(void) {
                   close_enough(pair.sin, expected_sin[i]) &&
                   close_enough(pair.cos, expected_cos[i]);
     }
+    /* 0.9.0: non-affine W lanes must not contribute to XYZ scale lengths. */
+    shz_mat4x4_init_scale(&matrix, 2, 3, 4);
+    matrix.elem[3] = 7;
+    matrix.elem[7] = 11;
+    matrix.elem[11] = 13;
+    shz_vec3_t scale = shz_mat4x4_get_scale(&matrix);
+    shz_xmtrx_load_4x4(&matrix);
+    shz_vec3_t resident_scale = shz_xmtrx_get_scale();
+    passed &= close_enough(scale.x, 2) && close_enough(scale.y, 3) &&
+              close_enough(scale.z, 4) && close_enough(resident_scale.x, 2) &&
+              close_enough(resident_scale.y, 3) && close_enough(resident_scale.z, 4);
+    shz_vec3_t vector = shz_mat4x4_transform_vec3(&matrix, shz_vec3_init(1, 2, 3));
+    passed &= close_enough(vector.x, 2) && close_enough(vector.y, 6) &&
+              close_enough(vector.z, 12);
+    shz_xmtrx_store_4x4(&observed);
+    passed &= memcmp(&matrix, &observed, sizeof(matrix)) == 0;
+    shz_xmtrx_load_4x4(&saved);
+    return passed;
+}
+
+/* Independent scalar oracle: column-major 4x4 product, no SH4ZAM math. */
+static void release_product(float out[16], const float a[16], const float b[16]) {
+    for(unsigned c = 0; c < 4; ++c)
+        for(unsigned r = 0; r < 4; ++r) {
+            out[c * 4 + r] = 0;
+            for(unsigned k = 0; k < 4; ++k)
+                out[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k];
+        }
+}
+
+static bool release_xmtrx_matches(const float expected[16]) {
+    shz_mat4x4_t actual;
+    shz_xmtrx_store_4x4(&actual);
+    for(unsigned i = 0; i < 16; ++i)
+        if(!isfinite(actual.elem[i]) || !close_enough(actual.elem[i], expected[i])) {
+            printf("SH4ZAM 3x4 mismatch at %u: %.9g expected %.9g\n",
+                   i, (double)actual.elem[i], (double)expected[i]);
+            return false;
+        }
+    return true;
+}
+
+static bool verify_release_3x4(void) {
+    shz_mat3x4_t a __attribute__((aligned(32)));
+    shz_mat3x4_t b __attribute__((aligned(32)));
+    shz_mat3x4_t row_b __attribute__((aligned(32)));
+    shz_mat3x4_t stored __attribute__((aligned(32)));
+    shz_mat4x4_t saved;
+    float wide_a[16] = { 0 }, wide_b[16] = { 0 }, expected[16];
+    bool passed = true;
+
+    shz_xmtrx_store_4x4(&saved);
+    for(unsigned c = 0; c < 4; ++c)
+        for(unsigned r = 0; r < 3; ++r) {
+            a.elem[c * 3 + r] = (float)(1 + c * 3 + r);
+            b.elem[c * 3 + r] = (float)((int)c * 2 - (int)r * 3 + 2);
+            row_b.elem[r * 4 + c] = b.elem[c * 3 + r];
+            wide_a[c * 4 + r] = a.elem[c * 3 + r];
+            wide_b[c * 4 + r] = b.elem[c * 3 + r];
+        }
+    wide_a[15] = wide_b[15] = 1;
+    shz_xmtrx_load_3x4(&b);
+    passed &= release_xmtrx_matches(wide_b);
+    shz_xmtrx_store_transpose_3x4(&stored);
+    for(unsigned i = 0; i < 12; ++i)
+        passed &= close_enough(stored.elem[i], row_b.elem[i]);
+    shz_xmtrx_load_transpose_3x4(&row_b);
+    passed &= release_xmtrx_matches(wide_b);
+    shz_xmtrx_load_cols_3x4(&b.col[0], &b.col[1], &b.col[2], &b.col[3]);
+    passed &= release_xmtrx_matches(wide_b);
+
+    release_product(expected, wide_a, wide_b);
+    shz_xmtrx_load_3x4(&a);
+    shz_xmtrx_apply_3x4(&b);
+    passed &= release_xmtrx_matches(expected);
+    shz_xmtrx_load_3x4(&a);
+    shz_xmtrx_apply_transpose_3x4(&row_b);
+    passed &= release_xmtrx_matches(expected);
+    shz_xmtrx_load_apply_3x4(&a, &b);
+    passed &= release_xmtrx_matches(expected);
+    shz_xmtrx_load_apply_store_3x4(&stored, &a, &b);
+    for(unsigned c = 0; c < 4; ++c)
+        for(unsigned r = 0; r < 3; ++r)
+            passed &= close_enough(stored.elem[c * 3 + r], expected[c * 4 + r]);
+
+    release_product(expected, wide_b, wide_a);
+    shz_xmtrx_load_3x4(&a);
+    shz_xmtrx_apply_reverse_3x4(&b);
+    passed &= release_xmtrx_matches(expected);
+    shz_xmtrx_load_3x4(&a);
+    shz_xmtrx_apply_reverse_transpose_3x4(&row_b);
+    passed &= release_xmtrx_matches(expected);
     shz_xmtrx_load_4x4(&saved);
     return passed;
 }
