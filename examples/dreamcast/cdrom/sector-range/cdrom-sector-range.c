@@ -188,7 +188,7 @@ int main(int argc, char **argv) {
     (void)argv;
     puts("KOS bounded sector-range validation");
 
-    if(cdrom_read_toc(&toc, false) != ERR_OK
+    if(cdrom_bios_read_toc(&toc, false) != ERR_OK
             || !(fad = cdrom_locate_data_track(&toc))) {
         puts("BIOS data-track discovery failed");
         failed = 1;

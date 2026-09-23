@@ -785,14 +785,31 @@ int cdrom_abort_cmd(uint32_t timeout, bool abort_dma);
 /** \brief    Get the status of the GD-ROM drive.
     \ingroup  gdrom
 
-    \param  status          Space to return the drive's status.
-    \param  disc_type       Space to return the type of disc in the drive.
+    Uses direct SPI with a 10000 ms primary-command timeout, independently of
+    `/cd` selection and with no BIOS fallback. Bounded recovery may take
+    additional time. This call requires thread context; interrupt handlers
+    must not issue a blocking drive command. For a caller-selected timeout
+    and raw diagnostics, use gdrom_direct_get_status().
 
-    \return                 \ref cd_cmd_response
+    \param  status          Optional output for the drive's status.
+    \param  disc_type       Optional output for the type of disc in the drive.
+
+    \retval 0               Status query completed (not a media-ready guarantee).
+    \retval -1              Query failed, errno set; supplied outputs set to -1.
     \see    cd_status_values
     \see    cd_disc_types
 */
 int cdrom_get_status(int *status, int *disc_type);
+
+/** \brief Get drive status explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains the legacy BIOS status query and G1 ownership behavior. Either
+    output may be NULL. Returns zero on success, or -1 with supplied outputs
+    set to -1 on failure. Unlike cdrom_get_status(), this does not impose a
+    direct-command timeout.
+*/
+int cdrom_bios_get_status(int *status, int *disc_type);
 
 /** \brief Cached GD-ROM drive state.
     \ingroup gdrom
@@ -955,14 +972,25 @@ int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size);
 /** \brief    Read the table of contents from the disc.
     \ingroup  gdrom
 
-    This function reads the TOC from the specified area of the disc.
-    On regular CD-ROMs, there are only low density area.
+    Reads the TOC from the specified area through direct SPI, independently
+    of `/cd` selection and with no BIOS fallback. Regular CD-ROMs have only
+    the low-density area. The primary-command timeout is 10000 ms, with
+    separately bounded recovery. Use gdrom_direct_read_toc() for a custom
+    timeout or raw diagnostics. Only consume the TOC on success.
 
     \param  toc_buffer      Space to store the returned TOC in.
     \param  high_density    Whether to read from the high density area.
     \return                 \ref cd_cmd_response
 */
 int cdrom_read_toc(cd_toc_t *toc_buffer, bool high_density);
+
+/** \brief Read the TOC explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Same buffer and density arguments as cdrom_read_toc(), but retains the
+    legacy unbounded BIOS command. Returns a common `ERR_*` result.
+*/
+int cdrom_bios_read_toc(cd_toc_t *toc_buffer, bool high_density);
 
 /** \brief    Read one or more sector from a CD-ROM.
     \ingroup  gdrom

@@ -10,6 +10,7 @@ The direct-default paths implemented so far are:
 | `cdrom_stream_session_start` | Direct, 2048-byte Mode-1 sectors | `cdrom_bios_stream_session_start` |
 | `cdrom_seek_async` | Direct SPI seek | `cdrom_bios_seek_async` |
 | `cdrom_cdda_get_status`, `cdrom_cdda_get_status_async` | Direct SPI Q-channel query | `cdrom_bios_cdda_get_status`, `cdrom_bios_cdda_get_status_async` |
+| `cdrom_get_status`, `cdrom_read_toc` | Direct SPI status/TOC query | `cdrom_bios_get_status`, `cdrom_bios_read_toc` |
 
 The raw constructors do not inherit the filesystem's selection or the BIOS
 sector-size setting. Use the format-selecting `gdrom_direct_*` constructors
@@ -32,12 +33,22 @@ timeout (bounded recovery may take additional time) and preserves the common
 The BIOS-only internal seek helpers used by explicitly selected BIOS ranges
 and filesystem descriptors are unchanged.
 
+Drive status and TOC also use a 10000 ms primary-command timeout and remain
+independent of `/cd` selection. Status preserves its actual legacy `0`/`-1`
+return convention (not the `ERR_*` enum), permits either output to be NULL,
+and sets supplied outputs to -1 on failure, even if the direct diagnostic
+transport decoded a payload before CHECK. It requires thread context; the
+bounded G1 command path rejects interrupt-context calls with `EPERM`.
+TOC retains `ERR_*` results and both density-area choices. The explicit BIOS
+filesystem mount and BIOS-reference/reuse examples call the named BIOS
+versions, so their selected transport is not changed by these defaults.
+
 ## Compatibility work still outstanding
 
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
-BIOS-command submission, reinitialization/sector-mode control, synchronous
-reads, raw subcode, playback controls, legacy streams, and their BIOS request
-helpers retain their current contracts. They require a separate
+BIOS-command submission, reinitialization/sector-mode control, sector reads
+(sync and async), raw subcode, playback controls, legacy streams, and their
+BIOS request helpers retain their current contracts. They require a separate
 compatibility/routing pass before the fork
 can claim that every generic convenience API defaults to direct. Applications
 needing the new direct behavior should use the default paths above or the
@@ -72,3 +83,10 @@ pass in both modes after relinking. The full SH-4 GCC 16.2 build, both affected
 driver units with `-Werror`, and the request/CDDA-status example builds pass.
 These routing tests use transport spies; live mixed-backend playback and
 physical-drive behavior remain untested in this pass.
+
+The subsequent status/TOC pass expands that probe to 128 checks, passing in
+both Flycast modes. The original defaults and G1 ownership probes still pass
+in both modes. The full SH-4 build, `cdrom.c` and `fs_iso9660.c` with `-Werror`,
+and 14 disc example rebuilds pass. Named BIOS exports are generated in both
+the symbol table and export stubs. Actual ISO9660 mount/read and live metadata
+transport behavior were not exercised by these transport-spy tests.

@@ -229,7 +229,7 @@ done:
             request_complete, "stop"), "stop") < 0)
         failed = 1;
 
-    if(cdrom_read_toc(&bios_toc, false) != ERR_OK) {
+    if(cdrom_bios_read_toc(&bios_toc, false) != ERR_OK) {
         printf("BIOS TOC failed after direct CDDA controls\n");
         failed = 1;
     }

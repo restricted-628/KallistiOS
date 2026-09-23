@@ -6,11 +6,11 @@ portion exercises track and FAD-range playback, synchronous and asynchronous
 status, pause, resume, stop, and the relationship between track-relative time
 and absolute FAD.
 
-Typed status now defaults to direct SPI; the playback controls in this example
+TOC and typed status now default to direct SPI; the playback controls in this example
 still use the legacy BIOS path. This therefore exercises interleaved backends
 under shared G1 ownership, not an entirely direct playback sequence. For an
 explicitly BIOS-only comparison, use `cdrom_bios_cdda_get_status` and
-`cdrom_bios_cdda_get_status_async`.
+`cdrom_bios_cdda_get_status_async`, and use `cdrom_bios_read_toc` for the TOC.
 
 After the CDDA checks, the program offers an optional live media-swap test.
 Eject and reinsert the image through the emulator menu to validate media-event

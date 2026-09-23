@@ -175,7 +175,7 @@ int main(int argc, char **argv) {
     }
     print_mode("reset mode", &reset_mode);
 
-    if(cdrom_read_toc(&toc, false) != ERR_OK) {
+    if(cdrom_bios_read_toc(&toc, false) != ERR_OK) {
         puts("BIOS TOC failed after direct reinitialization");
         failed = 1;
     }

@@ -88,6 +88,10 @@ static void *stream_cb_param = NULL;
 static bool inited = false;
 static int cur_sector_size = 2048;
 
+/* Primary-command deadline for convenience APIs without a timeout argument.
+   Direct transport recovery has its own bounded cleanup deadline. */
+#define CDROM_DIRECT_COMMAND_TIMEOUT_MS 10000u
+
 size_t cdrom_sector_size_internal(void) {
     return (size_t)cur_sector_size;
 }
@@ -809,6 +813,20 @@ static int sample_media_status(cd_check_drive_status_t *sample,
 
 /* Return the status of the drive as two integers (see constants) */
 int cdrom_get_status(int *status, int *disc_type) {
+    gdrom_direct_status_t stat;
+    int rv = gdrom_direct_get_status(
+        &stat, CDROM_DIRECT_COMMAND_TIMEOUT_MS, NULL);
+
+    /* The direct diagnostic API can expose a payload followed by CHECK.
+       This legacy convenience contract publishes outputs only on success. */
+    if(status)
+        *status = rv == 0 ? (int)stat.status : -1;
+    if(disc_type)
+        *disc_type = rv == 0 ? (int)stat.disc_type : -1;
+    return rv;
+}
+
+int cdrom_bios_get_status(int *status, int *disc_type) {
     cd_check_drive_status_t stat;
     int rv;
 
@@ -1267,6 +1285,15 @@ int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size) {
 
 /* Read the table of contents */
 int cdrom_read_toc(cd_toc_t *toc_buffer, bool high_density) {
+    gdrom_direct_result_t transport = { 0 };
+
+    if(gdrom_direct_read_toc(toc_buffer, high_density,
+                             CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, &transport);
+}
+
+int cdrom_bios_read_toc(cd_toc_t *toc_buffer, bool high_density) {
     cd_cmd_toc_params_t params;
 
     params.area = high_density ? CD_AREA_HIGH : CD_AREA_LOW;
@@ -1713,7 +1740,8 @@ void cdrom_decode_cdda_status_internal(
 int cdrom_cdda_get_status(cdrom_cdda_status_t *status) {
     gdrom_direct_result_t transport = { 0 };
 
-    if(gdrom_direct_cdda_get_status(status, 10000, &transport) == 0)
+    if(gdrom_direct_cdda_get_status(
+            status, CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport) == 0)
         return ERR_OK;
     return gdrom_direct_failure_result_internal(errno, &transport);
 }

@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
              "medium; current-disc ID is intentionally unavailable");
     }
 
-    if(cdrom_read_toc(&toc, false) != ERR_OK) {
+    if(cdrom_bios_read_toc(&toc, false) != ERR_OK) {
         puts("BIOS TOC failed after media recognition");
         failed = 1;
     }

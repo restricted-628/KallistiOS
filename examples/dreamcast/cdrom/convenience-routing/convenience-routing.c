@@ -20,6 +20,10 @@ static int token, user_data, direct_error;
 static bool sense_valid;
 static cdrom_sense_t sense;
 static cdrom_cdda_status_t status;
+static cd_toc_t toc;
+static unsigned int direct_status_calls, direct_toc_calls, bios_status_calls;
+static bool high_density;
+static int bios_status_error;
 
 #define CHECK(c) do { ++checks; if(!(c)) { ++failures; \
     printf("DISC-CONVENIENCE: failed line=%d errno=%d\n", __LINE__, errno); \
@@ -69,6 +73,31 @@ int __wrap_gdrom_direct_cdda_get_status(
         return -1;
     }
     out->fad = 12345;
+    return 0;
+}
+
+int __wrap_gdrom_direct_get_status(
+    gdrom_direct_status_t *out, uint32_t timeout, gdrom_direct_result_t *result) {
+    ++direct_status_calls;
+    CHECK(out && timeout == 10000 && !result);
+    /* A diagnostic payload can precede CHECK; don't publish it on failure. */
+    out->status = CD_STATUS_PAUSED;
+    out->disc_type = CD_GDROM;
+    errno = direct_error;
+    return direct_error ? -1 : 0;
+}
+
+int __wrap_gdrom_direct_read_toc(
+    cd_toc_t *out, bool density, uint32_t timeout, gdrom_direct_result_t *result) {
+    ++direct_toc_calls;
+    CHECK(out == &toc && density == high_density && timeout == 10000 && result);
+    result->sense_valid = sense_valid;
+    result->sense = sense;
+    if(direct_error) {
+        errno = direct_error;
+        return -1;
+    }
+    out->first = 0x41010000;
     return 0;
 }
 
@@ -123,12 +152,30 @@ int __wrap_g1_bus_unlock(void) {
 }
 
 gdc_cmd_hnd_t __wrap_syscall_gdrom_send_command(cd_cmd_code_t cmd, void *params) {
-    cd_cmd_getscd_params_t *q = params;
     ++bios_calls;
-    CHECK(testing && held && cmd == CD_CMD_GETSCD && q
-          && q->which == CD_SUB_Q_CHANNEL && q->buflen == 14);
-    fill_subcode(q->buffer);
+    CHECK(testing && held && params);
+    if(cmd == CD_CMD_GETTOC2) {
+        cd_cmd_toc_params_t *t = params;
+        CHECK(t->buffer == &toc
+              && t->area == (high_density ? CD_AREA_HIGH : CD_AREA_LOW));
+        t->buffer->first = 0x41020000;
+    }
+    else {
+        cd_cmd_getscd_params_t *q = params;
+        CHECK(cmd == CD_CMD_GETSCD && q->which == CD_SUB_Q_CHANNEL
+              && q->buflen == 14);
+        fill_subcode(q->buffer);
+    }
     return 77;
+}
+
+int __wrap_syscall_gdrom_check_drive(cd_check_drive_status_t *out) {
+    ++bios_status_calls;
+    CHECK(testing && held && out);
+    out->status = CD_STATUS_STANDBY;
+    out->disc_type = CD_CDROM_XA;
+    errno = bios_status_error;
+    return bios_status_error ? -1 : 0;
 }
 
 void __wrap_syscall_gdrom_exec_server(void) {
@@ -194,6 +241,59 @@ int main(void) {
           && errno == EINVAL);
     CHECK(cdrom_bios_cdda_get_status(NULL) == ERR_SYS && errno == EINVAL);
     CHECK(direct_calls == 14 && bios_calls == 5);
+
+    /* Generic metadata ignores BIOS filesystem selection; explicit BIOS
+       metadata ignores direct filesystem selection. */
+    {
+        int drive = 99, disc = 99;
+        direct_error = 0;
+        sense_valid = false;
+        CHECK(cdrom_get_status(&drive, &disc) == 0
+              && drive == CD_STATUS_PAUSED && disc == CD_GDROM);
+        CHECK(cdrom_get_status(NULL, &disc) == 0 && disc == CD_GDROM);
+        CHECK(cdrom_get_status(&drive, NULL) == 0 && drive == CD_STATUS_PAUSED);
+        CHECK(cdrom_get_status(NULL, NULL) == 0);
+        direct_error = EIO;
+        CHECK(cdrom_get_status(&drive, &disc) == -1 && errno == EIO
+              && drive == -1 && disc == -1);
+        direct_error = EPERM;
+        CHECK(cdrom_get_status(&drive, &disc) == -1 && errno == EPERM
+              && drive == -1 && disc == -1);
+
+        direct_error = 0;
+        CHECK(cdrom_read_toc(&toc, false) == ERR_OK && toc.first == 0x41010000);
+        high_density = true;
+        CHECK(cdrom_read_toc(&toc, true) == ERR_OK && toc.first == 0x41010000);
+        for(size_t i = 0; i < sizeof(errors) / sizeof(errors[0]); ++i) {
+            direct_error = errors[i].error;
+            CHECK(cdrom_read_toc(&toc, true) == errors[i].result
+                  && errno == errors[i].error);
+        }
+        sense_valid = true;
+        sense.key = CDROM_SENSE_NOT_READY;
+        sense.asc = 0x3a;
+        CHECK(cdrom_read_toc(&toc, true) == ERR_NO_DISC && errno == EIO);
+        sense.key = CDROM_SENSE_UNIT_ATTENTION;
+        CHECK(cdrom_read_toc(&toc, true) == ERR_DISC_CHG && errno == EIO);
+        CHECK(direct_status_calls == 6 && direct_toc_calls == 11
+              && bios_status_calls == 0 && bios_calls == 5);
+
+        CHECK(fs_iso9660_set_backend(FS_ISO9660_BACKEND_DIRECT) == 0);
+        CHECK(cdrom_bios_get_status(&drive, &disc) == 0
+              && drive == CD_STATUS_STANDBY && disc == CD_CDROM_XA);
+        CHECK(cdrom_bios_get_status(NULL, &disc) == 0 && disc == CD_CDROM_XA);
+        CHECK(cdrom_bios_get_status(&drive, NULL) == 0 && drive == CD_STATUS_STANDBY);
+        CHECK(cdrom_bios_get_status(NULL, NULL) == 0);
+        bios_status_error = EIO;
+        CHECK(cdrom_bios_get_status(&drive, &disc) == -1 && errno == EIO
+              && drive == -1 && disc == -1);
+        high_density = false;
+        CHECK(cdrom_bios_read_toc(&toc, false) == ERR_OK && toc.first == 0x41020000);
+        high_density = true;
+        CHECK(cdrom_bios_read_toc(&toc, true) == ERR_OK && toc.first == 0x41020000);
+        CHECK(direct_status_calls == 6 && direct_toc_calls == 11
+              && bios_status_calls == 5 && bios_calls == 7 && !held);
+    }
     testing = false;
     printf("DISC-CONVENIENCE: %s checks=%u\n", failures ? "FAIL" : "PASS", checks);
     return failures ? 1 : 0;

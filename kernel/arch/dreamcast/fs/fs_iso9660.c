@@ -679,14 +679,14 @@ static int init_percd(void) {
             return -1;
         }
 
-        if((i = cdrom_get_status(NULL, &disc_type)) != ERR_OK) {
+        if((i = cdrom_bios_get_status(NULL, &disc_type)) != ERR_OK) {
             dbglog(DBG_ERROR,
-                   "fs_iso9660:init_percd: cdrom_get_status returned %d\n",
+                   "fs_iso9660:init_percd: cdrom_bios_get_status returned %d\n",
                    i);
             return -1;
         }
 
-        if((i = cdrom_read_toc(&toc, disc_type == CD_GDROM)) != 0)
+        if((i = cdrom_bios_read_toc(&toc, disc_type == CD_GDROM)) != 0)
             return i;
     }
 

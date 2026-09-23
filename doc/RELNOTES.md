@@ -11,6 +11,12 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Routed drive status and TOC queries through direct SPI by default, with
+  explicit `cdrom_bios_get_status` and `cdrom_bios_read_toc` alternatives.
+  BIOS filesystem mounts and BIOS-reference/reuse examples now name those
+  paths explicitly. Status keeps its existing 0/-1 convention and failure
+  sentinels; TOC keeps `ERR_*` results. Neither silently falls back to BIOS.
+
 * Routed async pickup seek and sync/async typed CDDA status directly through
   SPI by default. Explicit `cdrom_bios_seek_async`,
   `cdrom_bios_cdda_get_status`, and `cdrom_bios_cdda_get_status_async` retain

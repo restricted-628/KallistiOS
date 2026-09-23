@@ -64,7 +64,7 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    bios_result = cdrom_read_toc(&bios_toc, high_density);
+    bios_result = cdrom_bios_read_toc(&bios_toc, high_density);
     if(bios_result == ERR_OK)
         bios_fad = cdrom_locate_data_track(&bios_toc);
 
