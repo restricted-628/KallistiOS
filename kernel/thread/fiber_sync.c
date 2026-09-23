@@ -152,6 +152,10 @@ int fiber_event_wait(kfiber_event_t *event) {
     }
     if(!event_valid(event))
         return -1;
+    if(_fiber_runtime_cookie() != event->runtime_cookie) {
+        errno = EXDEV;
+        return -1;
+    }
 
     old_irq = irq_disable();
     if(event->signaled) {

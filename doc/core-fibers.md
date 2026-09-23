@@ -95,5 +95,34 @@ and FPU mode assumptions. No media playback support or throughput is implied.
 - Prerequisite saved-stack host tests passed GCC 14 GNU17/C23 and Clang
   address/undefined-behavior sanitizers, in soft-gUSA and plain configurations.
 
-These are build, link, header-test, and symbol checks. Fresh emulator runs of
-the extracted fiber runtime and physical-hardware tests are still pending.
+### Isolated runtime validation, 2026-09-23
+
+All four core examples passed in both interpreter and dynarec modes of the
+installed Flycast v2.7 (`628bd3dbb`), using REIOS, 16 MiB RAM and private emulator
+configuration/data directories. These are eight fresh emulator runs of the
+extracted branch, not reused results from the integrated fork. No MMU-default
+or cache-policy changes were included.
+
+The synchronization regression first reproduced an ownership bug in both
+modes: a signaled event incorrectly allowed a foreign thread's wait to succeed.
+The fix checks the owning runtime before the signaled fast path, matching the
+existing mutex ownership rule. Both modes then passed:
+
+- Four foreign wait cases: attached/unattached thread, set/unset event.
+- Owner main-fiber immediate success versus `EDEADLK` when parking is needed.
+- Destruction of a parked event waiter and a parked mutex waiter, with immediate
+  stack overwrite before the surviving waiter is woken.
+- Mutex handoff ownership preventing destruction before the recipient resumes.
+- Existing FIFO, sticky-event, state and lifecycle checks.
+
+Success markers were `KOSFIBERCTX scheduler=2 bounds=2`,
+`KOSFIBERAPI scheduler=2 callbacks=8`,
+`KOSFIBERSYNC lifetime foreign=4 cancelled=2 resumed=2`,
+`KOSFIBERSYNC sequence=8 fifo=2`, and
+`KOSFIBERMATH children=2 rounds=2 xmtrx=16`.
+
+Physical-hardware validation remains open. The XMTRX probe checks cooperative
+preservation and yields to KOS, but does not establish interference from a
+separate FPU-using thread. Owner-thread teardown, addon notification/cancellation
+ABI review, and MMU-on integration remain separate review gates; these results
+do not establish a stable API or media-decoder compatibility.

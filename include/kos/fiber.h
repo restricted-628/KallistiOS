@@ -126,7 +126,12 @@ kfiber_t *fiber_create(void *stack, size_t stack_size,
 /** \brief Destroy a non-running fiber.
 
     The main fiber cannot be destroyed. This function never frees the borrowed
-    stack.
+    stack. Destroying a parked fiber removes its synchronization waiter before
+    returning, so the caller may immediately reuse its stack. The suspended
+    continuation is not resumed and no application cleanup code is run.
+
+    A fiber which owns a cooperative mutex cannot be destroyed (`EBUSY`),
+    including a ready waiter which has received ownership but not yet resumed.
 
     \retval 0  Success.
     \retval -1 Error, with `errno` set.
