@@ -71,12 +71,19 @@ is explicit per call, independent of the BIOS mode. Short transfers fail with
 `EPROTO`; excess data is drained without overrunning the destination and fails
 with `EMSGSIZE`. This does not change the generic BIOS compatibility aliases.
 
-Direct DMA, ranges, and staged sessions still accept only cooked 2048-byte
-Mode-1/Mode-2 Form-1 sectors and reject the new raw enum. A 2352-byte sector is
-not a multiple of the existing 32-byte DMA transfer unit; raw DMA needs its own
-alignment/staging contract before it can be enabled. Generic BIOS APIs also
-accept configured raw layouts, which the default switch must not silently
-reinterpret as cooked data.
+Direct DMA now accepts RAW2352 for even counts from 2 through 16, with a
+32-byte-aligned destination and exact sectors * 2352 byte accounting. This
+applies to synchronous/queued RAM or PVR destinations and leased GAPS SRAM.
+The queued executor captures format and byte counts at submission and uses
+that same size for the execution-time lease claim. Two raw sectors occupy
+4704 bytes, an exact multiple of 32; odd counts are rejected before submission
+or G1 ownership. There is no padding, extra sector read, hidden temporary
+buffer, or PIO fallback. Explicit PIO remains available for odd raw counts.
+
+Ranges, chained-request constructors, and staged sessions remain cooked-only.
+Arbitrary-count raw DMA/staging and bounded large-read chaining still need a
+separate contract before generic reads can switch. Generic BIOS APIs accept
+configured raw layouts, which must not be silently reinterpreted as cooked.
 
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
 BIOS-command submission, reinitialization/sector-mode control, sector reads
@@ -143,3 +150,18 @@ packet tests under GCC 14 GNU17/strict C23 and Clang ASan/UBSan. These simulated
 register tests do not prove physical raw-sector contents or drive timing.
 After relinking, the BIOS read, convenience-routing, default-selection, and
 G1 ownership probes still pass all 151/128/14/4 checks in both Flycast modes.
+
+The even-count raw DMA pass adds `direct-raw-dma`. Its 1426 checks pass in
+both Flycast modes using the production driver with simulated registers,
+cache operations, IRQ clients, queue submission, and SRAM leases. Coverage
+includes every even raw count from 2 through 16, both completion-event orders,
+exact byte/protection/cache ranges, cooked-format preservation, short-DMA
+failure, odd/invalid input rejection, memory limits, deferred execution,
+pre-command cancellation, progress, and SRAM lease sizing/failure/release.
+The full SH-4 GCC 16.2 build, direct driver and new probe under `-Werror`,
+eight existing example rebuilds, and GCC 14 GNU17/strict C23 plus Clang
+ASan/UBSan packet tests pass. Payload writes and physical DMA timing are not
+simulated by this probe; actual raw-disc comparisons remain outstanding.
+After updating the former all-raw-DMA rejection checks to odd raw counts,
+the 90-check PIO probe passes in both modes. The prior BIOS read, convenience,
+defaults, and G1 probes also pass all 151/128/14/4 checks after relinking.

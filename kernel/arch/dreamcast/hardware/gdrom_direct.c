@@ -184,6 +184,23 @@ static int capture_check_sense_locked(
     gdrom_direct_result_t *error_transport);
 static int deadline_timeout(uint64_t deadline, uint32_t *timeout);
 
+/* A raw sector occupies 73.5 Holly transfer units. Require whole pairs
+   instead of padding the transfer or reading beyond the caller's range. */
+static size_t dma_read_bytes(size_t sectors,
+                             gdrom_direct_sector_type_t sector_type) {
+    if(!sectors || sectors > GDROM_DIRECT_DMA_MAX_SECTORS)
+        return 0;
+    switch(sector_type) {
+        case GDROM_DIRECT_SECTOR_MODE1:
+        case GDROM_DIRECT_SECTOR_MODE2_FORM1:
+            return sectors * GDROM_DIRECT_SECTOR_SIZE;
+        case GDROM_DIRECT_SECTOR_RAW2352:
+            return (sectors & 1u) ? 0 : sectors * GDROM_DIRECT_RAW_SECTOR_SIZE;
+        default:
+            return 0;
+    }
+}
+
 static bool direct_command_irq(uint32_t code, void *data) {
     gdrom_direct_dma_operation_t *operation = data;
 
@@ -236,7 +253,7 @@ static void rearm_command_irq(gdrom_direct_dma_operation_t *operation) {
     irq_state = irq_disable();
     operation->command_event = false;
     if(operation->command_masked) {
-        *(volatile uint32_t *)ASIC_ACK_B = 1u;
+        G1_OUT32(ASIC_ACK_B, 1u);
         (void)g1_bus_gd_command_client_unmask();
         operation->command_masked = false;
     }
@@ -1893,7 +1910,7 @@ static int read_sectors_dma_internal(
     g1_bus_dma_client_t dma_client = G1_BUS_DMA_CLIENT_INVALID;
     uintptr_t buffer_address = (uintptr_t)buffer;
     uint32_t physical_address;
-    uint32_t expected_bytes;
+    uint32_t expected_bytes = (uint32_t)dma_read_bytes(sectors, sector_type);
     uint64_t deadline;
     uint64_t cleanup_deadline;
     uint32_t remaining;
@@ -1915,16 +1932,12 @@ static int read_sectors_dma_internal(
     memset(observed, 0, sizeof(*observed));
 
     if(!buffer || (buffer_address & 31u) || fad < 150u
-            || fad > GDROM_SPI_MAX_U24 || !sectors
-            || sectors > GDROM_DIRECT_DMA_MAX_SECTORS || !timeout
-            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
-                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)
+            || fad > GDROM_SPI_MAX_U24 || !expected_bytes || !timeout
             || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
         errno = EINVAL;
         return -1;
     }
 
-    expected_bytes = (uint32_t)(sectors * GDROM_DIRECT_SECTOR_SIZE);
     physical_address = (uint32_t)(buffer_address & MEM_AREA_CACHE_MASK);
     destination = dma_destination_classify(buffer_address, expected_bytes,
                                            gaps_authorized);
@@ -1935,7 +1948,10 @@ static int read_sectors_dma_internal(
 
     expected_type = sector_type == GDROM_DIRECT_SECTOR_MODE1
         ? GDROM_SPI_EXPECT_MODE1 : GDROM_SPI_EXPECT_MODE2_FORM1;
-    if(gdrom_spi_read(&packet, GDROM_SPI_SELECT_DATA,
+    if(sector_type == GDROM_DIRECT_SECTOR_RAW2352)
+        expected_type = GDROM_SPI_EXPECT_ANY;
+    if(gdrom_spi_read(&packet, sector_type == GDROM_DIRECT_SECTOR_RAW2352
+                      ? GDROM_SPI_SELECT_OTHER : GDROM_SPI_SELECT_DATA,
                       expected_type, GDROM_SPI_POINT_FAD,
                       fad, (uint32_t)sectors) != 0) {
         errno = EINVAL;
@@ -1981,7 +1997,7 @@ static int read_sectors_dma_internal(
        mistaken for completion of the packet below. */
     G1_OUT8(G1_ATA_CTL, GDROM_CTL_INTERRUPTS_OFF);
     (void)G1_IN8(G1_ATA_STATUS_REG);
-    *(volatile uint32_t *)ASIC_ACK_B = 1u;
+    G1_OUT32(ASIC_ACK_B, 1u);
 
     /* Holly's 1001 timing and the drive's Set Features mode are independent.
        Program both so direct DMA does not depend on a BIOS side effect. */
@@ -2170,7 +2186,7 @@ out_stop_dma:
         dcache_inval_range(buffer_address, expected_bytes);
 
     if(operation.command_masked && !bus_faulted) {
-        *(volatile uint32_t *)ASIC_ACK_B = 1u;
+        G1_OUT32(ASIC_ACK_B, 1u);
         (void)g1_bus_gd_command_client_unmask();
         operation.command_masked = false;
     }
@@ -2217,19 +2233,15 @@ int gdrom_direct_read_sectors_dma_gaps(
         gdrom_direct_sector_type_t sector_type, uint32_t timeout,
         gdrom_direct_result_t *result) {
     uint32_t physical_address;
-    size_t bytes;
+    size_t bytes = dma_read_bytes(sectors, sector_type);
     int saved_errno;
     int rv;
 
-    if(fad < 150u || fad > GDROM_SPI_MAX_U24 || !sectors
-            || sectors > GDROM_DIRECT_DMA_MAX_SECTORS || !timeout
-            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
-                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)
+    if(fad < 150u || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
             || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
         errno = EINVAL;
         return -1;
     }
-    bytes = sectors * GDROM_DIRECT_SECTOR_SIZE;
     if(gaps_sram_dma_claim(lease, offset, bytes,
                            GAPS_SRAM_DMA_OWNER_G1, &physical_address) < 0)
         return -1;
@@ -2874,7 +2886,7 @@ static int direct_request_execute(cdrom_request_t *request, void *data) {
     int rv;
 
     if(read->gaps_lease != GAPS_SRAM_LEASE_INVALID) {
-        size_t bytes = read->sectors * GDROM_DIRECT_SECTOR_SIZE;
+        size_t bytes = dma_read_bytes(read->sectors, read->sector_type);
 
         if(gaps_sram_dma_claim(read->gaps_lease, read->gaps_offset, bytes,
                                GAPS_SRAM_DMA_OWNER_G1,
@@ -2923,19 +2935,15 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_async(
         .timeout = timeout,
         .result = result,
     };
-    size_t bytes;
+    size_t bytes = dma_read_bytes(sectors, sector_type);
 
     if(!buffer || ((uintptr_t)buffer & 31u) || fad < 150u
-            || fad > GDROM_SPI_MAX_U24 || !sectors
-            || sectors > GDROM_DIRECT_DMA_MAX_SECTORS || !timeout
-            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
-                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)
+            || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
             || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
         errno = EINVAL;
         return NULL;
     }
 
-    bytes = sectors * GDROM_DIRECT_SECTOR_SIZE;
     return cdrom_request_submit_executor(
         CD_CMD_DMAREAD, &read, sizeof(read), bytes, bytes, bytes, timeout,
         direct_request_execute, NULL, NULL, callback, callback_data);
@@ -2957,17 +2965,13 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_gaps_async(
         .result = result,
     };
     gaps_sram_info_t info;
-    size_t bytes;
+    size_t bytes = dma_read_bytes(sectors, sector_type);
 
-    if(fad < 150u || fad > GDROM_SPI_MAX_U24 || !sectors
-            || sectors > GDROM_DIRECT_DMA_MAX_SECTORS || !timeout
-            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
-                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)
+    if(fad < 150u || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
             || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
         errno = EINVAL;
         return NULL;
     }
-    bytes = sectors * GDROM_DIRECT_SECTOR_SIZE;
     if(gaps_sram_get_info(lease, &info) < 0)
         return NULL;
     if(offset >= info.size || bytes > info.size - offset

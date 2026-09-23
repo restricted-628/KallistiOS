@@ -182,9 +182,9 @@ int main(void) {
     REJECT(buffer, 0xffffff, 2, GDROM_DIRECT_SECTOR_RAW2352, 1000);
     REJECT(buffer, 150, 1, (gdrom_direct_sector_type_t)99, 1000);
     REJECT(buffer, 150, 1, GDROM_DIRECT_SECTOR_RAW2352, 0);
-    CHECK(gdrom_direct_read_sectors_dma(storage, 150, 2, GDROM_DIRECT_SECTOR_RAW2352,
+    CHECK(gdrom_direct_read_sectors_dma(storage, 150, 1, GDROM_DIRECT_SECTOR_RAW2352,
                                        1000, &result) == -1 && errno == EINVAL && !locks);
-    CHECK(!gdrom_direct_read_sectors_dma_async(storage, 150, 2, GDROM_DIRECT_SECTOR_RAW2352,
+    CHECK(!gdrom_direct_read_sectors_dma_async(storage, 150, 1, GDROM_DIRECT_SECTOR_RAW2352,
                                               1000, NULL, NULL, NULL) && errno == EINVAL);
     CHECK(!gdrom_direct_sector_range_open(150, 2, GDROM_DIRECT_SECTOR_RAW2352)
           && errno == EINVAL);

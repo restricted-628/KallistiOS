@@ -78,8 +78,8 @@ typedef enum gdrom_direct_probe_command {
 } gdrom_direct_probe_command_t;
 
 /** \brief Sector format requested by a direct read.
-    Raw sectors are currently supported by the synchronous PIO entry point
-    only; DMA, ranges, and staged sessions still require a cooked format.
+    Raw sectors are supported by synchronous PIO and even-count DMA reads.
+    Ranges and staged sessions still require a cooked format.
 */
 typedef enum gdrom_direct_sector_type {
     GDROM_DIRECT_SECTOR_MODE1 = 0,
@@ -576,12 +576,19 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
                               uint32_t timeout,
                               gdrom_direct_result_t *result);
 
-/** \brief Read cooked sectors through the direct Holly GD-DMA transport.
+/** \brief Read cooked or raw sectors through the direct Holly GD-DMA transport.
 
     This experimental operation does not use the BIOS command server. The
     destination must be 32-byte aligned system RAM or PVR RAM. Success requires
     both the drive command INTRQ and the Holly DMA-complete event; neither
     interrupt by itself publishes the buffer.
+
+    RAW2352 requires an even sector count, so the exact transfer length is a
+    multiple of 32 bytes. No padding, extra sector read, temporary allocation,
+    or PIO fallback is performed. The destination must hold sectors * 2352
+    bytes for raw reads, or sectors * 2048 for cooked reads. Format selection
+    is per call and does not inherit the BIOS sector mode. Odd raw counts may
+    instead be read explicitly with \ref gdrom_direct_read_sectors.
 
     Cacheable system-RAM destinations are invalidated immediately before DMA
     and again after the engine becomes inactive. PVR RAM does not receive data
@@ -599,7 +606,7 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
     \param  buffer       Destination aligned to 32 bytes in system or PVR RAM.
     \param  fad          First absolute frame address; must be at least 150.
     \param  sectors      Required count from 1 through 16.
-    \param  sector_type  Exact 2048-byte sector format expected from the disc.
+    \param  sector_type  Mode-1/Mode-2 Form-1, or RAW2352 with an even count.
     \param  timeout      Required nonzero whole-operation timeout in milliseconds.
     \param  result       Optional low-level command and DMA observations.
     \retval 0            Both command and DMA completed successfully.
@@ -610,7 +617,7 @@ int gdrom_direct_read_sectors_dma(
     gdrom_direct_sector_type_t sector_type, uint32_t timeout,
     gdrom_direct_result_t *result);
 
-/** \brief Queue a cooked-sector read through the direct GD-DMA transport.
+/** \brief Queue a cooked or raw read through the direct GD-DMA transport.
 
     This is the asynchronous form of the experimental direct DMA operation.
     It returns a normal \ref cdrom_request_t and therefore uses the common KOS
@@ -623,11 +630,13 @@ int gdrom_direct_read_sectors_dma(
 
     Cancellation wakes the sleeping direct-DMA owner and runs the same bounded
     Holly stop and SPI soft-reset recovery as the synchronous operation.
+    Format and exact byte count are captured at submission. Raw reads require
+    an even sector count, with the same buffer contract as the synchronous API.
 
     \param  buffer        Destination aligned to 32 bytes in system or PVR RAM.
     \param  fad           First absolute frame address; must be at least 150.
     \param  sectors       Required count from 1 through 16.
-    \param  sector_type   Exact 2048-byte sector format expected from the disc.
+    \param  sector_type   Mode-1/Mode-2 Form-1, or RAW2352 with an even count.
     \param  timeout       Required nonzero operation timeout in milliseconds.
     \param  result        Optional direct transport result, valid at terminal state.
     \param  callback      Optional common request completion callback.
@@ -641,7 +650,7 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_async(
     gdrom_direct_result_t *result,
     cdrom_request_callback_t callback, void *callback_data);
 
-/** \brief Read cooked sectors directly into leased GAPS SRAM.
+/** \brief Read cooked or even-count raw sectors into leased GAPS SRAM.
 
     The lease is pinned for the complete GD-DMA operation, so it cannot be
     released or reused while Holly writes it. The destination is the byte
@@ -652,6 +661,8 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_async(
     The bridge must be initialized and the lease must cover the complete
     transfer. BBA initialization leases its complete established SRAM layout,
     so staging allocation naturally fails while that driver owns the window.
+    The format/count and 32-byte alignment rules are the same as
+    \ref gdrom_direct_read_sectors_dma; the lease must cover the exact byte count.
 
     \retval 0 Every sector reached the leased SRAM range.
     \retval -1 Validation, ownership, transport, or hardware failure.
@@ -661,7 +672,7 @@ int gdrom_direct_read_sectors_dma_gaps(
     gdrom_direct_sector_type_t sector_type, uint32_t timeout,
     gdrom_direct_result_t *result);
 
-/** \brief Queue a direct cooked-sector read into leased GAPS SRAM.
+/** \brief Queue a cooked or even-count raw read into leased GAPS SRAM.
 
     The caller must retain the lease until the returned request reaches a
     terminal state. Execution pins the lease before programming GD-DMA and
@@ -719,7 +730,7 @@ cdrom_stream_session_t *gdrom_direct_stream_session_start(
     \param  buffer       Destination aligned to 32 bytes in system RAM.
     \param  fad          First absolute frame address; must be at least 150.
     \param  sectors      Required count from 1 through 16.
-    \param  sector_type  Exact 2048-byte sector format expected from the disc.
+    \param  sector_type  Mode-1/Mode-2 Form-1, or RAW2352 with an even count.
     \param  timeout      Required nonzero timeout for each diagnostic phase.
     \param  diagnostic   Complete result record; must not be `NULL`.
     \retval 0            All fault and post-fault checks behaved as expected.

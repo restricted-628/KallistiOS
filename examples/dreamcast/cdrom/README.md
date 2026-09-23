@@ -22,6 +22,9 @@ a purpose-built data or mixed-mode image. They are integration tests rather
 than minimal application templates; read each directory's README before use.
 
 - `direct-status` and `direct-geometry` are read-only diagnostics.
+- `direct-raw-pio` and `direct-raw-dma` use the production driver with simulated
+  register access to check raw-sector contracts. They need no disc and provide
+  software regression coverage, not live transport or physical-drive proof.
 - `direct-read`, `direct-async`, and `direct-iso9660` compare direct data with
   the BIOS-backed path and verify DMA guards/progress.
 - `direct-cdda` actively controls audio playback.
