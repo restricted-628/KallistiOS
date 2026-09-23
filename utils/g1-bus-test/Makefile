@@ -26,6 +26,7 @@ $(TARGET): $(OBJS)
 
 test: $(TARGET)
 	./$(TARGET)
+	./$(TARGET) --irq-restore-failure
 
 clean:
 	$(RM) $(TARGET) $(OBJS)

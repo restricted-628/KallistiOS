@@ -653,6 +653,8 @@ static int cdrom_check_transfer(void *d) {
 }
 
 /* Command execution sequence */
+static int cdrom_abort_cmd_owned(uint32_t timeout);
+
 int cdrom_exec_cmd(cd_cmd_code_t cmd, void *param) {
     return cdrom_exec_cmd_timed(cmd, param, 0);
 }
@@ -672,9 +674,9 @@ int cdrom_exec_cmd_timed(cd_cmd_code_t cmd, void *param, uint32_t timeout) {
 
     /* Start the process of executing the command. */
     if(cdrom_poll(&cmd_hnd, timeout, cdrom_check_cmd_done) == ERR_TIMEOUT) {
-        /* cdrom_abort_cmd() acquires G1 itself when no DMA owns it. */
+        /* Keep ownership until this handle has been aborted/reset. */
+        (void)cdrom_abort_cmd_owned(1000);
         g1_bus_unlock();
-        cdrom_abort_cmd(1000, true);
         return ERR_TIMEOUT;
     }
 
@@ -687,8 +689,31 @@ int cdrom_exec_cmd_timed(cd_cmd_code_t cmd, void *param, uint32_t timeout) {
     return result;
 }
 
-int cdrom_abort_cmd(uint32_t timeout, bool abort_dma) {
+/* Caller owns G1 throughout; this helper neither acquires nor releases it. */
+static int cdrom_abort_cmd_owned(uint32_t timeout) {
     int rv = ERR_OK;
+
+    if(cmd_hnd <= 0)
+        return ERR_NO_ACTIVE;
+
+    syscall_gdrom_abort_command(cmd_hnd);
+
+    if(cdrom_poll(&cmd_hnd, timeout, cdrom_check_abort_done) == ERR_TIMEOUT) {
+        dbglog(DBG_ERROR, "cdrom_abort_cmd: Timeout exceeded, resetting.\n");
+        rv = ERR_TIMEOUT;
+        syscall_gdrom_reset();
+        syscall_gdrom_init();
+    }
+
+    cmd_hnd = 0;
+    stream_enabled = false;
+    if(stream_cb)
+        cdrom_stream_set_callback(0, NULL);
+    return rv;
+}
+
+int cdrom_abort_cmd(uint32_t timeout, bool abort_dma) {
+    int rv;
     irq_mask_t old = irq_disable();
 
     if(cmd_hnd <= 0) {
@@ -716,22 +741,7 @@ int cdrom_abort_cmd(uint32_t timeout, bool abort_dma) {
     }
 
     irq_restore(old);
-    syscall_gdrom_abort_command(cmd_hnd);
-
-    if(cdrom_poll(&cmd_hnd, timeout, cdrom_check_abort_done) == ERR_TIMEOUT) {
-        dbglog(DBG_ERROR, "cdrom_abort_cmd: Timeout exceeded, resetting.\n");
-        rv = ERR_TIMEOUT;
-        syscall_gdrom_reset();
-        syscall_gdrom_init();
-    }
-
-    cmd_hnd = 0;
-    stream_enabled = false;
-
-    if(stream_cb) {
-        cdrom_stream_set_callback(0, NULL);
-    }
-
+    rv = cdrom_abort_cmd_owned(timeout);
     g1_bus_unlock();
     return rv;
 }

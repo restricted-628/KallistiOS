@@ -311,6 +311,7 @@ asic_evt_handler_entry_t asic_evt_set_handler(uint16_t code, asic_evt_handler ha
                             re-enable the interrupt.
 
     \retval 0              Threaded handler installed.
+    \retval -1             Interrupt context (`EPERM`); no worker is created.
     \retval -1             Invalid input, allocation failure, or an event with
                             an existing handler or claim. `errno` is `EINVAL`,
                             an allocation error, or `EBUSY`, respectively.
@@ -325,6 +326,9 @@ int asic_evt_request_threaded_handler(uint16_t code, asic_evt_handler handler,
 
     Removing a threaded handler from its own worker callback is refused with
     `errno` set to `EDEADLK`; the handler remains installed.
+    Removing a threaded handler from interrupt context is refused with `EPERM`
+    before changing the handler or its worker. Installing a threaded handler
+    likewise requires thread context.
     Invalid event codes set `errno` to `EINVAL`, and claimed events remain
     installed with `errno` set to `EBUSY`.
 

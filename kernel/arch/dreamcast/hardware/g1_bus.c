@@ -190,8 +190,14 @@ int g1_bus_unlock(void) {
     }
 
     /* Retail systems normally have the GD-ROM as the master device. */
-    if(hardware_sys_mode(NULL) == HW_TYPE_RETAIL)
-        g1_bus_select_device(0);
+    if(hardware_sys_mode(NULL) == HW_TYPE_RETAIL
+            && g1_bus_select_device(0) == 0x0f) {
+        /* IRQ completion cannot wait for a busy slave to release the bus.
+           Do not hand the next client a token for an unrestored device. */
+        g1_bus_mark_faulted();
+        errno = EIO;
+        return -1;
+    }
 
     return sem_signal(&g1_bus_sem);
 }

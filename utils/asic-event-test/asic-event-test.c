@@ -36,6 +36,7 @@ static kthread_t *current_thread;
 static unsigned int worker_creates;
 static unsigned int worker_destroys;
 static unsigned int failures;
+static bool interrupt_context;
 
 #define CHECK(condition) do { \
     if(!(condition)) { \
@@ -66,6 +67,10 @@ void asic_test_write32(uintptr_t address, uint32_t value) {
 
 irq_mask_t irq_disable(void) {
     return 0;
+}
+
+int irq_inside_int(void) {
+    return interrupt_context;
 }
 
 void irq_restore(irq_mask_t state) {
@@ -261,8 +266,16 @@ static void threaded_handler(uint32_t code, void *data) {
 
 static void test_threaded_lifecycle(void) {
     unsigned int destroys_before = worker_destroys;
+    unsigned int creates_before = worker_creates;
+    asic_evt_status_t status;
 
     threaded_code = ASIC_EVT_EXP_8BIT;
+    interrupt_context = true;
+    errno = 0;
+    CHECK(asic_evt_request_threaded_handler(threaded_code, threaded_handler,
+                                            NULL, NULL, NULL) < 0);
+    CHECK(errno == EPERM && worker_creates == creates_before);
+    interrupt_context = false;
     CHECK(asic_evt_request_threaded_handler(threaded_code, threaded_handler,
                                             NULL, threaded_mask,
                                             threaded_unmask) == 0);
@@ -271,6 +284,14 @@ static void test_threaded_lifecycle(void) {
                                             NULL, NULL, NULL) < 0);
     CHECK(errno == EBUSY);
     CHECK(worker_destroys == destroys_before + 1);
+
+    interrupt_context = true;
+    errno = 0;
+    asic_evt_remove_handler(threaded_code);
+    CHECK(errno == EPERM && worker_destroys == destroys_before + 1);
+    CHECK(asic_evt_get_status(threaded_code, &status) == 0);
+    CHECK(status.handler_present);
+    interrupt_context = false;
 
     set_pending(threaded_code);
     dispatch(ASIC_IRQB);

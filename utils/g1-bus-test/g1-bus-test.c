@@ -378,7 +378,30 @@ static void test_dma_registers_and_fault_latch(void) {
     CHECK(g1_bus_lock_timed(1) < 0 && errno == EIO);
 }
 
-int main(void) {
+static void test_failed_irq_restore(void) {
+    taskfile[taskfile_index(G1_ATA_DEVICE_SELECT)] = G1_ATA_DEVICE_SLAVE_BIT;
+    CHECK(g1_bus_device_state_init() == G1_ATA_DEVICE_SLAVE_BIT);
+    CHECK(g1_bus_lock() == 0);
+    taskfile[0] = G1_ATA_SR_BSY;
+    inside_irq = true;
+    errno = 0;
+    CHECK(g1_bus_unlock() < 0 && errno == EIO);
+    inside_irq = false;
+    CHECK(g1_bus_is_faulted());
+    CHECK(taskfile[taskfile_index(G1_ATA_DEVICE_SELECT)] == G1_ATA_DEVICE_SLAVE_BIT);
+    errno = 0;
+    CHECK(g1_bus_trylock() < 0 && errno == EIO);
+}
+
+int main(int argc, char **argv) {
+    if(argc == 2 && strcmp(argv[1], "--irq-restore-failure") == 0) {
+        test_failed_irq_restore();
+        CHECK(irq_depth == 0);
+        if(!failures)
+            puts("Shared G1 IRQ restore failure test passed");
+        return failures ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+
     test_locking_and_device_selection();
     test_dma_dispatch_and_unwind();
     test_command_dispatch();

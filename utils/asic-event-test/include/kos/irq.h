@@ -15,6 +15,7 @@ enum {
 };
 
 irq_mask_t irq_disable(void);
+int irq_inside_int(void);
 void irq_restore(irq_mask_t state);
 void irq_set_handler(irq_t code, irq_hdl_t handler, void *data);
 

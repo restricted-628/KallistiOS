@@ -536,6 +536,11 @@ int asic_evt_request_threaded_handler(uint16_t code, asic_evt_handler hnd,
     kthread_t *thd;
     uint8_t evtreg, evt;
 
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+
     if(!asic_evt_code_valid(code) || !hnd) {
         errno = EINVAL;
         return -1;
@@ -610,6 +615,14 @@ void asic_evt_remove_handler(uint16_t code)
 
     entry = asic_evt_handlers[evtreg][evt];
     thdata = asic_evt_threaded[evtreg][evt];
+
+    /* Worker destruction joins a thread. Refuse before detaching the handler
+       or freeing its data when called from an interrupt. */
+    if(thdata && irq_inside_int()) {
+        irq_restore(irq_state);
+        errno = EPERM;
+        return;
+    }
 
     if(thdata && thd_get_current() == thd_worker_get_thread(thdata->worker)) {
         irq_restore(irq_state);

@@ -26,6 +26,10 @@ Every migrated legacy call checks acquisition failure before touching the
 controller. In particular, a failed claim can no longer be mistaken for a
 successful timeout or ignored by a BIOS-backed operation.
 
+A timed-out BIOS command keeps G1 through its abort/reset sequence. It does
+not unlock and reacquire around cleanup, which could let a competing command
+replace the shared command handle before the abort reaches the firmware.
+
 ## DMA event routing
 
 The arbiter exclusively claims normal completion plus the three G1 DMA fault
@@ -54,6 +58,9 @@ If a transport cannot quiesce the shared DMA engine, it may call
 all later lock attempts fail with `EIO` until reboot. Unlock after the latch
 does not publish a second ownership token. This prevents later clients from
 interpreting an available semaphore as proof that the hardware is safe.
+If IRQ-context release cannot restore the optical master because the slave
+or DMA is still busy, it also latches this fault and returns `EIO`; it cannot
+wait in the interrupt and must not publish a successful handoff.
 
 ## Resource cost
 
@@ -77,3 +84,10 @@ DMA, ASIC-claim, semaphore, timer, and IRQ boundaries. It covers:
 The harness runs with strict warnings and address/undefined-behavior
 sanitizers. Physical validation remains required for master/slave settle time,
 DMA error signaling, ATA expansion hardware, and concurrent optical/ATA load.
+
+The extracted branch passes GCC 14 GNU17/C23 and Clang ASan/UBSan host lanes,
+including a separate failed-master-restoration case. Its full SH-4 GCC 16.2
+build passes. `examples/dreamcast/cdrom/g1-command-ownership` links production
+command code to firmware/lock spies and passes four ownership cases in both
+Flycast interpreter and dynarec modes. These mocked command results do not
+establish actual BIOS/drive recovery or DMA fault behavior.

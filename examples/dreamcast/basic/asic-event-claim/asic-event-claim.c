@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+/* Leave the disc driver's error event available for this isolated probe. */
+KOS_INIT_FLAGS(INIT_DEFAULT & ~INIT_CDROM);
+
 static volatile uint32_t event_count;
 
 static void event_handler(uint32_t code, void *data) {

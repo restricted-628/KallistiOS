@@ -17,8 +17,9 @@ interrupt-context callback.
 The token is required for `asic_evt_claim_mask()`,
 `asic_evt_claim_unmask()`, and `asic_evt_release()`. Releasing a claim disables
 the event at every level before removing its handler. Reclaiming the same event
-produces a new generation, so a stale token cannot mask or release the new
-owner's event.
+produces a new generation, rejecting tokens from previous generations. The
+generation field is 16 bits and wraps after 65,535 claims of the same event;
+callers must discard tokens after release, not retain them indefinitely.
 
 Claims fail with `EBUSY` instead of taking over an existing handler or enabled
 mask. This preserves hardware state established by a driver which has not yet
@@ -34,6 +35,11 @@ Threaded handlers are also tracked explicitly. They cannot replace claims, and
 claims cannot replace them. Removing a threaded handler joins and destroys its
 worker. Removal from that same worker is rejected with `EDEADLK`, avoiding a
 self-join. ASIC shutdown drains any threaded handlers still registered.
+
+Installing a threaded handler or removing an existing threaded handler from
+interrupt context is rejected with `EPERM`, before allocating a worker or
+detaching/freeing its data. Worker destruction may join; it is not an IRQ-safe
+operation. Removal of ordinary non-threaded handlers retains its IRQ-safe path.
 
 `asic_evt_disable_all()` is intentionally lifecycle-global: ASIC startup and
 shutdown may disable every mask regardless of individual ownership. Drivers
@@ -57,4 +63,5 @@ masking, release, stale-token rejection, legacy exclusion, dispatch accounting,
 threaded-handler self-removal protection, and shutdown cleanup.
 
 `examples/dreamcast/basic/asic-event-claim` provides a target-side smoke test
-for claim, status, mask, unmask, and release on an otherwise unused error event.
+for claim, status, mask, unmask, and release on an error event, with disc
+initialization disabled so the existing driver does not already own it.
