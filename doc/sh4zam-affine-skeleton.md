@@ -127,6 +127,18 @@ geometry, normal, lighting, UV and clipping checks as `chunk-skin-clip.elf` and
 reports `skin_palette=compact joint_bytes=84`. Compare those two variants on
 physical hardware before treating smaller storage/fewer FIPRs as a speedup.
 
+For the fixed-four path, `pvr/chunk_skin` now builds original and compact
+palette executables from the same model and 120-frame animated workload. One,
+two and four active influences exercise rotated, nonuniformly scaled joints
+and non-axis-aligned normals. A double-precision analytic oracle checks each
+deformed position and inverse-transpose normal before the cached draw; output
+guards, emitted counts and final PVR fault status are checked too. The host
+suite runs the same admission, binding, decoding, preparation and deformation
+code without the renderer. See the
+[fixed-four comparison](../examples/dreamcast/pvr/chunk_skin/README.md#compact-palette-comparison).
+This example demonstrates the importer from sampled 4x4 palettes, not the
+direct compact hierarchy producer used by `chunk_scene`.
+
 The synthetic `sh4zam/integration/skin-bench.elf` now includes a
 `compact+weights` application lane for both fixed-four and variable-span plans,
 plus a separate `compact-palette-setup` timing mode. It compares twelve workloads
@@ -188,6 +200,12 @@ Validation recorded across these integration passes:
   Both compact influence loops retain six FIPRs without a helper call. The
   public header passed the SH-4 GNU++23 check, and the official v0.9.0 source
   pin and all eleven source-verifier tests passed unchanged.
+- Fixed-four rendered comparison: both `pvr/chunk_skin` variants passed GCC
+  14 GNU17/C23, Apple Clang GNU17/C2x and Clang ASan/UBSan on host. Both
+  built with SH-4 GCC 16.2 and passed 120 rendered frames in Flycast dynarec;
+  the compact variant also passed the interpreter. The strict C2x lane
+  caught and corrected the example's old alignment-specifier ordering.
+  These runs do not establish physical-console correctness or throughput.
 
 ```sh
 make -C utils/pvr-skeleton-affine-test CC=gcc-14 test
