@@ -135,5 +135,18 @@ int pvr_chunk_skeleton_palette_build_affine(
     pvr_skin_prepared_joint_t *storage, size_t capacity,
     pvr_skin_prepared_palette_t *prepared);
 
+/** \brief Build the optional compact position/normal palette directly.
+
+    Same input, ownership, unchanged-on-failure and batch XMTRX-preservation
+    contract as pvr_chunk_skeleton_palette_build_affine(). Retains the robust
+    inverse-transpose normal calculation. Its output is consumed by
+    pvr_skin_apply_spans_compact(), not the original prepared-palette APIs.
+*/
+int pvr_chunk_skeleton_palette_build_compact(
+    const pvr_chunk_skeleton_affine_t *skeleton,
+    const pvr_chunk_skeleton_affine_pose_t *pose,
+    pvr_skin_compact_joint_t *storage, size_t capacity,
+    pvr_skin_compact_palette_t *prepared);
+
 __END_DECLS
 #endif

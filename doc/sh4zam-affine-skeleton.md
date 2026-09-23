@@ -82,11 +82,51 @@ measurements, not a claim of a 25% reduction in the entire scene or palette.
 The prepared palette consumed during skinning deliberately retains its existing
 4x4 position plus 3x3 normal layout and its XMTRX-preserving one-off transforms.
 
+## Optional compact skinning palette
+
+An additional, opt-in runtime representation is now available:
+
+- `pvr_skin_compact_joint_t`: column-major `shz_mat3x4_t` position and
+  `shz_mat3x3_t` inverse-transpose normal. It is 84 bytes versus 104 bytes for
+  the existing prepared joint on the tested host and SH-4 builds (including
+  padding). The position portion alone drops from 64 to 48 bytes.
+- `pvr_chunk_skeleton_palette_build_compact`: builds these records directly
+  from the admitted hierarchy pose and inverse binds. Normal calculation,
+  singular/overflow rejection, unchanged-on-failure publication, and batch
+  XMTRX preservation are shared with the original affine palette builder.
+- `pvr_skin_palette_prepare_compact`: bridges existing KOS palettes, rejecting
+  any position matrix whose bottom row is not exactly `[0, 0, 0, 1]`. Normals
+  are copied as supplied, not inferred from the position matrix.
+- `pvr_skin_apply_spans_compact`: consumes the existing immutable variable-span
+  weight plan with this palette. Fixed-four consumers continue using their
+  existing prepared representation. No serialized layout or old API changes.
+
+The consumer uses SH4ZAM's `shz_vec4_dot3` on the three position rows and its
+existing 3x3 normal transform. This avoids constructing a temporary 4x4 matrix
+or loading XMTRX for each influence. Dynamic source/result checks, normal
+normalization, canonical in-place operation, source weight order, repeated
+joints, originally-positive weights that normalize to zero, and valid-prefix
+errors retain the established skinning semantics. Palette components and
+prepared weights/indices are not rescanned inside the influence loop.
+
+GCC 16.2 SH-4 object-code inspection shows six FIPR instructions in the compact
+influence body (three position, three normal), versus seven in the existing
+`skin_accumulate` body. The compact influence body has no function calls,
+FTRV, FRCHG, or FSCHG. These are code-generation facts, not cycle measurements:
+loads, register pressure, cache-line crossings from the 84-byte stride, and
+workload mix still matter. No new inline assembly or memory clobbers were added.
+
+The original scene, workload, grid and clipping executables keep the original
+prepared palette. `chunk-skin-compact.elf` is an explicit grid/clipping comparison
+variant, selected by `CHUNK_SCENE_COMPACT_PALETTE`. It uses the same authored
+geometry, normal, lighting, UV and clipping checks as `chunk-skin-clip.elf` and
+reports `skin_palette=compact joint_bytes=84`. Compare those two variants on
+physical hardware before treating smaller storage/fewer FIPRs as a speedup.
+
 The existing scene workload reports full pose/draw timings and can be used for
 physical-console comparisons. No Dreamcast hardware speedup is claimed from
-host or emulator results. Compact application palettes remain a further
-candidate, requiring comparisons against conversion, alignment, and XMTRX
-ownership costs before adoption.
+host or emulator results. Default-path adoption of the optional compact palette
+still needs representative physical-console comparisons.
 
 ## Validation and reproduction
 
@@ -101,18 +141,29 @@ roots, nonunit quaternions, root shear/reflection, negative/nonuniform and zero
 scale. They also cover copied topology, rejected pruning, boundary overlap,
 late invalid TRS/overflow, empty publication on failure, workspace reuse, and
 compact matrices aligned to four bytes but not eight or thirty-two.
+Compact skinning is compared against the existing prepared consumer over the
+same 24 poses, including importer/direct-builder agreement, strided inputs,
+in-place operation, repeated/shared spans, zero weights, late invalid sources,
+arithmetic overflow, collapsed normals, normalized-to-zero positive weights,
+palette version/count/overlap failures, non-affine rejection, and late palette
+construction failure without publishing partial output.
 
-Verified in this pass:
+Validation recorded across these integration passes:
 
 - Dedicated suite: GCC 14 GNU17/C23, Apple Clang 16 GNU17/C2x, and Clang
   AddressSanitizer/UndefinedBehaviorSanitizer all passed.
-- GCC 16.2 SH-4 KOS build, all five exports, dedicated ELF, and all four scene
+- GCC 16.2 SH-4 KOS build, all eight exports, dedicated ELF, and all five scene
   variants built successfully.
 - GCC host scene/grid/clipping integration passed its authored geometry,
-  normal, lighting, UV, clipping, packet-guard, and failure-cleanup checks.
+  normal, lighting, UV, clipping, packet-guard, and failure-cleanup checks,
+  including the additional compact-palette grid/clipping variant.
 - Isolated 16 MiB MMU-capable Flycast: dedicated ELF passed interpreter and
   dynarec; scene passed interpreter; grid and clipping passed dynarec. These
   establish emulator behavior, not physical-console timing or precision bounds.
+- Compact-palette pass: dedicated and 144-frame compact grid/clipping ELFs
+  passed both interpreter and dynarec. The default clipping variant passed
+  dynarec again. Existing deformation tests passed the four compiler/language
+  lanes and sanitizers; Compact skin asset and skin benchmark regressions passed.
 
 ```sh
 make -C utils/pvr-skeleton-affine-test CC=gcc-14 test

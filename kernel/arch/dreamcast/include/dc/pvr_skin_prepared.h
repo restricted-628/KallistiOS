@@ -198,5 +198,53 @@ int pvr_skin_apply_spans_prepared(pvr_deform_vertex_t *output,
     const pvr_skin_prepared_spans_t *influences,
     const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result);
 
+/** \brief Optional affine-only palette: 48-byte position plus 36-byte normal.
+
+    Position is SH4ZAM's column-major 3x4 layout, not three packed row vectors.
+    This is a distinct runtime ABI; do not cast existing prepared joints to it.
+*/
+typedef struct pvr_skin_compact_joint {
+    shz_mat3x4_t position;
+    shz_mat3x3_t normal;
+} pvr_skin_compact_joint_t;
+
+/** \brief Immutable compact snapshot in caller-owned, naturally aligned storage.
+
+    Produced only by pvr_skin_palette_prepare_compact() or
+    pvr_chunk_skeleton_palette_build_compact(). Rebuild after any pose change;
+    reuse across meshes sharing the palette. No source arrays are borrowed.
+*/
+typedef struct pvr_skin_compact_palette {
+    const pvr_skin_compact_joint_t *joints;
+    size_t joint_count;
+    uint32_t version;
+} pvr_skin_compact_palette_t;
+
+/** \brief Copy an affine palette without retaining the fixed fourth row.
+
+    Same capacity, disjoint-storage, finite-input and unchanged-on-failure
+    contract as pvr_skin_palette_prepare(). In addition, every position matrix
+    must have exact bottom row [0, 0, 0, 1]. Normal matrices are copied as given,
+    not replaced by the position matrix's linear part. XMTRX is untouched.
+*/
+int pvr_skin_palette_prepare_compact(const pvr_skin_palette_t *palette,
+    pvr_skin_compact_joint_t *storage, size_t joint_capacity,
+    pvr_skin_compact_palette_t *prepared);
+
+/** \brief Apply a compact palette using an existing prepared variable-span plan.
+
+    The lifetime, counts, valid-prefix, finite-source, normal-normalization,
+    canonical in-place and disjoint result/output contracts match
+    pvr_skin_apply_spans_prepared(). No palette component or weight/index scans
+    occur in the influence loop. Position uses three SH4ZAM four-component dot
+    products; normal uses its 3x3 transform. No XMTRX load/save, per-influence
+    4x4 expansion, allocation, or callbacks. Caller XMTRX is preserved.
+    This optional storage-saving path is not a hardware speedup guarantee.
+*/
+int pvr_skin_apply_spans_compact(pvr_deform_vertex_t *output,
+    size_t output_capacity, const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_spans_t *influences,
+    const pvr_skin_compact_palette_t *palette, pvr_deform_result_t *result);
+
 __END_DECLS
 #endif /* __DC_PVR_SKIN_PREPARED_H */

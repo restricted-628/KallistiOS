@@ -13,7 +13,8 @@ SOURCES = test.c $(PVR)/pvr_chunk_skeleton_affine.c \
           ../../kernel/arch/dreamcast/math/matrix_compose.c \
           ../../kernel/arch/dreamcast/math/matrix_camera.c
 HEADERS = ../../kernel/arch/dreamcast/include/dc/pvr_chunk_skeleton_affine.h \
-          $(PVR)/pvr_skin_internal.h
+          ../../kernel/arch/dreamcast/include/dc/pvr_skin_prepared.h \
+          $(PVR)/pvr_skin_internal.h compact-fixtures.h
 .PHONY: all test clean dreamcast
 all: $(TARGET)
 $(TARGET): $(SOURCES) $(HEADERS)

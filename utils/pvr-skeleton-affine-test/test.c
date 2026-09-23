@@ -419,21 +419,25 @@ static void test_hierarchy(void) {
     xmtrx_check();
 }
 
+#include "compact-fixtures.h"
+
 int main(void) {
     xmtrx_seed();
     for(unsigned frame = 0; frame < 24; ++frame) {
         init(frame);
         prepare();
         compare();
+        compare_compact();
     }
     test_admission();
     test_failure_atomicity();
     test_snapshot();
     test_hierarchy();
+    test_compact_failures();
     printf("affine matrix bytes=%u legacy=%u joint bytes=%u legacy=%u\n",
            (unsigned)sizeof(shz_mat3x4_t), (unsigned)sizeof(matrix_t),
            (unsigned)sizeof(pvr_chunk_skeleton_affine_joint_t),
            (unsigned)sizeof(pvr_chunk_skeleton_joint_t));
-    puts("RESULT: PASS (affine hierarchy, skeleton, normal matrices, skinning, XMTRX)");
+    puts("RESULT: PASS (affine hierarchy, skeleton, compact skinning, XMTRX)");
     return 0;
 }

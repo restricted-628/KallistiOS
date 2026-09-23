@@ -52,6 +52,20 @@
 #define LOOKUP (((VERTICES + PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE - 1u) / \
                  PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE) * PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE)
 
+/* Keep the established path as the default; build an explicit comparison
+   variant so storage/code changes are not mistaken for measured speedups. */
+#ifdef CHUNK_SCENE_COMPACT_PALETTE
+typedef pvr_skin_compact_joint_t scene_skin_joint_t;
+typedef pvr_skin_compact_palette_t scene_skin_palette_t;
+#define scene_palette_build pvr_chunk_skeleton_palette_build_compact
+#define scene_skin_apply pvr_skin_apply_spans_compact
+#else
+typedef pvr_skin_prepared_joint_t scene_skin_joint_t;
+typedef pvr_skin_prepared_palette_t scene_skin_palette_t;
+#define scene_palette_build pvr_chunk_skeleton_palette_build_affine
+#define scene_skin_apply pvr_skin_apply_spans_prepared
+#endif
+
 typedef struct model_state {
     pvr_chunk_model_plan_t plan;
     pvr_chunk_vertex_index_entry_t entries[LOOKUP];
@@ -67,8 +81,8 @@ typedef struct model_state {
     pvr_skin_prepared_spans_t skin_plan;
     pvr_chunk_skeleton_affine_joint_t affine_joints[JOINTS];
     pvr_chunk_skeleton_affine_t affine_skeleton;
-    pvr_skin_prepared_joint_t prepared_joints[JOINTS];
-    pvr_skin_prepared_palette_t prepared_palette;
+    scene_skin_joint_t prepared_joints[JOINTS];
+    scene_skin_palette_t prepared_palette;
     pvr_chunk_shape_section_view_t shape_view;
     pvr_chunk_shape_target_t shape_target;
     pvr_chunk_shape_delta_t shape_delta;
@@ -353,7 +367,7 @@ static int sample(float time) {
         const pvr_deform_stream_t posed = {
             m->morphed, m->skin_source.vertex_count, sizeof(*m->morphed)
         };
-        if(pvr_chunk_skeleton_palette_build_affine(
+        if(scene_palette_build(
                &m->affine_skeleton, &app.affine_pose, m->prepared_joints,
                JOINTS, &m->prepared_palette) < 0 ||
            anim_morph_targets_sample(&m->morph_tracks, 1, time,
@@ -363,7 +377,7 @@ static int sample(float time) {
                                    m->morphed, VERTICES,
                                    &deform_result) < 0)
             return failure("deform-pose");
-        if(pvr_skin_apply_spans_prepared(m->deformed, VERTICES, &posed,
+        if(scene_skin_apply(m->deformed, VERTICES, &posed,
                &m->skin_plan, &m->prepared_palette, &deform_result) < 0)
             return failure("skin-pose");
     }
@@ -690,6 +704,9 @@ int main(int argc, char **argv) {
         if(check_pose(times[i]) < 0)
             goto out;
     puts("KOSSCENE models=2 joints=2 morph_bindings=2 pose_goldens=6");
+#ifdef CHUNK_SCENE_COMPACT_PALETTE
+    printf("KOSSCENE skin_palette=compact joint_bytes=%u\n", (unsigned)sizeof(scene_skin_joint_t));
+#endif
 #ifdef CHUNK_SCENE_GRID
     puts("KOSSCENE grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS");
     puts("KOSSCENE rotation_scale=PASS normal_goldens=PASS lighting_goldens=PASS");

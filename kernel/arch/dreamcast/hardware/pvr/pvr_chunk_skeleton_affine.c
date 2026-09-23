@@ -296,11 +296,10 @@ static int compose(const pvr_chunk_skeleton_affine_joint_t *joint,
     return pvr_normal_matrix_build(normal, position);
 }
 
-int pvr_chunk_skeleton_palette_build_affine(
+static int palette_build(
     const pvr_chunk_skeleton_affine_t *skeleton,
     const pvr_chunk_skeleton_affine_pose_t *pose,
-    pvr_skin_prepared_joint_t *storage, size_t capacity,
-    pvr_skin_prepared_palette_t *prepared) {
+    void *storage, size_t capacity, void *prepared, int compact) {
     region_t input[4], output[2];
     shz_mat4x4_t saved;
     matrix_t position;
@@ -323,10 +322,16 @@ int pvr_chunk_skeleton_palette_build_affine(
                    _Alignof(pvr_chunk_skeleton_affine_joint_t)) < 0 ||
        region_init(&input[3], pose->world, pose->node_count, sizeof(*pose->world),
                    _Alignof(shz_mat3x4_t)) < 0 ||
-       region_init(&output[0], storage, skeleton->joint_count, sizeof(*storage),
-                   _Alignof(pvr_skin_prepared_joint_t)) < 0 ||
-       region_init(&output[1], prepared, 1, sizeof(*prepared),
-                   _Alignof(pvr_skin_prepared_palette_t)) < 0 ||
+       region_init(&output[0], storage, skeleton->joint_count,
+                   compact ? sizeof(pvr_skin_compact_joint_t) :
+                             sizeof(pvr_skin_prepared_joint_t),
+                   compact ? _Alignof(pvr_skin_compact_joint_t) :
+                             _Alignof(pvr_skin_prepared_joint_t)) < 0 ||
+       region_init(&output[1], prepared, 1,
+                   compact ? sizeof(pvr_skin_compact_palette_t) :
+                             sizeof(pvr_skin_prepared_palette_t),
+                   compact ? _Alignof(pvr_skin_compact_palette_t) :
+                             _Alignof(pvr_skin_prepared_palette_t)) < 0 ||
        outputs_disjoint(output, input, 4) < 0)
         return -1;
 
@@ -341,11 +346,39 @@ int pvr_chunk_skeleton_palette_build_affine(
     }
     for(size_t i = 0; i < skeleton->joint_count; ++i) {
         (void)compose(skeleton->joints + i, pose->world, &position, &normal);
-        shz_kos_matrix_import(&storage[i].position, &position);
-        memcpy(&storage[i].normal, &normal, sizeof(normal));
+        if(compact) {
+            pvr_skin_compact_joint_t *joint = (pvr_skin_compact_joint_t *)storage + i;
+            pack(&joint->position, &position);
+            memcpy(&joint->normal, &normal, sizeof(normal));
+        }
+        else {
+            pvr_skin_prepared_joint_t *joint = (pvr_skin_prepared_joint_t *)storage + i;
+            shz_kos_matrix_import(&joint->position, &position);
+            memcpy(&joint->normal, &normal, sizeof(normal));
+        }
     }
     shz_xmtrx_load_4x4(&saved);
-    *prepared = (pvr_skin_prepared_palette_t){storage, skeleton->joint_count,
-                                            SKIN_PALETTE_VERSION};
+    if(compact)
+        *(pvr_skin_compact_palette_t *)prepared = (pvr_skin_compact_palette_t){
+            storage, skeleton->joint_count, SKIN_COMPACT_PALETTE_VERSION};
+    else
+        *(pvr_skin_prepared_palette_t *)prepared = (pvr_skin_prepared_palette_t){
+            storage, skeleton->joint_count, SKIN_PALETTE_VERSION};
     return 0;
+}
+
+int pvr_chunk_skeleton_palette_build_affine(
+    const pvr_chunk_skeleton_affine_t *skeleton,
+    const pvr_chunk_skeleton_affine_pose_t *pose,
+    pvr_skin_prepared_joint_t *storage, size_t capacity,
+    pvr_skin_prepared_palette_t *prepared) {
+    return palette_build(skeleton, pose, storage, capacity, prepared, 0);
+}
+
+int pvr_chunk_skeleton_palette_build_compact(
+    const pvr_chunk_skeleton_affine_t *skeleton,
+    const pvr_chunk_skeleton_affine_pose_t *pose,
+    pvr_skin_compact_joint_t *storage, size_t capacity,
+    pvr_skin_compact_palette_t *prepared) {
+    return palette_build(skeleton, pose, storage, capacity, prepared, 1);
 }

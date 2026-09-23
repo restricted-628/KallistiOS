@@ -16,6 +16,14 @@ existing prepared skinning ABI remain unchanged. See
 [`sh4zam-affine-skeleton.md`](../../../../doc/sh4zam-affine-skeleton.md)
 for the lifetime contract, fallback, and validation scope.
 
+`chunk-skin-compact.elf` is an opt-in comparison variant of `chunk-skin-clip.elf`.
+It keeps position palettes in SH4ZAM 3x4 form, alongside full 3x3 normal matrices,
+and applies the existing prepared variable-span weights without expanding to
+4x4. Joint storage is 84 rather than 104 bytes on SH-4. The original executables
+retain the established prepared palette; this variant is not a hardware speedup
+claim. It runs the same grid/clipping goldens and prints its palette format and
+record size. Compare both executables on the same console/workload for timing.
+
 The original fixture has two opaque, untextured triangles with different materials, a
 translated root, and two joints. The base vertices follow the base joint; the
 top vertex follows the animated tip joint. Each model has one sparse shape
