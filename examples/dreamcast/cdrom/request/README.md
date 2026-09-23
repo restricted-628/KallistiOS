@@ -7,7 +7,8 @@ is an integration test rather than the smallest possible asynchronous-read
 example.
 
 Seek and typed CDDA status now default to direct SPI, while the legacy sector
-read in this example remains BIOS-backed. This deliberately mixed queue must
+read in this example explicitly uses `cdrom_bios_read_sectors_async`.
+This deliberately mixed queue must
 preserve ordering across both backends. Explicit BIOS-only callers can select
 `cdrom_bios_seek_async` and `cdrom_bios_cdda_get_status_async`.
 

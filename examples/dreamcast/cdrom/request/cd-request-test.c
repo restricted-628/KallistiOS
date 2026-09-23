@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
     /* This is a real asynchronous GD DMA read, not a blocking fs_read() moved
        into the worker. With no disc inserted, an error completion is expected
        and still exercises the DMA request lifecycle safely. */
-    last = cdrom_read_sectors_async(sector, 150, 1, 1000,
+    last = cdrom_bios_read_sectors_async(sector, 150, 1, 1000,
                                     request_complete, "DMA read");
 
     callback_wait_target = last;

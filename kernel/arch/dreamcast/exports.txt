@@ -39,6 +39,13 @@ cdrom_bios_cdda_get_status
 cdrom_bios_cdda_get_status_async
 cdrom_bios_get_status
 cdrom_bios_read_toc
+cdrom_bios_set_sector_size
+cdrom_bios_change_datatype
+cdrom_bios_reinit
+cdrom_bios_reinit_ex
+cdrom_bios_read_sectors
+cdrom_bios_read_sectors_ex
+cdrom_bios_read_sectors_async
 
 # ASIC
 asic_evt_set_handler

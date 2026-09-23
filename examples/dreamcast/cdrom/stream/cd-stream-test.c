@@ -202,13 +202,13 @@ int main(int argc, char *argv[]) {
         */
         dcache_purge_range((uintptr_t)dma_buf, BUFFER_SIZE);
 
-        rs = cdrom_read_sectors_ex(dma_buf, lba,
+        rs = cdrom_bios_read_sectors_ex(dma_buf, lba,
             BUFFER_SIZE >> 11, true);
     }
     else {
         dbglog(DBG_INFO, "Read PIO data.\n");
         memset(pio_buf, 0xee, BUFFER_SIZE);
-        rs = cdrom_read_sectors_ex(pio_buf, lba,
+        rs = cdrom_bios_read_sectors_ex(pio_buf, lba,
             BUFFER_SIZE >> 11, false);
     }
 

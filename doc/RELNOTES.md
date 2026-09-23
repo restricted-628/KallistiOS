@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added explicit BIOS sector-read, format, sector-size, and reinitialization
+  APIs. BIOS filesystem/range and reference paths now name their backend;
+  generic sector APIs remain BIOS compatibility aliases pending direct raw
+  format/chaining support. Failed sector-mode updates no longer change cached
+  sector size, and failed automatic track detection no longer submits a mode
+  based on an uninitialized status value.
+
 * Routed drive status and TOC queries through direct SPI by default, with
   explicit `cdrom_bios_get_status` and `cdrom_bios_read_toc` alternatives.
   BIOS filesystem mounts and BIOS-reference/reuse examples now name those

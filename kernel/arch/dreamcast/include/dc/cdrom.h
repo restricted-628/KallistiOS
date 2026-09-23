@@ -742,6 +742,13 @@ cdrom_stream_session_t *cdrom_sector_range_stream_start(
 */
 int cdrom_set_sector_size(int size);
 
+/** \brief Set the BIOS read sector size, including BIOS reinitialization.
+    \ingroup gdrom
+    Explicit BIOS counterpart of cdrom_set_sector_size(). The generic function
+    remains a BIOS compatibility alias until direct format support is complete.
+*/
+int cdrom_bios_set_sector_size(int size);
+
 /** \brief    Execute a CD-ROM command.
     \ingroup  gdrom
 
@@ -941,6 +948,21 @@ int cdrom_media_event_handler_remove(int handle);
 */
 int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int sector_size);
 
+/** \brief Select the BIOS command server's sector layout explicitly.
+    \ingroup gdrom
+
+    Same defaults and return values as cdrom_change_datatype(), which remains
+    a BIOS compatibility alias for now. Cached sector size changes only after
+    the BIOS accepts the mode. Failure to query an automatic track type does
+    not submit a mode change. This state does not affect explicit direct APIs.
+
+    The caller must serialize mode changes against all outstanding BIOS reads
+    and streams, including queued requests; G1 command ownership alone does
+    not protect a queued request's interpretation of global sector mode.
+*/
+int cdrom_bios_change_datatype(cd_read_sec_part_t sector_part, int track_type,
+                               int sector_size);
+
 /** \brief    Re-initialize the GD-ROM drive.
     \ingroup  gdrom
 
@@ -951,6 +973,13 @@ int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int se
     \see    cdrom_reinit_ex
 */
 int cdrom_reinit(void);
+
+/** \brief Reinitialize through the BIOS and select its default sector layout.
+    \ingroup gdrom
+    Explicit BIOS counterpart of cdrom_reinit(), currently a compatibility
+    alias. Boot initialization and BIOS filesystem mounts use this path.
+*/
+int cdrom_bios_reinit(void);
 
 /** \brief    Re-initialize the GD-ROM drive with custom parameters.
     \ingroup  gdrom
@@ -968,6 +997,13 @@ int cdrom_reinit(void);
     \see    cdrom_change_datatype
 */
 int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size);
+
+/** \brief Reinitialize through the BIOS with an explicit sector layout.
+    \ingroup gdrom
+    Retains cdrom_reinit_ex() defaults and error behavior. Do not change modes
+    with BIOS reads or streams outstanding; see cdrom_bios_change_datatype().
+*/
+int cdrom_bios_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size);
 
 /** \brief    Read the table of contents from the disc.
     \ingroup  gdrom
@@ -1013,6 +1049,15 @@ int cdrom_bios_read_toc(cd_toc_t *toc_buffer, bool high_density);
 */
 int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma);
 
+/** \brief Read sectors explicitly through BIOS PIO or DMA.
+    \ingroup gdrom
+    Same buffer, alignment, count, and result contract as
+    cdrom_read_sectors_ex(), currently a BIOS compatibility alias. Uses the
+    sector layout selected by cdrom_bios_change_datatype(), including raw
+    sectors when configured; explicit direct reads use their own format.
+*/
+int cdrom_bios_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma);
+
 /** \brief    Read one or more sector from a CD-ROM in PIO mode.
     \ingroup  gdrom
 
@@ -1025,6 +1070,13 @@ int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma);
     \see    cdrom_read_sectors_ex
 */
 int cdrom_read_sectors(void *buffer, uint32_t sector, size_t cnt);
+
+/** \brief Read sectors explicitly through BIOS PIO.
+    \ingroup gdrom
+    Same contract as cdrom_bios_read_sectors_ex() with dma=false.
+    cdrom_read_sectors() remains a BIOS compatibility alias for now.
+*/
+int cdrom_bios_read_sectors(void *buffer, uint32_t sector, size_t cnt);
 
 /** \brief    Read one or more sectors asynchronously using GD DMA.
     \ingroup  gdrom
@@ -1053,6 +1105,17 @@ int cdrom_read_sectors(void *buffer, uint32_t sector, size_t cnt);
                             caller remains responsible for memory coherency.
 */
 cdrom_request_t *cdrom_read_sectors_async(
+    void *buffer, uint32_t sector, size_t cnt, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a sector read explicitly through BIOS GD DMA.
+    \ingroup gdrom
+    Retains cdrom_read_sectors_async() request, callback, alignment, and
+    timeout contracts (zero permits no deadline). The generic call remains
+    a BIOS compatibility alias for now. The BIOS sector mode must not change
+    before this request is terminal; see cdrom_bios_change_datatype().
+*/
+cdrom_request_t *cdrom_bios_read_sectors_async(
     void *buffer, uint32_t sector, size_t cnt, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data);
 

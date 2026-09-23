@@ -89,7 +89,7 @@ int main(int argc, char **argv) {
                strerror(diagnostic_error), diagnostic_error);
     }
 
-    bios_result = cdrom_read_sectors(bios_buffer, fad, TEST_SECTORS);
+    bios_result = cdrom_bios_read_sectors(bios_buffer, fad, TEST_SECTORS);
     payload_matches = bios_result == ERR_OK
         && memcmp(direct_buffer, bios_buffer, TEST_BYTES) == 0;
 

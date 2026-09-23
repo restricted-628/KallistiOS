@@ -343,7 +343,7 @@ static int iso_backend_read_sectors(void *buffer, uint32_t fad,
     uint8_t *destination = buffer;
 
     if(iso_backend == FS_ISO9660_BACKEND_BIOS)
-        return cdrom_read_sectors_ex(buffer, fad, sectors, true);
+        return cdrom_bios_read_sectors_ex(buffer, fad, sectors, true);
 
     while(sectors) {
         gdrom_direct_result_t transport;
@@ -673,9 +673,9 @@ static int init_percd(void) {
             mutex_unlock(&backend_mutex);
         }
 
-        if((i = cdrom_reinit()) != 0) {
+        if((i = cdrom_bios_reinit()) != 0) {
             dbglog(DBG_ERROR,
-                   "fs_iso9660:init_percd: cdrom_reinit returned %d\n", i);
+                   "fs_iso9660:init_percd: cdrom_bios_reinit returned %d\n", i);
             return -1;
         }
 

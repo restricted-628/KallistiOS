@@ -569,7 +569,11 @@ bool cdrom_stream_sector_size_matches(size_t sector_size) {
 
 /* Shortcut to cdrom_reinit_ex. Typically this is the only thing changed. */
 int cdrom_set_sector_size(int size) {
-    return cdrom_reinit_ex(CDROM_READ_DEFAULT, -1, size);
+    return cdrom_bios_set_sector_size(size);
+}
+
+int cdrom_bios_set_sector_size(int size) {
+    return cdrom_bios_reinit_ex(CDROM_READ_DEFAULT, -1, size);
 }
 
 static int cdrom_poll(void *d, uint32_t timeout, int (*cb)(void *)) {
@@ -1220,6 +1224,11 @@ int cdrom_media_event_handler_remove(int handle) {
 
 /* Wrapper for the change datatype syscall */
 int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int sector_size) {
+    return cdrom_bios_change_datatype(sector_part, track_type, sector_size);
+}
+
+int cdrom_bios_change_datatype(cd_read_sec_part_t sector_part, int track_type,
+                               int sector_size) {
     cd_check_drive_status_t status;
     cd_sec_mode_params_t params;
     int result;
@@ -1239,7 +1248,11 @@ int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int se
         if(track_type == -1) {
             /* If not overriding cdxa, check what the drive thinks we should 
                use */
-            syscall_gdrom_check_drive(&status);
+            result = syscall_gdrom_check_drive(&status);
+            if(result < 0) {
+                g1_bus_unlock();
+                return result;
+            }
             track_type = (status.disc_type == CD_CDROM_XA ? 2048 : 1024);
         }
 
@@ -1255,20 +1268,29 @@ int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int se
     params.track_type  = track_type;    /* CD-XA mode 1/2 */
     params.sector_size = sector_size;   /* sector size */
 
-    cur_sector_size = sector_size;
     result = syscall_gdrom_sector_mode(&params);
+    if(result == 0)
+        cur_sector_size = sector_size;
     g1_bus_unlock();
     return result;
 }
 
 /* Re-init the drive, e.g., after a disc change, etc */
 int cdrom_reinit(void) {
+    return cdrom_bios_reinit();
+}
+
+int cdrom_bios_reinit(void) {
     /* By setting -1 to each parameter, they fall to the old defaults */
-    return cdrom_reinit_ex(CDROM_READ_DEFAULT, -1, -1);
+    return cdrom_bios_reinit_ex(CDROM_READ_DEFAULT, -1, -1);
 }
 
 /* Enhanced cdrom_reinit, takes the place of the old 'sector_size' function */
 int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size) {
+    return cdrom_bios_reinit_ex(sector_part, cdxa, sector_size);
+}
+
+int cdrom_bios_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size) {
     int r;
 
     do {
@@ -1280,7 +1302,7 @@ int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size) {
         return r;
     }
 
-    return cdrom_change_datatype(sector_part, cdxa, sector_size);
+    return cdrom_bios_change_datatype(sector_part, cdxa, sector_size);
 }
 
 /* Read the table of contents */
@@ -1354,6 +1376,10 @@ static int cdrom_read_sectors_dma_irq(cd_read_params_t *params) {
 
 /* Enhanced Sector reading: Choose mode to read in. */
 int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma) {
+    return cdrom_bios_read_sectors_ex(buffer, sector, cnt, dma);
+}
+
+int cdrom_bios_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma) {
     cd_read_params_t params;
     uintptr_t buf_addr = ((uintptr_t)buffer);
 
@@ -1395,10 +1421,21 @@ int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma) {
 
 /* Basic old sector read */
 int cdrom_read_sectors(void *buffer, uint32_t sector, size_t cnt) {
-    return cdrom_read_sectors_ex(buffer, sector, cnt, false);
+    return cdrom_bios_read_sectors(buffer, sector, cnt);
+}
+
+int cdrom_bios_read_sectors(void *buffer, uint32_t sector, size_t cnt) {
+    return cdrom_bios_read_sectors_ex(buffer, sector, cnt, false);
 }
 
 cdrom_request_t *cdrom_read_sectors_async(
+    void *buffer, uint32_t sector, size_t cnt, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data) {
+    return cdrom_bios_read_sectors_async(
+        buffer, sector, cnt, timeout, callback, callback_data);
+}
+
+cdrom_request_t *cdrom_bios_read_sectors_async(
     void *buffer, uint32_t sector, size_t cnt, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data) {
     return cdrom_read_sectors_async_internal(
@@ -2070,7 +2107,8 @@ void cdrom_init(void) {
 
     inited = true;
 
-    cdrom_reinit();
+    /* Boot-time BIOS setup is independent of the generic runtime policy. */
+    cdrom_bios_reinit();
 
     (void)cdrom_request_system_init();
     /* Cached-state sampling is optional. Its thread is created by the first

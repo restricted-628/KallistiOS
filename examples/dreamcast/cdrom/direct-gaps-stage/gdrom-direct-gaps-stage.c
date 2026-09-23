@@ -113,7 +113,7 @@ int main(int argc, char **argv) {
         failed = 1;
         goto done;
     }
-    if(cdrom_read_sectors(reference_buffer, fad, TEST_SECTORS) != ERR_OK
+    if(cdrom_bios_read_sectors(reference_buffer, fad, TEST_SECTORS) != ERR_OK
             || memcmp(staged_buffer, reference_buffer, TEST_BYTES)) {
         puts("payload comparison failed");
         failed = 1;

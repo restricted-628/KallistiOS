@@ -144,7 +144,7 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    bios_result = cdrom_read_sectors(bios_buffer, fad, TEST_SECTORS);
+    bios_result = cdrom_bios_read_sectors(bios_buffer, fad, TEST_SECTORS);
 
 done:
     if(request) {

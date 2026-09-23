@@ -45,6 +45,29 @@ versions, so their selected transport is not changed by these defaults.
 
 ## Compatibility work still outstanding
 
+The BIOS side of sector reads and format selection now has explicit names:
+`cdrom_bios_read_sectors`, `cdrom_bios_read_sectors_ex`,
+`cdrom_bios_read_sectors_async`, `cdrom_bios_change_datatype`,
+`cdrom_bios_reinit`, `cdrom_bios_reinit_ex`, and `cdrom_bios_set_sector_size`.
+Their generic counterparts remain BIOS compatibility aliases in this step;
+this is not a direct-read default switch. Boot setup, BIOS filesystem/range
+paths, and BIOS read-reference examples use the explicit functions so later
+generic routing cannot silently change their selected backend.
+
+BIOS sector-size bookkeeping now changes only after the firmware accepts a
+mode update. Failed automatic track-type queries stop before submitting any
+mode change. Callers must still serialize mode changes against outstanding
+BIOS reads/streams, including requests waiting in the queue; command-level G1
+ownership does not make global sector-mode changes safe for queued reads.
+
+Before generic reads can switch, the direct path needs an explicit format
+contract for cooked and raw sectors, a policy for legacy automatic selection,
+and bounded chaining beyond its current 16-sector command limit. Queued reads
+must capture their format rather than depend on a later global mode change.
+Current direct entry points support only cooked 2048-byte Mode-1/Mode-2 Form-1
+sectors. Generic BIOS APIs also accept configured raw 2352-byte layouts; the
+default switch must not silently reinterpret those buffers as cooked data.
+
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
 BIOS-command submission, reinitialization/sector-mode control, sector reads
 (sync and async), raw subcode, playback controls, legacy streams, and their
@@ -90,3 +113,12 @@ in both modes. The full SH-4 build, `cdrom.c` and `fs_iso9660.c` with `-Werror`,
 and 14 disc example rebuilds pass. Named BIOS exports are generated in both
 the symbol table and export stubs. Actual ISO9660 mount/read and live metadata
 transport behavior were not exercised by these transport-spy tests.
+
+The BIOS read/mode boundary pass adds `bios-read-contract`: 151 checks pass in
+both Flycast modes, covering the explicit APIs and temporary generic aliases,
+failed mode/query state preservation, cooked/raw async byte accounting,
+17-sector submissions, and BIOS reinitialization. The 128-check convenience,
+14-check defaults, and four-case G1 probes also pass in both modes. The full
+SH-4 build, three affected driver units under `-Werror`, and ten existing disc
+example rebuilds pass; the new probe also builds and links. Firmware and queue
+spies mean this does not prove actual raw data transfer or DMA completion.

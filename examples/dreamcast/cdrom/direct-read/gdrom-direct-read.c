@@ -190,7 +190,7 @@ int main(int argc, char **argv) {
     }
 
     draw_stage("BIOS sector read");
-    bios_result = cdrom_read_sectors(bios_buffer, test_fad, TEST_SECTORS);
+    bios_result = cdrom_bios_read_sectors(bios_buffer, test_fad, TEST_SECTORS);
     pio_sum = checksum(pio_buffer, TEST_BYTES);
     dma_sum = checksum(dma_buffer, TEST_BYTES);
     bios_sum = checksum(bios_buffer, TEST_BYTES);

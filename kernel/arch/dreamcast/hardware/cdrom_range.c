@@ -564,7 +564,7 @@ ssize_t cdrom_sector_range_read(
                 chunk_buffer, fad, chunk, range->direct_sector_type,
                 command_timeout, NULL, NULL, NULL);
         else
-            request = cdrom_read_sectors_async(
+            request = cdrom_bios_read_sectors_async(
                 chunk_buffer, fad, chunk, command_timeout, NULL, NULL);
         if(!request)
             goto fail;
