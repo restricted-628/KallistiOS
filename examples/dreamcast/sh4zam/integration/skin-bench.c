@@ -19,10 +19,14 @@ KOS_INIT_FLAGS(INIT_DEFAULT | INIT_NO_DCLOAD);
 #define REPEATS 5u
 #define FRAMES 2u
 #define SETUP_ITERATIONS 8u
-enum { WEIGHT_SETUP, PALETTE_SETUP, APPLY_ONLY, POSE_AND_APPLY };
+enum { WEIGHT_SETUP, PALETTE_SETUP, COMPACT_PALETTE_SETUP,
+       APPLY_ONLY, POSE_AND_APPLY, MODE_COUNT };
+enum { CHECKED, PREPARED_PALETTE, PREPARED_WEIGHTS, COMPACT_WEIGHTS, LANE_COUNT };
 #ifdef __DREAMCAST__
-static const char *const mode_names[] = { "weight-setup", "palette-setup", "apply", "pose+apply" };
-static const char *const lane_names[] = { "checked", "palette", "palette+weights" };
+static const char *const mode_names[] = {
+    "weight-setup", "palette-setup", "compact-palette-setup", "apply", "pose+apply" };
+static const char *const lane_names[] = {
+    "checked", "palette", "palette+weights", "compact+weights" };
 #endif
 static const char *const shape_names[] = { "fixed1", "fixed4", "span1-8" };
 static size_t vertex_count, mesh_count;
@@ -32,6 +36,8 @@ static pvr_normal_matrix_t normals[2][JOINTS];
 static pvr_skin_palette_t palettes[2];
 static pvr_skin_prepared_joint_t joint_storage[JOINTS];
 static pvr_skin_prepared_palette_t prepared_palette;
+static pvr_skin_compact_joint_t compact_storage[JOINTS];
+static pvr_skin_compact_palette_t compact_palette;
 static pvr_deform_vertex_t input[MAX_MESHES][MAX_VERTICES];
 static pvr_deform_vertex_t output[MAX_MESHES][MAX_VERTICES + 1];
 static pvr_skin_influences_t fixed[MAX_MESHES][MAX_VERTICES];
@@ -162,7 +168,10 @@ static int prepare_weights(void) {
     return 0;
 }
 
-static int prepare_palette(unsigned pose) {
+static int prepare_palette(unsigned pose, unsigned lane) {
+    if(lane == COMPACT_WEIGHTS)
+        return pvr_skin_palette_prepare_compact(&palettes[pose], compact_storage,
+                                                JOINTS, &compact_palette);
     return pvr_skin_palette_prepare(&palettes[pose], joint_storage, JOINTS, &prepared_palette);
 }
 
@@ -174,6 +183,8 @@ static int apply(unsigned lane, unsigned pose, size_t m) {
             &fixed_stream[m], &palettes[pose], &result);
         else if(lane == 1) rc = pvr_skin_apply_prepared_palette(output[m], vertex_count,
             &vertices[m], &fixed_stream[m], &prepared_palette, &result);
+        else if(lane == COMPACT_WEIGHTS) rc = pvr_skin_apply_compact(output[m],
+            vertex_count, &vertices[m], &fixed_plan[m], &compact_palette, &result);
         else rc = pvr_skin_apply_prepared(output[m], vertex_count, &vertices[m],
             &fixed_plan[m], &prepared_palette, &result);
     }
@@ -182,6 +193,8 @@ static int apply(unsigned lane, unsigned pose, size_t m) {
             &span_stream[m], &palettes[pose], &result);
         else if(lane == 1) rc = pvr_skin_apply_spans_prepared_palette(output[m], vertex_count,
             &vertices[m], &span_stream[m], &prepared_palette, &result);
+        else if(lane == COMPACT_WEIGHTS) rc = pvr_skin_apply_spans_compact(output[m],
+            vertex_count, &vertices[m], &span_plan[m], &compact_palette, &result);
         else rc = pvr_skin_apply_spans_prepared(output[m], vertex_count, &vertices[m],
             &span_plan[m], &prepared_palette, &result);
     }
@@ -215,10 +228,15 @@ static bool output_ok(unsigned pose) {
 static int run(unsigned mode, unsigned lane, unsigned iterations) {
     for(unsigned f = 0; f < iterations; ++f) {
         if(mode == WEIGHT_SETUP) { if(prepare_weights()) return -1; }
-        else if(mode == PALETTE_SETUP) { if(prepare_palette(f & 1u)) return -1; }
+        else if(mode == PALETTE_SETUP) {
+            if(prepare_palette(f & 1u, PREPARED_WEIGHTS)) return -1;
+        }
+        else if(mode == COMPACT_PALETTE_SETUP) {
+            if(prepare_palette(f & 1u, COMPACT_WEIGHTS)) return -1;
+        }
         else {
             unsigned pose = mode == POSE_AND_APPLY ? f & 1u : 0;
-            if(lane && mode == POSE_AND_APPLY && prepare_palette(pose)) return -1;
+            if(lane && mode == POSE_AND_APPLY && prepare_palette(pose, lane)) return -1;
             for(size_t m = 0; m < mesh_count; ++m) if(apply(lane, pose, m)) return -1;
         }
     }
@@ -228,37 +246,45 @@ static int run(unsigned mode, unsigned lane, unsigned iterations) {
 static int correctness(void) {
     if(prepare_weights() || !state_ok()) return -1;
     for(unsigned pose = 0; pose < 2; ++pose) {
-        if(prepare_palette(pose) || !state_ok()) return -1;
-        for(unsigned lane = 0; lane < 3; ++lane) {
+        for(unsigned lane = 0; lane < LANE_COUNT; ++lane) {
+            if(prepare_palette(pose, lane) || !state_ok()) return -1;
             memset(output, 0x5a, sizeof(output));
             for(size_t m = 0; m < mesh_count; ++m) if(apply(lane, pose, m)) return -1;
             if(!output_ok(pose)) return -1;
         }
     }
     /* Exercise the exact scheduling used by the timed loops on host too. */
-    for(unsigned mode = 0; mode < 4; ++mode)
-    for(unsigned lane = 0; lane < 3; ++lane) {
-        if(prepare_palette(0)) return -1;
+    for(unsigned mode = 0; mode < MODE_COUNT; ++mode)
+    for(unsigned lane = 0; lane < LANE_COUNT; ++lane) {
+        if(prepare_palette(0, lane)) return -1;
         memset(output, 0x5a, sizeof(output));
         if(run(mode, lane, FRAMES) || !state_ok()) return -1;
         if(mode >= APPLY_ONLY && !output_ok(mode == POSE_AND_APPLY ? 1 : 0)) return -1;
+        if(mode < APPLY_ONLY) {
+            unsigned pose = mode == WEIGHT_SETUP ? 0 : (FRAMES - 1) & 1u;
+            unsigned consumer = mode == COMPACT_PALETTE_SETUP ? COMPACT_WEIGHTS :
+                mode == PALETTE_SETUP ? PREPARED_WEIGHTS :
+                lane == COMPACT_WEIGHTS ? COMPACT_WEIGHTS : PREPARED_WEIGHTS;
+            for(size_t m = 0; m < mesh_count; ++m) if(apply(consumer, pose, m)) return -1;
+            if(!output_ok(pose)) return -1;
+        }
     }
     return 0;
 }
 
 #ifdef __DREAMCAST__
 static int timings(void) {
-    for(unsigned mode = 0; mode < 4; ++mode) {
-        uint64_t times[3][REPEATS];
-        unsigned lanes = mode < APPLY_ONLY ? 1 : 3;
+    for(unsigned mode = 0; mode < MODE_COUNT; ++mode) {
+        uint64_t times[LANE_COUNT][REPEATS];
+        unsigned lanes = mode < APPLY_ONLY ? 1 : LANE_COUNT;
         unsigned iterations = mode < APPLY_ONLY ? SETUP_ITERATIONS : FRAMES;
         for(unsigned lane = 0; lane < lanes; ++lane) {
-            if(prepare_palette(0) || run(mode, lane, iterations) || !state_ok()) return -1;
+            if(prepare_palette(0, lane) || run(mode, lane, iterations) || !state_ok()) return -1;
         }
         for(unsigned trial = 0; trial < REPEATS; ++trial)
         for(unsigned order = 0; order < lanes; ++order) {
             unsigned lane = (trial + order) % lanes;
-            if(prepare_palette(0)) return -1;
+            if(prepare_palette(0, lane)) return -1;
             memset(output, 0x5a, sizeof(output));
             uint64_t start = timer_us_gettime64();
             int rc = run(mode, lane, iterations);
@@ -271,8 +297,9 @@ static int timings(void) {
             else {
                 /* Consume timed setup results outside timing; detect bad plans
                    or palettes with a real apply and the independent oracle. */
-                unsigned pose = mode == PALETTE_SETUP ? (iterations - 1) & 1u : 0;
-                for(size_t m = 0; m < mesh_count; ++m) if(apply(2, pose, m)) return -1;
+                unsigned pose = mode == WEIGHT_SETUP ? 0 : (iterations - 1) & 1u;
+                unsigned consumer = mode == COMPACT_PALETTE_SETUP ? COMPACT_WEIGHTS : PREPARED_WEIGHTS;
+                for(size_t m = 0; m < mesh_count; ++m) if(apply(consumer, pose, m)) return -1;
                 if(!output_ok(pose)) return -1;
             }
             printf("SKIN sample shape=%s vertices=%u meshes=%u mode=%s lane=%s trial=%u us=%" PRIu64 "\n",
@@ -319,9 +346,10 @@ int main(void) {
         for(size_t m = 0; m < mesh_count; ++m)
             weight_bytes += shape < 2 ? vertex_count * sizeof(fixed_storage[0][0]) :
                 vertex_count * sizeof(span_storage[0][0]) + span_plan[m].weight_count * sizeof(weight_storage[0][0]);
-        printf("SKIN correctness shape=%s vertices=%u meshes=%u weights_bytes=%u palette_bytes=%u result=%s\n",
+        printf("SKIN correctness shape=%s vertices=%u meshes=%u weights_bytes=%u palette_bytes=%u compact_palette_bytes=%u result=%s\n",
             shape_names[shape], (unsigned)vertex_count, (unsigned)mesh_count,
-            (unsigned)weight_bytes, (unsigned)sizeof(joint_storage), rc ? "FAIL" : "PASS");
+            (unsigned)weight_bytes, (unsigned)sizeof(joint_storage),
+            (unsigned)sizeof(compact_storage), rc ? "FAIL" : "PASS");
 #ifdef __DREAMCAST__
         if(!rc) rc = timings();
 #endif

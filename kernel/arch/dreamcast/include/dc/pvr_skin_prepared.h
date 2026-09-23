@@ -246,5 +246,21 @@ int pvr_skin_apply_spans_compact(pvr_deform_vertex_t *output,
     const pvr_skin_prepared_spans_t *influences,
     const pvr_skin_compact_palette_t *palette, pvr_deform_result_t *result);
 
+/** \brief Apply a compact palette using an existing prepared fixed-four plan.
+
+    Matches pvr_skin_apply_prepared() for input/output, lifetime, counts,
+    overlap, valid-prefix errors, normalization and canonical in-place use.
+    The prepared active mask controls execution: originally positive weights
+    still execute if normalization rounded them to zero, while originally
+    zero slots ignore their indices. No weight/index/component rescans or
+    per-influence 4x4 expansion; uses the same XMTRX-preserving SH4ZAM math as
+    pvr_skin_apply_spans_compact(). Result must be disjoint from all arrays and
+    descriptors. No allocations or callbacks. Existing APIs remain unchanged.
+*/
+int pvr_skin_apply_compact(pvr_deform_vertex_t *output, size_t output_capacity,
+    const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_influences_t *influences,
+    const pvr_skin_compact_palette_t *palette, pvr_deform_result_t *result);
+
 __END_DECLS
 #endif /* __DC_PVR_SKIN_PREPARED_H */

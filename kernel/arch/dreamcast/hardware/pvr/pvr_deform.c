@@ -932,22 +932,14 @@ int pvr_skin_influences_prepare(const pvr_skin_stream_t *influences,
     return 0;
 }
 
-int pvr_skin_apply_prepared(pvr_deform_vertex_t *output, size_t output_capacity,
-    const pvr_deform_stream_t *vertices,
+static int prepared_influences_preflight(
     const pvr_skin_prepared_influences_t *influences,
-    const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result) {
-    pvr_deform_result_t progress = { 0 };
-    size_t input_bytes, output_bytes, influence_bytes, joint_count;
-
-    if(result)
-        *result = progress;
-    if(stream_preflight(vertices, output, output_capacity, &input_bytes,
-                        &output_bytes) < 0)
-        return -1;
+    size_t vertex_count, void *output, size_t output_bytes) {
+    size_t influence_bytes;
     if(!influences ||
        ((uintptr_t)influences & (_Alignof(pvr_skin_prepared_influences_t) - 1u)) ||
        influences->version != SKIN_INFLUENCES_VERSION || !influences->influences ||
-       influences->vertex_count != vertices->vertex_count ||
+       influences->vertex_count != vertex_count ||
        ((uintptr_t)influences->influences &
         (_Alignof(pvr_skin_prepared_influence_t) - 1u))) {
         errno = EINVAL;
@@ -968,7 +960,24 @@ int pvr_skin_apply_prepared(pvr_deform_vertex_t *output, size_t output_capacity,
         errno = EINVAL;
         return -1;
     }
-    if(skin_palette_preflight(NULL, palette, output, output_bytes, &joint_count) < 0)
+    return 0;
+}
+
+int pvr_skin_apply_prepared(pvr_deform_vertex_t *output, size_t output_capacity,
+    const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_influences_t *influences,
+    const pvr_skin_prepared_palette_t *palette, pvr_deform_result_t *result) {
+    pvr_deform_result_t progress = { 0 };
+    size_t input_bytes, output_bytes, joint_count;
+
+    if(result)
+        *result = progress;
+    if(stream_preflight(vertices, output, output_capacity, &input_bytes,
+                        &output_bytes) < 0)
+        return -1;
+    if(prepared_influences_preflight(influences, vertices->vertex_count,
+                                    output, output_bytes) < 0 ||
+       skin_palette_preflight(NULL, palette, output, output_bytes, &joint_count) < 0)
         return -1;
     if(influences->joint_count != joint_count) {
         errno = EINVAL;
@@ -1262,7 +1271,9 @@ fail:
     return -1;
 }
 
-static void skin_accumulate_compact(const pvr_deform_vertex_t *source,
+/* Sharing this leaf between two consumers must not introduce an out-of-line
+   call for every influence; retain the original compact span loop's shape. */
+SHZ_FORCE_INLINE void skin_accumulate_compact(const pvr_deform_vertex_t *source,
     const pvr_skin_compact_joint_t *joint, float weight,
     pvr_deform_vertex_t *vertex) {
     const shz_mat3x4_t *m = &joint->position;
@@ -1283,22 +1294,14 @@ static void skin_accumulate_compact(const pvr_deform_vertex_t *source,
     vertex->normal.z += n.z * weight;
 }
 
-int pvr_skin_apply_spans_compact(pvr_deform_vertex_t *output,
-    size_t output_capacity, const pvr_deform_stream_t *vertices,
-    const pvr_skin_prepared_spans_t *influences,
-    const pvr_skin_compact_palette_t *palette, pvr_deform_result_t *result) {
-    pvr_deform_result_t progress = {0};
-    size_t input_bytes, output_bytes, joint_bytes;
-    if(result)
-        *result = progress;
-    if(stream_preflight(vertices, output, output_capacity, &input_bytes, &output_bytes) < 0 ||
-       prepared_spans_preflight(influences, vertices->vertex_count, output, output_bytes) < 0)
-        return -1;
+static int compact_palette_preflight(const pvr_skin_compact_palette_t *palette,
+    size_t joint_count, void *output, size_t output_bytes) {
+    size_t joint_bytes;
     if(!palette || ((uintptr_t)palette & (_Alignof(pvr_skin_compact_palette_t) - 1u)) ||
        !palette->joints || !palette->joint_count ||
        palette->version != SKIN_COMPACT_PALETTE_VERSION ||
        ((uintptr_t)palette->joints & (_Alignof(pvr_skin_compact_joint_t) - 1u)) ||
-       palette->joint_count != influences->joint_count) {
+       palette->joint_count != joint_count) {
         errno = EINVAL;
         return -1;
     }
@@ -1315,7 +1318,20 @@ int pvr_skin_apply_spans_compact(pvr_deform_vertex_t *output,
         {palette, sizeof(*palette)}, {palette->joints, joint_bytes}
     };
     const skin_region_t destination = {output, output_bytes};
-    if(skin_destinations_disjoint(sources, 2, &destination, 1) < 0)
+    return skin_destinations_disjoint(sources, 2, &destination, 1);
+}
+
+int pvr_skin_apply_spans_compact(pvr_deform_vertex_t *output,
+    size_t output_capacity, const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_spans_t *influences,
+    const pvr_skin_compact_palette_t *palette, pvr_deform_result_t *result) {
+    pvr_deform_result_t progress = {0};
+    size_t input_bytes, output_bytes;
+    if(result)
+        *result = progress;
+    if(stream_preflight(vertices, output, output_capacity, &input_bytes, &output_bytes) < 0 ||
+       prepared_spans_preflight(influences, vertices->vertex_count, output, output_bytes) < 0 ||
+       compact_palette_preflight(palette, influences->joint_count, output, output_bytes) < 0)
         return -1;
     for(size_t i = 0; i < vertices->vertex_count; ++i) {
         const pvr_deform_vertex_t *source = (const pvr_deform_vertex_t *)
@@ -1330,6 +1346,51 @@ int pvr_skin_apply_spans_compact(pvr_deform_vertex_t *output,
             const pvr_skin_weight_t *weight = influences->weights + span->first_weight + s;
             skin_accumulate_compact(source, palette->joints + weight->joint,
                                     weight->weight, &vertex);
+        }
+        if(!finite3(vertex.position.x, vertex.position.y, vertex.position.z) ||
+           normalize(&vertex.normal.x, &vertex.normal.y, &vertex.normal.z) < 0) {
+            errno = ERANGE;
+            goto fail;
+        }
+        vertex.position.w = 1;
+        vertex.normal.w = 0;
+        memcpy(output + i, &vertex, sizeof(vertex));
+        ++progress.deformed_vertices;
+    }
+    if(result)
+        *result = progress;
+    return 0;
+fail:
+    if(result)
+        *result = progress;
+    return -1;
+}
+
+int pvr_skin_apply_compact(pvr_deform_vertex_t *output, size_t output_capacity,
+    const pvr_deform_stream_t *vertices,
+    const pvr_skin_prepared_influences_t *influences,
+    const pvr_skin_compact_palette_t *palette, pvr_deform_result_t *result) {
+    pvr_deform_result_t progress = {0};
+    size_t input_bytes, output_bytes;
+    if(result)
+        *result = progress;
+    if(stream_preflight(vertices, output, output_capacity, &input_bytes, &output_bytes) < 0 ||
+       prepared_influences_preflight(influences, vertices->vertex_count, output, output_bytes) < 0 ||
+       compact_palette_preflight(palette, influences->joint_count, output, output_bytes) < 0)
+        return -1;
+    for(size_t i = 0; i < vertices->vertex_count; ++i) {
+        const pvr_deform_vertex_t *source = (const pvr_deform_vertex_t *)
+            ((const uint8_t *)vertices->vertices + i * vertices->stride);
+        const pvr_skin_prepared_influence_t *influence = influences->influences + i;
+        pvr_deform_vertex_t vertex = {0};
+        if(!vertex_finite(source)) {
+            errno = EDOM;
+            goto fail;
+        }
+        for(size_t slot = 0; slot < 4; ++slot) {
+            if(influence->active_mask & (1u << slot))
+                skin_accumulate_compact(source, palette->joints + influence->joint[slot],
+                                        influence->weight[slot], &vertex);
         }
         if(!finite3(vertex.position.x, vertex.position.y, vertex.position.z) ||
            normalize(&vertex.normal.x, &vertex.normal.y, &vertex.normal.z) < 0) {

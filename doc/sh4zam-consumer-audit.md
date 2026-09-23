@@ -403,10 +403,11 @@ C23 and Clang ASan/UBSan. No hardware timing or throughput claim is made.
 ## Skinning workload benchmark
 
 `examples/dreamcast/sh4zam/integration/skin-bench.elf` compares checked,
-prepared-palette and fully prepared weight-plan consumers. Its twelve synthetic
-cases combine 64/256 vertices, one/four meshes per pose and one/four/variable
-one-through-eight influences. It reports plan preparation, palette preparation,
-apply-only and pose-plus-apply costs independently, including prepared storage
+prepared-palette, fully prepared weight-plan and optional compact-palette
+consumers. Its twelve synthetic cases combine 64/256 vertices, one/four meshes
+per pose and one/four/variable one-through-eight influences. It reports plan
+preparation, original/compact palette preparation, apply-only and pose-plus-apply
+costs independently, including prepared storage
 payload. A pose is prepared once per frame and shared across that frame's meshes;
 immutable weights persist across poses. Sampling/raw-matrix construction is not
 timed. See the [methodology](../examples/dreamcast/sh4zam/integration/README.md#skinning-workload-benchmark).

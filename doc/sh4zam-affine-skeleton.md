@@ -98,8 +98,12 @@ An additional, opt-in runtime representation is now available:
   any position matrix whose bottom row is not exactly `[0, 0, 0, 1]`. Normals
   are copied as supplied, not inferred from the position matrix.
 - `pvr_skin_apply_spans_compact`: consumes the existing immutable variable-span
-  weight plan with this palette. Fixed-four consumers continue using their
-  existing prepared representation. No serialized layout or old API changes.
+  weight plan with this palette.
+- `pvr_skin_apply_compact`: consumes the existing immutable fixed-four plan.
+  Its active mask preserves positive-source weights rounded to zero and skips
+  only originally zero slots. Both compact APIs retain canonical in-place
+  processing, valid-prefix errors and XMTRX preservation. No serialized layout
+  or old API changes; the established consumers remain available.
 
 The consumer uses SH4ZAM's `shz_vec4_dot3` on the three position rows and its
 existing 3x3 normal transform. This avoids constructing a temporary 4x4 matrix
@@ -122,6 +126,14 @@ variant, selected by `CHUNK_SCENE_COMPACT_PALETTE`. It uses the same authored
 geometry, normal, lighting, UV and clipping checks as `chunk-skin-clip.elf` and
 reports `skin_palette=compact joint_bytes=84`. Compare those two variants on
 physical hardware before treating smaller storage/fewer FIPRs as a speedup.
+
+The synthetic `sh4zam/integration/skin-bench.elf` now includes a
+`compact+weights` application lane for both fixed-four and variable-span plans,
+plus a separate `compact-palette-setup` timing mode. It compares twelve workloads
+against an independent double-precision oracle, rotates timed lane order, and
+reports compact and original palette storage separately. This is a console
+measurement harness, not evidence that compact skinning is faster. See its
+[methodology](../examples/dreamcast/sh4zam/integration/README.md#skinning-workload-benchmark).
 
 The existing scene workload reports full pose/draw timings and can be used for
 physical-console comparisons. No Dreamcast hardware speedup is claimed from
@@ -147,12 +159,17 @@ in-place operation, repeated/shared spans, zero weights, late invalid sources,
 arithmetic overflow, collapsed normals, normalized-to-zero positive weights,
 palette version/count/overlap failures, non-affine rejection, and late palette
 construction failure without publishing partial output.
+The fixed-four tests additionally cover all one-through-four active counts,
+noncontiguous active slots, ignored invalid inactive indices, copied source
+weights, normalized-to-zero active weights, and failed-plan/count/alignment
+admission. Both consumers share palette framing and arithmetic without adding
+per-influence calls or validation scans.
 
 Validation recorded across these integration passes:
 
 - Dedicated suite: GCC 14 GNU17/C23, Apple Clang 16 GNU17/C2x, and Clang
   AddressSanitizer/UndefinedBehaviorSanitizer all passed.
-- GCC 16.2 SH-4 KOS build, all eight exports, dedicated ELF, and all five scene
+- GCC 16.2 SH-4 KOS build, all nine exports, dedicated ELF, and all five scene
   variants built successfully.
 - GCC host scene/grid/clipping integration passed its authored geometry,
   normal, lighting, UV, clipping, packet-guard, and failure-cleanup checks,
@@ -164,6 +181,13 @@ Validation recorded across these integration passes:
   passed both interpreter and dynarec. The default clipping variant passed
   dynarec again. Existing deformation tests passed the four compiler/language
   lanes and sanitizers; Compact skin asset and skin benchmark regressions passed.
+- Fixed-four compact pass: dedicated, deformation, and twelve-case benchmark
+  suites passed all four compiler/language lanes and Clang ASan/UBSan. The
+  final inlined SH-4 build passed the dedicated suite in interpreter and
+  dynarec, plus the benchmark and compact grid/clipping scene in dynarec.
+  Both compact influence loops retain six FIPRs without a helper call. The
+  public header passed the SH-4 GNU++23 check, and the official v0.9.0 source
+  pin and all eleven source-verifier tests passed unchanged.
 
 ```sh
 make -C utils/pvr-skeleton-affine-test CC=gcc-14 test

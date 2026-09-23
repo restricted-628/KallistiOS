@@ -219,8 +219,8 @@ all four lanes on GCC 14 host and Flycast dynarec. Hardware remains untested.
 ## Skinning workload benchmark
 
 After sourcing `environ.sh`, build `make skin-bench.elf` here and run that ELF
-separately with debug-console capture. It uses the existing production skin
-APIs; it changes no production math, source dependency, or public interface.
+separately with debug-console capture. It uses the production skin APIs,
+including opt-in compact palettes; the benchmark does not change defaults.
 
 The twelve synthetic cases combine 64/256 canonical out-of-place vertices,
 one/four distinct meshes sharing a 16-joint pose, and fixed-one, fixed-four or
@@ -230,14 +230,17 @@ poses alternate for pose-update tests. Their position matrices include rotation,
 nonuniform scale and translation; normal matrices use the corresponding
 inverse-transpose linear transform. This is not an asset-derived workload.
 
-Three lanes compare the fully checked API, prepared palette only, and prepared
-palette plus immutable weight plan. Separate measurements prevent setup from
-being hidden inside an apply-only comparison:
+Four lanes compare the fully checked API, prepared palette only, prepared
+palette plus immutable weights, and compact palette plus the same immutable
+weights (`compact+weights`). Fixed-four and variable-span workloads both have
+the compact lane. Separate measurements prevent setup from being hidden inside
+an apply-only comparison:
 
 | Mode | Timed work |
 | --- | --- |
 | `weight-setup` | Prepare all meshes' plans eight times; span capacity queries are included. |
 | `palette-setup` | Prepare one 16-joint palette eight times, alternating poses. |
+| `compact-palette-setup` | Prepare one compact 16-joint palette eight times, alternating poses. |
 | `apply` | Apply all meshes twice at a fixed, already-prepared pose; no setup. |
 | `pose+apply` | Two alternating-pose frames; prepared lanes prepare one palette per frame and share it across meshes. |
 
@@ -264,9 +267,12 @@ the final frame's output for every mesh, including untouched output tails and
 exact homogeneous W fields. Absolute component tolerance is `3e-4` on SH-4 and
 `2e-5` on host, for these finite cases only. SH-4 checks all 16 XMTRX lanes and
 FPSCR FR/SZ/PR/DN/rounding modes (not sticky arithmetic flags) after runs.
-`weights_bytes` and `palette_bytes` report live prepared backing-array payload,
+`weights_bytes`, `palette_bytes`, and `compact_palette_bytes` report live prepared backing-array payload,
 excluding descriptors, original inputs, outputs and the harness's larger
 maximum-capacity static buffers; they are not total resident-memory figures.
+The harness holds both representations to compare them: 1664 bytes for the
+original 16-joint palette and 1344 for compact storage on the tested builds.
+Its combined memory footprint is not the cost of using only one representation.
 
 The host correctness lane runs the same datasets, oracle and scheduling without
 timers or simulated accelerator state. From the repository root:
