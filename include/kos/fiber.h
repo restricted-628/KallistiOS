@@ -20,6 +20,18 @@
     A fiber stack must remain mapped, writable, and alive in the owner thread's
     address space until the fiber is destroyed. This API does not create MMU
     mappings or guard pages and never changes an MMU context or ASID.
+
+    Returning from a child entry finishes only that fiber. Calling thd_exit()
+    from any fiber terminates the whole owner thread. Remaining fiber contexts
+    are reclaimed by the owner's KOS TLS destructor when the thread is joined
+    or reaped; suspended application code is not resumed for cleanup. Fiber
+    handles must not be used after their owner exits. Keep borrowed stacks alive
+    until thread reclamation is complete (for example, after thd_join()), or
+    explicitly destroy the children before the owner exits. Release cooperative
+    mutexes and destroy fiber synchronization objects before exiting.
+
+    KOS may run TLS destructors from the joining/reaping thread with interrupts
+    masked. Do not assume cleanup executes on the exited thread or its stack.
 */
 
 #ifndef __KOS_FIBER_H

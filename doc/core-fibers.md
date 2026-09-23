@@ -68,7 +68,10 @@ Core examples included here:
 - `basic/threading/fiber-sync`: sticky events, FIFO mutex handoff, recursive
   and dispatcher deadlock rejection, and object lifetimes.
 - `basic/threading/fiber-math`: opt-in XMTRX preservation for the main
-  continuation and two children, using only core APIs.
+  continuation and two children, plus a competing FPU-using KOS thread.
+- `basic/threading/fiber-teardown`: joined owner exit from main/child contexts,
+  default/math-enabled attachment, scoped allocation accounting and borrowed
+  stack lifetime.
 
 The integrated fork's historical emulator results are not results for this
 extracted branch. Fresh clean builds, linked-symbol/export checks, and emulator
@@ -121,8 +124,37 @@ Success markers were `KOSFIBERCTX scheduler=2 bounds=2`,
 `KOSFIBERSYNC sequence=8 fifo=2`, and
 `KOSFIBERMATH children=2 rounds=2 xmtrx=16`.
 
-Physical-hardware validation remains open. The XMTRX probe checks cooperative
-preservation and yields to KOS, but does not establish interference from a
-separate FPU-using thread. Owner-thread teardown, addon notification/cancellation
-ABI review, and MMU-on integration remain separate review gates; these results
-do not establish a stable API or media-decoder compatibility.
+### Competing thread and joined-owner teardown, 2026-09-23
+
+The expanded XMTRX probe uses semaphore handshakes to require a separate KOS
+thread to load/change its own matrix between resumes of both children and main.
+All 16 entries are checked in both threads. Eight exchanges pass in interpreter
+and dynarec modes, with `KOSFIBERMATH competing-thread=8` preceding the existing
+success marker. These are explicit scheduler transitions, not a claim about
+arbitrary interrupt timing.
+
+The new teardown probe also passes both modes: eight repetitions of four cases
+(default/math-enabled attachment, owner return/`thd_exit()` from a child).
+Each owner leaves ready/suspended contexts plus a finished or exiting child.
+Test-only linker wrappers scope allocation accounting to runtime/child creation
+and verify their reclamation when the owner is joined. All 192 tracked runtime,
+child and optional math allocations are freed over 32 cases. Borrowed stacks
+are never freed and are overwritten/reused after join. The marker is
+`KOSFIBERTEARDOWN cases=32 reclaimed=192 borrowed-frees=0`.
+
+KOS invokes the runtime's TLS destructor during thread reclamation, possibly
+from a different thread with interrupts masked. The public documentation now
+spells out whole-thread exit, handle invalidation, deferred stack lifetime and
+the absence of application-level unwinding. There are no live cooperative
+objects/held locks in these teardown cases: those must be cleaned up before
+owner exit. This is scoped accounting, not a whole-kernel leak audit.
+
+Physical hardware, detached reaping/forced destruction, private addon callback
+lifetime, and MMU-on integration remain separate validation/review gates.
+These results do not establish a stable addon ABI or media-decoder compatibility.
+
+After these additions all five probes passed together in interpreter and
+dynarec modes (ten runs, same Flycast/REIOS/16 MiB configuration above). Both
+changed/new test translation units also passed SH-4 GCC 16.2.0 GNU17 with
+`-Wall -Wextra -Werror` and KOS's normal system-header include configuration.
+This follow-up changes tests and documentation only, not runtime machinery.

@@ -8,10 +8,19 @@
 #include <stdio.h>
 #include <stdalign.h>
 
+#ifdef NDEBUG
+#error This probe requires assertions, including its checked API calls.
+#endif
+
+#define THREAD_EXCHANGES 8u
+
 static alignas(32) unsigned char stacks[2][8192];
 static kfiber_t *main_fiber;
 static unsigned stages[2];
 static matrix_t expected[3];
+static semaphore_t request = SEM_INITIALIZER(0);
+static semaphore_t complete = SEM_INITIALIZER(0);
+static unsigned thread_exchanges;
 
 static void expect_matrix(const matrix_t *wanted) {
     matrix_t actual;
@@ -21,6 +30,32 @@ static void expect_matrix(const matrix_t *wanted) {
             assert(actual[row][col] == (*wanted)[row][col]);
 }
 
+static void *competing_fpu_thread(void *data) {
+    matrix_t other;
+    (void)data;
+
+    for(unsigned row = 0; row < 4; ++row)
+        for(unsigned col = 0; col < 4; ++col)
+            other[row][col] = (float)(1000 + 4 * row + col);
+    mat_load(&other);
+    for(unsigned i = 0; i < THREAD_EXCHANGES; ++i) {
+        assert(sem_wait_timed(&request, 5000) == 0);
+        expect_matrix(&other);
+        other[0][0] += 1.0f;
+        mat_load(&other);
+        ++thread_exchanges;
+        assert(sem_signal(&complete) == 0);
+    }
+    return NULL;
+}
+
+static void exchange_with_thread(const matrix_t *wanted) {
+    assert(sem_signal(&request) == 0);
+    /* This blocks the entire owner thread, even when called by a child. */
+    assert(sem_wait_timed(&complete, 5000) == 0);
+    expect_matrix(wanted);
+}
+
 static void child(void *data) {
     unsigned index = *(unsigned *)data;
     matrix_t identity = {
@@ -28,17 +63,17 @@ static void child(void *data) {
     };
     expect_matrix(&identity);
     mat_load(&expected[index + 1]);
+    exchange_with_thread(&expected[index + 1]);
     stages[index] = 1;
     assert(fiber_switch(main_fiber) == 0);
     expect_matrix(&expected[index + 1]);
-    /* Kernel preemption and cooperative switching are separate boundaries. */
-    thd_pass();
-    expect_matrix(&expected[index + 1]);
+    exchange_with_thread(&expected[index + 1]);
     stages[index] = 2;
 }
 
 int main(void) {
     kfiber_t *fibers[2];
+    kthread_t *competitor;
     unsigned indices[2] = {0, 1};
     for(unsigned matrix = 0; matrix < 3; ++matrix)
         for(unsigned row = 0; row < 4; ++row)
@@ -49,6 +84,8 @@ int main(void) {
     main_fiber = fiber_attach_ex(KFIBER_ATTACH_MATH_CONTEXT);
     assert(main_fiber);
     assert(fiber_get_attach_flags() == KFIBER_ATTACH_MATH_CONTEXT);
+    competitor = thd_create(false, competing_fpu_thread, NULL);
+    assert(competitor);
     for(unsigned i = 0; i < 2; ++i) {
         fibers[i] = fiber_create(stacks[i], sizeof(stacks[i]), child, &indices[i]);
         assert(fibers[i]);
@@ -58,8 +95,12 @@ int main(void) {
             assert(fiber_switch(fibers[i]) == 0);
             assert(stages[i] == round);
             expect_matrix(&expected[0]);
+            exchange_with_thread(&expected[0]);
         }
     }
+    assert(thd_join(competitor, NULL) == 0);
+    assert(thread_exchanges == THREAD_EXCHANGES);
+    printf("KOSFIBERMATH competing-thread=%u\n", thread_exchanges);
     for(unsigned i = 0; i < 2; ++i) {
         assert(fiber_get_state(fibers[i]) == KFIBER_STATE_FINISHED);
         assert(fiber_destroy(fibers[i]) == 0);
