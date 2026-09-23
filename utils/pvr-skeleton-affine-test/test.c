@@ -225,6 +225,200 @@ static void test_snapshot(void) {
     xmtrx_check();
 }
 
+#define TREE_NODES 8u
+static pvr_chunk_hierarchy_node_t tree_nodes[TREE_NODES];
+static pvr_chunk_hierarchy_t tree = {tree_nodes, TREE_NODES};
+static pvr_chunk_hierarchy_affine_node_t tree_plan[TREE_NODES];
+static pvr_chunk_hierarchy_affine_t tree_prepared;
+static anim_transform_t tree_local[TREE_NODES];
+static matrix_t tree_reference[TREE_NODES], tree_root;
+static shz_mat3x4_t tree_world[TREE_NODES], compact_root;
+static pvr_chunk_skeleton_affine_pose_t tree_pose;
+
+static void tree_init(unsigned frame) {
+    const size_t parents[TREE_NODES] = {
+        PVR_CHUNK_NODE_NONE, PVR_CHUNK_NODE_NONE, 0, 1, 2, 0, 4, 6};
+    memset(tree_nodes, 0, sizeof(tree_nodes));
+    memset(tree_local, 0, sizeof(tree_local));
+    memset(tree_root, 0, sizeof(tree_root));
+    for(size_t c = 0; c < 4; ++c)
+        tree_root[c][c] = 1.0f;
+    tree_root[1][0] = 0.25f;
+    tree_root[2][2] = -2.0f;
+    tree_root[3][0] = -3.0f;
+    tree_root[3][1] = 1.5f;
+    for(size_t c = 0; c < 4; ++c)
+        for(size_t r = 0; r < 3; ++r)
+            compact_root.elem2D[c][r] = tree_root[c][r];
+    for(size_t i = 0; i < TREE_NODES; ++i) {
+        tree_nodes[i].parent_index = parents[i];
+        tree_nodes[i].flags = (uint32_t)((i + frame) & 7u);
+        if(i == 2)
+            tree_nodes[i].flags |= PVR_CHUNK_NODE_HIDDEN;
+        for(size_t c = 0; c < 4; ++c)
+            tree_nodes[i].local_transform[c][c] = 1.0f;
+        tree_local[i].translation.x = (float)i * 0.125f;
+        tree_local[i].translation.y = (float)frame * 0.03125f - 0.5f;
+        tree_local[i].translation.z = -0.25f;
+        /* Intentionally nonunit and non-axis-aligned quaternions. */
+        tree_local[i].rotation.w = 2.0f;
+        tree_local[i].rotation.x = (float)i * 0.0625f;
+        tree_local[i].rotation.y = 0.25f;
+        tree_local[i].rotation.z = (float)frame * 0.015625f;
+        tree_local[i].scale.x = -0.75f;
+        tree_local[i].scale.y = 1.25f;
+        tree_local[i].scale.z = 0.625f;
+        /* Unused homogeneous components match the legacy TRS contract. */
+        tree_local[i].translation.w = NAN;
+        tree_local[i].scale.w = NAN;
+    }
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) == 0);
+    xmtrx_check();
+}
+
+static void tree_compare(int use_root) {
+    assert(pvr_chunk_hierarchy_traverse_poses(&tree, tree_local, TREE_NODES,
+        use_root ? &tree_root : NULL, tree_reference, TREE_NODES,
+        NULL, NULL, NULL) == 0);
+    xmtrx_check();
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, use_root ? &compact_root : NULL, tree_world, TREE_NODES,
+        &tree_pose) == 0);
+    xmtrx_check();
+    assert(tree_pose.world == tree_world && tree_pose.node_count == TREE_NODES);
+    for(size_t i = 0; i < TREE_NODES; ++i)
+        for(size_t c = 0; c < 4; ++c)
+            for(size_t r = 0; r < 3; ++r)
+                assert(close_float(tree_world[i].elem2D[c][r],
+                                   tree_reference[i][c][r]));
+}
+
+static void test_hierarchy(void) {
+    for(unsigned frame = 0; frame < 24; ++frame) {
+        tree_init(frame);
+        tree_compare(0);
+        tree_compare(1);
+    }
+    /* Degenerate transforms are valid poses, though not normal palettes. */
+    tree_init(0);
+    tree_local[0].scale.x = 0.0f;
+    tree_compare(1);
+
+    /* Topology admission is atomic and deliberately separate from rendering. */
+    pvr_chunk_hierarchy_affine_node_t saved_plan[TREE_NODES];
+    pvr_chunk_hierarchy_affine_t saved_prepared = tree_prepared;
+    memcpy(saved_plan, tree_plan, sizeof(saved_plan));
+    tree_nodes[7].parent_index = 7;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == EINVAL);
+    tree_nodes[7].parent_index = 6;
+    tree_nodes[7].flags = PVR_CHUNK_NODE_PRUNE_CHILDREN;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == ENOTSUP);
+    tree_nodes[7].flags = UINT32_MAX;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == EINVAL);
+    assert(memcmp(tree_plan, saved_plan, sizeof(saved_plan)) == 0);
+    assert(memcmp(&tree_prepared, &saved_prepared, sizeof(saved_prepared)) == 0);
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES - 1,
+                                             &tree_prepared) < 0);
+    assert(errno == ENOSPC);
+    assert(pvr_chunk_hierarchy_affine_prepare(NULL, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    pvr_chunk_hierarchy_t invalid_size = {tree_nodes, SIZE_MAX};
+    assert(pvr_chunk_hierarchy_affine_prepare(&invalid_size, tree_plan, SIZE_MAX,
+                                             &tree_prepared) < 0);
+    assert(errno == EOVERFLOW);
+    invalid_size.node_count = 0;
+    assert(pvr_chunk_hierarchy_affine_prepare(&invalid_size, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree,
+        (pvr_chunk_hierarchy_affine_node_t *)tree_nodes, TREE_NODES,
+        &tree_prepared) < 0 && errno == EINVAL);
+
+    /* Copied topology does not retain source-node pointers or flags. */
+    shz_mat3x4_t saved_world[TREE_NODES];
+    memcpy(saved_world, tree_world, sizeof(saved_world));
+    memset(tree_nodes, 0xff, sizeof(tree_nodes));
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, &compact_root, tree_world, TREE_NODES, &tree_pose) == 0);
+    assert(memcmp(tree_world, saved_world, sizeof(saved_world)) == 0);
+    xmtrx_check();
+
+    /* Boundary errors do not begin evaluation or touch the previous pose. */
+    pvr_chunk_skeleton_affine_pose_t saved_pose = tree_pose;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES - 1, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == ENOSPC);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES - 1, &tree_pose) < 0);
+    assert(errno == ENOSPC);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, tree_world, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, (shz_mat3x4_t *)tree_local, TREE_NODES,
+        &tree_pose) < 0 && errno == EINVAL);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES,
+        (pvr_chunk_skeleton_affine_pose_t *)tree_world) < 0 && errno == EINVAL);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, (shz_mat3x4_t *)((char *)tree_world + 1), TREE_NODES,
+        &tree_pose) < 0 && errno == EINVAL);
+    compact_root.elem[11] = NAN;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, &compact_root, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EDOM);
+    assert(memcmp(tree_world, saved_world, sizeof(saved_world)) == 0);
+    assert(memcmp(&tree_pose, &saved_pose, sizeof(saved_pose)) == 0);
+
+    /* Late dynamic failure clears publication and preserves XMTRX. Even a
+       suppressed component must be valid, matching the general traversal. */
+    tree_init(0);
+    tree_local[7].translation.x = NAN;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EINVAL && !tree_pose.world && tree_pose.node_count == 0);
+    xmtrx_check();
+    tree_local[7].translation.x = 0;
+    tree_local[7].rotation = (anim_quaternion_t){0};
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EINVAL && !tree_pose.world);
+    xmtrx_check();
+
+    tree_init(0);
+    tree_nodes[6].flags = tree_nodes[7].flags = 0;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) == 0);
+    tree_local[6].scale.x = FLT_MAX * 0.5f;
+    tree_local[7].scale.x = FLT_MAX * 0.5f;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == ERANGE && !tree_pose.world && !tree_pose.node_count);
+    xmtrx_check();
+    tree_init(0);
+    tree_compare(1); /* Workspace can be reused after failure. */
+
+    /* The public compact API promises natural alignment, not 8/32-byte
+       alignment. Exercise a four-byte-offset destination and its parents. */
+    _Alignas(32) struct {
+        float prefix;
+        shz_mat3x4_t world[TREE_NODES];
+    } natural;
+    pvr_chunk_skeleton_affine_pose_t natural_pose;
+    assert(((uintptr_t)natural.world & 7u) == 4u);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, &compact_root, natural.world, TREE_NODES, &natural_pose) == 0);
+    assert(memcmp(natural.world, tree_world, sizeof(tree_world)) == 0);
+    xmtrx_check();
+}
+
 int main(void) {
     xmtrx_seed();
     for(unsigned frame = 0; frame < 24; ++frame) {
@@ -235,10 +429,11 @@ int main(void) {
     test_admission();
     test_failure_atomicity();
     test_snapshot();
+    test_hierarchy();
     printf("affine matrix bytes=%u legacy=%u joint bytes=%u legacy=%u\n",
            (unsigned)sizeof(shz_mat3x4_t), (unsigned)sizeof(matrix_t),
            (unsigned)sizeof(pvr_chunk_skeleton_affine_joint_t),
            (unsigned)sizeof(pvr_chunk_skeleton_joint_t));
-    puts("RESULT: PASS (affine skeleton, normal matrices, skinning, XMTRX)");
+    puts("RESULT: PASS (affine hierarchy, skeleton, normal matrices, skinning, XMTRX)");
     return 0;
 }

@@ -8,7 +8,10 @@ TARGET = pvr-skeleton-affine-test
 PVR = ../../kernel/arch/dreamcast/hardware/pvr
 SOURCES = test.c $(PVR)/pvr_chunk_skeleton_affine.c \
           $(PVR)/pvr_chunk_skeleton_asset.c $(PVR)/pvr_lighting.c \
-          $(PVR)/pvr_deform.c ../../kernel/arch/dreamcast/math/matrix_compose.c
+          $(PVR)/pvr_deform.c $(PVR)/pvr_chunk_hierarchy.c \
+          ../../kernel/arch/dreamcast/math/animation.c \
+          ../../kernel/arch/dreamcast/math/matrix_compose.c \
+          ../../kernel/arch/dreamcast/math/matrix_camera.c
 HEADERS = ../../kernel/arch/dreamcast/include/dc/pvr_chunk_skeleton_affine.h \
           $(PVR)/pvr_skin_internal.h
 .PHONY: all test clean dreamcast

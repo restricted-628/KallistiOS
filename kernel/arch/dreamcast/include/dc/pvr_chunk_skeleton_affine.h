@@ -12,6 +12,7 @@
 #define __DC_PVR_CHUNK_SKELETON_AFFINE_H
 
 #include <dc/pvr_chunk_skeleton_asset.h>
+#include <dc/pvr_chunk_model.h>
 #include <dc/pvr_skin_prepared.h>
 
 __BEGIN_DECLS
@@ -34,6 +35,57 @@ typedef struct pvr_chunk_skeleton_affine_pose {
     const shz_mat3x4_t *world;
     size_t node_count;
 } pvr_chunk_skeleton_affine_pose_t;
+
+/** \brief Admitted topology for one node in a complete animated pose. */
+typedef struct pvr_chunk_hierarchy_affine_node {
+    size_t parent_index;
+    uint32_t flags;
+} pvr_chunk_hierarchy_affine_node_t;
+
+/** \brief Immutable caller-owned topology snapshot; contains no asset pointers. */
+typedef struct pvr_chunk_hierarchy_affine {
+    const pvr_chunk_hierarchy_affine_node_t *nodes;
+    size_t node_count;
+} pvr_chunk_hierarchy_affine_t;
+
+/** \brief Admit and copy topology once for compact TRS pose evaluation.
+
+    Requires nonempty parent-before-child topology and known flags. Hidden
+    nodes still produce transforms. PRUNE_CHILDREN is rejected with ENOTSUP:
+    this producer needs a complete pose, not a partially visited render tree.
+    Model pointers, user data and static local matrices are not consumed; a
+    complete local TRS array is required by the evaluator. Outputs remain
+    unchanged on failure. Source nodes may be released after preparation.
+*/
+int pvr_chunk_hierarchy_affine_prepare(const pvr_chunk_hierarchy_t *hierarchy,
+    pvr_chunk_hierarchy_affine_node_t *storage, size_t capacity,
+    pvr_chunk_hierarchy_affine_t *prepared);
+
+/** \brief Evaluate an admitted hierarchy directly into compact world matrices.
+
+    Computes parent * (translation * rotation * scale), or root * local for
+    each root node. NULL root selects identity. Component suppression matches
+    the general TRS traversal; even suppressed source components must be valid.
+    Quaternions are normalized; translation/scale w components are ignored.
+    Zero scale is allowed here (the normal-palette builder rejects singularity).
+
+    Topology is trusted and not rescanned. Dynamic TRS inputs and arithmetic
+    results are checked once as each node is evaluated. Caller-owned output
+    storage and descriptor must be disjoint from each other and all inputs.
+    Input arrays/topology must remain immutable throughout the call.
+
+    Boundary errors leave outputs unchanged. Once evaluation begins, the
+    descriptor is cleared and storage is scratch: a later invalid TRS or
+    overflow leaves it partially written and the descriptor empty. Discard
+    any older pose descriptors referring to this storage before calling.
+    Only success publishes a consumable pose. No allocation or callbacks;
+    XMTRX is saved/restored once for the entire batch, including failures.
+*/
+int pvr_chunk_hierarchy_pose_build_affine(
+    const pvr_chunk_hierarchy_affine_t *hierarchy,
+    const anim_transform_t *local, size_t local_capacity,
+    const shz_mat3x4_t *root, shz_mat3x4_t *storage, size_t capacity,
+    pvr_chunk_skeleton_affine_pose_t *prepared);
 
 /** \brief Validate and copy inverse-bind matrices once per skeleton.
 
@@ -60,6 +112,7 @@ int pvr_chunk_skeleton_pose_prepare_affine(const matrix_t *world,
 /** \brief Build a prepared skin palette directly from admitted 3x4 snapshots.
 
     Both snapshots must have been produced by the preparation functions above
+    (or a successful compact hierarchy pose build)
     and remain immutable, including backing storage, during this call. Counts
     must match. No repeated input-matrix or joint-index scans are performed.
     Output storage is caller-owned and naturally aligned, with at least one

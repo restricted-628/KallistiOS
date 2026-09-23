@@ -6,6 +6,7 @@
 #include "pvr_skin_internal.h"
 
 #include <errno.h>
+#include <float.h>
 #include <math.h>
 #include <stdint.h>
 #include <string.h>
@@ -66,6 +67,155 @@ static void pack(shz_mat3x4_t *out, const matrix_t *matrix) {
     for(size_t c = 0; c < 4; ++c)
         out->col[c] = shz_vec3_init((*matrix)[c][0], (*matrix)[c][1],
                                    (*matrix)[c][2]);
+}
+
+int pvr_chunk_hierarchy_affine_prepare(const pvr_chunk_hierarchy_t *hierarchy,
+    pvr_chunk_hierarchy_affine_node_t *storage, size_t capacity,
+    pvr_chunk_hierarchy_affine_t *prepared) {
+    region_t input[2], output[2];
+    if(region_init(&input[0], hierarchy, 1, sizeof(*hierarchy),
+                   _Alignof(pvr_chunk_hierarchy_t)) < 0)
+        return -1;
+    if(capacity < hierarchy->node_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(region_init(&input[1], hierarchy->nodes, hierarchy->node_count,
+                   sizeof(*hierarchy->nodes),
+                   _Alignof(pvr_chunk_hierarchy_node_t)) < 0 ||
+       region_init(&output[0], storage, hierarchy->node_count, sizeof(*storage),
+                   _Alignof(pvr_chunk_hierarchy_affine_node_t)) < 0 ||
+       region_init(&output[1], prepared, 1, sizeof(*prepared),
+                   _Alignof(pvr_chunk_hierarchy_affine_t)) < 0 ||
+       outputs_disjoint(output, input, 2) < 0)
+        return -1;
+    for(size_t i = 0; i < hierarchy->node_count; ++i) {
+        const pvr_chunk_hierarchy_node_t *node = hierarchy->nodes + i;
+        if((node->parent_index != PVR_CHUNK_NODE_NONE &&
+            node->parent_index >= i) ||
+           (node->flags & ~PVR_CHUNK_NODE_FLAGS_MASK)) {
+            errno = EINVAL;
+            return -1;
+        }
+        if(node->flags & PVR_CHUNK_NODE_PRUNE_CHILDREN) {
+            errno = ENOTSUP;
+            return -1;
+        }
+    }
+    for(size_t i = 0; i < hierarchy->node_count; ++i)
+        storage[i] = (pvr_chunk_hierarchy_affine_node_t){
+            hierarchy->nodes[i].parent_index, hierarchy->nodes[i].flags};
+    *prepared = (pvr_chunk_hierarchy_affine_t){storage, hierarchy->node_count};
+    return 0;
+}
+
+static int compact_finite(const shz_mat3x4_t *matrix) {
+    for(size_t i = 0; i < 12; ++i)
+        if(!isfinite(matrix->elem[i]))
+            return 0;
+    return 1;
+}
+
+/* Match animation's TRS admission, but retain the quaternion norm for use
+   below rather than validating and normalizing it in separate passes. */
+static int local_affine(const anim_transform_t *source, uint32_t flags,
+                        shz_mat3x4_t *out) {
+    shz_quat_t q = shz_quat_init(source->rotation.w, source->rotation.x,
+                                source->rotation.y, source->rotation.z);
+    float norm;
+    if(!isfinite(source->translation.x) || !isfinite(source->translation.y) ||
+       !isfinite(source->translation.z) || !isfinite(source->scale.x) ||
+       !isfinite(source->scale.y) || !isfinite(source->scale.z) ||
+       !isfinite(q.w) || !isfinite(q.x) || !isfinite(q.y) || !isfinite(q.z)) {
+        errno = EINVAL;
+        return -1;
+    }
+    norm = shz_quat_magnitude_sqr(q);
+    if(!isfinite(norm) || norm <= FLT_MIN) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(flags & PVR_CHUNK_NODE_SUPPRESS_ROTATION)
+        q = shz_quat_init(1.0f, 0.0f, 0.0f, 0.0f);
+    else
+        q = shz_quat_scale(q, shz_inv_sqrtf_fsrra(norm));
+
+    /* SH4ZAM's quaternion initializer supplies the rotation columns. Only
+       this small local temporary is 4x4; no full world-matrix array or
+       subsequent world-packing pass is required. */
+    shz_mat4x4_t rotation;
+    shz_mat4x4_init_rotation_quat(&rotation, q);
+    const int unit_scale = flags & PVR_CHUNK_NODE_SUPPRESS_SCALE;
+    out->col[0] = shz_vec3_scale(rotation.col[0].xyz,
+                                unit_scale ? 1.0f : source->scale.x);
+    out->col[1] = shz_vec3_scale(rotation.col[1].xyz,
+                                unit_scale ? 1.0f : source->scale.y);
+    out->col[2] = shz_vec3_scale(rotation.col[2].xyz,
+                                unit_scale ? 1.0f : source->scale.z);
+    out->col[3] = flags & PVR_CHUNK_NODE_SUPPRESS_TRANSLATION ?
+        shz_vec3_init(0.0f, 0.0f, 0.0f) :
+        shz_vec3_init(source->translation.x, source->translation.y,
+                      source->translation.z);
+    return 0;
+}
+
+int pvr_chunk_hierarchy_pose_build_affine(
+    const pvr_chunk_hierarchy_affine_t *hierarchy,
+    const anim_transform_t *local, size_t local_capacity,
+    const shz_mat3x4_t *root, shz_mat3x4_t *storage, size_t capacity,
+    pvr_chunk_skeleton_affine_pose_t *prepared) {
+    region_t input[4], output[2];
+    shz_mat4x4_t saved;
+    const shz_mat3x4_t identity = {.elem = {
+        1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0}};
+    if(region_init(&input[0], hierarchy, 1, sizeof(*hierarchy),
+                   _Alignof(pvr_chunk_hierarchy_affine_t)) < 0)
+        return -1;
+    if(capacity < hierarchy->node_count || local_capacity < hierarchy->node_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(region_init(&input[1], hierarchy->nodes, hierarchy->node_count,
+                   sizeof(*hierarchy->nodes),
+                   _Alignof(pvr_chunk_hierarchy_affine_node_t)) < 0 ||
+       region_init(&input[2], local, hierarchy->node_count, sizeof(*local),
+                   _Alignof(anim_transform_t)) < 0 ||
+       region_init(&output[0], storage, hierarchy->node_count, sizeof(*storage),
+                   _Alignof(shz_mat3x4_t)) < 0 ||
+       region_init(&output[1], prepared, 1, sizeof(*prepared),
+                   _Alignof(pvr_chunk_skeleton_affine_pose_t)) < 0)
+        return -1;
+    if(root && region_init(&input[3], root, 1, sizeof(*root),
+                            _Alignof(shz_mat3x4_t)) < 0)
+        return -1;
+    if(outputs_disjoint(output, input, root ? 4 : 3) < 0)
+        return -1;
+    if(root && !compact_finite(root)) {
+        errno = EDOM;
+        return -1;
+    }
+
+    *prepared = (pvr_chunk_skeleton_affine_pose_t){NULL, 0};
+    shz_xmtrx_store_4x4(&saved);
+    for(size_t i = 0; i < hierarchy->node_count; ++i) {
+        shz_mat3x4_t transform;
+        const pvr_chunk_hierarchy_affine_node_t *node = hierarchy->nodes + i;
+        const shz_mat3x4_t *parent = node->parent_index == PVR_CHUNK_NODE_NONE ?
+            (root ? root : &identity) : storage + node->parent_index;
+        if(local_affine(local + i, node->flags, &transform) < 0) {
+            shz_xmtrx_load_4x4(&saved);
+            return -1;
+        }
+        shz_xmtrx_load_apply_store_3x4(storage + i, parent, &transform);
+        if(!compact_finite(storage + i)) {
+            shz_xmtrx_load_4x4(&saved);
+            errno = ERANGE;
+            return -1;
+        }
+    }
+    shz_xmtrx_load_4x4(&saved);
+    *prepared = (pvr_chunk_skeleton_affine_pose_t){storage, hierarchy->node_count};
+    return 0;
 }
 
 int pvr_chunk_skeleton_affine_prepare(const pvr_chunk_skeleton_t *skeleton,

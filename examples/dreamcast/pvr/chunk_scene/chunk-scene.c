@@ -93,6 +93,8 @@ static struct {
     pvr_chunk_model_view_t models[MODELS];
     pvr_chunk_hierarchy_node_t nodes[NODES];
     pvr_chunk_hierarchy_t hierarchy;
+    pvr_chunk_hierarchy_affine_node_t affine_nodes[NODES];
+    pvr_chunk_hierarchy_affine_t affine_hierarchy;
     model_state_t model[MODELS];
     pvr_chunk_animation_key_t keys[3u * CLIP_TRACKS];
     anim_track_view_t track[CLIP_TRACKS];
@@ -100,7 +102,6 @@ static struct {
     anim_visibility_tracks_t visibility[NODES];
     anim_clip_view_t clip;
     anim_transform_t local[NODES];
-    alignas(32) matrix_t world[NODES];
     shz_mat3x4_t affine_world[NODES];
     pvr_chunk_skeleton_affine_pose_t affine_pose;
     anim_scalar_hermite_key_t morph_keys[6];
@@ -279,7 +280,9 @@ static int scene_load(const void *source, size_t source_bytes) {
     }
     if(pvr_chunk_scene_asset_load(
            &app.scene, NULL, NULL, app.decode_storage, req.bytes,
-           app.models, MODELS, app.nodes, NODES, &app.hierarchy) < 0)
+           app.models, MODELS, app.nodes, NODES, &app.hierarchy) < 0 ||
+       pvr_chunk_hierarchy_affine_prepare(&app.hierarchy, app.affine_nodes,
+           NODES, &app.affine_hierarchy) < 0)
         return failure("scene-load");
     for(i = 0; i < MODELS; ++i) {
         pvr_chunk_model_table_record_t record;
@@ -341,11 +344,9 @@ static int sample(float time) {
        transform their output by the mesh node again when rendering. */
     if(anim_clip_sample(&app.clip, time, app.local, NODES,
                           &animation_result) < 0 ||
-       pvr_chunk_hierarchy_traverse_poses(
-           &app.hierarchy, app.local, NODES, NULL, app.world, NODES,
-           NULL, NULL, NULL) < 0 ||
-       pvr_chunk_skeleton_pose_prepare_affine(app.world, NODES,
-           app.affine_world, NODES, &app.affine_pose) < 0)
+       pvr_chunk_hierarchy_pose_build_affine(&app.affine_hierarchy,
+           app.local, NODES, NULL, app.affine_world, NODES,
+           &app.affine_pose) < 0)
         return failure("hierarchy-pose");
     for(i = 0; i < MODELS; ++i) {
         model_state_t *m = &app.model[i];

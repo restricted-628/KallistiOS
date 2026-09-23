@@ -6,8 +6,10 @@ sparse-morph, animation-catalog, transform-clip, morph-weight, and cooked-cache
 APIs. It does not introduce a scene graph, renderer, resource manager, or new
 library API.
 
-Skeleton setup now prepares compact SH4ZAM 3x4 inverse-bind snapshots. Each
-sampled hierarchy pose is packed once and shared by both models; fused affine
+Skeleton setup now prepares compact SH4ZAM 3x4 inverse-bind and topology
+snapshots. Each sampled hierarchy pose is evaluated directly into 3x4 world
+matrices and shared by both models, with no 4x4 world array or packing pass;
+fused affine
 composition builds each prepared skin palette directly, eliminating separate
 position/normal palette arrays and their later import. Projection and the
 existing prepared skinning ABI remain unchanged. See
