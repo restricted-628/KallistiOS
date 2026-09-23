@@ -42,15 +42,27 @@
    SET FEATURES 0xEF with feature 0x03 and sector-count value 0x22 selects
    WDMA mode 2. That drive-side setting is separate from Holly's 0x1001 access
    timing and both must be restored after a reset. */
+#ifndef G1_IN8
 #define G1_IN8(address)   (*(volatile uint8_t *)(address))
+#endif
+#ifndef G1_IN16
 #define G1_IN16(address)  (*(volatile uint16_t *)(address))
+#endif
+#ifndef G1_IN32
 #define G1_IN32(address)  (*(volatile uint32_t *)(address))
+#endif
+#ifndef G1_OUT8
 #define G1_OUT8(address, value) \
     (*(volatile uint8_t *)(address) = (uint8_t)(value))
+#endif
+#ifndef G1_OUT16
 #define G1_OUT16(address, value) \
     (*(volatile uint16_t *)(address) = (uint16_t)(value))
+#endif
+#ifndef G1_OUT32
 #define G1_OUT32(address, value) \
     (*(volatile uint32_t *)(address) = (uint32_t)(value))
+#endif
 
 /* Device-control bit 3 is fixed at one in SPI; bit 1 disables INTRQ. */
 #define GDROM_CTL_INTERRUPTS_ON  0x08u
@@ -1708,12 +1720,16 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
     gdrom_direct_result_t *observed = result ? result : &local_result;
     gdrom_spi_expected_type_t expected_type;
     size_t expected_bytes;
+    uint8_t data_select = GDROM_SPI_SELECT_DATA;
+
+    memset(observed, 0, sizeof(*observed));
 
     if(!buffer || ((uintptr_t)buffer & 1u) || fad < 150u
             || fad > GDROM_SPI_MAX_U24 || !sectors
             || sectors > GDROM_DIRECT_PIO_MAX_SECTORS || !timeout
             || (sector_type != GDROM_DIRECT_SECTOR_MODE1
-                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)
+                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1
+                && sector_type != GDROM_DIRECT_SECTOR_RAW2352)
             || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
         errno = EINVAL;
         return -1;
@@ -1722,7 +1738,12 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
     expected_bytes = sectors * GDROM_DIRECT_SECTOR_SIZE;
     expected_type = sector_type == GDROM_DIRECT_SECTOR_MODE1
         ? GDROM_SPI_EXPECT_MODE1 : GDROM_SPI_EXPECT_MODE2_FORM1;
-    if(gdrom_spi_read(&packet, GDROM_SPI_SELECT_DATA,
+    if(sector_type == GDROM_DIRECT_SECTOR_RAW2352) {
+        expected_bytes = sectors * GDROM_DIRECT_RAW_SECTOR_SIZE;
+        expected_type = GDROM_SPI_EXPECT_ANY;
+        data_select = GDROM_SPI_SELECT_OTHER;
+    }
+    if(gdrom_spi_read(&packet, data_select,
                       expected_type, GDROM_SPI_POINT_FAD,
                       fad, (uint32_t)sectors) != 0) {
         errno = EINVAL;
@@ -1733,7 +1754,7 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
                           timeout, observed) < 0)
         return -1;
 
-    /* Both supported data-only sector types have one exact transfer size.
+    /* Every supported layout has one exact transfer size.
        Treat an early, otherwise clean completion as a protocol failure. */
     if(observed->transferred != expected_bytes) {
         errno = EPROTO;

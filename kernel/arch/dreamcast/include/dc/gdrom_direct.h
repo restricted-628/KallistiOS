@@ -20,6 +20,9 @@ __BEGIN_DECLS
 /** \brief Byte size of one cooked data sector returned by direct reads. */
 #define GDROM_DIRECT_SECTOR_SIZE     2048u
 
+/** \brief Byte size of a complete raw sector (without subchannel data). */
+#define GDROM_DIRECT_RAW_SECTOR_SIZE 2352u
+
 /** \brief Maximum sectors accepted by one bounded direct PIO read. */
 #define GDROM_DIRECT_PIO_MAX_SECTORS 16u
 
@@ -74,10 +77,14 @@ typedef enum gdrom_direct_probe_command {
     GDROM_DIRECT_PROBE_REQ_STAT
 } gdrom_direct_probe_command_t;
 
-/** \brief Exact 2048-byte sector format requested by a direct read. */
+/** \brief Sector format requested by a direct read.
+    Raw sectors are currently supported by the synchronous PIO entry point
+    only; DMA, ranges, and staged sessions still require a cooked format.
+*/
 typedef enum gdrom_direct_sector_type {
     GDROM_DIRECT_SECTOR_MODE1 = 0,
-    GDROM_DIRECT_SECTOR_MODE2_FORM1
+    GDROM_DIRECT_SECTOR_MODE2_FORM1,
+    GDROM_DIRECT_SECTOR_RAW2352
 } gdrom_direct_sector_type_t;
 
 /** \brief SPI CD-ROM data-rate selection used by the direct mode page. */
@@ -537,21 +544,24 @@ cdrom_sector_range_t *gdrom_direct_sector_range_open(
     uint32_t start_fad, size_t sector_count,
     gdrom_direct_sector_type_t sector_type);
 
-/** \brief Read cooked 2048-byte sectors through the direct PIO transport.
+/** \brief Read cooked or raw sectors through the direct PIO transport.
 
     This experimental operation issues one SPI `CD_READ` command without the
-    BIOS command server. It requests the sector data field only and makes the
-    drive verify either Mode-1 or Mode-2 Form-1 media, both of which transfer
-    exactly 2048 payload bytes per sector.
+    BIOS command server. Cooked formats request the data field and verify
+    Mode-1 or Mode-2 Form-1, transferring 2048 bytes per sector. RAW2352
+    requests the complete 2352-byte sector without a sector-type constraint;
+    it does not include subchannel data or reinterpret audio sample bytes.
+    This selection is per call, independent of the BIOS sector-mode setting.
 
     The caller must split larger operations. Limiting each command to sixteen
-    sectors bounds continuous G1 ownership while direct DMA and asynchronous
-    scheduling are still under development.
+    sectors bounds continuous G1 ownership and keeps the byte count within the
+    PIO command's 16-bit transfer capacity.
 
-    \param  buffer       Destination aligned to at least two bytes.
+    \param  buffer       Destination aligned to at least two bytes, with space
+                         for sectors * 2048 (cooked) or sectors * 2352 (raw).
     \param  fad          First absolute frame address; must be at least 150.
     \param  sectors      Required count from 1 through 16.
-    \param  sector_type  Exact 2048-byte sector format expected from the disc.
+    \param  sector_type  Cooked Mode-1/Mode-2 Form-1, or RAW2352.
     \param  timeout      Required nonzero whole-operation timeout in milliseconds.
     \param  result       Optional low-level diagnostic observations.
     \retval 0            Every requested sector was transferred.

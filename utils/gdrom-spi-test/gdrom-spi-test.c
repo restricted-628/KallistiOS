@@ -154,6 +154,14 @@ int main(void) {
     expect(&p, VECTOR(0x30, 0x28, 0, 0, 0x96, 0, 0, 0,
                       0, 0, 0x10, 0));
 
+    /* Complete raw sectors: OTHER selects 2352 bytes independently of type. */
+    assert(gdrom_spi_read(&p, GDROM_SPI_SELECT_OTHER, GDROM_SPI_EXPECT_ANY,
+                          GDROM_SPI_POINT_FAD, 150, 1) == 0);
+    expect(&p, VECTOR(0x30, 0x10, 0, 0, 0x96, 0, 0, 0, 0, 0, 1, 0));
+    assert(gdrom_spi_read(&p, GDROM_SPI_SELECT_OTHER, GDROM_SPI_EXPECT_ANY,
+                          GDROM_SPI_POINT_FAD, 150, 16) == 0);
+    expect(&p, VECTOR(0x30, 0x10, 0, 0, 0x96, 0, 0, 0, 0, 0, 16, 0));
+
     assert(gdrom_spi_read2(&p, GDROM_SPI_SELECT_DATA,
                            GDROM_SPI_EXPECT_MODE1, GDROM_SPI_POINT_FAD,
                            0x00b06e, 16, 0x00b07e) == 0);

@@ -64,9 +64,19 @@ Before generic reads can switch, the direct path needs an explicit format
 contract for cooked and raw sectors, a policy for legacy automatic selection,
 and bounded chaining beyond its current 16-sector command limit. Queued reads
 must capture their format rather than depend on a later global mode change.
-Current direct entry points support only cooked 2048-byte Mode-1/Mode-2 Form-1
-sectors. Generic BIOS APIs also accept configured raw 2352-byte layouts; the
-default switch must not silently reinterpret those buffers as cooked data.
+The synchronous `gdrom_direct_read_sectors` PIO entry point now also accepts
+`GDROM_DIRECT_SECTOR_RAW2352`: one through sixteen complete 2352-byte sectors,
+without subchannel data, into a two-byte-aligned destination. Format selection
+is explicit per call, independent of the BIOS mode. Short transfers fail with
+`EPROTO`; excess data is drained without overrunning the destination and fails
+with `EMSGSIZE`. This does not change the generic BIOS compatibility aliases.
+
+Direct DMA, ranges, and staged sessions still accept only cooked 2048-byte
+Mode-1/Mode-2 Form-1 sectors and reject the new raw enum. A 2352-byte sector is
+not a multiple of the existing 32-byte DMA transfer unit; raw DMA needs its own
+alignment/staging contract before it can be enabled. Generic BIOS APIs also
+accept configured raw layouts, which the default switch must not silently
+reinterpret as cooked data.
 
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
 BIOS-command submission, reinitialization/sector-mode control, sector reads
@@ -122,3 +132,14 @@ failed mode/query state preservation, cooked/raw async byte accounting,
 SH-4 build, three affected driver units under `-Werror`, and ten existing disc
 example rebuilds pass; the new probe also builds and links. Firmware and queue
 spies mean this does not prove actual raw data transfer or DMA completion.
+
+The raw PIO pass adds `direct-raw-pio`, compiling the production direct driver
+with substituted MMIO accesses. Its 90 checks pass in both Flycast modes:
+cooked/raw packets, multi-phase transfers, exact byte counts, short/oversized
+responses with destination guards, invalid-input rejection, and G1 release.
+DMA/range/session rejection of the PIO-only format is also covered. The full
+SH-4 GCC 16.2 build and the direct driver under `-Werror` pass, as do the SPI
+packet tests under GCC 14 GNU17/strict C23 and Clang ASan/UBSan. These simulated
+register tests do not prove physical raw-sector contents or drive timing.
+After relinking, the BIOS read, convenience-routing, default-selection, and
+G1 ownership probes still pass all 151/128/14/4 checks in both Flycast modes.
