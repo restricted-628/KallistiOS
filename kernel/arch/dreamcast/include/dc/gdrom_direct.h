@@ -31,14 +31,15 @@ __BEGIN_DECLS
     \ingroup gdrom
 
     These routines use the GD-ROM drive's packet interface directly,
-    without submitting a command to the Dreamcast BIOS. Calling one is an
-    explicit opt-in operation. Filesystem backend selection is a separate
-    integration layer; the existing BIOS command server remains the default.
+    without submitting a command to the Dreamcast BIOS. Direct access is also
+    the default for `/cd`, sector ranges, and staged-session constructors in
+    this fork. BIOS access remains available through explicit selection.
 
     Direct commands share KOS's G1 controller ownership with the BIOS-backed
     GD-ROM and ATA drivers. PIO and DMA have emulator controls, but these APIs
-    remain opt-in until physical-drive timing, recovery, and GD-media behavior
-    are validated.
+    remain experimental: physical-drive timing, recovery, and GD-media behavior
+    still require validation. Changing the default does not establish those
+    hardware guarantees.
 
     "Direct" means no BIOS GD command-server syscall is used for the operation.
     It does not replace the boot ROM's power-on initialization or GD-media
@@ -666,7 +667,7 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_gaps_async(
 
 /** \brief Queue a direct SPI staged-read session.
 
-    This direct counterpart to \ref cdrom_stream_session_start issues one
+    This format-selecting counterpart to \ref cdrom_stream_session_start issues one
     `CD_READ2` packet command and leaves its read-ahead range resident in the
     drive buffer. The application drains that range with ordinary
     \ref cdrom_stream_session_transfer_async requests. No BIOS GD-ROM command

@@ -23,5 +23,7 @@ Build the program, place its scrambled binary in a self-boot data image as
 `1ST_READ.BIN`, and run that image in Flycast or on a Dreamcast. The test reads
 its own file through `/cd`, so no extra payload is required.
 
-The BIOS backend remains KOS's default; this test opts in deliberately before
-opening `/cd/1ST_READ.BIN`.
+The direct backend is this fork's default. This test checks that default and
+does not explicitly select it before opening `/cd/1ST_READ.BIN`. To request
+the BIOS backend in an application, select `FS_ISO9660_BACKEND_BIOS` before
+the first mount/read operation.

@@ -59,7 +59,7 @@ static int init_percd(void);
 static bool percd_done;
 static bool iso_bios_recognition_pending;
 static mutex_t backend_mutex;
-static fs_iso9660_backend_t iso_backend = FS_ISO9660_BACKEND_BIOS;
+static fs_iso9660_backend_t iso_backend = FS_ISO9660_BACKEND_DIRECT;
 static bool iso_backend_locked;
 static gdrom_direct_sector_type_t iso_direct_sector_type =
     GDROM_DIRECT_SECTOR_MODE1;
@@ -2993,7 +2993,7 @@ void fs_iso9660_init(void) {
     mutex_init(&backend_mutex, MUTEX_TYPE_NORMAL);
     mutex_init(&iso_media_event_mutex, MUTEX_TYPE_NORMAL);
 
-    iso_backend = FS_ISO9660_BACKEND_BIOS;
+    iso_backend = FS_ISO9660_BACKEND_DIRECT;
     iso_backend_locked = false;
     iso_direct_sector_type = GDROM_DIRECT_SECTOR_MODE1;
     iso_media_generation = 1;
@@ -3001,7 +3001,7 @@ void fs_iso9660_init(void) {
     iso_bios_recognition_pending = false;
     iso_media_event_hnd = -1;
     iso_media_monitor_warning = false;
-    cdrom_media_monitor_use_direct(false);
+    cdrom_media_monitor_use_direct(true);
 
     /* Allocate cache block space, properly aligned for DMA access */
     cache_data = aligned_alloc(32, 2 * NUM_CACHE_BLOCKS * 2048);

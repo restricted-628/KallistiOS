@@ -11,6 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Changed this fork's `/cd`, media-sampler, raw-range, and staged-session
+  defaults to direct disc access. BIOS filesystem access now requires explicit
+  selection; `cdrom_bios_sector_range_open` and
+  `cdrom_bios_stream_session_start` preserve the previous constructor paths.
+  There is no automatic BIOS fallback. Legacy BIOS convenience APIs and boot
+  initialization are not rerouted by this change. See `disc-backend-defaults.md`
+  for migration details and outstanding hardware-validation limits.
+
 * Added a load-time packaged-image check for auxiliary Compact material layers.
   PML1 requirements complement rather than redefine PRT1 stream requirements.
   The scene fixture now exercises packaged textures, independent UVs, actual

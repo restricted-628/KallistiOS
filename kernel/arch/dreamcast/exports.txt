@@ -29,6 +29,12 @@ arch_icache_sync_range
 arch_dcache_purge_all_indexed
 arch_dcache_wback_all_indexed
 
+# Disc backend constructors
+cdrom_sector_range_open
+cdrom_bios_sector_range_open
+cdrom_stream_session_start
+cdrom_bios_stream_session_start
+
 # ASIC
 asic_evt_set_handler
 asic_evt_request_threaded_handler

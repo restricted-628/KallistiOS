@@ -368,7 +368,7 @@ static semaphore_t media_monitor_wake = SEM_INITIALIZER(0);
    `volatile` would not make concurrent subsystem teardown safe. */
 static kthread_t *media_monitor_thread;
 static volatile bool media_monitor_quit;
-static volatile bool media_monitor_direct;
+static volatile bool media_monitor_direct = true;
 static cdrom_drive_state_t media_cached_state;
 static bool media_cached_state_valid;
 static int media_next_handle = 1;
@@ -1037,7 +1037,7 @@ static void media_monitor_reset(void) {
     media_cached_state_valid = false;
     media_pending_event_valid = false;
     media_monitor_quit = false;
-    media_monitor_direct = false;
+    media_monitor_direct = true;
     irq_restore(irq);
 }
 
@@ -1448,6 +1448,14 @@ cdrom_request_t *cdrom_seek_async_internal(
 }
 
 cdrom_stream_session_t *cdrom_stream_session_start(
+    uint32_t sector, size_t sector_count, uint32_t start_timeout,
+    uint32_t idle_timeout) {
+    return gdrom_direct_stream_session_start(
+        sector, sector_count, GDROM_DIRECT_SECTOR_MODE1,
+        start_timeout, idle_timeout);
+}
+
+cdrom_stream_session_t *cdrom_bios_stream_session_start(
     uint32_t sector, size_t sector_count, uint32_t start_timeout,
     uint32_t idle_timeout) {
     size_t sector_size;

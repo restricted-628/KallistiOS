@@ -196,7 +196,7 @@ int main(int argc, char **argv) {
     }
     printf("data range begins at FAD %lu\n", (unsigned long)fad);
 
-    bios_range = cdrom_sector_range_open(fad, TEST_RANGE_SECTORS);
+    bios_range = cdrom_bios_sector_range_open(fad, TEST_RANGE_SECTORS);
     if(!bios_range) {
         printf("BIOS range open failed: %s\n", strerror(errno));
         failed = 1;

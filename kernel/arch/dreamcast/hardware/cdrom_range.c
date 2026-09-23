@@ -108,6 +108,12 @@ static cdrom_sector_range_t *range_open(
 
 cdrom_sector_range_t *cdrom_sector_range_open(
         uint32_t start_fad, size_t sector_count) {
+    return gdrom_direct_sector_range_open(
+        start_fad, sector_count, GDROM_DIRECT_SECTOR_MODE1);
+}
+
+cdrom_sector_range_t *cdrom_bios_sector_range_open(
+        uint32_t start_fad, size_t sector_count) {
     if(cdrom_sector_size_internal() != CDROM_RANGE_SECTOR_SIZE) {
         errno = ENOTSUP;
         return NULL;

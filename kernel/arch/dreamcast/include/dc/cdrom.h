@@ -514,11 +514,29 @@ typedef struct cdrom_stream_session_status {
     uint32_t idle_timeout;               /**< \brief Ready-idle limit in ms. */
 } cdrom_stream_session_status_t;
 
-/** \brief Queue a BIOS DMA staged-read session for a raw FAD range.
+/** \brief Queue a direct Mode-1 staged-read session for a raw FAD range.
 
-    This constructor preserves the BIOS-backed CD-ROM API. Use
-    \ref gdrom_direct_stream_session_start for an explicit direct SPI session;
-    both return the common session type below.
+    The default constructor uses direct SPI with 2,048-byte Mode-1 sectors,
+    independent of the legacy BIOS sector-size setting and `/cd` selection.
+    Use \ref gdrom_direct_stream_session_start to select Mode-2 Form-1, or
+    \ref cdrom_bios_stream_session_start to explicitly use the BIOS server.
+    There is no automatic BIOS fallback.
+
+    Both timeouts must be nonzero. `sector_count` must be from 1 to 65535;
+    `sector` is an absolute frame address of at least 150. The session owns
+    G1 until completion, cancellation, error, or ready-idle expiry.
+
+    \return A queued direct session, or NULL with errno set.
+*/
+cdrom_stream_session_t *cdrom_stream_session_start(
+    uint32_t sector, size_t sector_count, uint32_t start_timeout,
+    uint32_t idle_timeout);
+
+/** \brief Explicitly queue a BIOS DMA staged-read session for a raw FAD range.
+
+    This constructor preserves the former BIOS-backed constructor's sector
+    size and timeout behavior. It returns the same common session type as
+    \ref cdrom_stream_session_start, but deliberately selects the BIOS server.
 
     `start_timeout` covers drive ownership acquisition and reaching the BIOS
     streaming state. Once ready, the session intentionally retains ownership
@@ -534,7 +552,7 @@ typedef struct cdrom_stream_session_status {
 
     \return                A queued session, or NULL with errno set.
 */
-cdrom_stream_session_t *cdrom_stream_session_start(
+cdrom_stream_session_t *cdrom_bios_stream_session_start(
     uint32_t sector, size_t sector_count, uint32_t start_timeout,
     uint32_t idle_timeout);
 
@@ -608,7 +626,22 @@ typedef struct cdrom_sector_range_info {
     size_t position;                 /**< \brief Current sector offset. */
 } cdrom_sector_range_info_t;
 
-/** \brief Open a bounded 2,048-byte-sector range on the BIOS transport.
+/** \brief Open a bounded Mode-1 range on the direct transport.
+
+    Uses 2,048-byte Mode-1 sectors, independent of the legacy BIOS sector-size
+    setting and `/cd` backend selection. This allocates bookkeeping only and
+    does not access the drive. There is no automatic BIOS fallback.
+    Use \ref gdrom_direct_sector_range_open for Mode-2 Form-1, or
+    \ref cdrom_bios_sector_range_open for explicit BIOS access.
+
+    \param start_fad       First absolute frame address, at least 150.
+    \param sector_count    Required nonzero number of sectors.
+    \return                A new range, or NULL with errno set.
+*/
+cdrom_sector_range_t *cdrom_sector_range_open(
+    uint32_t start_fad, size_t sector_count);
+
+/** \brief Explicitly open a bounded 2,048-byte-sector range on the BIOS transport.
 
     This operation allocates only KOS bookkeeping and does not access the
     drive. The range is inclusive of `start_fad` and contains exactly
@@ -618,7 +651,7 @@ typedef struct cdrom_sector_range_info {
     \param sector_count    Required nonzero number of sectors.
     \return                A new range, or `NULL` with errno set.
 */
-cdrom_sector_range_t *cdrom_sector_range_open(
+cdrom_sector_range_t *cdrom_bios_sector_range_open(
     uint32_t start_fad, size_t sector_count);
 
 /** \brief Close an idle sector range.
@@ -818,8 +851,8 @@ typedef void (*cdrom_media_event_callback_t)(
     This is the nonblocking status path. The first call starts the background
     media monitor without waiting for its first sample, so it can return
     `EAGAIN`; later calls only copy the latest snapshot. The monitor
-    uses the BIOS by default and follows the direct transport when the ISO9660
-    driver is explicitly switched to its direct backend. `state->backend`
+    uses direct SPI by default and follows the BIOS transport when the ISO9660
+    driver is explicitly switched to its BIOS backend. `state->backend`
     identifies the sampler used. Under normal drive availability, the snapshot
     is at most 100 milliseconds old. A long operation owning G1 can defer
     sampling without delaying that operation.

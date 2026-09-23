@@ -114,8 +114,9 @@ int main(int argc, char **argv) {
     memset(async_bytes, GUARD_VALUE, sizeof(async_bytes));
 
     puts("Direct ISO9660 backend validation");
-    if(fs_iso9660_set_backend(FS_ISO9660_BACKEND_DIRECT) < 0) {
-        request_error = errno;
+    /* Exercise the default without an explicit opt-in hiding a regression. */
+    if(fs_iso9660_get_backend() != FS_ISO9660_BACKEND_DIRECT) {
+        request_error = EINVAL;
         goto done;
     }
 

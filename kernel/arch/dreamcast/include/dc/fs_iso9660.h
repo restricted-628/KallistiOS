@@ -40,17 +40,20 @@ __BEGIN_DECLS
 
 /** \brief Physical command backend used by the ISO9660 filesystem. */
 typedef enum fs_iso9660_backend {
-    /** \brief Use the Dreamcast BIOS GD-ROM command server (default). */
+    /** \brief Explicitly use the Dreamcast BIOS GD-ROM command server. */
     FS_ISO9660_BACKEND_BIOS = 0,
-    /** \brief Use KOS's direct SPI/Holly GD-ROM driver. */
+    /** \brief Use KOS's direct SPI/Holly GD-ROM driver (default). */
     FS_ISO9660_BACKEND_DIRECT
 } fs_iso9660_backend_t;
 
 /** \brief Select the physical backend used by `/cd`.
 
-    The BIOS backend remains the default. The direct backend performs disc
+    The direct backend is the default. It performs disc
     probing, TOC discovery, cached metadata reads, synchronous file reads, and
     asynchronous DMA chains without the BIOS GD-ROM command server.
+    To opt into BIOS access, select `FS_ISO9660_BACKEND_BIOS` explicitly.
+    Direct failures are reported to the caller; there is no automatic BIOS
+    fallback. This default is fork policy, not a hardware-validation claim.
 
     Selection must be made before the first operation that mounts or reads
     `/cd`. Once a mount attempt has begun, the backend is locked for the

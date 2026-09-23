@@ -5,6 +5,8 @@ risk or media requirements.
 
 ## General API demonstrations
 
+- `backend-defaults` checks direct defaults and explicit BIOS selection without
+  reading a disc; its staged-session dispatch endpoints are link-time spies.
 - `request` demonstrates request status, cancellation, callback dispatch, and
   the required wait/callback-wait/destroy lifetime sequence.
 - `sector-range` demonstrates bounded FAD ranges over BIOS and direct backends.
@@ -14,7 +16,8 @@ risk or media requirements.
 
 ## Direct-transport validation
 
-The `direct-*` programs validate the opt-in post-boot SPI transport. Most need
+The `direct-*` programs validate the post-boot SPI transport, now the default
+for `/cd` and the range/staged-session constructors in this fork. Most need
 a purpose-built data or mixed-mode image. They are integration tests rather
 than minimal application templates; read each directory's README before use.
 
