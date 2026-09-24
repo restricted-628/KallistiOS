@@ -68,7 +68,8 @@ itlb1:	.long	0xf2000000
 itlb2:	.long	0xf3000000
 itlb3:	.long	0xf3800000
 
-! Invalidate any UTLB entry matching the supplied VPN and ASID. An
+! Invalidate any UTLB entry matching the supplied VPN and ASID. KOS uses
+! MMUCR.SV=0; shared entries match independently of ASID. An
 ! associative UTLB address-array write also invalidates a matching ITLB
 ! entry. Direct TLB-array accesses are performed from P2 as required by the
 ! SH-4 memory-management programming contract.
@@ -82,12 +83,21 @@ _mmu_invalidate_tlb:
 	nop
 
 mmu_invalidate_tlb_real:
+	! Associative comparison takes ASID from PTEH, NOT the write value.
+	! Keep exceptions blocked while temporarily selecting another context.
+	stc	sr,r3
+	mov.l	inval_block,r0
+	or	r3,r0
+	ldc	r0,sr
+	mov.l	inval_pteh,r2
+	mov.l	@r2,r6
+	extu.b	r5,r5
+	mov.l	r5,@r2
 	mov.l	utlb_assoc,r0
 	mov.l	vpn_mask,r1
 	and	r1,r4
-	extu.b	r5,r5
-	or	r5,r4
 	mov.l	r4,@r0
+	mov.l	r6,@r2
 
 	! Keep executing in P2 long enough for the array write to settle before
 	! fetching the next instruction from a translated/cached region.
@@ -98,6 +108,7 @@ mmu_invalidate_tlb_real:
 	nop
 	nop
 	nop
+	ldc	r3,sr
 	rts
 	nop
 
@@ -106,6 +117,8 @@ inval_real_addr:	.long	mmu_invalidate_tlb_real
 inval_p2mask:		.long	0x20000000
 utlb_assoc:		.long	0xf6000080
 vpn_mask:		.long	0xfffffc00
+inval_pteh:		.long	0xff000000
+inval_block:		.long	0x10000000
 
 ! Rewrite the two reserved SQ UTLB entries from P2. The caller has already
 ! assembled the PTEL values for entries 62 and 63 in r4 and r5.
