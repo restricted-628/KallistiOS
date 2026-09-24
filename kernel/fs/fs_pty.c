@@ -845,7 +845,8 @@ void fs_pty_shutdown(void) {
     if(!initted)
         return;
 
-    nmmgr_handler_remove(&vh.nmmgr);
+    if(nmmgr_handler_remove(&vh.nmmgr) < 0)
+        return;
 
     /* If we fail, we proceed anyways */
     mutex_trylock(&list_mutex);

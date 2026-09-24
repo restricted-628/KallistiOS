@@ -20,6 +20,7 @@ to be a somewhat slow process anyway.
 #include <string.h>
 #include <kos/nmmgr.h>
 #include <kos/exports.h>
+#include <kos/irq.h>
 
 static symtab_handler_t st_kern = {
     {
@@ -80,6 +81,10 @@ export_sym_t *export_lookup(const char *name) {
         if(!nmmgr)
             continue;
 
+        if(nmmgr->type != NMMGR_TYPE_SYMTAB) {
+            nmmgr_handler_release(nmmgr);
+            continue;
+        }
         sth = (symtab_handler_t *)nmmgr;
 
         /* First look through the kernel table */
@@ -112,6 +117,10 @@ export_sym_t *export_lookup_path(const char *name, const char *path) {
     if(nmmgr == NULL) {
         return NULL;
     }
+    if(nmmgr->type != NMMGR_TYPE_SYMTAB) {
+        nmmgr_handler_release(nmmgr);
+        return NULL;
+    }
     sth = (symtab_handler_t *)nmmgr;
 
     for(i = 0; sth->table[i].name; i++) {
@@ -128,6 +137,19 @@ export_sym_t *export_lookup_path(const char *name, const char *path) {
 }
 
 export_sym_t *export_lookup_addr(uintptr_t addr) {
+    /* Exception diagnostics cannot wait on a mutex held by the interrupted
+       thread. Built-in tables have static lifetime; skip dynamic tables here. */
+    if(irq_inside_int()) {
+        export_sym_t *tables[] = { kernel_symtab, arch_symtab, subarch_symtab };
+        export_sym_t *best = NULL;
+        for(size_t t = 0; t < sizeof(tables) / sizeof(tables[0]); ++t) {
+            for(export_sym_t *symbol = tables[t]; symbol->name; ++symbol) {
+                if(symbol->ptr <= addr && (!best || symbol->ptr > best->ptr))
+                    best = symbol;
+            }
+        }
+        return best;
+    }
     nmmgr_handler_t *nmmgr;
     char path[NAME_MAX];
     size_t index;
@@ -147,6 +169,10 @@ export_sym_t *export_lookup_addr(uintptr_t addr) {
         if(!nmmgr)
             continue;
 
+        if(nmmgr->type != NMMGR_TYPE_SYMTAB) {
+            nmmgr_handler_release(nmmgr);
+            continue;
+        }
         sth = (symtab_handler_t *)nmmgr;
 
         /* First look through the kernel table */

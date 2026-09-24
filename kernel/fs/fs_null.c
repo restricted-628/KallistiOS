@@ -257,7 +257,8 @@ void fs_null_init(void) {
 void fs_null_shutdown(void) {
     null_fh_t *c, *n;
 
-    nmmgr_handler_remove(&vh.nmmgr);
+    if(nmmgr_handler_remove(&vh.nmmgr) < 0)
+        return;
 
     mutex_lock(&fh_mutex);
 

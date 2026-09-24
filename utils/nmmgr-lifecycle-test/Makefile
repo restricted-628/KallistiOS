@@ -5,8 +5,8 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-include ../Makefile.host-test
-CFLAGS += -pthread
+HOST_CSTD ?= gnu17
+CFLAGS += -std=$(HOST_CSTD) -Wall -Wextra -Werror -pthread
 ROOT := ../..
 INCLUDES := -Iinclude
 SOURCE := $(ROOT)/kernel/exports/nmmgr.c $(ROOT)/kernel/exports/exports.c

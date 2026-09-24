@@ -2017,8 +2017,13 @@ int fs_ext2_unmount(const char *mp) {
 
     /* Handler close operations take ext2_mutex, so retained users must drain
        after the mount is detached and the mutex has been released. */
-    if(nmmgr_handler_remove(&i->vfsh->nmmgr) < 0)
+    if(nmmgr_handler_remove(&i->vfsh->nmmgr) < 0) {
+        /* Keep the detached mount reachable for a removal retry. */
+        mutex_lock(&ext2_mutex);
+        LIST_INSERT_HEAD(&ext2_fses, i, entry);
+        mutex_unlock(&ext2_mutex);
         return -1;
+    }
 
     ext2_fs_shutdown(i->fs);
     free(i->vfsh);

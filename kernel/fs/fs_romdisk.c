@@ -631,8 +631,12 @@ static int fs_romdisk_finish_remove(rd_image_t *n) {
 
     assert((void *)&n->vfsh->nmmgr == (void *)n->vfsh);
 
-    if(nmmgr_handler_remove(&n->vfsh->nmmgr) < 0)
+    if(nmmgr_handler_remove(&n->vfsh->nmmgr) < 0) {
+        mutex_lock(&fh_mutex);
+        LIST_INSERT_HEAD(&romdisks, n, list_ent);
+        mutex_unlock(&fh_mutex);
         return -1;
+    }
 
     /* If we own the buffer, free it */
     if(n->own_buffer) {
@@ -688,7 +692,10 @@ void fs_romdisk_shutdown(void) {
         if(!image)
             break;
 
-        fs_romdisk_finish_remove(image);
+        if(fs_romdisk_finish_remove(image) < 0) {
+            initted = 1;
+            return;
+        }
     }
 
     /* Iterate through any dangling files and clean them */

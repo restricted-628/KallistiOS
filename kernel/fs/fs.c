@@ -48,7 +48,7 @@ something like this:
 typedef struct fs_hnd {
     vfs_handler_t *handler;   /* Handler */
     void *hnd;   /* Handler-internal */
-    int refcnt;  /* Reference count */
+    atomic_int refcnt;  /* Descriptor and in-flight operation references */
     int idx;     /* Current index for readdir */
 } fs_hnd_t;
 
@@ -181,36 +181,35 @@ static int fs_hnd_unref(fs_hnd_t *ref) {
         if(ref->handler && ref->handler->close)
             retval = ref->handler->close(ref->hnd);
 
+        const int saved_errno = errno;
         if(ref->handler)
             nmmgr_handler_release(&ref->handler->nmmgr);
 
         free(ref);
+        errno = saved_errno;
     }
 
     return retval;
 }
 
-/* Assigns a file descriptor (index) to a file handle (pointer). Will auto-
-   reference the handle, and unrefs on error. */
+/* Assign a descriptor and acquire its reference only on success.
+   The caller owns the wrapper and underlying handle on failure. */
 static file_t fs_hnd_assign(fs_hnd_t *hnd) {
     int i;
 
-    fs_hnd_ref(hnd);
-
     if(mutex_lock(&fd_mutex) < 0) {
-        fs_hnd_unref(hnd);
         return FILEHND_INVALID;
     }
 
     if(!fs_accepting_descriptors) {
         mutex_unlock(&fd_mutex);
-        fs_hnd_unref(hnd);
         errno = ENODEV;
         return FILEHND_INVALID;
     }
 
     for(i = 3; i < FD_SETSIZE; i++) {
         if(!fd_table[i]) {
+            fs_hnd_ref(hnd);
             fd_table[i] = hnd;
             break;
         }
@@ -223,7 +222,6 @@ static file_t fs_hnd_assign(fs_hnd_t *hnd) {
               opts.h to support additional files being opened. Current \
               limit is %d\n", FD_SETSIZE);
 
-        fs_hnd_unref(hnd);
         errno = EMFILE;
         return FILEHND_INVALID;
     }
@@ -269,7 +267,14 @@ file_t fs_open(const char *fn, int mode) {
         return FILEHND_INVALID;
 
     /* Ok, that succeeded -- now look for a file descriptor. */
-    return fs_hnd_assign(hnd);
+    file_t fd = fs_hnd_assign(hnd);
+    if(fd == FILEHND_INVALID) {
+        const int saved_errno = errno;
+        fs_hnd_ref(hnd);
+        fs_hnd_unref(hnd);
+        errno = saved_errno;
+    }
+    return fd;
 }
 
 /* See header for comments */
@@ -294,7 +299,14 @@ file_t fs_open_handle(vfs_handler_t *vfs, void *vhnd) {
     hnd->idx = -2;
 
     /* Ok, that succeeded -- now look for a file descriptor. */
-    return fs_hnd_assign(hnd);
+    file_t fd = fs_hnd_assign(hnd);
+    if(fd == FILEHND_INVALID) {
+        const int saved_errno = errno;
+        nmmgr_handler_release(&vfs->nmmgr);
+        free(hnd);
+        errno = saved_errno;
+    }
+    return fd;
 }
 
 /* Returns a file handle for a given fd, or NULL if the parameters
@@ -326,8 +338,10 @@ static fs_hnd_t *fs_map_hnd_ref(file_t fd) {
 }
 
 static void fs_hnd_cleanup(fs_hnd_t **hnd) {
+    const int saved_errno = errno;
     if(*hnd)
         fs_hnd_unref(*hnd);
+    errno = saved_errno;
 }
 
 vfs_handler_t *fs_get_handler(file_t fd) {
@@ -339,7 +353,8 @@ vfs_handler_t *fs_get_handler(file_t fd) {
         return NULL;
     }
 
-    mutex_lock(&fd_mutex);
+    if(mutex_lock(&fd_mutex) < 0)
+        return NULL;
     exists = fd_table[fd] != NULL;
     handler = exists ? fd_table[fd]->handler : NULL;
     mutex_unlock(&fd_mutex);
@@ -359,7 +374,8 @@ void *fs_get_handle(file_t fd) {
         return NULL;
     }
 
-    mutex_lock(&fd_mutex);
+    if(mutex_lock(&fd_mutex) < 0)
+        return NULL;
     exists = fd_table[fd] != NULL;
     handle = exists ? fd_table[fd]->hnd : NULL;
     mutex_unlock(&fd_mutex);
@@ -703,8 +719,10 @@ int fs_ioctl(file_t fd, int cmd, ...) {
 }
 
 static void fs_vfs_cleanup(vfs_handler_t **handler) {
+    const int saved_errno = errno;
     if(*handler)
         nmmgr_handler_release(&(*handler)->nmmgr);
+    errno = saved_errno;
 }
 
 static vfs_handler_t *fs_verify_handler_ref(const char *fn) {

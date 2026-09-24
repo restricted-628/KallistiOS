@@ -9,6 +9,7 @@
 #include <kos/mutex.h>
 
 typedef pthread_cond_t condvar_t;
+extern int test_spurious_wakes;
 
 static inline int cond_init(condvar_t *condition) {
     return pthread_cond_init(condition, NULL);
@@ -27,6 +28,14 @@ static inline int cond_wait_timed(condvar_t *condition, mutex_t *mutex,
     struct timespec deadline;
     int rv;
 
+    if(test_spurious_wakes > 0) {
+        --test_spurious_wakes;
+        const struct timespec delay = { .tv_nsec = 1000000L };
+        pthread_mutex_unlock(mutex);
+        nanosleep(&delay, NULL);
+        pthread_mutex_lock(mutex);
+        return 0;
+    }
     if(timeout == 0)
         return pthread_cond_wait(condition, mutex);
 
@@ -41,8 +50,8 @@ static inline int cond_wait_timed(condvar_t *condition, mutex_t *mutex,
 
     rv = pthread_cond_timedwait(condition, mutex, &deadline);
 
-    if(rv == ETIMEDOUT) {
-        errno = ETIMEDOUT;
+    if(rv) {
+        errno = rv;
         return -1;
     }
 
