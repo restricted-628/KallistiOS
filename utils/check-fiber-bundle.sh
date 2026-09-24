@@ -9,9 +9,9 @@ task_kind="$(cat "$task_root/utils/fiber-bundle-provider")"
 task_make="${KOS_MAKE:-gmake}"
 task_nm="${KOS_CC_BASE:?}/bin/${KOS_CC_PREFIX:-sh-elf}-nm"
 "$task_make" -C "$task_root" -j"${JOBS:-4}"
-task_tests=(fiber-context-probe fiber fiber-sync fiber-math fiber-teardown)
+task_tests=(fiber-context-probe fiber fiber-sync fiber-math fiber-teardown vblank-priority fiber-vblank)
 if [ "$task_kind" = sh4zam ]; then
-    task_tests+=(fiber-service-probe fiber-service-sync fiber-service-queue)
+    task_tests+=(fiber-service-probe fiber-service-sync fiber-service-queue fiber-vblank-service)
 fi
 for task_test in "${task_tests[@]}"; do
     "$task_make" -C "$task_root/examples/dreamcast/basic/threading/$task_test" -B CFLAGS=-Werror
@@ -56,4 +56,29 @@ for task_test in fiber-disc-contract fiber-read fiber-vram; do
         grep -Fq "$task_lib.a($task_member.o)" "$task_map"
     done
 done
-echo "PASS: $task_kind bundle builds independently; disc examples link exactly one provider"
+task_vblank_tests=(fiber-vblank)
+if [ "$task_kind" = sh4zam ]; then
+    task_vblank_tests+=(fiber-vblank-service)
+fi
+for task_test in "${task_vblank_tests[@]}"; do
+    task_map="$task_root/examples/dreamcast/basic/threading/$task_test/$task_test.elf.map"
+    test -s "$task_map"
+    grep -Fq 'libfiber_vblank.a(fiber_vblank.o)' "$task_map"
+    if [ "$task_kind" = sh4zam ]; then
+        if grep -Eq 'libkallisti\.a\(fiber[^)]*\.o\)' "$task_map"; then
+            echo "FAIL: mixed provider in $task_test" >&2; exit 1
+        fi
+    elif grep -q 'libfiber_sh4zam\.a' "$task_map"; then
+        echo "FAIL: addon in core example $task_test" >&2; exit 1
+    fi
+    task_members=(fiber fiber_context fiber_switch)
+    if [ "$task_test" = fiber-vblank-service ]; then
+        task_members+=(fiber_service)
+    else
+        task_members+=(fiber_sync)
+    fi
+    for task_member in "${task_members[@]}"; do
+        grep -Fq "$task_lib.a($task_member.o)" "$task_map"
+    done
+done
+echo "PASS: $task_kind bundle builds independently; disc/VBlank examples link exactly one provider"

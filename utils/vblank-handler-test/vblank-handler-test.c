@@ -146,8 +146,8 @@ static void check_events(const uint8_t *expected, size_t count) {
 }
 
 static void test_priority_and_self_removal(void) {
-    static const uint8_t first[] = { 1, 2, 3, 4, 5 };
-    static const uint8_t second[] = { 1, 3, 4, 5 };
+    static const uint8_t first[] = { 1, 2, 4, 3, 5 };
+    static const uint8_t second[] = { 1, 4, 3, 5 };
     int high;
     int default_id;
     int equal;
@@ -225,11 +225,32 @@ static void test_errors(void) {
     CHECK(vblank_handler_remove(-1) < 0 && errno == ENOENT);
 }
 
+static void test_ties_and_legacy(void) {
+    static const uint8_t expected[] = { 8, 4, 1, 3, 5, 7 };
+    int ids[6];
+
+    /* Interleave the APIs: priority ties reverse, legacy ties do not. */
+    ids[0] = vblank_handler_add_prio(high_handler, NULL, 128);
+    ids[1] = vblank_handler_add(default_handler, NULL);
+    ids[2] = vblank_handler_add_prio(equal_handler, NULL, 128);
+    ids[3] = vblank_handler_add(low_handler, NULL);
+    ids[4] = vblank_handler_add_prio(tail_handler, NULL, 128);
+    ids[5] = vblank_handler_add(victim_handler, NULL);
+    event_count = 0;
+    dispatch();
+    check_events(expected, sizeof(expected));
+    for(size_t i = 0; i < 6; ++i) {
+        CHECK(ids[i] > 0);
+        CHECK(vblank_handler_remove(ids[i]) == 0);
+    }
+}
+
 int main(void) {
     CHECK(vblank_init() == 0);
     test_errors();
     test_priority_and_self_removal();
     test_remove_later_handler();
+    test_ties_and_legacy();
     CHECK(allocator_calls_in_irq == 0);
     CHECK(vblank_shutdown() == 0);
     CHECK(allocation_count == free_count);
