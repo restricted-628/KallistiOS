@@ -1594,19 +1594,8 @@ static int cdda_play_internal(
 
         first = TOC_TRACK(toc.first);
         last = TOC_TRACK(toc.last);
-        if((first < 1u || last > 99u || first > last
-                || start < first || end > last)) {
-            /* GD-DA tracks live in the high-density program area. The
-               single-density TOC is still checked first so ordinary mixed-
-               mode CDs need only one command. A play range may not cross the
-               two physically discontinuous areas. */
-            if(deadline_timeout(deadline, &remaining) < 0
-                    || read_toc_internal(&toc, true, remaining, observed,
-                                         true, cancel, cancel_data) < 0)
-                goto out_tracks;
-            first = TOC_TRACK(toc.first);
-            last = TOC_TRACK(toc.last);
-        }
+        /* Missing tracks fail within the low-density area; never promote
+           ordinary CDDA playback into the unsupported GD program area. */
         if(first < 1u || last > 99u || first > last
                 || start < first || end > last
                 || toc.entry[start - 1u] == 0xffffffffu

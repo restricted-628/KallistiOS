@@ -49,6 +49,15 @@ TOC retains `ERR_*` results and both density-area choices. The explicit BIOS
 filesystem mount and BIOS-reference/reuse examples call the named BIOS
 versions, so their selected transport is not changed by these defaults.
 
+Both `/cd` backends and all media-reading examples request the low-density
+TOC unconditionally, matching upstream KOS even when status reports `CD_GDROM`.
+Direct track-number CDDA playback also stays in the low-density TOC and fails
+with `ENOENT` when the requested tracks are absent, without a high-density
+retry. The explicit TOC-query area argument is retained for API compatibility;
+metadata queries are not a promise of high-density GD-ROM data-read support.
+Raw caller-supplied FAD APIs retain their existing contracts: no arbitrary
+numeric sector cutoff, per-read media probe, or new BIOS fallback is introduced.
+
 Raw subcode and playback controls also use direct SPI, independently of `/cd`,
 with 10000 ms primary-command timeouts plus bounded recovery and `ERR_*`
 results. Subcode output is only valid on success. Play retains repeat-count
