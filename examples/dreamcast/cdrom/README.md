@@ -13,6 +13,9 @@ For an inventory of DMA destinations and other transfer engines, see
 - `fiber-read` demonstrates direct DMA with application-owned fibers and the
   optional `libfiber_disc` adapter, without a service executor. The separate
   `fiber-disc-contract` probe tests lifetimes with a simulated transport.
+- `fiber-vram` reads a generated RGB565 texture directly into owned VRAM with
+  the same adapter, verifies data/guards, renders, then fences before freeing.
+  It requires the supplied generated asset on the mounted test disc.
 - `read-routing` checks generic direct format/read/reinitialization routing,
   independent BIOS state, and failure preservation with transport spies.
 - `convenience-routing` checks direct-default metadata, subcode, and playback

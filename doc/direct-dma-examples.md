@@ -10,7 +10,7 @@ each API's contract.
 | Destination | Existing examples / coverage | Remaining teaching gap |
 | --- | --- | --- |
 | Main RAM | `cdrom/direct-read`, `cdrom/direct-async`, `cdrom/stream`; `cdrom/fiber-read` adds cooperative application-fiber waiting | New fiber example needs live-media and hardware execution |
-| PVR RAM | Driver supports permitted PVR RAM aliases; `cdrom/direct-raw-dma` includes simulated transfers/bounds at `0xa4000000` | No dedicated end-to-end disc-to-VRAM usage example or rendered-texture validation |
+| PVR RAM | `cdrom/fiber-vram`: generated texture, guarded allocation, cooperative DMA wait, readback and render fence; `cdrom/direct-raw-dma` includes simulated transfers/bounds | Physical-hardware execution remains required; ordinary one-shot reads support VRAM, staged streaming remains RAM-only |
 | GAPS bridge SRAM | `cdrom/direct-gaps-stage`: explicit SRAM lease, GD-DMA completion, then G2 DMA to main RAM | No fiber adapter for the lease-based API; bridge/hardware validation remains separate |
 
 All example paths above are under `examples/dreamcast/`. The GAPS example is
@@ -34,7 +34,8 @@ disc-to-VRAM does not decompress, convert, or twiddle a texture automatically.
 
 `libfiber_disc` is an optional client adapter; the disc worker still executes
 the I/O. Its first API wraps ordinary direct GD-DMA reads, not GAPS leases,
-stream sessions, PIO, PVR DMA, or G2 DMA. The live example uses main RAM.
+stream sessions, PIO, PVR DMA, or G2 DMA. `fiber-read` uses main RAM;
+`fiber-vram` uses allocated texture RAM and only renders after retirement.
 `cdrom/fiber-disc-contract` checks software lifetimes and sibling scheduling
 with a simulated transport and the real request/callback workers.
 

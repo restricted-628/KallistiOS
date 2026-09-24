@@ -11,6 +11,13 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added `cdrom/fiber-vram`, an application-fiber direct disc-to-texture-RAM
+  example with a host-generated RGB565 asset, guarded VRAM allocation,
+  byte-for-byte readback, cancellation drain, and render-completion fencing.
+  It uses the existing `libfiber_disc` adapter and direct GD-DMA driver, with
+  no service executor, payload staging, or BIOS fallback. Staged disc streams
+  remain RAM-only. Physical-hardware validation remains outstanding.
+
 * Added optional `libfiber_disc` and an application-fiber direct-DMA example.
   The existing disc worker retains hardware ownership; only the requesting
   child fiber parks. Main-fiber pumping retires the request and its callback
