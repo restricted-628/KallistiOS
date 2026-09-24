@@ -5,20 +5,22 @@
 
 TARGET = independent-heap.elf
 OBJS = independent-heap.o
-KOS_CFLAGS += -std=c11
 
 all: rm-elf $(TARGET)
 
 include $(KOS_BASE)/Makefile.rules
 
 clean: rm-elf
-	-rm -f $(OBJS)
+	-rm -f $(OBJS) heap-safety.o heap-safety.elf
 
 rm-elf:
 	-rm -f $(TARGET)
 
 $(TARGET): $(OBJS)
 	kos-cc -o $(TARGET) $(OBJS)
+
+heap-safety.elf: heap-safety.o
+	kos-cc -o $@ $<
 
 run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
