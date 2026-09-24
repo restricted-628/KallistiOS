@@ -17,6 +17,11 @@
     called from interrupt context. Before destroying a heap, the caller must
     prevent new operations and wait for all existing users to finish.
 
+    This first-fit allocator validates the complete block list before mutation;
+    worst-case operation time is linear in the number of blocks, not constant.
+    Handles must refer to readable, aligned metadata with intact arena bounds
+    and mutex state. Validation is diagnostic, not memory protection.
+
     \author Joseph Black
 */
 

@@ -5,22 +5,27 @@
 
 CC ?= cc
 CFLAGS ?= -O2
-include ../Makefile.host-test
-CFLAGS += -pthread
+HOST_CSTD ?= gnu17
+HOST_PEDANTIC ?=
+CFLAGS += -std=$(HOST_CSTD) -Wall -Wextra -Werror $(HOST_PEDANTIC) -pthread
 ROOT := ../..
 INCLUDES := -Iinclude
 SOURCE := $(ROOT)/kernel/mm/heap.c
-TARGET := mm-heap-test
+TARGET := mm-heap-test heap-corruption-test
 
 .PHONY: all clean test
 
 all: test
 
-$(TARGET): mm-heap-test.c $(SOURCE) $(ROOT)/include/kos/heap.h
+mm-heap-test: mm-heap-test.c $(SOURCE) $(ROOT)/include/kos/heap.h
 	$(CC) $(CFLAGS) $(INCLUDES) -o $@ mm-heap-test.c $(SOURCE)
 
+heap-corruption-test: heap-corruption-test.c $(SOURCE) $(ROOT)/include/kos/heap.h
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ heap-corruption-test.c
+
 test: $(TARGET)
-	./$(TARGET)
+	./mm-heap-test
+	./heap-corruption-test
 
 clean:
 	$(RM) $(TARGET)
