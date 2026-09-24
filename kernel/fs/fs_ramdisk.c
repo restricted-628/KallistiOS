@@ -902,7 +902,8 @@ void fs_ramdisk_shutdown(void) {
     if(rootdir == NULL)
         return;
 
-    nmmgr_handler_remove(&vh.nmmgr);
+    if(nmmgr_handler_remove(&vh.nmmgr) < 0)
+        return;
 
     /* First free up the open handles */
     TAILQ_FOREACH_SAFE(fd1, &rd_fd_queue, next, fd2) {

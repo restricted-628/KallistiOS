@@ -325,8 +325,10 @@ void fs_rnd_init(void) {
 void fs_rnd_shutdown(void) {
     rnd_fh_t *c, *n;
 
-    nmmgr_handler_remove(&vh.nmmgr);
-    nmmgr_handler_remove(&ah_u.nmmgr);
+    if(nmmgr_handler_remove(&ah_u.nmmgr) < 0 && errno != ENOENT)
+        return;
+    if(nmmgr_handler_remove(&vh.nmmgr) < 0)
+        return;
 
     mutex_lock(&fh_mutex);
 

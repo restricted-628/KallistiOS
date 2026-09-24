@@ -95,6 +95,9 @@ export_sym_t *export_lookup_path(const char *name, const char *path);
 /** \brief  Look up the nearest exported symbol at or before addr.
             Useful for exception messages.
 
+    In interrupt/exception context, only built-in static symbol tables are
+    searched, without acquiring the name-manager mutex.
+
     The returned entry is borrowed from its owning symbol table. Code which can
     unload dynamically registered symbol tables concurrently must serialize
     that unload until it has finished using the entry.

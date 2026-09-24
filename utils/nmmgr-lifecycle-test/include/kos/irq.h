@@ -3,8 +3,9 @@
 
 #include <stdbool.h>
 
+extern bool test_in_irq;
 static inline bool irq_inside_int(void) {
-    return false;
+    return test_in_irq;
 }
 
 #endif

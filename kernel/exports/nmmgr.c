@@ -30,6 +30,7 @@ interface at the front of their struct.
 #include <kos/cond.h>
 #include <kos/exports.h>
 #include <kos/irq.h>
+#include <arch/timer.h>
 
 /* Thread mutex for our name handler list */
 static mutex_t mutex = MUTEX_INITIALIZER;
@@ -150,6 +151,7 @@ int nmmgr_handler_add(nmmgr_handler_t *hnd) {
     cond_init(&lifetime->idle);
 
     if(mutex_lock(&mutex) < 0) {
+        cond_destroy(&lifetime->idle);
         free(lifetime);
         return -1;
     }
@@ -239,7 +241,7 @@ int nmmgr_handler_release(nmmgr_handler_t *hnd) {
 int nmmgr_handler_remove_timed(nmmgr_handler_t *hnd, unsigned int timeout) {
     nmmgr_lifetime_t *lifetime;
     int wait_result = 0;
-    const int wait_timeout = timeout > INT_MAX ? INT_MAX : (int)timeout;
+    const uint64_t deadline = timeout ? timer_ms_gettime64() + timeout : 0;
 
     if(!hnd) {
         errno = EINVAL;
@@ -278,8 +280,23 @@ int nmmgr_handler_remove_timed(nmmgr_handler_t *hnd, unsigned int timeout) {
     }
 
     while(lifetime->references && wait_result == 0) {
+        int wait_timeout = 0;
+        if(timeout) {
+            const uint64_t now = timer_ms_gettime64();
+            if(now >= deadline) {
+                errno = ETIMEDOUT;
+                wait_result = -1;
+                break;
+            }
+            const uint64_t remaining = deadline - now;
+            wait_timeout = remaining > INT_MAX ? INT_MAX : (int)remaining;
+        }
         wait_result = cond_wait_timed(&lifetime->idle, &mutex,
                                       wait_timeout);
+        /* A chunked wait may expire before an unsigned timeout does. */
+        if(wait_result < 0 && errno == ETIMEDOUT && timeout &&
+           timer_ms_gettime64() < deadline)
+            wait_result = 0;
     }
 
     if(wait_result < 0 && lifetime->references) {

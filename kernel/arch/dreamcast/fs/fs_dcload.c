@@ -478,7 +478,8 @@ void fs_dcload_shutdown(void) {
     if(!syscall_dcload_detected())
         return;
 
-    nmmgr_handler_remove(&vh.nmmgr);
+    if(nmmgr_handler_remove(&vh.nmmgr) < 0)
+        return;
 
     /* Free dcload wrkram after no handler call can reach it. */
     if(dcload_wrkmem) {

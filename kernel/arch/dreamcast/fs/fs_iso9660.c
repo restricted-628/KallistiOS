@@ -3065,7 +3065,8 @@ void fs_iso9660_shutdown(void) {
 
     /* Stop new path operations and wait for existing retained lookups before
        dismantling caches and mutexes used by handler entry points. */
-    nmmgr_handler_remove(&vh.nmmgr);
+    if(nmmgr_handler_remove(&vh.nmmgr) < 0)
+        return;
 
     /* Dealloc cache block space */
     free(cache_data);
