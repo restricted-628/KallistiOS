@@ -651,6 +651,9 @@ file_t fs_dup2(file_t oldfd, file_t newfd);
     if you're trying to implement your own filesystem handler in your code, you
     may need this function, otherwise you should just ignore it.
 
+    Ownership of hnd transfers only on success. On failure, the caller still
+    owns hnd and the VFS close callback is not invoked.
+
     \param  vfs             The VFS handler structure to use for the file.
     \param  hnd             Internal handle data for the file.
 

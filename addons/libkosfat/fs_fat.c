@@ -1445,8 +1445,13 @@ int fs_fat_unmount(const char *mp) {
 
     /* Handler close operations take fat_mutex, so retained users must drain
        after the mount is detached and the mutex has been released. */
-    if(nmmgr_handler_remove(&i->vfsh->nmmgr) < 0)
+    if(nmmgr_handler_remove(&i->vfsh->nmmgr) < 0) {
+        /* Keep the detached mount reachable for a removal retry. */
+        mutex_lock(&fat_mutex);
+        LIST_INSERT_HEAD(&fat_fses, i, entry);
+        mutex_unlock(&fat_mutex);
         return -1;
+    }
 
     fat_fs_shutdown(i->fs);
     free(i->vfsh);
