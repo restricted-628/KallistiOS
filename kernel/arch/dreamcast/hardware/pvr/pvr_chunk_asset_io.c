@@ -104,6 +104,14 @@ static int validate_config(const pvr_chunk_asset_direct_config_t *config,
     return 0;
 }
 
+/* This synchronous API cannot return ownership of destination while an engine
+   still writes it. Cancellation/deadline reporting may therefore be delayed
+   until the active DMA reaches idle; a failed stop is not a completed stop. */
+static void drain_g2(uint32_t channel) {
+    while(g2_dma_cancel(channel) < 0 && errno == EBUSY)
+        (void)g2_dma_wait(channel, 0);
+}
+
 static int read_gaps_chunk(const pvr_chunk_asset_direct_config_t *config,
                            const gaps_sram_info_t *gaps_info, void *destination,
                            uint32_t fad, size_t sectors, uint64_t deadline,
@@ -137,7 +145,7 @@ static int read_gaps_chunk(const pvr_chunk_asset_direct_config_t *config,
     if(deadline_remaining(deadline, &remaining) < 0) {
         int saved_errno = errno;
 
-        (void)g2_dma_cancel(config->g2_channel);
+        drain_g2(config->g2_channel);
         result->g2_milliseconds += timer_ms_gettime64() - started;
         errno = saved_errno;
         return -1;
@@ -148,7 +156,7 @@ static int read_gaps_chunk(const pvr_chunk_asset_direct_config_t *config,
         /* This call owns the selected generic channel exclusively. Canceling
            on every wait failure prevents a late DMA write after publication;
            a transfer which raced to terminal simply makes cancel a no-op. */
-        (void)g2_dma_cancel(config->g2_channel);
+        drain_g2(config->g2_channel);
         result->g2_milliseconds += timer_ms_gettime64() - started;
         errno = saved_errno;
         return -1;

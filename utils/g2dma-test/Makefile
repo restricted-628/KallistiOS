@@ -5,7 +5,12 @@
 
 CC ?= cc
 CFLAGS ?= -O2
+ifneq ($(wildcard ../Makefile.host-test),)
 include ../Makefile.host-test
+else
+HOST_CSTD ?= gnu17
+CFLAGS += -std=$(HOST_CSTD) -Wall -Wextra -Werror $(HOST_PEDANTIC)
+endif
 ROOT := ../..
 INCLUDES := -Iinclude -I$(ROOT)/kernel/arch/dreamcast/include \
 	-I$(ROOT)/kernel/arch/dreamcast/hardware

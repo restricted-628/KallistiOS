@@ -8,3 +8,9 @@ The AICA endpoint is intentionally passed as its low physical G2 address. This
 exercises the distinction between SH-4 virtual mappings and G2 bus addresses,
 including in an MMU-enabled program. The program prints `G2-STATE: PASS` when
 the round-trip and both status snapshots succeed.
+
+It then chains two uploads from an IRQ callback while the first submission's
+blocking caller owns its wait result. The expected marker is
+`G2-STATE: PASS roundtrip=32 callbacks=2`. This probes the real G2/AICA path,
+not the register spies used by the host suite. Failed waits drain any active
+transfer before the example returns ownership of its sound allocation.

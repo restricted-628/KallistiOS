@@ -38,6 +38,7 @@
 __BEGIN_DECLS
 
 #include <stdint.h>
+#include <stddef.h>
 #include <stdbool.h>
 #include <kos/irq.h>
 
@@ -140,7 +141,13 @@ typedef struct g2_dma_status {
     because a single G2 DMA operation cannot represent a non-contiguous span.
     The G2 endpoint is a bus address rather than an SH-4 virtual mapping, so a
     physical G2 address or its ordinary P1/P2/P3 alias remains valid with the
-    MMU enabled.
+    MMU enabled. The external span must stay within G2 bus Area 0 or Area 5.
+
+    Buffers and callback data remain borrowed until completion or successful
+    cancellation. A failed wait does not release buffer ownership. Async
+    callback chaining is supported even before an earlier waiter resumes:
+    that waiter retains its own generation's result. A second blocking submit
+    is rejected with `EBUSY` until the earlier waiter returns.
 
     An endpoint inside bridge SRAM must be wholly contained in a live lease
     obtained from the \ref system_gaps API. The DMA channel claims that lease
@@ -170,6 +177,7 @@ typedef struct g2_dma_status {
     \par    Error Conditions:
     \em     ENODEV - G2 DMA support is not initialized \n
     \em     EINPROGRESS - DMA already in progress \n
+    \em     EBUSY - another caller still owns the blocking wait slot \n
     \em     EFAULT - address alignment, range, or alias is invalid \n
     \em     EINVAL - invalid channel, direction, or transfer length \n
     \em     EPERM - blocking submission from interrupt context \n
@@ -201,6 +209,10 @@ int g2_dma_get_status(uint32_t channel, g2_dma_status_t *status);
     channel is terminal, any caller may inspect or wait on the result without
     consuming it.
 
+    A timeout abandons only this wait, not the transfer. Shutdown returns
+    `EBUSY` while a waiter has not returned, including after it is signaled.
+    Chained completions cannot overwrite the result reserved for this waiter.
+
     \retval 0               Operation completed successfully.
     \retval -1              No operation, timeout, cancellation, or error.
 */
@@ -224,12 +236,17 @@ int g2_dma_resume(uint32_t channel);
 
 /** \brief Cancel the active G2 DMA operation.
 
-    Cancellation disables the channel and wakes a blocking or timed waiter.
+    Cancellation requests that the channel stop, then checks its busy bit.
+    Success means the engine reports idle; it publishes cancellation and wakes
+    a blocking or timed waiter. If hardware still reports busy, `EBUSY` leaves
+    the transfer, buffers, callback and any SRAM claim owned. Retry later or
+    wait for normal completion. There is no unbounded polling in this call.
     A completion callback is not invoked for a cancelled transfer.
 
     \retval 0               Active transfer cancelled.
     \retval -1              Invalid/uninitialized channel, or no active
-                            transfer; `errno` is set appropriately.
+                            transfer, or stop is not yet acknowledged (`EBUSY`);
+                            `errno` is set appropriately.
 */
 int g2_dma_cancel(uint32_t channel);
 
@@ -253,6 +270,10 @@ int g2_dma_init(void);
     This function must be called from ordinary thread context. A call made
     from interrupt context is ignored and sets `errno` to `EPERM`. A call that
     races another lifecycle operation is ignored and sets `errno` to `EBUSY`.
+    Shutdown also refuses unconsumed waiters or a channel which still reports
+    busy after a stop request. It remains initialized with event claims and
+    semaphores intact for retry; channels stopped earlier in that attempt stay
+    cancelled. Stop/join users before global hardware/ASIC teardown.
 */
 void g2_dma_shutdown(void);
 
