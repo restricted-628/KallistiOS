@@ -18,6 +18,13 @@
 
 #define SQ_RECURSION_DEPTH 8u
 
+/* Exercise both modes regardless of the application's default policy. */
+#ifdef INIT_MMU
+KOS_INIT_FLAGS(INIT_DEFAULT & ~INIT_MMU);
+#else
+KOS_INIT_FLAGS(INIT_DEFAULT);
+#endif
+
 static alignas(32) uint8_t source[64];
 static alignas(32) uint8_t destination[64];
 
@@ -34,6 +41,7 @@ static int verify_copy(void) {
     if(!sq_cpy(destination, source, sizeof(source)))
         return -1;
 
+    sq_wait();
     dcache_inval_range((uintptr_t)destination, sizeof(destination));
     if(memcmp(destination, source, sizeof(source))) {
         errno = EIO;
@@ -41,6 +49,46 @@ static int verify_copy(void) {
     }
 
     return 0;
+}
+
+static int verify_mapping_restore(void) {
+    const size_t page = 1024u * 1024u;
+    uint8_t *ram = aligned_alloc(page, 2u * page);
+    uint32_t *outer;
+    int result = -1;
+
+    if(!ram)
+        return -1;
+    memset(ram, 0, 64);
+    memset(ram + page, 0, 64);
+    dcache_purge_range((uintptr_t)ram, 64);
+    dcache_purge_range((uintptr_t)(ram + page), 64);
+    outer = sq_lock(ram);
+    if(!outer)
+        goto done;
+    /* The nested copy points at a different MMU page. */
+    if(!sq_cpy(ram + page, source, 32)) {
+        sq_unlock();
+        goto done;
+    }
+    for(size_t i = 0; i < 8; ++i)
+        outer[i] = 0x12345678u;
+    sq_flush(outer);
+    sq_wait();
+    sq_unlock();
+    dcache_inval_range((uintptr_t)ram, 64);
+    dcache_inval_range((uintptr_t)(ram + page), 64);
+    if(memcmp(ram + page, source, 32))
+        goto done;
+    for(size_t i = 0; i < 8; ++i)
+        if(((uint32_t *)ram)[i] != 0x12345678u)
+            goto done;
+    result = 0;
+done:
+    free(ram);
+    if(result)
+        errno = EIO;
+    return result;
 }
 
 /* Cross sq_cpy's 1 MiB batching boundary on both source-alignment paths.
@@ -158,7 +206,8 @@ unlock:
     if(recursion_failed)
         goto out;
 
-    if(verify_copy() < 0 || verify_batched_copy() < 0) {
+    if(verify_copy() < 0 || verify_batched_copy() < 0 ||
+       verify_mapping_restore() < 0) {
         result = fail("MMU-off copy");
         goto out;
     }
@@ -168,12 +217,13 @@ unlock:
         initialized_mmu = true;
     }
 
-    if(!mmu_enabled() || verify_copy() < 0 || verify_batched_copy() < 0) {
+    if(!mmu_enabled() || verify_copy() < 0 || verify_batched_copy() < 0 ||
+       verify_mapping_restore() < 0) {
         result = fail("MMU-on copy");
         goto out;
     }
 
-    printf("KOSSQ recursion=8 validation=1 mmu=1 batch=1\n");
+    printf("KOSSQ recursion=8 validation=1 mmu=1 batch=1 restore=1\n");
     result = EXIT_SUCCESS;
 
 out:
