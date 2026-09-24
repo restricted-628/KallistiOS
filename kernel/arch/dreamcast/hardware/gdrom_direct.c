@@ -1947,13 +1947,13 @@ static int wait_direct_dma_events(gdrom_direct_dma_operation_t *operation,
     }
 }
 
-static int read_sectors_dma_internal(
+static int read_sectors_dma_deadline(
         void *buffer, uint32_t fad, size_t sectors,
         gdrom_direct_sector_type_t sector_type, uint32_t timeout,
         gdrom_direct_result_t *result,
         gdrom_direct_dma_test_mode_t test_mode, semaphore_t *external_event,
         gdrom_direct_cancel_t cancel, gdrom_direct_progress_t progress,
-        void *hook_data, bool gaps_authorized) {
+        void *hook_data, bool gaps_authorized, uint64_t deadline) {
     gdrom_direct_dma_operation_t operation;
     semaphore_t local_event;
     gdrom_spi_packet_t packet;
@@ -1964,7 +1964,6 @@ static int read_sectors_dma_internal(
     uintptr_t buffer_address = (uintptr_t)buffer;
     uint32_t physical_address;
     uint32_t expected_bytes = (uint32_t)dma_read_bytes(sectors, sector_type);
-    uint64_t deadline;
     uint64_t cleanup_deadline;
     uint32_t remaining;
     uint8_t status;
@@ -2025,8 +2024,10 @@ static int read_sectors_dma_internal(
         operation.event = &local_event;
     }
 
-    deadline = timer_ms_gettime64() + timeout;
-    if(g1_bus_lock_timed(timeout) < 0)
+    if(!deadline)
+        deadline = timer_ms_gettime64() + timeout;
+    if(deadline_timeout(deadline, &remaining) < 0
+            || g1_bus_lock_timed(remaining) < 0)
         goto out;
 
     if(cancel && cancel(hook_data)) {
@@ -2271,14 +2272,63 @@ out:
     return rv;
 }
 
+static int read_sectors_dma_internal(
+        void *buffer, uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        gdrom_direct_dma_test_mode_t test_mode, semaphore_t *external_event,
+        gdrom_direct_cancel_t cancel, gdrom_direct_progress_t progress,
+        void *hook_data, bool gaps_authorized) {
+    return read_sectors_dma_deadline(buffer, fad, sectors, sector_type,
+        timeout, result, test_mode, external_event, cancel, progress,
+        hook_data, gaps_authorized, 0);
+}
+
 int gdrom_direct_read_sectors_dma(
         void *buffer, uint32_t fad, size_t sectors,
         gdrom_direct_sector_type_t sector_type, uint32_t timeout,
         gdrom_direct_result_t *result) {
-    return read_sectors_dma_internal(buffer, fad, sectors, sector_type,
-                                     timeout, result,
-                                     GDROM_DIRECT_DMA_TEST_NONE, NULL,
-                                     NULL, NULL, NULL, false);
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *observed = result ? result : &local_result;
+    size_t bytes = dma_range_bytes(sectors, sector_type);
+    size_t sector_size = sector_type == GDROM_DIRECT_SECTOR_RAW2352
+        ? GDROM_DIRECT_RAW_SECTOR_SIZE : GDROM_DIRECT_SECTOR_SIZE;
+    size_t completed = 0;
+    uint64_t deadline;
+
+    memset(observed, 0, sizeof(*observed));
+    if(!buffer || ((uintptr_t)buffer & 31u) || fad < 150u
+            || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
+            || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(bytes > UINTPTR_MAX - (uintptr_t)buffer
+            || dma_destination_classify((uintptr_t)buffer, bytes, false)
+                == GDROM_DMA_DESTINATION_INVALID) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    deadline = timer_ms_gettime64() + timeout;
+    while(completed < sectors) {
+        size_t chunk = sectors - completed;
+        size_t prior_bytes = completed * sector_size;
+        int rv;
+
+        if(chunk > GDROM_DIRECT_DMA_MAX_SECTORS)
+            chunk = GDROM_DIRECT_DMA_MAX_SECTORS;
+        /* Preserve the absolute deadline across preemption and G1 reacquisition.
+           The bounded transport owns cache/IRQ/recovery for each command. */
+        rv = read_sectors_dma_deadline((uint8_t *)buffer + prior_bytes,
+            fad + (uint32_t)completed, chunk, sector_type, timeout, observed,
+            GDROM_DIRECT_DMA_TEST_NONE, NULL, NULL, NULL, NULL, false, deadline);
+        observed->transferred += prior_bytes;
+        if(rv < 0)
+            return -1;
+        completed += chunk;
+    }
+    return 0;
 }
 
 int gdrom_direct_read_sectors_dma_gaps(

@@ -81,8 +81,14 @@ Direct DMA accepts RAW2352 for even counts, with a
 32-byte-aligned destination and exact sectors * 2352 byte accounting. This
 applies to synchronous/queued RAM or PVR destinations and leased GAPS SRAM.
 The queued executor captures format and byte counts at submission and uses
-that same size for the execution-time lease claim. Synchronous DMA and GAPS
-operations remain limited to sixteen sectors. Normal queued RAM/PVR reads can
+that same size for the execution-time lease claim. GAPS operations remain
+limited to sixteen sectors. Synchronous RAM/PVR reads split larger ranges into
+bounded commands without allocating queue or staging state. The full range is
+validated before I/O; one absolute deadline covers the read and G1 waits.
+G1 is released between commands, so other disc operations may interleave.
+The result's `transferred` field is cumulative (including partial failures),
+while the remaining fields describe the last attempted command. No later
+command is issued after failure. Normal queued RAM/PVR reads can
 span multiple commands: each is limited to sixteen sectors and requeued at
 the tail afterward. One chain deadline starts at first execution and includes
 time spent waiting between segments. Initial queue residence is not charged.
@@ -211,3 +217,16 @@ checks in both modes. The bounded DMA probe now rejects 18-sector reads
 only through the synchronous API, since queued reads support chaining.
 These tests do not establish physical-drive payload, cache, IRQ, or timing
 correctness; hardware validation remains outstanding.
+
+The synchronous whole-range DMA pass expands `direct-raw-dma` to 3346 checks,
+passing in both Flycast modes. Simulated MMIO verifies 17/18/32/33/34-sector
+reads into cached/uncached RAM and PVR RAM, exact per-command FAD/count/buffer
+and cache ranges, partial middle/final failures, G1 reacquisition failure,
+and one absolute deadline with decreasing lock budgets. Complete destination,
+pointer/size arithmetic, and FAD-span rejection precede I/O. GAPS retains its
+bounded contract. The full SH-4 GCC 16.2 build, driver and DMA probe under
+`-Werror`, ten other example rebuilds, and GCC 14 GNU17/strict C23 plus Clang
+ASan/UBSan packet tests pass. Queued DMA, PIO, BIOS read, convenience, defaults,
+and G1 probes still pass 320/304/151/128/14/4 checks in both modes. Payload
+writes and real bus timing are not simulated by the MMIO probe; no physical
+DMA/cache/IRQ or drive-support claim follows from these results.

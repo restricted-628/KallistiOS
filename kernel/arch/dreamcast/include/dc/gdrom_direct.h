@@ -599,6 +599,16 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
     is per call and does not inherit the BIOS sector mode. Odd raw counts may
     instead be read explicitly with \ref gdrom_direct_read_sectors.
 
+    Larger reads use commands of at most sixteen sectors, releasing G1 between
+    commands. The entire read shares one absolute deadline, including G1 waits
+    and time between commands; bounded recovery may take additional time.
+    The full destination and FAD span are validated before I/O. This does not
+    allocate a request or staging buffer and is not atomic against other disc
+    users or media/control changes. On failure, no later command is issued.
+    `result->transferred` is cumulative, including partial progress on error;
+    the remaining diagnostic fields describe the last command attempted (so
+    `dma_transferred` is per-command, not the whole-read byte count).
+
     Cacheable system-RAM destinations are invalidated immediately before DMA
     and again after the engine becomes inactive. PVR RAM does not receive data
     cache maintenance. With the MMU enabled, destinations must use a direct
@@ -614,7 +624,8 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
 
     \param  buffer       Destination aligned to 32 bytes in system or PVR RAM.
     \param  fad          First absolute frame address; must be at least 150.
-    \param  sectors      Required count from 1 through 16.
+    \param  sectors      Nonzero count fitting the FAD/destination span;
+                         raw counts must be even.
     \param  sector_type  Mode-1/Mode-2 Form-1, or RAW2352 with an even count.
     \param  timeout      Required nonzero whole-operation timeout in milliseconds.
     \param  result       Optional low-level command and DMA observations.

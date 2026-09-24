@@ -2,6 +2,9 @@
 #define DIRECT_RAW_DMA_MMIO_SHIM_H
 #include <stdint.h>
 #include <kos/cache.h>
+#include <kos/timer.h>
+uint64_t dma_probe_time(void);
+#define timer_ms_gettime64() dma_probe_time()
 uint8_t dma_probe_in8(uintptr_t address);
 uint16_t dma_probe_in16(uintptr_t address);
 uint32_t dma_probe_in32(uintptr_t address);
