@@ -3,6 +3,7 @@
    util/vmu_fb.c
    Copyright (C) 2023 Paul Cercueil
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -233,20 +234,24 @@ void vmufb_clear_area(vmufb_t *fb,
     vmufb_paint_area(fb, x, y, w, h, (const uint8_t *) tmp);
 }
 
+int vmufb_present_ex(const vmufb_t *fb, maple_device_t *dev) {
+    vmu_lcd_direction_t direction;
+
+    if(!fb || !dev)
+        return MAPLE_EINVALID;
+
+    /* A standard controller presents its LCD upside down relative to the
+       attached device. Sideways or unknown topologies retain raw ordering;
+       applications can apply a custom transform when that geometry matters. */
+    if(vmu_lcd_get_direction(dev, &direction) == 0 &&
+       direction == VMU_LCD_DIRECTION_FLIPPED)
+        return vmu_draw_lcd_rotated(dev, fb->data);
+
+    return vmu_draw_lcd(dev, fb->data);
+}
+
 void vmufb_present(const vmufb_t *fb, maple_device_t *dev) {
-    /* Check for controller containing VMU (should always be same port, unit 0) */
-    maple_device_t *cont = maple_enum_dev(dev->port, 0);
-
-    /* If the VMU connector and controller connector face opposite directions,
-       no flipping necessary (example: VMU in a lightgun). */
-    if(cont && (cont->info.functions & MAPLE_FUNC_CONTROLLER) &&
-       (cont->info.connector_direction != dev->info.connector_direction))
-        vmu_draw_lcd(dev, fb->data);
-
-    /* If we somehow found no corresponding controller, or connectors face the same direction,
-       we rotate the image 180 degrees (example: VMU in a standard controller). */
-    else
-        vmu_draw_lcd_rotated(dev, fb->data);
+    (void)vmufb_present_ex(fb, dev);
 }
 
 void vmufb_print_string_into(vmufb_t *fb,

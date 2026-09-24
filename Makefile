@@ -19,6 +19,10 @@ SUBDIRS = utils kernel addons # examples
 
 all: subdirs
 
+.PHONY: fiber-bundle-check
+fiber-bundle-check:
+	bash utils/check-fiber-bundle.sh
+
 clean: clean_subdirs
 
 distclean: clean

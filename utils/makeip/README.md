@@ -1,12 +1,10 @@
 # IP creator (makeip)
 
-**IP creator** (`makeip`) is an utility used for generating homebrew **Sega
-Dreamcast** bootstrap files, also known as `IP` which stands for **Initial
+**IP creator** (`makeip`) is an utility used for generating homebrew **Dreamcast** bootstrap files, also known as `IP` which stands for **Initial
 Program**. This file is often named `IP.BIN`. It's a critical component for
 any Dreamcast discs.
 
-`IP.BIN` file is used for making selfboot (**MIL-CD**) discs for **Sega
-Dreamcast** software. When the file is inserted in the bootsector of a disc,
+`IP.BIN` file is used for making selfboot (**MIL-CD**) discs for **Dreamcast** software. When the file is inserted in the bootsector of a disc,
 the bootstrap program (`IP.BIN`) will execute the main program stored on the
 file system which is often named `1ST_READ.BIN`. Please note, the `IP.BIN`
 file is not needed on the file system as it's inserted in the bootsector.
@@ -21,11 +19,6 @@ these fields. It also supports the insertion of custom images in the boot
 screen. These kind of images are called **MR images** or **MR logos** and are
 often stored in files with the `.mr` extension. You'll be able to convert
 a **PNG** image into the **MR** format on-the-fly with **IP creator**.
-
-Below you'll find an example of the *ADK/Napalm* MR image shown in the boot
-screen (this **MR** logo was extracted from the `dcload` bootstrap):
-
-![Example](img/mrlogo.png "Sample MR image")
 
 ## Building
 
@@ -275,11 +268,9 @@ To install the GIMP Plug-In:
 1. Make the plug-in executable: ```chmod +x file-mr.py``` or equivalent.
 2. Place the plug-in in the `plugins` directory. This directory is different
    depending on what operating system you use. To find out go to `GIMP` >
-   `Preferences` > `Folders` (*Expand option*) > `Plugins` (see below an
-   example under **Windows**, but this applies to others OS).
+   `Preferences` > `Folders` (*Expand option*) > `Plugins`. Use one of the
+   plug-in directories listed for your system.
 3. That's it!
-
-![GIMP Plug-In Directory](img/gimp.png "GIMP Plug-In Directory")
 
 ## Acknowledgments
 

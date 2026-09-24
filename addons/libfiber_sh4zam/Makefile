@@ -6,6 +6,8 @@ PROBES = fiber-context-probe fiber fiber-sync fiber-math fiber-teardown \
          fiber-service-probe fiber-service-sync fiber-service-queue
 ELFS = $(addprefix .build/,$(addsuffix .elf,$(PROBES)))
 ADDON_ROOT := $(abspath .)
+SH4ZAM_ROOT ?= $(KOS_BASE)/addons/libsh4zam/upstream
+INSTALLED = $(KOS_BASE)/addons/lib/$(KOS_ARCH)/libfiber_sh4zam.a
 
 ifeq ($(wildcard $(SH4ZAM_ROOT)/include/sh4zam/shz_xmtrx.h),)
 $(error Set SH4ZAM_ROOT to a SH4ZAM 0.9.0 source checkout)
@@ -14,14 +16,18 @@ endif
 KOS_CFLAGS += -std=gnu17 -I$(ADDON_ROOT)/include -I$(SH4ZAM_ROOT)/include \
               -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT
 
-.PHONY: all probes clean
+.PHONY: all probes install clean
 .SECONDARY:
-all: $(TARGET)
+all: install
 probes: $(ELFS)
 include $(KOS_BASE)/Makefile.rules
 
 $(TARGET): $(OBJS)
 	$(KOS_AR) rcs $@ $^
+
+install: $(TARGET)
+	mkdir -p $(dir $(INSTALLED))
+	cp $(TARGET) $(INSTALLED)
 
 .build/%.o: src/%.c
 	mkdir -p $(@D)
@@ -42,6 +48,6 @@ PROVIDER = -Wl,--whole-archive $(TARGET) -Wl,--no-whole-archive
 .build/fiber-teardown.elf: EXTRA_LDFLAGS = -Wl,--wrap=calloc,--wrap=aligned_alloc,--wrap=free
 
 clean:
-	$(RM) $(OBJS) $(TARGET) $(ELFS) $(ELFS:=.map) .build/*.d .build/test-*.o
+	$(RM) $(OBJS) $(TARGET) $(INSTALLED) $(ELFS) $(ELFS:=.map) .build/*.d .build/test-*.o
 
 -include $(wildcard .build/*.d)

@@ -1,0 +1,443 @@
+/* KallistiOS ##version##
+   Copyright (C) 2026 Joseph Black
+*/
+#include <dc/pvr_chunk_skeleton_affine.h>
+#include <assert.h>
+#include <errno.h>
+#include <float.h>
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+#define COUNT 3u
+static matrix_t world[COUNT], reference[COUNT];
+static pvr_normal_matrix_t reference_normal[COUNT];
+static pvr_chunk_skeleton_joint_t joints[COUNT];
+static pvr_chunk_skeleton_t skeleton = {joints, COUNT, COUNT};
+static pvr_chunk_skeleton_affine_joint_t packed_joints[COUNT];
+static shz_mat3x4_t packed_world[COUNT];
+static pvr_chunk_skeleton_affine_t affine;
+static pvr_chunk_skeleton_affine_pose_t pose;
+static pvr_skin_prepared_joint_t output[COUNT], before[COUNT];
+static pvr_skin_prepared_palette_t palette;
+static shz_mat4x4_t sentinel;
+
+static int close_float(float a, float b) {
+    return fabsf(a - b) <= 0.0002f * fmaxf(1.0f, fabsf(b));
+}
+
+static void xmtrx_seed(void) {
+    for(size_t i = 0; i < 16; ++i)
+        sentinel.elem[i] = (float)i * 0.25f - 2.0f;
+    shz_xmtrx_load_4x4(&sentinel);
+}
+
+static void xmtrx_check(void) {
+    shz_mat4x4_t actual;
+    shz_xmtrx_store_4x4(&actual);
+    assert(memcmp(&actual, &sentinel, sizeof(actual)) == 0);
+}
+
+static void init(unsigned frame) {
+    for(size_t i = 0; i < COUNT; ++i) {
+        memset(world + i, 0, sizeof(*world));
+        memset(&joints[i].inverse_bind, 0, sizeof(matrix_t));
+        for(size_t j = 0; j < 4; ++j) {
+            world[i][j][j] = 1.0f;
+            joints[i].inverse_bind[j][j] = 1.0f;
+        }
+        /* Nonsymmetric, noncommuting matrices: negative/nonuniform scale,
+           shear, translation, and node order different from joint order. */
+        world[i][0][0] = -(1.0f + (float)i * 0.25f);
+        world[i][1][1] = 2.0f + (float)frame * 0.015625f;
+        world[i][2][2] = 0.75f;
+        world[i][1][0] = 0.3125f;
+        world[i][2][1] = -0.1875f;
+        world[i][3][0] = (float)frame * 0.25f;
+        world[i][3][1] = (float)i - 2.5f;
+        world[i][3][2] = 3.0f;
+        joints[i].node_index = (i + 2u) % COUNT;
+        joints[i].inverse_bind[0][1] = -0.25f;
+        joints[i].inverse_bind[3][0] = 1.5f + (float)i;
+        joints[i].inverse_bind[3][2] = -0.5f;
+    }
+}
+
+static void prepare(void) {
+    assert(pvr_chunk_skeleton_affine_prepare(&skeleton, packed_joints, COUNT,
+                                            &affine) == 0);
+    assert(pvr_chunk_skeleton_pose_prepare_affine(world, COUNT, packed_world,
+                                                 COUNT, &pose) == 0);
+    xmtrx_check();
+}
+
+static void compare(void) {
+    pvr_skin_palette_t old;
+    assert(pvr_chunk_skeleton_palette_build(&skeleton, world, COUNT,
+        reference, COUNT, reference_normal, COUNT, &old) == 0);
+    xmtrx_check();
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose, output,
+                                                   COUNT, &palette) == 0);
+    xmtrx_check();
+    assert(palette.joints == output && palette.joint_count == COUNT);
+    for(size_t i = 0; i < COUNT; ++i) {
+        for(size_t c = 0; c < 4; ++c) {
+            for(size_t r = 0; r < 4; ++r) {
+                float scalar = 0.0f;
+                for(size_t k = 0; k < 4; ++k)
+                    scalar += world[joints[i].node_index][k][r] *
+                              joints[i].inverse_bind[c][k];
+                assert(close_float(output[i].position.elem2D[c][r], scalar));
+                assert(close_float(output[i].position.elem2D[c][r],
+                                   reference[i][c][r]));
+            }
+        }
+        for(size_t c = 0; c < 3; ++c)
+            for(size_t r = 0; r < 3; ++r)
+                assert(close_float(output[i].normal.elem2D[c][r],
+                                   reference_normal[i].column[c][r]));
+    }
+
+    /* The producer must interoperate with the existing prepared consumer. */
+    pvr_deform_vertex_t vertex = {
+        .position = {0.5f, 1.0f, -0.25f, 1.0f},
+        .normal = {0.0f, 0.0f, 1.0f, 0.0f}
+    };
+    pvr_deform_vertex_t new_vertex, old_vertex;
+    pvr_skin_influences_t weights = {{0, 1, 2, 0}, {0.25f, 0.5f, 0.25f, 0}};
+    pvr_deform_stream_t vertices = {&vertex, 1, sizeof(vertex)};
+    pvr_skin_stream_t influences = {&weights, 1, sizeof(weights)};
+    assert(pvr_skin_apply(&old_vertex, 1, &vertices, &influences, &old, NULL) == 0);
+    assert(pvr_skin_apply_prepared_palette(&new_vertex, 1, &vertices,
+                                           &influences, &palette, NULL) == 0);
+    assert(close_float(new_vertex.position.x, old_vertex.position.x));
+    assert(close_float(new_vertex.position.y, old_vertex.position.y));
+    assert(close_float(new_vertex.position.z, old_vertex.position.z));
+    assert(close_float(new_vertex.normal.x, old_vertex.normal.x));
+    assert(close_float(new_vertex.normal.y, old_vertex.normal.y));
+    assert(close_float(new_vertex.normal.z, old_vertex.normal.z));
+    xmtrx_check();
+}
+
+static void test_admission(void) {
+    pvr_chunk_skeleton_affine_joint_t saved_joints[COUNT];
+    shz_mat3x4_t saved_world[COUNT];
+    pvr_chunk_skeleton_affine_t saved_affine;
+    pvr_chunk_skeleton_affine_pose_t saved_pose;
+    init(0);
+    prepare();
+    memcpy(saved_joints, packed_joints, sizeof(saved_joints));
+    memcpy(saved_world, packed_world, sizeof(saved_world));
+    saved_affine = affine;
+    saved_pose = pose;
+    joints[2].inverse_bind[1][3] = 0.25f;
+    errno = 0;
+    assert(pvr_chunk_skeleton_affine_prepare(&skeleton, packed_joints, COUNT,
+                                            &affine) == -1 && errno == EDOM);
+    assert(memcmp(packed_joints, saved_joints, sizeof(saved_joints)) == 0);
+    assert(memcmp(&affine, &saved_affine, sizeof(affine)) == 0);
+    joints[2].inverse_bind[1][3] = 0;
+    joints[2].node_index = COUNT;
+    assert(pvr_chunk_skeleton_affine_prepare(&skeleton, packed_joints, COUNT,
+                                            &affine) == -1 && errno == EDOM);
+    world[2][3][3] = 2.0f;
+    assert(pvr_chunk_skeleton_pose_prepare_affine(world, COUNT, packed_world,
+                                                 COUNT, &pose) == -1);
+    assert(memcmp(packed_world, saved_world, sizeof(saved_world)) == 0);
+    assert(memcmp(&pose, &saved_pose, sizeof(pose)) == 0);
+    world[2][3][3] = 1.0f;
+    world[2][2][0] = NAN;
+    assert(pvr_chunk_skeleton_pose_prepare_affine(world, COUNT, packed_world,
+                                                 COUNT, &pose) == -1);
+    assert(memcmp(packed_world, saved_world, sizeof(saved_world)) == 0);
+    assert(pvr_chunk_skeleton_pose_prepare_affine(world, COUNT, packed_world,
+                                                 COUNT - 1, &pose) == -1 &&
+           errno == ENOSPC);
+    assert(pvr_chunk_skeleton_pose_prepare_affine(world, COUNT,
+        (shz_mat3x4_t *)world, COUNT, &pose) == -1 && errno == EINVAL);
+    assert(pvr_chunk_skeleton_pose_prepare_affine(world,
+        SIZE_MAX / sizeof(matrix_t) + 1, packed_world, SIZE_MAX, &pose) == -1 &&
+        errno == EOVERFLOW);
+    assert(pvr_chunk_skeleton_affine_prepare(NULL, packed_joints, COUNT,
+                                            &affine) == -1 && errno == EINVAL);
+    xmtrx_check();
+}
+
+static void test_failure_atomicity(void) {
+    pvr_skin_prepared_palette_t saved_palette;
+    init(0);
+    prepare();
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose, output,
+                                                   COUNT, &palette) == 0);
+    memcpy(before, output, sizeof(before));
+    saved_palette = palette;
+    /* Joint 2 uses node 1: reject a late singular result before any publish. */
+    world[1][0][0] = 0.0f;
+    assert(pvr_chunk_skeleton_pose_prepare_affine(world, COUNT, packed_world,
+                                                 COUNT, &pose) == 0);
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose, output,
+                                                   COUNT, &palette) == -1 &&
+           errno == ERANGE);
+    assert(memcmp(output, before, sizeof(before)) == 0);
+    assert(memcmp(&palette, &saved_palette, sizeof(palette)) == 0);
+    xmtrx_check();
+
+    init(0);
+    world[1][0][0] = FLT_MAX;
+    joints[2].inverse_bind[0][0] = 4.0f;
+    prepare();
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose, output,
+                                                   COUNT, &palette) == -1);
+    assert(memcmp(output, before, sizeof(before)) == 0);
+    assert(memcmp(&palette, &saved_palette, sizeof(palette)) == 0);
+    xmtrx_check();
+
+    init(0);
+    prepare();
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose, output,
+                                                   COUNT - 1, &palette) == -1 &&
+           errno == ENOSPC);
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose, output,
+        COUNT, (pvr_skin_prepared_palette_t *)output) == -1 && errno == EINVAL);
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose,
+        (pvr_skin_prepared_joint_t *)packed_world, COUNT, &palette) == -1 &&
+        errno == EINVAL);
+    assert(memcmp(output, before, sizeof(before)) == 0);
+    xmtrx_check();
+}
+
+static void test_snapshot(void) {
+    init(5);
+    prepare();
+    compare();
+    memcpy(before, output, sizeof(before));
+    /* Snapshots own their copies; changing source data cannot affect them. */
+    memset(world, 0, sizeof(world));
+    memset(joints, 0, sizeof(joints));
+    assert(pvr_chunk_skeleton_palette_build_affine(&affine, &pose, output,
+                                                   COUNT, &palette) == 0);
+    for(size_t i = 0; i < COUNT; ++i) {
+        assert(memcmp(&output[i].position, &before[i].position,
+                      sizeof(output[i].position)) == 0);
+        assert(memcmp(&output[i].normal, &before[i].normal,
+                      sizeof(output[i].normal)) == 0);
+    }
+    xmtrx_check();
+}
+
+#define TREE_NODES 8u
+static pvr_chunk_hierarchy_node_t tree_nodes[TREE_NODES];
+static pvr_chunk_hierarchy_t tree = {tree_nodes, TREE_NODES};
+static pvr_chunk_hierarchy_affine_node_t tree_plan[TREE_NODES];
+static pvr_chunk_hierarchy_affine_t tree_prepared;
+static anim_transform_t tree_local[TREE_NODES];
+static matrix_t tree_reference[TREE_NODES], tree_root;
+static shz_mat3x4_t tree_world[TREE_NODES], compact_root;
+static pvr_chunk_skeleton_affine_pose_t tree_pose;
+
+static void tree_init(unsigned frame) {
+    const size_t parents[TREE_NODES] = {
+        PVR_CHUNK_NODE_NONE, PVR_CHUNK_NODE_NONE, 0, 1, 2, 0, 4, 6};
+    memset(tree_nodes, 0, sizeof(tree_nodes));
+    memset(tree_local, 0, sizeof(tree_local));
+    memset(tree_root, 0, sizeof(tree_root));
+    for(size_t c = 0; c < 4; ++c)
+        tree_root[c][c] = 1.0f;
+    tree_root[1][0] = 0.25f;
+    tree_root[2][2] = -2.0f;
+    tree_root[3][0] = -3.0f;
+    tree_root[3][1] = 1.5f;
+    for(size_t c = 0; c < 4; ++c)
+        for(size_t r = 0; r < 3; ++r)
+            compact_root.elem2D[c][r] = tree_root[c][r];
+    for(size_t i = 0; i < TREE_NODES; ++i) {
+        tree_nodes[i].parent_index = parents[i];
+        tree_nodes[i].flags = (uint32_t)((i + frame) & 7u);
+        if(i == 2)
+            tree_nodes[i].flags |= PVR_CHUNK_NODE_HIDDEN;
+        for(size_t c = 0; c < 4; ++c)
+            tree_nodes[i].local_transform[c][c] = 1.0f;
+        tree_local[i].translation.x = (float)i * 0.125f;
+        tree_local[i].translation.y = (float)frame * 0.03125f - 0.5f;
+        tree_local[i].translation.z = -0.25f;
+        /* Intentionally nonunit and non-axis-aligned quaternions. */
+        tree_local[i].rotation.w = 2.0f;
+        tree_local[i].rotation.x = (float)i * 0.0625f;
+        tree_local[i].rotation.y = 0.25f;
+        tree_local[i].rotation.z = (float)frame * 0.015625f;
+        tree_local[i].scale.x = -0.75f;
+        tree_local[i].scale.y = 1.25f;
+        tree_local[i].scale.z = 0.625f;
+        /* Unused homogeneous components match the legacy TRS contract. */
+        tree_local[i].translation.w = NAN;
+        tree_local[i].scale.w = NAN;
+    }
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) == 0);
+    xmtrx_check();
+}
+
+static void tree_compare(int use_root) {
+    assert(pvr_chunk_hierarchy_traverse_poses(&tree, tree_local, TREE_NODES,
+        use_root ? &tree_root : NULL, tree_reference, TREE_NODES,
+        NULL, NULL, NULL) == 0);
+    xmtrx_check();
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, use_root ? &compact_root : NULL, tree_world, TREE_NODES,
+        &tree_pose) == 0);
+    xmtrx_check();
+    assert(tree_pose.world == tree_world && tree_pose.node_count == TREE_NODES);
+    for(size_t i = 0; i < TREE_NODES; ++i)
+        for(size_t c = 0; c < 4; ++c)
+            for(size_t r = 0; r < 3; ++r)
+                assert(close_float(tree_world[i].elem2D[c][r],
+                                   tree_reference[i][c][r]));
+}
+
+static void test_hierarchy(void) {
+    for(unsigned frame = 0; frame < 24; ++frame) {
+        tree_init(frame);
+        tree_compare(0);
+        tree_compare(1);
+    }
+    /* Degenerate transforms are valid poses, though not normal palettes. */
+    tree_init(0);
+    tree_local[0].scale.x = 0.0f;
+    tree_compare(1);
+
+    /* Topology admission is atomic and deliberately separate from rendering. */
+    pvr_chunk_hierarchy_affine_node_t saved_plan[TREE_NODES];
+    pvr_chunk_hierarchy_affine_t saved_prepared = tree_prepared;
+    memcpy(saved_plan, tree_plan, sizeof(saved_plan));
+    tree_nodes[7].parent_index = 7;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == EINVAL);
+    tree_nodes[7].parent_index = 6;
+    tree_nodes[7].flags = PVR_CHUNK_NODE_PRUNE_CHILDREN;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == ENOTSUP);
+    tree_nodes[7].flags = UINT32_MAX;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == EINVAL);
+    assert(memcmp(tree_plan, saved_plan, sizeof(saved_plan)) == 0);
+    assert(memcmp(&tree_prepared, &saved_prepared, sizeof(saved_prepared)) == 0);
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES - 1,
+                                             &tree_prepared) < 0);
+    assert(errno == ENOSPC);
+    assert(pvr_chunk_hierarchy_affine_prepare(NULL, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    pvr_chunk_hierarchy_t invalid_size = {tree_nodes, SIZE_MAX};
+    assert(pvr_chunk_hierarchy_affine_prepare(&invalid_size, tree_plan, SIZE_MAX,
+                                             &tree_prepared) < 0);
+    assert(errno == EOVERFLOW);
+    invalid_size.node_count = 0;
+    assert(pvr_chunk_hierarchy_affine_prepare(&invalid_size, tree_plan, TREE_NODES,
+                                             &tree_prepared) < 0);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree,
+        (pvr_chunk_hierarchy_affine_node_t *)tree_nodes, TREE_NODES,
+        &tree_prepared) < 0 && errno == EINVAL);
+
+    /* Copied topology does not retain source-node pointers or flags. */
+    shz_mat3x4_t saved_world[TREE_NODES];
+    memcpy(saved_world, tree_world, sizeof(saved_world));
+    memset(tree_nodes, 0xff, sizeof(tree_nodes));
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, &compact_root, tree_world, TREE_NODES, &tree_pose) == 0);
+    assert(memcmp(tree_world, saved_world, sizeof(saved_world)) == 0);
+    xmtrx_check();
+
+    /* Boundary errors do not begin evaluation or touch the previous pose. */
+    pvr_chunk_skeleton_affine_pose_t saved_pose = tree_pose;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES - 1, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == ENOSPC);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES - 1, &tree_pose) < 0);
+    assert(errno == ENOSPC);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, tree_world, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, (shz_mat3x4_t *)tree_local, TREE_NODES,
+        &tree_pose) < 0 && errno == EINVAL);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES,
+        (pvr_chunk_skeleton_affine_pose_t *)tree_world) < 0 && errno == EINVAL);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, (shz_mat3x4_t *)((char *)tree_world + 1), TREE_NODES,
+        &tree_pose) < 0 && errno == EINVAL);
+    compact_root.elem[11] = NAN;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, &compact_root, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EDOM);
+    assert(memcmp(tree_world, saved_world, sizeof(saved_world)) == 0);
+    assert(memcmp(&tree_pose, &saved_pose, sizeof(saved_pose)) == 0);
+
+    /* Late dynamic failure clears publication and preserves XMTRX. Even a
+       suppressed component must be valid, matching the general traversal. */
+    tree_init(0);
+    tree_local[7].translation.x = NAN;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EINVAL && !tree_pose.world && tree_pose.node_count == 0);
+    xmtrx_check();
+    tree_local[7].translation.x = 0;
+    tree_local[7].rotation = (anim_quaternion_t){0};
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == EINVAL && !tree_pose.world);
+    xmtrx_check();
+
+    tree_init(0);
+    tree_nodes[6].flags = tree_nodes[7].flags = 0;
+    assert(pvr_chunk_hierarchy_affine_prepare(&tree, tree_plan, TREE_NODES,
+                                             &tree_prepared) == 0);
+    tree_local[6].scale.x = FLT_MAX * 0.5f;
+    tree_local[7].scale.x = FLT_MAX * 0.5f;
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, NULL, tree_world, TREE_NODES, &tree_pose) < 0);
+    assert(errno == ERANGE && !tree_pose.world && !tree_pose.node_count);
+    xmtrx_check();
+    tree_init(0);
+    tree_compare(1); /* Workspace can be reused after failure. */
+
+    /* The public compact API promises natural alignment, not 8/32-byte
+       alignment. Exercise a four-byte-offset destination and its parents. */
+    _Alignas(32) struct {
+        float prefix;
+        shz_mat3x4_t world[TREE_NODES];
+    } natural;
+    pvr_chunk_skeleton_affine_pose_t natural_pose;
+    assert(((uintptr_t)natural.world & 7u) == 4u);
+    assert(pvr_chunk_hierarchy_pose_build_affine(&tree_prepared, tree_local,
+        TREE_NODES, &compact_root, natural.world, TREE_NODES, &natural_pose) == 0);
+    assert(memcmp(natural.world, tree_world, sizeof(tree_world)) == 0);
+    xmtrx_check();
+}
+
+#include "compact-fixtures.h"
+
+int main(void) {
+    xmtrx_seed();
+    for(unsigned frame = 0; frame < 24; ++frame) {
+        init(frame);
+        prepare();
+        compare();
+        compare_compact();
+    }
+    test_admission();
+    test_failure_atomicity();
+    test_snapshot();
+    test_hierarchy();
+    test_compact_failures();
+    printf("affine matrix bytes=%u legacy=%u joint bytes=%u legacy=%u\n",
+           (unsigned)sizeof(shz_mat3x4_t), (unsigned)sizeof(matrix_t),
+           (unsigned)sizeof(pvr_chunk_skeleton_affine_joint_t),
+           (unsigned)sizeof(pvr_chunk_skeleton_joint_t));
+    puts("RESULT: PASS (affine hierarchy, skeleton, compact skinning, XMTRX)");
+    return 0;
+}

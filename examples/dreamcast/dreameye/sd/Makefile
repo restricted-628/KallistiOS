@@ -1,5 +1,7 @@
 # KallistiOS ##version##
 #
+# Copyright (C) 2026 Joseph Black
+#
 # examples/dreamcast/dreameye/sd/Makefile
 #
 

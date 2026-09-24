@@ -2,6 +2,7 @@
 
    clock_gettime.c
    Copyright (C) 2023, 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <kos/thread.h>
@@ -17,7 +18,7 @@
 int clock_getcpuclockid(pid_t pid, clockid_t *clock_id) {
     /* pid of 0 means the current process,
        and we only support a single process. */
-    if(pid != 0 || pid != KOS_PID)
+    if(pid != 0 && pid != KOS_PID)
         return ESRCH;
 
     assert(clock_id);
@@ -61,7 +62,8 @@ int clock_getres(clockid_t clk_id, struct timespec *ts) {
 
 int clock_gettime(clockid_t clk_id, struct timespec *ts) {
     lldiv_t  div_result;
-    uint32_t secs, nsecs, secs_offset=0;
+    uint32_t secs, nsecs;
+    time_t secs_offset = 0;
 
     if(!ts) {
         errno = EFAULT;
@@ -110,6 +112,12 @@ int clock_settime(clockid_t clk_id, const struct timespec *ts) {
                 return -1;
             }
 
+            if(ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L) {
+                errno = EINVAL;
+                return -1;
+            }
+
+            /* The persistent RTC has whole-second resolution. */
             return rtc_set_unix_secs(ts->tv_sec);
 
         default:

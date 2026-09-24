@@ -5,6 +5,7 @@
    Copyright (C) 2010, 2016, 2023 Lawrence Sebald
    Copyright (C) 2023 Colton Pawielski
    Copyright (C) 2023, 2024, 2025 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <assert.h>
@@ -47,8 +48,8 @@ also using their queue library verbatim (sys/queue.h).
 */
 
 /* Builtin background thread data */
-static alignas(THD_STACK_ALIGNMENT) uint8_t thd_reaper_stack[512];
-static alignas(THD_STACK_ALIGNMENT) uint8_t thd_idle_stack[512];
+alignas(THD_STACK_ALIGNMENT) static uint8_t thd_reaper_stack[512];
+alignas(THD_STACK_ALIGNMENT) static uint8_t thd_idle_stack[512];
 
 /*****************************************************************************/
 /* Thread scheduler data */
@@ -89,8 +90,8 @@ static semaphore_t thd_reap_sem;
 static size_t thd_count = 0;
 
 /* Optional cooperative-context provider. Registration occurs only when a
-   runtime is first attached, so this does not pull the runtime into programs
-   which never use it. No fiber-specific fields are added to kthread_t. */
+   runtime is first attached, so the scheduler has no reference which can pull
+   that runtime out of libkallisti.a for an ordinary program. */
 static kthread_continuation_stack_resolver_t continuation_stack_resolver;
 
 void _thd_continuation_stack_resolver_set(
@@ -105,7 +106,7 @@ void _thd_continuation_stack_resolver_set(
 }
 
 bool _thd_continuation_stack_bounds(const kthread_t *thd, uintptr_t sp,
-                                   uintptr_t *base, size_t *size) {
+                                    uintptr_t *base, size_t *size) {
     return continuation_stack_resolver &&
            continuation_stack_resolver(thd, sp, base, size);
 }
@@ -651,15 +652,18 @@ static inline void thd_schedule_inner(kthread_t *thd, uint64_t now) {
     _impure_ptr = &thd->thd_reent;
     thd->state = STATE_RUNNING;
 
-    /* Only an SP outside the ordinary thread stack queries the optional
-       cooperative runtime. Preserve soft-gUSA's raw saved restart registers. */
+    /* Validate the owned thread stack on the common path. Only a saved stack
+       pointer outside it can consult an optional cooperative-context runtime. */
     if(thd_current->stack && thd_current->stack_size) {
         uintptr_t stack_base = (uintptr_t)thd_current->stack;
+        /* An interrupted compiler atomic may keep a restart marker in the
+           raw SP register. Validate the logical stack, including fibers. */
         uintptr_t sp = irq_context_stack_pointer(&thd_current->context);
 
         if((sp < stack_base || sp - stack_base > thd_current->stack_size) &&
            !_thd_continuation_stack_bounds(thd_current, sp, NULL, NULL)) {
-            /* The scheduler may run with VFS stdout unavailable. */
+            /* This can run from the timer IRQ, including after the VFS has
+               closed stdout during shutdown. Keep diagnostics on debug I/O. */
             thd_pslist(dbgio_printf);
             thd_pslist_queue(dbgio_printf);
             assert_msg(0, "Thread context escaped valid stack bounds");

@@ -3,13 +3,17 @@
    pvr_misc.c
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2014 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
  */
 
 #include <assert.h>
-#include <string.h>
+#include <errno.h>
 #include <float.h>
+#include <math.h>
+#include <string.h>
 
+#include <arch/irq.h>
 #include <kos/timer.h>
 #include <dc/pvr.h>
 #include <dc/video.h>
@@ -26,12 +30,18 @@
    any other polygons) */
 void pvr_set_bg_color(float r, float g, float b) {
     int ir, ig, ib;
+    unsigned int i;
 
     ir = (int)(255 * r);
     ig = (int)(255 * g);
     ib = (int)(255 * b);
 
     pvr_state.bg_color = (ir << 16) | (ig << 8) | (ib << 0);
+
+    if(pvr_state.scene_active && !pvr_state.ta_checked_ready) {
+        for(i = 0; i < 3; ++i)
+            pvr_state.next_background.vertices[i].color = pvr_state.bg_color;
+    }
 }
 
 /* Enable/disable cheap shadow mode and set the cheap shadow scale register. */
@@ -44,6 +54,163 @@ void pvr_set_shadow_scale(bool enable, float scale_value) {
 /* Set the Z-Clip value (that is to say the depth of the background layer). */
 void pvr_set_zclip(float zc) {
     pvr_state.zclip = zc;
+
+    if(pvr_state.scene_active && !pvr_state.ta_checked_ready)
+        pvr_state.next_background.depth = zc;
+}
+
+int pvr_set_culling_threshold(float threshold) {
+    uint32_t encoded;
+    int old_irq;
+
+    if(!isfinite(threshold) || threshold < 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memcpy(&encoded, &threshold, sizeof(encoded));
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    /* PVR_OBJECT_CLIP consumes the IEEE-754 determinant threshold directly.
+       PVR_CULLING_SMALL, CW, and CCW all consult this global value. */
+    PVR_SET(PVR_OBJECT_CLIP, encoded);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_get_culling_threshold(float *threshold) {
+    uint32_t encoded;
+    int old_irq;
+
+    if(!threshold) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    encoded = PVR_GET(PVR_OBJECT_CLIP);
+    irq_restore(old_irq);
+
+    memcpy(threshold, &encoded, sizeof(encoded));
+    return 0;
+}
+
+static bool clamp_endpoints_valid(uint32_t minimum, uint32_t maximum) {
+    unsigned int shift;
+
+    for(shift = 0; shift < 32; shift += 8) {
+        if(((minimum >> shift) & 0xffu) > ((maximum >> shift) & 0xffu))
+            return false;
+    }
+
+    return true;
+}
+
+int pvr_set_color_clamp(uint32_t minimum, uint32_t maximum) {
+    int old_irq;
+
+    if(!clamp_endpoints_valid(minimum, maximum)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    /* Keep the endpoint pair coherent with respect to threads and PVR IRQs.
+       Rendering must still be synchronized by the caller when the pair should
+       take effect at a frame boundary. */
+    PVR_SET(PVR_COLOR_CLAMP_MIN, minimum);
+    PVR_SET(PVR_COLOR_CLAMP_MAX, maximum);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_get_color_clamp(uint32_t *minimum, uint32_t *maximum) {
+    int old_irq;
+
+    if(!minimum || !maximum || minimum == maximum) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    *minimum = PVR_GET(PVR_COLOR_CLAMP_MIN);
+    *maximum = PVR_GET(PVR_COLOR_CLAMP_MAX);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_set_punch_through_alpha(uint32_t threshold) {
+    int old_irq;
+
+    if(threshold > UINT8_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    PVR_SET(PVR_PT_ALPHA_REF, threshold);
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_get_punch_through_alpha(uint8_t *threshold) {
+    int old_irq;
+
+    if(!threshold) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    *threshold = (uint8_t)PVR_GET(PVR_PT_ALPHA_REF);
+
+    irq_restore(old_irq);
+    return 0;
 }
 
 /* Return the current VBlank count */
@@ -75,6 +242,115 @@ int pvr_get_stats(pvr_stats_t *stat) {
     stat->buf_last_time = pvr_state.buf_last_len;
     stat->frame_count = pvr_state.frame_count;
 
+    return 0;
+}
+
+void pvr_status_advance(void) {
+    int old_irq = irq_disable();
+
+    ++pvr_state.status_sequence;
+    irq_restore(old_irq);
+}
+
+void pvr_fault_record(pvr_fault_t fault, uint32_t event) {
+    int old_irq;
+    unsigned int index;
+
+    if(!fault || (fault & (fault - 1u)) || (fault & ~PVR_FAULT_ALL))
+        return;
+
+    index = (unsigned int)__builtin_ctz((unsigned int)fault);
+    old_irq = irq_disable();
+
+    ++pvr_state.fault_status.sequence;
+    pvr_state.fault_status.mask |= fault;
+    pvr_state.fault_status.last_fault = fault;
+    pvr_state.fault_status.last_event = event;
+    ++pvr_state.fault_status.counts[index];
+    pvr_state.fault_status.opb_start = PVR_GET(PVR_TA_OPB_START);
+    pvr_state.fault_status.opb_end = PVR_GET(PVR_TA_OPB_END);
+    pvr_state.fault_status.opb_position = PVR_GET(PVR_TA_OPB_POS) << 2;
+    pvr_state.fault_status.vertex_start = PVR_GET(PVR_TA_VERTBUF_START);
+    pvr_state.fault_status.vertex_end = PVR_GET(PVR_TA_VERTBUF_END);
+    pvr_state.fault_status.vertex_position = PVR_GET(PVR_TA_VERTBUF_POS);
+    ++pvr_state.status_sequence;
+
+    irq_restore(old_irq);
+}
+
+int pvr_get_pipeline_status(pvr_pipeline_status_t *status) {
+    int old_irq;
+
+    if(!status) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    status->sequence = pvr_state.status_sequence;
+    status->initialized = pvr_state.valid;
+    status->scene_active = pvr_state.scene_active;
+    status->vertex_dma_enabled = pvr_state.dma_mode;
+    status->dma_busy = !pvr_dma_ready();
+    status->ta_busy = pvr_state.ta_busy;
+    status->render_busy = pvr_state.render_busy;
+    status->display_pending = pvr_state.render_completed;
+    status->registration_to_texture = pvr_state.curr_to_texture;
+    status->render_to_texture = pvr_state.was_to_texture;
+    status->enabled_lists = pvr_state.lists_enabled;
+    status->transferred_lists = pvr_state.lists_transferred;
+    status->flushed_lists = pvr_pass_dma_buffer(
+        pvr_state.ram_target,
+        pvr_state.multipass ? pvr_state.multipass->build_pass : 0)->flushed;
+    status->open_list = pvr_state.list_reg_open;
+    status->ram_target = pvr_state.ram_target;
+    status->ta_target = pvr_state.ta_target;
+    status->view_target = pvr_state.view_target;
+    status->scene_render_id = pvr_state.scene_render_id;
+    status->queued_render_id = pvr_state.queued_render_id;
+    status->registration_render_id =
+        pvr_state.registration_render_id;
+    status->registered_render_id = pvr_state.registered_render_id;
+    status->render_started_id = pvr_state.render_started_id;
+    status->active_render_id = pvr_state.active_render_id;
+    status->completed_render_id = pvr_state.completed_render_id;
+    status->pending_display_render_id =
+        pvr_state.pending_display_render_id;
+    status->displayed_render_id = pvr_state.displayed_render_id;
+    memcpy(&status->faults, (const void *)&pvr_state.fault_status,
+           sizeof(status->faults));
+
+    irq_restore(old_irq);
+    return 0;
+}
+
+int pvr_clear_faults(uint32_t mask) {
+    int old_irq;
+
+    if(mask & ~PVR_FAULT_ALL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+
+    if(!pvr_state.valid) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    pvr_state.fault_status.mask &= ~mask;
+    ++pvr_state.status_sequence;
+
+    irq_restore(old_irq);
     return 0;
 }
 
@@ -145,15 +421,28 @@ void pvr_sync_view(void) {
 /* Synchronize the registration buffer with what's in pvr_state */
 void pvr_sync_reg_buffer(void) {
     volatile pvr_ta_buffers_t *buf;
+    uint32_t opb_start;
 
     buf = pvr_state.ta_buffers + pvr_state.ta_target;
+
+    /* A new TA bank always begins at pass zero. Later passes preserve the
+       shared parameter and overflow cursors through PVR_TA_LIST_CONT. */
+    if(pvr_state.multipass) {
+        pvr_state.multipass->ta_pass = 0;
+        pvr_activate_pass(0);
+        opb_start = buf->opb +
+            pvr_state.multipass->layout.pass_opb_offset[0];
+    }
+    else {
+        opb_start = buf->opb;
+    }
 
     /* Reset TA */
     //PVR_SET(PVR_RESET, PVR_RESET_TA);
     //PVR_SET(PVR_RESET, PVR_RESET_NONE);
 
     /* Set buffer pointers */
-    PVR_SET(PVR_TA_OPB_START,       buf->opb);
+    PVR_SET(PVR_TA_OPB_START,       opb_start);
     PVR_SET(PVR_TA_OPB_INIT,        buf->opb + buf->opb_size);
     PVR_SET(PVR_TA_OPB_END,         buf->opb + buf->opb_size * (1 + buf->opb_overflow_count));
     PVR_SET(PVR_TA_VERTBUF_START,   buf->vertex);
@@ -172,6 +461,29 @@ void pvr_sync_reg_buffer(void) {
 #endif
 }
 
+void pvr_continue_ta_pass(size_t next_pass) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+    volatile pvr_ta_buffers_t *buffer;
+
+    assert(multipass && next_pass < multipass->pass_count);
+
+    multipass->ta_pass = next_pass;
+    pvr_activate_pass(next_pass);
+    pvr_state.lists_transferred = 0;
+    pvr_state.lists_closed = 0;
+    pvr_state.list_reg_open = PVR_LIST_NONE;
+
+    /* Continuation preserves the shared parameter write position and overflow
+       cursor. Only the next pass's initial OPB and allocation sizes change. */
+    buffer = pvr_state.ta_buffers + pvr_state.ta_target;
+    PVR_SET(PVR_TA_OPB_START, buffer->opb +
+            multipass->layout.pass_opb_offset[next_pass]);
+    PVR_SET(PVR_OPB_CFG, multipass->list_reg_mask[next_pass]);
+    PVR_SET(PVR_TA_LIST_CONT, BIT(31));
+    (void)PVR_GET(PVR_TA_LIST_CONT);
+    pvr_status_advance();
+}
+
 /* Begin a render operation that has been queued completely (i.e., the
    opposite of ta_target) */
 void pvr_begin_queued_render(void) {
@@ -179,7 +491,6 @@ void pvr_begin_queued_render(void) {
     volatile pvr_frame_buffers_t    *rbuf;
     pvr_bkg_poly_t  *bkg;
     uint32_t      vert_end;
-    uint32_t      target_w, target_h;
     int bufn = pvr_state.view_target;
     union {
         float    f;
@@ -189,8 +500,6 @@ void pvr_begin_queued_render(void) {
     /* Get the appropriate buffer */
     tbuf = pvr_state.ta_buffers + (pvr_state.ta_target ^ pvr_state.vbuf_doublebuf);
     rbuf = pvr_state.frame_buffers + (bufn ^ 1);
-    target_w = pvr_state.curr_to_texture ? pvr_state.to_txr_w : (uint32_t)pvr_state.w;
-    target_h = pvr_state.curr_to_texture ? pvr_state.to_txr_h : (uint32_t)pvr_state.h;
 
     /* Calculate background value for below */
     /* Small side note: during setup, the value is originally
@@ -206,18 +515,18 @@ void pvr_begin_queued_render(void) {
         .flags1 = 0x90800000,    /* These are from libdream.. ought to figure out */
         .flags2 = 0x20800440,    /*   what they mean for sure... heh =) */
         .dummy  = 0,
-        .x1     = 0.0f,
-        .y1     = target_h,
-        .z1     = FLT_EPSILON,
-        .argb1  = pvr_state.bg_color,
-        .x2     = 0.0f,
-        .y2     = 0.0f,
-        .z2     = FLT_EPSILON,
-        .argb2  = pvr_state.bg_color,
-        .x3     = target_w,
-        .y3     = target_h,
-        .z3     = FLT_EPSILON,
-        .argb3  = pvr_state.bg_color,
+        .x1     = pvr_state.curr_background.vertices[0].x,
+        .y1     = pvr_state.curr_background.vertices[0].y,
+        .z1     = pvr_state.curr_background.vertices[0].z,
+        .argb1  = pvr_state.curr_background.vertices[0].color,
+        .x2     = pvr_state.curr_background.vertices[1].x,
+        .y2     = pvr_state.curr_background.vertices[1].y,
+        .z2     = pvr_state.curr_background.vertices[1].z,
+        .argb2  = pvr_state.curr_background.vertices[1].color,
+        .x3     = pvr_state.curr_background.vertices[2].x,
+        .y3     = pvr_state.curr_background.vertices[2].y,
+        .z3     = pvr_state.curr_background.vertices[2].z,
+        .argb3  = pvr_state.curr_background.vertices[2].color,
     };
 
     /* Reset the ISP/TSP, just in case */
@@ -236,16 +545,10 @@ void pvr_begin_queued_render(void) {
     }
 
     PVR_SET(PVR_BGPLANE_CFG, vert_end); /* Bkg plane location */
-    zclip.f = pvr_state.zclip;
+    zclip.f = pvr_state.curr_background.depth;
     PVR_SET(PVR_BGPLANE_Z, zclip.i);
-    if(!pvr_state.curr_to_texture) {
-        PVR_SET(PVR_PCLIP_X, pvr_state.pclip_x);
-        PVR_SET(PVR_PCLIP_Y, pvr_state.pclip_y);
-    }
-    else {
-        PVR_SET(PVR_PCLIP_X, ((target_w - 1) << 16) | 0);
-        PVR_SET(PVR_PCLIP_Y, ((target_h - 1) << 16) | 0);
-    }
+    PVR_SET(PVR_PCLIP_X, pvr_state.curr_pclip_x);
+    PVR_SET(PVR_PCLIP_Y, pvr_state.curr_pclip_y);
 
     if(!pvr_state.curr_to_texture)
         PVR_SET(PVR_RENDER_MODULO, (pvr_state.w * vid_pmode_bpp[vid_mode->pm]) / 8);

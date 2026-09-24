@@ -1,8 +1,11 @@
+> Complete fiber SDK bundle: `addon/fiber-service-sh4zam`. See [checkout, build and provider rules](FIBER-BUNDLE.md).
+> The narrow upstream fiber proposal is preserved as `pr/core-fibers-submission`.
+
 <!-- PROJECT LOGO -->
 <div align="center">
   <h1 align="center"><strong>KallistiOS</strong></h1>
   <p align="center">
-    Independent SDK for the Sega Dreamcast
+    Independent SDK for the Dreamcast
     <br />
     <a href="https://kos-docs.dreamcast.wiki"><strong>Explore the docs »</strong></a>
   </p>
@@ -10,7 +13,7 @@
 
 ## Overview
 
-KallistiOS is a development library and operating system for the Sega Dreamcast game console, developed independently from Sega entirely by free software developers. Its flexible permissive license allows both homebrew and commercial use with little restrictions besides proper attribution. As a result, it powers most homebrew and commercial indie releases for the platform. Interfaces and drivers are included for a significant portion of the Dreamcast's hardware capabilities and accessories, including modifications created by hobbyists. 
+KallistiOS is an independent development library and operating system for the Dreamcast game console, created by free software developers. Its flexible permissive license allows both homebrew and commercial use with little restrictions besides proper attribution. As a result, it powers most homebrew and commercial indie releases for the platform. Interfaces and drivers are included for a significant portion of the Dreamcast's hardware capabilities and accessories, including modifications created by hobbyists.
 
 KallistiOS offers a modern, programmer friendly environment for the vintage Dreamcast system. The distribution includes [scripts for building and installing a cross-compiling toolchain](utils/kos-chain/README.md) using the latest GCC, Binutils, and Newlib. This allows for full support for C17 and C++20 standards and libraries, as well as various POSIX APIs. Preliminary support exists for C23, C++23, and Objective-C.
 
@@ -49,7 +52,12 @@ KallistiOS also features a package manager called [**_kos-ports_**](https://gith
 * IDE hard drive, 32MB RAM upgrade, custom BIOS flashROMs
 
 ## Getting Started
-A beginner's guide to development for the Sega Dreamcast along with detailed instructions for installing KOS and the required toolchains can be found on [dreamcast.wiki](https://dreamcast.wiki/Getting_Started_with_Dreamcast_development). Additional documentation can be found in the docs folder. 
+A beginner's guide to development for the Dreamcast along with detailed instructions for installing KOS and the required toolchains can be found on [dreamcast.wiki](https://dreamcast.wiki/Getting_Started_with_Dreamcast_development). Additional documentation can be found in the docs folder.
+
+This branch uses a pinned SH4ZAM submodule. Clone with `--recurse-submodules`,
+or run `git submodule update --init --recursive` in an existing checkout before
+building. After changing revisions, run the same command to select their pinned
+dependencies. See [the SH4ZAM build adapter](addons/libsh4zam/README.md).
 
 ## Licensing
 KallistiOS itself is licensed under the BSD-like **KOS License**. **Attribution is not optional**. Additionally, this distribution contains code licensed under various free software licenses.
@@ -86,4 +94,3 @@ Once you've set up the environment and are ready to begin developing, a good pla
 [Simulant Discord Chat](https://discord.gg/bpDZHT78PA): Home to the official Discord channel of KOS  
 [DCEmulation Forums](http://dcemulation.org/phpBB/viewforum.php?f=29): Goldmine of Dreamcast development information and history  
 IRC Channel: irc.libera.chat `#dreamcastdev`
-

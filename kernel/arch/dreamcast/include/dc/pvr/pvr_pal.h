@@ -5,6 +5,7 @@
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file       dc/pvr/pvr_pal.h
@@ -24,6 +25,7 @@
 #ifndef __DC_PVR_PVR_PALETTE_H
 #define __DC_PVR_PVR_PALETTE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <kos/cdefs.h>
@@ -70,6 +72,23 @@ typedef enum pvr_palfmt {
     \param  fmt             The format to use
 */
 void pvr_set_pal_format(pvr_palfmt_t fmt);
+
+/** \brief   Update a checked range of palette entries.
+    \ingroup pvr_pal_mgmt
+
+    The palette contains exactly 1024 32-bit entries. A zero-length update is
+    accepted as a no-op and may use a NULL values pointer. Palette writes are
+    individually visible to rendering hardware; synchronize with rendering if
+    an entire range must change between frames.
+
+    \param  first           First palette entry, from 0 through 1023.
+    \param  values          Source array containing count entries.
+    \param  count           Number of entries to update.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_set_pal_entries(uint32_t first, const uint32_t *values, size_t count);
 
 /** \brief   Set a palette value.
     \ingroup pvr_pal_mgmt

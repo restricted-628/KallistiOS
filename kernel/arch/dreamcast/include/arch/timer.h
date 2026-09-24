@@ -4,6 +4,7 @@
    Copyright (c) 2000, 2001 Megan Potter
    Copyright (c) 2023 Falco Girgis
    Copyright (c) 2024 Paul Cercueil
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -29,6 +30,7 @@
 
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <kos/cdefs.h>
 __BEGIN_DECLS
 
@@ -47,10 +49,9 @@ __BEGIN_DECLS
     input clock for each TMU channel, providing a maximum internal resolution
     of 80ns ticks.
 
-    \warning
-    Under normal circumstances, all 3 TMU channels are reserved by KOS for
-    various OS-related purposes. If you need a free general-purpose interval
-    timer, consider using the Watchdog Timer.
+    \note
+    KOS reserves TMU0 for scheduling and TMU2 for uptime. TMU1 is available
+    through the exclusive timer-channel API or the legacy direct-access API.
 
     \note
     90% of the time, you will never have a need to directly interact with this
@@ -83,8 +84,9 @@ __BEGIN_DECLS
 
 /** \brief  SH4 Timer Channel 1.
 
-    \warning
-    This timer channel is free to use.
+    \note
+    Prefer timer_channel_claim() when several libraries may use this channel.
+    The claim prevents legacy KOS timer calls from silently reprogramming TMU1.
 */
 #define TMU1    1
 
@@ -123,6 +125,7 @@ __BEGIN_DECLS
     \param  speed           The number of ticks per second.
     \param  interrupts      Set to 1 to receive interrupts when the timer ticks.
     \retval 0               On success.
+    \retval -1              If TMU1 is exclusively claimed or speed is zero.
 */
 int timer_prime(int channel, uint32_t speed, int interrupts);
 
@@ -134,6 +137,7 @@ int timer_prime(int channel, uint32_t speed, int interrupts);
 
     \param  channel         The timer channel to start (\ref tmus).
     \retval 0               On success.
+    \retval -1              If TMU1 is exclusively claimed.
 */
 int timer_start(int channel);
 
@@ -145,6 +149,7 @@ int timer_start(int channel);
 
     \param  channel         The timer channel to stop (\ref tmus).
     \retval 0               On success.
+    \retval -1              If TMU1 is exclusively claimed.
 */
 int timer_stop(int channel);
 
@@ -177,6 +182,7 @@ uint32_t timer_count(int channel);
     \param  channel         The timer channel to clear (\ref tmus).
     \retval 0               If the underflow bit was clear (prior to calling).
     \retval 1               If the underflow bit was set (prior to calling).
+    \retval -1              If TMU1 is exclusively claimed.
 */
 int timer_clear(int channel);
 
@@ -186,6 +192,9 @@ int timer_clear(int channel);
     This function enables interrupts on the specified timer.
 
     \param  channel        The timer channel to enable interrupts on (\ref tmus).
+
+    \note                  If TMU1 is exclusively claimed, this function
+                           leaves it unchanged and sets `errno` to `EBUSY`.
 */
 void timer_enable_ints(int channel);
 
@@ -196,6 +205,9 @@ void timer_enable_ints(int channel);
 
     \param  channel         The timer channel to disable interrupts on
                             (\ref tmus).
+
+    \note                  If TMU1 is exclusively claimed, this function
+                           leaves it unchanged and sets `errno` to `EBUSY`.
 */
 void timer_disable_ints(int channel);
 
@@ -210,6 +222,181 @@ void timer_disable_ints(int channel);
     \retval 1               If interrupts are enabled on the timer.
 */
 int timer_ints_enabled(int channel);
+
+/** \defgroup tmu_channel    Exclusive Timer Channel
+    \brief                   Owned, periodic access to TMU1
+    \ingroup                 timers
+
+    This API provides typed, exclusive ownership of TMU1. It is intended for
+    high-resolution periodic work that cannot use thread-context software
+    timers or VBlank callbacks. No memory or interrupt resources are consumed
+    until a caller claims the channel.
+
+    While TMU1 is claimed, legacy mutating calls such as timer_prime(),
+    timer_start(), timer_stop(), timer_clear(), timer_enable_ints(), and
+    timer_disable_ints() refuse to alter it. The two void interrupt-control
+    functions leave the channel unchanged and set `errno` to `EBUSY`.
+
+    \warning
+    Callbacks execute in interrupt context. They must not block, allocate, or
+    call timer_channel_release(). Direct writes to TMU registers bypass KOS and
+    therefore cannot be protected by this ownership model.
+
+    @{
+*/
+
+/** \brief Opaque exclusive timer-channel handle. */
+typedef struct timer_channel timer_channel_t;
+
+/** \brief Supported peripheral-clock divisors. */
+typedef enum timer_channel_clock {
+    TIMER_CHANNEL_CLOCK_DIV_4 = 4,       /**< Peripheral clock divided by 4. */
+    TIMER_CHANNEL_CLOCK_DIV_16 = 16,     /**< Peripheral clock divided by 16. */
+    TIMER_CHANNEL_CLOCK_DIV_64 = 64,     /**< Peripheral clock divided by 64. */
+    TIMER_CHANNEL_CLOCK_DIV_256 = 256,   /**< Peripheral clock divided by 256. */
+    TIMER_CHANNEL_CLOCK_DIV_1024 = 1024  /**< Peripheral clock divided by 1024. */
+} timer_channel_clock_t;
+
+/** \brief Periodic timer-channel callback.
+
+    \param  channel         The channel which underflowed.
+    \param  data            User data supplied in timer_channel_config_t.
+*/
+typedef void (*timer_channel_callback_t)(timer_channel_t *channel, void *data);
+
+/** \brief Exclusive channel configuration. */
+typedef struct timer_channel_config {
+    timer_channel_clock_t clock; /**< Input clock divisor. */
+    uint32_t period_ticks;       /**< Logical ticks per period; must be nonzero. */
+    unsigned int irq_priority;   /**< IRQ priority from 1 through 15. */
+    timer_channel_callback_t callback; /**< Optional periodic IRQ callback. */
+    void *callback_data;         /**< User data passed to callback. */
+} timer_channel_config_t;
+
+/** \brief Snapshot of an exclusive channel. */
+typedef struct timer_channel_info {
+    int channel;                 /**< Claimed TMU channel number. */
+    timer_channel_clock_t clock; /**< Configured input clock divisor. */
+    uint32_t period_ticks;       /**< Logical ticks in one complete period. */
+    uint32_t remaining_ticks;    /**< Logical ticks until the next underflow. */
+    uint64_t expirations;        /**< Underflows handled since configuration. */
+    bool configured;             /**< Whether the channel has a configuration. */
+    bool running;                /**< Whether the counter is currently running. */
+} timer_channel_info_t;
+
+/** \brief Claim exclusive ownership of a timer channel.
+
+    TMU1 is currently the only claimable channel. TMU0 and TMU2 are reserved by
+    KOS and fail with `EBUSY`. A running TMU1 also fails with `EBUSY`; stop any
+    legacy use before claiming it. The previous stopped register and interrupt
+    configuration is restored by timer_channel_release().
+
+    \param  channel         The channel to claim.
+    \return                 A handle on success, or `NULL` with `errno` set.
+*/
+timer_channel_t *timer_channel_claim(int channel);
+
+/** \brief Configure a claimed timer channel without starting it.
+
+    A logical period of N ticks is programmed as a reload value of N - 1, so
+    the callback cadence is exactly N selected input-clock ticks. The channel
+    must be stopped. If callback is `NULL`, irq_priority is ignored and the
+    channel may be polled through timer_channel_get_info().
+
+    \param  channel         A valid exclusive channel handle.
+    \param  config          Configuration to apply.
+    \retval 0               On success.
+    \retval -1              On error with `errno` set.
+*/
+int timer_channel_configure(timer_channel_t *channel,
+                            const timer_channel_config_t *config);
+
+/** \brief Start a configured exclusive timer channel.
+
+    \param  channel         A valid exclusive channel handle.
+    \retval 0               On success.
+    \retval -1              On error with `errno` set.
+*/
+int timer_channel_start(timer_channel_t *channel);
+
+/** \brief Stop an exclusive timer channel.
+
+    This function is safe to call from the channel's own interrupt callback.
+
+    \param  channel         A valid exclusive channel handle.
+    \retval 0               On success.
+    \retval -1              On error with `errno` set.
+*/
+int timer_channel_stop(timer_channel_t *channel);
+
+/** \brief Obtain a coherent snapshot of an exclusive timer channel.
+
+    \param  channel         A valid exclusive channel handle.
+    \param  info            Destination for the snapshot.
+    \retval 0               On success.
+    \retval -1              On error with `errno` set.
+*/
+int timer_channel_get_info(const timer_channel_t *channel,
+                           timer_channel_info_t *info);
+
+/** \brief Release an exclusive timer channel.
+
+    The channel is stopped and its pre-claim register, handler, and interrupt
+    priority state is restored. This function cannot be called from interrupt
+    context.
+
+    \param  channel         A valid exclusive channel handle.
+    \retval 0               On success.
+    \retval -1              On error with `errno` set.
+*/
+int timer_channel_release(timer_channel_t *channel);
+
+/** \brief Convert channel ticks to nanoseconds, rounding down.
+
+    \param  clock           Input clock divisor used for the ticks.
+    \param  ticks           Number of logical timer ticks.
+    \param  nanoseconds     Destination for the converted duration.
+    \retval 0               On success.
+    \retval -1              For an invalid argument.
+*/
+int timer_channel_ticks_to_ns(timer_channel_clock_t clock, uint32_t ticks,
+                              uint64_t *nanoseconds);
+
+/** \brief Convert nanoseconds to channel ticks, rounding up.
+
+    Rounding up ensures that a programmed interval is never shorter than the
+    requested duration. Durations requiring more than UINT32_MAX ticks fail
+    with `EOVERFLOW`.
+
+    \param  clock           Input clock divisor to use.
+    \param  nanoseconds     Duration to convert.
+    \param  ticks           Destination for the logical tick count.
+    \retval 0               On success.
+    \retval -1              On error with `errno` set.
+*/
+int timer_channel_ns_to_ticks(timer_channel_clock_t clock,
+                              uint64_t nanoseconds, uint32_t *ticks);
+
+/** \brief Calculate elapsed ticks from two remaining-count snapshots.
+
+    Both snapshots use the logical `remaining_ticks` convention from
+    timer_channel_info_t and must be in the range 1 through period_ticks. The
+    result is modulo one period; multiple complete wraps cannot be inferred
+    from counter snapshots alone.
+
+    \param  start_remaining Earlier remaining-tick snapshot.
+    \param  end_remaining   Later remaining-tick snapshot.
+    \param  period_ticks    Configured logical period.
+    \param  elapsed_ticks   Destination for elapsed ticks.
+    \retval 0               On success.
+    \retval -1              For an invalid argument.
+*/
+int timer_channel_elapsed_ticks(uint32_t start_remaining,
+                                uint32_t end_remaining,
+                                uint32_t period_ticks,
+                                uint32_t *elapsed_ticks);
+
+/** @} */
 
 /** \defgroup tmu_uptime    Uptime
     \brief                  Maintaining time since system boot.

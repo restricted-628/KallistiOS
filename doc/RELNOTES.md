@@ -3,6 +3,972 @@ Copyright (C) 2002, 2003 Megan Potter
 Copyright (C) 2012-2019 Lawrence Sebald  
 Copyright (C) 2024-2026 Donald Haase  
 Copyright (C) 2025 Eric Fradella  
+Copyright (C) 2026 Joseph Black
+
+UNRELEASED DREAMCAST CAPABILITY WORK
+------------------------------------
+
+This development series extends existing KOS drivers and retains their normal
+lifecycle and naming conventions.
+
+* Added `cdrom/fiber-vram`, an application-fiber direct disc-to-texture-RAM
+  example with a host-generated RGB565 asset, guarded VRAM allocation,
+  byte-for-byte readback, cancellation drain, and render-completion fencing.
+  It uses the existing `libfiber_disc` adapter and direct GD-DMA driver, with
+  no service executor, payload staging, or BIOS fallback. Staged disc streams
+  remain RAM-only. Physical-hardware validation remains outstanding.
+
+* Added optional `libfiber_disc` and an application-fiber direct-DMA example.
+  The existing disc worker retains hardware ownership; only the requesting
+  child fiber parks. Main-fiber pumping retires the request and its callback
+  before waking the child, preserving safe buffer/handle lifetimes. Includes
+  bounded admission, explicit cancellation/shutdown, a no-media regression,
+  and a DMA-target example inventory. No service-executor or kernel changes;
+  stream-session/GAPS-specific cooperative adapters remain separate work.
+
+* Removed the ambiguous legacy singleton `cdrom_stream_*` API names. Programs
+  must migrate to direct stream sessions, or deliberately use the renamed
+  `cdrom_bios_stream_*` functions and `cdrom_bios_stream_callback_t`. BIOS
+  ISO9660 streaming keeps its explicit backend. The default streaming example
+  now demonstrates direct session/request lifetimes; the old firmware PIO/DMA
+  demonstration is retained as `stream-bios`. This is an intentional API/ABI
+  break, not a transparent replacement for legacy streaming semantics.
+
+* Routed generic subcode, CDDA play/pause/resume, and spin-down through direct
+  SPI, with named `cdrom_bios_*` alternatives. Direct calls use 10000 ms
+  command timeouts plus bounded recovery, preserve `ERR_*` results, and never
+  fall back to BIOS. Playback retains repeat saturation but now rejects
+  invalid modes/ranges. Explicit BIOS typed status remains fully BIOS-backed.
+
+* Added explicit BIOS sector-read, format, sector-size, and reinitialization
+  APIs. BIOS filesystem/range and reference paths now name their backend;
+  generic sector APIs now use direct PIO/DMA with separately captured format
+  state and bounded timeouts. Failed sector-mode updates no longer change cached
+  sector size, and failed automatic track detection no longer submits a mode
+  based on an uninitialized status value.
+
+* Routed drive status and TOC queries through direct SPI by default, with
+  explicit `cdrom_bios_get_status` and `cdrom_bios_read_toc` alternatives.
+  BIOS filesystem mounts and BIOS-reference/reuse examples now name those
+  paths explicitly. Status keeps its existing 0/-1 convention and failure
+  sentinels; TOC keeps `ERR_*` results. Neither silently falls back to BIOS.
+
+* Routed async pickup seek and sync/async typed CDDA status directly through
+  SPI by default. Explicit `cdrom_bios_seek_async`,
+  `cdrom_bios_cdda_get_status`, and `cdrom_bios_cdda_get_status_async` retain
+  the BIOS contracts. Direct async timeouts must be nonzero; synchronous
+  typed status uses 10000 ms plus bounded recovery. No silent BIOS fallback.
+
+* Switched extended specular lighting to SH4ZAM's `shz_powf`, removing its libm
+  power exception. This deliberately accepts the fast approximation for both
+  integer and fractional shininess; contributions still saturate only at final
+  color packing. Rendered quality and SH-4 speedup await hardware validation.
+
+* Changed this fork's `/cd`, media-sampler, raw-range, and staged-session
+  defaults to direct disc access. BIOS filesystem access now requires explicit
+  selection; `cdrom_bios_sector_range_open` and
+  `cdrom_bios_stream_session_start` preserve the previous constructor paths.
+  There is no automatic BIOS fallback. Legacy BIOS convenience APIs and boot
+  initialization are not rerouted by this change. See `disc-backend-defaults.md`
+  for migration details and outstanding hardware-validation limits.
+
+* Added a load-time packaged-image check for auxiliary Compact material layers.
+  PML1 requirements complement rather than redefine PRT1 stream requirements.
+  The scene fixture now exercises packaged textures, independent UVs, actual
+  material recipes, direct/cache packet agreement and VRAM cleanup on SH-4.
+
+* Added explicit UV-aware layered scene loading. PML1/PUV1 framing is checked
+  before geometry decode, and cross-section relationships before hierarchy
+  publication. Views borrow asset bytes; UV expansion stays caller-controlled.
+  Ordinary scene users do not acquire the UV codec's link-time dependency.
+
+* Added PUV1 independent UV source serialization and shared material-layer
+  associations, with explicit model/layer validation and caller-owned decode.
+  Required PCM2 feature gating prevents unsupported loaders from dropping UV
+  semantics. Auxiliary import remains open.
+
+* Added caller-owned per-reference Compact UV sources, integrated before
+  ordinary filtered/clipped rendering and prepared-cache construction. Seams
+  and reversed strip order are preserved without growing model/cache layouts.
+  Auxiliary glTF import remains separate work.
+
+* Centralized host-side Compact UV baking and added relative auxiliary-map
+  preparation with explicit independent-coordinate fallback. Converter tests
+  check transformed signed UVs, V-flip order and legal zero/negative scales.
+  No runtime layout or auxiliary material admission changes are implied.
+
+* Fixed a scheduler stack-bound false positive when an interrupt lands inside
+  a GCC soft-gUSA atomic operation. The check now uses the preserved logical
+  stack address without changing the atomic restart context. Failure diagnostics
+  use debug I/O instead of stdout, including after filesystem teardown.
+
+* Added required PCM2 material-layer sections and explicit layer-aware scene
+  loading. Geometry-only loaders reject these assets instead of silently
+  discarding required rendering meaning. Legacy zero-flag assets are unchanged.
+* Added auxiliary texture-table validation and preparation through the existing
+  residency adapter, with shared duplicate pins and explicit failure cleanup.
+
+* Added a checked pointer-free material-layer section codec. Model/source-strip
+  ranges map to existing layer descriptors, with CRCs, explicit little-endian
+  encoding, immutable binary-search lookup and load-time model validation.
+  The example consumes decoded associations; host/target tests include fixed
+  wire goldens and malformed-input cases. No model/cache layouts grow and no
+  automatic auxiliary glTF import or scene consumption is implied.
+
+* Added caller-owned Compact auxiliary layer descriptors and checked recipe/
+  vertex preparation for lightmaps and emission. They reuse texture tables,
+  preserve independent sampling and geometry/depth, enforce neutral layer
+  alpha and clear offset color without allocation or startup work. The example
+  checks explicit-context header equivalence and nonidentity UV mapping.
+  Serialized auxiliary material associations/import remain separate work.
+
+* Added authored unlit Compact materials and glTF `KHR_materials_unlit` import.
+  Standard raw/prepared policy bindings bypass lighting and clear specular,
+  while checked material contexts retain alpha and culling behavior. The flag
+  survives prepared/cooked caches using existing storage; no allocation or
+  startup work is added. Old checked renderers reject newly flagged content.
+  Auxiliary texture-role metadata remains separate follow-up work.
+
+* Added checked lightmap and emissive material recipes through the existing
+  Compact resource/context and canonical-geometry paths. They preserve surface
+  alpha, support independent input sampling flags and reuse bounded recipe
+  storage without allocation or startup work. The example includes a layered
+  mode; authored asset-role metadata and physical image validation remain open.
+
+* Added reusable checked Compact material-context resolution for existing
+  trilinear and bump recipes. It shares the regular resolver's validation,
+  leaves outputs unchanged on failure and borrows texture addresses without
+  allocating or retaining resources. Ordinary material resolution still
+  compiles once; model formats and existing public layouts are unchanged.
+
+* Added a rectangular portal integration example over existing homogeneous
+  clipping, SH4ZAM transforms, checked materials, geometry sinks and multipass
+  registration. A shared host/target geometry fixture has full-frame software
+  coverage goldens and foreground-depth negative controls. No public scene
+  API or runtime allocation was added; the strict depth-clear image check
+  retains the recorded emulator limitation.
+
+* Added opt-in per-pass depth clear/preserve initialization for hardware
+  multipass rendering, independent of accumulated color retention. Existing
+  initialization APIs and public configuration layouts are unchanged. The
+  framebuffer fixture checks direct, DMA and hybrid submission; physical
+  depth-clear behavior remains a validation gate, with a recorded Vulkan
+  emulator limitation rather than a relaxed pixel test.
+
+* Added bounded opaque/translucent trilinear and bump material recipes over
+  existing checked polygon contexts. Ordered headers describe intermediate
+  accumulation, modulation, final blending, and vertex-data requirements;
+  no scene owner or intermediate VRAM allocation is introduced. Unsupported
+  compound profiles are rejected. Physical composition/order validation is
+  still required; the included framebuffer fixture records an emulator
+  limitation for presorted secondary-buffer operations.
+
+* Added a bounded, caller-owned scrolling tile-map compiler over cell geometry
+  and frustum clipping. Independent wrap/clamp/finite axes, transformed views,
+  colors and atlas flips produce canonical vertices with explicit list and
+  material routing. Exact capacity preflight preserves outputs on failure;
+  no allocation, persistent cache, worker or automatic renderer is introduced.
+
+* Checked PVR materials now reject both trilinear phases on the punch-through
+  list and require compatible mipmapped textures. Polygon, sprite, and both
+  two-volume texture states share the checks; rejection preserves the previous
+  output packet. Raw header compilation remains available.
+
+* Pinned the bundled SH4ZAM source revision with verifiable per-file hashes
+  and a local patch record, retaining the GCC 16 FFT assembly fix. Clarified
+  that the optional fiber math context preserves XMTRX, not an independent
+  FPSCR, FPUL, or TLS environment.
+
+* Added checked AICA DSP ownership to the base sound driver. Callers can
+  validate and load complete program images, receive computed work-memory
+  requirements, control all sixteen effect returns, inspect coherent state,
+  and clear the processor with a bounded command-queue drain. Replacement is
+  rejected while live channels route into the DSP; work memory is allocated
+  only for an installed image, and no thread or service is created.
+
+* Added a checked stream lifecycle over the established allocation and polling
+  model. Streams now provide validated complete channel controls, coherent
+  source/buffered/played progress, underrun counts, live updates, bounded stop
+  and destruction, and explicit lifecycle/error state. Short callback blocks
+  are silence-padded without source over-read or stale ring data, exact stereo
+  tails avoid fixed-block splitters, and key-on waits for both prefill halves.
+  Existing stream entry points remain available and use the checked engine;
+  no automatic poller, worker, or permanent buffer was added.
+
+* Corrected parallel-build races in all added PVR example Makefiles. Their
+  default target no longer runs ELF deletion concurrently with linking, clean
+  owns artifact removal, phony lifecycle targets are explicit, and each ELF
+  relinks when the KOS archive changes. The direct-disc asset benchmark also
+  supplies the stable texture identifier required by its shared UV fixture.
+
+* Added a multi-model Compact scene integration example and matching host
+  regression suite. The same code composes serialized skeleton palettes,
+  transform and instance morph-weight playback, deformation, and cooked-cache
+  emission, checking six independently calculated poses before rendering.
+  No library API, automatic service, or retained scene owner is added.
+
+* Added checked Compact asset section-index lookup by type and ordinal, shared
+  by the host compiler and the complete asset example. Optional skeleton and
+  model-table sections no longer shift that example's resource, morph, or
+  animation selections. The example now exercises decode-service teardown,
+  morphing, skinning, hierarchy animation, bounds, residency, lighting, and
+  cooked rendering together; it holds the rendered image for inspection,
+  preserves failure diagnostics through cleanup, and avoids a parallel-build
+  race that could remove its freshly linked ELF.
+
+* Unified immediate and cooked Compact rendering policy. New allocation-free
+  cached-strip adapters reuse the established material, texture-residency,
+  environment-map, and extended-lighting bindings without reparsing model
+  streams or introducing another renderer. Prepared caches now retain
+  per-reference normals so hard-normal seams survive into dynamic cached
+  lighting. The explicit skinning example exercises the shared path.
+
+* Froze the pre-release Compact asset format epoch. PAT1 version 3, PMW1
+  version 2, PMT1 version 2, and PCH1 version 2 are now the only admitted
+  encodings for their respective magics; obsolete development encodings are
+  rejected instead of burdening the first public release with legacy readers.
+  PCM1 and PCM2 remain intentionally distinct supported container profiles.
+
+* Kept shared PCM2 geometry shared after materialization. The coherent scene
+  workspace now budgets every uniquely referenced compressed or unaligned
+  vertex and polygon stream once, decodes it once, and points all selecting
+  model views at that persistent copy. Differently skinned model
+  specializations therefore avoid duplicate file payloads and duplicate target
+  workspace while retaining independent bounds and deformation bindings.
+
+* Completed the bounded glTF scene-instance import path. Static
+  `EXT_mesh_gpu_instancing` TRS data lowers to ordinary animated hierarchy
+  children; distinct mesh/skin pairs become independent model-table entries;
+  identical vertex and polygon payloads share PCM2 sections; and skin joints
+  outside the selected scene enter only as transform anchors with their
+  required ancestors. The target gains no parser, extension state, retained
+  scene graph, or per-frame import work.
+
+* The compact-model host importer now lowers glTF triangle strips and fans,
+  material-selected texture-coordinate sets, and finite base-color texture
+  transforms into the existing canonical triangle and signed/float UV records.
+  This broadens authored-scene input without adding target-side topology,
+  transform state, allocations, or per-frame work.
+
+* Added host-side complete-pose deformation canonicalization. Importers can
+  submit unordered, repeated vertex contributions from hierarchy nodes; the
+  compiler validates inverse-bind sources, merges duplicate pairs, sorts
+  joints deterministically, and quantizes every covered vertex to an exact
+  65,535 weight sum. The glTF skin importer now uses this path, producing the
+  existing general-skin and skeleton sections without intermediate-result
+  dependencies or new target-side machinery.
+
+* Added host-side canonical draw-schedule lowering. Importers can resolve
+  ordinary draws plus deferred capture/replay operations into one flat command
+  sequence, then emit a runtime hierarchy containing only transform anchors
+  and ordinary model draws. Identity draw proxies inherit animated source
+  poses without duplicating transform tracks. A matching animation serializer
+  pads identity proxy transforms and aliases each source visibility channel;
+  matching node/model morph bindings are remapped to every surviving proxy;
+  capture state is discarded, draw order is explicit, and static descendant
+  pruning is compiled into omitted draws.
+
+* Extended PCM2 model composition without duplicating geometry. `PMT1`
+  version two selects vertex and polygon section ordinals independently, so
+  several canonical draw-order segments can share one immutable vertex
+  stream. New checked pair-workspace and pair-load operations retain the
+  allocation-free decode, CRC, bounds, and admission contracts; the original
+  equal-ordinal APIs remain available as ordinal-zero wrappers.
+
+* Added coherent allocation-free PCM2 scene loading. A checked scene-asset
+  view joins the unique model table and hierarchy, validates their
+  cross-section ordinals, computes one persistent decode span for all unique
+  model streams,
+  materializes the complete model set, and binds hierarchy nodes directly to
+  contiguous caller-owned model views. Applications no longer need a
+  temporary model-pointer table or per-model workspace reconstruction, while
+  ownership of memory, animation, rendering, and scene lifetime stays explicit.
+  Multi-model host output is round-tripped through this same coherent loader,
+  including independently compressed model streams. Canonical scene loading
+  rejects import-only cross-hierarchy execution controls before publishing any
+  model or node, leaving their resolution solely to host compilation.
+
+* Completed the authored cell-sprite integration path with a build-generated
+  PCA1 example spanning independent streams, priority sorting, per-corner
+  color, and opaque/punch-through/translucent material routing. Corrected the
+  colored-cell quad compiler to map rectangle-order A/B/C/D corners into the
+  A/B/D/C order required by a complete triangle strip; the previous order
+  overlapped two upper triangles and left part of each cell uncovered.
+
+* Added exact cubic Hermite animation throughout the generic runtime and
+  pointer-free Compact asset pipeline. Scalar, vector, and quaternion tracks
+  preserve independent incoming and outgoing time derivatives; quaternion
+  results are normalized after component-wise Hermite evaluation. PAT1 v3 and
+  PMW1 v2 retain those tangents as their canonical key representation. The
+  glTF/GLB importer now preserves CUBICSPLINE TRS and morph channels rather
+  than rejecting or relabeling them as Catmull-Rom.
+
+* Added pointer-free PAC1 animation catalogs for PCM2. Logical clips map by
+  source order and optional unique name to independent PAT1 transform and PMW1
+  morph-section ordinals, avoiding empty placeholder sections when a clip uses
+  only one channel family. Checked APIs open, index, find, and validate catalog
+  relationships against the enclosing compact asset. The bounded glTF/GLB
+  importer now emits mixed transform-only, morph-only, and combined clips in
+  source order, while preserving the established single-animation layout.
+
+* Added exact affine matrix fallback decomposition to glTF animation import.
+  Static matrix-authored nodes can now coexist with animated TRS nodes when
+  their transforms are losslessly expressible as translation, quaternion
+  rotation, and signed scale. Shear, degenerate axes, and matrix-authored TRS
+  animation targets remain explicit errors rather than changing semantics.
+
+* Added explicit Compact Model discontinuity and general-N skin conformance.
+  Golden host fixtures prove that shared position indices retain independent
+  per-reference UVs and hard normals, and that multiple glTF joint/weight sets
+  preserve more than four influences with an exact normalized weight sum.
+  Unbound skin attributes are now rejected instead of being discarded into a
+  rigid mesh.
+
+* Added pointer-free PCA1 cell-sprite assets. Checked APIs measure and encode
+  existing base cells and independently timed streams, validate fixed-width
+  records and two CRCs, decode individual records, and materialize directly
+  into caller-owned cell runtime arrays. Canonical zeroed partial keys prevent
+  uninitialized fields from becoming hidden authored data. The host-only
+  `pvr-cell-convert` utility compiles a strict declarative manifest against an
+  inspected atlas image, emits PCA1, and generates exact normalized KOS atlas
+  geometry without embedding source paths or image data.
+
+* Extended the bounded glTF/GLB importer with normalized VEC3/VEC4 `COLOR_0`.
+  Vertex color is multiplied by the primitive base-color factor and emitted as
+  compact ARGB vertex data that coexists with per-reference UVs and normals.
+  Mesh-wide preflight gives uncolored primitives the correct material base
+  color when another primitive is colored, while indexed seams remain intact.
+
+* Added explicit XYZ and ZXY Euler rotation-track modes beside the preferred
+  quaternion path. Euler keys retain their authored representation through
+  PAT1, interpolate over shortest angular arcs, and convert to the established
+  normalized quaternion pipeline only after sampling.
+
+* Extended pointer-free compact hierarchies with PCH1 v2 node policy.
+  Caller-owned nodes now preserve translation/rotation/scale
+  suppression, hidden evaluation, and descendant pruning. A new pose
+  traversal applies component suppression before matrix construction and uses
+  the established animation and hierarchy paths without allocation or matrix
+  decomposition.
+
+* Added pointer-free PCM2 morph-weight animation. Checked `PMW1` APIs bind one
+  scalar track per sparse target to a specific hierarchy-node instance,
+  cross-validate node/model/shape ownership, and materialize directly into the
+  existing caller-owned animation and compact-shape runtime. The glTF/GLB host
+  importer now preserves STEP/LINEAR weight channels without overloading
+  transform animation or sharing one pose across repeated model instances.
+
+* Added allocation-free current-pose bounds for morphed or skinned vertex
+  streams. The new checked operation publishes an exact AABB and a conservative
+  enclosing sphere, allowing existing frustum classification to reject a
+  deformed model without trusting its reference-pose bounds.
+
+* Extended the bounded glTF/GLB host importer to emit every unique mesh
+  in the selected scene as an independent PCM2 model ordinal. Scene nodes bind
+  the corresponding model, repeated instances share it, exact local bounds
+  and resource ownership remain per-model, and raw or LZ4-framed streams are
+  reloaded together before publication. Optional cooked caches are built,
+  assigned, materialized, and checked independently for every model. Authored
+  general-N skins, inverse-bind skeletons, and sparse morph targets now follow
+  the same per-model ownership and type-ordinal rules.
+* Added pointer-free PCM2 per-model metadata. Checked `PMT1` APIs bind required
+  vertex and polygon streams to exact local bounds and typed optional-section
+  ordinals, cross-validate the complete table against its asset, and load any
+  model without allocation. The host converter now emits and reopens this
+  table for every section-directory asset.
+* Extended PCM2 from one model to checked nonzero vertex and polygon stream
+  sets. Workspace and load APIs admit every equal-ordinal legacy pair without
+  allocation, while the established single-model calls remain ordinal-zero
+  wrappers. Explicit PMT1 version-two pairs may also select streams beyond
+  that common equal-ordinal range.
+* Added bounded host-side glTF 2.0 and GLB input to the compact-model
+  converter. One selected scene and its unique mesh set can populate PCM2
+  geometry, hierarchy, deterministic PBR-derived material state, exact
+  general-N skin weights, inverse-bind skeleton bindings, sparse morph targets,
+  and one STEP/LINEAR TRS animation. Unsupported semantics are rejected rather
+  than silently flattened, and the parser remains host-only.
+* Added portable pointer-free PCM2 skeleton bindings. Checked `PSK1` APIs
+  validate unique hierarchy-node mappings and finite inverse-bind matrices,
+  materialize into caller-owned records, and build existing position/normal
+  skin palettes from completed hierarchy world matrices without allocation.
+* Added portable PCM2 cooked-cache sections for ordinary, two-volume, and
+  modifier compact geometry. Fixed-width `PCC1` records round-trip into the
+  existing caller-owned prepared-cache objects without serializing pointers,
+  host-sized fields, or VRAM addresses. With `--cooked-cache`, the model
+  converter emits and validates an ordinary cooked cache for PCM2 output.
+
+* Added a portable PCM2 volume-data section. It retains exact compact
+  triangle, quad, and strip records in a checked pointer-free directory,
+  preserves zero-to-three per-triangle user words, and delegates expansion to
+  the existing modifier-volume topology iterator. Standalone collision data
+  can be bound against an admitted model before use, while the host pipeline
+  extracts, reloads, and verifies volume records automatically.
+* Added a portable PCM2 animation section. Checked APIs validate pointer-free
+  transform bindings, channel types, gapless finite keys, canonical values,
+  fallbacks, and checksums, then materialize caller-owned keys, track views,
+  transform/visibility bindings, rotation modes, and an existing animation
+  clip. PAT1 version 3 retains quaternion, XYZ Euler, or ZXY Euler rotation
+  tracks and explicit cubic Hermite tangents. The host pipeline emits and
+  reopens an explicit root-translation fixture without introducing a container
+  clock or a second interpolation engine.
+* Added a portable PCM2 sparse morph-target section. Checked target APIs
+  validate pointer-free target spans and finite indexed deltas, expose
+  individual records, and materialize directly into the existing compact
+  shape runtime using caller-owned storage. The host pipeline can emit and
+  reopen a single explicit offset target today; scene importers provide wider
+  authored target sets without adding another morph engine.
+* Added a portable PCM2 variable-influence skin section. Checked target APIs
+  validate pointer-free spans and weights, expose indexed records, and
+  materialize directly into the existing general-skin runtime using only
+  caller-owned storage. The host scene pipeline can serialize, reopen, and
+  verify a rigid integration fixture today; later scene importers provide
+  authored joint data without adding another deformation engine.
+* Added a portable PCM2 hierarchy-section contract and the first canonical
+  host scene-IR output path. Checked target APIs admit finite parent-before-
+  child nodes and bind stable model ordinals into the existing allocation-free
+  compact hierarchy using caller-owned storage. The converter can emit and
+  reopen an explicit single-model root today, while later scene importers can
+  populate the same IR without adding pointer trees or another runtime scene
+  system.
+* Added a backward-compatible PCM2 compact-model asset directory beside PCM1.
+  It validates checksummed, offset-ordered, nonoverlapping section descriptors;
+  requires nonzero vertex and polygon stream sets; and exposes legacy
+  equal-ordinal models plus repeatable
+  optional typed or application sections through checked lookup and
+  allocation-free materialization APIs. Raw aligned data remains zero-copy,
+  while compressed or unaligned sections use exact caller-owned workspace.
+* Added allocation-free scalar-band geometry for cel shading. One generic
+  partitioner covers binary and arbitrary ordered multiband shading, preserves
+  position, normalized normal, decoded floating UVs, base/offset color, and
+  exact threshold shade, and deterministically intersects oppositely traversed
+  shared edges. Small checked helpers supply signed directional shade profiles,
+  band lookup, capacity bounds, and packed-color modulation without adding
+  model records, renderer state, or per-frame allocation.
+* Added an admitted vertex-quantized toon ramp beside exact geometric band
+  splitting. It performs logarithmic shade lookup without per-vertex ramp
+  validation and independently modulates packed base and offset colors, giving
+  custom and compact renderers a smaller approximate diffuse/highlight policy
+  while retaining exact topology-changing emission when required.
+* Classified deferred polygon capture/draw controls as an explicit compact-
+  model canonicalization requirement. Validation and inspection report both
+  record counts, while runtime emitters continue rejecting the cross-hierarchy
+  execution mechanism before side effects instead of creating a competing
+  on-console polygon cache.
+* Added finite floating-point UV strip records as a rare compact-model escape
+  beside signed 8.8 and 6.10 coordinates. The model converter retains 6.10 as
+  its first choice and 8.8 for wider tiling, selecting float UVs only when the
+  authored range exceeds both fixed encodings instead of rejecting or
+  clamping it.
+* Added a prepared two-volume compact-cache band path. It preserves both
+  texture-coordinate, diffuse, and offset-color parameter sets through shade
+  subdivision and homogeneous frustum clipping, supports independent
+  outside/inside modulation ramps, and emits the original format-bound PVR
+  packets without selecting modifier state on the CPU.
+* Added SH4ZAM-backed normal extrusion and a prepared compact-cache inverted-
+  shell outline pass. Smooth and flat-shaded strips preserve current
+  deformation, optional per-frame policy, frustum clipping, and established
+  geometry sinks while the application retains explicit culling, material,
+  scene, and list ownership.
+* Added checked homogeneous line-segment clipping and constant-width
+  screen-space line expansion, plus an allocation-free prepared compact-model
+  wireframe policy. It enumerates unique full-mesh, outside-boundary, or
+  consecutive-path strip edges; composes current deformation, clipping, and
+  existing geometry sinks; and retains caller ownership of scratch, materials,
+  scenes, and lists.
+* Added a caller-owned compact-model render-policy binding with unlit,
+  diffuse, and diffuse-plus-specular presets. It composes homogeneous position
+  handling, vertex intensity, signed lights, material ambient and exponent,
+  optional environment UV generation, optional distance-cue alpha, material
+  submission, and an application callback without adding model records,
+  global renderer state, allocation, or scene ownership. Lighting context is
+  admitted once rather than revalidated for every bound vertex.
+* Added an allocation-free extended PVR vertex-lighting kernel beside the
+  established minimal Lambert path. It accumulates signed diffuse lights
+  before saturation, generates checked Blinn-Phong offset color from positive
+  lights, multiplies per-vertex diffuse/specular material values, and can
+  encode a caller-defined distance cue into vertex alpha. The original API and
+  its nonnegative-light contract remain unchanged.
+* Added a checked view-normal-to-UV environment-map kernel and a composable
+  compact-model callback adapter. Environment strips now have a standard
+  executable policy which preserves per-reference normal discontinuities,
+  transforms normals correctly under nonuniform object scale, forwards
+  material submission, and permits a chained application vertex policy to
+  override generated coordinates or combine lighting.
+* Added time-aware Catmull-Rom interpolation for scalar and four-component
+  animation tracks. Uneven key spacing contributes to the spline tangents,
+  endpoint behavior is explicit, and quaternion and Boolean tracks retain
+  their established spherical and step-only contracts.
+* Added arbitrary-count compact skinning beside the existing four-joint fast
+  path. A canonical span/weight representation preserves every influence,
+  expands once into caller-owned runtime storage, and uses a checked general
+  deformation kernel with the same palette, overlap, prefix, and pose-lookup
+  contracts. The previously public Compact Skin4 entry points are now also
+  available to loadable modules.
+* Added topology-preserving near-plane warping for PVR modifier triangles and
+  compact modifier-volume models. Crossing points move to the caller's near-W
+  plane without adding or dropping triangles, so closed shadow volumes cannot
+  acquire clipping holes; prepared and immediate model paths share the same
+  checked implementation.
+* Added explicit compact-model frustum policies for ordinary strips. Fully
+  outside models return before stream traversal, fully inside models retain
+  the fast strip path, and intersecting models can either split triangles with
+  UV/color interpolation or drop crossing triangles. A trusted-visible mode
+  preserves the minimum-overhead path for caller-proven content.
+* Added exact object-space sphere classification against homogeneous PVR
+  frusta and a compact-model wrapper for retained model bounds. Applications
+  can reject whole models before stream traversal and identify fully visible
+  models before selecting more expensive per-triangle clipping paths.
+* Added a validated compact-volume triangle iterator shared by model tools,
+  collision consumers, modifier rendering, and prepared modifier caches. It
+  expands triangle, quad, and strip records with consistent winding while
+  preserving all per-triangle user words and exact record boundaries.
+* Added signed fixed-point compact-model texture coordinates. New 8.8 records
+  provide wide repeat range and new 6.10 records provide finer precision while
+  retaining the same 16-bit coordinate storage. The model converter selects
+  6.10 when representable and falls back to 8.8 for wide tiling; negative and
+  repeated coordinates are accepted. Existing unsigned-normalized records
+  remain readable but are no longer emitted by the converter.
+* Added an independently managed expansion-bridge lifecycle and a fixed-state,
+  generation-checked allocator for its complete 32 KiB SRAM window. The BBA
+  now leases and releases its established receive, wrap-guard, and transmit
+  ranges instead of owning hard-coded global addresses. G1 and G2 DMA claims
+  exclude one another across the complete SRAM window.
+* Replaced reference-counted GAPS initialization with explicit exclusive
+  STAGING/NETWORK owner tokens and owner-authorized SRAM allocation. Resident
+  IP or unclassified dcload blocks staging before bridge mutation; native
+  loader device calls are guarded while KOS owns the bridge. BBA teardown now
+  retains ownership on failed drain/release. G1-to-BBA DMA remains available
+  under NETWORK ownership; only competing staging is excluded. See
+  `doc/gaps-ownership.md` for API migration and loader/hardware limitations.
+* Extended G2 DMA root-bus endpoints to both PVR-RAM apertures with explicit
+  region status and cache behavior. Direct optical DMA likewise accepts
+  system or PVR RAM, and adds synchronous/asynchronous reads into leased
+  bridge SRAM for a serialized disc-to-SRAM-to-RAM or VRAM pipeline.
+* Added true 64-channel synchronized AICA key-on and routed stereo effects and
+  streams through it. The ARM firmware now validates command sizes, channel
+  parameters, loop geometry, and sound-RAM ranges before programming hardware;
+  malformed queue records cannot trap its command loop. PCM stream maxima now
+  fit the 16-bit hardware loop endpoint after alignment. These changes add no
+  service thread, allocation, or periodic work.
+* Added negotiated complete AICA channel control for amplitude envelopes,
+  pitch and amplitude LFOs, direct and DSP routing, and time-variant filters.
+  Checked starts, selected live updates, release-aware stops, and coherent
+  sequence-checked status share the existing firmware and channel ownership;
+  legacy effect and stream packets remain supported and visible through the
+  same status vocabulary. ARM queue setup no longer reads back posted sound-RAM
+  writes to derive capacity, the ARM7 FIQ enable updates the complete status
+  register, and firmware regeneration now rebuilds its embedding object.
+* The bundled AICA firmware now reports a versioned capability and health
+  snapshot. Sound initialization rejects silent or incompatible firmware, and
+  applications can inspect queue pressure and rejected or malformed commands
+  through a bounded public status query.
+* Added lazily initialized asynchronous sound-RAM transfer requests with
+  queued bidirectional DMA, exact-byte PIO fallback, live byte progress,
+  execution deadlines, cancellation, waits, and thread-context completion
+  callbacks. Synchronous SPU transfers retain their established behavior and
+  applications that do not submit a request allocate no worker or queue state.
+* Added an optional automatic stream polling service. One explicitly created
+  thread can own several streams, uses a caller-selected or caller-owned stack,
+  reports coherent poll and underrun counters, and bounds stream removal and
+  service teardown. Manual polling remains the allocation-free default.
+* Bundled SH4ZAM 0.8 as a first-class, automatically built Dreamcast math
+  component and added it to the standard grouped KOS link set. The optimized
+  target backend remains independently attributed under its MIT license and
+  retains normal section garbage collection, so unused routines occupy no
+  application image space. Added compile-time layout checks and alias-safe
+  bridges between established KOS matrices/vectors and SH4ZAM types.
+* Routed memory matrix composition through SH4ZAM's one-off FIPR transform
+  path without changing XMTRX. Batched checked PVR projection now keeps its
+  transform resident in XMTRX across the stream and restores the caller's
+  prior matrix on both success and partial failure.
+* Added opt-in fiber math contexts. A thread attaching with
+  `KFIBER_ATTACH_MATH_CONTEXT` receives an independent XMTRX image for its main
+  fiber and each child fiber. Lightweight attachment remains the default and
+  performs no matrix allocation or matrix save/load during a switch.
+* Added checked, caller-owned PVR material packets compiled from existing
+  polygon, sprite, and two-volume contexts. Complete validation precedes
+  publication, and submission continues through established PVR list paths.
+* Added caller-owned screen/W frusta with bounded AABB classification and
+  allocation-free homogeneous triangle clipping. Clipped polygons expand into
+  independent canonical PVR triangles with explicit output capacity.
+* Added checked global small-polygon culling-threshold control and a defined
+  1.0f initialization value for every PVR session.
+* Added optional caller-owned compact-model plans with sparse page-backed,
+  constant-time vertex resolution. Prepared ordinary, two-volume, and modifier
+  emitters retain the immediate path's validation, callbacks, progress, and
+  sinks while applications that do not prepare a model allocate no index.
+* Added caller-owned compact-model draw caches for ordinary strips, two-volume
+  strips, and modifier volumes. One-time admission retains decoded strip state
+  or expanded volume topology, tightly packed 32-byte or 64-byte PVR packets,
+  canonical deformation inputs, original vertex indices, and modifier user
+  words in exact queried footprints. Repeated emission reads neither compact
+  stream and can bind caller-owned skin or morph results plus per-frame policy
+  without creating a scene owner, worker, allocator, or hidden resource
+  namespace. Ordinary and two-volume strips retain exact reference-pose AABBs;
+  filtered emitters can skip a strip before deformation, material setup,
+  projection, callbacks, or sink publication, while dynamically deformed
+  models retain explicit responsibility for conservative current-pose policy.
+* Added explicit compact-model skin bindings with four normalized influences
+  per vertex, complete model and joint coverage validation, caller-owned
+  constant-time pose lookup, and one-time canonical source construction for
+  repeated use by the existing checked deformation kernel.
+* Added explicit compact-model shape bindings with sparse canonical morph
+  deltas, complete target-to-base validation, caller-owned constant-time pose
+  lookup, one-time dense source construction, and direct scalar animation-
+  channel binding into the existing checked morph kernel.
+* Added versioned compact-model asset containers with independently stored
+  vertex and polygon sections, bounded workspace queries, header and decoded-
+  stream CRCs, raw zero-copy loading, and optional codec callbacks. The model
+  converter can emit raw assets or LZ4 Frame-compressed vertex partitions.
+* Added pointer-free PCM2 texture-resource manifests with sorted stable
+  identifiers, primary/secondary usage, complete model-integrity validation,
+  checked texture-table admission, and direct preparation through the existing
+  fixed-slot residency adapter. The converter emits and round-trips the
+  section automatically without storing paths, pointers, or VRAM ownership.
+* Bundled the unmodified BSD-2-Clause LZ4 1.10.0 library as an optional static
+  addon, including its Frame and dictionary APIs and a strict compact-asset
+  decoder callback. Applications that do not link it incur no runtime cost.
+  The addon also provides manually budgeted incremental decoding and a separate
+  opt-in adapter for caller-configured shared fiber-service executors; neither
+  policy reserves a thread, stack, queue, or workspace until selected.
+* PVR TA startup now propagates bounded readiness failures instead of
+  continuing into a busy or faulted accelerator, and AICA store-queue paths
+  acquire their real mapped destination under the checked SQ contract.
+* Added shared, fail-closed G1 controller arbitration for GD-ROM and ATA.
+  Drivers now use the public G1 ownership API instead of the former private
+  `_g1_ata_sem` symbol.
+* Completed buffered PVR list flushing and hybrid per-list submission, allowing
+  selected lists to use RAM/DMA while other lists use direct store-queue input
+  in the same scene without replaying early transfers. Scene completion now
+  preflights space for every required end marker before modifying any caller
+  buffer, so a full buffer fails with `ENOSPC` instead of overrunning storage.
+* Added coherent PVR pipeline snapshots and persistent fault records with
+  per-fault counters and captured TA buffer registers. Fault interrupts are
+  monitored in all builds while their debug logging remains optional.
+* Added opt-in PVR registration, render, display, DMA, and fault events with
+  bounded IRQ-context callbacks, safe self-removal, and no worker thread or
+  allocation until a handler is registered.
+* Added checked per-scene pixel clipping for framebuffer and texture targets,
+  plus bounded tile-granular user-clip command compilation and submission for
+  both direct and buffered polygon lists.
+* Added checked per-scene background-plane geometry, RGB888 vertex colors, and
+  depth state while preserving the established solid-color interface.
+* Added coherent physical scanout snapshots, checked framebuffer display
+  filters with exact vertical coefficients, and opt-in physical-line raster
+  callbacks with exclusive event ownership. The established dithering setter
+  now preserves unrelated framebuffer-control fields. Full-scene
+  antialiasing remains owned by PVR initialization because it changes the TA
+  render-buffer layout as well as a display-scaler bit.
+* Checked video-mode validation now rejects horizontal or vertical timing
+  counters that do not fit their ten-bit hardware fields, including the
+  effective scanline value after VGA line doubling.
+* Added checked framebuffer-surface queries for configured slots, the hardware
+  scanout target, and KOS's CPU drawing target, including exact geometry, VRAM
+  offsets, visible byte counts, known capacity, and interlaced field layout.
+* Added caller-owned PVR texture surfaces with checked allocation or external
+  binding, exact mip and VQ codebook layout metadata, format-word generation,
+  bounded full/partial/level/codebook transfers, and rectangular updates for
+  linear and twiddled uncompressed textures. Encoded full, byte-range, and
+  mip-level CPU readback is bounded by the same metadata, while a checked
+  render-target entry point accepts only compatible 16-bit linear surfaces and
+  records exact target geometry through render tickets.
+* Added a checked full-codebook VQ palette builder, allowing byte-indexed
+  textures to carry independent 16-bit color tables without consuming global
+  palette banks. A focused example demonstrates the doubled-dimension VQ
+  layout and validates 120 rendered frames.
+* Added compact-codebook VQ surfaces with exact encoded-size metadata, checked
+  high-range index bases, and distinct storage and texture-header addresses.
+  Allocated, externally bound, and reserved surfaces retain ordinary upload,
+  readback, release, and compact-model material behavior while storing only
+  the codebook entries actually used.
+* Added opt-in fixed-slot texture residency over one contiguous VRAM
+  reservation. Caller-owned slot and surface arrays provide deterministic LRU
+  replacement, explicit render-safe pins, generation-checked stale-handle
+  rejection, two-phase asynchronous upload publication, and coherent cache
+  statistics without a worker, queue, decompressor, or hidden main-RAM pool.
+* Integrated fixed-slot residency with compact-model material binding through
+  caller-owned preflight arrays. Referenced identifiers are pinned before list
+  emission, strip callbacks perform no cache admission, and pins remain held
+  until the application releases them after render completion.
+* Removed shared mutable scratch matrices from the established 3D transform
+  helpers and added a bounded caller-owned matrix stack with explicit
+  overflow, underflow, and non-consuming restore operations. It allocates no
+  memory and adds no initialization or per-frame cost to applications that do
+  not use it. Added failure-atomic perspective and look-at builders with
+  explicit descriptors, plus a two-input memory matrix composition routine
+  whose order matches the established post-multiply API. The new stack,
+  composition, and camera operations are available to loadable modules through
+  the established Dreamcast architecture export table.
+* Added allocation-free PVR geometry projection over bounded strided canonical
+  vertex streams, with prefix-safe error reporting and caller-owned memory,
+  current-list, or explicit buffered-list sinks. The sinks preserve existing
+  direct and vertex-DMA submission while leaving scene ownership unchanged.
+  Format-aware projection and sinks also cover complete 32-byte untextured and
+  64-byte textured two-volume vertices without changing the canonical sink
+  ABI; command and XYZ fields are transformed while both volume attribute sets
+  are preserved exactly.
+* Added checked, allocation-free sprite-cell geometry over the established
+  textured PVR sprite packet. Caller-owned atlas cells and strided instances
+  support normalized pivots and UV regions, independent scale and rotation,
+  UV flips, visibility compaction, screen-space output, and projected 3D
+  billboards. Existing checked materials and geometry sinks retain texture,
+  color, scene, list, and submission ownership.
+* Added allocation-free cell-sprite composition and timestamped step streams.
+  Ordered stream lists independently override atlas selection, local transform,
+  signed priority, visibility, material routing, and per-corner colors before
+  one whole-sprite transform is applied. Resolved cells feed either the compact
+  hardware sprite path or expressive four-corner colored strips in 2D and 3D.
+  Generic animated transforms bind directly to whole sprites, and bounded
+  event traversal follows each stream's independent repeat time base.
+  Dreamcast rotations, quaternion extraction, and projection use SH4ZAM;
+  callers retain every clock, state array, workspace, texture, material, scene,
+  and submission object.
+* Added bounded caller-owned particles with failure-atomic pool clearing,
+  spawning, and deterministic constant-acceleration stepping. Active particles
+  can compact into the sprite-cell path, expand into colored or textured
+  polygon billboards, or form ordered camera-facing trails through established
+  checked geometry sinks. The API creates no allocator, worker, timer, random
+  source, texture, material, scene, or list ownership.
+* Added validated caller-owned compact-model texture tables with sorted
+  13-bit identifiers, palette selection, checked surface/VRAM admission, and
+  allocation-free binary lookup. A material adapter now resolves persistent
+  compact draw state into existing one- or two-volume KOS materials and submits
+  them through established current or buffered list paths without owning a
+  texture namespace, asset lifetime, scene, list, allocator, or worker.
+* Added contiguous caller-owned PVR memory reservations and failure-atomic
+  multi-surface layout planning. Checked slices bind existing texture-surface
+  descriptors to exact non-owning ranges inside one established allocator
+  allocation without introducing a second allocator, global registry, worker,
+  or permanent workspace.
+* Added bounded compact PVR model streams with allocation-free record
+  iteration and whole-model validation. Record framing, per-format vertex
+  sizes, finite data, strip and volume structure, counters, and every indexed
+  vertex reference are checked before later traversal or rendering consumes
+  the model. Typed vertex-batch and strip views now expose bounded entries
+  without repeating format arithmetic. Format-neutral decoding expands
+  normals, colors, intensities, UV sets, user data, and generic metadata;
+  admitted models require unique vertex ranges and provide deterministic
+  allocation-free indexed lookup. Parent-before-child model hierarchies
+  compose through caller-owned matrix workspace with no recursion or
+  allocation. Added bounded one-volume and two-volume strip emission with
+  complete support and capacity preflight, decoded primary/secondary render
+  state, explicit texture-ID resolution, reversed-winding correction,
+  SH4ZAM-backed projection, and existing memory/current-list/buffered-list
+  sinks. Two-volume output binds each call to the matching complete 32-byte or
+  64-byte TA vertex layout. Added a separate compact modifier-volume pass that
+  expands triangle, quad, and strip topology with preserved winding, projects
+  all three positions, and publishes each header/triangle pair atomically to a
+  modifier list. Compact bump materials now expose their persistent
+  signed-normalized direction/up basis to explicit application vertex policy;
+  unsupported state families fail before callbacks or output.
+* Added a host-side compact-model inspector that decodes explicit
+  little-endian vertex and polygon streams, applies the exact target runtime
+  validator, and reports deterministic topology, indexing, strip, and texture
+  statistics. It defines no additional container format, and malformed assets
+  can now be rejected during a host build before being linked or packaged.
+* Added a deterministic host-side OBJ converter for finite indexed positions,
+  per-corner signed fixed-point UVs, normalized signed-16-bit normals, and
+  explicitly triangulated faces. It preserves independent OBJ attribute
+  indices without duplicating positions, accepts positive and
+  relative-negative references, splits vertex and strip records before their
+  16-bit fields overflow, applies
+  explicit winding/V flips and either one global texture identifier or repeated
+  material-name-to-identifier bindings, coalesces aliases, emits persistent
+  texture state only on actual transitions, and runs the target validator
+  before publishing little-endian output streams. An opt-in strip optimizer
+  joins only order-adjacent faces with exact position/UV/normal edge identity,
+  honors alternating strip winding and resolved texture boundaries, reports
+  the reduction, and splits at both strip and record encoding limits. Explicit
+  host-selected material libraries now convert a strict diffuse, ambient,
+  specular, and exponent subset into persistent compact render state, with
+  deterministic quantization and no implicit file access. A generated-C mode
+  embeds both naturally aligned streams and exact calculated bounds behind one
+  immutable `pvr_chunk_model_t`, ready for the normal target compiler without
+  invoking a compiler from the converter. Validated model metadata now exposes
+  the largest strip vertex count so callers can size renderer workspace without
+  rescanning the polygon stream. The compact-resource example builds its model
+  through this complete conversion, optimization, embedding, residency,
+  material, and rendering path. Opacity, texture-map paths, source
+  triangulation, and global topology reordering remain explicit rather than
+  being guessed.
+* Added allocation-free CPU vertex-lighting kernels with checked
+  inverse-transpose normal matrices, bounded strided normal transforms,
+  directional and attenuated point Lambert lights, and deterministic saturated
+  ARGB packing. Dreamcast vector math uses SH4ZAM while host validation retains
+  a portable scalar path.
+* Added format-neutral, allocation-free keyframe sampling with validated
+  immutable scalar, vector, and quaternion track views, logarithmic clamped
+  interval lookup, shortest-path rotation interpolation, fallback-channel
+  object sampling, blended TRS transforms, and explicit local-matrix
+  publication. Dreamcast interpolation and rotation paths use SH4ZAM without
+  changing XMTRX.
+* Added admitted transform clips and caller-owned one-shot, loop, and ping-pong
+  playback cursors with constant-time boundary traversal. Sampled local
+  matrices bind directly to compact-model hierarchies, including exact
+  in-place composition, while camera and light tracks publish through the
+  established checked matrix and `pvr_light_t` contracts. The facility creates
+  no clock, worker, fiber, scene manager, or hidden pose allocation.
+* Added step-only visibility tracks, strictly ordered application event markers,
+  and scalar morph-weight bindings. Event collection follows forward, backward,
+  loop, and ping-pong traversal, supports zero-capacity counting, and bounds
+  publication by caller capacity even across very large loop counts. Morph
+  output uses the existing `pvr_morph_target_t` and deformation kernel directly.
+* Added bounded, allocation-free additive morph-target deformation and indexed
+  four-influence linear-blend skinning over caller-owned streams and joint
+  palettes. Complete structural, influence, and palette validation precedes
+  skin output; exact canonical in-place operation is supported; partial morph
+  failures report a valid prefix. Dreamcast transforms and normalization use
+  SH4ZAM without changing XMTRX.
+* Added renderer-independent, allocation-free collision geometry for rays,
+  triangles, unit planes, finite segments, spheres, capsules, axis-aligned
+  boxes, and oriented boxes. Checked closest-point, projection, ray interval,
+  barycentric hit, inclusive overlap, separating-axis, and bounds operations
+  retain no world or object state, normalize published point/vector W
+  components, and leave caller output unchanged on failure. A bounded strided
+  point stream can produce AABBs without an intermediate mesh copy. Dreamcast
+  dot products and magnitudes use SH-4 vector instructions while host tests use
+  the portable path from the same source.
+* Added immediate-admission asynchronous PVR texture transfers with coherent
+  progress, timed waits, and terminal request ownership. Added checked
+  YUV420/YUV422 macroblock input sizing and conversion whose request completes
+  only after both channel-2 DMA and converter completion interrupts. These
+  opt-in operations create no worker, queue, permanent buffer, or idle thread.
+  Legacy nonblocking image DMA now retains shared channel ownership until its
+  completion interrupt instead of admitting scene-list DMA prematurely.
+* Added checked PVR color-clamp endpoints, punch-through alpha threshold,
+  bounded bulk palette writes, and vertex-buffer assignment. Extended polygon,
+  sprite, and two-volume header compilation exposes texture supersampling
+  without enlarging established public context structures or adding work to
+  the legacy compiler path.
+* PVR initialization now validates the complete vertex, object-list, region,
+  and frame-buffer layout before clearing VRAM or changing hardware state.
+  Invalid bin sizes, overflow, frame-bank exhaustion, and failure to register
+  the required VBlank callback fail cleanly. Checked render-to-texture entry
+  now rejects active scenes, invalid VRAM aliases, misalignment, arithmetic
+  overflow, and pitched targets that extend beyond PVR RAM.
+* Added opt-in direct and buffered PVR multipass registration for one through
+  eight passes. Each pass has independent bins, translucent sorting, and DMA
+  staging, while hardware continuation preserves shared parameters, depth, and
+  tile accumulation until one final renderer submission. The established
+  one-pass path retains its ABI, allocation model, and DMA behavior. Pass-aware
+  hybrid flushing switches only the opted-in scene to lockstep continuation.
+* Added allocation-free PVR render tickets with monotonic scene identities and
+  identity-specific queued, registered, rendering, complete, and displayed
+  stages. Texture tickets describe their exact target geometry, reject display
+  waits, and make the render-to-texture reuse boundary explicit; framebuffer
+  tickets separately identify the VBlank at which their result becomes visible.
+* Completed the established extended texture loader with checked dimensions,
+  honest preformatted-copy behavior, bounded transfer selection, and an
+  error-reporting entry point while preserving the original void wrapper.
+* Added an opt-in post-boot direct GD-ROM transport with bounded packet PIO and
+  DMA, status, geometry, mode, recovery, CDDA, streaming, diagnostics, and
+  asynchronous request integration. Boot-time disc authorization remains the
+  responsibility of the firmware.
+* Added queued asynchronous CD requests with cancellation, deadlines, progress,
+  terminal sense data, finalizers, and callbacks dispatched outside IRQ and
+  transport-worker context. Request and callback workers are created on first
+  use.
+* Added typed TMU channel ownership and opt-in software timer events, together
+  with caller-stacked cooperative fibers, synchronization objects, and explicit
+  service executors. Ordinary threads carry no fiber state or stack allocation;
+  service wake/message delivery cannot falsely complete a mutex or event wait.
+* Added validated flash configuration and play-history transactions, full-range
+  RTC counter/calendar conversion, checked cable-aware video-mode policy,
+  coherent SCIF configuration/status, and side-effect-bounded expansion-device
+  discovery. Physical writes, timing, and device variants remain validation
+  gates.
+* Extended ISO9660 with selectable BIOS/direct transport, aligned-sector and
+  arbitrary-byte asynchronous reads, preseek, staged streaming, media
+  invalidation, directory prefetch, and cache statistics. The 32 KiB bounce
+  workspace is allocated only when an unaligned byte read needs it.
+* Added bounded sector-range handles and typed CDDA, media recognition,
+  drive-state, disc-identity, and media-event facilities.
+* Added encoding-aware BIOS-font glyph lookup and corrected ASCII space to use
+  the historical blank replacement glyph instead of the overbar slot.
+* Added stored-order Maple function-descriptor and connection-direction helpers,
+  coherent controller snapshots and transitions, analog-trigger hysteresis,
+  capability-aware soft-reset detection, and strict response-size validation.
+* Completed keyboard metadata and coherent state snapshots, bounded both legacy
+  key queues, synchronized callback configuration, and corrected attach-time
+  status clearing that could overwrite memory beyond the keyboard state.
+* Completed mouse condition decoding with eight buttons, eight axes, overflow
+  and option data, descriptor metadata, coherent transitions, and safe handling
+  of malformed responses while preserving the established leading status
+  layout.
+* Added response-aware microphone controls and caller-buffered capture rings
+  with independent readers, bounded copy-out, seeking, and exact overrun
+  accounting. Added per-port stored-camera-image requests with bounded
+  deadlines, validated replies, coherent progress, and detach-safe late
+  completion. Live camera video remains separately scoped.
+* Hardened low-level sound output with validated command queues, sound-RAM
+  geometry and allocator status, failure-atomic stream allocation, bounded
+  raw/WAV effect loading, exact SPU byte-range copies, and coherent channel
+  status. Codecs, sequencing, and content middleware remain separate libraries.
+* Added scheduled light-gun capture with exclusive Maple field ownership,
+  automatic flash restoration, coherent aim snapshots, port selection, and
+  optional IRQ-context trigger and completion callbacks.
+* Extended vibration support with typed effect encoding, multi-unit output,
+  device and unit metadata, relative orientation, hardware auto-stop, readiness,
+  coherent asynchronous completion status, and optional IRQ-context callbacks.
+* Extended VMU display support with descriptor-based capability checks,
+  top-left grayscale packing into the peripheral's raw bitmap order, relative
+  orientation, coherent completion state, and optional IRQ-context callbacks.
+* Added validated civil-time VMU clock APIs with synchronous and asynchronous
+  reads and writes, coherent completion state, and correct Sunday-zero weekday
+  conversion while retaining the established time-based entry points.
+* Added host-usable VMU filesystem metadata definitions and whole-filesystem
+  validation for root geometry, exact FAT chains, cycles, cross-links,
+  duplicate names, orphan blocks, and executable-eligible free space. Normal
+  VMU setup now rejects unsafe geometry before allocating or reading metadata.
+* Added direct file-metadata queries and geometry-aware full-file and bounded
+  block-range VMU reads that resolve and validate an exact FAT chain before
+  touching the destination. Raw block reads now reject malformed response
+  lengths before copying. Hardened VMU package construction and parsing against
+  unaligned input, truncated layouts, integer overflow, unterminated text
+  fields, invalid icon metadata, and checksum mismatch without modifying the
+  caller's encoded buffer.
+* Added synchronous and lazy asynchronous VMU volume inspection that
+  distinguishes ready, orphan-degraded, unformatted, corrupt, and unsupported
+  filesystems while reporting directory usage and both ordinary and
+  executable-eligible free space.
+* VMU saves and deletions now gate all mutations on whole-filesystem ownership
+  validation. New saves use data/FAT/directory commit ordering, replacements
+  use copy-on-write, deletions remove the directory entry before freeing data,
+  failed allocations leave the in-memory FAT unchanged, and executable images
+  require contiguous free space beginning at block zero. A high-level query
+  now reports that executable-eligible prefix separately from total free space.
+* Added validated VMU file renaming, including `/vmu` VFS rename support, and
+  directory-only updates for copy protection and file-header offset. Existing
+  rename destinations are removed before their blocks are reclaimed, so an
+  interrupted replacement can leak space but cannot cross-link live files.
+* Added synchronous and lazy asynchronous multi-file deletion with complete
+  preflight, directory-before-FAT ordering, confirmed-removal accounting, and
+  explicit reporting when an unacknowledged directory write makes the exact
+  on-card result uncertain.
+* Added synchronous and lazy asynchronous bounded VMU file rewrites. Normal
+  files preserve all directory metadata through a copy-on-write chain switch;
+  executable files use pre-read rollback because their required block-zero
+  placement prevents dual-chain publication. Added validated orphan-only FAT
+  repair that never reclaims a block reachable from a live directory entry.
+* Added validated bank discovery, selection, and lock control for compatible
+  multi-bank memory cards, together with lazy asynchronous VMUFS requests and
+  host-tested command/response vectors. Physical multi-bank hardware remains
+  a required validation gate.
+* The `/vmu` VFS now distinguishes logical package payload length from
+  block-rounded backing storage. Reads, seeks, totals, `stat()`, `fstat()`,
+  append writes, sparse gaps, and package rebuilds use the logical EOF, while
+  `O_META` continues to expose the complete stored image. Unmodified writable
+  handles no longer rewrite a card merely because they were closed.
+* Added quick and full standard-card formatting with invalid-root-first commit
+  ordering and final metadata verification. Added copy-on-write
+  defragmentation that packs ordinary files high, retains an executable at
+  block zero, safely stages relocation cycles, and refuses before mutation
+  when insufficient scratch space prevents an interruption-safe schedule.
+* Added lazy asynchronous VMU range-read, save, delete, rename, attribute,
+  format, and defragment requests with coherent block-level progress,
+  cancellation at transaction-safe boundaries, and application callbacks
+  dispatched outside the storage worker and IRQ context. Save data is read
+  back before allocation metadata can make its chain visible.
 
 RELEASE NOTES for 2.2.2
 -----------------------
@@ -132,8 +1098,8 @@ to formats used directly by the Dreamcast's PowerVR (utils/pvrtex), a significan
 rewrite of wav2adpcm which converts standard sound data into the smaller ADPCM
 format used by the Dreamcast's AICA (utils/wav2adpcm), an example that
 demonstrates how to draw lines with quads via the pvr (pvr/pvrline), one for
-testing network speed (network/speedtest) and another on how to use libADX
-from kos-ports for audio playback (sound/libADX).
+testing network speed (network/speedtest) and another on compressed-audio
+playback with an optional kos-ports decoder.
 
 RELEASE NOTES for 2.1.0
 -----------------------

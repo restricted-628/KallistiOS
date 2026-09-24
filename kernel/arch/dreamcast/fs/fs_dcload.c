@@ -5,7 +5,6 @@
    Copyright (C) 2004 Megan Potter
    Copyright (C) 2012 Lawrence Sebald
    Copyright (C) 2025 Donald Haase
-
 */
 
 /*
@@ -479,11 +478,11 @@ void fs_dcload_shutdown(void) {
     if(!syscall_dcload_detected())
         return;
 
-    /* Free dcload wrkram */
+    nmmgr_handler_remove(&vh.nmmgr);
+
+    /* Free dcload wrkram after no handler call can reach it. */
     if(dcload_wrkmem) {
         dcload_assignwrkmem(0);
         free(dcload_wrkmem);
     }
-
-    nmmgr_handler_remove(&vh.nmmgr);
 }

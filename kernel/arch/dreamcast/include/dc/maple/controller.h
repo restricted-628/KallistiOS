@@ -4,6 +4,7 @@
    Copyright (C) 2000-2002 Jordan DeLong
    Copyright (C) 2000-2002 Megan Potter
    Copyright (C) 2023, 2025 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 
    Thanks to Marcus Comstedt for information on the controller.
 */
@@ -116,6 +117,8 @@ __BEGIN_DECLS
 #define CONT_DPAD2_DOWN     BIT(13)     /**< \brief Secondary Dpad Down button Mask. */
 #define CONT_DPAD2_LEFT     BIT(14)     /**< \brief Secondary Dpad Left button Mask. */
 #define CONT_DPAD2_RIGHT    BIT(15)     /**< \brief Secondary Dpad Right button Mask. */
+#define CONT_RTRIG_DIGITAL  BIT(16)     /**< \brief Emulated digital Right trigger Mask. */
+#define CONT_LTRIG_DIGITAL  BIT(17)     /**< \brief Emulated digital Left trigger Mask. */
 /** @} */
 
 /** \brief   Controller buttons for standard reset action
@@ -125,6 +128,12 @@ __BEGIN_DECLS
     used as a reset mechanism by most retail games.
 */
 #define CONT_RESET_BUTTONS  (CONT_A | CONT_B | CONT_X | CONT_Y | CONT_START)
+
+/** \brief Default analog value that presses an emulated trigger button. */
+#define CONT_TRIGGER_PRESS_DEFAULT    192
+
+/** \brief Default analog value that releases an emulated trigger button. */
+#define CONT_TRIGGER_RELEASE_DEFAULT  160
 
 /** \brief   Controller state structure.
     \ingroup controller_inputs
@@ -165,7 +174,9 @@ typedef struct cont_state {
             uint32_t dpad2_down: 1;     /**< \brief Secondary Dpad Down button value. */
             uint32_t dpad2_left: 1;     /**< \brief Secondary Dpad Left button value. */
             uint32_t dpad2_right: 1;    /**< \brief Secondary Dpad Right button value. */
-            uint32_t: 16;
+            uint32_t rtrig_digital: 1;  /**< \brief Emulated digital Right trigger. */
+            uint32_t ltrig_digital: 1;  /**< \brief Emulated digital Left trigger. */
+            uint32_t: 14;
         };
     };
 
@@ -176,6 +187,97 @@ typedef struct cont_state {
     int joy2x;    /**< \brief Secondary joystick x-axis value. */
     int joy2y;    /**< \brief Secondary joystick y-axis value. */
 } cont_state_t;
+
+/* Forward declaration for the snapshot and callback API below. */
+struct maple_device;
+
+/** \brief   Coherent snapshot of one completed controller sample.
+    \ingroup controller_inputs
+
+    Unlike the driver-owned pointer returned by maple_dev_status(), this is a
+    caller-owned copy made atomically with respect to Maple response handling.
+    The transition masks compare this sample with the immediately preceding
+    successful sample from the same device.
+*/
+typedef struct cont_snapshot {
+    cont_state_t state;     /**< \brief Current decoded controller state. */
+    uint32_t pressed;       /**< \brief Buttons newly pressed in this sample. */
+    uint32_t released;      /**< \brief Buttons newly released in this sample. */
+    uint32_t sequence;      /**< \brief Per-device successful-sample counter. */
+} cont_snapshot_t;
+
+/** \brief   Low-latency controller sample callback.
+    \ingroup controller_inputs
+
+    The callback runs from the Maple DMA response interrupt immediately after a
+    sample is decoded. The snapshot pointer is valid only for the duration of
+    the callback.
+
+    \warning Interrupt-context restrictions apply: do not block, allocate,
+             invoke VFS operations, or call APIs that require later interrupts.
+*/
+typedef void (*cont_sample_handler_t)(struct maple_device *dev,
+                                      const cont_snapshot_t *snapshot,
+                                      void *user_data);
+
+/** \brief   Copy the latest controller sample atomically.
+    \ingroup controller_inputs
+
+    \param  dev             Controller device to query.
+    \param  snapshot        Receives a caller-owned coherent snapshot.
+    \retval 0               A completed sample was copied.
+    \retval -1              Failure, with errno set to EINVAL, ENODEV, or
+                            EAGAIN when the first sample has not arrived yet.
+*/
+int cont_get_snapshot(const struct maple_device *dev,
+                      cont_snapshot_t *snapshot);
+
+/** \brief   Register the immediate controller sample handler.
+    \ingroup controller_inputs
+
+    There is one process-wide handler, matching the controller driver's single
+    response stream. Passing NULL unregisters it. Registration is atomic with
+    respect to Maple response interrupts. The handler is invoked for every
+    successful sample from every connected controller; filter with dev->port
+    and dev->unit when only one device is relevant.
+
+    \param callback         Handler to install, or NULL to remove it.
+    \param user_data        Opaque value passed to the handler.
+*/
+void cont_set_sample_handler(cont_sample_handler_t callback, void *user_data);
+
+/** \brief   Configure analog-to-digital trigger hysteresis.
+    \ingroup controller_inputs
+
+    Each successful controller sample exposes the analog triggers normally and
+    also maintains CONT_RTRIG_DIGITAL and CONT_LTRIG_DIGITAL in the button
+    field. A digital trigger becomes pressed at or above \p press and remains
+    pressed until it reaches or falls below \p release.
+
+    \param  press           Analog value that presses the digital trigger.
+    \param  release         Analog value that releases the digital trigger.
+    \retval 0               Thresholds were installed.
+    \retval -1              Invalid hysteresis (press must exceed release),
+                            with errno set to EINVAL.
+*/
+int cont_set_trigger_thresholds(uint8_t press, uint8_t release);
+
+/** \brief   Test a snapshot for the standard soft-reset command.
+    \ingroup controller_inputs
+
+    The command is recognized when Start is newly pressed while A and B are
+    held. Controllers advertising both X and Y must hold those buttons too;
+    controllers advertising neither use the shorter A+B+Start command. A
+    device advertising only one of X or Y is treated as malformed and does not
+    produce the command.
+
+    \param  dev             Controller that produced \p snapshot.
+    \param  snapshot        Coherent snapshot to inspect.
+    \retval 1               The soft-reset command was entered this sample.
+    \retval 0               It was not entered, or the arguments are invalid.
+*/
+int cont_snapshot_is_soft_reset(const struct maple_device *dev,
+                                const cont_snapshot_t *snapshot);
 
 /** \brief   Controller automatic callback type.
     \ingroup controller_inputs
@@ -522,4 +624,3 @@ void cont_shutdown(void);
 __END_DECLS
 
 #endif  /* __DC_MAPLE_CONTROLLER_H */
-

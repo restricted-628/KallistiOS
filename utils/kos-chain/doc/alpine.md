@@ -1,7 +1,7 @@
 # KallistiOS Toolchain Builder (`kos-chain`) with Alpine Linux #
 
 This document contains all the instructions to create a fully working
-toolchain targeting the **Sega Dreamcast** system under **Alpine Linux**.
+toolchain targeting the **Dreamcast** system under **Alpine Linux**.
 
 **Alpine Linux** is a regular **GNU/Linux** system, but it's also a great
 candidate for making **Docker** images. You may find a working example of a

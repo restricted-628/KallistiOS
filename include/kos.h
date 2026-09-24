@@ -34,6 +34,7 @@ __BEGIN_DECLS
 
 #include <kos/version.h>
 #include <kos/cache.h>
+#include <kos/heap.h>
 #include <kos/fs.h>
 #include <kos/fs_romdisk.h>
 #include <kos/fs_ramdisk.h>
@@ -63,6 +64,8 @@ __BEGIN_DECLS
 #include <kos/string.h>
 #include <kos/init.h>
 #include <kos/oneshot_timer.h>
+#include <kos/timer_event.h>
+#include <kos/workqueue.h>
 #include <kos/regfield.h>
 #include <kos/spinlock.h>
 

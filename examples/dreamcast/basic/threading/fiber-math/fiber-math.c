@@ -3,7 +3,8 @@
    Core-only XMTRX preservation; no service-executor dependency.
 */
 #include <kos.h>
-#include <dc/matrix.h>
+#include <sh4zam/shz_xmtrx.h>
+#include <sh4zam/shz_matrix.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdalign.h>
@@ -17,39 +18,39 @@
 static alignas(32) unsigned char stacks[2][8192];
 static kfiber_t *main_fiber;
 static unsigned stages[2];
-static matrix_t expected[3];
+static shz_mat4x4_t expected[3];
 static semaphore_t request = SEM_INITIALIZER(0);
 static semaphore_t complete = SEM_INITIALIZER(0);
 static unsigned thread_exchanges;
 
-static void expect_matrix(const matrix_t *wanted) {
-    matrix_t actual;
-    mat_store(&actual);
+static void expect_matrix(const shz_mat4x4_t *wanted) {
+    shz_mat4x4_t actual;
+    shz_xmtrx_store_4x4(&actual);
     for(unsigned row = 0; row < 4; ++row)
         for(unsigned col = 0; col < 4; ++col)
-            assert(actual[row][col] == (*wanted)[row][col]);
+            assert(actual.elem2D[row][col] == wanted->elem2D[row][col]);
 }
 
 static void *competing_fpu_thread(void *data) {
-    matrix_t other;
+    shz_mat4x4_t other;
     (void)data;
 
     for(unsigned row = 0; row < 4; ++row)
         for(unsigned col = 0; col < 4; ++col)
-            other[row][col] = (float)(1000 + 4 * row + col);
-    mat_load(&other);
+            other.elem2D[row][col] = (float)(1000 + 4 * row + col);
+    shz_xmtrx_load_4x4(&other);
     for(unsigned i = 0; i < THREAD_EXCHANGES; ++i) {
         assert(sem_wait_timed(&request, 5000) == 0);
         expect_matrix(&other);
-        other[0][0] += 1.0f;
-        mat_load(&other);
+        other.elem2D[0][0] += 1.0f;
+        shz_xmtrx_load_4x4(&other);
         ++thread_exchanges;
         assert(sem_signal(&complete) == 0);
     }
     return NULL;
 }
 
-static void exchange_with_thread(const matrix_t *wanted) {
+static void exchange_with_thread(const shz_mat4x4_t *wanted) {
     assert(sem_signal(&request) == 0);
     /* This blocks the entire owner thread, even when called by a child. */
     assert(sem_wait_timed(&complete, 5000) == 0);
@@ -58,11 +59,11 @@ static void exchange_with_thread(const matrix_t *wanted) {
 
 static void child(void *data) {
     unsigned index = *(unsigned *)data;
-    matrix_t identity = {
+    shz_mat4x4_t identity = { .elem2D = {
         {1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}, {0, 0, 0, 1}
-    };
+    } };
     expect_matrix(&identity);
-    mat_load(&expected[index + 1]);
+    shz_xmtrx_load_4x4(&expected[index + 1]);
     exchange_with_thread(&expected[index + 1]);
     stages[index] = 1;
     assert(fiber_switch(main_fiber) == 0);
@@ -78,9 +79,9 @@ int main(void) {
     for(unsigned matrix = 0; matrix < 3; ++matrix)
         for(unsigned row = 0; row < 4; ++row)
             for(unsigned col = 0; col < 4; ++col)
-                expected[matrix][row][col] = (float)(100 * matrix + 4 * row + col);
+                expected[matrix].elem2D[row][col] = (float)(100 * matrix + 4 * row + col);
 
-    mat_load(&expected[0]);
+    shz_xmtrx_load_4x4(&expected[0]);
     main_fiber = fiber_attach_ex(KFIBER_ATTACH_MATH_CONTEXT);
     assert(main_fiber);
     assert(fiber_get_attach_flags() == KFIBER_ATTACH_MATH_CONTEXT);

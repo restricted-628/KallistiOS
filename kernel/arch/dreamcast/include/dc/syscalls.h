@@ -252,7 +252,7 @@ typedef int32_t gdc_cmd_hnd_t;
 */
 typedef enum cd_cmd_code {
     CD_CMD_CHECK_LICENSE     =  2,  /**< \brief Check license */
-    CD_CMD_REQ_SPI_CMD       =  4,  /**< \brief Request to Sega Packet Interface */
+    CD_CMD_REQ_SPI_CMD       =  4,  /**< \brief Request packet-interface command */
     CD_CMD_PIOREAD           = 16,  /**< \brief Read via PIO */
     CD_CMD_DMAREAD           = 17,  /**< \brief Read via DMA */
     CD_CMD_GETTOC            = 18,  /**< \brief Read TOC */
@@ -468,8 +468,8 @@ typedef enum cd_cmd_chk_ata_status {
     return value of the syscall.
 */
 typedef struct cd_cmd_chk_status {
-    int32_t                 err1; /**< \brief Error code 1 */
-    int32_t                 err2; /**< \brief Error code 2 */
+    int32_t                 err1; /**< \brief GD-ROM sense key */
+    int32_t                 err2; /**< \brief ASC in bits 0-7, ASCQ in bits 8-15 */
     size_t                  size; /**< \brief Transferred size */
     cd_cmd_chk_ata_status_t ata;  /**< \brief ATA status */
 } cd_cmd_chk_status_t;
@@ -671,6 +671,23 @@ int syscall_misc_init(void);
 */
 int syscall_misc_setvector(uint32_t super, uintptr_t handler);
 
+/** \brief   Advance the BootROM's Dreamcast-disc recognition process.
+
+    This invokes selector 2 of the BootROM system vector. It is distinct from
+    the GD command server's `CD_CMD_CHECK_LICENSE` command even though both
+    selectors have the numeric value 2.
+
+    Callers must not invoke this more than once per vertical-refresh period.
+    Higher-level code should normally use cdrom_media_recognize(), which owns
+    G1, performs the required cache maintenance, enforces that cadence, and
+    supplies a timeout.
+
+    \retval 0               A Dreamcast-compatible disc was recognized.
+    \return                 A positive value for another kind of disc.
+    \return                 A negative value while recognition is in progress.
+*/
+int syscall_system_disc_check(void);
+
 /** \brief   Resets the Dreamcast.
 
     This function soft resets the Dreamcast console.
@@ -694,4 +711,3 @@ void syscall_system_cd_menu(void) __noreturn;
 __END_DECLS
 
 #endif
-

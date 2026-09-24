@@ -1,26 +1,24 @@
-# Logical saved-stack regression
+# Saved stack pointer regression
 
-The scheduler's existing underrun check must inspect the real saved stack
-address, not GCC soft-gUSA's temporary negative restart length in r15. The
-helper reads r1 for markers -128 through -1 without modifying the saved CPU
-context. Exception return retains the original restart protocol.
+The scheduler must check the logical stack address, not GCC soft-gUSA's
+temporary negative length in r15. The real stack remains in r1 until the region
+end restores it. Neither the marker nor the saved PC may be changed by the
+stack-address accessor: IRQ restart and exception return still need them.
 
-This is an independent correctness patch. It does not add fibers, new thread
-fields, an upper-bound policy, a different atomic model, or MMU policy changes.
+`make test` compiles the actual architecture header twice, with and without
+soft-gUSA enabled. Cases cover every marker from -128 through -1, both the
+region interior and its end, ordinary P1/P2 pointers, invalid non-marker values,
+an invalid preserved r1, and byte-for-byte context preservation. The small host
+shim supplies only generic IRQ declarations; the tested helper is not mocked.
+The suite participates in `utils/run-host-tests.sh` GNU17 and strict C23 lanes.
 
-`make test` compiles the production architecture header with and without
-soft-gUSA enabled. It covers all marker values at both interior and end PCs,
-ordinary P1/P2 pointers, invalid non-marker values, an invalid preserved r1,
-and byte-for-byte preservation of the CPU context. Only generic host IRQ and
-linkage declarations are shimmed; the tested helper is not mocked.
+After sourcing the KOS environment, `make dreamcast` builds an ELF that also
+runs atomic fetch-add and compare/exchange under a temporary 1000 Hz scheduler
+tick for two seconds. It restores the prior tick rate and global IRQ observer.
+The observer checks the interrupted context without changing it or suppressing
+normal per-IRQ dispatch. The final atomic value must match the operation count.
 
-Run `make clean test CC=gcc-14 HOST_CSTD=c23` for a C23 lane, or use Clang and
-`CFLAGS='-O1 -std=gnu17 -Wall -Wextra -Werror -fsanitize=address,undefined'`
-for host sanitizers.
-
-After loading the KOS environment, `make dreamcast` builds a target stress
-probe. It temporarily raises the scheduler tick to 1000 Hz and exercises atomic
-fetch-add and compare/exchange for two seconds. It restores the prior tick and
-global IRQ observer. A positive `interrupted-atomics` count demonstrates actual
-interrupts inside atomic restart windows; zero hits do not prove that path.
-Target compilation is not runtime or physical-hardware validation.
+Inspect `interrupted-atomics` in the serial log. A positive count demonstrates
+that interrupts actually landed in restart regions. A zero count can occur
+with emulator-optimized atomics and is not proof of that path. No physical
+hardware result is implied by an emulator run.

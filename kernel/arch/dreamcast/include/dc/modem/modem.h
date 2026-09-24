@@ -2,6 +2,7 @@
 
    modem.h
    Copyright (C) 2002, 2004 Nick Kochakian
+   Copyright (C) 2026 Joseph Black
 
    Distributed under the terms of the KOS license.
 
@@ -177,6 +178,20 @@ typedef enum {
 typedef void (*MODEMEVENTHANDLERPROC)(modemEvent_t event);
 
 /* From modem.c */
+/** \brief Probe the inactive 8-bit expansion interface for a modem.
+
+    The probe resets the 8-bit interface and performs the device self-test. It
+    refuses to run while another driver owns the shared external interrupt.
+
+    \retval 1               Modem is present.
+    \retval 0               Modem is absent.
+    \retval -1              Interface is busy; errno is set.
+*/
+int modem_probe(void);
+
+/** \brief Return nonzero when the modem driver is initialized. */
+int modem_is_initialized(void);
+
 /** \brief   Initialize the modem.
     \ingroup modem
 

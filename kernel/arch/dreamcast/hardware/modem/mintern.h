@@ -2,6 +2,7 @@
 
    mintern.h
    Copyright (C)2002, 2004 Nick Kochakian
+   Copyright (C) 2026 Joseph Black
 
    Distributed under the terms of the KOS license.
 
@@ -104,7 +105,7 @@ extern int                  __isLessThan(int x, int y);
 extern unsigned char        modemInternalFlags;
 
 /* From mintr.c */
-void modemIntInit(void);
+int modemIntInit(void);
 void modemIntShutdown(void);
 void modemIntSetupConnectionInterrupts(int clear);
 void modemIntSetupProtocolInterrupts(int clear);

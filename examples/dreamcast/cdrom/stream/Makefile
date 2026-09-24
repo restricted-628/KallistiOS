@@ -1,6 +1,6 @@
 # KallistiOS ##version##
 #
-# examples/dreamcast/cd/stream/Makefile
+# examples/dreamcast/cdrom/stream/Makefile
 # (c) 2025 Ruslan Rostovtsev
 #
 

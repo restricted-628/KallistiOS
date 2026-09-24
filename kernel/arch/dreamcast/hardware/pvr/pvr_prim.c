@@ -2,6 +2,7 @@
 
    pvr_prim.c
    Copyright (C) 2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -99,6 +100,20 @@ void pvr_poly_compile(pvr_poly_hdr_t *dst, const pvr_poly_cxt_t *src) {
         dst->mode2_1 = mode2;
         dst->mode3_1 = mode3;
     }
+}
+
+void pvr_poly_compile_ex(pvr_poly_hdr_t *dst, const pvr_poly_cxt_t *src,
+                         uint32_t flags) {
+    assert(!(flags & ~PVR_COMPILE_ALL_FLAGS));
+
+    pvr_poly_compile(dst, src);
+
+    if(src->txr.enable && (flags & PVR_COMPILE_SUPERSAMPLE))
+        dst->mode2 |= PVR_TA_PM2_SUPERSAMPLE;
+
+    if(src->fmt.modifier && src->gen.modifier_mode && src->txr.enable
+       && (flags & PVR_COMPILE_SUPERSAMPLE_2))
+        dst->mode2_1 |= PVR_TA_PM2_SUPERSAMPLE;
 }
 
 /* Create a colored polygon context with parameters similar to
@@ -331,6 +346,16 @@ void pvr_sprite_compile(pvr_sprite_hdr_t *dst, const pvr_sprite_cxt_t *src) {
     dst->oargb = 0x00000000;
 }
 
+void pvr_sprite_compile_ex(pvr_sprite_hdr_t *dst,
+                           const pvr_sprite_cxt_t *src, uint32_t flags) {
+    assert(!(flags & ~PVR_COMPILE_SUPERSAMPLE));
+
+    pvr_sprite_compile(dst, src);
+
+    if(src->txr.enable && (flags & PVR_COMPILE_SUPERSAMPLE))
+        dst->mode2 |= PVR_TA_PM2_SUPERSAMPLE;
+}
+
 void pvr_mod_compile(pvr_mod_hdr_t *dst, pvr_list_t list, uint32_t mode,
                      uint32_t cull) {
     uint32_t cmd;
@@ -461,6 +486,19 @@ void pvr_poly_mod_compile(pvr_poly_mod_hdr_t *dst, const pvr_poly_cxt_t *src) {
 
     dst->mode2_1 = mode2;
     dst->mode3_1 = mode3;
+}
+
+void pvr_poly_mod_compile_ex(pvr_poly_mod_hdr_t *dst,
+                             const pvr_poly_cxt_t *src, uint32_t flags) {
+    assert(!(flags & ~PVR_COMPILE_ALL_FLAGS));
+
+    pvr_poly_mod_compile(dst, src);
+
+    if(src->txr.enable && (flags & PVR_COMPILE_SUPERSAMPLE))
+        dst->mode2_0 |= PVR_TA_PM2_SUPERSAMPLE;
+
+    if(src->txr2.enable && (flags & PVR_COMPILE_SUPERSAMPLE_2))
+        dst->mode2_1 |= PVR_TA_PM2_SUPERSAMPLE;
 }
 
 /* Create a colored polygon context for polygons affected by modifier volumes */

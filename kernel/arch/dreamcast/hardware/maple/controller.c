@@ -4,21 +4,21 @@
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2024 Donald Haase
    Copyright (C) 2025 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 
  */
 
 #include <arch/arch.h>
 #include <dc/maple.h>
 #include <dc/maple/controller.h>
+#include <dc/maple/lightgun.h>
 #include <kos/mutex.h>
 #include <kos/worker_thread.h>
-#include <assert.h>
+#include <arch/irq.h>
+#include <errno.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/queue.h>
-
-/* Location of controller capabilities within function_data array */
-#define CONT_FUNCTION_DATA_INDEX  0
 
 #ifndef CONT_BTN_CALLBACK_THD_STACK_SIZE
 #define CONT_BTN_CALLBACK_THD_STACK_SIZE (8 * 1024)
@@ -34,6 +34,22 @@ typedef struct cont_cond {
     uint8_t joy2x;     /* second joystick X */
     uint8_t joy2y;     /* second joystick Y */
 } cont_cond_t;
+
+/* cont_state_t must remain first so maple_dev_status() stays compatible. */
+typedef struct cont_status {
+    cont_state_t state;
+    uint32_t pressed;
+    uint32_t released;
+    uint32_t sequence;
+} cont_status_t;
+
+static struct {
+    cont_sample_handler_t callback;
+    void *user_data;
+} sample_handler;
+
+static uint8_t trigger_press_threshold = CONT_TRIGGER_PRESS_DEFAULT;
+static uint8_t trigger_release_threshold = CONT_TRIGGER_RELEASE_DEFAULT;
 
 typedef struct cont_callback_params {
     cont_btn_callback_t cb;
@@ -53,14 +69,102 @@ static mutex_t btn_cbs_mtx = MUTEX_INITIALIZER;
 
 /* Check whether the controller has EXACTLY the given capabilities. */
 int __pure cont_is_type(const maple_device_t *cont, uint32_t type) {
-    return cont ? cont->info.function_data[CONT_FUNCTION_DATA_INDEX] == type :
-                  -1;
+    uint32_t capabilities;
+
+    if(!cont || !cont->valid ||
+       !maple_dev_function_data(cont, MAPLE_FUNC_CONTROLLER,
+                                &capabilities))
+        return -1;
+
+    return capabilities == type;
 }
 
 /* Check whether the controller has at LEAST the given capabilities. */
 int __pure cont_has_capabilities(const maple_device_t *cont, uint32_t capabilities) {
-    return cont ? ((cont->info.function_data[CONT_FUNCTION_DATA_INDEX] 
-                   & capabilities) == capabilities) : -1;
+    uint32_t available;
+
+    if(!cont || !cont->valid ||
+       !maple_dev_function_data(cont, MAPLE_FUNC_CONTROLLER,
+                                &available))
+        return -1;
+
+    return (available & capabilities) == capabilities;
+}
+
+int cont_get_snapshot(const maple_device_t *dev, cont_snapshot_t *snapshot) {
+    const cont_status_t *status;
+    irq_mask_t irq;
+
+    if(!dev || !snapshot) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    irq = irq_disable();
+
+    if(!dev->valid || !(dev->info.functions & MAPLE_FUNC_CONTROLLER) ||
+       !dev->status) {
+        irq_restore(irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    status = (const cont_status_t *)dev->status;
+
+    if(!status->sequence) {
+        irq_restore(irq);
+        errno = EAGAIN;
+        return -1;
+    }
+
+    snapshot->state = status->state;
+    snapshot->pressed = status->pressed;
+    snapshot->released = status->released;
+    snapshot->sequence = status->sequence;
+    irq_restore(irq);
+    return 0;
+}
+
+void cont_set_sample_handler(cont_sample_handler_t callback, void *user_data) {
+    irq_mask_t irq = irq_disable();
+
+    sample_handler.callback = callback;
+    sample_handler.user_data = user_data;
+
+    irq_restore(irq);
+}
+
+int cont_set_trigger_thresholds(uint8_t press, uint8_t release) {
+    irq_mask_t irq;
+
+    if(press <= release) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    irq = irq_disable();
+    trigger_press_threshold = press;
+    trigger_release_threshold = release;
+    irq_restore(irq);
+    return 0;
+}
+
+int cont_snapshot_is_soft_reset(const maple_device_t *dev,
+                                const cont_snapshot_t *snapshot) {
+    const uint32_t xy_capabilities = CONT_CAPABILITY_X | CONT_CAPABILITY_Y;
+    uint32_t capabilities;
+    uint32_t required = CONT_A | CONT_B;
+
+    if(!dev || !snapshot || !(snapshot->pressed & CONT_START) ||
+       !maple_dev_function_data(dev, MAPLE_FUNC_CONTROLLER, &capabilities))
+        return 0;
+
+    if((capabilities & xy_capabilities) == xy_capabilities)
+        required |= CONT_X | CONT_Y;
+    else if(capabilities & xy_capabilities)
+        return 0;
+
+    return (snapshot->state.buttons & required) == required;
 }
 
 /* This is an internal function for deleting a callback. It happens
@@ -146,7 +250,10 @@ static void cont_reply(maple_state_t *st, maple_frame_t *frm) {
     maple_response_t *resp;
     uint32_t         *respbuf;
     cont_cond_t      *raw;
+    cont_status_t    *status;
     cont_state_t     *cooked;
+    cont_snapshot_t   snapshot;
+    uint32_t          old_buttons;
     cont_callback_params_t *c;
 
     /* Unlock the frame now (it's ok, we're in an IRQ) */
@@ -166,19 +273,57 @@ static void cont_reply(maple_state_t *st, maple_frame_t *frm) {
     if(!frm->dev)
         return;
 
-    /* Verify the size of the frame and grab a pointer to it */
-    assert(sizeof(cont_cond_t) == ((resp->data_len - 1) * sizeof(uint32_t)));
+    /* A malformed third-party response must be ignored, not turn into an
+       assertion panic (or an unchecked short read when NDEBUG is enabled). */
+    if(resp->data_len != 1 + sizeof(cont_cond_t) / sizeof(uint32_t))
+        return;
+
     raw = (cont_cond_t *)(respbuf + 1);
 
     /* Fill the "nice" struct from the raw data */
-    cooked = (cont_state_t *)(frm->dev->status);
-    cooked->buttons = (~raw->buttons) & 0xffff;
+    status = (cont_status_t *)frm->dev->status;
+    cooked = &status->state;
+    old_buttons = cooked->buttons;
+    cooked->buttons = ((~raw->buttons) & 0xffff) |
+                      (old_buttons & (CONT_RTRIG_DIGITAL |
+                                      CONT_LTRIG_DIGITAL));
     cooked->ltrig = raw->ltrig;
     cooked->rtrig = raw->rtrig;
     cooked->joyx = ((int)raw->joyx) - 128;
     cooked->joyy = ((int)raw->joyy) - 128;
     cooked->joy2x = ((int)raw->joy2x) - 128;
     cooked->joy2y = ((int)raw->joy2y) - 128;
+
+    if(raw->rtrig >= trigger_press_threshold)
+        cooked->buttons |= CONT_RTRIG_DIGITAL;
+    else if(raw->rtrig <= trigger_release_threshold)
+        cooked->buttons &= ~CONT_RTRIG_DIGITAL;
+
+    if(raw->ltrig >= trigger_press_threshold)
+        cooked->buttons |= CONT_LTRIG_DIGITAL;
+    else if(raw->ltrig <= trigger_release_threshold)
+        cooked->buttons &= ~CONT_LTRIG_DIGITAL;
+
+    status->pressed = cooked->buttons & ~old_buttons;
+    status->released = old_buttons & ~cooked->buttons;
+    if(++status->sequence == 0)
+        ++status->sequence;
+
+    snapshot.state = *cooked;
+    snapshot.pressed = status->pressed;
+    snapshot.released = status->released;
+    snapshot.sequence = status->sequence;
+
+    /* A light gun is a compound controller/light-gun Maple device. Let its
+       capture scheduler consume the coherent trigger edge without taking over
+       the controller driver's public sample callback. */
+    lightgun_controller_sample(frm->dev, &snapshot);
+
+    /* Deliver the newly decoded response without another frame of latency. */
+    if(sample_handler.callback) {
+        sample_handler.callback(frm->dev, &snapshot,
+                                sample_handler.user_data);
+    }
 
     /* If someone is in the middle of modifying the list, don't process callbacks */
     if(mutex_trylock(&btn_cbs_mtx))
@@ -225,16 +370,20 @@ static maple_driver_t controller_drv = {
     .functions = MAPLE_FUNC_CONTROLLER,
     .name = "Controller Driver",
     .periodic = cont_periodic,
-    .status_size = sizeof(cont_state_t)
+    .status_size = sizeof(cont_status_t)
 };
 
 /* Add the controller to the driver chain */
 void cont_init(void) {
     TAILQ_INIT(&btn_cbs);
+    memset(&sample_handler, 0, sizeof(sample_handler));
+    trigger_press_threshold = CONT_TRIGGER_PRESS_DEFAULT;
+    trigger_release_threshold = CONT_TRIGGER_RELEASE_DEFAULT;
     maple_driver_reg(&controller_drv);
 }
 
 void cont_shutdown(void) {
+    cont_set_sample_handler(NULL, NULL);
     /* Empty the callback list */
     cont_btn_callback_del(NULL);
     maple_driver_unreg(&controller_drv);

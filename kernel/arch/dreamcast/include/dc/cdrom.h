@@ -4,6 +4,7 @@
    Copyright (C) 2000-2001 Megan Potter
    Copyright (C) 2014, 2025 Donald Haase
    Copyright (C) 2023, 2024, 2025 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 */
 
 #ifndef __DC_CDROM_H
@@ -14,6 +15,8 @@ __BEGIN_DECLS
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <sys/types.h>
 #include <dc/syscalls.h>
 #include <kos/regfield.h>
 
@@ -95,7 +98,138 @@ static const uint8_t  CMD_MAX                __depr("Please use the new CD_ pref
 #define ERR_ABORTED     4   /**< \brief Command aborted */
 #define ERR_NO_ACTIVE   5   /**< \brief System inactive? */
 #define ERR_TIMEOUT     6   /**< \brief Aborted due to timeout */
+#define ERR_RECOVERED   7   /**< \brief Drive reported a recovered error */
+#define ERR_NOT_READY   8   /**< \brief Drive is temporarily not ready */
+#define ERR_MEDIA       9   /**< \brief Medium error */
+#define ERR_HARDWARE   10   /**< \brief Drive hardware error */
+#define ERR_ILLEGAL_REQUEST 11 /**< \brief Command or parameter was rejected */
+#define ERR_PROTECT    12   /**< \brief Operation is prohibited/protected */
+#define ERR_NOT_READABLE 13 /**< \brief Inserted medium cannot be read */
+#define ERR_BUSY       14   /**< \brief Command server or G1 path is busy */
 /** @} */
+
+/** \brief GD-ROM command sense keys returned in `cd_cmd_chk_status_t.err1`.
+
+    These values are the GD-ROM BIOS result categories returned by the
+    Dreamcast firmware. They resemble SCSI sense keys, but include Dreamcast-
+    specific values and should not be treated as an unrestricted SCSI status.
+*/
+typedef enum cdrom_sense_key {
+    CDROM_SENSE_NONE            = 0x00,
+    CDROM_SENSE_RECOVERED_ERROR = 0x01,
+    CDROM_SENSE_NOT_READY       = 0x02,
+    CDROM_SENSE_MEDIUM_ERROR    = 0x03,
+    CDROM_SENSE_HARDWARE_ERROR  = 0x04,
+    CDROM_SENSE_ILLEGAL_REQUEST = 0x05,
+    CDROM_SENSE_UNIT_ATTENTION  = 0x06,
+    CDROM_SENSE_DATA_PROTECT    = 0x07,
+    CDROM_SENSE_ABORTED_COMMAND = 0x0b,
+    CDROM_SENSE_NOT_READABLE    = 0x10,
+    CDROM_SENSE_G1_SEMAPHORE    = 0x20
+} cdrom_sense_key_t;
+
+/** \brief Decoded GD-ROM command sense information. */
+typedef struct cdrom_sense {
+    cdrom_sense_key_t key; /**< \brief General error category from `err1`. */
+    uint8_t asc;           /**< \brief Additional sense code. */
+    uint8_t ascq;          /**< \brief Additional sense code qualifier. */
+} cdrom_sense_t;
+
+/** \brief Decode the raw status words returned by the GD-ROM BIOS.
+
+    The low byte of `err2` is the additional sense code and its next byte is
+    the qualifier. The original signed fields remain available to callers who
+    need the complete firmware result.
+
+    \retval 0              Status decoded successfully.
+    \retval -1             A pointer was NULL, with errno set to `EINVAL`.
+*/
+int cdrom_decode_sense(const cd_cmd_chk_status_t *detail,
+                       cdrom_sense_t *sense);
+
+/** \brief Map decoded GD-ROM sense information to a KOS `ERR_*` result.
+
+    This mapping is shared by BIOS-backed commands and direct SPI commands.
+    A not-ready response with ASC 0x3a maps to the more specific
+    `ERR_NO_DISC` result.
+
+    \param  sense           Decoded drive sense information.
+    \return                 A stable KOS GD-ROM result code. A NULL pointer
+                            maps to `ERR_SYS` and sets errno to `EINVAL`.
+*/
+int cdrom_sense_to_result(const cdrom_sense_t *sense);
+
+/** \brief Map a BIOS response and raw status to a KOS `ERR_*` result.
+
+    Completed and streaming responses map to `ERR_OK`; in-progress responses
+    map to `ERR_BUSY`. Failed commands are classified by their sense key. A
+    not-ready response with ASC 0x3a is the more specific `ERR_NO_DISC`.
+
+    \param  response        Response returned by the BIOS command server.
+    \param  detail          Raw BIOS status, required for a failed response.
+
+    \return                 A stable KOS GD-ROM result code.
+*/
+int cdrom_status_to_result(cd_cmd_chk_t response,
+                           const cd_cmd_chk_status_t *detail);
+
+/** \brief Map a KOS GD-ROM `ERR_*` result to a portable errno value.
+
+    `ERR_NO_DISC` maps to `ENODEV`, since KOS's Newlib configuration does not
+    expose the non-portable `ENOMEDIUM`. Callers needing that distinction can
+    inspect the result and decoded sense directly.
+
+    \return                 Zero for `ERR_OK`, otherwise an errno value.
+*/
+int cdrom_result_to_errno(int result);
+
+/** \brief Dreamcast disc identity parsed from the IP system area.
+
+    The product identifier contains at most ten characters and is always NUL
+    terminated by KOS. The larger array leaves room for future request metadata
+    without exposing a firmware-specific structure as ABI.
+*/
+typedef struct cdrom_disc_id {
+    uint32_t disc_number;     /**< \brief One-based disc number in the set. */
+    uint32_t disc_count;      /**< \brief Total number of discs in the set. */
+    char product_id[16];      /**< \brief NUL-terminated product identifier. */
+} cdrom_disc_id_t;
+
+/** \brief Run the BootROM's bounded Dreamcast-disc recognition process.
+
+    This is the KOS counterpart of the media-recognition step required
+    after the drive reports unit attention. It owns the shared G1 path for the
+    complete sequence, performs the BootROM-required cache purge before every
+    attempt, and calls the system service no more than once every 20 ms.
+
+    The operation uses a BootROM system service. It is not part of the direct
+    direct SPI transport and does not change the selected ISO9660 backend.
+
+    \param  timeout          Required nonzero timeout in milliseconds.
+    \retval 0               A Dreamcast-compatible disc was recognized.
+    \retval 1               The inserted medium is not Dreamcast-compatible.
+    \retval -1              Invalid arguments or timeout, with errno set.
+*/
+int cdrom_media_recognize(uint32_t timeout);
+
+/** \brief Read the identity of the disc which booted the application.
+
+    \param  id               Output for the parsed disc number/count/product.
+    \retval 0               Identity parsed successfully.
+    \retval -1              Invalid pointer or malformed system area.
+*/
+int cdrom_get_boot_disc_id(cdrom_disc_id_t *id);
+
+/** \brief Read the identity populated by the latest media recognition.
+
+    This record is meaningful only after cdrom_media_recognize() returned 0
+    and the drive door has not subsequently been opened.
+
+    \param  id               Output for the parsed disc number/count/product.
+    \retval 0               Identity parsed successfully.
+    \retval -1              Invalid pointer or malformed system area.
+*/
+int cdrom_get_current_disc_id(cdrom_disc_id_t *id);
 
 /* These are defines provided for compatibility. These defines are now part of `cd_cmd_chk_t` in dc/syscalls.h */
 static const uint8_t  FAILED      __depr("Please use the new CD_CMD_ prefixed versions.") = CD_CMD_FAILED;
@@ -156,9 +290,446 @@ static const bool  CDROM_READ_DMA   __depr("Please just use true to use dma.") =
 #define TOC_TRACK(n) FIELD_GET(n, 0x00ff0000)
 /** @} */
 
-/** \brief  CD-ROM streams callback
+/** \brief Legacy BIOS stream callback (not a staged-session callback).
 */
-typedef void (*cdrom_stream_callback_t)(void *data);
+typedef void (*cdrom_bios_stream_callback_t)(void *data);
+
+/** \defgroup cdrom_requests Asynchronous GD-ROM requests
+    \brief Asynchronous GD-ROM command requests.
+    \ingroup gdrom
+
+    These requests serialize access to the physical GD-ROM command path. BIOS
+    requests preserve the complete command-server result; direct requests
+    identify their backend explicitly and publish the same lifecycle and byte
+    accounting. Completion callbacks run in normal thread context, never from
+    a GD DMA interrupt. The request and callback workers are created atomically
+    on the first valid submission; synchronous-only applications reserve no
+    asynchronous worker stacks. First use can fail with `ENOMEM`.
+
+    @{ */
+
+/** \brief Opaque asynchronous GD-ROM request. */
+typedef struct cdrom_request cdrom_request_t;
+
+/** \brief State of an asynchronous GD-ROM request. */
+typedef enum cdrom_request_state {
+    CDROM_REQUEST_QUEUED,       /**< \brief Waiting for ownership of the drive. */
+    CDROM_REQUEST_RUNNING,      /**< \brief Being dispatched or run by the BIOS. */
+    CDROM_REQUEST_COMPLETE,     /**< \brief Completed successfully. */
+    CDROM_REQUEST_CANCELLED,    /**< \brief Cancelled by the caller or shutdown. */
+    CDROM_REQUEST_ERROR,        /**< \brief Completed with a drive/command error. */
+    CDROM_REQUEST_TIMED_OUT     /**< \brief Timed out and was aborted. */
+} cdrom_request_state_t;
+
+/** \brief Transport backend servicing an asynchronous request. */
+typedef enum cdrom_request_backend {
+    CDROM_REQUEST_BACKEND_BIOS,   /**< \brief Dreamcast BIOS command server. */
+    CDROM_REQUEST_BACKEND_DIRECT  /**< \brief Direct GD-ROM transport. */
+} cdrom_request_backend_t;
+
+/** \brief Status and detailed result of an asynchronous GD-ROM request.
+
+    For data requests, the three byte totals distinguish the caller's logical
+    request, useful payload available before EOF, and sector-rounded physical
+    I/O. `completed_bytes` tracks useful payload progress while
+    `io_completed_bytes` tracks the underlying command. Consequently,
+    `remaining_bytes` can remain nonzero after a successful request that
+    reached EOF. Once a request is terminal, the first `completed_bytes` of
+    caller-visible payload are coherent and valid, including after
+    cancellation, timeout, or error; later bytes have no defined contents.
+*/
+typedef struct cdrom_request_status {
+    cd_cmd_code_t command;          /**< \brief Logical GD-ROM command. */
+    cdrom_request_backend_t backend; /**< \brief Transport servicing it. */
+    cdrom_request_state_t state;    /**< \brief Current request state. */
+    int result;                     /**< \brief Mapped KOS `ERR_*` result. */
+    int error;                      /**< \brief Mapped errno value, or zero. */
+    cd_cmd_chk_t response;          /**< \brief Raw BIOS response, if used. */
+    cd_cmd_chk_status_t detail;     /**< \brief BIOS detail/progress, if used. */
+    cdrom_sense_t sense;            /**< \brief Decoded command sense. */
+    size_t requested_bytes;     /**< \brief Payload bytes requested by the caller. */
+    size_t data_bytes;          /**< \brief Payload bytes available to return. */
+    size_t completed_bytes;     /**< \brief Payload bytes completed so far. */
+    size_t remaining_bytes;     /**< \brief Requested payload bytes not returned. */
+    size_t io_bytes;            /**< \brief Bytes scheduled for physical transfer. */
+    size_t io_completed_bytes;  /**< \brief Physical bytes transferred so far. */
+} cdrom_request_status_t;
+
+/** \brief Completion callback for an asynchronous GD-ROM request.
+
+    The callback is dispatched by a dedicated KOS thread after the terminal
+    status and completed data are published. It cannot delay the GD-ROM request
+    queue. The status pointer is valid only for the duration of the callback.
+
+    A callback may call cdrom_request_wait() for a different request, but must
+    not wait for its own request or call cdrom_request_wait_callback() from the
+    callback dispatcher. A request cannot be destroyed from its callback.
+*/
+typedef void (*cdrom_request_callback_t)(cdrom_request_t *request,
+                                         const cdrom_request_status_t *status,
+                                         void *data);
+
+/** \brief Submit a raw asynchronous BIOS GD-ROM control command.
+
+    This is an explicitly firmware-level API, not backend-neutral dispatch.
+    It always uses the BIOS command server, independently of `/cd` selection.
+
+    The parameter block is copied before this function returns. Any buffers
+    referenced by pointers inside that block must remain valid until the
+    request completes. Requests are queued and executed one at a time through
+    KOS's normal G1/GD-ROM ownership mechanism.
+
+    Raw read, DMA read, DMA abort, and streaming commands are intentionally
+    rejected until their transfer ownership is integrated with this request
+    engine. Use the existing blocking or streaming APIs for those operations.
+
+    \param command      BIOS GD-ROM command to submit.
+    \param params       Optional command parameter block.
+    \param params_size  Size of the parameter block in bytes.
+    \param timeout      Timeout in milliseconds after the BIOS command starts,
+                        or zero for no timeout. Time spent queued for drive
+                        ownership is not included.
+    \param callback     Optional completion callback.
+    \param callback_data User data passed to the callback.
+
+    \return             A new request on success, or NULL with errno set.
+*/
+cdrom_request_t *cdrom_request_submit(cd_cmd_code_t command,
+                                      const void *params, size_t params_size,
+                                      uint32_t timeout,
+                                      cdrom_request_callback_t callback,
+                                      void *callback_data);
+
+/** \brief Copy the current status of an asynchronous request.
+
+    BIOS DMA progress is refreshed by the vblank monitor and therefore has a
+    granularity of up to one video frame. Direct DMA progress is sampled by its
+    sleeping request owner at a bounded 16 ms cadence. This function never
+    re-enters the GD-ROM BIOS command server or touches the drive task file.
+
+    \retval 0           On success.
+    \retval -1          On invalid arguments, with errno set.
+*/
+int cdrom_request_get_status(const cdrom_request_t *request,
+                             cdrom_request_status_t *status);
+
+/** \brief Wait for a request to enter a terminal state.
+
+    A successful return means the command and all driver-level finalization
+    finished, not necessarily that the command succeeded. An optional user
+    callback may still be pending or running. Inspect `status->state`,
+    `status->error`, and the raw BIOS result fields for the outcome. Use
+    cdrom_request_wait_callback() before destroying a request with a callback.
+
+    \param request      Request to wait for.
+    \param timeout      Wait timeout in milliseconds, or zero to wait forever.
+    \param status       Optional output for the final status.
+
+    \retval 0           The request reached a terminal state.
+    \retval -1          The wait timed out or an argument was invalid.
+*/
+int cdrom_request_wait(cdrom_request_t *request, uint32_t timeout,
+                       cdrom_request_status_t *status);
+
+/** \brief Wait for terminal completion and callback dispatch.
+
+    This is only needed when the caller must know that its optional callback
+    returned, normally before destroying the request. It must not be called
+    from a GD-ROM request callback.
+
+    \param request      Request to wait for.
+    \param timeout      Wait timeout in milliseconds, or zero to wait forever.
+
+    \retval 0           The request and callback finished.
+    \retval -1          Timed out, invalid request, or callback-context call.
+*/
+int cdrom_request_wait_callback(cdrom_request_t *request, uint32_t timeout);
+
+/** \brief Cancel a queued or running request.
+
+    Queued requests complete as cancelled without accessing the drive. A
+    running request is asked to abort and completes asynchronously.
+
+    \retval 0           Cancellation was accepted or the request was finished.
+    \retval -1          The request was invalid.
+*/
+int cdrom_request_cancel(cdrom_request_t *request);
+
+/** \brief Destroy a completed request.
+
+    \retval 0           The request was destroyed.
+    \retval -1          The request is active or its callback is pending/running.
+*/
+int cdrom_request_destroy(cdrom_request_t *request);
+
+/** @} */
+
+/** \defgroup cdrom_stream_sessions Staged GD-ROM stream sessions
+    \brief Drive read-ahead with application-directed RAM transfers.
+    \ingroup gdrom
+
+    A stream session queues behind ordinary GD-ROM requests, then owns
+    the drive until all staged bytes are transferred or the session is
+    cancelled. BIOS and direct SPI sessions share this lifecycle; inspect
+    `status.backend` to identify the selected transport. RAM transfers are
+    represented by normal \ref cdrom_request_t objects, so their progress,
+    cancellation, waiting, and callbacks use the same rules as other
+    asynchronous DMA.
+
+    @{ */
+
+/** \brief Opaque staged GD-ROM stream session. */
+typedef struct cdrom_stream_session cdrom_stream_session_t;
+
+/** \brief State of a staged GD-ROM stream session. */
+typedef enum cdrom_stream_session_state {
+    CDROM_STREAM_SESSION_QUEUED,
+    CDROM_STREAM_SESSION_STARTING,
+    CDROM_STREAM_SESSION_READY,
+    CDROM_STREAM_SESSION_COMPLETE,
+    CDROM_STREAM_SESSION_CANCELLED,
+    CDROM_STREAM_SESSION_ERROR,
+    CDROM_STREAM_SESSION_TIMED_OUT
+} cdrom_stream_session_state_t;
+
+/** \brief Status of a staged GD-ROM stream session.
+
+    `state` describes drive read-ahead ownership. An active RAM transfer has
+    its own \ref cdrom_request_status_t, deliberately keeping the two state
+    machines separate.
+*/
+typedef struct cdrom_stream_session_status {
+    cdrom_request_backend_t backend;      /**< \brief Transport owning G1. */
+    cdrom_stream_session_state_t state; /**< \brief Drive-session state. */
+    int result;                         /**< \brief Mapped KOS result. */
+    int error;                          /**< \brief Mapped errno value. */
+    cd_cmd_chk_t response;              /**< \brief Raw BIOS response. */
+    cd_cmd_chk_status_t detail;         /**< \brief Raw BIOS status. */
+    cdrom_sense_t sense;                /**< \brief Decoded command sense. */
+    uint32_t start_sector;              /**< \brief First disc FAD. */
+    size_t sector_count;                /**< \brief Physical sector count. */
+    size_t total_bytes;                 /**< \brief Physical staged bytes. */
+    size_t data_bytes;                  /**< \brief Useful payload bytes. */
+    size_t transferred_bytes;           /**< \brief Completed physical bytes. */
+    size_t completed_bytes;             /**< \brief Completed payload bytes. */
+    size_t remaining_bytes;             /**< \brief Physical bytes remaining. */
+    bool transfer_active;               /**< \brief A RAM request is active. */
+    uint32_t idle_timeout;               /**< \brief Ready-idle limit in ms. */
+} cdrom_stream_session_status_t;
+
+/** \brief Queue a direct Mode-1 staged-read session for a raw FAD range.
+
+    The default constructor uses direct SPI with 2,048-byte Mode-1 sectors,
+    independent of the legacy BIOS sector-size setting and `/cd` selection.
+    Use \ref gdrom_direct_stream_session_start to select Mode-2 Form-1, or
+    \ref cdrom_bios_stream_session_start to explicitly use the BIOS server.
+    There is no automatic BIOS fallback.
+
+    Both timeouts must be nonzero. `sector_count` must be from 1 to 65535;
+    `sector` is an absolute frame address of at least 150. The session owns
+    G1 until completion, cancellation, error, or ready-idle expiry.
+
+    \return A queued direct session, or NULL with errno set.
+*/
+cdrom_stream_session_t *cdrom_stream_session_start(
+    uint32_t sector, size_t sector_count, uint32_t start_timeout,
+    uint32_t idle_timeout);
+
+/** \brief Explicitly queue a BIOS DMA staged-read session for a raw FAD range.
+
+    This constructor preserves the former BIOS-backed constructor's sector
+    size and timeout behavior. It returns the same common session type as
+    \ref cdrom_stream_session_start, but deliberately selects the BIOS server.
+
+    `start_timeout` covers drive ownership acquisition and reaching the BIOS
+    streaming state. Once ready, the session intentionally retains ownership
+    until its complete range is transferred, it is cancelled, or no transfer
+    is submitted within `idle_timeout`. The idle timer restarts after every
+    completed or queued-cancelled transfer. Expiry aborts the stream, releases
+    G1 ownership, and completes the session as timed out.
+
+    \param sector          First disc sector as a FAD.
+    \param sector_count    Number of sectors to stage.
+    \param start_timeout   Startup timeout in milliseconds, or zero for none.
+    \param idle_timeout    Required nonzero ready-idle timeout in milliseconds.
+
+    \return                A queued session, or NULL with errno set.
+*/
+cdrom_stream_session_t *cdrom_bios_stream_session_start(
+    uint32_t sector, size_t sector_count, uint32_t start_timeout,
+    uint32_t idle_timeout);
+
+/** \brief Copy the current staged-stream status. */
+int cdrom_stream_session_get_status(
+    const cdrom_stream_session_t *session,
+    cdrom_stream_session_status_t *status);
+
+/** \brief Wait until a staged stream is ready or terminal.
+
+    A successful return reports either `CDROM_STREAM_SESSION_READY` or a
+    terminal state; inspect the returned status for the outcome.
+*/
+int cdrom_stream_session_wait_ready(
+    cdrom_stream_session_t *session, uint32_t timeout,
+    cdrom_stream_session_status_t *status);
+
+/** \brief Wait for a staged stream to enter a terminal state. */
+int cdrom_stream_session_wait(
+    cdrom_stream_session_t *session, uint32_t timeout,
+    cdrom_stream_session_status_t *status);
+
+/** \brief Transfer staged bytes to RAM asynchronously using GD DMA.
+
+    Only one transfer may be active per session. `buffer` and `bytes` must be
+    32-byte aligned, and the transfer cannot exceed the session's remaining
+    range. The returned request owns its normal callback and destruction
+    lifecycle independently of the session. Cancelling or timing out a transfer
+    after DMA starts aborts the underlying BIOS stream, so the parent session
+    becomes terminal too. Cancelling a transfer while it is still queued leaves
+    the ready drive session usable.
+
+    A nonzero `timeout` bounds the active RAM transfer in milliseconds. Zero
+    preserves the legacy unbounded behavior for a BIOS session; a direct SPI
+    session substitutes a bounded 30-second safety timeout so a lost DMARQ
+    cannot retain the shared G1 path forever.
+*/
+cdrom_request_t *cdrom_stream_session_transfer_async(
+    cdrom_stream_session_t *session, void *buffer, size_t bytes,
+    uint32_t timeout, cdrom_request_callback_t callback,
+    void *callback_data);
+
+/** \brief Cancel a queued or active staged stream and its active transfer. */
+int cdrom_stream_session_cancel(cdrom_stream_session_t *session);
+
+/** \brief Destroy a terminal staged stream with no active transfer request. */
+int cdrom_stream_session_destroy(cdrom_stream_session_t *session);
+
+/** @} */
+
+/** \defgroup cdrom_sector_ranges Bounded raw-disc sector ranges
+    \brief Seekable FAD windows over the BIOS or direct transport.
+    \ingroup gdrom
+
+    A sector range is a KOS-owned, seekable view of a fixed sequence of cooked
+    2,048-byte disc sectors. It provides the useful behavior of opening a raw
+    disc range without importing a filesystem handle, caller work area, or
+    global current operation. One read, preseek, or stream may own a range at a
+    time; unrelated ranges still share the normal request queue.
+
+    @{ */
+
+/** \brief Opaque bounded raw-disc sector range. */
+typedef struct cdrom_sector_range cdrom_sector_range_t;
+
+/** \brief Immutable geometry and current cursor of a sector range. */
+typedef struct cdrom_sector_range_info {
+    cdrom_request_backend_t backend; /**< \brief BIOS or direct transport. */
+    uint32_t start_fad;              /**< \brief First absolute frame address. */
+    size_t sector_count;             /**< \brief Total sectors in the range. */
+    size_t position;                 /**< \brief Current sector offset. */
+} cdrom_sector_range_info_t;
+
+/** \brief Open a bounded Mode-1 range on the direct transport.
+
+    Uses 2,048-byte Mode-1 sectors, independent of the legacy BIOS sector-size
+    setting and `/cd` backend selection. This allocates bookkeeping only and
+    does not access the drive. There is no automatic BIOS fallback.
+    Use \ref gdrom_direct_sector_range_open for Mode-2 Form-1, or
+    \ref cdrom_bios_sector_range_open for explicit BIOS access.
+
+    \param start_fad       First absolute frame address, at least 150.
+    \param sector_count    Required nonzero number of sectors.
+    \return                A new range, or NULL with errno set.
+*/
+cdrom_sector_range_t *cdrom_sector_range_open(
+    uint32_t start_fad, size_t sector_count);
+
+/** \brief Explicitly open a bounded 2,048-byte-sector range on the BIOS transport.
+
+    This operation allocates only KOS bookkeeping and does not access the
+    drive. The range is inclusive of `start_fad` and contains exactly
+    `sector_count` sectors.
+
+    \param start_fad       First absolute frame address, at least 150.
+    \param sector_count    Required nonzero number of sectors.
+    \return                A new range, or `NULL` with errno set.
+*/
+cdrom_sector_range_t *cdrom_bios_sector_range_open(
+    uint32_t start_fad, size_t sector_count);
+
+/** \brief Close an idle sector range.
+
+    \retval 0              The range was closed.
+    \retval -1             An operation still owns the range (`EBUSY`).
+*/
+int cdrom_sector_range_close(cdrom_sector_range_t *range);
+
+/** \brief Copy a range's backend, geometry, and current cursor. */
+int cdrom_sector_range_get_info(
+    cdrom_sector_range_t *range, cdrom_sector_range_info_t *info);
+
+/** \brief Seek the range cursor in units of 2,048-byte sectors.
+
+    Positions beyond the range are clamped to its end. Seeking before its
+    start fails. An active read, preseek, or stream makes this return `EBUSY`.
+
+    \return                New sector offset, or -1 with errno set.
+*/
+int64_t cdrom_sector_range_seek(
+    cdrom_sector_range_t *range, int64_t offset, int whence);
+
+/** \brief Return the current sector offset, or -1 with errno set. */
+int64_t cdrom_sector_range_tell(cdrom_sector_range_t *range);
+
+/** \brief Report whether the cursor is at the end of the range. */
+int cdrom_sector_range_eof(cdrom_sector_range_t *range, bool *eof);
+
+/** \brief Read cooked sectors synchronously from the current cursor.
+
+    The request is clipped at the range end and advances the cursor by the
+    number of sectors returned. The destination may be unaligned; KOS uses a
+    bounded aligned workspace when necessary. Physical commands are limited
+    to 16 sectors and yield G1 between chunks. `timeout` is a required nonzero
+    deadline for a nonempty logical read; a zero-sector read does no I/O.
+
+    \return                Number of sectors read, zero at EOF, or -1.
+*/
+ssize_t cdrom_sector_range_read(
+    cdrom_sector_range_t *range, void *buffer, size_t sector_count,
+    uint32_t timeout);
+
+/** \brief Read cooked sectors asynchronously from the current cursor.
+
+    The destination must be 32-byte aligned and remain untouched until the
+    returned request is terminal. Large reads use bounded 16-sector DMA
+    commands and requeue between chunks. A successful request advances the
+    cursor atomically; cancellation, timeout, or error leaves it unchanged,
+    while the request status still identifies any valid completed prefix.
+    A nonempty read requires a nonzero timeout.
+
+    \return                A request, or `NULL` with errno set.
+*/
+cdrom_request_t *cdrom_sector_range_read_async(
+    cdrom_sector_range_t *range, void *buffer, size_t sector_count,
+    uint32_t timeout, cdrom_request_callback_t callback,
+    void *callback_data);
+
+/** \brief Queue a pickup preseek for the range's current cursor. */
+cdrom_request_t *cdrom_sector_range_preseek_async(
+    cdrom_sector_range_t *range, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Start staged read-ahead at the range's current cursor.
+
+    The requested count is clipped to the range end. Completed staged payload
+    advances the cursor even if the session later terminates through cancel,
+    timeout, or error, matching ordinary ISO staged-stream accounting.
+*/
+cdrom_stream_session_t *cdrom_sector_range_stream_start(
+    cdrom_sector_range_t *range, size_t sector_count,
+    uint32_t start_timeout, uint32_t idle_timeout);
+
+/** @} */
 
 /** \brief    Set the sector size for read sectors.
     \ingroup  gdrom
@@ -173,6 +744,13 @@ typedef void (*cdrom_stream_callback_t)(void *data);
     \return                 \ref cd_cmd_response
 */
 int cdrom_set_sector_size(int size);
+
+/** \brief Set the BIOS read sector size, including BIOS reinitialization.
+    \ingroup gdrom
+    Explicit BIOS counterpart of cdrom_set_sector_size(). The generic function
+    uses direct post-boot reinitialization and changes only the generic format.
+*/
+int cdrom_bios_set_sector_size(int size);
 
 /** \brief    Execute a CD-ROM command.
     \ingroup  gdrom
@@ -217,53 +795,219 @@ int cdrom_abort_cmd(uint32_t timeout, bool abort_dma);
 /** \brief    Get the status of the GD-ROM drive.
     \ingroup  gdrom
 
-    \param  status          Space to return the drive's status.
-    \param  disc_type       Space to return the type of disc in the drive.
+    Uses direct SPI with a 10000 ms primary-command timeout, independently of
+    `/cd` selection and with no BIOS fallback. Bounded recovery may take
+    additional time. This call requires thread context; interrupt handlers
+    must not issue a blocking drive command. For a caller-selected timeout
+    and raw diagnostics, use gdrom_direct_get_status().
 
-    \return                 \ref cd_cmd_response
+    \param  status          Optional output for the drive's status.
+    \param  disc_type       Optional output for the type of disc in the drive.
+
+    \retval 0               Status query completed (not a media-ready guarantee).
+    \retval -1              Query failed, errno set; supplied outputs set to -1.
     \see    cd_status_values
     \see    cd_disc_types
 */
 int cdrom_get_status(int *status, int *disc_type);
 
+/** \brief Get drive status explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains the legacy BIOS status query and G1 ownership behavior. Either
+    output may be NULL. Returns zero on success, or -1 with supplied outputs
+    set to -1 on failure. Unlike cdrom_get_status(), this does not impose a
+    direct-command timeout.
+*/
+int cdrom_bios_get_status(int *status, int *disc_type);
+
+/** \brief Cached GD-ROM drive state.
+    \ingroup gdrom
+
+    The media monitor updates this snapshot without requiring the caller to
+    wait for G1/GD-ROM ownership. Observations include successful status
+    samples, failed samples, and media-significant request failures.
+    `sequence` advances for every published observation, while `timestamp`
+    records when it was published.
+*/
+typedef struct cdrom_drive_state {
+    cd_stat_t status;              /**< \brief Current drive status. */
+    cd_disc_types_t disc_type;     /**< \brief Current disc type. */
+    cdrom_request_backend_t backend; /**< \brief Transport used to sample. */
+    uint32_t sequence;             /**< \brief Monotonic sample sequence. */
+    uint64_t timestamp;            /**< \brief Sample time in milliseconds. */
+} cdrom_drive_state_t;
+
+/** \brief Significant GD-ROM media or drive event type.
+    \ingroup gdrom
+*/
+typedef enum cdrom_media_event_type {
+    CDROM_MEDIA_EVENT_INSERTED,    /**< \brief Media became available. */
+    CDROM_MEDIA_EVENT_REMOVED,     /**< \brief Media became unavailable. */
+    CDROM_MEDIA_EVENT_CHANGED,     /**< \brief Media changed or unit attention. */
+    CDROM_MEDIA_EVENT_ERROR,       /**< \brief Drive entered error state. */
+    CDROM_MEDIA_EVENT_FATAL,       /**< \brief Drive entered fatal state. */
+    CDROM_MEDIA_EVENT_RECOVERED    /**< \brief Drive left error/fatal state. */
+} cdrom_media_event_type_t;
+
+/** \brief A GD-ROM media or drive transition.
+    \ingroup gdrom
+*/
+typedef struct cdrom_media_event {
+    cdrom_media_event_type_t type; /**< \brief Kind of transition. */
+    cdrom_drive_state_t previous;  /**< \brief State before the transition. */
+    cdrom_drive_state_t current;   /**< \brief State after the transition. */
+} cdrom_media_event_t;
+
+/** \brief Callback for GD-ROM media and drive-error events.
+    \ingroup gdrom
+
+    Callbacks run serially on a dedicated KOS thread after the drive releases
+    G1 ownership. They may use normal GD-ROM APIs, but must return promptly and
+    must not wait indefinitely. They must not add or remove media-event
+    handlers or call cdrom_shutdown(). Both registration functions detect
+    callback context and fail with `EDEADLK`. Shutdown waits for an in-progress
+    callback so its code and user data cannot outlive the GD-ROM subsystem.
+*/
+typedef void (*cdrom_media_event_callback_t)(
+    const cdrom_media_event_t *event, void *data);
+
+/** \brief Read the latest drive-state sample without waiting for the drive.
+    \ingroup gdrom
+
+    This is the nonblocking status path. The first call starts the background
+    media monitor without waiting for its first sample, so it can return
+    `EAGAIN`; later calls only copy the latest snapshot. The monitor
+    uses direct SPI by default and follows the BIOS transport when the ISO9660
+    driver is explicitly switched to its BIOS backend. `state->backend`
+    identifies the sampler used. Under normal drive availability, the snapshot
+    is at most 100 milliseconds old. A long operation owning G1 can defer
+    sampling without delaying that operation.
+    In particular, a staged stream session owns G1 continuously and suspends
+    sampling until the session ends; ordinary chained reads release G1 between
+    segments. A media-significant stream/request failure is still reported
+    without waiting for a new sample. Compare `state->timestamp` with
+    timer_ms_gettime64() when freshness matters.
+
+    \param state           Destination for the coherent cached snapshot.
+
+    \retval 0             A snapshot was returned.
+    \retval -1            No sample is available, monitoring is unavailable,
+                          or `state` is NULL, with errno set to `EAGAIN`,
+                          `ENODEV`, or `EINVAL` respectively.
+*/
+int cdrom_get_cached_drive_state(cdrom_drive_state_t *state);
+
+/** \brief Register a media/drive-error event callback.
+    \ingroup gdrom
+
+    The first registration starts the background monitor if necessary.
+    Registration does not synthesize an event for the current media. Use
+    cdrom_get_cached_drive_state() when the initial state is required.
+
+    Callbacks run on the media-monitor thread while handler membership is
+    protected. They must be bounded and must not block on application work,
+    perform lengthy console/VFS I/O, call cdrom_shutdown(), or add/remove
+    media handlers. Copy the event or set a flag and defer that work to an
+    application thread.
+
+    \param callback       Callback to invoke for significant transitions.
+    \param data           User data passed to `callback`.
+
+    \return               A positive handler identifier, or -1 with errno set.
+*/
+int cdrom_media_event_handler_add(cdrom_media_event_callback_t callback,
+                                  void *data);
+
+/** \brief Remove a media/drive-error event callback.
+    \ingroup gdrom
+
+    On success, any callback already in progress has returned and `data` is no
+    longer referenced. This function must not be called by a media callback.
+
+    \param handle         Identifier returned by
+                          cdrom_media_event_handler_add().
+
+    \retval 0             Handler removed.
+    \retval -1            Invalid handle or callback-context call, with errno
+                          set to `EINVAL`, `ENOENT`, or `EDEADLK`.
+*/
+int cdrom_media_event_handler_remove(int handle);
+
 /** \brief    Change the datatype of disc.
     \ingroup  gdrom
 
-    This function will take in all parameters to pass to the change_datatype
-    syscall. This allows these parameters to be modified without a reinit.
-    Each parameter allows -1 as a default, which is tied to the former static
-    values provided by cdrom_reinit and cdrom_set_sector_size.
+    Selects the generic direct-read format without resetting the drive or
+    changing BIOS sector mode. Supported layouts are DATA_AREA/2048 bytes
+    with track_type 1024 (Mode-1) or 2048 (Mode-2 Form-1), and WHOLE_SECTOR/2352
+    bytes with track_type 0 (raw). DEFAULT selects the corresponding part;
+    size -1 selects 2048 bytes. For cooked reads, track_type -1 runs one direct
+    readiness probe and selects Mode-2 Form-1 for CD_CDROM_XA, Mode-1 otherwise.
+    For raw reads, track_type -1 means any sector type, without a probe.
+
+    Unsupported combinations return ERR_SYS with errno=ENOTSUP before I/O.
+    Failure preserves the previous generic format. Reads capture the selected
+    format at invocation/submission; there is no per-read detection or fallback.
+    Boot setup seeds this format from its successful BIOS initialization;
+    before initialization the software default is Mode-1. After media changes,
+    callers must select/reinitialize the format again. This state is independent
+    of explicit gdrom_direct_* format arguments, /cd, ranges, and sessions.
 
     \param sector_part      How much of each sector to return.
     \param track_type       What CDXA mode to read as (if applicable).
-    \param sector_size      What sector size to read (eg. - 2048, 2532).
+    \param sector_size      2048, 2352, or -1 for 2048.
 
     \return                 \ref cd_cmd_response
     \see    cd_read_sector_part
 */
 int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int sector_size);
 
+/** \brief Select the BIOS command server's sector layout explicitly.
+    \ingroup gdrom
+
+    Retains the legacy BIOS layout/default rules. Cached sector size changes
+    only after the BIOS accepts the mode. Failure to query an automatic track type does
+    not submit a mode change. This state does not affect explicit direct APIs.
+
+    The caller must serialize mode changes against all outstanding BIOS reads
+    and streams, including queued requests; G1 command ownership alone does
+    not protect a queued request's interpretation of global sector mode.
+*/
+int cdrom_bios_change_datatype(cd_read_sec_part_t sector_part, int track_type,
+                               int sector_size);
+
 /** \brief    Re-initialize the GD-ROM drive.
     \ingroup  gdrom
 
-    This function is for reinitializing the GD-ROM drive after a disc change to
-    its default settings. Calls cdrom_reinit(-1,-1,-1)
+    Uses direct post-boot reinitialization and automatic cooked-format selection:
+    cdrom_reinit_ex(CDROM_READ_DEFAULT, -1, -1). No BIOS fallback is performed.
 
     \return                 \ref cd_cmd_response
     \see    cdrom_reinit_ex
 */
 int cdrom_reinit(void);
 
+/** \brief Reinitialize through the BIOS and select its default sector layout.
+    \ingroup gdrom
+    Explicit BIOS counterpart of cdrom_reinit(). Boot initialization and BIOS
+    filesystem mounts use this path.
+*/
+int cdrom_bios_reinit(void);
+
 /** \brief    Re-initialize the GD-ROM drive with custom parameters.
     \ingroup  gdrom
 
-    At the end of each cdrom_reinit(), cdrom_change_datatype is called.
-    This passes in the requested values to that function after
-    reinitialization, as opposed to defaults.
+    Validates the layout before a direct SPI reset/readiness sequence with a
+    10000 ms primary deadline plus bounded recovery. Automatic format selection
+    uses the status already obtained by that sequence, with no second probe.
+    The generic format changes only after success; a failed reset/probe may
+    still have changed hardware state. Callers must serialize reinitialization
+    against outstanding reads/streams on either backend. This is not boot-ROM
+    bring-up or media authorization. BIOS layout state is not changed.
 
     \param sector_part      How much of each sector to return.
     \param cdxa             What CDXA mode to read as (if applicable).
-    \param sector_size      What sector size to read (eg. - 2048, 2532).
+    \param sector_size      2048, 2352, or -1 for 2048.
 
     \return                 \ref cd_cmd_response
     \see    cd_read_sec_part_t
@@ -271,17 +1015,35 @@ int cdrom_reinit(void);
 */
 int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size);
 
+/** \brief Reinitialize through the BIOS with an explicit sector layout.
+    \ingroup gdrom
+    Retains the legacy BIOS defaults and error behavior. Do not change modes
+    with BIOS reads or streams outstanding; see cdrom_bios_change_datatype().
+*/
+int cdrom_bios_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size);
+
 /** \brief    Read the table of contents from the disc.
     \ingroup  gdrom
 
-    This function reads the TOC from the specified area of the disc.
-    On regular CD-ROMs, there are only low density area.
+    Reads the TOC from the specified area through direct SPI, independently
+    of `/cd` selection and with no BIOS fallback. Regular CD-ROMs have only
+    the low-density area. The primary-command timeout is 10000 ms, with
+    separately bounded recovery. Use gdrom_direct_read_toc() for a custom
+    timeout or raw diagnostics. Only consume the TOC on success.
 
     \param  toc_buffer      Space to store the returned TOC in.
     \param  high_density    Whether to read from the high density area.
     \return                 \ref cd_cmd_response
 */
 int cdrom_read_toc(cd_toc_t *toc_buffer, bool high_density);
+
+/** \brief Read the TOC explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Same buffer and density arguments as cdrom_read_toc(), but retains the
+    legacy unbounded BIOS command. Returns a common `ERR_*` result.
+*/
+int cdrom_bios_read_toc(cd_toc_t *toc_buffer, bool high_density);
 
 /** \brief    Read one or more sector from a CD-ROM.
     \ingroup  gdrom
@@ -290,6 +1052,12 @@ int cdrom_read_toc(cd_toc_t *toc_buffer, bool high_density);
     where requested. This will respect the size of the sectors set with
     cdrom_change_datatype(). The buffer must have enough space to store the
     specified number of sectors and size must be a multiple of 32 for DMA.
+
+    Uses direct PIO or DMA with a 10000 ms whole-read deadline plus bounded
+    recovery, independently of /cd backend selection. Large reads use bounded
+    commands with G1 released between them. PIO accepts odd raw counts; raw DMA
+    requires even counts and rejects odd counts with ERR_SYS/errno=EINVAL.
+    There is no implicit PIO tail, overread, staging buffer, or BIOS fallback.
 
     \param  buffer          Space to store the read sectors.
     \param  sector          The sector to start reading from.
@@ -304,6 +1072,14 @@ int cdrom_read_toc(cd_toc_t *toc_buffer, bool high_density);
 */
 int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma);
 
+/** \brief Read sectors explicitly through BIOS PIO or DMA.
+    \ingroup gdrom
+    Retains the legacy BIOS buffer, alignment, count, and result contract. Uses the
+    sector layout selected by cdrom_bios_change_datatype(), including raw
+    sectors when configured; explicit direct reads use their own format.
+*/
+int cdrom_bios_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma);
+
 /** \brief    Read one or more sector from a CD-ROM in PIO mode.
     \ingroup  gdrom
 
@@ -317,21 +1093,107 @@ int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma);
 */
 int cdrom_read_sectors(void *buffer, uint32_t sector, size_t cnt);
 
-/** \brief    Start streaming from a CD-ROM.
+/** \brief Read sectors explicitly through BIOS PIO.
+    \ingroup gdrom
+    Same contract as cdrom_bios_read_sectors_ex() with dma=false.
+    Independent of generic direct-read format selection.
+*/
+int cdrom_bios_read_sectors(void *buffer, uint32_t sector, size_t cnt);
+
+/** \brief    Read one or more sectors asynchronously using GD DMA.
+    \ingroup  gdrom
+
+    This submits a GD-ROM request and returns before the transfer
+    completes. The destination must remain valid, 32-byte aligned, and must not
+    be accessed by the caller until the request reaches a terminal state. The
+    request status exposes separate requested-data, useful-data, and physical
+    I/O totals plus live logical and physical progress. The backend is DIRECT;
+    BIOS detail fields do not describe this transport. An optional callback is
+    dispatched separately after the data
+    is published. On any terminal state, the first `completed_bytes` in the
+    destination are valid; subsequent bytes have undefined contents.
+
+    \param  buffer          Space to store the read sectors.
+    \param  sector          The sector to start reading from (FAD).
+    \param  cnt             The number of sectors to read.
+    \param  timeout         Required nonzero execution timeout in milliseconds;
+                            initial queue residence is excluded. Zero is rejected.
+    \param  callback        Optional completion callback in thread context.
+    \param  callback_data   User data passed to the callback.
+
+    \return                 A request handle, or NULL with errno set.
+
+    \note                   The transfer captures the generic format selected by
+                            cdrom_change_datatype() at submission. Raw DMA requires
+                            even counts; use gdrom_direct_read_sectors_pio_async()
+                            explicitly for odd raw counts. There is no BIOS fallback.
+                            For P2 destinations, the
+                            caller remains responsible for memory coherency.
+*/
+cdrom_request_t *cdrom_read_sectors_async(
+    void *buffer, uint32_t sector, size_t cnt, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a sector read explicitly through BIOS GD DMA.
+    \ingroup gdrom
+    Retains the legacy request, callback, alignment, and timeout contracts
+    (zero permits no deadline, unlike the generic direct call). The BIOS sector
+    mode must not change
+    before this request is terminal; see cdrom_bios_change_datatype().
+*/
+cdrom_request_t *cdrom_bios_read_sectors_async(
+    void *buffer, uint32_t sector, size_t cnt, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief    Move the GD-ROM pickup asynchronously.
+    \ingroup  gdrom
+
+    This submits a direct SPI seek for a disc FAD, with no BIOS fallback. It
+    is a scheduling hint before a later read and does not transfer data.
+    The request identifies `CDROM_REQUEST_BACKEND_DIRECT`. The filesystem's
+    backend selection does not change this path.
+
+    \param  sector          Destination sector (FAD), at least 150.
+    \param  timeout         Required nonzero command timeout in milliseconds.
+    \param  callback        Optional completion callback in thread context.
+    \param  callback_data   User data passed to the callback.
+
+    \return                 A request handle, or NULL with errno set.
+*/
+cdrom_request_t *cdrom_seek_async(
+    uint32_t sector, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Queue a pickup seek explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Same arguments as cdrom_seek_async(), but retains the legacy BIOS request
+    contract, including zero timeout for an unbounded wait. The returned
+    request identifies `CDROM_REQUEST_BACKEND_BIOS`.
+*/
+cdrom_request_t *cdrom_bios_seek_async(
+    uint32_t sector, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief    Start a legacy stream explicitly through the BIOS server.
     \ingroup  gdrom
 
     This function pre-reads the specified number of sectors from the disc.
+    This is the old singleton PIO/DMA firmware interface, now deliberately
+    BIOS-prefixed. It does not inherit the filesystem backend selection and
+    can wait indefinitely. New direct applications should use
+    cdrom_stream_session_start() and the request/session lifetime API.
 
     \param  sector          The sector to start reading from.
     \param  cnt             The number of sectors to read, 0x1ff means until end of disc.
     \param  dma             True for read using dma, false for pio.
 
     \return                 \ref cd_cmd_response
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-int cdrom_stream_start(int sector, int cnt, bool dma);
+int cdrom_bios_stream_start(int sector, int cnt, bool dma);
 
-/** \brief    Stop streaming from a CD-ROM.
+/** \brief    Stop the legacy BIOS stream.
     \ingroup  gdrom
 
     This function finishing stream commands.
@@ -339,11 +1201,11 @@ int cdrom_stream_start(int sector, int cnt, bool dma);
     \param  abort_dma       Abort current G1 DMA transfer.
 
     \return                 \ref cd_cmd_response
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-int cdrom_stream_stop(bool abort_dma);
+int cdrom_bios_stream_stop(bool abort_dma);
 
-/** \brief    Request stream transfer.
+/** \brief    Request a legacy BIOS stream transfer.
     \ingroup  gdrom
 
     This function request data from stream.
@@ -352,31 +1214,34 @@ int cdrom_stream_stop(bool abort_dma);
     \param  size            The size in bytes to read (DMA min 32, PIO min 2).
     \param  block           True to block until DMA transfer completes.
     \return                 \ref cd_cmd_response
-    \see    cdrom_stream_start
+    \see    cdrom_bios_stream_start
 */
-int cdrom_stream_request(void *buffer, size_t size, bool block);
+int cdrom_bios_stream_request(void *buffer, size_t size, bool block);
 
-/** \brief    Check requested stream transfer.
+/** \brief    Check the legacy BIOS stream transfer.
     \ingroup  gdrom
 
     This function check requested stream transfer.
 
     \param  size            The transfered (if in progress) or remain size in bytes.
     \return                 1 - is in progress, 0 - done
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-int cdrom_stream_progress(size_t *size);
+int cdrom_bios_stream_progress(size_t *size);
 
-/** \brief    Setting up a callback for transfers.
+/** \brief    Set the legacy BIOS stream's transfer callback.
     \ingroup  gdrom
 
     This callback is called for every transfer request that is completed.
+    Retains the firmware/IRQ callback behavior, not the staged-session API's
+    thread-dispatched cdrom_request_callback_t contract. Callbacks must not
+    block or assume they own a separate request object.
 
     \param  callback        Callback function.
     \param  param           Callback function param.
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param);
+void cdrom_bios_stream_set_callback(cdrom_bios_stream_callback_t callback, void *param);
 
 /** \brief    Read subcode data from the most recently read sectors.
     \ingroup  gdrom
@@ -384,6 +1249,11 @@ void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param);
     After reading sectors, this can pull subcode data regarding the sectors
     read. If reading all subcode data with CD_SUB_CURRENT_POSITION, this needs
     to be performed one sector at a time.
+
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback,
+    independently of the filesystem backend. Transport recovery has its own
+    bounded cleanup time. Use gdrom_direct_get_subcode() for a custom timeout
+    or raw diagnostics. The buffer is undefined unless the call succeeds.
 
     \param  buffer          Space to store the read subcode data.
     \param  buflen          Amount of data to be read.
@@ -393,6 +1263,87 @@ void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param);
     \see    cd_sub_type_t
 */
 int cdrom_get_subcode(void *buffer, size_t buflen, cd_sub_type_t which);
+
+/** \brief Read subcode explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains the legacy synchronous, unbounded BIOS query and ERR_* results.
+*/
+int cdrom_bios_get_subcode(void *buffer, size_t buflen, cd_sub_type_t which);
+
+/** \brief Decoded CDDA playback position and Q-subcode state.
+    \ingroup gdrom
+
+    `track_elapsed_frames` is relative to the current track. `fad` is the
+    absolute frame address reported by the drive. The minute/second/frame
+    fields are a convenience decomposition of `track_elapsed_frames` at 75
+    frames per second.
+*/
+typedef struct cdrom_cdda_status {
+    cd_sub_audio_t audio_status; /**< \brief BIOS CDDA playback state. */
+    uint8_t control;             /**< \brief Q-channel control nibble. */
+    uint8_t adr;                 /**< \brief Q-channel address nibble. */
+    uint8_t track;               /**< \brief Current track number. */
+    uint8_t index;               /**< \brief Current index within the track. */
+    uint32_t track_elapsed_frames; /**< \brief Track-relative frame count. */
+    uint32_t track_minutes;      /**< \brief Track-relative whole minutes. */
+    uint32_t track_seconds;      /**< \brief Second within the minute. */
+    uint32_t track_frames;       /**< \brief Frame within the second. */
+    uint32_t fad;                /**< \brief Absolute frame address. */
+} cdrom_cdda_status_t;
+
+/** \brief Read and decode the current CDDA playback status synchronously.
+    \ingroup gdrom
+
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback,
+    independently of the filesystem backend selection. Mandatory transport
+    recovery has its own bounded cleanup time. Reports playback state,
+    track/index, track-relative time, and absolute FAD. Use
+    gdrom_direct_cdda_get_status() to choose a timeout or retain raw diagnostics.
+
+    \param status          Destination for the decoded status.
+
+    \return                \ref cd_cmd_response.
+*/
+int cdrom_cdda_get_status(cdrom_cdda_status_t *status);
+
+/** \brief Read typed CDDA status explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains the legacy synchronous, unbounded BIOS query. Returns the same
+    `ERR_*` result vocabulary as cdrom_cdda_get_status().
+*/
+int cdrom_bios_cdda_get_status(cdrom_cdda_status_t *status);
+
+/** \brief Queue a typed CDDA playback-status query.
+    \ingroup gdrom
+
+    Uses direct SPI, independently of the filesystem selection, with no BIOS
+    fallback. The request identifies `CDROM_REQUEST_BACKEND_DIRECT`.
+    `status` is populated during driver finalization before the request becomes
+    terminal or its callback runs. It must remain valid until completion and
+    has undefined contents unless the request completes successfully.
+
+    \param status          Destination for the decoded status.
+    \param timeout         Required nonzero command timeout in milliseconds.
+    \param callback        Optional completion callback in thread context.
+    \param callback_data   User data passed to the callback.
+
+    \return                A queued request, or NULL with errno set.
+*/
+cdrom_request_t *cdrom_cdda_get_status_async(
+    cdrom_cdda_status_t *status, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
+
+/** \brief Queue typed CDDA status explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Same output lifetime and callback rules as cdrom_cdda_get_status_async(),
+    but retains the BIOS backend and permits zero timeout for no deadline.
+*/
+cdrom_request_t *cdrom_bios_cdda_get_status_async(
+    cdrom_cdda_status_t *status, uint32_t timeout,
+    cdrom_request_callback_t callback, void *callback_data);
 
 /** \brief    Locate the sector of the data track.
     \ingroup  gdrom
@@ -410,6 +1361,12 @@ uint32_t cdrom_locate_data_track(cd_toc_t *toc);
 
     This function starts playback of CDDA audio.
 
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback,
+    independently of the filesystem backend. Recovery has its own bounded
+    cleanup time. Repeat counts above 15 saturate to 15 (infinite).
+    Invalid modes/ranges return ERR_SYS with errno EINVAL, rather than the
+    legacy BIOS wrapper's successful no-op for an invalid mode.
+
     \param  start           The track or sector to start playback from.
     \param  end             The track or sector to end playback at.
     \param  loops           The number of times to repeat (max of 15).
@@ -418,28 +1375,58 @@ uint32_t cdrom_locate_data_track(cd_toc_t *toc);
 */
 int cdrom_cdda_play(uint32_t start, uint32_t end, uint32_t loops, int mode);
 
+/** \brief Play CDDA explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains legacy unbounded waits, repeat saturation, and invalid-mode no-op.
+*/
+int cdrom_bios_cdda_play(uint32_t start, uint32_t end, uint32_t loops, int mode);
+
 /** \brief    Pause CDDA audio playback.
     \ingroup  gdrom
+
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback.
+    Transport recovery has its own bounded cleanup time.
 
     \return                 \ref cd_cmd_response
 */
 int cdrom_cdda_pause(void);
 
+/** \brief Pause CDDA explicitly through the BIOS (legacy unbounded wait).
+    \ingroup gdrom
+*/
+int cdrom_bios_cdda_pause(void);
+
 /** \brief    Resume CDDA audio playback after a pause.
     \ingroup  gdrom
+
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback.
+    Transport recovery has its own bounded cleanup time.
 
     \return                 \ref cd_cmd_response
 */
 int cdrom_cdda_resume(void);
 
+/** \brief Resume CDDA explicitly through the BIOS (legacy unbounded wait).
+    \ingroup gdrom
+*/
+int cdrom_bios_cdda_resume(void);
+
 /** \brief    Spin down the CD.
     \ingroup  gdrom
 
     This stops the disc in the drive from spinning until it is accessed again.
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback.
+    Transport recovery has its own bounded cleanup time.
 
     \return                 \ref cd_cmd_response
 */
 int cdrom_spin_down(void);
+
+/** \brief Spin down explicitly through the BIOS (legacy unbounded wait).
+    \ingroup gdrom
+*/
+int cdrom_bios_spin_down(void);
 
 /** \brief    Initialize the GD-ROM for reading CDs.
     \ingroup  gdrom

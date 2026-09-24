@@ -6,7 +6,7 @@ also known as the `TXF` format, from a **TrueType** (`TTF`) or **OpenType**
 
 `TXF` is a texture font which can be used in the context of **GLUT** (OpenGL
 Utility Toolkit), created by [Mark J. Kilgard](https://en.wikipedia.org/wiki/Mark_Kilgard).
-For the **Sega Dreamcast**, the `TXF` format is supported using the `libdcplib`
+For the **Dreamcast**, the `TXF` format is supported using the `libdcplib`
 KallistiOS Port, using the `PLIB FNT` component. An example of source code,
 including sample `TXF` fonts, is available here:
 

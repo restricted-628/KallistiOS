@@ -6,7 +6,7 @@
 
 TARGET = fiber-context-probe.elf
 OBJS = fiber-context-probe.o
-KOS_CFLAGS += -std=c11
+KOS_CFLAGS += -std=gnu17
 
 all: rm-elf $(TARGET)
 
@@ -19,7 +19,7 @@ rm-elf:
 	-rm -f $(TARGET)
 
 $(TARGET): $(OBJS)
-	kos-cc -o $(TARGET) $(OBJS)
+	kos-cc -Wl,-Map,$@.map -o $(TARGET) $(OBJS)
 
 run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)

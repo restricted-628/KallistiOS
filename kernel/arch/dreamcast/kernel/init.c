@@ -3,6 +3,7 @@
    init.c
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2015 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <stdio.h>
@@ -20,6 +21,7 @@
 #include <kos/platform.h>
 #include <kos/timer.h>
 #include <arch/arch.h>
+#include <arch/mmu.h>
 #include <arch/gdb.h>
 #include <arch/rtc.h>
 #include <dc/cache.h>
@@ -116,6 +118,10 @@ KOS_INIT_FLAG_WEAK(vmu_fs_shutdown, true);
 KOS_INIT_FLAG_WEAK(fs_iso9660_init, true);
 KOS_INIT_FLAG_WEAK(fs_iso9660_shutdown, true);
 
+/* Defined alongside the hardware driver's other init-flag pointers. Request
+   workers must stop before ISO9660 destroys state used by their finalizers. */
+extern void (*cdrom_shutdown_weak)(void);
+
 void dcload_init(void) {
     if (syscall_dcload_detected()) {
         dbglog(DBG_INFO, "dc-load console support enabled\n");
@@ -141,6 +147,21 @@ KOS_INIT_FLAG_WEAK(fs_rnd_shutdown, true);
 KOS_INIT_FLAG_WEAK(library_init, true);
 KOS_INIT_FLAG_WEAK(library_shutdown, true);
 
+/* P1 kernel code/data keep their direct mapping. Applications explicitly map
+   P0 workspaces; enabling translation does not create a process address space. */
+void arch_init_mmu(void) {
+    if(!mmu_enabled())
+        mmu_init();
+}
+
+void arch_shutdown_mmu(void) {
+    if(mmu_enabled())
+        mmu_shutdown();
+}
+
+KOS_INIT_FLAG_WEAK(arch_init_mmu, true);
+KOS_INIT_FLAG_WEAK(arch_shutdown_mmu, true);
+
 /* Auto-init stuff: override with a non-weak symbol if you don't want all of
    this to be linked into your code (and do the same with the
    arch_auto_shutdown function too). */
@@ -152,6 +173,8 @@ int  __weak_symbol arch_auto_init(void) {
        and use ints for dbgio receive. */
     irq_init();         /* IRQs */
     irq_disable();      /* Turn on exceptions */
+
+    KOS_INIT_FLAG_CALL(arch_init_mmu);
 
     ubc_init();
 
@@ -229,29 +252,31 @@ int  __weak_symbol arch_auto_init(void) {
 }
 
 void  __weak_symbol arch_auto_shutdown(void) {
-    /* Restore the native transport before it is torn down below. */
+    /* Restore the default transport before it is torn down below. */
     dcload_syscall_net_shutdown();
+
+    /* Detach existing descriptors before unloading a module which may
+       implement their handler. Module close hooks may still open temporary
+       descriptors while the rest of the runtime is available. */
+    if(fs_shutdown_weak)
+        fs_fdtbl_destroy();
+
+    /* Modules may own threads, handlers, and hardware resources. */
+    KOS_INIT_FLAG_CALL(library_shutdown);
+
+    /* Refuse new descriptors and close any created during module cleanup
+       before filesystem handlers begin unpublishing. */
+    KOS_INIT_FLAG_CALL(fs_shutdown);
 
     if (!KOS_PLATFORM_IS_NAOMI)
         KOS_INIT_FLAG_CALL(net_shutdown);
 
-    snd_shutdown();
-    hardware_shutdown();
-    /* XXX: We should investigate shrinking this irq_disabled
-       time. Until then, all these shut downs happen with
-       irqs disabled which prevents things like safely joining
-       threads or sending cleanup commands to hardware.
-    */
-    irq_disable();
-    timer_shutdown();
-    pvr_shutdown();
-
-    KOS_INIT_FLAG_CALL(library_shutdown);
-
     KOS_INIT_FLAG_CALL(fs_dcload_shutdown);
     KOS_INIT_FLAG_CALL(vmu_fs_shutdown);
-    if (!KOS_PLATFORM_IS_NAOMI)
+    if (!KOS_PLATFORM_IS_NAOMI) {
+        KOS_INIT_FLAG_CALL(cdrom_shutdown);
         KOS_INIT_FLAG_CALL(fs_iso9660_shutdown);
+    }
 
     KOS_INIT_FLAG_CALL(fs_rnd_shutdown);
 
@@ -259,14 +284,22 @@ void  __weak_symbol arch_auto_shutdown(void) {
     KOS_INIT_FLAG_CALL(fs_romdisk_shutdown);
     KOS_INIT_FLAG_CALL(fs_null_shutdown);
     KOS_INIT_FLAG_CALL(fs_dev_shutdown);
-
-    /* As a workaround, shut down the base FS before fs_pty
-       to avoid triggering bugs. */
-    KOS_INIT_FLAG_CALL(fs_shutdown);
-
     KOS_INIT_FLAG_CALL(fs_pty_shutdown);
 
+    nmmgr_shutdown();
+
+    /* Hardware cleanup can wait for workers and use interrupts here. */
+    snd_shutdown();
+    pvr_shutdown();
+    hardware_shutdown();
+
     thd_shutdown();
+
+    /* Nothing below this point needs a thread, callback, or interrupt-driven
+       hardware cleanup operation. */
+    irq_disable();
+    KOS_INIT_FLAG_CALL(arch_shutdown_mmu);
+    timer_shutdown();
     rtc_shutdown();
 }
 

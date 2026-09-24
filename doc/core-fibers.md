@@ -1,5 +1,9 @@
 # Core cooperative fibers — upstream proposal
 
+This document describes the narrow `pr/core-fibers-submission` topic. For the
+complete checkout and its selected provider, see [the bundle guide](../FIBER-BUNDLE.md).
+Do not submit the complete SDK integration branch wholesale upstream.
+
 This topic proposes the core fiber runtime as a KOS facility. It deliberately
 excludes the Fiber Service Executor, worker/dispatcher policy, deadline queues,
 mailboxes, codecs, graphics, SH4ZAM dependencies, timer-event services, and any

@@ -6,15 +6,18 @@
    Copyright (C) 2023 Andy Barajas
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2024 Donald Haase
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <assert.h>
+#include <errno.h>
 
-#include <arch/mmu.h>
 #include <arch/fiber.h>
+#include <arch/mmu.h>
 #include <dc/sq.h>
 #include <kos/cache.h>
 #include <kos/dbglog.h>
+#include <kos/irq.h>
 #include <kos/mutex.h>
 #include <kos/thread.h>
 
@@ -57,19 +60,17 @@
 
 static mutex_t sq_mutex = RECURSIVE_MUTEX_INITIALIZER;
 
-bool arch_fiber_cooperative_state_switchable(void) {
-    /* Transfer callers mask interrupts. Sibling fibers share a thread identity
-       and must not inherit one another's recursive SQ transaction ownership. */
-    return !thd_current || !sq_mutex.count || sq_mutex.holder != thd_current;
-}
-
 typedef struct sq_state {
     uint32_t dest;
+    bool with_mmu;
 } sq_state_t;
 
 #ifndef SQ_STATE_CACHE_SIZE
 #define SQ_STATE_CACHE_SIZE 8
 #endif
+
+_Static_assert(SQ_STATE_CACHE_SIZE > 0,
+               "SQ_STATE_CACHE_SIZE must contain at least one entry");
 
 static sq_state_t sq_state_cache[SQ_STATE_CACHE_SIZE] = {0};
 
@@ -78,15 +79,43 @@ uint32_t *sq_lock(void *dest) {
     bool with_mmu;
     uint32_t mask;
 
-    mutex_lock(&sq_mutex);
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return NULL;
+    }
 
-    assert_msg(sq_mutex.count < SQ_STATE_CACHE_SIZE, "You've overrun the SQ_STATE_CACHE.");
+    if(!dest || !__is_aligned(dest, 32)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    if(mutex_lock(&sq_mutex) < 0)
+        return NULL;
+
+    if(__predict_false(sq_mutex.count > SQ_STATE_CACHE_SIZE)) {
+        mutex_unlock(&sq_mutex);
+        errno = EOVERFLOW;
+        return NULL;
+    }
+
+    with_mmu = mmu_enabled();
+
+    /* A recursive acquisition must use the same address-translation mode as
+       the outer transaction. Restoring mappings across a mode change is not
+       well-defined, so reject it before touching QACR or the SQ TLB entries. */
+    if(__predict_false(sq_mutex.count > 1 &&
+                       sq_state_cache[sq_mutex.count - 2].with_mmu !=
+                           with_mmu)) {
+        mutex_unlock(&sq_mutex);
+        errno = EBUSY;
+        return NULL;
+    }
 
     new_state = &sq_state_cache[sq_mutex.count - 1];
 
     new_state->dest = (uint32_t)dest;
+    new_state->with_mmu = with_mmu;
 
-    with_mmu = mmu_enabled();
     mask = with_mmu ? 0x000fffe0 : 0x03ffffe0;
 
     if(with_mmu)
@@ -98,8 +127,37 @@ uint32_t *sq_lock(void *dest) {
 }
 
 void sq_unlock(void) {
+    sq_state_t *current_state;
+    bool with_mmu;
+
+    if(irq_inside_int()) {
+        dbglog(DBG_ERROR, "sq_unlock: Called from interrupt context\n");
+        assert_msg(false, "Store queues unlocked from interrupt context.");
+        return;
+    }
+
     if(sq_mutex.count == 0) {
         dbglog(DBG_WARNING, "sq_unlock: Called without any lock\n");
+        return;
+    }
+
+    if(thd_current && sq_mutex.holder != thd_current) {
+        dbglog(DBG_ERROR,
+               "sq_unlock: Called from a thread that does not own the SQs\n");
+        assert_msg(false, "Store queues unlocked from a non-owning thread.");
+        return;
+    }
+
+    current_state = &sq_state_cache[sq_mutex.count - 1];
+    with_mmu = mmu_enabled();
+    if(__predict_false(current_state->with_mmu != with_mmu)) {
+        dbglog(DBG_DEAD,
+               "sq_unlock: MMU mode changed while the SQs were locked\n");
+        assert_msg(false, "MMU mode changed while the store queues were locked.");
+
+        /* In an assertion-disabled build there is no safe mapping to restore.
+           Release this recursion level without programming either mode. */
+        mutex_unlock(&sq_mutex);
         return;
     }
 
@@ -107,13 +165,19 @@ void sq_unlock(void) {
     if(sq_mutex.count - 1) {
         sq_state_t *tmp_state = &sq_state_cache[sq_mutex.count - 2];
 
-        if(mmu_enabled())
+        if(tmp_state->with_mmu)
             mmu_set_sq_addr((void *)tmp_state->dest);
         else
             SET_QACR_REGS(tmp_state->dest, tmp_state->dest);
     }
 
     mutex_unlock(&sq_mutex);
+}
+
+bool arch_fiber_cooperative_state_switchable(void) {
+    /* Interrupts are masked by transfer callers, so this ownership snapshot is
+       stable on SH-4. Ordinary SQ users do no fiber-specific bookkeeping. */
+    return !thd_current || !sq_mutex.count || sq_mutex.holder != thd_current;
 }
 
 void sq_wait(void) {
@@ -129,6 +193,17 @@ __noinline void *sq_cpy(void *dest, const void *src, size_t n) {
     uint32_t *d;
     size_t nb;
 
+    if(!n)
+        return dest;
+
+    if(!dest || !src || !__is_aligned(dest, 32) ||
+       !__is_aligned(src, 4) || (n & 31) ||
+       (uintptr_t)dest > UINTPTR_MAX - (n - 1) ||
+       (uintptr_t)src > UINTPTR_MAX - (n - 1)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
     /* Fill/write queues as many times necessary */
     n >>= 5;
 
@@ -139,6 +214,8 @@ __noinline void *sq_cpy(void *dest, const void *src, size_t n) {
         nb = n > 0x8000 ? 0x8000 : n;
 
         d = sq_lock(curr_dest);
+        if(!d)
+            return NULL;
 
         curr_dest += nb * 32;
         n -= nb;
@@ -193,6 +270,15 @@ void *sq_set32(void *dest, uint32_t c, size_t n) {
     uint32_t *d;
     size_t nb;
 
+    if(!n)
+        return dest;
+
+    if(!dest || !__is_aligned(dest, 32) || (n & 31) ||
+       (uintptr_t)dest > UINTPTR_MAX - (n - 1)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
     /* Write them as many times necessary */
     n >>= 5;
 
@@ -203,6 +289,8 @@ void *sq_set32(void *dest, uint32_t c, size_t n) {
         nb = n > 0x8000 ? 0x8000 : n;
 
         d = sq_lock(curr_dest);
+        if(!d)
+            return NULL;
 
         curr_dest += nb * 32;
         n -= nb;

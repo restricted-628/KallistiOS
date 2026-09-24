@@ -2,6 +2,7 @@
 
    pvr_internal.h
    Copyright (C) 2002, 2003, 2004 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -18,6 +19,8 @@
 
 #include <stdbool.h>
 #include <kos/sem.h>
+
+#include "pvr_multipass_layout.h"
 
 /**** State stuff ***************************************************/
 
@@ -128,6 +131,7 @@ typedef struct {
     uint8_t     *base[PVR_OPB_COUNT];  // DMA buffers, if assigned
     uint32_t    ptr[PVR_OPB_COUNT];    // DMA buffer write pointer, if used
     uint32_t    size[PVR_OPB_COUNT];   // DMA buffer sizes, or zero if none
+    uint32_t    flushed;               // Lists already transferred to the TA
     int         ready;                 // >0 if these buffers are ready to be DMAed
 } pvr_dma_buffers_t;
 
@@ -135,6 +139,23 @@ typedef struct {
 typedef struct {
     uint32_t  frame, frame_size;      // Output frame buffer, size
 } pvr_frame_buffers_t;
+
+/* Per-use multipass state. The fixed one-pass API leaves this unallocated. */
+typedef struct {
+    pvr_ta_layout_t layout;
+    pvr_ta_pass_layout_t passes[PVR_MULTIPASS_MAX_PASSES];
+    pvr_dma_buffers_t *dma_buffers;
+    uint32_t lists_enabled[PVR_MULTIPASS_MAX_PASSES];
+    uint32_t list_reg_mask[PVR_MULTIPASS_MAX_PASSES];
+    size_t pass_count;
+    size_t build_pass;
+    size_t ta_pass;
+    int dma_frame;
+    bool dma_chain_active;
+    bool dma_pass_fed;
+    bool dma_hybrid_active;
+    uint32_t fault_sequence;
+} pvr_multipass_state_t;
 
 /* PVR status structure; not only will this hold status information,
    but it will also server as the wait object for the frame-complete
@@ -148,6 +169,7 @@ typedef struct {
     uint32_t  list_reg_mask;            // Active lists register mask
     int       dma_mode;                 // 1 if we are using DMA to transfer vertices
     int       opb_size[PVR_OPB_COUNT];  // opb size flags
+    pvr_multipass_state_t *multipass;    // Optional pass control and layout
 
     // Pipeline state
     int     ram_target;                 // RAM buffer we're writing into
@@ -167,6 +189,21 @@ typedef struct {
     int     ta_busy;                    // >0 if a scene is ongoing and the TA hasn't signaled completion
     int     render_busy;                // >0 if a render is in progress
     int     render_completed;           // >1 if a render has recently finished
+    bool    scene_active;               // Scene accepts list data until finish
+    uint32_t status_sequence;           // Software-visible pipeline transitions
+    pvr_fault_status_t fault_status;    // Persistent interrupt fault record
+
+    // Stable render identities; zero is reserved for inactive pipeline slots.
+    pvr_render_id_t next_render_id;
+    pvr_render_id_t scene_render_id;
+    pvr_render_id_t queued_render_id;
+    pvr_render_id_t registration_render_id;
+    pvr_render_id_t registered_render_id;
+    pvr_render_id_t render_started_id;
+    pvr_render_id_t active_render_id;
+    pvr_render_id_t completed_render_id;
+    pvr_render_id_t pending_display_render_id;
+    pvr_render_id_t displayed_render_id;
 
     // Memory pointers / buffers
     pvr_dma_buffers_t   dma_buffers[2];     // DMA buffers (if any)
@@ -182,7 +219,13 @@ typedef struct {
     uint32_t  pclip_left, pclip_right;    // X pixel clip constants
     uint32_t  pclip_top, pclip_bottom;    // Y pixel clip constants
     uint32_t  pclip_x, pclip_y;           // Composited clip constants
+    uint32_t  next_pclip_left, next_pclip_right;
+    uint32_t  next_pclip_top, next_pclip_bottom;
+    uint32_t  next_pclip_x, next_pclip_y;
+    uint32_t  curr_pclip_x, curr_pclip_y;
     uint32_t  bg_color;                   // Background color in ARGB format
+    pvr_background_plane_t next_background;
+    pvr_background_plane_t curr_background;
 
     /* Running statistics on the PVR system. All vars are in terms
        of nanoseconds. */
@@ -258,10 +301,25 @@ typedef struct pvr_bkg_poly {
 /**** pvr_buffers.c ***************************************************/
 
 /* Initialize buffers for TA/ISP/TSP usage */
-void pvr_allocate_buffers(const pvr_init_params_t *params);
+/* Validate the complete one-pass VRAM layout without changing driver state. */
+int pvr_buffers_validate(const pvr_init_params_t *params,
+                         pvr_multipass_state_t *multipass);
+
+/* Allocate the prevalidated one-pass TA/ISP/TSP buffers. */
+int pvr_allocate_buffers(const pvr_init_params_t *params,
+                         pvr_multipass_state_t *multipass);
 
 /* Fill the tile matrices (after it's initialized) */
 void pvr_init_tile_matrices(bool presort);
+
+/* Select one pass's enabled lists and OPB allocation register value. */
+void pvr_activate_pass(size_t pass);
+
+/* True when the active TA pass is permitted to release the renderer. */
+bool pvr_registration_is_final(void);
+
+/* Return one frame/pass DMA staging record. */
+volatile pvr_dma_buffers_t *pvr_pass_dma_buffer(int frame, size_t pass);
 
 
 /**** pvr_misc.c ******************************************************/
@@ -279,11 +337,33 @@ void pvr_init_tile_matrices(bool presort);
 /* Update statistical counters */
 void pvr_sync_stats(int event);
 
+/* Advance the public pipeline-state sequence without losing IRQ transitions. */
+void pvr_status_advance(void);
+
+/* Latch a PVR fault and the diagnostic register state observed with it. */
+void pvr_fault_record(pvr_fault_t fault, uint32_t event);
+
+/* Initialize, dispatch, and destroy optional IRQ-context event handlers. */
+void pvr_event_init(void);
+void pvr_event_shutdown(void);
+void pvr_event_dispatch(pvr_event_t event, uint32_t detail);
+
+/* Completion observations consumed by checked texture requests. */
+size_t pvr_dma_completion_remaining(void);
+uint32_t pvr_dma_completion_detail(void);
+
+/* Complete or cancel the optional per-use texture request object. */
+void pvr_txr_yuv_complete(void);
+void pvr_txr_request_shutdown(void);
+
 /* Synchronize the viewed page with what's in pvr_state */
 void pvr_sync_view(void);
 
 /* Synchronize the registration buffer with what's in pvr_state */
 void pvr_sync_reg_buffer(void);
+
+/* Continue the active TA bank to a prevalidated next pass. IRQs must be off. */
+void pvr_continue_ta_pass(size_t next_pass);
 
 /* Begin a render operation that has been queued completely */
 void pvr_begin_queued_render(void);

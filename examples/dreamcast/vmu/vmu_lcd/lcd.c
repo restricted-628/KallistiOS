@@ -1,84 +1,182 @@
-/*  KallistiOS ##version##
+/* KallistiOS ##version##
 
-    lcd.c
-    Copyright (C) 2023 Paul Cercueil
-
+   VMU LCD conversion, orientation, and completion validation.
+   Copyright (C) 2023 Paul Cercueil
+   Copyright (C) 2026 Joseph Black
 */
 
-/*
-    This example demonstrates drawing dynamic contents to the
-    VMU's LCD display. It does so by rendering to a virtual
-    framebuffer and then presenting it, which sends the updated
-    framebuffer to the VMU over the maple protocol which displays
-    it.
-
-    This demo also shows off rendering dynamic text using an
-    embedded font.
- */
-
-#include <stdio.h>
-#include <math.h>
+#include <errno.h>
 #include <stdint.h>
-#include <stdlib.h>
+#include <stdio.h>
 
-#include <kos/init.h>
-
-#include <dc/maple.h>
-#include <dc/maple/controller.h>
+#include <kos.h>
 #include <dc/maple/vmu.h>
 #include <dc/vmu_fb.h>
-#include <dc/fmath.h>
 
-static const uint8_t smiley[] = {
-    0b00111100,
-    0b01000010,
-    0b10100101,
-    0b10000001,
-    0b10100101,
-    0b10011001,
-    0b01000010,
-    0b00111100,
-};
+KOS_INIT_FLAGS(INIT_DEFAULT);
 
-static vmufb_t vmufb;
-static const char message[] = "        Hello World!        ";
+static volatile uint32_t callback_sequence;
+static volatile int callback_result;
+static volatile int callback_response;
 
-KOS_INIT_FLAGS(INIT_DEFAULT | INIT_MALLOCSTATS);
+static void completion_handler(maple_device_t *dev, int result, int response,
+                               uint32_t sequence, void *user_data) {
+    (void)dev;
+    (void)user_data;
 
-/* Your program's main entry point */
-int main(int argc, char **argv) {
-    unsigned int x, y, i, vmu;
-    maple_device_t *dev;
-    const vmufb_font_t *font;
-    float val;
+    /* Maple callbacks run in interrupt context. Publish only fixed-size state;
+       printing and waiting remain in the application thread. */
+    callback_result = result;
+    callback_response = response;
+    callback_sequence = sequence;
+}
 
-    /* If start is pressed, exit the app. */
-    cont_btn_callback(0, CONT_START,
-                      (cont_btn_callback_t)exit);
+static void finish_test(void) __attribute__((noreturn));
+static void finish_test(void) {
+    fflush(stdout);
 
-    font = vmu_get_font();
+    for(;;)
+        thd_sleep(1000);
+}
 
-    for(i = 0; ; i++) {
-        vmufb_clear(&vmufb);
+static int validate_converter(void) {
+    uint8_t pixels[VMU_SCREEN_WIDTH * VMU_SCREEN_HEIGHT] = { 0 };
+    uint8_t bitmap[VMU_SCREEN_BITMAP_BYTES];
 
-        val = (float)i * F_PI / 360.0f;
-        x = 20 + (int)(20.0f * cosf(val));
-        y = 12 + (int)(12.0f * sinf(val));
+    pixels[0] = 0x08;
 
-        vmufb_paint_area(&vmufb, x, y, 8, 8, smiley);
+    if(vmu_lcd_pack_grayscale(bitmap, pixels, VMU_LCD_FLIP_NONE) < 0 ||
+       bitmap[VMU_SCREEN_BITMAP_BYTES - 1] != 0x01)
+        return -1;
 
-        vmufb_print_string_into(&vmufb, font,
-                    12, 12, 24, 6, 0,
-                    &message[(i / 16) % sizeof(message)]);
+    if(vmu_lcd_pack_grayscale(bitmap, pixels,
+                              VMU_LCD_FLIP_HORIZONTAL) < 0 ||
+       bitmap[(VMU_SCREEN_HEIGHT - 1) * 6] != 0x80)
+        return -1;
 
+    if(vmu_lcd_pack_grayscale(bitmap, pixels, VMU_LCD_FLIP_VERTICAL) < 0 ||
+       bitmap[5] != 0x01)
+        return -1;
 
-        for(vmu = 0; !!(dev = maple_enum_type(vmu, MAPLE_FUNC_LCD)); vmu++) {
-            vmufb_present(&vmufb, dev);
-        }
+    if(vmu_lcd_pack_grayscale(bitmap, pixels,
+                              VMU_LCD_FLIP_HORIZONTAL |
+                              VMU_LCD_FLIP_VERTICAL) < 0 ||
+       bitmap[0] != 0x80)
+        return -1;
 
-        /* Now sleep for a bit so we can actually see the new frame */
-        usleep(2000);
-    }
+    errno = 0;
+    if(vmu_lcd_pack_grayscale(bitmap, pixels, (vmu_lcd_flip_t)4) == 0 ||
+       errno != EINVAL)
+        return -1;
 
     return 0;
+}
+
+static int validate_descriptor(void) {
+    maple_device_t synthetic = { 0 };
+
+    synthetic.valid = 1;
+    synthetic.info.functions = MAPLE_FUNC_LCD;
+    synthetic.info.function_data[0] = 0x00100500;
+
+    if(vmu_lcd_is_compatible(&synthetic) != 1)
+        return -1;
+
+    synthetic.info.function_data[0] = 0;
+    if(vmu_lcd_is_compatible(&synthetic) != 0)
+        return -1;
+
+    return 0;
+}
+
+static int wait_for_completion(maple_device_t *dev, uint32_t sequence,
+                               uint64_t timeout_ms) {
+    const uint64_t deadline = timer_ms_gettime64() + timeout_ms;
+    vmu_lcd_status_t status;
+
+    do {
+        if(vmu_lcd_get_status(dev, &status) < 0)
+            return -1;
+
+        if(!status.busy && status.completed_sequence == sequence) {
+            if(status.result != MAPLE_EOK || callback_sequence != sequence ||
+               callback_result != status.result ||
+               callback_response != status.response) {
+                errno = EPROTO;
+                return -1;
+            }
+
+            return 0;
+        }
+
+        thd_pass();
+    } while(timer_ms_gettime64() < deadline);
+
+    errno = ETIMEDOUT;
+    return -1;
+}
+
+static void build_asymmetric_test_image(vmufb_t *fb) {
+    static const uint8_t marker[] = {
+        0xf8, 0x88, 0x88, 0x88
+    };
+
+    vmufb_clear(fb);
+    vmufb_paint_area(fb, 1, 1, 4, 8, marker);
+    vmufb_print_string_into(fb, NULL, 9, 5, 36, 12, 0, "KOS\nLCD");
+}
+
+int main(int argc, char *argv[]) {
+    vmufb_t framebuffer;
+    vmu_lcd_direction_t direction;
+    vmu_lcd_status_t status;
+    maple_device_t *dev;
+    int ready;
+    int result;
+
+    (void)argc;
+    (void)argv;
+
+    dbgio_dev_select("scif");
+    dbgio_enable();
+    printf("KOS VMU LCD validation\n");
+
+    if(validate_converter() < 0 || validate_descriptor() < 0) {
+        printf("FAIL: converter or descriptor test errno=%d\n", errno);
+        finish_test();
+    }
+
+    maple_wait_scan();
+    dev = maple_enum_type(0, MAPLE_FUNC_LCD);
+
+    if(!dev) {
+        printf("FAIL: no LCD device\n");
+        finish_test();
+    }
+
+    ready = vmu_lcd_is_ready(dev);
+    if(vmu_lcd_is_compatible(dev) != 1 || ready < 0 ||
+       vmu_lcd_get_direction(dev, &direction) < 0 ||
+       vmu_lcd_set_completion_handler(dev, completion_handler, NULL) < 0) {
+        printf("FAIL: LCD metadata errno=%d\n", errno);
+        finish_test();
+    }
+
+    printf("device=%c%d direction=%u ready=%d\n", 'A' + dev->port,
+           dev->unit, direction, ready);
+
+    build_asymmetric_test_image(&framebuffer);
+    result = vmufb_present_ex(&framebuffer, dev);
+
+    if(result != MAPLE_EOK || vmu_lcd_get_status(dev, &status) < 0 ||
+       wait_for_completion(dev, status.submitted_sequence, 1000) < 0) {
+        printf("FAIL: display completion result=%d errno=%d "
+               "callback=(%lu,%d,%d)\n", result, errno,
+               (unsigned long)callback_sequence, callback_result,
+               callback_response);
+        finish_test();
+    }
+
+    printf("RESULT: PASS\n");
+    finish_test();
 }

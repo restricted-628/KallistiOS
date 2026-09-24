@@ -17,7 +17,15 @@ __BEGIN_DECLS
 
 #include <kos/irq.h>
 
-#include <dc/vector.h>
+#include <sh4zam/shz_matrix.h>
+#include <sh4zam/shz_version.h>
+
+#if SHZ_BACKEND != SHZ_SH4
+#error This Dreamcast fiber provider requires the SH4ZAM SH-4 backend.
+#endif
+#if SHZ_VERSION < SHZ_VERSION_INIT(0, 9, 0)
+#error This fiber provider requires SH4ZAM 0.9.0 or newer.
+#endif
 
 #include <stdint.h>
 
@@ -45,7 +53,7 @@ typedef struct __attribute__((aligned(8))) arch_fiber_context {
 /* Optional architecture-owned accelerator state. This remains separate from
    arch_fiber_context_t so lightweight fibers keep the original footprint. */
 typedef struct __attribute__((aligned(32))) arch_fiber_math_context {
-    matrix_t matrix;
+    shz_mat4x4_t matrix;
 } arch_fiber_math_context_t;
 
 /* SR.BL and SR.IMASK describe CPU-wide exclusion state. A cooperative

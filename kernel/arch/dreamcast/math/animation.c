@@ -1,0 +1,2260 @@
+/* KallistiOS ##version##
+
+   animation.c
+   Copyright (C) 2026 Joseph Black
+*/
+
+#include <dc/animation.h>
+
+#include <dc/sh4zam.h>
+
+#include <errno.h>
+#include <float.h>
+#include <math.h>
+#include <stdint.h>
+#include <string.h>
+
+static int finite4(float x, float y, float z, float w) {
+    return isfinite(x) && isfinite(y) && isfinite(z) && isfinite(w);
+}
+
+#define ANIM_PI 3.14159265358979323846f
+#define ANIM_TAU (2.0f * ANIM_PI)
+
+static size_t key_size(anim_value_kind_t kind) {
+    switch(kind) {
+        case ANIM_VALUE_SCALAR:
+            return sizeof(anim_scalar_key_t);
+        case ANIM_VALUE_VECTOR:
+            return sizeof(anim_vector_key_t);
+        case ANIM_VALUE_QUATERNION:
+            return sizeof(anim_quaternion_key_t);
+        case ANIM_VALUE_BOOLEAN:
+            return sizeof(anim_boolean_key_t);
+        default:
+            return 0;
+    }
+}
+
+static size_t hermite_key_size(anim_value_kind_t kind) {
+    switch(kind) {
+        case ANIM_VALUE_SCALAR:
+            return sizeof(anim_scalar_hermite_key_t);
+        case ANIM_VALUE_VECTOR:
+            return sizeof(anim_vector_hermite_key_t);
+        case ANIM_VALUE_QUATERNION:
+            return sizeof(anim_quaternion_hermite_key_t);
+        default:
+            return 0;
+    }
+}
+
+static const void *key_at(const anim_track_t *track, size_t index) {
+    return (const uint8_t *)track->keys + index * track->stride;
+}
+
+static float key_time(const anim_track_t *track, size_t index) {
+    float time;
+
+    memcpy(&time, key_at(track, index), sizeof(time));
+    return time;
+}
+
+static int quaternion_valid(const anim_quaternion_t *quaternion) {
+    float magnitude_squared;
+
+    if(!quaternion || !finite4(quaternion->w, quaternion->x,
+                               quaternion->y, quaternion->z))
+        return 0;
+    magnitude_squared = shz_quat_magnitude_sqr(shz_quat_init(
+        quaternion->w, quaternion->x, quaternion->y, quaternion->z));
+    return isfinite(magnitude_squared) && magnitude_squared > FLT_MIN;
+}
+
+static int key_value_valid(const anim_track_t *track, size_t index) {
+    const void *key = key_at(track, index);
+
+    switch(track->kind) {
+        case ANIM_VALUE_SCALAR: {
+            const anim_scalar_key_t *scalar = key;
+
+            if(!isfinite(scalar->value))
+                return 0;
+            if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                const anim_scalar_hermite_key_t *hermite = key;
+
+                return isfinite(hermite->in_tangent) &&
+                       isfinite(hermite->out_tangent) &&
+                       hermite->value_reserved[0] == 0.0f &&
+                       hermite->value_reserved[1] == 0.0f &&
+                       hermite->value_reserved[2] == 0.0f &&
+                       hermite->in_tangent_reserved[0] == 0.0f &&
+                       hermite->in_tangent_reserved[1] == 0.0f &&
+                       hermite->in_tangent_reserved[2] == 0.0f &&
+                       hermite->out_tangent_reserved[0] == 0.0f &&
+                       hermite->out_tangent_reserved[1] == 0.0f &&
+                       hermite->out_tangent_reserved[2] == 0.0f;
+            }
+            return 1;
+        }
+
+        case ANIM_VALUE_VECTOR: {
+            const anim_vector_key_t *vector = key;
+            if(!finite4(vector->value.x, vector->value.y,
+                        vector->value.z, vector->value.w))
+                return 0;
+            if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                const anim_vector_hermite_key_t *hermite = key;
+
+                return finite4(hermite->in_tangent.x,
+                               hermite->in_tangent.y,
+                               hermite->in_tangent.z,
+                               hermite->in_tangent.w) &&
+                       finite4(hermite->out_tangent.x,
+                               hermite->out_tangent.y,
+                               hermite->out_tangent.z,
+                               hermite->out_tangent.w);
+            }
+            return 1;
+        }
+
+        case ANIM_VALUE_QUATERNION: {
+            const anim_quaternion_key_t *quaternion = key;
+            if(!quaternion_valid(&quaternion->value))
+                return 0;
+            if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+                const anim_quaternion_hermite_key_t *hermite = key;
+
+                return finite4(hermite->in_tangent.w,
+                               hermite->in_tangent.x,
+                               hermite->in_tangent.y,
+                               hermite->in_tangent.z) &&
+                       finite4(hermite->out_tangent.w,
+                               hermite->out_tangent.x,
+                               hermite->out_tangent.y,
+                               hermite->out_tangent.z);
+            }
+            return 1;
+        }
+
+        case ANIM_VALUE_BOOLEAN: {
+            const anim_boolean_key_t *boolean = key;
+            return boolean->value <= 1u;
+        }
+
+        default:
+            return 0;
+    }
+}
+
+int anim_track_open(const anim_track_t *track, anim_track_view_t *output) {
+    anim_track_view_t view;
+    size_t minimum_size;
+    float previous_time = 0.0f;
+    size_t i;
+
+    if(!track || !output || !track->keys || !track->key_count ||
+       ((uintptr_t)track->keys & 3u) ||
+       (track->interpolation != ANIM_INTERPOLATION_STEP &&
+        track->interpolation != ANIM_INTERPOLATION_LINEAR &&
+        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM &&
+        track->interpolation != ANIM_INTERPOLATION_CUBIC_HERMITE)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    minimum_size = track->interpolation ==
+                       ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                       hermite_key_size(track->kind) : key_size(track->kind);
+    if(!minimum_size || track->stride < minimum_size ||
+       (track->stride & 3u) ||
+       (track->kind == ANIM_VALUE_BOOLEAN &&
+        track->interpolation != ANIM_INTERPOLATION_STEP) ||
+       (track->kind == ANIM_VALUE_QUATERNION &&
+        track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(track->key_count - 1u >
+       (SIZE_MAX - minimum_size) / track->stride ||
+       (track->key_count - 1u) * track->stride + minimum_size >
+       UINTPTR_MAX - (uintptr_t)track->keys) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    for(i = 0; i < track->key_count; ++i) {
+        float time = key_time(track, i);
+
+        if(!isfinite(time) || !key_value_valid(track, i)) {
+            errno = EDOM;
+            return -1;
+        }
+        if(i && time <= previous_time) {
+            errno = EILSEQ;
+            return -1;
+        }
+        previous_time = time;
+    }
+
+    view.track = *track;
+    view.start_time = key_time(track, 0);
+    view.end_time = previous_time;
+    memcpy(output, &view, sizeof(view));
+    return 0;
+}
+
+static int view_valid(const anim_track_view_t *view,
+                      anim_value_kind_t expected_kind) {
+    const anim_track_t *track;
+    size_t minimum_size;
+
+    if(!view)
+        return 0;
+    track = &view->track;
+    minimum_size = track->interpolation ==
+                       ANIM_INTERPOLATION_CUBIC_HERMITE ?
+                       hermite_key_size(expected_kind) :
+                       key_size(expected_kind);
+    if(track->kind != expected_kind || !track->keys || !track->key_count ||
+       ((uintptr_t)track->keys & 3u) ||
+       (track->interpolation != ANIM_INTERPOLATION_STEP &&
+        track->interpolation != ANIM_INTERPOLATION_LINEAR &&
+        track->interpolation != ANIM_INTERPOLATION_CATMULL_ROM &&
+        track->interpolation != ANIM_INTERPOLATION_CUBIC_HERMITE) ||
+       (expected_kind == ANIM_VALUE_BOOLEAN &&
+        track->interpolation != ANIM_INTERPOLATION_STEP) ||
+       (expected_kind == ANIM_VALUE_QUATERNION &&
+        track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) ||
+       track->stride < minimum_size || (track->stride & 3u) ||
+       !isfinite(view->start_time) || !isfinite(view->end_time) ||
+       view->start_time > view->end_time ||
+       track->key_count - 1u >
+       (SIZE_MAX - minimum_size) / track->stride ||
+       (track->key_count - 1u) * track->stride + minimum_size >
+       UINTPTR_MAX - (uintptr_t)track->keys)
+        return 0;
+
+    return key_time(track, 0) == view->start_time &&
+           key_time(track, track->key_count - 1u) == view->end_time;
+}
+
+static int sample_interval(const anim_track_view_t *view, float time,
+                           size_t *lower, size_t *upper, float *factor,
+                           anim_sample_info_t *info) {
+    const anim_track_t *track = &view->track;
+    anim_sample_info_t interval = { 0, 0, 0.0f };
+    size_t low;
+    size_t high;
+
+    if(info)
+        *info = interval;
+
+    if(!isfinite(time)) {
+        errno = EDOM;
+        return -1;
+    }
+
+    if(time <= view->start_time || track->key_count == 1) {
+        *lower = 0;
+        *upper = 0;
+        *factor = 0.0f;
+        if(info)
+            *info = interval;
+        return 0;
+    }
+
+    if(time >= view->end_time) {
+        interval.lower_key = track->key_count - 1u;
+        interval.upper_key = interval.lower_key;
+        *lower = interval.lower_key;
+        *upper = interval.upper_key;
+        *factor = 0.0f;
+        if(info)
+            *info = interval;
+        return 0;
+    }
+
+    low = 0;
+    high = track->key_count - 1u;
+    while(high - low > 1u) {
+        size_t middle = low + (high - low) / 2u;
+
+        if(time < key_time(track, middle))
+            high = middle;
+        else
+            low = middle;
+    }
+
+    if(time == key_time(track, low)) {
+        high = low;
+        *factor = 0.0f;
+    }
+    else if(track->interpolation == ANIM_INTERPOLATION_STEP) {
+        high = low;
+        *factor = 0.0f;
+    }
+    else {
+        float low_time = key_time(track, low);
+        float high_time = key_time(track, high);
+
+        *factor = (time - low_time) / (high_time - low_time);
+        if(!isfinite(*factor) || *factor < 0.0f || *factor > 1.0f) {
+            errno = EILSEQ;
+            return -1;
+        }
+    }
+
+    *lower = low;
+    *upper = high;
+    interval.lower_key = low;
+    interval.upper_key = high;
+    interval.factor = *factor;
+    if(info)
+        *info = interval;
+    return 0;
+}
+
+static int catmull_component(float previous, float lower, float upper,
+                             float next, float previous_time,
+                             float lower_time, float upper_time,
+                             float next_time, float factor, float *output) {
+    float interval = upper_time - lower_time;
+    float lower_denominator = upper_time - previous_time;
+    float upper_denominator = next_time - lower_time;
+    float lower_tangent;
+    float upper_tangent;
+    float factor_squared = factor * factor;
+    float factor_cubed = factor_squared * factor;
+    float value;
+
+    if(!isfinite(interval) || !isfinite(lower_denominator) ||
+       !isfinite(upper_denominator) || interval <= 0.0f ||
+       lower_denominator <= 0.0f || upper_denominator <= 0.0f) {
+        errno = EILSEQ;
+        return -1;
+    }
+
+    lower_tangent = (upper - previous) * interval / lower_denominator;
+    upper_tangent = (next - lower) * interval / upper_denominator;
+    value = (2.0f * factor_cubed - 3.0f * factor_squared + 1.0f) * lower +
+            (factor_cubed - 2.0f * factor_squared + factor) * lower_tangent +
+            (-2.0f * factor_cubed + 3.0f * factor_squared) * upper +
+            (factor_cubed - factor_squared) * upper_tangent;
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = value;
+    return 0;
+}
+
+static int hermite_component(float lower, float upper,
+                             float lower_out_tangent,
+                             float upper_in_tangent, float interval,
+                             float factor, float *output) {
+    float factor_squared = factor * factor;
+    float factor_cubed = factor_squared * factor;
+    float value;
+
+    value = (2.0f * factor_cubed - 3.0f * factor_squared + 1.0f) * lower +
+            (factor_cubed - 2.0f * factor_squared + factor) *
+                interval * lower_out_tangent +
+            (-2.0f * factor_cubed + 3.0f * factor_squared) * upper +
+            (factor_cubed - factor_squared) *
+                interval * upper_in_tangent;
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = value;
+    return 0;
+}
+
+static void catmull_indices(const anim_track_view_t *view,
+                            size_t lower, size_t upper,
+                            size_t *previous, size_t *next,
+                            float *previous_time, float *next_time) {
+    const anim_track_t *track = &view->track;
+    float interval = key_time(track, upper) - key_time(track, lower);
+
+    if(lower) {
+        *previous = lower - 1u;
+        *previous_time = key_time(track, *previous);
+    }
+    else {
+        *previous = lower;
+        *previous_time = key_time(track, lower) - interval;
+    }
+    if(upper + 1u < track->key_count) {
+        *next = upper + 1u;
+        *next_time = key_time(track, *next);
+    }
+    else {
+        *next = upper;
+        *next_time = key_time(track, upper) + interval;
+    }
+}
+
+int anim_track_sample_scalar(const anim_track_view_t *view, float time,
+                             float *output, anim_sample_info_t *info) {
+    size_t lower;
+    size_t upper;
+    float factor;
+    float value;
+
+    if(!output || !view_valid(view, ANIM_VALUE_SCALAR)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sample_interval(view, time, &lower, &upper, &factor, info) < 0)
+        return -1;
+
+    value = ((const anim_scalar_key_t *)key_at(&view->track, lower))->value;
+    if(upper != lower) {
+        float next = ((const anim_scalar_key_t *)
+                      key_at(&view->track, upper))->value;
+
+        if(view->track.interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+            const anim_scalar_hermite_key_t *lower_key =
+                key_at(&view->track, lower);
+            const anim_scalar_hermite_key_t *upper_key =
+                key_at(&view->track, upper);
+
+            if(hermite_component(value, next, lower_key->out_tangent,
+                                 upper_key->in_tangent,
+                                 key_time(&view->track, upper) -
+                                     key_time(&view->track, lower),
+                                 factor, &value) < 0)
+                return -1;
+        }
+        else if(view->track.interpolation ==
+                ANIM_INTERPOLATION_CATMULL_ROM) {
+            size_t previous_index;
+            size_t next_index;
+            float previous_time;
+            float next_time;
+            float previous;
+            float following;
+
+            catmull_indices(view, lower, upper, &previous_index,
+                            &next_index, &previous_time, &next_time);
+            previous = ((const anim_scalar_key_t *)
+                        key_at(&view->track, previous_index))->value;
+            following = ((const anim_scalar_key_t *)
+                         key_at(&view->track, next_index))->value;
+            if(catmull_component(previous, value, next, following,
+                                 previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &value) < 0)
+                return -1;
+        }
+        else
+            value += (next - value) * factor;
+    }
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = value;
+    return 0;
+}
+
+int anim_track_sample_vector(const anim_track_view_t *view, float time,
+                             vector_t *output, anim_sample_info_t *info) {
+    size_t lower;
+    size_t upper;
+    float factor;
+    vector_t value;
+
+    if(!output || !view_valid(view, ANIM_VALUE_VECTOR)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sample_interval(view, time, &lower, &upper, &factor, info) < 0)
+        return -1;
+
+    value = ((const anim_vector_key_t *)key_at(&view->track, lower))->value;
+    if(upper != lower) {
+        const vector_t *next = &((const anim_vector_key_t *)
+                                 key_at(&view->track, upper))->value;
+        if(view->track.interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+            const anim_vector_hermite_key_t *lower_key =
+                key_at(&view->track, lower);
+            const anim_vector_hermite_key_t *upper_key =
+                key_at(&view->track, upper);
+            float interval = key_time(&view->track, upper) -
+                             key_time(&view->track, lower);
+            vector_t interpolated;
+
+            if(hermite_component(value.x, next->x,
+                                 lower_key->out_tangent.x,
+                                 upper_key->in_tangent.x, interval, factor,
+                                 &interpolated.x) < 0 ||
+               hermite_component(value.y, next->y,
+                                 lower_key->out_tangent.y,
+                                 upper_key->in_tangent.y, interval, factor,
+                                 &interpolated.y) < 0 ||
+               hermite_component(value.z, next->z,
+                                 lower_key->out_tangent.z,
+                                 upper_key->in_tangent.z, interval, factor,
+                                 &interpolated.z) < 0 ||
+               hermite_component(value.w, next->w,
+                                 lower_key->out_tangent.w,
+                                 upper_key->in_tangent.w, interval, factor,
+                                 &interpolated.w) < 0)
+                return -1;
+            value = interpolated;
+        }
+        else if(view->track.interpolation ==
+                ANIM_INTERPOLATION_CATMULL_ROM) {
+            size_t previous_index;
+            size_t next_index;
+            float previous_time;
+            float next_time;
+            const vector_t *previous;
+            const vector_t *following;
+            vector_t interpolated;
+
+            catmull_indices(view, lower, upper, &previous_index,
+                            &next_index, &previous_time, &next_time);
+            previous = &((const anim_vector_key_t *)
+                         key_at(&view->track, previous_index))->value;
+            following = &((const anim_vector_key_t *)
+                          key_at(&view->track, next_index))->value;
+            if(catmull_component(previous->x, value.x, next->x,
+                                 following->x, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.x) < 0 ||
+               catmull_component(previous->y, value.y, next->y,
+                                 following->y, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.y) < 0 ||
+               catmull_component(previous->z, value.z, next->z,
+                                 following->z, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.z) < 0 ||
+               catmull_component(previous->w, value.w, next->w,
+                                 following->w, previous_time,
+                                 key_time(&view->track, lower),
+                                 key_time(&view->track, upper), next_time,
+                                 factor, &interpolated.w) < 0)
+                return -1;
+            value = interpolated;
+        }
+        else {
+            shz_vec4_t interpolated = shz_vec4_lerp(
+                shz_vec4_init(value.x, value.y, value.z, value.w),
+                shz_vec4_init(next->x, next->y, next->z, next->w), factor);
+
+            value.x = interpolated.x;
+            value.y = interpolated.y;
+            value.z = interpolated.z;
+            value.w = interpolated.w;
+        }
+    }
+    if(!finite4(value.x, value.y, value.z, value.w)) {
+        errno = ERANGE;
+        return -1;
+    }
+    memcpy(output, &value, sizeof(value));
+    return 0;
+}
+
+static float shortest_angle_delta(float from, float to) {
+    float delta = fmodf(to - from, ANIM_TAU);
+
+    if(delta > ANIM_PI)
+        delta -= ANIM_TAU;
+    else if(delta < -ANIM_PI)
+        delta += ANIM_TAU;
+    return delta;
+}
+
+static float vector_component(const vector_t *value, size_t component) {
+    switch(component) {
+        case 0:
+            return value->x;
+        case 1:
+            return value->y;
+        default:
+            return value->z;
+    }
+}
+
+static int sample_euler_component(const anim_track_view_t *view,
+                                  size_t lower, size_t upper, float factor,
+                                  size_t component, float *output) {
+    const anim_track_t *track = &view->track;
+    const vector_t *lower_value = &((const anim_vector_key_t *)
+        key_at(track, lower))->value;
+    float value = vector_component(lower_value, component);
+
+    if(upper != lower) {
+        const vector_t *upper_value = &((const anim_vector_key_t *)
+            key_at(track, upper))->value;
+        float next = value + shortest_angle_delta(
+            value, vector_component(upper_value, component));
+
+        if(track->interpolation == ANIM_INTERPOLATION_CUBIC_HERMITE) {
+            const anim_vector_hermite_key_t *lower_key =
+                key_at(track, lower);
+            const anim_vector_hermite_key_t *upper_key =
+                key_at(track, upper);
+            float lower_tangent = vector_component(
+                &lower_key->out_tangent, component);
+            float upper_tangent = vector_component(
+                &upper_key->in_tangent, component);
+
+            if(hermite_component(value, next, lower_tangent, upper_tangent,
+                                 key_time(track, upper) -
+                                     key_time(track, lower),
+                                 factor, &value) < 0)
+                return -1;
+        }
+        else if(track->interpolation == ANIM_INTERPOLATION_CATMULL_ROM) {
+            size_t previous_index;
+            size_t next_index;
+            float previous_time;
+            float next_time;
+            const vector_t *previous_value;
+            const vector_t *following_value;
+            float previous;
+            float following;
+
+            catmull_indices(view, lower, upper, &previous_index,
+                            &next_index, &previous_time, &next_time);
+            previous_value = &((const anim_vector_key_t *)
+                key_at(track, previous_index))->value;
+            following_value = &((const anim_vector_key_t *)
+                key_at(track, next_index))->value;
+            previous = value - shortest_angle_delta(
+                vector_component(previous_value, component), value);
+            following = next + shortest_angle_delta(
+                vector_component(upper_value, component),
+                vector_component(following_value, component));
+            if(catmull_component(previous, value, next, following,
+                                 previous_time, key_time(track, lower),
+                                 key_time(track, upper), next_time, factor,
+                                 &value) < 0)
+                return -1;
+        }
+        else
+            value += (next - value) * factor;
+    }
+    if(!isfinite(value)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = value;
+    return 0;
+}
+
+int anim_track_sample_euler(const anim_track_view_t *view, float time,
+                            vector_t *output, anim_sample_info_t *info) {
+    vector_t value;
+    size_t lower;
+    size_t upper;
+    float factor;
+
+    if(!output || !view_valid(view, ANIM_VALUE_VECTOR)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sample_interval(view, time, &lower, &upper, &factor, info) < 0)
+        return -1;
+    if(sample_euler_component(view, lower, upper, factor, 0, &value.x) < 0 ||
+       sample_euler_component(view, lower, upper, factor, 1, &value.y) < 0 ||
+       sample_euler_component(view, lower, upper, factor, 2, &value.z) < 0)
+        return -1;
+    value.w = 0.0f;
+    *output = value;
+    return 0;
+}
+
+int anim_track_sample_boolean(const anim_track_view_t *view, float time,
+                              bool *output, anim_sample_info_t *info) {
+    const anim_boolean_key_t *key;
+    size_t lower;
+    size_t upper;
+    float factor;
+
+    if(!output || !view_valid(view, ANIM_VALUE_BOOLEAN) ||
+       view->track.interpolation != ANIM_INTERPOLATION_STEP) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sample_interval(view, time, &lower, &upper, &factor, info) < 0)
+        return -1;
+
+    (void)upper;
+    (void)factor;
+    key = key_at(&view->track, lower);
+    if(key->value > 1u) {
+        errno = EILSEQ;
+        return -1;
+    }
+    *output = key->value != 0;
+    return 0;
+}
+
+static int event_track_valid(const anim_event_track_view_t *view) {
+    const anim_event_track_t *track;
+    size_t bytes;
+
+    if(!view)
+        return 0;
+    track = &view->track;
+    if(!track->events || !track->event_count ||
+       ((uintptr_t)track->events &
+        (_Alignof(anim_event_key_t) - 1u)) ||
+       !isfinite(view->start_time) || !isfinite(view->end_time) ||
+       view->start_time > view->end_time ||
+       track->event_count > SIZE_MAX / sizeof(*track->events))
+        return 0;
+    bytes = track->event_count * sizeof(*track->events);
+    if(bytes > UINTPTR_MAX - (uintptr_t)track->events)
+        return 0;
+    return track->events[0].time == view->start_time &&
+           track->events[track->event_count - 1u].time == view->end_time;
+}
+
+int anim_event_track_open(const anim_event_track_t *track,
+                          anim_event_track_view_t *output) {
+    anim_event_track_view_t view;
+    float previous = 0.0f;
+    size_t i;
+
+    if(!track || !output || !track->events || !track->event_count ||
+       ((uintptr_t)track->events &
+        (_Alignof(anim_event_key_t) - 1u)) ||
+       track->event_count > SIZE_MAX / sizeof(*track->events) ||
+       track->event_count * sizeof(*track->events) >
+       UINTPTR_MAX - (uintptr_t)track->events) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for(i = 0; i < track->event_count; ++i) {
+        float time = track->events[i].time;
+
+        if(!isfinite(time)) {
+            errno = EDOM;
+            return -1;
+        }
+        if(i && time <= previous) {
+            errno = EILSEQ;
+            return -1;
+        }
+        previous = time;
+    }
+
+    view.track = *track;
+    view.start_time = track->events[0].time;
+    view.end_time = previous;
+    memcpy(output, &view, sizeof(view));
+    return 0;
+}
+
+static int quaternion_normalize(const anim_quaternion_t *source,
+                                anim_quaternion_t *output) {
+    anim_quaternion_t normalized;
+    shz_quat_t input;
+    float magnitude_squared;
+
+    if(!source || !finite4(source->w, source->x, source->y, source->z)) {
+        errno = EDOM;
+        return -1;
+    }
+    input = shz_quat_init(source->w, source->x, source->y, source->z);
+    magnitude_squared = shz_quat_magnitude_sqr(input);
+    if(!isfinite(magnitude_squared) || magnitude_squared <= FLT_MIN) {
+        errno = EDOM;
+        return -1;
+    }
+
+    {
+        shz_quat_t value = shz_quat_scale(input,
+            shz_inv_sqrtf_fsrra(magnitude_squared));
+
+        normalized.w = value.w;
+        normalized.x = value.x;
+        normalized.y = value.y;
+        normalized.z = value.z;
+    }
+
+    if(!finite4(normalized.w, normalized.x, normalized.y, normalized.z)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = normalized;
+    return 0;
+}
+
+static anim_quaternion_t quaternion_multiply(anim_quaternion_t lhs,
+                                             anim_quaternion_t rhs) {
+    anim_quaternion_t product;
+
+    {
+        shz_quat_t value = shz_quat_mult(
+            shz_quat_init(lhs.w, lhs.x, lhs.y, lhs.z),
+            shz_quat_init(rhs.w, rhs.x, rhs.y, rhs.z));
+
+        product.w = value.w;
+        product.x = value.x;
+        product.y = value.y;
+        product.z = value.z;
+    }
+    return product;
+}
+
+int anim_euler_to_quaternion(const vector_t *angles,
+                             anim_rotation_mode_t mode,
+                             anim_quaternion_t *output) {
+    anim_quaternion_t axis_x;
+    anim_quaternion_t axis_y;
+    anim_quaternion_t axis_z;
+    anim_quaternion_t rotation;
+    float sin_x;
+    float cos_x;
+    float sin_y;
+    float cos_y;
+    float sin_z;
+    float cos_z;
+
+    if(!angles || !output ||
+       !finite4(angles->x, angles->y, angles->z, 0.0f) ||
+       (mode != ANIM_ROTATION_EULER_XYZ &&
+        mode != ANIM_ROTATION_EULER_ZXY)) {
+        errno = EINVAL;
+        return -1;
+    }
+    {
+        shz_sincos_t x = shz_sincosf(angles->x * 0.5f);
+        shz_sincos_t y = shz_sincosf(angles->y * 0.5f);
+        shz_sincos_t z = shz_sincosf(angles->z * 0.5f);
+
+        sin_x = x.sin;
+        cos_x = x.cos;
+        sin_y = y.sin;
+        cos_y = y.cos;
+        sin_z = z.sin;
+        cos_z = z.cos;
+    }
+    axis_x = (anim_quaternion_t){ cos_x, sin_x, 0.0f, 0.0f };
+    axis_y = (anim_quaternion_t){ cos_y, 0.0f, sin_y, 0.0f };
+    axis_z = (anim_quaternion_t){ cos_z, 0.0f, 0.0f, sin_z };
+    if(mode == ANIM_ROTATION_EULER_XYZ)
+        rotation = quaternion_multiply(
+            quaternion_multiply(axis_x, axis_y), axis_z);
+    else
+        rotation = quaternion_multiply(
+            quaternion_multiply(axis_z, axis_x), axis_y);
+    if(quaternion_normalize(&rotation, &rotation) < 0)
+        return -1;
+    *output = rotation;
+    return 0;
+}
+
+static int quaternion_slerp(const anim_quaternion_t *from,
+                            const anim_quaternion_t *to, float factor,
+                            anim_quaternion_t *output) {
+    anim_quaternion_t lhs;
+    anim_quaternion_t rhs;
+    anim_quaternion_t result;
+
+    if(quaternion_normalize(from, &lhs) < 0 ||
+       quaternion_normalize(to, &rhs) < 0)
+        return -1;
+
+    {
+        shz_quat_t value = shz_quat_slerp(
+            shz_quat_init(lhs.w, lhs.x, lhs.y, lhs.z),
+            shz_quat_init(rhs.w, rhs.x, rhs.y, rhs.z), factor);
+
+        result.w = value.w;
+        result.x = value.x;
+        result.y = value.y;
+        result.z = value.z;
+    }
+
+    return quaternion_normalize(&result, output);
+}
+
+int anim_track_sample_quaternion(const anim_track_view_t *view, float time,
+                                 anim_quaternion_t *output,
+                                 anim_sample_info_t *info) {
+    const anim_quaternion_t *lower_value;
+    const anim_quaternion_t *upper_value;
+    anim_quaternion_t sampled;
+    size_t lower;
+    size_t upper;
+    float factor;
+
+    if(!output || !view_valid(view, ANIM_VALUE_QUATERNION)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sample_interval(view, time, &lower, &upper, &factor, info) < 0)
+        return -1;
+
+    lower_value = &((const anim_quaternion_key_t *)
+                    key_at(&view->track, lower))->value;
+    if(lower == upper) {
+        if(quaternion_normalize(lower_value, &sampled) < 0)
+            return -1;
+    }
+    else if(view->track.interpolation ==
+            ANIM_INTERPOLATION_CUBIC_HERMITE) {
+        const anim_quaternion_hermite_key_t *lower_key =
+            key_at(&view->track, lower);
+        const anim_quaternion_hermite_key_t *upper_key =
+            key_at(&view->track, upper);
+        float interval = key_time(&view->track, upper) -
+                         key_time(&view->track, lower);
+
+        if(hermite_component(lower_value->w, upper_key->value.w,
+                             lower_key->out_tangent.w,
+                             upper_key->in_tangent.w, interval, factor,
+                             &sampled.w) < 0 ||
+           hermite_component(lower_value->x, upper_key->value.x,
+                             lower_key->out_tangent.x,
+                             upper_key->in_tangent.x, interval, factor,
+                             &sampled.x) < 0 ||
+           hermite_component(lower_value->y, upper_key->value.y,
+                             lower_key->out_tangent.y,
+                             upper_key->in_tangent.y, interval, factor,
+                             &sampled.y) < 0 ||
+           hermite_component(lower_value->z, upper_key->value.z,
+                             lower_key->out_tangent.z,
+                             upper_key->in_tangent.z, interval, factor,
+                             &sampled.z) < 0 ||
+           quaternion_normalize(&sampled, &sampled) < 0)
+            return -1;
+    }
+    else {
+        upper_value = &((const anim_quaternion_key_t *)
+                        key_at(&view->track, upper))->value;
+        if(quaternion_slerp(lower_value, upper_value, factor, &sampled) < 0)
+            return -1;
+    }
+    *output = sampled;
+    return 0;
+}
+
+static int transform_valid(const anim_transform_t *transform) {
+    return transform &&
+           finite4(transform->translation.x, transform->translation.y,
+                   transform->translation.z, 0.0f) &&
+           finite4(transform->scale.x, transform->scale.y,
+                   transform->scale.z, 0.0f) &&
+           quaternion_valid(&transform->rotation);
+}
+
+int anim_transform_sample(const anim_transform_tracks_t *tracks, float time,
+                          anim_transform_t *output) {
+    anim_transform_t sampled;
+
+    if(!tracks || !output || !isfinite(time) ||
+       tracks->rotation_mode < ANIM_ROTATION_QUATERNION ||
+       tracks->rotation_mode > ANIM_ROTATION_EULER_ZXY ||
+       !transform_valid(&tracks->fallback)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    sampled = tracks->fallback;
+    if(tracks->translation && anim_track_sample_vector(
+           tracks->translation, time, &sampled.translation, NULL) < 0)
+        return -1;
+    if(tracks->rotation) {
+        if(tracks->rotation_mode == ANIM_ROTATION_QUATERNION) {
+            if(anim_track_sample_quaternion(
+                   tracks->rotation, time, &sampled.rotation, NULL) < 0)
+                return -1;
+        }
+        else {
+            vector_t angles;
+
+            if(anim_track_sample_euler(
+                   tracks->rotation, time, &angles, NULL) < 0 ||
+               anim_euler_to_quaternion(
+                   &angles, tracks->rotation_mode, &sampled.rotation) < 0)
+                return -1;
+        }
+    }
+    if(tracks->scale && anim_track_sample_vector(
+           tracks->scale, time, &sampled.scale, NULL) < 0)
+        return -1;
+    if(quaternion_normalize(&sampled.rotation, &sampled.rotation) < 0)
+        return -1;
+    sampled.translation.w = 1.0f;
+    sampled.scale.w = 0.0f;
+    *output = sampled;
+    return 0;
+}
+
+int anim_transform_blend(const anim_transform_t *from,
+                         const anim_transform_t *to, float weight,
+                         anim_transform_t *output) {
+    anim_transform_t blended;
+
+    if(!output || !transform_valid(from) || !transform_valid(to) ||
+       !isfinite(weight) || weight < 0.0f || weight > 1.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    {
+        shz_vec3_t translation = shz_vec3_lerp(
+            shz_vec3_init(from->translation.x, from->translation.y,
+                          from->translation.z),
+            shz_vec3_init(to->translation.x, to->translation.y,
+                          to->translation.z), weight);
+        shz_vec3_t scale = shz_vec3_lerp(
+            shz_vec3_init(from->scale.x, from->scale.y, from->scale.z),
+            shz_vec3_init(to->scale.x, to->scale.y, to->scale.z), weight);
+
+        blended.translation.x = translation.x;
+        blended.translation.y = translation.y;
+        blended.translation.z = translation.z;
+        blended.scale.x = scale.x;
+        blended.scale.y = scale.y;
+        blended.scale.z = scale.z;
+    }
+    blended.translation.w = 1.0f;
+    blended.scale.w = 0.0f;
+    if(quaternion_slerp(&from->rotation, &to->rotation, weight,
+                        &blended.rotation) < 0)
+        return -1;
+    if(!transform_valid(&blended)) {
+        errno = ERANGE;
+        return -1;
+    }
+    *output = blended;
+    return 0;
+}
+
+int anim_transform_matrix_build(const anim_transform_t *transform,
+                                matrix_t *output) {
+    anim_quaternion_t rotation;
+    matrix_t matrix;
+
+    if(!output || ((uintptr_t)output & (_Alignof(matrix_t) - 1u)) ||
+       !transform_valid(transform)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(quaternion_normalize(&transform->rotation, &rotation) < 0)
+        return -1;
+
+    {
+        shz_mat4x4_t shz_matrix;
+
+        shz_mat4x4_init_rotation_quat(
+            &shz_matrix, shz_quat_init(rotation.w, rotation.x,
+                                       rotation.y, rotation.z));
+        /* Scale the rotation columns for T * R * S. Unlike
+           shz_mat4x4_apply_scale(), these one-off operations preserve XMTRX
+           and leave the affine row (0, 0, 0, 1) intact. SH4ZAM selects its
+           portable implementation for host tools. */
+        shz_matrix.col[0].xyz = shz_vec3_scale(shz_matrix.col[0].xyz,
+                                              transform->scale.x);
+        shz_matrix.col[1].xyz = shz_vec3_scale(shz_matrix.col[1].xyz,
+                                              transform->scale.y);
+        shz_matrix.col[2].xyz = shz_vec3_scale(shz_matrix.col[2].xyz,
+                                              transform->scale.z);
+        shz_mat4x4_set_translation(&shz_matrix, transform->translation.x,
+                                   transform->translation.y,
+                                   transform->translation.z);
+        shz_kos_matrix_export(&matrix, &shz_matrix);
+    }
+
+    if(!finite4(matrix[0][0], matrix[1][0], matrix[2][0], matrix[3][0]) ||
+       !finite4(matrix[0][1], matrix[1][1], matrix[2][1], matrix[3][1]) ||
+       !finite4(matrix[0][2], matrix[1][2], matrix[2][2], matrix[3][2]) ||
+       !finite4(matrix[0][3], matrix[1][3], matrix[2][3], matrix[3][3])) {
+        errno = ERANGE;
+        return -1;
+    }
+    memcpy(output, &matrix, sizeof(matrix));
+    return 0;
+}
+
+static int clip_shallow_valid(const anim_clip_view_t *view) {
+    const anim_clip_t *clip;
+
+    if(!view)
+        return 0;
+    clip = &view->clip;
+    if(!clip->transforms || !clip->transform_count ||
+       ((uintptr_t)clip->transforms &
+        (_Alignof(anim_transform_tracks_t) - 1u)) ||
+       !isfinite(clip->start_time) || !isfinite(clip->end_time) ||
+       clip->start_time >= clip->end_time ||
+       clip->transform_count > SIZE_MAX / sizeof(*clip->transforms) ||
+       clip->transform_count * sizeof(*clip->transforms) >
+       UINTPTR_MAX - (uintptr_t)clip->transforms)
+        return 0;
+    if(clip->visibility &&
+       (((uintptr_t)clip->visibility &
+         (_Alignof(anim_visibility_tracks_t) - 1u)) ||
+        clip->transform_count > SIZE_MAX / sizeof(*clip->visibility) ||
+        clip->transform_count * sizeof(*clip->visibility) >
+        UINTPTR_MAX - (uintptr_t)clip->visibility))
+        return 0;
+    return 1;
+}
+
+static int transform_tracks_valid(const anim_transform_tracks_t *tracks) {
+    anim_value_kind_t rotation_kind;
+
+    if(!tracks || tracks->rotation_mode < ANIM_ROTATION_QUATERNION ||
+       tracks->rotation_mode > ANIM_ROTATION_EULER_ZXY)
+        return 0;
+    rotation_kind = tracks->rotation_mode == ANIM_ROTATION_QUATERNION ?
+                    ANIM_VALUE_QUATERNION : ANIM_VALUE_VECTOR;
+    return transform_valid(&tracks->fallback) &&
+           (!tracks->translation ||
+            view_valid(tracks->translation, ANIM_VALUE_VECTOR)) &&
+           (!tracks->rotation ||
+            view_valid(tracks->rotation, rotation_kind)) &&
+           (!tracks->scale ||
+            view_valid(tracks->scale, ANIM_VALUE_VECTOR));
+}
+
+static int visibility_tracks_valid(const anim_visibility_tracks_t *tracks) {
+    return tracks && (!tracks->visible ||
+           (view_valid(tracks->visible, ANIM_VALUE_BOOLEAN) &&
+            tracks->visible->track.interpolation == ANIM_INTERPOLATION_STEP));
+}
+
+int anim_clip_open(const anim_clip_t *clip, anim_clip_view_t *output) {
+    anim_clip_view_t view;
+    size_t i;
+
+    if(!clip || !output) {
+        errno = EINVAL;
+        return -1;
+    }
+    view.clip = *clip;
+    if(!clip_shallow_valid(&view)) {
+        errno = EINVAL;
+        return -1;
+    }
+    for(i = 0; i < clip->transform_count; ++i) {
+        if(!transform_tracks_valid(&clip->transforms[i]) ||
+           (clip->visibility &&
+            !visibility_tracks_valid(&clip->visibility[i]))) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+
+    memcpy(output, &view, sizeof(view));
+    return 0;
+}
+
+static float clip_time_clamp(const anim_clip_view_t *clip, float time) {
+    if(time < clip->clip.start_time)
+        return clip->clip.start_time;
+    if(time > clip->clip.end_time)
+        return clip->clip.end_time;
+    return time;
+}
+
+int anim_clip_sample(const anim_clip_view_t *clip, float time,
+                     anim_transform_t *output, size_t output_capacity,
+                     anim_pose_result_t *result) {
+    anim_pose_result_t progress = { 0 };
+    float sample_time;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(!clip_shallow_valid(clip) || !output ||
+       ((uintptr_t)output & (_Alignof(anim_transform_t) - 1u)) ||
+       !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < clip->clip.transform_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(clip->clip.transform_count >
+       (UINTPTR_MAX - (uintptr_t)output) / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    sample_time = clip_time_clamp(clip, time);
+    for(i = 0; i < clip->clip.transform_count; ++i) {
+        if(anim_transform_sample(&clip->clip.transforms[i], sample_time,
+                                 &output[i]) < 0)
+            return -1;
+        progress.sampled_transforms = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}
+
+int anim_clip_sample_matrices(const anim_clip_view_t *clip, float time,
+                              matrix_t *output, size_t output_capacity,
+                              anim_pose_result_t *result) {
+    anim_pose_result_t progress = { 0 };
+    float sample_time;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(!clip_shallow_valid(clip) || !output ||
+       ((uintptr_t)output & (_Alignof(matrix_t) - 1u)) ||
+       !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < clip->clip.transform_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(clip->clip.transform_count >
+       (UINTPTR_MAX - (uintptr_t)output) / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    sample_time = clip_time_clamp(clip, time);
+    for(i = 0; i < clip->clip.transform_count; ++i) {
+        anim_transform_t transform;
+
+        if(anim_transform_sample(&clip->clip.transforms[i], sample_time,
+                                 &transform) < 0 ||
+           anim_transform_matrix_build(&transform, &output[i]) < 0)
+            return -1;
+        progress.sampled_transforms = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}
+
+int anim_clip_sample_visibility(const anim_clip_view_t *clip, float time,
+                                bool *output, size_t output_capacity,
+                                anim_pose_result_t *result) {
+    anim_pose_result_t progress = { 0 };
+    float sample_time;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(!clip_shallow_valid(clip) || !output || !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < clip->clip.transform_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(clip->clip.transform_count >
+       (UINTPTR_MAX - (uintptr_t)output) / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    sample_time = clip_time_clamp(clip, time);
+    for(i = 0; i < clip->clip.transform_count; ++i) {
+        bool visible = true;
+
+        if(clip->clip.visibility) {
+            const anim_visibility_tracks_t *tracks =
+                &clip->clip.visibility[i];
+
+            if(!visibility_tracks_valid(tracks)) {
+                errno = EINVAL;
+                return -1;
+            }
+            visible = tracks->fallback;
+            if(tracks->visible && anim_track_sample_boolean(
+                   tracks->visible, sample_time, &visible, NULL) < 0)
+                return -1;
+        }
+        output[i] = visible;
+        progress.sampled_transforms = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}
+
+int anim_clip_sample_blend(const anim_clip_view_t *from, float from_time,
+                           const anim_clip_view_t *to, float to_time,
+                           float weight, anim_transform_t *output,
+                           size_t output_capacity,
+                           anim_pose_result_t *result) {
+    anim_pose_result_t progress = { 0 };
+    float first_time;
+    float second_time;
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if(!clip_shallow_valid(from) || !clip_shallow_valid(to) || !output ||
+       ((uintptr_t)output & (_Alignof(anim_transform_t) - 1u)) ||
+       from->clip.transform_count != to->clip.transform_count ||
+       !isfinite(from_time) || !isfinite(to_time) || !isfinite(weight) ||
+       weight < 0.0f || weight > 1.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < from->clip.transform_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(from->clip.transform_count >
+       (UINTPTR_MAX - (uintptr_t)output) / sizeof(*output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    first_time = clip_time_clamp(from, from_time);
+    second_time = clip_time_clamp(to, to_time);
+    for(i = 0; i < from->clip.transform_count; ++i) {
+        anim_transform_t first;
+        anim_transform_t second;
+
+        if(anim_transform_sample(&from->clip.transforms[i], first_time,
+                                 &first) < 0 ||
+           anim_transform_sample(&to->clip.transforms[i], second_time,
+                                 &second) < 0 ||
+           anim_transform_blend(&first, &second, weight, &output[i]) < 0)
+            return -1;
+        progress.sampled_transforms = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}
+
+static int playback_valid(const anim_playback_t *playback) {
+    if(!playback || !clip_shallow_valid(playback->clip) ||
+       !isfinite(playback->time) || !isfinite(playback->rate) ||
+       playback->rate <= 0.0f ||
+       playback->time < playback->clip->clip.start_time ||
+       playback->time > playback->clip->clip.end_time ||
+       (playback->mode != ANIM_PLAYBACK_ONCE &&
+        playback->mode != ANIM_PLAYBACK_LOOP &&
+        playback->mode != ANIM_PLAYBACK_PING_PONG) ||
+       (playback->direction != ANIM_PLAYBACK_FORWARD &&
+        playback->direction != ANIM_PLAYBACK_BACKWARD) ||
+       (playback->state != ANIM_PLAYBACK_STOPPED &&
+        playback->state != ANIM_PLAYBACK_PLAYING &&
+        playback->state != ANIM_PLAYBACK_PAUSED &&
+        playback->state != ANIM_PLAYBACK_COMPLETE))
+        return 0;
+    return 1;
+}
+
+int anim_playback_init(anim_playback_t *playback,
+                       const anim_clip_view_t *clip,
+                       anim_playback_mode_t mode) {
+    anim_playback_t initialized;
+
+    if(!playback || !clip_shallow_valid(clip) ||
+       (mode != ANIM_PLAYBACK_ONCE && mode != ANIM_PLAYBACK_LOOP &&
+        mode != ANIM_PLAYBACK_PING_PONG)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    initialized.clip = clip;
+    initialized.time = clip->clip.start_time;
+    initialized.rate = 1.0f;
+    initialized.boundary_count = 0;
+    initialized.mode = mode;
+    initialized.direction = ANIM_PLAYBACK_FORWARD;
+    initialized.state = ANIM_PLAYBACK_STOPPED;
+    *playback = initialized;
+    return 0;
+}
+
+int anim_playback_play(anim_playback_t *playback) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(playback->state == ANIM_PLAYBACK_COMPLETE) {
+        playback->time = playback->direction == ANIM_PLAYBACK_FORWARD ?
+            playback->clip->clip.start_time : playback->clip->clip.end_time;
+    }
+    playback->state = ANIM_PLAYBACK_PLAYING;
+    return 0;
+}
+
+int anim_playback_pause(anim_playback_t *playback) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(playback->state == ANIM_PLAYBACK_PLAYING)
+        playback->state = ANIM_PLAYBACK_PAUSED;
+    return 0;
+}
+
+int anim_playback_stop(anim_playback_t *playback) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->time = playback->clip->clip.start_time;
+    playback->boundary_count = 0;
+    playback->direction = ANIM_PLAYBACK_FORWARD;
+    playback->state = ANIM_PLAYBACK_STOPPED;
+    return 0;
+}
+
+int anim_playback_seek(anim_playback_t *playback, float time) {
+    if(!playback_valid(playback) || !isfinite(time) ||
+       time < playback->clip->clip.start_time ||
+       time > playback->clip->clip.end_time) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->time = time;
+    if(playback->state == ANIM_PLAYBACK_COMPLETE)
+        playback->state = ANIM_PLAYBACK_PAUSED;
+    return 0;
+}
+
+int anim_playback_set_rate(anim_playback_t *playback, float rate) {
+    if(!playback_valid(playback) || !isfinite(rate) || rate <= 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->rate = rate;
+    return 0;
+}
+
+int anim_playback_set_direction(anim_playback_t *playback,
+                                anim_playback_direction_t direction) {
+    if(!playback_valid(playback) ||
+       (direction != ANIM_PLAYBACK_FORWARD &&
+        direction != ANIM_PLAYBACK_BACKWARD)) {
+        errno = EINVAL;
+        return -1;
+    }
+    playback->direction = direction;
+    return 0;
+}
+
+static int boundary_count_from_double(double value, uint64_t *output) {
+    double integral;
+
+    /* UINT64_MAX rounds upward to 2^64 in binary64, so compare against the
+       first unrepresentable count rather than a converted UINT64_MAX. */
+    if(!isfinite(value) || value < 0.0 ||
+       value >= 18446744073709551616.0) {
+        errno = ERANGE;
+        return -1;
+    }
+    integral = floor(value);
+    *output = (uint64_t)integral;
+    return 0;
+}
+
+int anim_playback_advance(anim_playback_t *playback, float elapsed,
+                          anim_playback_result_t *result) {
+    anim_playback_result_t advanced;
+    anim_playback_t next;
+    double start;
+    double end;
+    double duration;
+    double travel;
+    uint64_t crossed = 0;
+
+    if(!playback_valid(playback) || !isfinite(elapsed) || elapsed < 0.0f) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    start = playback->clip->clip.start_time;
+    end = playback->clip->clip.end_time;
+    next = *playback;
+    advanced.previous_time = playback->time;
+    advanced.current_time = playback->time;
+    advanced.crossed_boundaries = 0;
+    advanced.previous_direction = playback->direction;
+    advanced.current_direction = playback->direction;
+    advanced.state = playback->state;
+
+    if(playback->state != ANIM_PLAYBACK_PLAYING || elapsed == 0.0f) {
+        if(result)
+            *result = advanced;
+        return 0;
+    }
+
+    duration = end - start;
+    travel = (double)elapsed * playback->rate;
+    if(!isfinite(travel)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    if(playback->mode == ANIM_PLAYBACK_ONCE) {
+        double remaining = playback->direction == ANIM_PLAYBACK_FORWARD ?
+            end - playback->time : playback->time - start;
+
+        if(travel >= remaining) {
+            next.time = playback->direction == ANIM_PLAYBACK_FORWARD ?
+                (float)end : (float)start;
+            next.state = ANIM_PLAYBACK_COMPLETE;
+            crossed = remaining > 0.0 ? 1u : 0u;
+        }
+        else if(playback->direction == ANIM_PLAYBACK_FORWARD) {
+            next.time = (float)(playback->time + travel);
+        }
+        else {
+            next.time = (float)(playback->time - travel);
+        }
+    }
+    else if(playback->mode == ANIM_PLAYBACK_LOOP) {
+        double phase;
+        double total;
+        double remainder;
+
+        if(playback->direction == ANIM_PLAYBACK_FORWARD)
+            phase = playback->time - start;
+        else
+            phase = end - playback->time;
+        total = phase + travel;
+        if(boundary_count_from_double(total / duration, &crossed) < 0)
+            return -1;
+        remainder = fmod(total, duration);
+        if(playback->direction == ANIM_PLAYBACK_FORWARD)
+            next.time = (float)(start + remainder);
+        else
+            next.time = (float)(end - remainder);
+    }
+    else {
+        double phase;
+        double total;
+        double period = duration * 2.0;
+        double remainder;
+        uint64_t initial_boundaries;
+        uint64_t final_boundaries;
+
+        if(playback->time <= start &&
+           playback->direction == ANIM_PLAYBACK_BACKWARD)
+            next.direction = ANIM_PLAYBACK_FORWARD;
+        else if(playback->time >= end &&
+                playback->direction == ANIM_PLAYBACK_FORWARD)
+            next.direction = ANIM_PLAYBACK_BACKWARD;
+
+        phase = next.direction == ANIM_PLAYBACK_FORWARD ?
+            playback->time - start : period - (playback->time - start);
+        total = phase + travel;
+        if(boundary_count_from_double(phase / duration,
+                                      &initial_boundaries) < 0 ||
+           boundary_count_from_double(total / duration,
+                                      &final_boundaries) < 0)
+            return -1;
+        crossed = final_boundaries - initial_boundaries;
+        remainder = fmod(total, period);
+        if(remainder < duration) {
+            next.time = (float)(start + remainder);
+            next.direction = ANIM_PLAYBACK_FORWARD;
+        }
+        else {
+            next.time = (float)(end - (remainder - duration));
+            next.direction = ANIM_PLAYBACK_BACKWARD;
+        }
+    }
+
+    if(UINT64_MAX - next.boundary_count < crossed) {
+        errno = ERANGE;
+        return -1;
+    }
+    next.boundary_count += crossed;
+    advanced.current_time = next.time;
+    advanced.crossed_boundaries = crossed;
+    advanced.current_direction = next.direction;
+    advanced.state = next.state;
+    *playback = next;
+    if(result)
+        *result = advanced;
+    return 0;
+}
+
+static size_t event_lower_bound(const anim_event_track_view_t *view,
+                                float time) {
+    size_t low = 0;
+    size_t high = view->track.event_count;
+
+    while(low < high) {
+        size_t middle = low + (high - low) / 2u;
+
+        if(view->track.events[middle].time < time)
+            low = middle + 1u;
+        else
+            high = middle;
+    }
+    return low;
+}
+
+static size_t event_upper_bound(const anim_event_track_view_t *view,
+                                float time) {
+    size_t low = 0;
+    size_t high = view->track.event_count;
+
+    while(low < high) {
+        size_t middle = low + (high - low) / 2u;
+
+        if(view->track.events[middle].time <= time)
+            low = middle + 1u;
+        else
+            high = middle;
+    }
+    return low;
+}
+
+/* Forward traversal owns (from, to]; backward traversal owns [to, from).
+   These half-open rules fire a reflected endpoint once and avoid replaying a
+   marker merely because the next advance begins on that endpoint. */
+static uint64_t event_count_forward(const anim_event_track_view_t *view,
+                                    float from, float to) {
+    return (uint64_t)(event_upper_bound(view, to) -
+                      event_upper_bound(view, from));
+}
+
+static uint64_t event_count_backward(const anim_event_track_view_t *view,
+                                     float from, float to) {
+    return (uint64_t)(event_lower_bound(view, from) -
+                      event_lower_bound(view, to));
+}
+
+static uint64_t event_count_at(const anim_event_track_view_t *view,
+                               float time) {
+    return (uint64_t)(event_upper_bound(view, time) -
+                      event_lower_bound(view, time));
+}
+
+static int event_count_add(uint64_t *total, uint64_t count,
+                           uint64_t repetitions) {
+    uint64_t addition;
+
+    if(count && repetitions > UINT64_MAX / count) {
+        errno = ERANGE;
+        return -1;
+    }
+    addition = count * repetitions;
+    if(UINT64_MAX - *total < addition) {
+        errno = ERANGE;
+        return -1;
+    }
+    *total += addition;
+    return 0;
+}
+
+static void event_emit_forward(const anim_event_track_view_t *view,
+                               float from, float to,
+                               anim_playback_direction_t direction,
+                               anim_event_occurrence_t *output,
+                               size_t output_capacity, size_t *published) {
+    size_t i = event_upper_bound(view, from);
+    size_t end = event_upper_bound(view, to);
+
+    while(i < end && *published < output_capacity) {
+        output[*published].event = view->track.events[i++];
+        output[*published].direction = direction;
+        ++*published;
+    }
+}
+
+static void event_emit_backward(const anim_event_track_view_t *view,
+                                float from, float to,
+                                anim_playback_direction_t direction,
+                                anim_event_occurrence_t *output,
+                                size_t output_capacity, size_t *published) {
+    size_t i = event_lower_bound(view, from);
+    size_t end = event_lower_bound(view, to);
+
+    while(i > end && *published < output_capacity) {
+        output[*published].event = view->track.events[--i];
+        output[*published].direction = direction;
+        ++*published;
+    }
+}
+
+static void event_emit_at(const anim_event_track_view_t *view, float time,
+                          anim_playback_direction_t direction,
+                          anim_event_occurrence_t *output,
+                          size_t output_capacity, size_t *published) {
+    size_t i = event_lower_bound(view, time);
+
+    if(i < view->track.event_count &&
+       view->track.events[i].time == time &&
+       *published < output_capacity) {
+        output[*published].event = view->track.events[i];
+        output[*published].direction = direction;
+        ++*published;
+    }
+}
+
+static anim_playback_direction_t playback_effective_direction(
+        const anim_playback_t *playback,
+        const anim_playback_result_t *advance) {
+    float start = playback->clip->clip.start_time;
+    float end = playback->clip->clip.end_time;
+    anim_playback_direction_t direction = advance->previous_direction;
+
+    if(playback->mode == ANIM_PLAYBACK_PING_PONG) {
+        if(advance->previous_time <= start &&
+           direction == ANIM_PLAYBACK_BACKWARD)
+            direction = ANIM_PLAYBACK_FORWARD;
+        else if(advance->previous_time >= end &&
+                direction == ANIM_PLAYBACK_FORWARD)
+            direction = ANIM_PLAYBACK_BACKWARD;
+    }
+    return direction;
+}
+
+int anim_playback_collect_events(const anim_playback_t *playback,
+                                 const anim_playback_result_t *advance,
+                                 const anim_event_track_view_t *events,
+                                 anim_event_occurrence_t *output,
+                                 size_t output_capacity,
+                                 anim_event_result_t *result) {
+    anim_event_result_t collected = { 0, 0, false };
+    anim_playback_direction_t direction;
+    float start;
+    float end;
+    uint64_t crossed;
+    uint64_t full_forward;
+    uint64_t full_backward;
+    size_t published = 0;
+
+    if(result)
+        *result = collected;
+    if(!playback_valid(playback) || !advance || !event_track_valid(events) ||
+       (output_capacity && !output) ||
+       (output && ((uintptr_t)output &
+                   (_Alignof(anim_event_occurrence_t) - 1u))) ||
+       advance->current_time != playback->time ||
+       advance->current_direction != playback->direction ||
+       advance->state != playback->state ||
+       !isfinite(advance->previous_time) ||
+       advance->previous_time < playback->clip->clip.start_time ||
+       advance->previous_time > playback->clip->clip.end_time ||
+       (advance->previous_direction != ANIM_PLAYBACK_FORWARD &&
+        advance->previous_direction != ANIM_PLAYBACK_BACKWARD) ||
+       advance->crossed_boundaries > playback->boundary_count ||
+       (playback->mode == ANIM_PLAYBACK_ONCE &&
+        advance->crossed_boundaries > 1u)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity > SIZE_MAX / sizeof(*output) ||
+       (output_capacity && output_capacity * sizeof(*output) >
+        UINTPTR_MAX - (uintptr_t)output)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    start = playback->clip->clip.start_time;
+    end = playback->clip->clip.end_time;
+    crossed = advance->crossed_boundaries;
+    direction = playback_effective_direction(playback, advance);
+    full_forward = event_count_forward(events, start, end);
+    full_backward = event_count_backward(events, end, start);
+
+    if(playback->mode == ANIM_PLAYBACK_ONCE || !crossed) {
+        if(direction == ANIM_PLAYBACK_FORWARD) {
+            collected.matching_events = event_count_forward(
+                events, advance->previous_time, advance->current_time);
+            event_emit_forward(events, advance->previous_time,
+                               advance->current_time, direction,
+                               output, output_capacity, &published);
+        }
+        else {
+            collected.matching_events = event_count_backward(
+                events, advance->previous_time, advance->current_time);
+            event_emit_backward(events, advance->previous_time,
+                                advance->current_time, direction,
+                                output, output_capacity, &published);
+        }
+    }
+    else if(playback->mode == ANIM_PLAYBACK_LOOP) {
+        uint64_t middle = crossed - 1u;
+        uint64_t boundary;
+        uint64_t i;
+
+        if(direction == ANIM_PLAYBACK_FORWARD) {
+            collected.matching_events = event_count_forward(
+                events, advance->previous_time, end);
+            boundary = event_count_at(events, start);
+            if(event_count_add(&collected.matching_events, boundary,
+                               crossed) < 0 ||
+               event_count_add(&collected.matching_events, full_forward,
+                               middle) < 0 ||
+               event_count_add(&collected.matching_events,
+                               event_count_forward(events, start,
+                                                   advance->current_time),
+                               1u) < 0)
+                return -1;
+
+            event_emit_forward(events, advance->previous_time, end, direction,
+                               output, output_capacity, &published);
+            if(boundary || full_forward) {
+                for(i = 0; i < crossed && published < output_capacity; ++i) {
+                    event_emit_at(events, start, direction, output,
+                                  output_capacity, &published);
+                    if(i + 1u < crossed)
+                        event_emit_forward(events, start, end, direction,
+                                           output, output_capacity, &published);
+                }
+            }
+            if(published < output_capacity)
+                event_emit_forward(events, start, advance->current_time,
+                                   direction, output, output_capacity,
+                                   &published);
+        }
+        else {
+            collected.matching_events = event_count_backward(
+                events, advance->previous_time, start);
+            boundary = event_count_at(events, end);
+            if(event_count_add(&collected.matching_events, boundary,
+                               crossed) < 0 ||
+               event_count_add(&collected.matching_events, full_backward,
+                               middle) < 0 ||
+               event_count_add(&collected.matching_events,
+                               event_count_backward(events, end,
+                                                    advance->current_time),
+                               1u) < 0)
+                return -1;
+
+            event_emit_backward(events, advance->previous_time, start,
+                                direction, output, output_capacity, &published);
+            if(boundary || full_backward) {
+                for(i = 0; i < crossed && published < output_capacity; ++i) {
+                    event_emit_at(events, end, direction, output,
+                                  output_capacity, &published);
+                    if(i + 1u < crossed)
+                        event_emit_backward(events, end, start, direction,
+                                            output, output_capacity,
+                                            &published);
+                }
+            }
+            if(published < output_capacity)
+                event_emit_backward(events, end, advance->current_time,
+                                    direction, output, output_capacity,
+                                    &published);
+        }
+    }
+    else {
+        uint64_t middle = crossed - 1u;
+        uint64_t forward_repetitions;
+        uint64_t backward_repetitions;
+        uint64_t i;
+        anim_playback_direction_t middle_direction;
+
+        if(direction == ANIM_PLAYBACK_FORWARD) {
+            collected.matching_events = event_count_forward(
+                events, advance->previous_time, end);
+            backward_repetitions = (middle + 1u) / 2u;
+            forward_repetitions = middle / 2u;
+            middle_direction = ANIM_PLAYBACK_BACKWARD;
+        }
+        else {
+            collected.matching_events = event_count_backward(
+                events, advance->previous_time, start);
+            forward_repetitions = (middle + 1u) / 2u;
+            backward_repetitions = middle / 2u;
+            middle_direction = ANIM_PLAYBACK_FORWARD;
+        }
+        if(event_count_add(&collected.matching_events, full_forward,
+                           forward_repetitions) < 0 ||
+           event_count_add(&collected.matching_events, full_backward,
+                           backward_repetitions) < 0)
+            return -1;
+        if(advance->current_direction == ANIM_PLAYBACK_FORWARD) {
+            if(event_count_add(&collected.matching_events,
+                               event_count_forward(events, start,
+                                                   advance->current_time),
+                               1u) < 0)
+                return -1;
+        }
+        else if(event_count_add(&collected.matching_events,
+                                event_count_backward(events, end,
+                                                     advance->current_time),
+                                1u) < 0) {
+            return -1;
+        }
+
+        if(direction == ANIM_PLAYBACK_FORWARD)
+            event_emit_forward(events, advance->previous_time, end, direction,
+                               output, output_capacity, &published);
+        else
+            event_emit_backward(events, advance->previous_time, start,
+                                direction, output, output_capacity, &published);
+
+        if(full_forward || full_backward) {
+            for(i = 0; i < middle && published < output_capacity; ++i) {
+                if(middle_direction == ANIM_PLAYBACK_FORWARD)
+                    event_emit_forward(events, start, end, middle_direction,
+                                       output, output_capacity, &published);
+                else
+                    event_emit_backward(events, end, start, middle_direction,
+                                        output, output_capacity, &published);
+                middle_direction = middle_direction == ANIM_PLAYBACK_FORWARD ?
+                    ANIM_PLAYBACK_BACKWARD : ANIM_PLAYBACK_FORWARD;
+            }
+        }
+        if(published < output_capacity) {
+            if(advance->current_direction == ANIM_PLAYBACK_FORWARD)
+                event_emit_forward(events, start, advance->current_time,
+                                   ANIM_PLAYBACK_FORWARD, output,
+                                   output_capacity, &published);
+            else
+                event_emit_backward(events, end, advance->current_time,
+                                    ANIM_PLAYBACK_BACKWARD, output,
+                                    output_capacity, &published);
+        }
+    }
+
+    collected.published_events = published;
+    collected.truncated = (uint64_t)published < collected.matching_events;
+    if(result)
+        *result = collected;
+    return 0;
+}
+
+int anim_playback_sample(const anim_playback_t *playback,
+                         anim_transform_t *output, size_t output_capacity,
+                         anim_pose_result_t *result) {
+    if(!playback_valid(playback)) {
+        if(result)
+            result->sampled_transforms = 0;
+        errno = EINVAL;
+        return -1;
+    }
+    return anim_clip_sample(playback->clip, playback->time, output,
+                            output_capacity, result);
+}
+
+static int camera_pose_valid(const anim_camera_pose_t *camera) {
+    float forward_x;
+    float forward_y;
+    float forward_z;
+    float forward_length;
+    float up_length;
+
+    if(!camera ||
+       !finite4(camera->eye.x, camera->eye.y, camera->eye.z, 0.0f) ||
+       !finite4(camera->target.x, camera->target.y, camera->target.z, 0.0f) ||
+       !finite4(camera->up.x, camera->up.y, camera->up.z, 0.0f) ||
+       !isfinite(camera->roll) || !isfinite(camera->vertical_fov) ||
+       camera->vertical_fov <= 0.0f ||
+       camera->vertical_fov >= 3.14159265358979323846f)
+        return 0;
+
+    forward_x = camera->target.x - camera->eye.x;
+    forward_y = camera->target.y - camera->eye.y;
+    forward_z = camera->target.z - camera->eye.z;
+    forward_length = forward_x * forward_x + forward_y * forward_y +
+                     forward_z * forward_z;
+    up_length = camera->up.x * camera->up.x +
+                camera->up.y * camera->up.y +
+                camera->up.z * camera->up.z;
+    return isfinite(forward_length) && forward_length > FLT_MIN &&
+           isfinite(up_length) && up_length > FLT_MIN;
+}
+
+static int camera_tracks_valid(const anim_camera_tracks_t *tracks) {
+    return tracks && camera_pose_valid(&tracks->fallback) &&
+           (!tracks->eye || view_valid(tracks->eye, ANIM_VALUE_VECTOR)) &&
+           (!tracks->target ||
+            view_valid(tracks->target, ANIM_VALUE_VECTOR)) &&
+           (!tracks->up || view_valid(tracks->up, ANIM_VALUE_VECTOR)) &&
+           (!tracks->roll || view_valid(tracks->roll, ANIM_VALUE_SCALAR)) &&
+           (!tracks->vertical_fov ||
+            view_valid(tracks->vertical_fov, ANIM_VALUE_SCALAR));
+}
+
+int anim_camera_sample(const anim_camera_tracks_t *tracks, float time,
+                       anim_camera_pose_t *output) {
+    anim_camera_pose_t sampled;
+
+    if(!camera_tracks_valid(tracks) || !output || !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    sampled = tracks->fallback;
+    if(tracks->eye && anim_track_sample_vector(
+           tracks->eye, time, &sampled.eye, NULL) < 0)
+        return -1;
+    if(tracks->target && anim_track_sample_vector(
+           tracks->target, time, &sampled.target, NULL) < 0)
+        return -1;
+    if(tracks->up && anim_track_sample_vector(
+           tracks->up, time, &sampled.up, NULL) < 0)
+        return -1;
+    if(tracks->roll && anim_track_sample_scalar(
+           tracks->roll, time, &sampled.roll, NULL) < 0)
+        return -1;
+    if(tracks->vertical_fov && anim_track_sample_scalar(
+           tracks->vertical_fov, time, &sampled.vertical_fov, NULL) < 0)
+        return -1;
+
+    sampled.eye.w = 1.0f;
+    sampled.target.w = 1.0f;
+    sampled.up.w = 0.0f;
+    if(!camera_pose_valid(&sampled)) {
+        errno = EDOM;
+        return -1;
+    }
+    *output = sampled;
+    return 0;
+}
+
+int anim_camera_view_matrix_build(const anim_camera_pose_t *camera,
+                                  matrix_t *output) {
+    anim_camera_pose_t rolled;
+    mat_lookat_desc_t look_at;
+    shz_vec3_t axis;
+    shz_vec3_t up;
+    shz_vec3_t cross;
+    shz_vec3_t rolled_up;
+    shz_sincos_t rotation;
+    float reciprocal_length;
+    float sine;
+    float cosine;
+    float dot;
+
+    if(!camera_pose_valid(camera) || !output ||
+       ((uintptr_t)output & (_Alignof(matrix_t) - 1u))) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    rolled = *camera;
+    axis = shz_vec3_sub(shz_vec3_init(camera->target.x, camera->target.y,
+                                     camera->target.z),
+                        shz_vec3_init(camera->eye.x, camera->eye.y,
+                                     camera->eye.z));
+    reciprocal_length = shz_vec3_magnitude_inv(axis);
+    axis = shz_vec3_scale(axis, reciprocal_length);
+    rotation = shz_sincosf(camera->roll);
+    sine = rotation.sin;
+    cosine = rotation.cos;
+    up = shz_vec3_init(camera->up.x, camera->up.y, camera->up.z);
+    cross = shz_vec3_cross(axis, up);
+    dot = shz_vec3_dot(axis, up);
+    /* Rodrigues rotation, using one-off vectors rather than loading XMTRX. */
+    rolled_up = shz_vec3_add(
+        shz_vec3_add(shz_vec3_scale(up, cosine), shz_vec3_scale(cross, sine)),
+        shz_vec3_scale(axis, dot * (1.0f - cosine)));
+    rolled.up.x = rolled_up.x;
+    rolled.up.y = rolled_up.y;
+    rolled.up.z = rolled_up.z;
+    rolled.up.w = 0.0f;
+    if(!camera_pose_valid(&rolled) ||
+       !finite4(reciprocal_length, sine, cosine, dot)) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    look_at.eye = rolled.eye;
+    look_at.center = rolled.target;
+    look_at.up = rolled.up;
+    return mat_lookat_build(output, &look_at);
+}
+
+int anim_camera_projection_matrix_build(const anim_camera_pose_t *camera,
+                                        float x_center, float y_center,
+                                        float z_near, float z_far,
+                                        matrix_t *output) {
+    mat_perspective_desc_t perspective;
+    float tangent;
+
+    if(!camera_pose_valid(camera) || !output ||
+       ((uintptr_t)output & (_Alignof(matrix_t) - 1u)) ||
+       !finite4(x_center, y_center, z_near, z_far)) {
+        errno = EINVAL;
+        return -1;
+    }
+    tangent = shz_tanf(camera->vertical_fov * 0.5f);
+    perspective.cot_half_fov = shz_invf(tangent);
+    if(!isfinite(tangent) || tangent <= FLT_MIN ||
+       !isfinite(perspective.cot_half_fov)) {
+        errno = ERANGE;
+        return -1;
+    }
+    perspective.x_center = x_center;
+    perspective.y_center = y_center;
+    perspective.z_near = z_near;
+    perspective.z_far = z_far;
+    return mat_perspective_build(output, &perspective);
+}
+
+int anim_playback_sample_camera(const anim_playback_t *playback,
+                                const anim_camera_tracks_t *tracks,
+                                anim_camera_pose_t *output) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return anim_camera_sample(tracks, playback->time, output);
+}
+
+static int light_pose_valid(const pvr_light_t *light) {
+    float length_squared;
+
+    if(!light || (light->kind != PVR_LIGHT_DIRECTIONAL &&
+                  light->kind != PVR_LIGHT_POINT) ||
+       !finite4(light->color.x, light->color.y, light->color.z, 0.0f) ||
+       light->color.x < 0.0f || light->color.y < 0.0f ||
+       light->color.z < 0.0f || !isfinite(light->intensity) ||
+       light->intensity < 0.0f ||
+       !isfinite(light->attenuation_constant) ||
+       !isfinite(light->attenuation_linear) ||
+       !isfinite(light->attenuation_quadratic) ||
+       !isfinite(light->range) || light->range < 0.0f)
+        return 0;
+
+    if(light->kind == PVR_LIGHT_POINT)
+        return finite4(light->source.position.x, light->source.position.y,
+                       light->source.position.z, 0.0f) &&
+               light->attenuation_constant > 0.0f &&
+               light->attenuation_linear >= 0.0f &&
+               light->attenuation_quadratic >= 0.0f;
+
+    if(!finite4(light->source.direction.x, light->source.direction.y,
+                light->source.direction.z, 0.0f))
+        return 0;
+    length_squared = light->source.direction.x * light->source.direction.x +
+                     light->source.direction.y * light->source.direction.y +
+                     light->source.direction.z * light->source.direction.z;
+    return isfinite(length_squared) && length_squared > FLT_MIN;
+}
+
+static int light_tracks_valid(const anim_light_tracks_t *tracks) {
+    return tracks && light_pose_valid(&tracks->fallback) &&
+           (!tracks->source ||
+            view_valid(tracks->source, ANIM_VALUE_VECTOR)) &&
+           (!tracks->color || view_valid(tracks->color, ANIM_VALUE_VECTOR)) &&
+           (!tracks->intensity ||
+            view_valid(tracks->intensity, ANIM_VALUE_SCALAR)) &&
+           (!tracks->range || view_valid(tracks->range, ANIM_VALUE_SCALAR));
+}
+
+int anim_light_sample(const anim_light_tracks_t *tracks, float time,
+                      pvr_light_t *output) {
+    pvr_light_t sampled;
+    vector_t source;
+
+    if(!light_tracks_valid(tracks) || !output || !isfinite(time)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    sampled = tracks->fallback;
+    source = sampled.kind == PVR_LIGHT_POINT ?
+        sampled.source.position : sampled.source.direction;
+    if(tracks->source && anim_track_sample_vector(
+           tracks->source, time, &source, NULL) < 0)
+        return -1;
+    if(sampled.kind == PVR_LIGHT_POINT) {
+        source.w = 1.0f;
+        sampled.source.position = source;
+    }
+    else {
+        source.w = 0.0f;
+        sampled.source.direction = source;
+    }
+    if(tracks->color && anim_track_sample_vector(
+           tracks->color, time, &sampled.color, NULL) < 0)
+        return -1;
+    if(tracks->intensity && anim_track_sample_scalar(
+           tracks->intensity, time, &sampled.intensity, NULL) < 0)
+        return -1;
+    if(tracks->range && anim_track_sample_scalar(
+           tracks->range, time, &sampled.range, NULL) < 0)
+        return -1;
+    sampled.color.w = 0.0f;
+    if(!light_pose_valid(&sampled)) {
+        errno = EDOM;
+        return -1;
+    }
+    *output = sampled;
+    return 0;
+}
+
+int anim_playback_sample_light(const anim_playback_t *playback,
+                               const anim_light_tracks_t *tracks,
+                               pvr_light_t *output) {
+    if(!playback_valid(playback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return anim_light_sample(tracks, playback->time, output);
+}
+
+int anim_morph_targets_sample(const anim_morph_target_tracks_t *tracks,
+                              size_t target_count, float time,
+                              pvr_morph_target_t *output,
+                              size_t output_capacity,
+                              anim_morph_result_t *result) {
+    anim_morph_result_t progress = { 0 };
+    size_t i;
+
+    if(result)
+        *result = progress;
+    if((target_count && (!tracks || !output)) || !isfinite(time) ||
+       (tracks && ((uintptr_t)tracks &
+                   (_Alignof(anim_morph_target_tracks_t) - 1u))) ||
+       (output && ((uintptr_t)output &
+                   (_Alignof(pvr_morph_target_t) - 1u)))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(output_capacity < target_count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(target_count > SIZE_MAX / sizeof(*tracks) ||
+       target_count > SIZE_MAX / sizeof(*output) ||
+       (target_count &&
+        (target_count * sizeof(*tracks) >
+         UINTPTR_MAX - (uintptr_t)tracks ||
+         target_count * sizeof(*output) >
+         UINTPTR_MAX - (uintptr_t)output))) {
+        errno = ERANGE;
+        return -1;
+    }
+
+    for(i = 0; i < target_count; ++i) {
+        pvr_morph_target_t sampled = tracks[i].fallback;
+
+        if(!isfinite(sampled.weight) ||
+           (tracks[i].weight &&
+            !view_valid(tracks[i].weight, ANIM_VALUE_SCALAR))) {
+            errno = EINVAL;
+            return -1;
+        }
+        if(tracks[i].weight && anim_track_sample_scalar(
+               tracks[i].weight, time, &sampled.weight, NULL) < 0)
+            return -1;
+        output[i] = sampled;
+        progress.sampled_targets = i + 1u;
+        if(result)
+            *result = progress;
+    }
+    return 0;
+}

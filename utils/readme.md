@@ -1,6 +1,12 @@
 # KallistiOS Utilities
 This directory contains a number of PC-side tools used for a variety of purposes. Some are meant to be used directly by users, while others are called through KallistiOS Makefiles. These utilities are built automatically when KallistiOS is built, and many KallistiOS examples depend upon them to build properly. An example of this would be using `vqenc` to generate textures from image files at build time.
 
+Self-contained C host tests that include `Makefile.host-test` use KOS's GNU17
+language mode by default. Run `./run-host-tests.sh gnu17 [compiler]` for the
+target-fidelity lane or `./run-host-tests.sh c23 [compiler]` for the strict
+C23 `-pedantic` lane. Compilers that still spell the final language mode
+`c2x` are detected automatically.
+
 - [**bin2c**](bin2c/): Converts a binary file to a C integer array for inclusion in a source file
 - [**bin2o**](bin2o/): Converts a binary file to an object file for linking into a project
 - [**bincnv**](bincnv/): An ELF to BIN conversion testing utility
@@ -21,6 +27,8 @@ This directory contains a number of PC-side tools used for a variety of purposes
 - [**makejitter**](makejitter/): Creates jitter tables
 - [**naomibintool**](naomibintool/): Builds a NAOMI ROM from ELF or BIN files
 - [**naominetboot**](naominetboot/): Uploads a program to a NAOMI NetDIMM
+- [**pvr-model-convert**](pvr-model-convert/): Converts an explicit triangulated OBJ subset into bounded compact PVR model streams
+- [**pvr-model-inspect**](pvr-model-inspect/): Validates bounded compact PVR model streams and reports their structure
 - [**rdtest**](rdtest/): A PC-based romdisk driver for testing KOS romdisk filesystem code
 - [**scramble**](scramble/): Scrambles Dreamcast binaries to prepare for loading from disc
 - [**version**](version/): A utility to write the KallistiOS version to the header of project files

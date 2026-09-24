@@ -1,411 +1,839 @@
 /* KallistiOS ##version##
 
    hardware/scif.c
-   Copyright (C)2000,2001,2004 Megan Potter
+   Copyright (C) 2000, 2001, 2004 Megan Potter
+   Copyright (C) 2026 Joseph Black
 */
 
-#include <stdio.h>
 #include <errno.h>
-#include <kos/dbgio.h>
-#include <kos/irq.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stdint.h>
+
 #include <arch/arch.h>
 #include <dc/fs_dcload.h>
 #include <dc/scif.h>
+#include <kos/dbgio.h>
+#include <kos/irq.h>
+
+#include "scif_config_internal.h"
 
 /*
-
-This module handles very basic serial I/O using the SH4's SCIF port. FIFO
-mode is used by default; you can turn this off to avoid forcing a wait
-when there is no serial device attached.
-
-Unlike in KOS 1.x, this is not designed to be used as the normal I/O, but
-simply as an early debugging device in case something goes wrong in the
-kernel or for debugging it.
-
+   The byte-oriented driver is allocation-free and worker-free: receive IRQs
+   drain the 16-byte hardware FIFO into a fixed software ring, while transmit
+   operations either poll with a legacy bound or use nonblocking readiness.
+   SCIF-SPI temporarily owns the register bank through the private claim API.
 */
 
-/* SCIF registers */
 #define SCIFREG08(x) *((volatile uint8_t *)(x))
 #define SCIFREG16(x) *((volatile uint16_t *)(x))
 #define SCSMR2  SCIFREG16(0xffe80000)
 #define SCBRR2  SCIFREG08(0xffe80004)
 #define SCSCR2  SCIFREG16(0xffe80008)
-#define SCFTDR2 SCIFREG08(0xffe8000C)
+#define SCFTDR2 SCIFREG08(0xffe8000c)
 #define SCFSR2  SCIFREG16(0xffe80010)
 #define SCFRDR2 SCIFREG08(0xffe80014)
 #define SCFCR2  SCIFREG16(0xffe80018)
-#define SCFDR2  SCIFREG16(0xffe8001C)
+#define SCFDR2  SCIFREG16(0xffe8001c)
 #define SCSPTR2 SCIFREG16(0xffe80020)
 #define SCLSR2  SCIFREG16(0xffe80024)
 
-/* Default serial parameters */
-static int serial_baud = DEFAULT_SERIAL_BAUD,
-           serial_fifo = DEFAULT_SERIAL_FIFO;
+#define SCSCR_TIE   0x80u
+#define SCSCR_RIE   0x40u
+#define SCSCR_TE    0x20u
+#define SCSCR_RE    0x10u
+#define SCSCR_REIE  0x08u
 
-/* This will get set to zero if we fail to send. */
-static int serial_enabled = 1;
+#define SCFSR_ER    0x80u
+#define SCFSR_TEND  0x40u
+#define SCFSR_TDFE  0x20u
+#define SCFSR_BRK   0x10u
+#define SCFSR_FER   0x08u
+#define SCFSR_PER   0x04u
+#define SCFSR_RDF   0x02u
+#define SCFSR_DR    0x01u
 
-/* Set serial parameters; this is not platform independent like I want
-   it to be, but it should be generic enough to be useful. */
-void scif_set_parameters(int baud, int fifo) {
-    serial_baud = baud;
-    serial_fifo = fifo;
+#define SCFCR_TFRST 0x04u
+#define SCFCR_RFRST 0x02u
+
+#define SCLSR_ORER  0x01u
+
+#define SCIF_FIFO_CAPACITY  16u
+#define SCIF_LEGACY_SPINS   800000
+#define SCIF_RX_BUFFER_SIZE 1024u
+
+/*
+   serial_config is the retained configuration requested for the next init.
+   active_config and register_config describe hardware that was actually
+   installed; keeping them separate makes the status snapshot truthful after
+   the compatibility setter changes a pending bitrate.
+*/
+static scif_config_t serial_config = {
+    .baud = DEFAULT_SERIAL_BAUD,
+    .data_bits = 8,
+    .stop_bits = 1,
+    .parity = SCIF_PARITY_NONE,
+    .flow_control = SCIF_FLOW_NONE,
+    .rx_trigger = SCIF_RX_TRIGGER_4,
+    .tx_trigger = SCIF_TX_TRIGGER_8
+};
+
+static scif_config_t active_config = {
+    .baud = DEFAULT_SERIAL_BAUD,
+    .data_bits = 8,
+    .stop_bits = 1,
+    .parity = SCIF_PARITY_NONE,
+    .flow_control = SCIF_FLOW_NONE,
+    .rx_trigger = SCIF_RX_TRIGGER_4,
+    .tx_trigger = SCIF_TX_TRIGGER_8
+};
+
+static scif_register_config_t register_config;
+static bool serial_fifo = DEFAULT_SERIAL_FIFO;
+static bool serial_enabled;
+static bool serial_initialized;
+static bool scif_irq_usage;
+static bool spi_active;
+static bool spi_saved_irq_usage;
+
+/*
+   Only the receive interrupt producer and interrupt-excluded application
+   consumers mutate this ring. Full rings discard the arriving byte instead
+   of overwriting unread data or allowing the occupancy count to escape its
+   bounds.
+*/
+static uint8_t recvbuf[SCIF_RX_BUFFER_SIZE];
+static size_t rb_head;
+static size_t rb_tail;
+static size_t rb_count;
+static bool polled_peek_valid;
+static uint8_t polled_peek_value;
+
+typedef struct scif_stats {
+    uint32_t receive_dropped;
+    uint32_t framing_errors;
+    uint32_t parity_errors;
+    uint32_t overrun_errors;
+    uint32_t breaks;
+    uint32_t transmit_timeouts;
+    uint32_t event_sequence;
+} scif_stats_t;
+
+static scif_stats_t stats;
+
+static bool byte_access_available(void) {
+    return serial_initialized && serial_enabled && !spi_active &&
+           dcload_type != DCLOAD_TYPE_SER;
 }
-
-/* Receive ring buffer */
-#define BUFSIZE 1024
-static uint8_t recvbuf[BUFSIZE];
-static int rb_head = 0, rb_tail = 0, rb_cnt = 0;
-static int rb_paused = 0;
 
 static void rb_reset(void) {
-    rb_head = rb_tail = rb_cnt = rb_paused = 0;
+    rb_head = 0;
+    rb_tail = 0;
+    rb_count = 0;
+    polled_peek_valid = false;
 }
 
-static void rb_push_char(int c) {
-    recvbuf[rb_head] = c;
-    rb_head = (rb_head + 1) % BUFSIZE;
-    rb_cnt++;
+static void record_event(uint32_t *counter) {
+    ++*counter;
+    ++stats.event_sequence;
+}
 
-    /* If we're within 32 bytes of being out of space, pause for
-       the moment. */
-    if(!rb_paused && (BUFSIZE - rb_cnt) < 32) {
-        rb_paused = 1;
-        SCSPTR2 = 0x20;     /* Set CTS=0 */
+static void rb_push_char(uint8_t value) {
+    if(rb_count == SCIF_RX_BUFFER_SIZE) {
+        record_event(&stats.receive_dropped);
+        return;
     }
+
+    recvbuf[rb_head] = value;
+    rb_head = (rb_head + 1u) % SCIF_RX_BUFFER_SIZE;
+    ++rb_count;
 }
 
 static int rb_pop_char(void) {
-    int c;
-    c = recvbuf[rb_tail];
-    rb_tail = (rb_tail + 1) % BUFSIZE;
-    rb_cnt--;
+    int value = recvbuf[rb_tail];
 
-    /* If we're paused and clear again, re-enabled receiving. */
-    if(rb_paused && (BUFSIZE - rb_cnt) >= 64) {
-        rb_paused = 0;
-        SCSPTR2 = 0x00;
+    rb_tail = (rb_tail + 1u) % SCIF_RX_BUFFER_SIZE;
+    --rb_count;
+    return value;
+}
+
+static void clear_receive_flags(uint16_t status) {
+    /*
+       These flags are cleared only after first being observed as set. Preserve
+       unrelated state because TEND/TDFE and error details share this register.
+    */
+    SCFSR2 = status & ~(SCFSR_ER | SCFSR_BRK | SCFSR_RDF | SCFSR_DR);
+}
+
+static void drain_receive_fifo(void) {
+    /*
+       Reading a character updates FER/PER for that exact FIFO entry. Sample
+       status after the data read so diagnostics stay associated with the byte
+       that is still delivered to the application.
+    */
+    while((SCFDR2 & 0x1fu) != 0) {
+        uint8_t value = SCFRDR2;
+        uint16_t status = SCFSR2;
+
+        /* FER/PER describe the character most recently read from SCFRDR2. */
+        if(status & SCFSR_FER)
+            record_event(&stats.framing_errors);
+        if(status & SCFSR_PER)
+            record_event(&stats.parity_errors);
+
+        rb_push_char(value);
     }
 
-    return c;
+    clear_receive_flags(SCFSR2);
 }
 
-/* static int rb_space_free(void) {
-    return BUFSIZE - rb_cnt;
-} */
+static void scif_err_irq(irq_t src, irq_context_t *context, void *data) {
+    uint16_t status = SCFSR2;
+    uint16_t line_status = SCLSR2;
 
-static int rb_space_used(void) {
-    return rb_cnt;
-}
-
-
-/* Serial receive and receive error interrupts. When this is triggered we
-   must look for available data and error conditions, and clear them all
-   out if possible. If our internal ring buffer comes close to overflowing,
-   the best we can do is twiddle RTS/CTS for a while. */
-static void scif_err_irq(irq_t src, irq_context_t *cxt, void *data) {
     (void)src;
-    (void)cxt;
+    (void)context;
     (void)data;
 
-    /* Clear status bits */
-    SCSCR2 &= ~0x08;
-    SCSCR2 |= 0x08;
+    if(status & SCFSR_BRK)
+        record_event(&stats.breaks);
+    if(line_status & SCLSR_ORER)
+        record_event(&stats.overrun_errors);
 
-    printf("scif_err_irq called\n");
+    /*
+       Do not log from this IRQ: the selected debug handler may itself be SCIF.
+       Preserve readable characters instead of resetting both FIFOs as the old
+       handler did.
+    */
+    drain_receive_fifo();
+    clear_receive_flags(SCFSR2);
 
-    /* Did we get an error condition? */
-    if(SCFSR2 & 0x9c) {     /* Check ER, BRK, FER, PER */
-        printf("SCFSR2 status was %04x\n", SCFSR2);
-        /* Try to clear it */
-        SCFCR2 = 0x06;
-        SCFCR2 = 0x88;
-        SCFSR2 &= ~0x9c;
-    }
-
-    if(SCLSR2 & 0x01) {     /* ORER */
-        printf("SCLSR2 status was %04x\n", SCLSR2);
-        /* Try to clear it */
-        SCFCR2 = 0x06;
-        SCFCR2 = 0x88;
-        SCLSR2 = 0x00;
-    }
+    if(line_status & SCLSR_ORER)
+        SCLSR2 = line_status & ~SCLSR_ORER;
 }
 
-static void scif_data_irq(irq_t src, irq_context_t *cxt, void *data) {
+static void scif_data_irq(irq_t src, irq_context_t *context, void *data) {
     (void)src;
-    (void)cxt;
+    (void)context;
     (void)data;
 
-    /* Clear status bits */
-    SCSCR2 &= ~0x40;
-    SCSCR2 |= 0x40;
-
-    /* Check for received data available. */
-    if(SCFSR2 & 3) {
-        while(SCFDR2 & 0x1f) {
-            int c = SCFRDR2;
-            rb_push_char(c);
-        }
-
-        SCFSR2 &= ~3;
-    }
+    drain_receive_fifo();
 }
 
-/* Are we using IRQs? */
-static int scif_irq_usage = 0;
-int scif_set_irq_usage(int on) {
-    scif_irq_usage = on;
+static void irq_mode_apply(bool enabled) {
+    uint16_t control = SCSCR2;
 
-    /* Clear out the buffer in any case */
-    rb_reset();
+    /*
+       Mask SCIF interrupt generation before replacing handlers or changing
+       INTC priority. This prevents an old handler from observing new mode
+       state, and the caller already excludes CPU interrupts around the whole
+       transition.
+    */
+    control &= ~(SCSCR_RIE | SCSCR_REIE | SCSCR_TIE);
+    SCSCR2 = control;
 
-    if(scif_irq_usage) {
-        /* Hook the SCIF interrupt */
+    if(enabled) {
         irq_set_handler(EXC_SCIF_ERI, scif_err_irq, NULL);
         irq_set_handler(EXC_SCIF_BRI, scif_err_irq, NULL);
         irq_set_handler(EXC_SCIF_RXI, scif_data_irq, NULL);
         irq_set_priority(IRQ_SRC_SCIF, 14);
-
-        /* Enable transmit/receive, recv/recv error ints */
-        SCSCR2 |= 0x48;
+        SCSCR2 = control | SCSCR_RIE | SCSCR_REIE;
     }
     else {
-        /* Disable transmit/receive, recv/recv error ints */
-        SCSCR2 &= ~0x48;
-
-        /* Unhook the SCIF interrupt */
         irq_set_priority(IRQ_SRC_SCIF, IRQ_PRIO_MASKED);
         irq_set_handler(EXC_SCIF_ERI, NULL, NULL);
         irq_set_handler(EXC_SCIF_BRI, NULL, NULL);
         irq_set_handler(EXC_SCIF_RXI, NULL, NULL);
     }
 
+    scif_irq_usage = enabled;
+    rb_reset();
+}
+
+static void wait_one_bit(uint32_t actual_baud) {
+    uint32_t iterations = actual_baud ? 200000000u / actual_baud : 800000u;
+
+    if(iterations < 32u)
+        iterations = 32u;
+
+    /*
+       SCBRR changes require at least one complete serial bit interval before
+       transfer is enabled. A simple early-boot-safe loop avoids depending on
+       timers, threads, or an initialized scheduler.
+    */
+    while(iterations--)
+        __asm__ volatile("nop");
+}
+
+static int apply_configuration(const scif_config_t *config,
+                               const scif_register_config_t *registers) {
+    irq_mask_t irq_state = irq_disable();
+    uint16_t interrupt_control = scif_irq_usage ?
+                                 SCSCR_RIE | SCSCR_REIE : 0;
+
+    if(spi_active) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return -1;
+    }
+
+    /*
+       The hardware initialization order is load-bearing: disable transfer,
+       hold both FIFOs reset, select the clock and frame format, wait one bit,
+       release the FIFOs, and only then enable transmission and reception.
+    */
+    SCSCR2 = registers->control_clock;
+    SCFCR2 = registers->fifo | SCFCR_TFRST | SCFCR_RFRST;
+    SCSMR2 = registers->mode;
+    SCBRR2 = registers->bit_rate;
+    SCSPTR2 = 0;
+
+    (void)SCFSR2;
+    SCFSR2 &= ~(SCFSR_ER | SCFSR_BRK | SCFSR_RDF | SCFSR_DR);
+    (void)SCLSR2;
+    SCLSR2 &= ~SCLSR_ORER;
+
+    rb_reset();
+    wait_one_bit(registers->actual_baud);
+
+    SCFCR2 = registers->fifo;
+    SCSCR2 = registers->control_clock | SCSCR_TE | SCSCR_RE |
+             interrupt_control;
+
+    serial_config = *config;
+    active_config = *config;
+    register_config = *registers;
+    serial_enabled = true;
+    serial_initialized = true;
+    irq_restore(irq_state);
     return 0;
 }
 
-/* We are always detected, though we might end up realizing there's no
-   cable connected later... */
+void scif_set_parameters(int baud, int fifo) {
+    scif_config_t config = serial_config;
+    scif_register_config_t registers;
+    int saved_errno = errno;
+
+    if(baud < 0)
+        return;
+
+    config.baud = (uint32_t)baud;
+    config.data_bits = 8;
+    config.stop_bits = 1;
+    config.parity = SCIF_PARITY_NONE;
+    config.flow_control = SCIF_FLOW_NONE;
+
+    /*
+       The historical void API cannot report invalid input. Validate it
+       without changing errno and retain the last valid configuration when
+       validation fails.
+    */
+    if(scif_config_encode(&config, &registers) == 0) {
+        irq_mask_t irq_state = irq_disable();
+
+        serial_config = config;
+        serial_fifo = fifo != 0;
+        irq_restore(irq_state);
+    }
+
+    errno = saved_errno;
+}
+
+int scif_configure(const scif_config_t *config) {
+    scif_register_config_t registers;
+
+    if(scif_config_encode(config, &registers) < 0)
+        return -1;
+    if(dcload_type == DCLOAD_TYPE_SER || spi_active) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    serial_fifo = true;
+    return apply_configuration(config, &registers);
+}
+
+int scif_get_status(scif_status_t *status) {
+    irq_mask_t irq_state;
+
+    if(!status) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /*
+       One interrupt-excluded snapshot keeps ring indices, IRQ state, hardware
+       FIFO counts, and cumulative event counters from describing different
+       instants.
+    */
+    irq_state = irq_disable();
+    status->config = active_config;
+    status->actual_baud = register_config.actual_baud;
+    status->baud_error_ppm = register_config.baud_error_ppm;
+    if(spi_active || dcload_type == DCLOAD_TYPE_SER || !serial_initialized) {
+        status->receive_queued = 0;
+        status->transmit_queued = 0;
+    }
+    else {
+        status->receive_queued = scif_irq_usage ? rb_count :
+                                 (SCFDR2 & 0x1fu) + polled_peek_valid;
+        status->transmit_queued = (SCFDR2 >> 8) & 0x1fu;
+    }
+    status->receive_dropped = stats.receive_dropped;
+    status->framing_errors = stats.framing_errors;
+    status->parity_errors = stats.parity_errors;
+    status->overrun_errors = stats.overrun_errors;
+    status->breaks = stats.breaks;
+    status->transmit_timeouts = stats.transmit_timeouts;
+    status->event_sequence = stats.event_sequence;
+    status->irq_enabled = scif_irq_usage;
+    status->enabled = byte_access_available();
+    irq_restore(irq_state);
+    return 0;
+}
+
+void scif_clear_stats(void) {
+    irq_mask_t irq_state = irq_disable();
+
+    stats = (scif_stats_t){ 0 };
+    irq_restore(irq_state);
+}
+
+int scif_set_irq_usage(int on) {
+    irq_mask_t irq_state;
+
+    if(dcload_type == DCLOAD_TYPE_SER || spi_active) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    irq_state = irq_disable();
+    irq_mode_apply(on != 0);
+    irq_restore(irq_state);
+    return 0;
+}
+
 int scif_detected(void) {
     return 1;
 }
 
-/* We use this for the dbgio interface because we always init SCIF. */
+/* The architecture initializes SCIF before selecting a dbgio handler. */
 int scif_init_fake(void) {
-    return 0;
+    return byte_access_available() ? 0 : scif_init();
 }
 
-/* Initialize the SCIF port; */
-/* recv trigger to 1 byte */
 int scif_init(void) {
-    int i;
-    unsigned char scbrr2 = 0;
-    unsigned short scsmr2 = 0;
+    scif_register_config_t registers;
 
-    /*  If dcload-serial is active, then do nothing here, or we'll
-        screw that up. */
     if(dcload_type == DCLOAD_TYPE_SER)
         return 0;
-
-    /* Disable interrupts, transmit/receive,
-       and use internal or external clock */
-    SCSCR2 = serial_baud ? 0x0 : 0x02;
-
-    /* Enter reset mode */
-    SCFCR2 = 0x06;
-
-    if(serial_baud > 9600) {
-        scsmr2 = 0;
-        scbrr2 = (50000000 / (32 * serial_baud)) - 1;
+    if(spi_active) {
+        errno = EBUSY;
+        return -1;
     }
-    else if(serial_baud > 4800) {
-        scsmr2 = 1;
-        scbrr2 = (50000000 / (128 * serial_baud)) - 1;
-    }
-    else if(serial_baud > 600) {
-        scsmr2 = 2;
-        scbrr2 = (50000000 / (512 * serial_baud)) - 1;
-    }
-    else if(serial_baud) {
-        scsmr2 = 3;
-        scbrr2 = (50000000 / (2048 * serial_baud)) - 1;
-    }
+    if(scif_config_encode(&serial_config, &registers) < 0)
+        return -1;
 
-    /* 8N1, clock as set above (scsmr2) */
-    SCSMR2 = scsmr2;
-
-    /* Set baudrate, N = P0/(32*B)-1 */
-    /* B = P0/32*(N+1) */
-    SCBRR2 = scbrr2;
-
-    /* Wait a bit for it to stabilize */
-    for(i = 0; i < 800000; i++)
-        __asm__("nop");
-
-    /* Unreset, disable hardware flow control, triggers on 8 bytes */
-    SCFCR2 = 0x40;
-
-    /* Disable manual pin control */
-    SCSPTR2 = 0;
-
-    /* Clear status */
-    (void)SCFSR2;
-    SCFSR2 = 0x60;
-    (void)SCLSR2;
-    SCLSR2 = 0;
-
-    /* Enable transmit/receive */
-    /* If external clock is used set CKE1 bit */
-    SCSCR2 = serial_baud ? 0x30 : 0x32;
-
-    /* Wait a bit for it to stabilize */
-    for(i = 0; i < 800000; i++)
-        __asm__("nop");
-
-    return 0;
+    return apply_configuration(&serial_config, &registers);
 }
 
 int scif_shutdown(void) {
-    scif_set_irq_usage(DBGIO_MODE_POLLED);
+    irq_mask_t irq_state = irq_disable();
+
+    if(dcload_type == DCLOAD_TYPE_SER) {
+        irq_restore(irq_state);
+        return 0;
+    }
+    if(spi_active) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return -1;
+    }
+
+    irq_mode_apply(false);
+    SCSCR2 = register_config.control_clock;
+    serial_enabled = false;
+    serial_initialized = false;
+    rb_reset();
+    irq_restore(irq_state);
     return 0;
 }
 
-/* Read one char from the serial port (-1 if nothing to read) */
+static void record_polled_receive_status(uint16_t status,
+                                         uint16_t line_status) {
+    irq_mask_t irq_state = irq_disable();
+
+    if(status & SCFSR_FER)
+        record_event(&stats.framing_errors);
+    if(status & SCFSR_PER)
+        record_event(&stats.parity_errors);
+    if(status & SCFSR_BRK)
+        record_event(&stats.breaks);
+    if(line_status & SCLSR_ORER)
+        record_event(&stats.overrun_errors);
+
+    irq_restore(irq_state);
+}
+
 int scif_read(void) {
-    if(!serial_enabled) {
-        errno = EIO;
+    irq_mask_t irq_state = irq_disable();
+
+    if(!byte_access_available()) {
+        int error = spi_active || dcload_type == DCLOAD_TYPE_SER ? EBUSY : EIO;
+
+        irq_restore(irq_state);
+        errno = error;
         return -1;
     }
-
     if(scif_irq_usage) {
-        /* Do we have anything ready? */
-        if(rb_space_used() <= 0) {
+        int value;
+
+        if(rb_count == 0) {
+            irq_restore(irq_state);
             errno = EAGAIN;
             return -1;
         }
-        else
-            return rb_pop_char();
+
+        value = rb_pop_char();
+        irq_restore(irq_state);
+        return value;
     }
     else {
-        int c;
+        uint16_t status;
+        uint16_t line_status;
+        int value;
 
-        if(!(SCFDR2 & 0x1f)) {
+        /*
+           Polled peek consumes one hardware FIFO entry into this lookahead
+           slot. Reading the slot first preserves application-visible order.
+        */
+        if(polled_peek_valid) {
+            polled_peek_valid = false;
+            value = polled_peek_value;
+            irq_restore(irq_state);
+            return value;
+        }
+
+        if((SCFDR2 & 0x1fu) == 0) {
+            irq_restore(irq_state);
             errno = EAGAIN;
             return -1;
         }
 
-        /* Get the input char */
-        c = SCFRDR2;
-
-        /* Ack */
-        SCFSR2 &= ~0x92;
-
-        return c;
+        value = SCFRDR2;
+        status = SCFSR2;
+        line_status = SCLSR2;
+        record_polled_receive_status(status, line_status);
+        clear_receive_flags(status);
+        if(line_status & SCLSR_ORER)
+            SCLSR2 = line_status & ~SCLSR_ORER;
+        irq_restore(irq_state);
+        return value;
     }
 }
 
-/* Write one char to the serial port (call serial_flush()!) */
-int scif_write(int c) {
-    int timeout = 800000;
+int scif_peek(void) {
+    irq_mask_t irq_state = irq_disable();
+    int value;
 
-    if(!serial_enabled) {
-        errno = EIO;
+    if(!byte_access_available()) {
+        int error = spi_active || dcload_type == DCLOAD_TYPE_SER ? EBUSY : EIO;
+
+        irq_restore(irq_state);
+        errno = error;
+        return -1;
+    }
+    if(scif_irq_usage) {
+        if(rb_count == 0) {
+            irq_restore(irq_state);
+            errno = EAGAIN;
+            return -1;
+        }
+
+        value = recvbuf[rb_tail];
+    }
+    else {
+        uint16_t status;
+        uint16_t line_status;
+
+        if(polled_peek_valid)
+            value = polled_peek_value;
+        else {
+            if((SCFDR2 & 0x1fu) == 0) {
+                irq_restore(irq_state);
+                errno = EAGAIN;
+                return -1;
+            }
+
+            value = SCFRDR2;
+            status = SCFSR2;
+            line_status = SCLSR2;
+            record_polled_receive_status(status, line_status);
+            clear_receive_flags(status);
+            if(line_status & SCLSR_ORER)
+                SCLSR2 = line_status & ~SCLSR_ORER;
+            polled_peek_value = (uint8_t)value;
+            polled_peek_valid = true;
+        }
+    }
+
+    irq_restore(irq_state);
+    return value;
+}
+
+int scif_read_available(void) {
+    irq_mask_t irq_state = irq_disable();
+    int available;
+
+    if(!byte_access_available()) {
+        int error = spi_active || dcload_type == DCLOAD_TYPE_SER ? EBUSY : EIO;
+
+        irq_restore(irq_state);
+        errno = error;
         return -1;
     }
 
-    /* Wait until the transmit buffer has space. Too long of a failure
-       is indicative of no serial cable. */
-    while(!(SCFSR2 & 0x20) && timeout > 0)
-        timeout--;
+    available = (int)(scif_irq_usage ? rb_count :
+                      (SCFDR2 & 0x1fu) + polled_peek_valid);
+    irq_restore(irq_state);
+    return available;
+}
 
-    if(timeout <= 0) {
-        serial_enabled = 0;
-        errno = EIO;
+int scif_read_buffer_nonblock(uint8_t *data, size_t len) {
+    size_t read = 0;
+
+    if((!data && len != 0) || len > INT_MAX) {
+        errno = len > INT_MAX ? EOVERFLOW : EINVAL;
         return -1;
     }
 
-    /* Send the char */
-    SCFTDR2 = c;
+    while(read < len) {
+        int value = scif_read();
 
-    /* Clear status */
-    SCFSR2 &= 0xff9f;
+        if(value < 0) {
+            if(errno == EAGAIN)
+                break;
+            return read ? (int)read : -1;
+        }
 
+        data[read++] = (uint8_t)value;
+    }
+
+    return (int)read;
+}
+
+int scif_write_available(void) {
+    irq_mask_t irq_state = irq_disable();
+    int queued;
+
+    if(!byte_access_available()) {
+        int error = spi_active || dcload_type == DCLOAD_TYPE_SER ? EBUSY : EIO;
+
+        irq_restore(irq_state);
+        errno = error;
+        return -1;
+    }
+
+    queued = (SCFDR2 >> 8) & 0x1f;
+    if(queued > (int)SCIF_FIFO_CAPACITY)
+        queued = SCIF_FIFO_CAPACITY;
+    irq_restore(irq_state);
+    return (int)SCIF_FIFO_CAPACITY - queued;
+}
+
+int scif_try_write(int c) {
+    irq_mask_t irq_state = irq_disable();
+    uint16_t status;
+    int queued;
+
+    if(!byte_access_available()) {
+        int error = spi_active || dcload_type == DCLOAD_TYPE_SER ? EBUSY : EIO;
+
+        irq_restore(irq_state);
+        errno = error;
+        return -1;
+    }
+
+    /*
+       TDFE depends on the configured trigger and does not mean the FIFO is
+       completely empty. SCFDR2 gives the exact occupancy needed by a true
+       nonblocking write.
+    */
+    queued = (SCFDR2 >> 8) & 0x1f;
+    if(queued >= (int)SCIF_FIFO_CAPACITY) {
+        irq_restore(irq_state);
+        errno = EAGAIN;
+        return -1;
+    }
+
+    status = SCFSR2;
+    SCFTDR2 = (uint8_t)c;
+    SCFSR2 = status & ~(SCFSR_TDFE | SCFSR_TEND);
+    irq_restore(irq_state);
     return 1;
 }
 
-/* Flush all FIFO'd bytes out of the serial port buffer */
+int scif_write(int c) {
+    int spins = SCIF_LEGACY_SPINS;
+
+    while(spins-- > 0) {
+        if(scif_try_write(c) == 1)
+            return 1;
+        if(errno != EAGAIN)
+            return -1;
+    }
+
+    {
+        irq_mask_t irq_state = irq_disable();
+        record_event(&stats.transmit_timeouts);
+        irq_restore(irq_state);
+    }
+
+    errno = ETIMEDOUT;
+    return -1;
+}
+
 int scif_flush(void) {
-    int timeout = 800000;
+    int spins = SCIF_LEGACY_SPINS;
 
-    if(!serial_enabled) {
-        errno = EIO;
-        return -1;
+    while(spins-- > 0) {
+        irq_mask_t irq_state = irq_disable();
+
+        if(!byte_access_available()) {
+            int error = spi_active || dcload_type == DCLOAD_TYPE_SER ?
+                        EBUSY : EIO;
+
+            irq_restore(irq_state);
+            errno = error;
+            return -1;
+        }
+        /* TEND means both the FIFO and the shift register have drained. */
+        if(SCFSR2 & SCFSR_TEND) {
+            irq_restore(irq_state);
+            return 0;
+        }
+
+        irq_restore(irq_state);
     }
 
-    SCFSR2 &= 0xbf;
-
-    while(!(SCFSR2 & 0x40) && timeout > 0)
-        timeout--;
-
-    if(timeout <= 0) {
-        serial_enabled = 0;
-        errno = EIO;
+    if(spins <= 0) {
+        irq_mask_t irq_state = irq_disable();
+        record_event(&stats.transmit_timeouts);
+        irq_restore(irq_state);
+        errno = ETIMEDOUT;
         return -1;
     }
-
-    SCFSR2 &= 0xbf;
 
     return 0;
 }
 
-/* Send an entire buffer */
-int scif_write_buffer(const uint8_t *data, int len, int xlat) {
-    int rv, i = 0, c;
+int scif_write_buffer(const uint8_t *data, int len, int translate) {
+    int written = 0;
 
-    while(len-- > 0) {
-        c = *data++;
-
-        if(xlat) {
-            if(c == '\n') {
-                if(scif_write('\r') < 0)
-                    return -1;
-
-                i++;
-            }
-        }
-
-        rv = scif_write(c);
-
-        if(rv < 0)
-            return -1;
-
-        i += rv;
+    if((!data && len != 0) || len < 0) {
+        errno = EINVAL;
+        return -1;
     }
 
-    if(scif_flush() < 0)
-        return -1;
+    while(len-- > 0) {
+        int value = *data++;
 
-    return i;
+        if(translate && value == '\n') {
+            if(scif_write('\r') < 0)
+                return -1;
+            ++written;
+        }
+
+        if(scif_write(value) < 0)
+            return -1;
+        ++written;
+    }
+
+    if(serial_fifo && scif_flush() < 0)
+        return -1;
+    return written;
 }
 
-/* Read an entire buffer (block) */
 int scif_read_buffer(uint8_t *data, int len) {
-    int c, i = 0;
+    int read = 0;
+
+    if((!data && len != 0) || len < 0) {
+        errno = EINVAL;
+        return -1;
+    }
 
     while(len-- > 0) {
-        while((c = scif_read()) == -1) {
+        int value;
+
+        while((value = scif_read()) < 0) {
             if(errno != EAGAIN)
                 return -1;
         }
 
-        *data++ = c;
-        i++;
+        *data++ = (uint8_t)value;
+        ++read;
     }
 
-    return i;
+    return read;
 }
 
-/* Tie all of that together into a dbgio package. */
+int _scif_spi_claim(void) {
+    irq_mask_t irq_state;
+
+    if(dcload_type == DCLOAD_TYPE_SER) {
+        errno = EBUSY;
+        return -1;
+    }
+
+    irq_state = irq_disable();
+    if(spi_active) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return -1;
+    }
+
+    /*
+       SPI changes every register in this bank. Disable and remember byte-mode
+       receive IRQs before publishing exclusive ownership, all without a
+       preemption window.
+    */
+    spi_saved_irq_usage = scif_irq_usage;
+    irq_mode_apply(false);
+    spi_active = true;
+    serial_enabled = false;
+    irq_restore(irq_state);
+    return 0;
+}
+
+int _scif_spi_release(void) {
+    int result;
+    bool restore_irq;
+    irq_mask_t irq_state = irq_disable();
+
+    if(!spi_active) {
+        irq_restore(irq_state);
+        errno = EINVAL;
+        return -1;
+    }
+
+    restore_irq = spi_saved_irq_usage;
+    spi_active = false;
+    spi_saved_irq_usage = false;
+
+    /*
+       Keep the transition non-preemptible until the retained byte format and
+       prior IRQ mode are restored. A competing configure call can therefore
+       observe either SPI ownership or a completely usable byte port, never a
+       half-restored register set.
+    */
+    result = scif_init();
+    if(result == 0 && restore_irq)
+        irq_mode_apply(true);
+
+    irq_restore(irq_state);
+    return result;
+}
+
 dbgio_handler_t dbgio_scif = {
     .name = "scif",
     .detected = scif_detected,

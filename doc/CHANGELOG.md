@@ -733,7 +733,7 @@ Platform-specific changes are prefixed with the platform name, otherwise the cha
 - **Dreamcast**: Ported KGL to new PVR API and Merged in Benoit Millers Changes. NOTE: glRotatef now takes angle in degrees; Maths in gltrans is completely rewritten and should be more GL compatible. [PB]
 - **Dreamcast**: Created new KGL demo/example subdirectory /examples/dreamcast/kgl. Moved gl under kgl/basic/gl. Added Benoit Millers nehe02-nehe09 ports to kgl/nehe and texenv example under /kgl/basic. [PB]
 - **Dreamcast**: A couple of OggVorbis fixes [Thorsten Titze == TT]
-- **Dreamcast**: Added _start to work with sh-sega-dreamcast GCC / GCC 3.0.4 [MP]
+- **Dreamcast**: Added _start support for Dreamcast-targeting GCC / GCC 3.0.4 [MP]
 - **Dreamcast**: Added timer_ms_gettime() for the number of milliseconds since startup [MP]
 - Added gettimeofday(), mktime(), and localtime_r(); fixed time() [MP]
 - **Dreamcast**: Fixed clash with newlib's time.h [MP]

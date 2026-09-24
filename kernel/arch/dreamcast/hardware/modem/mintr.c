@@ -3,6 +3,7 @@
    mintr.c
    Copyright (C) 2002, 2004 Nick Kochakian
    Copyright (C) 2024 Paul Cercueil
+   Copyright (C) 2026 Joseph Black
 
    Distributed under the terms of the KOS license.
 */
@@ -25,6 +26,7 @@ static void modemIntSetupTimeoutTimer(unsigned int timeout_secs,
 static void modemIntStartTimeoutTimer(void);
 
 static oneshot_timer_t *oneshot;
+static asic_evt_claim_t modem_irq_claim = ASIC_EVT_CLAIM_INVALID;
 
 /* This controls the code that's executed during a modem generated interrupt */
 void (*modemCallbackCode)(void) = NULL;
@@ -585,7 +587,22 @@ static void modemCallback(uint32_t code, void *data) {
         modemClearBits(REGLOC(0x1F), 0x8); /* Clear NEWS if NSIA was set */
 }
 
-void modemIntInit(void) {
+int modemIntInit(void) {
+    if(modem_irq_claim != ASIC_EVT_CLAIM_INVALID)
+        return 0;
+
+    /* Allocate the optional timer before publishing interrupt ownership. */
+    oneshot = oneshot_timer_create(NULL, NULL, 0);
+    if(!oneshot)
+        return -1;
+
+    if(asic_evt_claim(ASIC_EVT_EXP_8BIT, ASIC_IRQB, modemCallback,
+                      NULL, &modem_irq_claim) < 0) {
+        oneshot_timer_destroy(oneshot);
+        oneshot = NULL;
+        return -1;
+    }
+
     /* Only need to call atexit once */
     if(!(modemInternalFlags & MODEM_INTERNAL_FLAG_INT_INIT_ATEXIT)) {
         atexit(modemIntShutdown);
@@ -594,18 +611,19 @@ void modemIntInit(void) {
 
     /* Set the default IRQ handler */
     modemCallbackCode = NULL;
-    asic_evt_set_handler(ASIC_EVT_EXP_8BIT, modemCallback, NULL);
-    asic_evt_enable(ASIC_EVT_EXP_8BIT, ASIC_IRQB);
-
-    /* Oneshot timer will be configured later. */
-    oneshot = oneshot_timer_create(NULL, NULL, 0);
+    return 0;
 }
 
 void modemIntShutdown(void) {
-    asic_evt_disable(ASIC_EVT_EXP_8BIT, ASIC_IRQB);
-    asic_evt_remove_handler(ASIC_EVT_EXP_8BIT);
+    if(modem_irq_claim != ASIC_EVT_CLAIM_INVALID) {
+        (void)asic_evt_release(modem_irq_claim);
+        modem_irq_claim = ASIC_EVT_CLAIM_INVALID;
+    }
 
-    oneshot_timer_destroy(oneshot);
+    if(oneshot) {
+        oneshot_timer_destroy(oneshot);
+        oneshot = NULL;
+    }
 }
 
 #define dspSetClear8(addr, mask, clear)\

@@ -6,6 +6,7 @@
    Copyright (C) 2017 Donald Haase
    Copyright (C) 2024 Falco Girgis
    Copyright (C) 2024 Andress Barajas
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -65,13 +66,17 @@ __BEGIN_DECLS
 #define BFONT_ISO_8859_1_33_126     (BFONT_NARROW_START + ( 1 * BFONT_BYTES_PER_CHAR))
 #define BFONT_YEN                   (BFONT_NARROW_START + (95 * BFONT_BYTES_PER_CHAR))
 #define BFONT_ISO_8859_1_160_255    (BFONT_NARROW_START + (96 * BFONT_BYTES_PER_CHAR))
+/** \brief Start of the JIS X 0201 upper-half characters. */
+#define BFONT_JISX_0201_160_255      (BFONT_NARROW_START + (192 * BFONT_BYTES_PER_CHAR))
 
-/* JISX-0208 Rows 1-7 and 16-84 are encoded between BFONT_WIDE_START and BFONT_DREAMCAST_SPECIFIC.
-    Only the box-drawing characters (row 8) are missing. */
+/* JIS X 0208 rows 1-7 and 16-83, plus cells 1-6 of row 84, are encoded
+   between BFONT_WIDE_START and BFONT_DREAMCAST_SPECIFIC. Rows 8-15 are absent. */
 /** \brief Size of a row for JISX-0208 characters */
 #define JISX_0208_ROW_SIZE          94
 /** \brief Start of Wide Characters in Font Block */
 #define BFONT_WIDE_START            (288 * BFONT_BYTES_PER_CHAR)
+/** \brief Blank replacement glyph historically used for ASCII space. */
+#define BFONT_BLANK                 BFONT_WIDE_START
 /** \brief Start of JISX-0208 Rows 1-7 in Font Block */
 #define BFONT_JISX_0208_ROW1        BFONT_WIDE_START
 /** \brief Start of JISX-0208 Row 16-47 (Start of Level 1) in Font Block */
@@ -115,6 +120,8 @@ __BEGIN_DECLS
 
 #define BFONT_ICON_DIMEN                 32    /**< \brief Dimension of vmu icons */
 #define BFONT_VMU_DREAMCAST_SPECIFIC     (BFONT_DREAMCAST_SPECIFIC+(22 * BFONT_BYTES_PER_WIDE_CHAR))
+#define BFONT_DREAMCAST_ICON_COUNT       22    /**< \brief Number of Dreamcast-specific 24x24 glyphs */
+#define BFONT_VMU_ICON_COUNT             129   /**< \brief Number of built-in 32x32 VMU icons */
 /** @} */
 
 /** \brief Builtin VMU Icons
@@ -297,6 +304,26 @@ typedef enum bfont_code {
     BFONT_CODE_RAW       = 3   /**< \brief Raw indexing to the BFONT */
 } bfont_code_t;
 
+/** \brief Encoding or collection used by bfont_lookup_glyph(). */
+typedef enum bfont_glyph_set {
+    BFONT_GLYPH_ISO8859_1 = 0,   /**< \brief ISO-8859-1, excluding control characters */
+    BFONT_GLYPH_JISX0201,        /**< \brief JIS X 0201 Roman and half-width Katakana */
+    BFONT_GLYPH_JISX0208,        /**< \brief Packed 16-bit JIS X 0208 code */
+    BFONT_GLYPH_EUC_JP,          /**< \brief EUC-JP character (one, two, or SS2-prefixed bytes) */
+    BFONT_GLYPH_SHIFT_JIS,       /**< \brief Shift-JIS character (one or two bytes) */
+    BFONT_GLYPH_DREAMCAST_ICON,  /**< \brief Dreamcast-specific 24x24 glyph index */
+    BFONT_GLYPH_VMU_ICON         /**< \brief Built-in 32x32 VMU icon index */
+} bfont_glyph_set_t;
+
+/** \brief A validated glyph within the Dreamcast Boot ROM font. */
+typedef struct bfont_glyph {
+    uint8_t *data;       /**< \brief Address of the packed one-bit glyph data */
+    uint32_t offset;     /**< \brief Byte offset from the start of the Boot ROM font */
+    uint16_t width;      /**< \brief Glyph width in pixels */
+    uint16_t height;     /**< \brief Glyph height in pixels */
+    uint16_t data_size;  /**< \brief Size of the packed glyph in bytes */
+} bfont_glyph_t;
+
 /** \brief   Set the font encoding.
 
     This function selects the font encoding that is used for the font. This
@@ -306,10 +333,46 @@ typedef enum bfont_code {
 */
 void bfont_set_encoding(bfont_code_t enc);
 
+/** \brief   Convert one valid two-byte Shift-JIS character to JIS X 0208.
+
+    This conversion is independent of the process-wide encoding selected by
+    bfont_set_encoding(). It validates both the lead and trail bytes, but does
+    not require the resulting character to be present in the Boot ROM font.
+
+    \param  sjis            Packed two-byte Shift-JIS character.
+    \param  jis             Receives the packed JIS X 0208 character.
+
+    \retval true            The input was converted successfully.
+    \retval false           The input was invalid or \p jis was NULL.
+*/
+bool bfont_sjis_to_jis(uint16_t sjis, uint16_t *jis);
+
 /** \name Character Lookups
     \brief Methods for finding various font characters and icons.
     @{
 */
+
+/** \brief   Look up a validated Boot ROM glyph and its dimensions.
+
+    Unlike the older bfont_find_char*() helpers, this function does not depend
+    on global encoding state and rejects codes which are absent from the font.
+    Shift-JIS and EUC-JP lookups may return either a 12x24 or 24x24 glyph,
+    depending on the supplied character.
+
+    The returned pointer identifies ROM on the G1 bus. Call
+    syscall_font_lock() before dereferencing or copying the glyph data, and
+    syscall_font_unlock() afterward. Merely calculating the address does not
+    acquire the font semaphore.
+
+    \param  set             Encoding or glyph collection containing \p code.
+    \param  code            Encoded character or collection index.
+    \param  glyph           Receives the address, offset, dimensions, and size.
+
+    \retval true            The glyph exists and \p glyph was populated.
+    \retval false           The set, code, or output pointer was invalid.
+*/
+bool bfont_lookup_glyph(bfont_glyph_set_t set, uint32_t code,
+                        bfont_glyph_t *glyph);
 
 /** \brief   Find an ISO-8859-1 character in the font.
 

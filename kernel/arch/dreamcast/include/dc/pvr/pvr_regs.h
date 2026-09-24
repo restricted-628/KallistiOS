@@ -5,6 +5,7 @@
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023, 2025 Ruslan Rostovtsev
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file       dc/pvr/pvr_regs.h
@@ -152,12 +153,31 @@ __BEGIN_DECLS
 #define PVR_YUV_CFG             0x014c  /**< \brief YUV configuration */
 #define PVR_YUV_STAT            0x0150  /**< \brief The number of YUV macroblocks converted */
 
-#define PVR_UNK_0160            0x0160  /**< \brief ?? */
+#define PVR_TA_LIST_CONT        0x0160  /**< \brief Continue TA list registration */
 #define PVR_TA_OPB_INIT         0x0164  /**< \brief Object pointer buffer position init */
 
 #define PVR_FOG_TABLE_BASE      0x0200  /**< \brief Base of the fog table */
 
 #define PVR_PALETTE_TABLE_BASE  0x1000  /**< \brief Base of the palette table */
+/** @} */
+
+/** \defgroup pvr_fb_cfg_2 PVR_FB_CFG_2 Values
+    \brief                   Definitions for framebuffer output configuration.
+    \ingroup                 pvr_registers
+    @{
+*/
+#define PVR_FB_CFG_2_DITHER BIT(3) /**< \brief Enable framebuffer dithering */
+/** @} */
+
+/** \defgroup pvr_hpos_irq PVR_HPOS_IRQ Values
+    \brief                  Definitions for horizontal-blank interrupt timing.
+    \ingroup                pvr_registers
+    @{
+*/
+#define PVR_HPOS_IRQ_SCANLINE GENMASK(9, 0) /**< \brief Scanline comparator */
+#define PVR_HPOS_IRQ_MODE     GENMASK(13, 12) /**< \brief Comparator mode */
+#define PVR_HPOS_IRQ_MODE_EXACT 0u /**< \brief Interrupt on an exact scanline */
+#define PVR_HPOS_IRQ_HBLANK_POSITION GENMASK(25, 16) /**< \brief HBlank position */
 /** @} */
 
 /** \defgroup pvr_addresses     Addresses and Constants
@@ -228,6 +248,18 @@ __BEGIN_DECLS
 #define PVR_SCALER_CFG_FSAA BIT(16)  /**< \brief Enable FSAA */
 
 #define PVR_SCALER_CFG_VSCALE_FACTOR GENMASK(15, 0) /**< \brief Vertical scale factor = 1024 / value */
+/** @} */
+
+/** \defgroup pvr_sync_status PVR_SYNC_STATUS Values
+    \brief                      Definitions for the live scanout status.
+    \ingroup                    pvr_registers
+    @{
+*/
+#define PVR_SYNC_STATUS_SCANLINE GENMASK(9, 0) /**< \brief Physical scanline counter */
+#define PVR_SYNC_STATUS_FIELD    BIT(10)       /**< \brief Current interlaced field */
+#define PVR_SYNC_STATUS_BLANK    BIT(11)       /**< \brief Blanking interval active */
+#define PVR_SYNC_STATUS_HSYNC    BIT(12)       /**< \brief Horizontal sync active */
+#define PVR_SYNC_STATUS_VSYNC    BIT(13)       /**< \brief Vertical sync active */
 /** @} */
 
 __END_DECLS

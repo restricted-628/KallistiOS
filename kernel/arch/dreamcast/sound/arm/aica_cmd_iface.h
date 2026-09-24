@@ -2,6 +2,7 @@
 
    aica_cmd_iface.h
    (c)2000-2002 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
    Definitions for the SH-4/AICA interface. This file is meant to be
    included from both the ARM and SH-4 sides of the fence.
@@ -31,7 +32,12 @@
 /* The clock value (in milliseconds) */
 #define AICA_MEM_CLOCK      0x021000    /* 4 bytes */
 
-/* 0x021004 - 0x030000 are reserved for future expansion */
+/* Coherent extended status for the checked channel-control API. Keep this on
+   its own page so the legacy channel array and clock retain their addresses. */
+#define AICA_MEM_CHANNEL_STATUS 0x022000
+
+/* The status array ends below 0x025000. The remainder through 0x030000 stays
+   reserved for compatible firmware expansion. */
 
 /* Open ram for sample data */
 #define AICA_RAM_START      0x030000
@@ -39,6 +45,8 @@
 
 /* Quick access to the AICA channels */
 #define AICA_CHANNEL(x)     (AICA_MEM_CHANNELS + (x) * sizeof(aica_channel_t))
+#define AICA_CHANNEL_STATUS(x) \
+    (AICA_MEM_CHANNEL_STATUS + (x) * sizeof(aica_channel_status_ext_t))
 
 /* Channels status register bits */
 #define AICA_CHANNEL_KEYONEX   0x8000

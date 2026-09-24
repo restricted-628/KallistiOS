@@ -4,6 +4,7 @@
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
    Low-level PVR 3D interface for the DC
 */
@@ -21,8 +22,14 @@
     management to actual primitive rendering.
 
     \note
-    This API does \a not handle any sort of transformations
-    (including perspective!) so for that, you should look to KGL.
+    This low-level header does \a not perform transformations. Applications
+    that want checked, caller-owned projection into canonical, two-volume, or
+    modifier packets can use dc/pvr_geometry.h with the matrix APIs. Checked
+    material compilation and bounded visibility/clipping are provided by
+    dc/pvr_material.h and dc/pvr_frustum.h, while dc/pvr_lighting.h provides
+    optional caller-owned CPU vertex lighting. Admitted compact models can use
+    the bounded emitter in dc/pvr_chunk_render.h. None of these interfaces
+    changes PVR scene ownership.
 
     \author Megan Potter
     \author Roger Cattermole
@@ -31,6 +38,7 @@
     \author Lawrence Sebald
     \author Benoit Miller
     \author Ruslan Rostovtsev
+    \author Joseph Black
 */
 
 #ifndef __DC_PVR_H
@@ -185,12 +193,12 @@ typedef struct {
     struct {
         pvr_blend_mode_t    src;            /**< \brief Source blending mode outside modifier */
         pvr_blend_mode_t    dst;            /**< \brief Dest blending mode outside modifier */
-        bool                src_enable;     /**< \brief Source blending enable outside modifier */
-        bool                dst_enable;     /**< \brief Dest blending enable outside modifier */
+        bool                src_enable;     /**< \brief Select secondary source instead of shaded color */
+        bool                dst_enable;     /**< \brief Select secondary blend destination/output */
         pvr_blend_mode_t    src2;           /**< \brief Source blending mode inside modifier */
         pvr_blend_mode_t    dst2;           /**< \brief Dest blending mode inside modifier */
-        bool                src_enable2;    /**< \brief Source blending mode inside modifier */
-        bool                dst_enable2;    /**< \brief Dest blending mode inside modifier */
+        bool                src_enable2;    /**< \brief Select secondary source inside modifier */
+        bool                dst_enable2;    /**< \brief Select secondary destination/output inside modifier */
     } blend;                                /**< \brief Blending parameters */
     struct {
         pvr_color_fmts_t    color;      /**< \brief Color format in vertex */
@@ -199,7 +207,7 @@ typedef struct {
     } fmt;                              /**< \brief Format control */
     struct {
         pvr_depthcmp_mode_t comparison; /**< \brief Depth comparison mode */
-        bool                write;      /**< \brief Enable depth writes */
+        bool                write;      /**< \brief Encoded write-disable bit; use PVR_DEPTHWRITE_* */
     } depth;                            /**< \brief Depth comparison/write modes */
     struct {
         bool                enable;         /**< \brief Enable/disable texturing */
@@ -245,12 +253,12 @@ typedef struct {
     struct {
         pvr_blend_mode_t    src;        /**< \brief Source blending mode */
         pvr_blend_mode_t    dst;        /**< \brief Dest blending mode */
-        bool                src_enable; /**< \brief Source blending enable */
-        bool                dst_enable; /**< \brief Dest blending enable */
+        bool                src_enable; /**< \brief Select secondary source instead of shaded color */
+        bool                dst_enable; /**< \brief Select secondary destination/output */
     } blend;
     struct {
         pvr_depthcmp_mode_t comparison; /**< \brief Depth comparison mode */
-        bool                write;      /**< \brief Enable depth writes */
+        bool                write;      /**< \brief Encoded write-disable bit; use PVR_DEPTHWRITE_* */
     } depth;                            /**< \brief Depth comparison/write modes */
     struct {
         bool                enable;         /**< \brief Enable/disable texturing */
@@ -620,6 +628,7 @@ Striplength set to 2 */
 #define PVR_TA_PM2_UVFLIP          GENMASK(18, 17)
 #define PVR_TA_PM2_UVCLAMP         GENMASK(16, 15)
 #define PVR_TA_PM2_FILTER          GENMASK(14, 13)
+#define PVR_TA_PM2_SUPERSAMPLE     BIT(12)
 #define PVR_TA_PM2_MIPBIAS         GENMASK(11, 8)
 #define PVR_TA_PM2_TXRENV          GENMASK(7, 6)
 #define PVR_TA_PM2_USIZE           GENMASK(5, 3)
@@ -647,6 +656,36 @@ Striplength set to 2 */
 #define PVR_BINSIZE_16  16  /**< \brief 16-word (64-byte) length */
 #define PVR_BINSIZE_32  32  /**< \brief 32-word (128-byte) length */
 /** @} */
+
+/** \brief Maximum number of hardware registration passes in one scene.
+    \ingroup pvr_init
+*/
+#define PVR_MULTIPASS_MAX_PASSES 8u
+
+/** \brief Configuration for one tile-accelerator registration pass.
+    \ingroup pvr_init
+
+    Each pass has an independent set of primitive bins and translucent sort
+    policy. Vertex storage is shared by the complete scene because the tile
+    accelerator preserves its parameter cursor between passes.
+*/
+typedef struct pvr_pass_config {
+    /** \brief Primitive bin sizes, in the same order as pvr_init_params_t. */
+    int opb_sizes[5];
+
+    /** \brief Disable translucent polygon autosorting for this pass. */
+    int autosort_disabled;
+} pvr_pass_config_t;
+
+/** \brief Depth state entering a hardware registration pass.
+    \ingroup pvr_init
+
+    This controls tile depth, not polygon depth writes or accumulated color.
+*/
+typedef enum pvr_pass_depth {
+    PVR_PASS_DEPTH_CLEAR = 0, /**< Start this pass with cleared tile depth. */
+    PVR_PASS_DEPTH_PRESERVE   /**< Retain depth from the preceding pass. */
+} pvr_pass_depth_t;
 
 /** \brief   PVR initialization structure
     \ingroup pvr_init
@@ -736,11 +775,81 @@ static const pvr_init_params_t pvr_default_params = {
     already using the vid_* API.
 
     \param  params          The set of parameters to initialize with
-    \retval 0               On success
-    \retval -1              If the PVR has already been initialized or the video
-                            mode active is not suitable for 3D
+    \retval 0               On success.
+    \retval -1              On error, with errno set appropriately. `EALREADY`
+                            reports an initialized PVR; `EINVAL`, `ENOTSUP`,
+                            `EOVERFLOW`, and `ENOSPC` report invalid or
+                            unavailable layout; handler allocation can report
+                            `ENOMEM`; interrupt context is rejected with
+                            `EPERM`.
 */
 int pvr_init(const pvr_init_params_t *params);
+
+/** \brief Initialize the PVR for hardware multipass registration.
+    \ingroup pvr_init
+
+    Multipass registration submits several independently binned geometry
+    passes to the tile accelerator, then renders their combined region array
+    once. Depth and accumulated tile color are preserved across pass
+    boundaries. Applications advance between passes with
+    pvr_scene_next_pass().
+
+    Both direct store-queue and buffered DMA submission are supported. Buffered
+    mode requires pvr_set_pass_vertbuf_checked() for every enabled list in
+    every pass. The interrupt chain preserves pass ownership and prevents
+    unrelated PVR DMA from interleaving between continuation boundaries.
+
+    Early list flushing is also supported. The first flush must occur in pass
+    zero; subsequent pass boundaries run in lockstep with the TA so later-pass
+    flushes retain an unambiguous hardware owner. A scene that never flushes
+    early retains fully asynchronous buffered construction.
+
+    The pass configuration is copied during initialization. No multipass
+    control allocation is made by pvr_init(), so applications that keep the
+    established one-pass API do not pay for this feature.
+
+    \param  params          Common vertex, framebuffer, and overflow settings.
+                            params->opb_sizes and params->autosort_disabled are
+                            ignored in favor of passes.
+    \param  passes         Array of pass-specific bin and sort settings.
+    \param  pass_count     Number of entries in passes, from one through
+                            PVR_MULTIPASS_MAX_PASSES.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to `EALREADY`, `EINVAL`,
+                            `ENOTSUP`, `ENOMEM`, `EOVERFLOW`, `ENOSPC`, or
+                            `EPERM` as appropriate.
+*/
+int pvr_init_multipass(const pvr_init_params_t *params,
+                       const pvr_pass_config_t *passes, size_t pass_count);
+
+/** \brief Initialize multipass registration with explicit depth boundaries.
+    \ingroup pvr_init
+
+    Behaves like pvr_init_multipass(), but depth[pass] selects whether depth
+    is cleared before that pass or retained from the preceding pass. Pass
+    zero must use PVR_PASS_DEPTH_CLEAR: depth cannot be inherited from another
+    tile or scene. Accumulated color is retained between passes independently
+    of this choice. A clear applies to every tile, not a portal rectangle;
+    later geometry must supply its own coverage and occlusion constraints.
+
+    Settings are copied at initialization and apply to every scene, in direct,
+    DMA and hybrid modes. There is no extra allocation beyond the established
+    multipass state. The original configuration structures and entry point
+    retain their ABI and clear-first/preserve-later behavior.
+
+    \param params       Common settings, as for pvr_init_multipass().
+    \param passes       Array of pass-specific bin and sort settings.
+    \param depth        Required array of pass_count depth policies.
+    \param pass_count   Number of passes, one through PVR_MULTIPASS_MAX_PASSES.
+    \retval 0           On success.
+    \retval -1          On error, with errno as for pvr_init_multipass().
+                        Null depth, invalid policies, or preserving pass-zero
+                        depth give EINVAL before allocation or hardware changes.
+*/
+int pvr_init_multipass_depth(const pvr_init_params_t *params,
+                             const pvr_pass_config_t *passes,
+                             const pvr_pass_depth_t *depth, size_t pass_count);
 
 /** \brief   Simple PVR initialization.
     \ingroup pvr_init
@@ -748,9 +857,8 @@ int pvr_init(const pvr_init_params_t *params);
     This simpler function initializes the PVR using the default parameters defined in
     pvr_default_params.
 
-    \retval 0               On success
-    \retval -1              If the PVR has already been initialized or the video
-                            mode active is not suitable for 3D
+    \retval 0               On success.
+    \retval -1              On error, with errno matching pvr_init().
 
     \sa pvr_default_params
 */
@@ -762,8 +870,10 @@ int pvr_init_defaults(void);
     This essentially leaves the video system in 2D mode as it was before the
     init.
 
-    \retval 0               On success
-    \retval -1              If the PVR has not been initialized
+    \retval 0               On success.
+    \retval -1              If the PVR is not initialized or shutdown is
+                            attempted from interrupt context, with errno set
+                            to `ENODEV` or `EPERM`.
 */
 int pvr_shutdown(void);
 
@@ -850,6 +960,50 @@ int pvr_vertex_dma_enabled(void);
 */
 void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len);
 
+/** \brief   Assign a vertex buffer with checked failure reporting.
+    \ingroup pvr_list_mgmt
+
+    This is the error-reporting companion to pvr_set_vertbuf(). The complete
+    allocation is split equally between the two RAM frames used by buffered
+    list submission. Assignment is refused while a scene or a queued RAM frame
+    could still refer to the previous buffer.
+
+    \param  list            Enabled primitive list receiving the buffer.
+    \param  buffer          32-byte-aligned main-memory allocation.
+    \param  len             Allocation size, at least 128 and a multiple of 64.
+    \param  old_buffer      Optional destination for the previous allocation.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV, EPERM,
+                            or EBUSY.
+*/
+int pvr_set_vertbuf_checked(pvr_list_t list, void *buffer, size_t len,
+                            void **old_buffer);
+
+/** \brief Assign a double-buffered vertex staging allocation to one pass/list.
+    \ingroup pvr_vertex_dma
+
+    The allocation is split evenly between the two RAM frame banks, matching
+    pvr_set_vertbuf_checked(). Each enabled list in a buffered multipass scene
+    requires its own allocation. The application retains ownership and must not
+    release or modify it while the PVR is initialized.
+
+    Every enabled pass/list pair requires an assigned staging buffer, including
+    lists that the application intends to flush before a pass boundary.
+
+    \param pass             Zero-based registration pass.
+    \param list             Primitive list within the pass.
+    \param buffer           32-byte-aligned staging allocation.
+    \param len              Total allocation size; at least 128 bytes and a
+                            multiple of 64.
+    \param old_buffer       Optional destination for the previous allocation.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set appropriately.
+*/
+int pvr_set_pass_vertbuf_checked(size_t pass, pvr_list_t list, void *buffer,
+                                 size_t len, void **old_buffer);
+
 /** \brief   Retrieve a pointer to the current output location in the DMA buffer
              for the requested list.
     \ingroup pvr_vertex_dma
@@ -876,6 +1030,43 @@ void *pvr_vertbuf_tail(pvr_list_t list);
 */
 void pvr_vertbuf_written(pvr_list_t list, size_t amt);
 
+/** \brief Stable identity assigned to one PVR scene.
+    \ingroup pvr_scene_mgmt
+
+    Zero is reserved as an invalid identity. Values increase monotonically for
+    the lifetime of one PVR initialization.
+*/
+typedef uint64_t pvr_render_id_t;
+
+#define PVR_RENDER_ID_INVALID UINT64_C(0)
+
+/** \brief Observable stages of one submitted render.
+    \ingroup pvr_scene_mgmt
+*/
+typedef enum pvr_render_stage {
+    PVR_RENDER_STAGE_QUEUED = 0,
+    PVR_RENDER_STAGE_REGISTERED,
+    PVR_RENDER_STAGE_RENDERING,
+    PVR_RENDER_STAGE_COMPLETE,
+    PVR_RENDER_STAGE_DISPLAYED
+} pvr_render_stage_t;
+
+/** \brief Immutable completion ticket for one submitted scene.
+    \ingroup pvr_scene_mgmt
+
+    A framebuffer ticket has target set to NULL and can reach DISPLAYED. A
+    render-to-texture ticket identifies its exact destination and stops at
+    COMPLETE because texture renders never enter the display page-flip queue.
+*/
+typedef struct pvr_render_ticket {
+    pvr_render_id_t id;       /**< \brief Stable scene identity. */
+    pvr_ptr_t target;         /**< \brief Texture target, or NULL for display. */
+    uint32_t width;           /**< \brief Rendered width in pixels. */
+    uint32_t height;          /**< \brief Rendered height in pixels. */
+    uint32_t stride;          /**< \brief Target pitch in pixels. */
+    uint32_t to_texture;      /**< \brief Non-zero for a texture target. */
+} pvr_render_ticket_t;
+
 /** \brief   Begin collecting data for a frame of 3D output to the off-screen
              frame buffer.
     \ingroup pvr_scene_mgmt
@@ -884,6 +1075,26 @@ void pvr_vertbuf_written(pvr_list_t list, size_t amt);
     output.
 */
 void pvr_scene_begin(void);
+
+/** \brief Finish the current registration pass and begin the next one.
+    \ingroup pvr_scene_mgmt
+
+    In direct mode, this operation closes every enabled list not already
+    closed, waits for the tile accelerator to consume their end markers, and
+    performs the hardware continuation sequence. In buffered mode, it closes
+    the current pass in its pass-owned staging buffers; the IRQ-driven DMA
+    chain performs continuation after pvr_scene_finish(). Neither path resets
+    the shared parameter or overflow cursors or starts rendering early.
+
+    The call is valid only for a scene started after pvr_init_multipass() or
+    pvr_init_multipass_depth(), and
+    only before the configured final pass.
+
+    \retval 0               The next pass is ready for list submission.
+    \retval -1              On error, with errno set to `ENODEV`, `ENOTSUP`,
+                            `EPERM`, `EALREADY`, `ETIMEDOUT`, or `EIO`.
+*/
+int pvr_scene_next_pass(void);
 
 /** \brief   Begin collecting data for a frame of 3D output to the specified
              texture.
@@ -914,7 +1125,11 @@ void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry)
     render_w and render_h describe the area to draw. stride_px describes the
     number of pixels between rows in memory and must be greater than or equal
     to render_w. For the initial 16-bit render target implementation,
-    stride_px must also be a multiple of 4 pixels.
+    stride_px must also be a multiple of 4 pixels. The complete pitched target
+    must fit in the 64-bit CPU-visible VRAM range beginning at an eight-byte
+    aligned txr address. The render extent cannot exceed the tile matrix
+    dimensions established at PVR initialization, and the pitch must fit the
+    hardware render-modulo field.
 
     \note Initial support is intended for 16-bit render targets, matching the
     deprecated pvr_scene_begin_txr() compatibility wrapper behavior.
@@ -925,16 +1140,111 @@ void pvr_scene_begin_txr(pvr_ptr_t txr, uint32_t *rx, uint32_t *ry)
     \param  stride_px       Backing texture pitch (in pixels).
 
     \retval 0               On success.
-    \retval -1              If the specified arguments are invalid.
+    \retval -1              On error, with errno set to `EINVAL`, `ENODEV`,
+                            `EBUSY`, `EFAULT`, `EOVERFLOW`, or `ENOSPC`.
 */
 int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
                         uint32_t render_h, uint32_t stride_px);
+
+/** \brief Inclusive pixel clipping rectangle for one scene.
+    \ingroup pvr_scene_mgmt
+*/
+typedef struct pvr_pixel_clip {
+    uint32_t left;            /**< \brief Leftmost rendered pixel. */
+    uint32_t top;             /**< \brief Topmost rendered pixel. */
+    uint32_t right;           /**< \brief Rightmost rendered pixel. */
+    uint32_t bottom;          /**< \brief Bottommost rendered pixel. */
+} pvr_pixel_clip_t;
+
+/** \brief Set the pixel clipping rectangle for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    Call this after pvr_scene_begin() or pvr_scene_begin_rtt() and before the
+    scene begins TA registration. Direct submission therefore requires this
+    call before the first pvr_list_begin(); buffered submission permits it until
+    the first explicit list flush or scene completion.
+
+    Coordinates are inclusive and must fit the active framebuffer or texture
+    render area. Packed 24-bit framebuffer output requires even coordinates;
+    invalid values are rejected rather than rounded silently.
+
+    \param  clip            Pixel clipping rectangle.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV, EPERM,
+                            or EBUSY.
+*/
+int pvr_scene_set_pixel_clip(const pvr_pixel_clip_t *clip);
+
+/** \brief Get the pixel clipping rectangle configured for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    \param  clip            Destination rectangle.
+
+    \retval 0               On success.
+    \retval -1              If clip is NULL, PVR is unavailable, or no scene
+                            is active, with errno set appropriately.
+*/
+int pvr_scene_get_pixel_clip(pvr_pixel_clip_t *clip);
 
 
 /** \defgroup pvr_list_mgmt Polygon Lists
     \brief                  PVR API for managing list submission
     \ingroup                pvr_scene_mgmt
 */
+
+/** \brief Inclusive tile rectangle for a TA user-clip command.
+    \ingroup pvr_list_mgmt
+
+    One tile is 32 by 32 pixels. Hardware command fields provide six bits for
+    X and four bits for Y; submission additionally checks the active render
+    area.
+*/
+typedef struct pvr_user_clip {
+    uint32_t left;            /**< \brief Leftmost tile. */
+    uint32_t top;             /**< \brief Topmost tile. */
+    uint32_t right;           /**< \brief Rightmost tile. */
+    uint32_t bottom;          /**< \brief Bottommost tile. */
+} pvr_user_clip_t;
+
+#define PVR_USER_CLIP_MAX_X 63u /**< \brief Largest encoded user-clip X tile. */
+#define PVR_USER_CLIP_MAX_Y 15u /**< \brief Largest encoded user-clip Y tile. */
+
+/** \brief Compile a checked TA user-clip command.
+    \ingroup pvr_list_mgmt
+
+    This function is independent of scene state and is suitable for preparing
+    a command in advance. pvr_user_clip_submit() adds active-target and list
+    ordering checks.
+
+    \param  command         Destination 32-byte command.
+    \param  list            List affected by the command.
+    \param  clip            Inclusive tile rectangle.
+
+    \retval 0               On success.
+    \retval -1              On invalid pointers, list, ordering, or hardware
+                            coordinate range, with errno set to EINVAL.
+*/
+int pvr_user_clip_compile(pvr_poly_hdr_t *command, pvr_list_t list,
+                          const pvr_user_clip_t *clip);
+
+/** \brief Compile and submit a user-clip command to one list.
+    \ingroup pvr_list_mgmt
+
+    For a directly submitted list, that list must currently be open. A buffered
+    list may receive the command directly in its RAM buffer. Do not insert a
+    user-clip command between the first vertex of a strip and its end-of-strip
+    vertex.
+
+    \param  list            List affected by the command.
+    \param  clip            Inclusive tile rectangle.
+
+    \retval 0               On success.
+    \retval -1              On invalid coordinates, inactive scene, disabled
+                            list, direct-list ordering, flushed list, or buffer
+                            exhaustion, with errno set appropriately.
+*/
+int pvr_user_clip_submit(pvr_list_t list, const pvr_user_clip_t *clip);
 
 /** \brief   Begin collecting data for the given list type.
     \ingroup pvr_list_mgmt
@@ -949,7 +1259,9 @@ int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
 
     \param  list            The list to open.
     \retval 0               On success.
-    \retval -1              If the specified list has already been closed.
+    \retval -1              If the list is invalid, disabled for the active
+                            pass, has already been closed, or TA readiness
+                            fails with `ETIMEDOUT` or `EIO`.
 */
 int pvr_list_begin(pvr_list_t list);
 
@@ -1053,13 +1365,33 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
 /** \brief   Flush the buffered data of the given list type to the TA.
     \ingroup pvr_list_mgmt
 
-    This function is currently not implemented, and calling it will result in an
-    assertion failure. It is intended to be used later in a "hybrid" mode where
-    both direct and DMA TA submission is possible.
+    This completes the buffered list, appends its end marker, and transfers it
+    synchronously to the TA. The list cannot be written, reopened, or flushed
+    again during the current scene. pvr_scene_finish() will not transfer it a
+    second time.
+
+    This operation enables hybrid submission: selected lists can be collected
+    in RAM while other lists are submitted directly. It blocks until the DMA
+    engine has accepted the complete list, but it does not wait for rendering or
+    display.
+
+    In a multipass scene, early flushing must begin in pass zero. Once enabled,
+    pvr_scene_next_pass() synchronously drains the remaining buffered lists in
+    that pass, waits for TA acceptance, and performs continuation. This keeps
+    later pass construction aligned with the hardware pass. Calling this for
+    the first time after construction has advanced beyond pass zero fails with
+    `ENOTSUP`.
+
+    The scene API is not thread-safe. List construction, flushing, and scene
+    completion must be serialized by the application.
 
     \param  list            The list to flush.
 
-    \retval -1              On error (it is not possible to succeed).
+    \retval 0               On success.
+    \retval -1              On error, with `errno` set to `EINVAL`, `EPERM`,
+                            `ENOTSUP`, `ENODEV`, `EALREADY`, `EBUSY`, `ENOSPC`,
+                            `ETIMEDOUT`, `EIO`, or an error reported by the DMA
+                            layer.
 */
 int pvr_list_flush(pvr_list_t list);
 
@@ -1070,9 +1402,64 @@ int pvr_list_flush(pvr_list_t list);
     pvr_scene_begin() or pvr_scene_begin_rtt() functions is called again.
 
     \retval 0               On success.
-    \retval -1              On error (no scene started).
+    \retval -1              On error (no scene started, a multipass scene has
+                            not reached its final pass, or TA readiness failed
+                            with `ETIMEDOUT` or `EIO`).
 */
 int pvr_scene_finish(void);
+
+/** \brief Finish a scene and return its stable completion ticket.
+    \ingroup pvr_scene_mgmt
+
+    This has the same submission behavior as pvr_scene_finish(). The ticket is
+    written only after successful scene completion and remains valid until PVR
+    shutdown. No object is allocated and the caller does not release it.
+
+    \param  ticket          Destination ticket.
+
+    \retval 0              On success.
+    \retval -1             On invalid output or scene state, with errno set.
+*/
+int pvr_scene_finish_tracked(pvr_render_ticket_t *ticket);
+
+/** \brief Query the latest stage reached by one render ticket.
+    \ingroup pvr_scene_mgmt
+
+    COMPLETE guarantees that the ISP/TSP no longer writes the ticket's render
+    target. CPU access, DMA upload, reuse, or release of a texture target must
+    not occur before that stage. COMPLETE is the highest stage returned for a
+    render-to-texture ticket because that target never enters page flipping.
+
+    \param  ticket          Ticket returned by pvr_scene_finish_tracked().
+    \param  stage           Destination for the observed stage.
+
+    \retval 0              On success.
+    \retval -1             On error, with `errno` set to `EINVAL`, `ENODEV`,
+                           or `ENOENT`.
+*/
+int pvr_render_ticket_get_stage(const pvr_render_ticket_t *ticket,
+                                pvr_render_stage_t *stage);
+
+/** \brief Wait until one render ticket reaches a requested stage.
+    \ingroup pvr_scene_mgmt
+
+    Waiting is identity-specific: completion of a different queued render does
+    not satisfy the request. A zero timeout waits indefinitely; otherwise the
+    timeout is in milliseconds and applies to the complete wait operation.
+    DISPLAYED is rejected for render-to-texture tickets because those renders
+    intentionally bypass page flipping.
+
+    \param  ticket          Ticket returned by pvr_scene_finish_tracked().
+    \param  stage           Minimum stage to reach.
+    \param  timeout_ms      Zero for no deadline, otherwise milliseconds.
+
+    \retval 0              Requested stage reached.
+    \retval -1             On error, with `errno` set to `EINVAL`, `ENOTSUP`,
+                           `ENODEV`, `ENOENT`, or `ETIMEDOUT`.
+*/
+int pvr_render_ticket_wait(const pvr_render_ticket_t *ticket,
+                           pvr_render_stage_t stage,
+                           unsigned int timeout_ms);
 
 /** \brief   Block the caller until the PVR system is ready for another frame to
              be submitted.
@@ -1123,6 +1510,17 @@ int pvr_wait_render_done(void);
     \ingroup pvr_ctx
 */
 
+/** \defgroup pvr_compile_flags Extended compilation flags
+    \brief                         Optional texture-header controls
+    \ingroup                       pvr_primitives_compilation
+    @{
+*/
+#define PVR_COMPILE_SUPERSAMPLE   (1u << 0) /**< Supersample the outside texture. */
+#define PVR_COMPILE_SUPERSAMPLE_2 (1u << 1) /**< Supersample the inside texture. */
+#define PVR_COMPILE_ALL_FLAGS     (PVR_COMPILE_SUPERSAMPLE | \
+                                   PVR_COMPILE_SUPERSAMPLE_2)
+/** @} */
+
 /** \brief   Compile a polygon context into a polygon header.
     \ingroup pvr_primitives_compilation
 
@@ -1133,6 +1531,20 @@ int pvr_wait_render_done(void);
     \param  src             The context to compile.
 */
 void pvr_poly_compile(pvr_poly_hdr_t *dst, const pvr_poly_cxt_t *src);
+
+/** \brief   Compile a polygon context with optional header controls.
+    \ingroup pvr_primitives_compilation
+
+    This preserves pvr_poly_cxt_t's layout while exposing texture
+    supersampling through the high-level compiler. The second flag affects the
+    inside-volume state when a two-volume header is generated.
+
+    \param  dst             Where to store the compiled header.
+    \param  src             The context to compile.
+    \param  flags           Bitwise OR of values in pvr_compile_flags.
+*/
+void pvr_poly_compile_ex(pvr_poly_hdr_t *dst, const pvr_poly_cxt_t *src,
+                         uint32_t flags);
 
 /** \defgroup pvr_ctx_init     Initialization
     \brief                     Functions for initializing PVR polygon contexts
@@ -1181,6 +1593,19 @@ void pvr_poly_cxt_txr(pvr_poly_cxt_t *dst, pvr_list_t list,
 */
 void pvr_sprite_compile(pvr_sprite_hdr_t *dst,
                         const pvr_sprite_cxt_t *src);
+
+/** \brief   Compile a sprite context with optional header controls.
+    \ingroup pvr_primitives_compilation
+
+    PVR_COMPILE_SUPERSAMPLE controls the sprite texture. The inside-volume
+    flag is not valid for sprite headers.
+
+    \param  dst             Where to store the compiled header.
+    \param  src             The context to compile.
+    \param  flags           Zero or PVR_COMPILE_SUPERSAMPLE.
+*/
+void pvr_sprite_compile_ex(pvr_sprite_hdr_t *dst,
+                           const pvr_sprite_cxt_t *src, uint32_t flags);
 
 /** \brief   Fill in a sprite context for non-textured sprites.
     \ingroup pvr_ctx_init
@@ -1244,6 +1669,19 @@ void pvr_mod_compile(pvr_mod_hdr_t *dst, pvr_list_t list, uint32_t mode,
     \param  src             The context to compile.
 */
 void pvr_poly_mod_compile(pvr_poly_mod_hdr_t *dst, const pvr_poly_cxt_t *src);
+
+/** \brief   Compile a two-volume polygon context with optional controls.
+    \ingroup pvr_primitives_compilation
+
+    PVR_COMPILE_SUPERSAMPLE controls the outside-volume texture and
+    PVR_COMPILE_SUPERSAMPLE_2 controls the inside-volume texture.
+
+    \param  dst             Where to store the compiled header.
+    \param  src             The context to compile.
+    \param  flags           Bitwise OR of values in pvr_compile_flags.
+*/
+void pvr_poly_mod_compile_ex(pvr_poly_mod_hdr_t *dst,
+                             const pvr_poly_cxt_t *src, uint32_t flags);
 
 /** \brief   Fill in a polygon context for non-textured polygons affected by a
              modifier volume.

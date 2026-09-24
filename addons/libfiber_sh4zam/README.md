@@ -1,7 +1,8 @@
 # SH4ZAM fiber runtime and service executor addon
 
-This is an **alternative provider**, not a second simultaneous fiber runtime.
-Choose exactly one for an application:
+This is the **full alternative fiber stack**, not an executor layered on core
+fibers. The complete `addon/fiber-service-sh4zam` branch selects it exclusively;
+start with [the bundle guide](../../FIBER-BUNDLE.md). The two bundles provide:
 
 - KOS core fibers: the upstream proposal's KOS-only implementation.
 - This addon: its own duplicate fiber/synchronization runtime and context switch,
@@ -14,14 +15,15 @@ which can be loaded into an application already using core fibers.
 
 ## Dependencies and build
 
-This initial extraction requires the KOS core-fiber proposal's public headers,
-logical-SP fix, continuation-stack resolver and SQ exclusion hook (tested at
-`ecde786320cac4a3ee8b50f158eeddfb03fe1fc0`). Those are OS mechanisms, not math.
+This complete checkout contains the KOS public fiber headers, logical-SP fix,
+continuation-stack resolver and SQ exclusion hook. Those are OS mechanisms,
+not a second fiber runtime and not math.
 They are not yet accepted upstream; this addon is not advertised as compatible
 with unmodified upstream KOS. It does not access a kernel-private fiber header:
 the executor's private cancellation/observer hooks belong to its bundled copy.
 
-Use an independent SH4ZAM 0.9.0 source checkout. No upstream SH4ZAM source is
+SH4ZAM defaults to this checkout's pinned `addons/libsh4zam/upstream` submodule.
+No separate source checkout is required. No upstream SH4ZAM source is
 copied, renamed, or reattributed here. The current register operations inline
 from its public headers; clients using out-of-line SH4ZAM routines must also link
 their compatible SH4ZAM library. Tested dependency:
@@ -30,26 +32,24 @@ their compatible SH4ZAM library. Tested dependency:
 With a configured KOS environment:
 
 ```sh
-make SH4ZAM_ROOT=/path/to/sh4zam all probes
+make all probes
 bash check-provider.sh
 ```
 
-Applications include `kos/fiber.h` and `kos/fiber_sync.h` from the prerequisite
-KOS headers, and this addon's `include/kos/fiber_service.h` when using services.
-Add this addon's `include` to their include path. Link the **entire** provider
-before the normal KOS libraries, as the supplied probe build does:
+Applications include `kos/fiber.h`, `kos/fiber_sync.h`, and explicitly
+`kos/fiber_service.h` when using the Service Executor. The root build installs
+`libfiber_sh4zam.a`; this branch's standard KOS link group selects it
+automatically. Normal applications need no custom provider link flags.
 
-```sh
-kos-cc -o app.elf app.o \
-  -Wl,--whole-archive /path/to/libfiber_sh4zam/.build/libfiber_sh4zam.a \
-  -Wl,--no-whole-archive
-```
+The kernel archive contains **no core fiber implementation**. Runtime,
+synchronization, context switching, XMTRX preservation and the executor all
+come from this addon. There is no fallback or runtime selector. Do not bring
+core fiber objects or archives from another checkout into this build.
 
-Whole-archive selects all fiber components, preventing partial resolution from
-KOS's archive. Do not link the kernel fiber object files explicitly or force
-whole-archive inclusion of `libkallisti.a`; duplicate-symbol errors are expected
-if both implementations are forced in. The link-map audit checks that no kernel
-fiber implementation was selected.
+The standalone addon probes force the entire addon archive for auditing;
+ordinary applications can pull only the needed members because no competing
+provider exists in the kernel. The shared disc adapter uses the selected public
+fiber API and does not add a runtime or require the Service Executor.
 
 ## Math and switching contract
 
@@ -81,7 +81,8 @@ math backend are adapted here. Copyright notices remain with their authors.
 
 Core fixes must be reviewed and carried to both copies deliberately. They are
 not generated from each other during a build. This duplication is intentional,
-and neither the core PR nor integrated master is changed by this extraction.
+and the narrow upstream proposal is preserved on `pr/core-fibers-submission`.
+The complete addon branch deliberately excludes the competing kernel provider.
 No Sega middleware, BIOS, media assets or reverse-engineering artifacts belong
 in this addon.
 

@@ -67,9 +67,24 @@ include kos.h
 
 # Name Manager
 nmmgr_lookup
+nmmgr_lookup_ref
 nmmgr_get_list
 nmmgr_handler_add
+nmmgr_handler_retain
+nmmgr_handler_release
 nmmgr_handler_remove
+nmmgr_handler_remove_timed
+nmmgr_handler_get_path
+
+# Independent Heaps
+mm_heap_create
+mm_heap_destroy
+mm_heap_alloc
+mm_heap_calloc
+mm_heap_realloc
+mm_heap_free
+mm_heap_get_stats
+mm_heap_validate
 
 # File System
 elf_load
@@ -166,29 +181,23 @@ thd_get_errno
 thd_set_mode
 thd_block_now
 
-# Cooperative fibers (no service executor dependency)
-fiber_attach
-fiber_attach_ex
-fiber_get_attach_flags
-fiber_create
-fiber_destroy
-fiber_switch
-fiber_current
-fiber_main
-fiber_get_data
-fiber_get_state
-fiber_set_switch_callback
-fiber_event_create
-fiber_event_destroy
-fiber_event_wait
-fiber_event_set
-fiber_event_clear
-fiber_event_is_set
-fiber_mutex_create
-fiber_mutex_destroy
-fiber_mutex_lock
-fiber_mutex_trylock
-fiber_mutex_unlock
+# Threaded work queues
+workqueue_create
+workqueue_destroy
+workqueue_kill
+workqueue_enqueue
+workqueue_enqueue_ex
+workqueue_cancel
+workqueue_cancel_ex
+workqueue_job_get_info
+workqueue_get_thread
+
+# Shared software timers
+timer_event_create
+timer_event_destroy
+timer_event_arm
+timer_event_cancel
+timer_event_get_info
 
 # Libraries
 #library_print_list

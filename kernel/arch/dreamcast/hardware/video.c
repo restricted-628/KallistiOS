@@ -5,15 +5,21 @@
    Copyright (C) 2001 Anders Clerwall (scav)
    Copyright (C) 2000-2001 Megan Potter
    Copyright (C) 2023-2024 Donald Haase
+   Copyright (C) 2026 Joseph Black
  */
 
 #include <dc/video.h>
 #include <dc/pvr.h>
 #include <dc/sq.h>
 #include <kos/dbglog.h>
+#include <kos/irq.h>
 #include <kos/platform.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
+
+#include "video_mode_internal.h"
+#include "video_raster_internal.h"
 
 /*-----------------------------------------------------------------------------*/
 /* This table is indexed w/ DM_* */
@@ -224,71 +230,27 @@ int8_t vid_check_cable(void) {
 }
 
 /*-----------------------------------------------------------------------------*/
-void vid_set_mode(int dm, vid_pixel_mode_t pm) {
-    vid_mode_t mode;
-    int i, found, mb;
+int vid_set_mode_checked(int dm, vid_pixel_mode_t pm) {
+    return vid_set_mode_standard_checked(dm, pm,
+                                         VID_MODE_STANDARD_DEFAULT);
+}
 
+int vid_set_mode_standard_checked(int dm, vid_pixel_mode_t pm,
+                                  vid_mode_standard_t standard) {
+    vid_mode_t mode;
     int8_t ct = vid_check_cable();
 
-    /* Remove the multi-buffering flag from the mode, if its present, and save
-       the state of that flag. */
-    mb = dm & DM_MULTIBUFFER;
-    dm &= ~DM_MULTIBUFFER;
-
-    /* Check to see if we should use a direct mode index, a generic
-       mode check, or if it's just invalid. */
-    if(dm > DM_INVALID && dm < DM_SENTINEL) {
-        memcpy(&mode, &vid_builtin[dm], sizeof(vid_mode_t));
-    }
-    else if(dm >= DM_GENERIC_FIRST && dm <= DM_GENERIC_LAST) {
-        found = 0;
-
-        for(i = 1; i < DM_SENTINEL; i++) {
-            /* Is it the right generic mode? */
-            if(vid_builtin[i].generic != dm)
-                continue;
-
-            /* Do we have the right cable type? */
-            if(vid_builtin[i].cable_type != CT_ANY &&
-                    vid_builtin[i].cable_type != ct)
-                continue;
-
-            /* Ok, nothing else to check right now -- we've got our mode */
-            memcpy(&mode, &vid_builtin[i], sizeof(vid_mode_t));
-            found = 1;
-            break;
-        }
-
-        if(!found) {
-            dbglog(DBG_ERROR, "vid_set_mode: invalid generic mode %04x\n", dm);
-            return;
-        }
-    }
-    else {
-        dbglog(DBG_ERROR, "vid_set_mode: invalid mode specifier %04x\n", dm);
-        return;
+    if(vid_mode_resolve(dm, pm, ct, standard, &mode) < 0) {
+        dbglog(DBG_ERROR, "vid_set_mode: invalid mode %04x: %s\n", dm,
+               strerror(errno));
+        return -1;
     }
 
-    /* We set this here so actual mode is bit-depth independent.. */
-    mode.pm = pm;
+    return vid_set_mode_ex_checked(&mode);
+}
 
-    /* Calculate basic size needed for a framebuffer */
-    mode.fb_size = (mode.width * mode.height) * vid_pmode_bpp[mode.pm];
-
-    /* Ensure the FBs are 32-bit aligned */
-    if(mode.fb_size % 4)
-        mode.fb_size = (mode.fb_size + 4) & ~3;
-
-    if(mb == DM_MULTIBUFFER) {
-        /* Fill vram with framebuffers */
-        mode.fb_count = PVR_RAM_SIZE / mode.fb_size;
-    }
-
-    /* This is also to be generic */
-    mode.cable_type = ct;
-
-    /* This will make a private copy of our "mode" */
-    vid_set_mode_ex(&mode);
+void vid_set_mode(int dm, vid_pixel_mode_t pm) {
+    (void)vid_set_mode_checked(dm, pm);
 }
 
 enum pvr_pm_modes {
@@ -299,32 +261,21 @@ enum pvr_pm_modes {
     PVR_PM_RGB888,
     PVR_PM_XRGB8888,
     PVR_PM_ARGB8888,
-    PVR_PM_DITHER = 8,
 };
 
 static const unsigned int vid_bpp_to_pvr_cfg2[] = {
-    [PM_RGB555] = PVR_PM_XRGB1555 | PVR_PM_DITHER,
-    [PM_RGB565] = PVR_PM_RGB565 | PVR_PM_DITHER,
+    [PM_RGB555] = PVR_PM_XRGB1555 | PVR_FB_CFG_2_DITHER,
+    [PM_RGB565] = PVR_PM_RGB565 | PVR_FB_CFG_2_DITHER,
     [PM_RGB888P] = PVR_PM_RGB888,
     [PM_RGB0888] = PVR_PM_XRGB8888,
 };
 
 /*-----------------------------------------------------------------------------*/
-void vid_set_mode_ex(vid_mode_t *mode) {
+static int vid_apply_mode(vid_mode_t *mode, int8_t ct) {
     uint32_t data;
 
-    /* Verify cable type for video mode. */
-    int8_t ct = vid_check_cable();
-
-    if(mode->cable_type != CT_ANY) {
-        if(mode->cable_type != ct) {
-            /* Maybe this should have the ability to be forced (thru param)
-               so you can set a mode with VGA params with RGB cable type? */
-            /*ct=mode->cable_type; */
-            dbglog(DBG_ERROR, "vid_set_mode: Mode not allowed for this cable type (%i!=%i)\n", mode->cable_type, ct);
-            return;
-        }
-    }
+    /* Suspend opt-in raster callbacks while scanout timing is rewritten. */
+    vid_raster_mode_change_begin();
 
     /* Blank screen and reset display enable (looks nicer) */
     vid_set_enabled(false);
@@ -438,6 +389,251 @@ void vid_set_mode_ex(vid_mode_t *mode) {
 
     /* Re-enable the display */
     vid_set_enabled(true);
+    vid_raster_mode_changed(vid_mode->scanlines);
+
+    return 0;
+}
+
+int vid_set_mode_ex_checked(const vid_mode_t *mode) {
+    vid_mode_t prepared;
+    size_t frame_bytes;
+    int8_t cable_type;
+
+    if(!mode) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    cable_type = vid_check_cable();
+    if(vid_mode_validate_for_vram(mode, cable_type, PVR_RAM_SIZE,
+                                  &frame_bytes) < 0) {
+        dbglog(DBG_ERROR, "vid_set_mode_ex: invalid mode: %s\n",
+               strerror(errno));
+        return -1;
+    }
+
+    memcpy(&prepared, mode, sizeof(prepared));
+    prepared.cable_type = cable_type;
+    prepared.fb_size = frame_bytes;
+    return vid_apply_mode(&prepared, cable_type);
+}
+
+void vid_set_mode_ex(vid_mode_t *mode) {
+    (void)vid_set_mode_ex_checked(mode);
+}
+
+int vid_get_mode(vid_mode_t *mode) {
+    if(!mode) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(!vid_mode) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    memcpy(mode, vid_mode, sizeof(*mode));
+    return 0;
+}
+
+int vid_get_scanout_status(vid_scanout_status_t *status) {
+    uint32_t raw;
+
+    if(!status) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    /* One read makes the five related fields a coherent observation. */
+    raw = PVR_GET(PVR_SYNC_STATUS);
+    status->scanline = FIELD_GET(raw, PVR_SYNC_STATUS_SCANLINE);
+    status->field = (raw & PVR_SYNC_STATUS_FIELD) != 0;
+    status->blank = (raw & PVR_SYNC_STATUS_BLANK) != 0;
+    status->hsync = (raw & PVR_SYNC_STATUS_HSYNC) != 0;
+    status->vsync = (raw & PVR_SYNC_STATUS_VSYNC) != 0;
+    return 0;
+}
+
+int vid_get_display_filter(vid_display_filter_t *filter) {
+    uint32_t fb_cfg;
+    uint32_t scaler_cfg;
+
+    if(!filter) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    irq_disable_scoped();
+    fb_cfg = PVR_GET(PVR_FB_CFG_2);
+    scaler_cfg = PVR_GET(PVR_SCALER_CFG);
+
+    filter->dithering = (fb_cfg & PVR_FB_CFG_2_DITHER) != 0;
+    filter->antialiasing = (scaler_cfg & PVR_SCALER_CFG_FSAA) != 0;
+    filter->vertical_scale =
+        FIELD_GET(scaler_cfg, PVR_SCALER_CFG_VSCALE_FACTOR);
+    return 0;
+}
+
+int vid_set_display_filter(const vid_display_filter_t *filter) {
+    uint32_t fb_cfg;
+    uint32_t scaler_cfg;
+    bool current_antialiasing;
+
+    if(!filter) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(filter->vertical_scale == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Both controls are shared registers. Preserve fields owned by other
+       framebuffer and scaler facilities while applying one coherent update. */
+    irq_disable_scoped();
+    fb_cfg = PVR_GET(PVR_FB_CFG_2);
+    scaler_cfg = PVR_GET(PVR_SCALER_CFG);
+
+    /* Full-scene antialiasing changes the TA's horizontal tile geometry and
+       is therefore owned by pvr_init(). Updating only the scaler bit would
+       leave the live render buffers and register layout inconsistent. Keep
+       the field in this snapshot so callers can preserve/query it, but reject
+       attempts to change it through the display-only setter. */
+    current_antialiasing =
+        (scaler_cfg & PVR_SCALER_CFG_FSAA) != 0;
+
+    if(filter->antialiasing != current_antialiasing) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    if(filter->dithering)
+        fb_cfg |= PVR_FB_CFG_2_DITHER;
+    else
+        fb_cfg &= ~PVR_FB_CFG_2_DITHER;
+
+    scaler_cfg &= ~PVR_SCALER_CFG_VSCALE_FACTOR;
+    scaler_cfg |= FIELD_PREP(PVR_SCALER_CFG_VSCALE_FACTOR,
+                             filter->vertical_scale);
+
+    PVR_SET(PVR_FB_CFG_2, fb_cfg);
+    PVR_SET(PVR_SCALER_CFG, scaler_cfg);
+    return 0;
+}
+
+int vid_get_framebuffer_info(int32_t selector, vid_framebuffer_info_t *info) {
+    uint32_t displayed_offset;
+    uint32_t draw_offset;
+    uint32_t selected_offset;
+    uint32_t stride_bytes;
+    uint32_t odd_field_offset = UINT32_MAX;
+    size_t visible_bytes;
+    size_t capacity_bytes = 0;
+    uintptr_t draw_address;
+    int32_t resolved_index = -1;
+    bool draw_valid;
+    irq_mask_t old_irq;
+
+    if(info)
+        memset(info, 0, sizeof(*info));
+
+    if(!info) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    if(selector < VID_FRAMEBUFFER_DRAW) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    old_irq = irq_disable();
+    if(!vid_mode) {
+        irq_restore(old_irq);
+        errno = ENODEV;
+        return -1;
+    }
+
+    if(selector >= 0 && selector >= vid_mode->fb_count) {
+        irq_restore(old_irq);
+        errno = ERANGE;
+        return -1;
+    }
+
+    stride_bytes = (uint32_t)vid_mode->width * vid_pmode_bpp[vid_mode->pm];
+    visible_bytes = (size_t)stride_bytes * vid_mode->height;
+    displayed_offset = PVR_GET(PVR_FB_ADDR) & (PVR_RAM_SIZE - 1u);
+    draw_address = (uintptr_t)vram_l;
+    draw_valid = draw_address >= PVR_RAM_BASE && draw_address < PVR_RAM_TOP;
+    draw_offset = draw_valid ?
+        (uint32_t)(draw_address - PVR_RAM_BASE) : UINT32_MAX;
+
+    if(selector == VID_FRAMEBUFFER_DRAW && !draw_valid) {
+        irq_restore(old_irq);
+        errno = EIO;
+        return -1;
+    }
+
+    if(selector == VID_FRAMEBUFFER_DISPLAYED)
+        selected_offset = displayed_offset;
+    else if(selector == VID_FRAMEBUFFER_DRAW)
+        selected_offset = draw_offset;
+    else
+        selected_offset = (uint32_t)((size_t)selector * vid_mode->fb_size);
+
+    /* Resolve active PVR-managed or caller-selected addresses to a configured
+       slot only when they start at that slot's exact base. */
+    if(vid_mode->fb_size &&
+       selected_offset % vid_mode->fb_size == 0) {
+        size_t candidate = selected_offset / vid_mode->fb_size;
+
+        if(candidate < vid_mode->fb_count) {
+            resolved_index = (int32_t)candidate;
+            capacity_bytes = vid_mode->fb_size;
+        }
+    }
+
+    if(selected_offset > PVR_RAM_SIZE ||
+       visible_bytes > PVR_RAM_SIZE - selected_offset) {
+        irq_restore(old_irq);
+        errno = EIO;
+        return -1;
+    }
+
+    if(vid_mode->flags & VID_INTERLACE) {
+        if(selected_offset == displayed_offset)
+            odd_field_offset = PVR_GET(PVR_FB_IL_ADDR) &
+                               (PVR_RAM_SIZE - 1u);
+        else
+            odd_field_offset = selected_offset + stride_bytes;
+
+        if(odd_field_offset >= PVR_RAM_SIZE) {
+            irq_restore(old_irq);
+            errno = EIO;
+            return -1;
+        }
+    }
+
+    *info = (vid_framebuffer_info_t) {
+        .index = resolved_index,
+        .vram_offset = selected_offset,
+        .address = (void *)(PVR_RAM_BASE | selected_offset),
+        .odd_field_offset = odd_field_offset,
+        .visible_bytes = visible_bytes,
+        .capacity_bytes = capacity_bytes,
+        .stride_bytes = stride_bytes,
+        .width = vid_mode->width,
+        .height = vid_mode->height,
+        .pixel_mode = vid_mode->pm,
+        .displayed = selected_offset == displayed_offset,
+        .draw_target = draw_valid && selected_offset == draw_offset,
+        .interlaced = (vid_mode->flags & VID_INTERLACE) != 0
+    };
+
+    irq_restore(old_irq);
+    return 0;
 }
 
 /*-----------------------------------------------------------------------------*/
@@ -588,25 +784,36 @@ void vid_waitvbl(void) {
 }
 
 /*-----------------------------------------------------------------------------*/
-void vid_init(int disp_mode, vid_pixel_mode_t pixel_mode) {
-    /* Set mode and clear vram */
-    vid_set_mode(disp_mode, pixel_mode);
+int vid_init_checked(int disp_mode, vid_pixel_mode_t pixel_mode) {
+    if(vid_set_mode_checked(disp_mode, pixel_mode) < 0)
+        return -1;
+
     vid_empty();
+    return 0;
+}
+
+void vid_init(int disp_mode, vid_pixel_mode_t pixel_mode) {
+    (void)vid_init_checked(disp_mode, pixel_mode);
 }
 
 /*-----------------------------------------------------------------------------*/
 void vid_shutdown(void) {
+    vid_raster_shutdown();
+
     /* Reset back to default mode, in case we're going back to a loader. */
     vid_init(DM_640x480, PM_RGB565);
 }
 
 void vid_set_dithering(bool enable) {
-    uint32_t cfg = vid_bpp_to_pvr_cfg2[currmode.pm];
+    uint32_t cfg;
+
+    irq_disable_scoped();
+    cfg = PVR_GET(PVR_FB_CFG_2);
 
     if(enable)
-        cfg |= PVR_PM_DITHER;
+        cfg |= PVR_FB_CFG_2_DITHER;
     else
-        cfg &= ~PVR_PM_DITHER;
+        cfg &= ~PVR_FB_CFG_2_DITHER;
 
     PVR_SET(PVR_FB_CFG_2, cfg);
 }

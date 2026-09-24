@@ -4,10 +4,12 @@
 
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2010 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
 */
 
 #include <stdint.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -44,8 +46,8 @@
    required. Fortunately the Fujitsu chip is _much_ simpler and easier to
    work with than the later RTL chip, but unfortunately, that simplicity
    comes at a cost. Each packet to be send or received must be processed
-   over a PIO interface one byte at a time. This is probably why Sega dumped
-   it for the RTL design later on, because you can imagine the system load
+   over a PIO interface one byte at a time. The later DMA-capable design avoids
+   much of the resulting system load
    to do that while trying to process 3D graphics and such...
 
    This driver is really simplistic, but this should form the basis with
@@ -217,6 +219,7 @@ netif_t la_if;
 #define LA_RUNNING      2
 #define LA_PAUSED       3
 static int la_started = LA_NOT_STARTED;
+static asic_evt_claim_t la_irq_claim = ASIC_EVT_CLAIM_INVALID;
 
 /* Mac address (read from EEPROM) */
 static uint8_t la_mac[6];
@@ -253,7 +256,7 @@ static void la_write(int reg, int bank, int value) {
 }
 
 /* This is based on the JLI EEPROM reader from FreeBSD. EEPROM in the
-   Sega adapter is a bit simpler than what is described in the Fujitsu
+   console adapter is a bit simpler than what is described in the Fujitsu
    manual -- it appears to contain only the MAC address and not a base
    address like the manual says. EEPROM is read one bit (!) at a time
    through the EEPROM interface port. */
@@ -314,11 +317,9 @@ static void la_read_eeprom(uint8_t *data) {
     }
 }
 
-/* Reset the lan adapter and verify that it's there and alive */
-static int la_detect(void) {
+/* Reset the 8-bit interface and identify the Ethernet controller. */
+static int la_probe_hardware(void) {
     int type;
-
-    assert_msg(la_started == LA_NOT_STARTED, "la_detect called out of sequence");
 
     /* Reset the interface */
     g2_write_8(G2_8BP_RST, 0);
@@ -331,9 +332,28 @@ static int la_detect(void) {
     /* Read the chip type and verify it */
     type = DLCR7_IDENT(la_read(DLCR7));
 
-    if(type != DLCR7_ID_MB86967) {
+    return type == DLCR7_ID_MB86967;
+}
+
+int la_probe(void) {
+    if(la_started != LA_NOT_STARTED) {
+        errno = EBUSY;
         return -1;
     }
+
+    return la_probe_hardware();
+}
+
+int la_is_initialized(void) {
+    return (la_if.flags & NETIF_INITIALIZED) != 0;
+}
+
+/* Reset the lan adapter and verify that it's there and alive */
+static int la_detect(void) {
+    assert_msg(la_started == LA_NOT_STARTED, "la_detect called out of sequence");
+
+    if(!la_probe_hardware())
+        return -1;
 
     /* That should do */
     la_started = LA_DETECTED;
@@ -391,9 +411,13 @@ static int la_hw_init(void) {
     /* Set non-promiscuous mode (use 0x03 for promiscuous) */
     la_write(DLCR5, (la_read(DLCR5) & ~DLCR5_AM_MASK) | DLCR5_AM_OTHER);
 
-    /* Setup interrupt handler */
-    asic_evt_set_handler(ASIC_EVT_EXP_8BIT, la_irq_hnd, NULL);
-    asic_evt_enable(ASIC_EVT_EXP_8BIT, ASIC_IRQB);
+    /* Own the shared 8-bit expansion interrupt while the adapter is active. */
+    if(asic_evt_claim(ASIC_EVT_EXP_8BIT, ASIC_IRQB, la_irq_hnd,
+                      NULL, &la_irq_claim) < 0) {
+        dbglog(DBG_ERROR, "lan_adapter: external interrupt is already owned\n");
+        la_write(DLCR7, la_read(DLCR7) & ~DLCR7_NSTBY);
+        return -1;
+    }
 
     /* Enable receive interrupt */
     la_write(DLCR3, DLCR1_PKTRDY);
@@ -436,9 +460,10 @@ static void la_hw_shutdown(void) {
 
     la_started = LA_NOT_STARTED;
 
-    /* Unhook interrupts */
-    asic_evt_disable(ASIC_EVT_EXP_8BIT, ASIC_IRQB);
-    asic_evt_remove_handler(ASIC_EVT_EXP_8BIT);
+    if(la_irq_claim != ASIC_EVT_CLAIM_INVALID) {
+        (void)asic_evt_release(la_irq_claim);
+        la_irq_claim = ASIC_EVT_CLAIM_INVALID;
+    }
 }
 
 /* We don't really need these stats right now but we might want 'em later */

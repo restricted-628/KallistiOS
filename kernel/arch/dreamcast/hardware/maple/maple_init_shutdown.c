@@ -3,6 +3,7 @@
    maple_init_shutdown.c
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2026 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
  */
 
 #include <inttypes.h>
@@ -150,6 +151,7 @@ static void maple_hw_init(void) {
     maple_state.scan_ready_mask = 0;
     maple_state.port0_mie = 0;
     maple_state.gun_port = -1;
+    maple_state.gun_active_port = -1;
     maple_state.gun_x = maple_state.gun_y = -1;
 
     /* Reset hardware */

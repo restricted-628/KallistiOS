@@ -4,6 +4,7 @@
    Copyright (C) 2000, 2001 Megan Potter
    Copyright (C) 2024 Paul Cercueil
    Copyright (C) 2024, 2025 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 
 */
 

@@ -2,6 +2,7 @@
 
    pvr_irq.c
    Copyright (C)2002,2004 Megan Potter
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -27,16 +28,32 @@
 
 // Find the next list to DMA out. If we have none left to do, then do
 // nothing. Otherwise, start the DMA and chain back to us upon completion.
+static void pvr_render_lists(void);
+static void registration_complete(void);
+
 static void dma_next_list(void *thread) {
     volatile pvr_dma_buffers_t * b;
     unsigned int i;
 
     // Get the buffers for this frame.
-    b = pvr_state.dma_buffers + (pvr_state.ram_target ^ 1);
+    if(pvr_state.multipass) {
+        b = pvr_pass_dma_buffer(pvr_state.multipass->dma_frame,
+                                pvr_state.multipass->ta_pass);
+    }
+    else {
+        b = pvr_state.dma_buffers + (pvr_state.ram_target ^ 1);
+    }
 
     for(i = 0; i < PVR_OPB_COUNT; i++) {
         if((pvr_state.lists_enabled & BIT(i))
                 && !(pvr_state.lists_dmaed & BIT(i))) {
+
+            /* Hybrid submission may transfer selected buffered lists before
+               scene_finish(). Those lists must not be replayed by this chain. */
+            if(b->flushed & BIT(i)) {
+                pvr_state.lists_dmaed |= BIT(i);
+                continue;
+            }
 
             /* If we are in PVR DMA mode, yet we haven't associated a
                RAM-residing vertex buffer with the current list
@@ -54,6 +71,20 @@ static void dma_next_list(void *thread) {
             pvr_dma_load_ta(b->base[i], b->ptr[i], 0, dma_next_list, thread);
             return;
         }
+    }
+
+    /* Multipass keeps the DMA lock across the registration boundary. The list
+       completion path continues the TA, then restarts this chain for the next
+       pass. */
+    if(pvr_state.multipass) {
+        pvr_state.multipass->dma_pass_fed = true;
+
+        /* Usually the TA list interrupt follows DMA completion because its EOL
+           is the final transferred block. Handle the opposite IRQ order too. */
+        if(pvr_state.lists_transferred == pvr_state.lists_enabled)
+            registration_complete();
+
+        return;
     }
 
     // If that was the last one, then free up the DMA channel.
@@ -79,6 +110,7 @@ static void pvr_render_lists(void) {
     if(pvr_state.ta_busy
        && !pvr_state.render_busy
        && (!pvr_state.render_completed || pvr_state.curr_to_texture)
+       && pvr_registration_is_final()
        && pvr_state.lists_transferred == pvr_state.lists_enabled) {
 
         /* XXX Note:
@@ -90,9 +122,14 @@ static void pvr_render_lists(void) {
         // Begin rendering from the dirty TA buffer into the clean
         // frame buffer.
         pvr_state.ta_target ^= pvr_state.vbuf_doublebuf;
-        pvr_begin_queued_render();
+        pvr_state.active_render_id = pvr_state.registration_render_id;
+        pvr_state.render_started_id = pvr_state.active_render_id;
+        pvr_state.registration_render_id = PVR_RENDER_ID_INVALID;
+        pvr_state.was_to_texture = pvr_state.curr_to_texture;
         pvr_state.render_busy = 1;
+        pvr_begin_queued_render();
         pvr_sync_stats(PVR_SYNC_RNDSTART);
+        genwait_wake_all((void *)&pvr_state.render_started_id);
 
         // Switch to the clean TA buffer.
         pvr_state.lists_transferred = 0;
@@ -101,12 +138,66 @@ static void pvr_render_lists(void) {
         // The TA is no longer busy.
         pvr_state.ta_busy = 0;
 
-        pvr_state.was_to_texture = pvr_state.curr_to_texture;
+        pvr_status_advance();
 
         // Signal the client code to continue onwards.
         genwait_wake_all((void *)&pvr_state.ta_busy);
         thd_schedule(true);
     }
+}
+
+static void finish_multipass_dma_chain(void) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+    size_t pass;
+
+    assert(multipass && multipass->dma_chain_active);
+
+    for(pass = 0; pass < multipass->pass_count; ++pass)
+        pvr_pass_dma_buffer(multipass->dma_frame, pass)->ready = 0;
+
+    multipass->dma_chain_active = false;
+    multipass->dma_pass_fed = false;
+    pvr_state.lists_dmaed = 0;
+    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+}
+
+static void registration_complete(void) {
+    pvr_multipass_state_t *multipass = pvr_state.multipass;
+
+    if(multipass && pvr_state.dma_mode) {
+        size_t next_pass;
+
+        if(!multipass->dma_pass_fed)
+            return;
+
+        if(!pvr_registration_is_final()) {
+            next_pass = multipass->ta_pass + 1u;
+            multipass->dma_pass_fed = false;
+            pvr_state.lists_dmaed = 0;
+            pvr_continue_ta_pass(next_pass);
+            dma_next_list(NULL);
+            return;
+        }
+
+        finish_multipass_dma_chain();
+    }
+    else {
+        /* Direct intermediate completion admits the thread that owns the
+           serialized continuation register transition. */
+        genwait_wake_all((void *)&pvr_state.lists_transferred);
+
+        if(!pvr_registration_is_final()) {
+            thd_schedule(true);
+            return;
+        }
+    }
+
+    pvr_state.registered_render_id = pvr_state.registration_render_id;
+    genwait_wake_all((void *)&pvr_state.registered_render_id);
+    pvr_sync_stats(PVR_SYNC_REGDONE);
+    pvr_event_dispatch(PVR_EVENT_REGISTRATION_COMPLETE,
+                       pvr_state.lists_transferred);
+    pvr_render_lists();
 }
 
 void pvr_vblank_handler(uint32_t code, void *data) {
@@ -126,8 +217,18 @@ void pvr_vblank_handler(uint32_t code, void *data) {
 
         pvr_sync_view();
 
+        if(pvr_state.pending_display_render_id != PVR_RENDER_ID_INVALID) {
+            pvr_state.displayed_render_id =
+                pvr_state.pending_display_render_id;
+        }
+
+        pvr_state.pending_display_render_id = PVR_RENDER_ID_INVALID;
+        genwait_wake_all((void *)&pvr_state.displayed_render_id);
+
         // Clear the render completed flag.
         pvr_state.render_completed = 0;
+        pvr_status_advance();
+        pvr_event_dispatch(PVR_EVENT_DISPLAY, pvr_state.view_target);
     }
 
     // We may have a pending render, that couldn't be done as the previous
@@ -136,46 +237,83 @@ void pvr_vblank_handler(uint32_t code, void *data) {
 }
 
 void pvr_int_handler(uint32_t code, void *data) {
+    pvr_fault_t fault = PVR_FAULT_NONE;
+    bool status_changed = false;
+
     (void)data;
 
     // What kind of event did we get?
     switch(code) {
         case ASIC_EVT_PVR_OPAQUEDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_OP_POLY);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_TRANSDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_TR_POLY);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_OPAQUEMODDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_OP_MOD);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_TRANSMODDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_TR_MOD);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_PTDONE:
             pvr_state.lists_transferred |= BIT(PVR_LIST_PT_POLY);
+            status_changed = true;
             break;
         case ASIC_EVT_PVR_RENDERDONE_TSP:
+            if(pvr_state.active_render_id != PVR_RENDER_ID_INVALID) {
+                pvr_state.completed_render_id = pvr_state.active_render_id;
+
+                if(!pvr_state.was_to_texture) {
+                    pvr_state.pending_display_render_id =
+                        pvr_state.active_render_id;
+                }
+            }
+
+            pvr_state.active_render_id = PVR_RENDER_ID_INVALID;
             pvr_state.render_busy = 0;
             if(!pvr_state.was_to_texture)
                 pvr_state.render_completed = 1;
             pvr_sync_stats(PVR_SYNC_RNDDONE);
+            status_changed = true;
 
             genwait_wake_all((void *)&pvr_state.render_busy);
+            genwait_wake_all((void *)&pvr_state.completed_render_id);
+            break;
+        case ASIC_EVT_PVR_YUV_DONE:
+            /* Converter completion is distinct from the channel-2 DMA that
+               supplies its input. The request layer orders both interrupts. */
+            pvr_txr_yuv_complete();
+            status_changed = true;
             break;
     }
 
-    /* Show register values on each interrupt */
+    if(status_changed)
+        pvr_status_advance();
+
+    if(code == ASIC_EVT_PVR_RENDERDONE_TSP)
+        pvr_event_dispatch(PVR_EVENT_RENDER_COMPLETE,
+                           pvr_state.was_to_texture);
+
+    /* Faults are always latched. Logging remains controlled by the existing
+       debug source so release builds get diagnostics without log traffic. */
     switch (code) {
         case ASIC_EVT_PVR_ISP_OUTOFMEM:
+            fault = PVR_FAULT_ISP_OUT_OF_MEMORY;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_ISP_OUTOFMEM\n");
             break;
 
         case ASIC_EVT_PVR_STRIP_HALT:
+            fault = PVR_FAULT_STRIP_HALT;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_STRIP_HALT\n");
             break;
 
         case ASIC_EVT_PVR_OPB_OUTOFMEM:
+            fault = PVR_FAULT_OPB_OUT_OF_MEMORY;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_OPB_OUTOFMEM\n"
             "pvr_irq: PVR_TA_OPB_START: %08lx\n"
             "pvr_irq: PVR_TA_OPB_END: %08lx\n"
@@ -184,12 +322,19 @@ void pvr_int_handler(uint32_t code, void *data) {
             break;
 
         case ASIC_EVT_PVR_TA_INPUT_ERR:
+            fault = PVR_FAULT_TA_INPUT_ERROR;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_TA_INPUT_ERR\n");
             break;
 
         case ASIC_EVT_PVR_TA_INPUT_OVERFLOW:
+            fault = PVR_FAULT_TA_INPUT_OVERFLOW;
             dbglog(DBG_SOURCE(PVR_RENDER_DBG), "pvr_irq: ASIC_EVT_PVR_TA_INPUT_OVERFLOW\n");
             break;
+    }
+
+    if(fault != PVR_FAULT_NONE) {
+        pvr_fault_record(fault, code);
+        pvr_event_dispatch(PVR_EVENT_FAULT, fault);
     }
 
     /* Update our stats if we finished all registration */
@@ -203,8 +348,8 @@ void pvr_int_handler(uint32_t code, void *data) {
             if(pvr_state.lists_transferred != pvr_state.lists_enabled)
                 return;
 
-            pvr_sync_stats(PVR_SYNC_REGDONE);
-            break;
+            registration_complete();
+            return;
     }
 
     // If all lists are fully transferred and a render is not in progress,

@@ -4,6 +4,7 @@
    Copyright (C) 2000, 2001 Megan Potter
    Copyright (C) 2023, 2024 Falco Girgis
    Copyright (C) 2026 Paul Cercueil
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -32,6 +33,7 @@
 __BEGIN_DECLS
 
 #include <time.h>
+#include <stdint.h>
 
 /* Notes:
     The RTC that is used by the DC is located on the AICA rather than SH4,
@@ -46,17 +48,12 @@ __BEGIN_DECLS
 
 extern time_t dc_boot_time;
 
+int arch_rtc_get_counter(uint32_t *counter);
+int arch_rtc_set_counter(uint32_t counter);
 time_t arch_rtc_unix_secs(void);
 int arch_rtc_set_unix_secs(time_t time);
-
-static inline time_t arch_rtc_boot_time(void) {
-    return dc_boot_time;
-}
-
-static inline int arch_rtc_init(void) {
-    dc_boot_time = arch_rtc_unix_secs();
-    return 0;
-}
+time_t arch_rtc_boot_time(void);
+int arch_rtc_init(void);
 
 static inline void arch_rtc_shutdown(void) {
 }
@@ -64,4 +61,3 @@ static inline void arch_rtc_shutdown(void) {
 __END_DECLS
 
 #endif  /* __ARCH_RTC_H */
-

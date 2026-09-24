@@ -1,5 +1,5 @@
 #
-# LibADX Test
+# Compressed-audio playback test
 # Copyright (C) 2011-2013 Josh 'PH3NOM' Pearson <ph3nom.dcmc@gmail.com>
 # Copyright (C) 2024 The KOS Team and contributors
 #
