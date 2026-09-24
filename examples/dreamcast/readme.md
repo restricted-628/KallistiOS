@@ -5,6 +5,7 @@ This page serves as an index for all KallistiOS examples.
 - basic
   - asserthnd
   - breaking
+  - cache-safety
   - dma
   - exec
   - fpu

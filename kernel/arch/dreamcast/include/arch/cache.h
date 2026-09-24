@@ -6,6 +6,7 @@
    Copyright (C) 2023 Andy Barajas
    Copyright (C) 2025 Eric Fradella
    Copyright (C) 2026 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file    arch/cache.h
@@ -33,7 +34,10 @@ __BEGIN_DECLS
 
 #include <kos/regfield.h>
 
+#include <dc/memory.h>
+
 #include <stdalign.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #define ARCH_CACHE_L1_ICACHE_SIZE       (8 * 1024)
@@ -51,6 +55,8 @@ __BEGIN_DECLS
 void arch_icache_inval_range(uintptr_t start, size_t count);
 void arch_icache_sync_range(uintptr_t start, size_t count);
 
+#include <arch/cache_range.h>
+
 __depr("dcache_wback_sq is deprecated. Use sq_flush() from <dc/sq.h>")
 static __always_inline void dcache_wback_sq(void *src) {
     __asm__ __volatile__("pref @%0\n"
@@ -61,10 +67,12 @@ static __always_inline void dcache_wback_sq(void *src) {
 }
 
 static inline void arch_dcache_pref_line(const void *src) {
+    src = (const void *)arch_cacheable_alias((uintptr_t)src);
     __builtin_prefetch(src);
 }
 
 static inline void arch_dcache_alloc_line_with_value(void *src, uintptr_t value) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("movca.l r0, @%8\n\t"
@@ -81,6 +89,7 @@ static inline void arch_dcache_alloc_line_with_value(void *src, uintptr_t value)
 }
 
 static inline void arch_dcache_alloc_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("movca.l r0, @%8\n\t"
@@ -97,6 +106,7 @@ static inline void arch_dcache_alloc_line(void *src) {
 }
 
 static inline void arch_dcache_zero_alloc_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
     uint32_t *ptr = (uint32_t *)((uintptr_t)src & ~0x1f);
 
     arch_dcache_alloc_line_with_value(src, 0);
@@ -105,6 +115,7 @@ static inline void arch_dcache_zero_alloc_line(void *src) {
 }
 
 static inline void arch_dcache_inval_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("ocbi @%8\n\t"
@@ -121,6 +132,7 @@ static inline void arch_dcache_inval_line(void *src) {
 }
 
 static inline void arch_dcache_purge_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("ocbp @%8\n\t"
@@ -137,6 +149,7 @@ static inline void arch_dcache_purge_line(void *src) {
 }
 
 static inline void arch_dcache_wback_line(void *src) {
+    src = (void *)arch_cacheable_alias((uintptr_t)src);
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("ocbwb @%8\n\t"
@@ -153,12 +166,19 @@ static inline void arch_dcache_wback_line(void *src) {
 }
 
 static inline void arch_dcache_inval_range(uintptr_t start, size_t count) {
-    uintptr_t end = start + count;
+    uintptr_t last;
 
-    start &= ~0x1f;
+    if(!arch_cache_range(start, count, &start, &last))
+        return;
 
-    for(; start < end; start += 32)
+    for(;;) {
         arch_dcache_inval_line((void *)start);
+
+        if(start == last)
+            break;
+
+        start += 32;
+    }
 }
 
 static inline void arch_dcache_wback_all(void) {
@@ -170,17 +190,24 @@ static inline void arch_dcache_wback_all(void) {
 }
 
 static inline void arch_dcache_wback_range(uintptr_t start, size_t count) {
-    uintptr_t end = start + count;
+    uintptr_t last;
+
+    if(!arch_cache_range(start, count, &start, &last))
+        return;
 
     if(count >= 65560) {
         /* Above this magic threshold, it's just faster to flush the whole cache. */
         arch_dcache_wback_all();
     }
     else {
-        start &= ~0x1f;
-
-        for(; start < end; start += 32)
+        for(;;) {
             arch_dcache_wback_line((void *)start);
+
+            if(start == last)
+                break;
+
+            start += 32;
+        }
     }
 }
 
@@ -206,17 +233,24 @@ static inline void arch_dcache_purge_all(void) {
 }
 
 static inline void arch_dcache_purge_range(uintptr_t start, size_t count) {
-    uintptr_t end = start + count;
+    uintptr_t last;
+
+    if(!arch_cache_range(start, count, &start, &last))
+        return;
 
     if(count >= 39936) {
         /* Above this magic threshold, it's just faster to purge the whole cache. */
         arch_dcache_purge_all();
     }
     else {
-        start &= ~0x1f;
-
-        for(; start < end; start += 32)
+        for(;;) {
             arch_dcache_purge_line((void *)start);
+
+            if(start == last)
+                break;
+
+            start += 32;
+        }
     }
 }
 

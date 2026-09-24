@@ -6,6 +6,7 @@
    Copyright (C) 2023 Andy Barajas
    Copyright (C) 2025 Eric Fradella
    Copyright (C) 2026 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file    include/kos/cache.h
@@ -20,6 +21,7 @@
     \author Ruslan Rostovtsev
     \author Andy Barajas
     \author Falco Girgis
+    \author Joseph Black
 */
 
 #ifndef __KOS_CACHE_H
@@ -106,6 +108,10 @@ __BEGIN_DECLS
 
     This instruction invalidates a range of the instruction cache.
 
+    A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
+
     \param  start           The physical address to begin invalidation at.
     \param  count           The number of bytes to invalidate.
 */
@@ -120,6 +126,10 @@ static inline void icache_inval_range(uintptr_t start, size_t count) {
     dcache_wback_range() followed by icache_inval_range(), but may be
     implemented in a more optimized way.
 
+    A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
+
     \param  start           The physical address to begin invalidation at.
     \param  count           The number of bytes to invalidate.
 */
@@ -132,6 +142,10 @@ static inline void icache_sync_range(uintptr_t start, size_t count) {
     This function invalidates a range of the data/operand cache. If you care
     about the contents of the cache that have not been written back yet, use
     dcache_wback_range() before using this function.
+
+    A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
 
     \param  start           The physical address to begin invalidating at.
     \param  count           The number of bytes to invalidate.
@@ -148,6 +162,10 @@ static inline void dcache_inval_range(uintptr_t start, size_t count) {
     just not marked as dirty after this has completed). If you wish to
     invalidate the cache as well, call dcache_inval_range() after calling this
     function or use dcache_purge_range() instead of dcache_wback_range().
+
+    A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
 
     \param  start           The physical address to begin flushing at.
     \param  count           The number of bytes to write back.
@@ -170,6 +188,10 @@ static inline void dcache_wback_all(void) {
     This function flushes a range of the data/operand cache, forcing a write-
     back and then invalidates all of the data in the specified range.
 
+    A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
+
     \param  start           The physical address to begin purging at.
     \param  count           The number of bytes to purge.
 */
@@ -181,8 +203,12 @@ static inline void dcache_purge_range(uintptr_t start, size_t count) {
 
     This function flushes the entire data/operand cache, ensuring that all
     cache blocks marked as dirty are written back to memory and all cache
-    entries are invalidated. It does not require an additional buffer and is
-    preferred when memory resources are constrained.
+    entries are invalidated.
+
+    \note When optimizing for speed, the implementation reserves an internal
+          16 KiB aligned eviction buffer in each translation unit that emits
+          this inline function. Size-optimized builds use an address-array
+          walk instead. Prefer a bounded range purge when memory cost matters.
 */
 static inline void dcache_purge_all(void) {
     arch_dcache_purge_all();
