@@ -1,6 +1,38 @@
 # Overview
 KallistiOS[^1] is a development library and unikernel operating system for
-the Sega Dreamcast[^1] licensed under a [permissive software license](LICENSE.md).
+the Dreamcast[^1] licensed under a [permissive software license](LICENSE.md).
+
+Checked deferred-callback semantics are documented in the
+[workqueue safety guide](workqueue-safety.md). The ownership and resource rules
+for KOS-created background execution are recorded in the
+[background execution audit](background-execution-audit.md).
+Checked cache ranges and P2 alias handling are documented in the
+[cache-maintenance safety guide](cache-maintenance.md).
+Checked page-table mutation and targeted TLB retirement are documented in the
+[MMU mapping safety guide](mmu-mapping.md).
+Store-queue ownership, recursion, and MMU-mode invariants are documented in the
+[store-queue safety guide](store-queue-safety.md).
+Caller-backed allocator ownership, validation, and resource behavior are
+documented in the [independent heap guide](independent-heaps.md).
+Priority ordering, interrupt-safe removal, and deferred callback reclamation
+are documented in the [VBlank callback safety guide](vblank-callback-safety.md).
+Exclusive ASIC event ownership and its interaction with legacy and threaded
+handlers are documented in the
+[ASIC event ownership guide](asic-event-ownership.md).
+G2 PIO state preservation, DMA lifecycle rules, cache ownership, and MMU-safe
+address handling are documented in the
+[G2 DMA safety guide](g2-dma-safety.md).
+Shared optical-drive and ATA ownership, DMA-event routing, and fail-closed
+controller behavior are documented in the
+[G1 bus ownership guide](g1-bus-ownership.md).
+Independent 16-bit color tables for byte-indexed textures are documented in
+the [per-texture VQ palette guide](pvr-vq-palettes.md).
+Reduced VQ storage, biased indices, and the distinction between owned storage
+and the texture-header address are documented in the
+[compact VQ codebook guide](pvr-vq-compact.md).
+Opt-in fixed-slot LRU replacement, generation-checked handles, and render-safe
+pinning are documented in the
+[texture residency guide](pvr-texture-residency.md).
 
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.
@@ -169,8 +201,8 @@ changes), but it is still mostly right. :wink:
 
 ## History and Lore
 KallistiOS began its life as a hobby operating system written by Megan Potter 
-in the late 90s, not for the Sega Dreamcast, but for i386 PCs. Megan later
-became interested in hacking her new Sega Dreamcast console, and along with
+in the late 90s, not for the Dreamcast, but for i386 PCs. Megan later
+became interested in hacking her new Dreamcast console, and along with
 Jordan DeLong and Mike "Tursi" Brent, began work on the **libdream** library
 by adapting the work pioneered by Marcus Comstedt. _Stars_ and _Ghetto Pong_
 then become the first publicly released Dreamcast homebrew demo and game. 
@@ -209,11 +241,11 @@ Dreamcast dev pioneers _Cryptic Allusion_, _Ganksoft_, _Moving Target Software
 Design_, and _AndrewK/Napalm_ collaborated to design, produce, and distribute
 a collection of homebrew games and demos called _DC Tonic_ at the E3 Electronics
 Entertainment Exposition. The demo disc was a hit and both the demos and the
-KallistiOS software caught the attention and praise of Sega themselves. 
+KallistiOS software caught the attention and praise of the console's manufacturer.
 
 Ports of KallistiOS once existed for the existed for the Gameboy Advance[^2],
 PlayStation 2[^2], and Intel[^2] ia32 platforms, although none were particularly
-complete. At this time, only the Sega Dreamcast portion remains, but the project
+complete. At this time, only the Dreamcast portion remains, but the project
 architecture still exists to add additional consoles at later time.
 
 
@@ -236,9 +268,4 @@ to SourceForge for all console-related things.
   professional development company Kalisto Software* or the cracking group
   "Kalisto".
 
-[^2]: "Sega", "Dreamcast", and NAOMI are registered trademarks of Sega Corporation.
-  "Nintendo" and "Gameboy Advance" are registered trademarks of Nintendo of America
-  Kalisto Software is a registered trademark of Kalisto Software, Inc.
-  "PlayStation" is a registered trademark of Sony Computer Entertainment America
-  "Intel" is a registered trademark of Intel, Inc.
-  Any other trademarks are trademarks of their respective owners.
+[^2]: See the [trademark notices](license/TRADEMARKS.md) for platform and product names.

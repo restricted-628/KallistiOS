@@ -2,6 +2,7 @@
 
    dc/fs_vmu.h
    (c)2000-2001 Jordan DeLong
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -14,12 +15,18 @@
     the first controller). VMUs themselves have no subdirectories, so the driver
     itself is fairly simple.
 
-    Files on a VMU must be multiples of 512 bytes in size, and should have a
-    header attached so that they show up in the BIOS menu.
+    VMU storage allocates whole 512-byte blocks. For valid package files, normal
+    VFS access reports and operates on the exact logical payload length rather
+    than the package header or final block padding. Opening with O_META exposes
+    the complete block-rounded on-card image instead.
 
     This layer is built off of the vmufs layer, which does all the low-level
     operations. It is generally easier to work with things at this level though,
     so that you can use the normal libc file access functions.
+
+    Each open file is cached independently. Applications must serialize
+    writers to the same file and must not modify it concurrently through direct
+    block access or the lower-level vmufs interface.
 
     \author Megan Potter
 
@@ -112,4 +119,3 @@ static inline int fs_vmu_set_default_header(const vmu_pkg_t *pkg) {
 __END_DECLS
 
 #endif  /* __DC_FS_VMU_H */
-

@@ -2,6 +2,7 @@
 
    dreameye-sd.c
    Copyright (C) 2013 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
    This example simply dumps all the images on the first connected Dreameye to
    the SD card. It creates a new directory and saves the images in it.
@@ -22,7 +23,7 @@
 
 int main(int argc, char *argv[]) {
     maple_device_t *dreameye;
-    dreameye_state_t *state;
+    dreameye_status_t status;
     uint8_t *buf = NULL;
     int size, err;
     FILE *fp;
@@ -50,14 +51,29 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    state = (dreameye_state_t *)maple_dev_status(dreameye);
+    dreameye = maple_enum_dev(dreameye->port, 1);
+
+    if(!dreameye || !(dreameye->info.functions & MAPLE_FUNC_CAMERA)) {
+        printf("The camera's stored-image unit is unavailable.\n");
+        exit(EXIT_FAILURE);
+    }
 
     printf("Attempting to grab the number of saved images...\n");
-    dreameye_get_image_count(dreameye, 1);
 
-    printf("Image Count is %s -- (%d)\n",
-           state->image_count_valid ? "valid" : "invalid", state->image_count);
-    img_count = state->image_count;
+    if(dreameye_get_image_count(dreameye, 1) != MAPLE_EOK ||
+       dreameye_get_status(dreameye, &status) < 0 ||
+       !status.image_count_valid) {
+        printf("The camera did not return a valid image count.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Image count: %d\n", status.image_count);
+    img_count = status.image_count;
+
+    if(img_count > 0x20) {
+        printf("Image count exceeds the stored-image index range.\n");
+        exit(EXIT_FAILURE);
+    }
 
     /* Initialize the low-level SD card stuff. */
     if(sd_init()) {
@@ -93,7 +109,7 @@ int main(int argc, char *argv[]) {
 
     /* Try to make a "dreameye" directory on the root of the card and move to
        the new directory. */
-    if(mkdir("/sd/dreameye", 0777)) {
+    if(mkdir("/sd/dreameye", 0777) && errno != EEXIST) {
         printf("Cannot create a dreameye directory: %s\n", strerror(errno));
         exit(EXIT_FAILURE);
     }
@@ -105,7 +121,9 @@ int main(int argc, char *argv[]) {
 
     for(i = 0; i < img_count; ++i) {
         printf("Reading image %d...\n", i + 1);
-        err = dreameye_get_image(dreameye, i + 2, &buf, &size);
+        err = dreameye_get_image_timed(
+            dreameye, (uint8_t)(i + 2), &buf, &size,
+            DREAMEYE_DEFAULT_TRANSFER_TIMEOUT);
 
         if(err != MAPLE_EOK) {
             printf("Error was: %d\n", err);
@@ -114,7 +132,7 @@ int main(int argc, char *argv[]) {
         }
 
         printf("Image received successfully, size %d bytes\n", size);
-        sprintf(fn, "image%02d.jpg", i + 1);
+        snprintf(fn, sizeof(fn), "image%02d.jpg", i + 1);
 
         if(!(fp = fopen(fn, "wb"))) {
             printf("Cannot open /sd/dreameye/%s: %s\n", fn, strerror(errno));
@@ -134,7 +152,8 @@ int main(int argc, char *argv[]) {
     }
 
     /* Clean up the filesystem and everything else */
-    fs_ext2_unmount("/sd");
+    if(fs_ext2_unmount("/sd"))
+        printf("Warning: could not unmount /sd: %s\n", strerror(errno));
     fs_ext2_shutdown();
     sd_shutdown();
 

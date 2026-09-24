@@ -1,0 +1,1260 @@
+/* KallistiOS ##version##
+
+   Host-side compact scene hierarchy tests.
+   Copyright (C) 2026 Joseph Black
+*/
+
+#include <dc/pvr_chunk_scene.h>
+#include <dc/pvr_chunk_animation_asset.h>
+#include <dc/pvr_chunk_layer_asset.h>
+#include <dc/pvr_chunk_uv_asset.h>
+#include <dc/pvr_chunk_texture_asset.h>
+#ifdef __DREAMCAST__
+#include <dc/pvr_chunk_binding.h>
+#endif
+
+#include "pvr-scene-ir.h"
+
+#include <assert.h>
+#include <errno.h>
+#include <math.h>
+#include <stdalign.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef __DREAMCAST__
+void pvr_mod_compile(pvr_mod_hdr_t *out, pvr_list_t list, uint32_t mode,
+                     uint32_t cull) {
+    (void)out; (void)list; (void)mode; (void)cull;
+    assert(0 && "scene admission must not submit modifiers");
+}
+int pvr_prim(const void *data, size_t bytes) {
+    (void)data; (void)bytes;
+    assert(0 && "scene admission must not submit geometry");
+    return -1;
+}
+int pvr_list_prim(pvr_list_t list, const void *data, size_t bytes) {
+    (void)list;
+    return pvr_prim(data, bytes);
+}
+#endif
+
+#define VERTEX_HEADER(type, size) \
+    ((uint32_t)(type) | ((uint32_t)(size) << 16))
+
+static const uint32_t scene_vertices0[] = {
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10),
+    UINT32_C(0x00030000),
+    UINT32_C(0xbf800000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0x3f800000), UINT32_C(0xbf800000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0x3f800000), UINT32_C(0),
+    UINT32_C(0x000000ff)
+};
+
+static const uint32_t scene_vertices1[] = {
+    VERTEX_HEADER(PVR_CHUNK_VERTEX_XYZ, 10),
+    UINT32_C(0x00030000),
+    UINT32_C(0xc0000000), UINT32_C(0xc0000000), UINT32_C(0),
+    UINT32_C(0x40000000), UINT32_C(0xc0000000), UINT32_C(0),
+    UINT32_C(0), UINT32_C(0x40000000), UINT32_C(0),
+    UINT32_C(0x000000ff)
+};
+
+static const uint16_t scene_polygons[] = {
+    PVR_CHUNK_STRIP_INDEX, UINT16_C(5), UINT16_C(1),
+    UINT16_C(3), UINT16_C(0), UINT16_C(1), UINT16_C(2),
+    UINT16_C(0x00ff)
+};
+
+static const uint16_t deferred_scene_polygons[] = {
+    (UINT16_C(1) << 8) | PVR_CHUNK_CONTROL_CACHE_POLYGONS,
+    (UINT16_C(1) << 8) | PVR_CHUNK_CONTROL_DRAW_CACHED_POLYGONS,
+    UINT16_C(0), UINT16_C(0), UINT16_C(0), UINT16_C(0), UINT16_C(0),
+    UINT16_C(0x00ff)
+};
+
+static uint32_t crc32_bytes(const void *data, size_t size) {
+    const uint8_t *bytes = data;
+    uint32_t crc = UINT32_MAX;
+    size_t index;
+
+    for(index = 0; index < size; ++index) {
+        unsigned bit;
+
+        crc ^= bytes[index];
+        for(bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^
+                  (UINT32_C(0xedb88320) &
+                   (uint32_t)-(int32_t)(crc & 1u));
+    }
+    return ~crc;
+}
+
+static void write_le32(uint8_t *bytes, uint32_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+    bytes[2] = (uint8_t)(value >> 16);
+    bytes[3] = (uint8_t)(value >> 24);
+}
+
+static uint32_t read_le32(const uint8_t *bytes) {
+    return (uint32_t)bytes[0] | ((uint32_t)bytes[1] << 8) |
+           ((uint32_t)bytes[2] << 16) | ((uint32_t)bytes[3] << 24);
+}
+
+static void write_le16(uint8_t *bytes, uint16_t value) {
+    bytes[0] = (uint8_t)value;
+    bytes[1] = (uint8_t)(value >> 8);
+}
+
+static void write_float(uint8_t *bytes, float value) {
+    uint32_t word;
+
+    memcpy(&word, &value, sizeof(word));
+    write_le32(bytes, word);
+}
+
+static size_t align32(size_t value) {
+    return (value + 31u) & ~(size_t)31u;
+}
+
+static void write_section(uint8_t *descriptor, uint32_t type,
+                          size_t offset, const void *stored,
+                          size_t stored_bytes, size_t decoded_bytes,
+                          uint16_t codec, uint16_t alignment) {
+    write_le32(descriptor, type);
+    write_le32(descriptor + 8, (uint32_t)offset);
+    write_le32(descriptor + 12, (uint32_t)stored_bytes);
+    write_le32(descriptor + 16, (uint32_t)decoded_bytes);
+    write_le32(descriptor + 20, crc32_bytes(stored, decoded_bytes));
+    write_le16(descriptor + 28, codec);
+    write_le16(descriptor + 30, alignment);
+}
+
+static void init_model_record(pvr_chunk_model_table_record_t *record,
+                              size_t ordinal, float center,
+                              float radius) {
+    memset(record, 0, sizeof(*record));
+    record->vertex_ordinal = ordinal;
+    record->polygon_ordinal = ordinal;
+    record->resource_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->volume_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->skin4_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->skin_general_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->skeleton_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->morph_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->cooked_cache_ordinal = PVR_CHUNK_MODEL_SECTION_NONE;
+    record->center[0] = center;
+    record->radius = radius;
+}
+
+static size_t build_scene_asset_extended(uint8_t *asset, size_t capacity,
+                                const void *table, size_t table_bytes,
+                                const void *hierarchy,
+                                size_t hierarchy_bytes,
+                                int compress_first_vertex,
+                                const void *layers, size_t layer_bytes,
+                                const void *uv, size_t uv_bytes,
+                                const void *images, size_t image_bytes) {
+    static const uint16_t textured_polygons[] = {
+        PVR_CHUNK_TEXTURE | (4u << 8), 7,
+        PVR_CHUNK_STRIP_UV8_FIXED, 11, 1, 3,
+        0, 0, 0, 1, 256, 0, 2, 0, 256, 255
+    };
+    const void *polygon_data = images ? (const void *)textured_polygons :
+                                       (const void *)scene_polygons;
+    const size_t polygon_bytes = images ? sizeof(textured_polygons) :
+                                         sizeof(scene_polygons);
+    const size_t section_count = 6 + (layers != NULL) + (uv != NULL) +
+                                 (images != NULL);
+    const size_t directory_bytes = section_count *
+        PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+    size_t vertex0_offset = align32(
+        PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES + directory_bytes);
+    size_t polygon0_offset = align32(
+        vertex0_offset + sizeof(scene_vertices0));
+    size_t vertex1_offset = align32(
+        polygon0_offset + polygon_bytes);
+    size_t polygon1_offset = align32(
+        vertex1_offset + sizeof(scene_vertices1));
+    size_t table_offset = align32(
+        polygon1_offset + polygon_bytes);
+    size_t hierarchy_offset = align32(table_offset + table_bytes);
+    size_t layer_offset = align32(hierarchy_offset + hierarchy_bytes);
+    size_t file_bytes = layers ? layer_offset + layer_bytes :
+                                hierarchy_offset + hierarchy_bytes;
+    size_t uv_offset = align32(file_bytes);
+    uint8_t *directory = asset + PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
+
+    if(uv)
+        file_bytes = uv_offset + uv_bytes;
+    size_t image_offset = align32(file_bytes);
+    if(images)
+        file_bytes = image_offset + image_bytes;
+    assert(file_bytes <= capacity);
+    memset(asset, 0, capacity);
+    memcpy(asset + vertex0_offset, scene_vertices0,
+           sizeof(scene_vertices0));
+    memcpy(asset + polygon0_offset, polygon_data, polygon_bytes);
+    memcpy(asset + vertex1_offset, scene_vertices1,
+           sizeof(scene_vertices1));
+    memcpy(asset + polygon1_offset, polygon_data, polygon_bytes);
+    memcpy(asset + table_offset, table, table_bytes);
+    memcpy(asset + hierarchy_offset, hierarchy, hierarchy_bytes);
+
+    write_section(directory, PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+                  vertex0_offset, scene_vertices0, sizeof(scene_vertices0),
+                  sizeof(scene_vertices0), compress_first_vertex ?
+                      PVR_CHUNK_ASSET_CODEC_LZ4_FRAME :
+                      PVR_CHUNK_ASSET_CODEC_RAW, 4);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES,
+                  PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+                  polygon0_offset, polygon_data, polygon_bytes,
+                  polygon_bytes, PVR_CHUNK_ASSET_CODEC_RAW, 2);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 2u,
+                  PVR_CHUNK_ASSET_SECTION_VERTEX_STREAM,
+                  vertex1_offset, scene_vertices1, sizeof(scene_vertices1),
+                  sizeof(scene_vertices1),
+                  PVR_CHUNK_ASSET_CODEC_LZ4_FRAME, 4);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 3u,
+                  PVR_CHUNK_ASSET_SECTION_POLYGON_STREAM,
+                  polygon1_offset, polygon_data, polygon_bytes,
+                  polygon_bytes, PVR_CHUNK_ASSET_CODEC_RAW, 2);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 4u,
+                  PVR_CHUNK_ASSET_SECTION_MODEL_TABLE,
+                  table_offset, table, table_bytes, table_bytes,
+                  PVR_CHUNK_ASSET_CODEC_RAW, 4);
+    write_section(directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 5u,
+                  PVR_CHUNK_ASSET_SECTION_HIERARCHY,
+                  hierarchy_offset, hierarchy, hierarchy_bytes,
+                  hierarchy_bytes, PVR_CHUNK_ASSET_CODEC_RAW, 4);
+    if(layers) {
+        uint8_t *entry = directory +
+            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * 6u;
+        memcpy(asset + layer_offset, layers, layer_bytes);
+        write_section(entry, PVR_CHUNK_ASSET_SECTION_MATERIAL_LAYERS,
+                      layer_offset, layers, layer_bytes, layer_bytes,
+                      PVR_CHUNK_ASSET_CODEC_RAW, 4);
+        write_le32(entry + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
+    }
+    if(uv) {
+        uint8_t *entry = directory +
+            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES * (6u + (layers != NULL));
+        memcpy(asset + uv_offset, uv, uv_bytes);
+        write_section(entry, PVR_CHUNK_ASSET_SECTION_UV_SOURCES,
+                      uv_offset, uv, uv_bytes, uv_bytes,
+                      PVR_CHUNK_ASSET_CODEC_RAW, 4);
+        write_le32(entry + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
+    }
+    if(images) {
+        uint8_t *entry = directory + PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES *
+            (6u + (layers != NULL) + (uv != NULL));
+        memcpy(asset + image_offset, images, image_bytes);
+        write_section(entry, PVR_CHUNK_ASSET_SECTION_TEXTURE_IMAGES,
+                      image_offset, images, image_bytes, image_bytes,
+                      PVR_CHUNK_ASSET_CODEC_RAW, 32);
+    }
+
+    write_le32(asset, PVR_CHUNK_ASSET_DIRECTORY_MAGIC);
+    write_le16(asset + 4, PVR_CHUNK_ASSET_DIRECTORY_VERSION);
+    write_le16(asset + 6, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    write_le32(asset + 8, (uint32_t)file_bytes);
+    write_float(asset + 28, 4.0f);
+    write_le32(asset + 32, (uint32_t)section_count);
+    write_le32(asset + 36, PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES);
+    write_le32(asset + 40, (uint32_t)directory_bytes);
+    write_le32(asset + 44, crc32_bytes(directory, directory_bytes));
+    write_le32(asset + 60, crc32_bytes(asset, 60));
+    return file_bytes;
+}
+
+static size_t build_scene_asset(uint8_t *asset, size_t capacity,
+                                const void *table, size_t table_bytes,
+                                const void *hierarchy, size_t hierarchy_bytes,
+                                int compress_first_vertex,
+                                const void *layers, size_t layer_bytes) {
+    return build_scene_asset_extended(asset, capacity, table, table_bytes,
+        hierarchy, hierarchy_bytes, compress_first_vertex, layers, layer_bytes,
+        NULL, 0, NULL, 0);
+}
+
+/* Two independently framed 8x8 RGB565 images, IDs 7 and 8. Uniform texels
+   avoid depending on a host texture converter or twiddle implementation. */
+static void build_layer_images(uint8_t bytes[384]) {
+    memset(bytes, 0, 384);
+    write_le32(bytes, PVR_CHUNK_TEXTURE_SECTION_MAGIC);
+    write_le16(bytes + 4, PVR_CHUNK_TEXTURE_SECTION_VERSION);
+    write_le16(bytes + 6, 64);
+    write_le32(bytes + 8, 384);
+    write_le32(bytes + 12, 2);
+    write_le16(bytes + 16, 32);
+    write_le32(bytes + 20, 128);
+    for(size_t i = 0; i < 2; ++i) {
+        uint8_t *entry = bytes + 64 + i * 32;
+        uint8_t *pixels = bytes + 128 + i * 128;
+        write_le16(entry, (uint16_t)(7 + i));
+        entry[2] = PVR_TXR_SURFACE_RGB565;
+        entry[3] = PVR_TXR_SURFACE_TWIDDLED;
+        write_le16(entry + 4, 8);
+        write_le16(entry + 6, 8);
+        write_le32(entry + 12, (uint32_t)(128 + i * 128));
+        write_le32(entry + 16, 128);
+        for(size_t j = 0; j < 64; ++j)
+            write_le16(pixels + j * 2, i ? 0x07e0 : 0xf800);
+        write_le32(entry + 20, crc32_bytes(pixels, 128));
+    }
+    write_le32(bytes + 24, crc32_bytes(bytes + 64, 64));
+    write_le32(bytes + 28, crc32_bytes(bytes + 128, 256));
+    write_le32(bytes + 60, crc32_bytes(bytes, 60));
+}
+
+static void test_layer_images(const pvr_chunk_layer_section_view_t *layers,
+                              const pvr_chunk_texture_section_view_t *images) {
+    uint8_t bytes[384], layer_bytes[160];
+    pvr_chunk_texture_section_view_t view;
+    pvr_chunk_layer_section_view_t shared;
+    pvr_chunk_layer_entry_t entries[2];
+    assert(pvr_chunk_layer_section_validate_images(layers, images) == 0);
+    for(size_t i = 0; i < 2; ++i) {
+        assert(pvr_chunk_layer_section_entry_get(layers, i, &entries[i]) == 0);
+        entries[i].layer.texture.identifier = 7;
+    }
+    assert(pvr_chunk_layer_section_write(entries, 2, layer_bytes, 160) == 0);
+    assert(pvr_chunk_layer_section_open(layer_bytes, 160, &shared) == 0);
+    assert(pvr_chunk_layer_section_validate_images(&shared, images) == 0);
+    layer_bytes[40] ^= 1;
+    assert(pvr_chunk_layer_section_validate_images(&shared, images) < 0);
+    assert(errno == EILSEQ);
+    memcpy(bytes, images->data, sizeof(bytes));
+    write_le16(bytes + 64, 6); /* Well-formed package missing layer ID 7. */
+    write_le32(bytes + 24, crc32_bytes(bytes + 64, 64));
+    write_le32(bytes + 60, crc32_bytes(bytes, 60));
+    assert(pvr_chunk_texture_section_open(bytes, sizeof(bytes), &view) == 0);
+    assert(pvr_chunk_layer_section_validate_images(layers, &view) < 0);
+    assert(errno == ENOENT);
+    bytes[140] ^= 1;
+    assert(pvr_chunk_layer_section_validate_images(layers, &view) < 0);
+    assert(errno == EILSEQ);
+    assert(pvr_chunk_layer_section_validate_images(NULL, images) < 0);
+    assert(errno == EINVAL);
+    assert(pvr_chunk_layer_section_validate_images(layers, NULL) < 0);
+    assert(errno == EINVAL);
+}
+
+static size_t decoder_calls;
+
+static int copy_decoder(const pvr_chunk_asset_section_t *section,
+                        void *destination, size_t destination_bytes,
+                        void *data) {
+    (void)data;
+    assert(destination_bytes == section->decoded_bytes);
+    ++decoder_calls;
+    memcpy(destination, section->stored_data, destination_bytes);
+    return 0;
+}
+
+static int fail_decoder(const pvr_chunk_asset_section_t *section,
+                        void *destination, size_t destination_bytes,
+                        void *data) {
+    (void)copy_decoder(section, destination, destination_bytes, data);
+    errno = EIO;
+    return -1;
+}
+
+static void refresh_checksums(uint8_t *bytes, size_t size) {
+    write_le32(bytes + 20, crc32_bytes(
+        bytes + PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES,
+        size - PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES));
+    write_le32(bytes + 28, crc32_bytes(bytes, 28));
+}
+
+static void test_round_trip(void) {
+    static const float child_transform[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        2.0f, 3.0f, 4.0f, 1.0f
+    };
+    pvr_scene_ir_t scene = { 0 };
+    pvr_chunk_scene_hierarchy_view_t view;
+    pvr_chunk_scene_node_t decoded;
+    pvr_chunk_model_view_t model_views[2] = { 0 };
+    const pvr_chunk_model_view_t *models[] = {
+        &model_views[0], &model_views[1]
+    };
+    pvr_chunk_hierarchy_node_t nodes[3];
+    pvr_chunk_hierarchy_t hierarchy;
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+
+    assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
+    assert(pvr_scene_ir_add_node_flags(
+               &scene, 0, UINT32_MAX, PVR_CHUNK_NODE_HIDDEN,
+               child_transform) == 0);
+    assert(pvr_scene_ir_add_node_flags(
+               &scene, 1, 1,
+               PVR_CHUNK_NODE_SUPPRESS_TRANSLATION |
+               PVR_CHUNK_NODE_PRUNE_CHILDREN,
+               child_transform) == 0);
+    assert(pvr_scene_ir_serialize_hierarchy(&scene, &bytes, &size) == 0);
+    assert(size == PVR_CHUNK_SCENE_HIERARCHY_HEADER_BYTES +
+                   3u * PVR_CHUNK_SCENE_HIERARCHY_NODE_BYTES);
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == 0);
+    assert(view.version == PVR_CHUNK_SCENE_HIERARCHY_VERSION &&
+           view.node_count == 3 &&
+           view.node_stride == PVR_CHUNK_SCENE_HIERARCHY_NODE_BYTES);
+    assert(pvr_chunk_scene_hierarchy_node_get(&view, 1, &decoded) == 0);
+    assert(decoded.parent_index == 0 &&
+           decoded.model_ordinal == PVR_CHUNK_NODE_NONE &&
+           decoded.flags == PVR_CHUNK_NODE_HIDDEN &&
+           ((float *)decoded.local_transform)[12] == 2.0f);
+    assert(pvr_chunk_scene_hierarchy_bind(
+               &view, models, 2, nodes, 3, &hierarchy) == 0);
+    assert(hierarchy.nodes == nodes && hierarchy.node_count == 3);
+    assert(nodes[0].model == &model_views[0] &&
+           nodes[1].model == NULL && nodes[2].model == &model_views[1]);
+    assert(nodes[1].flags == PVR_CHUNK_NODE_HIDDEN &&
+           nodes[2].parent_index == 1 && nodes[2].user_data == NULL &&
+           nodes[2].flags == (PVR_CHUNK_NODE_SUPPRESS_TRANSLATION |
+                              PVR_CHUNK_NODE_PRUNE_CHILDREN));
+    memset(nodes, 0, sizeof(nodes));
+    assert(pvr_chunk_scene_hierarchy_bind_models(
+               &view, model_views, 2, nodes, 3, &hierarchy) == 0);
+    assert(nodes[0].model == &model_views[0] &&
+           nodes[1].model == NULL && nodes[2].model == &model_views[1]);
+
+    free(bytes);
+    pvr_scene_ir_free(&scene);
+}
+
+static void test_rejections(void) {
+    pvr_scene_ir_t scene = { 0 };
+    pvr_chunk_scene_hierarchy_view_t view;
+    pvr_chunk_model_view_t model = { 0 };
+    const pvr_chunk_model_view_t *models[] = { &model };
+    pvr_chunk_hierarchy_node_t node;
+    pvr_chunk_hierarchy_t hierarchy;
+    uint8_t *bytes = NULL;
+    size_t size = 0;
+
+    assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
+    assert(pvr_scene_ir_serialize_hierarchy(&scene, &bytes, &size) == 0);
+
+    /* Obsolete development encodings must fail rather than be guessed. */
+    write_le16(bytes + 4, 1u);
+    refresh_checksums(bytes, size);
+    errno = 0;
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == -1);
+    assert(errno == EILSEQ);
+    write_le16(bytes + 4, PVR_CHUNK_SCENE_HIERARCHY_VERSION);
+    refresh_checksums(bytes, size);
+
+    bytes[32] ^= 1u;
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == -1);
+    assert(errno == EILSEQ);
+    bytes[32] ^= 1u;
+    refresh_checksums(bytes, size);
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == 0);
+
+    write_le32(bytes + 32, 0);
+    refresh_checksums(bytes, size);
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == -1);
+    assert(errno == EILSEQ);
+
+    write_le32(bytes + 32, UINT32_MAX);
+    write_le32(bytes + 36, 7);
+    refresh_checksums(bytes, size);
+    assert(pvr_chunk_scene_hierarchy_open(bytes, size, &view) == 0);
+    memset(&node, 0xa5, sizeof(node));
+    assert(pvr_chunk_scene_hierarchy_bind(
+               &view, models, 1, &node, 1, &hierarchy) == -1);
+    assert(errno == EILSEQ && hierarchy.nodes == NULL &&
+           hierarchy.node_count == 0);
+    {
+        const unsigned char *unchanged = (const unsigned char *)&node;
+        size_t index;
+
+        for(index = 0; index < sizeof(node); ++index)
+            assert(unchanged[index] == 0xa5);
+    }
+
+    free(bytes);
+    pvr_scene_ir_free(&scene);
+}
+
+static void test_ir_rejections(void) {
+    static const float identity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    float invalid[16];
+    pvr_scene_ir_t scene = { 0 };
+
+    assert(pvr_scene_ir_add_node(&scene, 0, 0, identity) == -1);
+    assert(errno == EINVAL);
+    memcpy(invalid, identity, sizeof(invalid));
+    invalid[5] = NAN;
+    assert(pvr_scene_ir_add_node(
+               &scene, UINT32_MAX, 0, invalid) == -1);
+    assert(errno == EDOM);
+    assert(pvr_scene_ir_add_node_flags(
+               &scene, UINT32_MAX, 0, UINT32_C(0x80000000),
+               identity) == -1);
+    assert(errno == EINVAL);
+    pvr_scene_ir_free(&scene);
+}
+
+static void test_draw_schedule_canonicalization(void) {
+    static const float identity[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    static const float translated[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        9.0f, 8.0f, 7.0f, 1.0f
+    };
+    const pvr_scene_ir_draw_command_t commands[] = {
+        { PVR_SCENE_IR_CAPTURE_MODEL, 0, 5, 3 },
+        { PVR_SCENE_IR_DRAW_MODEL, 1, 6,
+          PVR_SCENE_IR_CAPTURE_NONE },
+        { PVR_SCENE_IR_DRAW_CAPTURED_MODEL, UINT32_MAX, UINT32_MAX, 3 },
+        { PVR_SCENE_IR_DRAW_MODEL, 2, 2,
+          PVR_SCENE_IR_CAPTURE_NONE },
+        { PVR_SCENE_IR_CAPTURE_MODEL, 2, 2, 3 },
+        { PVR_SCENE_IR_DRAW_CAPTURED_MODEL, UINT32_MAX, UINT32_MAX, 3 }
+    };
+    const pvr_scene_ir_draw_command_t invalid = {
+        PVR_SCENE_IR_DRAW_CAPTURED_MODEL, UINT32_MAX, UINT32_MAX, 99
+    };
+    pvr_scene_ir_t source = { 0 };
+    pvr_scene_ir_t canonical = { 0 };
+    pvr_scene_ir_t rejected = { 0 };
+    pvr_chunk_scene_hierarchy_view_t hierarchy;
+    pvr_chunk_animation_section_view_t animation_view;
+    pvr_chunk_animation_section_transform_t animation_transform;
+    pvr_chunk_morph_animation_section_view_t morph_view;
+    pvr_chunk_morph_animation_section_binding_t morph_decoded;
+    static const anim_scalar_key_t morph_keys[] = {
+        { 0.0f, 0.0f }, { 1.0f, 1.0f }
+    };
+    const anim_track_view_t morph_track = {
+        {
+            ANIM_VALUE_SCALAR, ANIM_INTERPOLATION_LINEAR,
+            morph_keys, 2, sizeof(morph_keys[0])
+        },
+        0.0f, 1.0f
+    };
+    const pvr_chunk_shape_channel_t morph_channel = {
+        &morph_track, 0.0f
+    };
+    pvr_chunk_morph_animation_binding_t morph_binding = {
+        2, 2, &morph_channel, 1
+    };
+    const pvr_chunk_morph_animation_t morph_animation = {
+        &morph_binding, 1, 0.0f, 1.0f
+    };
+    anim_transform_tracks_t transforms[3] = { 0 };
+    anim_visibility_tracks_t visibility[3] = { 0 };
+    anim_clip_view_t clip = { 0 };
+    uint8_t *serialized = NULL;
+    uint8_t *animation = NULL;
+    uint8_t *morph = NULL;
+    size_t serialized_bytes = 0;
+    size_t animation_bytes = 0;
+    size_t morph_bytes = 0;
+    size_t index;
+
+    assert(pvr_scene_ir_add_node_flags(
+        &source, UINT32_MAX, 0, PVR_CHUNK_NODE_PRUNE_CHILDREN,
+        identity) == 0);
+    assert(pvr_scene_ir_add_node(&source, 0, 1, translated) == 0);
+    assert(pvr_scene_ir_add_node_flags(
+        &source, UINT32_MAX, 2, PVR_CHUNK_NODE_HIDDEN,
+        translated) == 0);
+    assert(pvr_scene_ir_canonicalize_draw_schedule(
+        &source, commands, sizeof(commands) / sizeof(commands[0]),
+        &canonical) == 0);
+
+    assert(canonical.node_count == 6);
+    assert(canonical.nodes[0].model_ordinal ==
+               PVR_CHUNK_SCENE_MODEL_NONE &&
+           canonical.nodes[1].model_ordinal ==
+               PVR_CHUNK_SCENE_MODEL_NONE &&
+           canonical.nodes[2].model_ordinal ==
+               PVR_CHUNK_SCENE_MODEL_NONE);
+    assert(!(canonical.nodes[0].flags &
+             PVR_CHUNK_NODE_PRUNE_CHILDREN));
+    assert(canonical.nodes[3].parent_index == 0 &&
+           canonical.nodes[3].model_ordinal == 5 &&
+           canonical.nodes[3].local_transform[0] == 1.0f &&
+           canonical.nodes[3].local_transform[12] == 0.0f);
+    assert(canonical.nodes[4].parent_index == 2 &&
+           canonical.nodes[4].model_ordinal == 2 &&
+           canonical.nodes[4].flags == PVR_CHUNK_NODE_HIDDEN);
+    assert(canonical.nodes[5].parent_index == 2 &&
+           canonical.nodes[5].model_ordinal == 2 &&
+           canonical.nodes[5].flags == PVR_CHUNK_NODE_HIDDEN);
+
+    assert(pvr_scene_ir_serialize_hierarchy(
+        &canonical, &serialized, &serialized_bytes) == 0);
+    assert(pvr_chunk_scene_hierarchy_open(
+        serialized, serialized_bytes, &hierarchy) == 0);
+    assert(hierarchy.node_count == canonical.node_count);
+
+    for(index = 0; index < 3; ++index) {
+        transforms[index].fallback.rotation.w = 1.0f;
+        transforms[index].fallback.scale.x = 1.0f;
+        transforms[index].fallback.scale.y = 1.0f;
+        transforms[index].fallback.scale.z = 1.0f;
+        transforms[index].rotation_mode = ANIM_ROTATION_QUATERNION;
+        visibility[index].fallback = index == 1;
+    }
+    transforms[1].fallback.translation.x = 4.0f;
+    clip.clip.transforms = transforms;
+    clip.clip.transform_count = 3;
+    clip.clip.start_time = 0.0f;
+    clip.clip.end_time = 1.0f;
+    clip.clip.visibility = visibility;
+    assert(pvr_scene_ir_serialize_animation_for_scene(
+        &clip, &canonical, 3, &animation, &animation_bytes) == 0);
+    assert(pvr_chunk_animation_section_open(
+        animation, animation_bytes, &animation_view) == 0);
+    assert(animation_view.transform_count == canonical.node_count);
+    assert(pvr_chunk_animation_section_transform_get(
+        &animation_view, 3, &animation_transform) == 0);
+    assert(animation_transform.fallback.rotation.w == 1.0f &&
+           animation_transform.fallback.scale.x == 1.0f &&
+           animation_transform.fallback.translation.x == 0.0f &&
+           animation_transform.fallback_visible == 0);
+    assert(pvr_chunk_animation_section_transform_get(
+        &animation_view, 4, &animation_transform) == 0);
+    assert(animation_transform.fallback_visible == 0);
+    assert(pvr_chunk_animation_section_transform_get(
+        &animation_view, 5, &animation_transform) == 0);
+    assert(animation_transform.fallback_visible == 0);
+
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == 0);
+    assert(pvr_chunk_morph_animation_section_open(
+        morph, morph_bytes, &morph_view) == 0);
+    assert(morph_view.binding_count == 2);
+    assert(pvr_chunk_morph_animation_section_binding_get(
+        &morph_view, 0, &morph_decoded) == 0);
+    assert(morph_decoded.node_index == 4 &&
+           morph_decoded.model_ordinal == 2 &&
+           morph_decoded.channel_count == 1);
+    assert(pvr_chunk_morph_animation_section_binding_get(
+        &morph_view, 1, &morph_decoded) == 0);
+    assert(morph_decoded.node_index == 5 &&
+           morph_decoded.model_ordinal == 2 &&
+           morph_decoded.channel_count == 1);
+    free(morph);
+    morph = NULL;
+
+    morph_binding.model_ordinal = 3;
+    morph_bytes = 99;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == 0);
+    assert(morph == NULL && morph_bytes == 0);
+    morph_binding.model_ordinal = 2;
+    morph_binding.node_index = 1;
+    morph_bytes = 99;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == 0);
+    assert(morph == NULL && morph_bytes == 0);
+    morph_binding.channels = NULL;
+    errno = 0;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == -1);
+    assert(errno == EINVAL && morph == NULL && morph_bytes == 0);
+    morph_binding.channels = &morph_channel;
+    morph_binding.node_index = 3;
+    errno = 0;
+    assert(pvr_scene_ir_serialize_morph_animation_for_scene(
+        &morph_animation, &canonical, 3, &morph, &morph_bytes) == -1);
+    assert(errno == EILSEQ && morph == NULL && morph_bytes == 0);
+    morph_binding.node_index = 2;
+
+    free(animation);
+    animation = NULL;
+    canonical.nodes[4].parent_index = 3;
+    errno = 0;
+    assert(pvr_scene_ir_serialize_animation_for_scene(
+        &clip, &canonical, 3, &animation, &animation_bytes) == -1);
+    assert(errno == EILSEQ && animation == NULL && animation_bytes == 0);
+    canonical.nodes[4].parent_index = 2;
+
+    errno = 0;
+    assert(pvr_scene_ir_canonicalize_draw_schedule(
+        &source, &invalid, 1, &rejected) == -1);
+    assert(errno == EILSEQ && rejected.nodes == NULL &&
+           rejected.node_count == 0 && rejected.node_capacity == 0);
+    errno = 0;
+    assert(pvr_scene_ir_canonicalize_draw_schedule(
+        &source, commands, 1, &canonical) == -1);
+    assert(errno == EBUSY && canonical.node_count == 6);
+
+    free(animation);
+    free(morph);
+    free(serialized);
+    pvr_scene_ir_free(&rejected);
+    pvr_scene_ir_free(&canonical);
+    pvr_scene_ir_free(&source);
+}
+
+#ifdef __DREAMCAST__
+typedef struct layer_pipeline {
+    pvr_poly_cxt_t context;
+    const pvr_chunk_texture_table_view_t *textures;
+    pvr_chunk_material_layer_t layer;
+    pvr_material_recipe_t recipe;
+    size_t begins;
+} layer_pipeline_t;
+
+static int layer_begin(const pvr_chunk_render_state_t *state,
+                       const pvr_chunk_strip_view_t *strip, void *data) {
+    layer_pipeline_t *pipeline = data;
+    pvr_chunk_material_context_t surface;
+    if(pvr_chunk_material_resolve_context(&surface, &pipeline->context,
+           pipeline->textures, state, strip) < 0 ||
+       pvr_chunk_material_resolve_layer(&pipeline->recipe, &surface,
+           pipeline->textures, &pipeline->layer) < 0)
+        return -1;
+    assert(surface.context.txr.enable);
+    ++pipeline->begins;
+    return 0;
+}
+
+static int layer_vertex(const pvr_chunk_render_state_t *state,
+    const pvr_chunk_vertex_attributes_t *attributes,
+    const pvr_chunk_strip_attributes_t *reference,
+    pvr_vertex_t *vertex, void *data) {
+    layer_pipeline_t *pipeline = data;
+    (void)state; (void)attributes; (void)reference;
+    return pvr_chunk_material_layer_prepare_vertex(&pipeline->layer,
+                                                   vertex, vertex);
+}
+
+/* Real KOS implementations, not host mocks: packaged images -> allocated
+   surfaces -> texture table -> recipe -> UV renderer/cache -> caller sink.
+   No header/geometry submission occurs, so this is not a pixel-order test. */
+static void test_layer_pipeline(const pvr_chunk_model_view_t *models,
+    const pvr_chunk_layer_section_view_t *layers,
+    const pvr_chunk_uv_section_view_t *uv,
+    const pvr_chunk_texture_section_view_t *images) {
+    /* The allocator's first allocation establishes the aligned arena and
+       retains its leading padding. Compare live allocations only after that
+       one-time setup, without resetting the allocator to hide a leak. */
+    size_t cold_available = pvr_mem_available();
+    pvr_ptr_t warmup = pvr_mem_malloc(32);
+    assert(warmup);
+    pvr_mem_free(warmup);
+    size_t available = pvr_mem_available();
+    printf("layer VRAM baseline: %lu -> %lu bytes after arena setup\n",
+           (unsigned long)cold_available, (unsigned long)available);
+    pvr_txr_surface_t surfaces[2];
+    pvr_chunk_texture_binding_t bindings[2];
+    pvr_chunk_texture_table_t table = {bindings, 2};
+    pvr_chunk_texture_table_view_t textures;
+    assert(pvr_chunk_layer_section_validate_images(layers, images) == 0);
+    for(size_t i = 0; i < 2; ++i) {
+        pvr_chunk_texture_image_t image;
+        assert(pvr_chunk_texture_section_entry_get(images, i, &image) == 0);
+        assert(pvr_txr_surface_alloc(&surfaces[i], image.width, image.height,
+            image.format, image.layout, image.mipmapped) == 0);
+        assert(pvr_chunk_texture_image_upload(&image, &surfaces[i],
+                                               PVR_TXR_TRANSFER_CPU) == 0);
+        bindings[i] = (pvr_chunk_texture_binding_t){image.identifier, 0,
+                                                   &surfaces[i]};
+    }
+    assert(pvr_chunk_texture_table_open(&table, &textures) == 0);
+    assert(pvr_chunk_layer_section_validate_table(layers, &textures) == 0);
+    for(size_t i = 0; i < 2; ++i) {
+        pvr_chunk_layer_entry_t entry;
+        uint32_t selected;
+        pvr_chunk_uv_t coordinates[3];
+        pvr_chunk_uv_strip_t strips[1];
+        pvr_chunk_uv_source_t source;
+        layer_pipeline_t pipeline = {.textures = &textures};
+        pvr_chunk_model_plan_requirements_t plan_size;
+        pvr_chunk_model_plan_t plan;
+        pvr_chunk_cache_requirements_t cache_size;
+        pvr_chunk_model_cache_t cache;
+        alignas(32) pvr_vertex_t direct[3], cached[3], base[3], work[3];
+        pvr_geometry_sink_t sink;
+        const matrix_t matrix = {{1,0,0,0},{0,1,0,0},{0,0,1,0},{0,0,1,1}};
+        pvr_frustum_t frustum;
+        assert(pvr_chunk_layer_section_entry_get(layers, i, &entry) == 0);
+        assert(entry.model == i);
+        pipeline.layer = entry.layer;
+        pvr_poly_cxt_col(&pipeline.context, PVR_LIST_OP_POLY);
+        pipeline.context.gen.culling = PVR_CULLING_NONE;
+        pipeline.context.txr.env = PVR_TXRENV_MODULATEALPHA;
+        assert(pvr_chunk_uv_section_find(uv, (uint32_t)i, &selected) == 0);
+        assert(pvr_chunk_uv_section_decode(uv, selected, coordinates, 3) == 0);
+        assert(pvr_chunk_uv_source_init(&models[i], coordinates, 3, strips, 1,
+                                          &source) == 0);
+        assert(pvr_frustum_init(&frustum, &matrix, -4,-4,4,4,.5f,2) == 0);
+        assert(pvr_geometry_sink_init_memory(&sink, direct, 3) == 0);
+        assert(pvr_chunk_model_emit_uv(&source, NULL, &frustum,
+            PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink, work, 3, NULL, 0,
+            NULL, layer_begin, layer_vertex, &pipeline, NULL) == 0);
+        assert(pipeline.begins == 1 && pipeline.recipe.pass_count == 2);
+        assert(pipeline.recipe.requires_presort);
+        assert(pipeline.recipe.passes[0].role == PVR_MATERIAL_PASS_SURFACE);
+        assert(pipeline.recipe.passes[1].role == entry.layer.role);
+        assert(pvr_geometry_sink_init_memory(&sink, base, 3) == 0);
+        assert(pvr_chunk_model_emit_clipped(&models[i], &frustum,
+            PVR_CHUNK_CLIP_ASSUME_VISIBLE, &sink, work, 3, NULL, 0,
+            NULL, NULL, NULL, NULL) == 0);
+        const float expected_u[] = {-1.75f,6.25f,10.25f};
+        const float expected_v[] = {.75f,1.75f,2.75f};
+        for(size_t v = 0; v < 3; ++v) {
+            assert(direct[v].x == base[v].x && direct[v].y == base[v].y &&
+                   direct[v].z == base[v].z && direct[v].flags == base[v].flags);
+            assert(direct[v].u == expected_u[v] && direct[v].v == expected_v[v]);
+            assert(direct[v].argb == (i ? UINT32_C(0xffffffff) : 0x00ffffff));
+            assert(direct[v].oargb == 0);
+        }
+        assert(pvr_chunk_model_plan_query(&models[i], &plan_size) == 0);
+        pvr_chunk_vertex_index_entry_t *index = malloc(plan_size.vertex_index_bytes);
+        assert(index);
+        assert(pvr_chunk_model_plan_build(&models[i], index,
+            plan_size.vertex_index_entries, &plan) == 0);
+        assert(pvr_chunk_model_cache_query(&plan, &cache_size) == 0);
+        size_t bytes = (cache_size.bytes + 31u) & ~(size_t)31u;
+        void *storage = aligned_alloc(32, bytes);
+        assert(storage);
+        assert(pvr_chunk_model_cache_build_uv(&plan, &source, storage, bytes,
+            layer_vertex, &pipeline, &cache) == 0);
+        memset(coordinates, 0, sizeof(coordinates)); /* Cache owns baked values. */
+        assert(pvr_geometry_sink_init_memory(&sink, cached, 3) == 0);
+        assert(pvr_chunk_model_cache_emit(&cache, &matrix, &sink, work, 3,
+            NULL, NULL, NULL, NULL, NULL) == 0);
+        assert(!memcmp(cached, direct, sizeof(direct)));
+        free(storage);
+        free(index);
+        /* Missing auxiliary bindings fail without replacing a valid recipe. */
+        pvr_material_recipe_t saved = pipeline.recipe;
+        pvr_chunk_material_context_t surface = {pipeline.context, 0};
+        pvr_chunk_material_layer_t missing = pipeline.layer;
+        missing.texture.identifier = 9;
+        assert(pvr_chunk_material_resolve_layer(&pipeline.recipe, &surface,
+            &textures, &missing) < 0 && errno == ENOENT);
+        assert(!memcmp(&saved, &pipeline.recipe, sizeof(saved)));
+    }
+    for(size_t i = 0; i < 2; ++i)
+        pvr_txr_surface_release(&surfaces[i]);
+    assert(pvr_mem_available() == available);
+    puts("layer pipeline: packaged textures, recipes, UV/cache and cleanup passed");
+}
+#endif
+
+static void test_scene_uv(const void *table, size_t table_bytes,
+                           const void *hierarchy_bytes, size_t hierarchy_size) {
+    const pvr_chunk_uv_t coordinates[] = {{-1,2},{3,4},{5,6}};
+    pvr_chunk_layer_entry_t entries[2] = {
+        {.model = 0, .strip_count = 1, .layer = {
+            .role = PVR_MATERIAL_PASS_EMISSIVE,
+            .texture = {.identifier = 7, .mipmap_adjust = PVR_MIPBIAS_NORMAL},
+            .rgb = 0xffffff, .uv = {{2,0,.25f},{0,.5f,-.25f}}}},
+        {.model = 1, .strip_count = 1, .layer = {
+            .role = PVR_MATERIAL_PASS_LIGHTMAP,
+            .texture = {.identifier = 8, .mipmap_adjust = PVR_MIPBIAS_NORMAL},
+            .rgb = 0xffffff, .uv = {{2,0,.25f},{0,.5f,-.25f}}}}
+    };
+    uint8_t layer_bytes[160], uv_bytes[136];
+    alignas(32) uint8_t image_bytes[384];
+    build_layer_images(image_bytes);
+    assert(pvr_chunk_layer_section_write(entries, 2, layer_bytes,
+                                          sizeof(layer_bytes)) == 0);
+    for(unsigned variant = 0; variant < 20; ++variant) {
+        pvr_chunk_uv_asset_source_t sources[] = {
+            {0,coordinates,3}, {variant == 2 ? 0 : 1,coordinates,
+                               variant == 3 ? 2 : 3}};
+        pvr_chunk_uv_asset_binding_t bindings[] = {{0,0},
+            {variant == 4 ? 2 : 1,1}};
+        size_t uv_size, asset_size;
+        alignas(32) uint8_t asset[4096], asset_before[4096];
+        alignas(32) uint8_t workspace[sizeof(scene_vertices1)];
+        pvr_chunk_asset_view_t asset_view;
+        pvr_chunk_scene_asset_view_t scene_view;
+        pvr_chunk_scene_asset_workspace_requirements_t required;
+        pvr_chunk_model_view_t models[2], saved_models[2];
+        pvr_chunk_hierarchy_node_t nodes[2], saved_nodes[2];
+        pvr_chunk_hierarchy_t hierarchy;
+        pvr_chunk_layer_section_view_t layers, saved_layers;
+        pvr_chunk_uv_section_view_t uv, saved_uv;
+        pvr_chunk_uv_section_view_t *out_uv = &uv;
+        assert(pvr_chunk_uv_section_query(2, 2,
+            sources[0].uv_count + sources[1].uv_count, &uv_size) == 0);
+        assert(pvr_chunk_uv_section_write(sources, 2, bindings, 2,
+                                            uv_bytes, sizeof(uv_bytes)) == 0);
+        if(variant == 1)
+            uv_bytes[32] ^= 1; /* Correct container CRC, invalid inner CRC. */
+        asset_size = build_scene_asset_extended(asset, sizeof(asset), table,
+            table_bytes, hierarchy_bytes, hierarchy_size, 1,
+            layer_bytes, sizeof(layer_bytes), uv_bytes, uv_size,
+            image_bytes, sizeof(image_bytes));
+        uint8_t *uv_descriptor = asset + 64 + 7 * 32;
+        if(variant == 5) { /* Unused second vertex stream becomes a duplicate. */
+            write_le32(asset + 64 + 2 * 32, PVR_CHUNK_ASSET_SECTION_UV_SOURCES);
+            write_le32(asset + 64 + 2 * 32 + 4, PVR_CHUNK_ASSET_SECTION_REQUIRED);
+        }
+        if(variant == 6)
+            write_le16(uv_descriptor + 28, PVR_CHUNK_ASSET_CODEC_LZ4_FRAME);
+        if(variant == 7 || variant == 8) {
+            uint8_t *entry = variant == 7 ? uv_descriptor : asset + 64 + 6 * 32;
+            write_le32(entry, PVR_CHUNK_ASSET_SECTION_APPLICATION);
+            write_le32(entry + 4, 0);
+        }
+        if(variant == 9)
+            asset[read_le32(uv_descriptor + 8) + 32] ^= 1;
+        write_le32(asset + 44, crc32_bytes(asset + 64, 9 * 32));
+        write_le32(asset + 60, crc32_bytes(asset, 60));
+        assert(pvr_chunk_asset_open(asset, asset_size, &asset_view) == 0);
+        assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+        assert(pvr_chunk_scene_asset_workspace_query(&scene_view, &required) == 0);
+        assert(required.bytes == sizeof(workspace)); /* No eager UV expansion. */
+        memset(models, 0x5a, sizeof(models));
+        memcpy(saved_models, models, sizeof(models));
+        memset(nodes, 0x5a, sizeof(nodes));
+        memcpy(saved_nodes, nodes, sizeof(nodes));
+        memset(&layers, 0x5a, sizeof(layers));
+        memcpy(&saved_layers, &layers, sizeof(layers));
+        memset(&uv, 0x5a, sizeof(uv));
+        memcpy(&saved_uv, &uv, sizeof(uv));
+        memcpy(asset_before, asset, sizeof(asset));
+        if(variant == 11) out_uv = (void *)&layers;
+        if(variant == 12) out_uv = (void *)asset;
+        if(variant == 13) out_uv = (void *)models;
+        if(variant == 14) out_uv = (void *)nodes;
+        if(variant == 15) out_uv = (void *)workspace;
+        if(variant == 16) out_uv = (void *)&scene_view;
+        if(variant == 17) out_uv = (void *)&hierarchy;
+        if(variant == 19) out_uv = NULL;
+        decoder_calls = 0;
+        int result = pvr_chunk_scene_asset_load_layers_uv(&scene_view,
+            variant == 18 ? fail_decoder : copy_decoder, NULL,
+            workspace, variant == 10 ? sizeof(workspace) - 1 : sizeof(workspace),
+            models, 2, nodes, 2, &hierarchy, &layers, out_uv);
+        if(variant == 0) {
+            uint32_t selected;
+            pvr_chunk_uv_t decoded[3];
+            pvr_chunk_uv_strip_t index[1];
+            pvr_chunk_uv_source_t runtime;
+            assert(result == 0 && decoder_calls == 1);
+            assert(hierarchy.node_count == 2 && layers.entry_count == 2);
+            assert(uv.data == asset + read_le32(uv_descriptor + 8));
+            assert(pvr_chunk_uv_section_find(&uv, 1, &selected) == 0);
+            assert(selected == 1);
+            assert(pvr_chunk_uv_section_decode(&uv, selected, decoded, 3) == 0);
+            assert(!memcmp(decoded, coordinates, sizeof(coordinates)));
+            assert(pvr_chunk_uv_source_init(&models[1], decoded, 3,
+                                               index, 1, &runtime) == 0);
+            assert(runtime.model == &models[1] && runtime.uv_count == 3);
+            pvr_chunk_texture_section_view_t images;
+            pvr_chunk_asset_section_t image_section;
+            const void *image_data;
+            assert(pvr_chunk_asset_section_get(&asset_view, 8, &image_section) == 0);
+            assert(pvr_chunk_asset_section_load(&asset_view, 8, NULL, NULL,
+                NULL, 0, &image_data) == 0);
+            assert(pvr_chunk_texture_section_open(image_data,
+                image_section.decoded_bytes, &images) == 0);
+            test_layer_images(&layers, &images);
+#ifdef __DREAMCAST__
+            test_layer_pipeline(models, &layers, &uv, &images);
+#endif
+        }
+        else {
+            int expected = variant >= 11 && variant != 18 ? EINVAL :
+                variant == 18 ? EIO : variant == 10 ? ENOSPC :
+                variant == 7 || variant == 8 ? ENOENT :
+                variant == 6 ? ENOTSUP : EILSEQ;
+            assert(result < 0 && errno == expected);
+            assert(!memcmp(&layers, &saved_layers, sizeof(layers)));
+            assert(!memcmp(&uv, &saved_uv, sizeof(uv)));
+            if((variant >= 2 && variant <= 4) || variant == 18) {
+                const uint8_t *m = (const void *)models, *n = (const void *)nodes;
+                assert(decoder_calls == 1 && hierarchy.node_count == 0);
+                for(size_t i = 0; i < sizeof(models); ++i) assert(m[i] == 0);
+                for(size_t i = 0; i < sizeof(nodes); ++i) assert(n[i] == 0);
+            }
+            else {
+                assert(decoder_calls == 0);
+                assert(!memcmp(models, saved_models, sizeof(models)));
+                assert(!memcmp(nodes, saved_nodes, sizeof(nodes)));
+            }
+        }
+        assert(!memcmp(asset, asset_before, sizeof(asset)));
+    }
+}
+
+static void test_scene_asset(void) {
+    static const float child_transform[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        3.0f, 0.0f, 0.0f, 1.0f
+    };
+    pvr_chunk_model_table_record_t records[2];
+    pvr_scene_ir_t scene = { 0 };
+    pvr_chunk_asset_view_t asset_view;
+    pvr_chunk_scene_asset_view_t scene_view;
+    pvr_chunk_scene_asset_workspace_requirements_t requirements;
+    pvr_chunk_model_view_t models[2];
+    pvr_chunk_hierarchy_node_t nodes[2];
+    pvr_chunk_hierarchy_t hierarchy;
+    alignas(32) uint8_t asset[4096];
+    alignas(32) uint8_t workspace[sizeof(scene_vertices1)];
+    uint8_t *table = NULL;
+    uint8_t *hierarchy_bytes = NULL;
+    size_t table_bytes = 0;
+    size_t hierarchy_size = 0;
+    size_t asset_bytes;
+
+    init_model_record(&records[0], 0, 1.0f, 2.0f);
+    init_model_record(&records[1], 1, 3.0f, 4.0f);
+    records[1].vertex_ordinal = 0;
+    assert(pvr_scene_ir_serialize_model_table(
+               records, 2, &table, &table_bytes) == 0);
+    assert(pvr_scene_ir_add_root_model(&scene, 0) == 0);
+    assert(pvr_scene_ir_add_node(
+               &scene, 0, 1, child_transform) == 0);
+    assert(pvr_scene_ir_serialize_hierarchy(
+               &scene, &hierarchy_bytes, &hierarchy_size) == 0);
+    test_scene_uv(table, table_bytes, hierarchy_bytes, hierarchy_size);
+    asset_bytes = build_scene_asset(
+        asset, sizeof(asset), table, table_bytes,
+        hierarchy_bytes, hierarchy_size, 1, NULL, 0);
+
+    assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+    assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+    assert(scene_view.model_count == 2 && scene_view.node_count == 2);
+    assert(pvr_chunk_scene_asset_workspace_query(
+               &scene_view, &requirements) == 0);
+    assert(requirements.alignment == PVR_CHUNK_ASSET_ALIGNMENT &&
+           requirements.bytes == sizeof(scene_vertices1));
+    decoder_calls = 0;
+    assert(pvr_chunk_scene_asset_load(
+               &scene_view, copy_decoder, NULL,
+               workspace, sizeof(workspace), models, 2, nodes, 2,
+               &hierarchy) == 0);
+    assert(hierarchy.nodes == nodes && hierarchy.node_count == 2);
+    assert(nodes[0].model == &models[0] &&
+           nodes[1].model == &models[1] && nodes[1].parent_index == 0);
+    assert(models[0].model.center[0] == 1.0f &&
+           models[0].model.radius == 2.0f &&
+           models[1].model.center[0] == 3.0f &&
+           models[1].model.radius == 4.0f);
+    assert(decoder_calls == 1);
+    assert(models[0].model.vertex_words == models[1].model.vertex_words);
+
+    /* Required associations must survive the container/loader boundary. */
+    {
+        uint8_t layer_bytes[96];
+        pvr_chunk_layer_entry_t entry = { .model = 1, .strip_count = 1,
+            .layer = { .role = PVR_MATERIAL_PASS_EMISSIVE,
+                .texture = { .identifier = 7,
+                    .mipmap_adjust = PVR_MIPBIAS_NORMAL },
+                .rgb = 0x123456, .uv = { {1,0,0}, {0,1,0} } } };
+        pvr_chunk_layer_section_view_t layers, sentinel;
+        uint8_t *descriptor = asset + 64 + 6 * 32;
+        for(unsigned variant = 0; variant < 10; ++variant) {
+            entry.model = variant == 1 ? 2 : 1;
+            entry.strip_count = variant == 2 ? 2 : 1;
+            assert(pvr_chunk_layer_section_write(
+                &entry, 1, layer_bytes, sizeof(layer_bytes)) == 0);
+            asset_bytes = build_scene_asset(asset, sizeof(asset), table,
+                table_bytes, hierarchy_bytes, hierarchy_size, 1,
+                layer_bytes, sizeof(layer_bytes));
+            if(variant == 3) /* No optional encoding of required meaning. */
+                write_le32(descriptor + 4, 0);
+            if(variant == 4) /* Unknown required semantic. */
+                write_le32(descriptor, PVR_CHUNK_ASSET_SECTION_APPLICATION);
+            if(variant == 5) /* Unknown flag. */
+                write_le32(descriptor + 4, 3);
+            if(variant == 6) /* Canonical metadata must stay directly readable. */
+                write_le16(descriptor + 28, PVR_CHUNK_ASSET_CODEC_LZ4_FRAME);
+            if(variant == 7) /* Payload corruption, outer CRC left unchanged. */
+                asset[read_le32(descriptor + 8) + 24] ^= 1;
+            if(variant >= 8) /* Framing alone does not consume UV semantics. */
+                write_le32(descriptor, PVR_CHUNK_ASSET_SECTION_UV_SOURCES);
+            if(variant == 9)
+                write_le32(descriptor + 4, 0);
+            write_le32(asset + 44, crc32_bytes(asset + 64, 7 * 32));
+            write_le32(asset + 60, crc32_bytes(asset, 60));
+            if((variant >= 3 && variant <= 5) || variant == 9) {
+                assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) < 0);
+                assert(errno == (variant == 4 ? ENOTSUP : EILSEQ));
+                continue;
+            }
+            assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+            assert(pvr_chunk_asset_requirements_check(&asset_view, 0) < 0);
+            assert(errno == ENOTSUP);
+            if(variant == 8) {
+                assert(pvr_chunk_asset_requirements_check(&asset_view,
+                    PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS) < 0);
+                assert(errno == ENOTSUP);
+                assert(pvr_chunk_asset_requirements_check(&asset_view,
+                    PVR_CHUNK_ASSET_FEATURE_UV_SOURCES) == 0);
+                assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+                decoder_calls = 0;
+                layers = sentinel;
+                assert(pvr_chunk_scene_asset_load_layers(&scene_view,
+                    copy_decoder, NULL, workspace, sizeof(workspace), models, 2,
+                    nodes, 2, &hierarchy, &layers) < 0);
+                assert(errno == ENOTSUP && decoder_calls == 0);
+                assert(!memcmp(&layers, &sentinel, sizeof(layers)));
+                continue;
+            }
+            assert(pvr_chunk_asset_requirements_check(&asset_view,
+                PVR_CHUNK_ASSET_FEATURE_MATERIAL_LAYERS) == 0);
+            assert(pvr_chunk_asset_requirements_check(&asset_view, 4) < 0);
+            assert(errno == EINVAL);
+            assert(pvr_chunk_asset_load(&asset_view, copy_decoder, NULL,
+                workspace, sizeof(workspace), &models[0]) < 0);
+            assert(errno == ENOTSUP);
+            assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+            decoder_calls = 0;
+            assert(pvr_chunk_scene_asset_load(&scene_view, copy_decoder, NULL,
+                workspace, sizeof(workspace), models, 2, nodes, 2,
+                &hierarchy) < 0);
+            assert(errno == ENOTSUP && decoder_calls == 0);
+            memset(&layers, 0xa5, sizeof(layers));
+            sentinel = layers;
+            int rv = pvr_chunk_scene_asset_load_layers(&scene_view,
+                copy_decoder, NULL, workspace, sizeof(workspace), models, 2,
+                nodes, 2, &hierarchy, &layers);
+            if(variant == 0) {
+                assert(rv == 0 && hierarchy.node_count == 2);
+                assert(decoder_calls == 1 && layers.entry_count == 1);
+                assert(pvr_chunk_layer_section_find(&layers, 1, 0, &entry) == 0);
+                assert(entry.layer.texture.identifier == 7);
+                assert(pvr_chunk_scene_asset_load_layers(&scene_view,
+                    copy_decoder, NULL, workspace, sizeof(workspace), models, 2,
+                    nodes, 2, &hierarchy, (void *)workspace) < 0);
+                assert(errno == EINVAL);
+            }
+            else {
+                assert(rv < 0 && hierarchy.node_count == 0);
+                assert(errno == (variant == 6 ? ENOTSUP : EILSEQ));
+                assert(!memcmp(&layers, &sentinel, sizeof(layers)));
+                if(variant <= 2) {
+                    for(size_t i = 0; i < sizeof(models); ++i)
+                        assert(((uint8_t *)models)[i] == 0);
+                    for(size_t i = 0; i < sizeof(nodes); ++i)
+                        assert(((uint8_t *)nodes)[i] == 0);
+                }
+                else
+                    assert(decoder_calls == 0);
+            }
+        }
+        /* Restore the ordinary asset used by the following failure tests. */
+        asset_bytes = build_scene_asset(asset, sizeof(asset), table, table_bytes,
+            hierarchy_bytes, hierarchy_size, 1, NULL, 0);
+        assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+        assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+        assert(pvr_chunk_scene_asset_load_layers(&scene_view, copy_decoder, NULL,
+            workspace, sizeof(workspace), models, 2, nodes, 2,
+            &hierarchy, &layers) < 0 && errno == ENOENT);
+    }
+    memset(models, 0xa5, sizeof(models));
+    memset(nodes, 0xa5, sizeof(nodes));
+    memset(&hierarchy, 0xa5, sizeof(hierarchy));
+    assert(pvr_chunk_scene_asset_load(
+               &scene_view, NULL, NULL, workspace, sizeof(workspace),
+               models, 2, nodes, 2, &hierarchy) == -1);
+    assert(errno == ENOTSUP && hierarchy.nodes == NULL &&
+           hierarchy.node_count == 0);
+    {
+        const uint8_t *model_bytes = (const uint8_t *)models;
+        const uint8_t *node_bytes = (const uint8_t *)nodes;
+        size_t index;
+
+        for(index = 0; index < sizeof(models); ++index)
+            assert(model_bytes[index] == 0);
+        for(index = 0; index < sizeof(nodes); ++index)
+            assert(node_bytes[index] == 0);
+    }
+
+    {
+        uint8_t *directory = asset +
+            PVR_CHUNK_ASSET_DIRECTORY_HEADER_BYTES;
+        uint8_t *polygon_descriptor = directory +
+            PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES;
+        size_t polygon_offset = read_le32(polygon_descriptor + 8);
+
+        assert(sizeof(deferred_scene_polygons) == sizeof(scene_polygons));
+        memcpy(asset + polygon_offset, deferred_scene_polygons,
+               sizeof(deferred_scene_polygons));
+        write_le32(polygon_descriptor + 20,
+                   crc32_bytes(deferred_scene_polygons,
+                               sizeof(deferred_scene_polygons)));
+        write_le32(asset + 44,
+                   crc32_bytes(directory,
+                               6u * PVR_CHUNK_ASSET_DIRECTORY_ENTRY_BYTES));
+        write_le32(asset + 60, crc32_bytes(asset, 60));
+    }
+    assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+    assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == 0);
+    memset(models, 0xa5, sizeof(models));
+    memset(nodes, 0xa5, sizeof(nodes));
+    memset(&hierarchy, 0xa5, sizeof(hierarchy));
+    assert(pvr_chunk_scene_asset_load(
+               &scene_view, copy_decoder, NULL,
+               workspace, sizeof(workspace), models, 2, nodes, 2,
+               &hierarchy) == -1);
+    assert(errno == ENOTSUP && hierarchy.nodes == NULL &&
+           hierarchy.node_count == 0);
+    {
+        const uint8_t *model_bytes = (const uint8_t *)models;
+        const uint8_t *node_bytes = (const uint8_t *)nodes;
+        size_t index;
+
+        for(index = 0; index < sizeof(models); ++index)
+            assert(model_bytes[index] == 0);
+        for(index = 0; index < sizeof(nodes); ++index)
+            assert(node_bytes[index] == 0);
+    }
+
+    scene.nodes[1].model_ordinal = 2;
+    free(hierarchy_bytes);
+    hierarchy_bytes = NULL;
+    assert(pvr_scene_ir_serialize_hierarchy(
+               &scene, &hierarchy_bytes, &hierarchy_size) == 0);
+    asset_bytes = build_scene_asset(
+        asset, sizeof(asset), table, table_bytes,
+        hierarchy_bytes, hierarchy_size, 1, NULL, 0);
+    assert(pvr_chunk_asset_open(asset, asset_bytes, &asset_view) == 0);
+    assert(pvr_chunk_scene_asset_open(&asset_view, &scene_view) == -1);
+    assert(errno == EILSEQ);
+
+    free(table);
+    free(hierarchy_bytes);
+    pvr_scene_ir_free(&scene);
+}
+
+int main(void) {
+#ifdef __DREAMCAST__
+    assert(pvr_init_defaults() == 0);
+#endif
+    test_round_trip();
+    test_rejections();
+    test_ir_rejections();
+    test_draw_schedule_canonicalization();
+    test_scene_asset();
+#ifdef __DREAMCAST__
+    pvr_shutdown();
+#endif
+    puts("pvr chunk scene tests passed");
+    return 0;
+}

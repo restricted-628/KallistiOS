@@ -1,7 +1,9 @@
+# KallistiOS ##version##
 #
 # VMU LCD Example
 # Copyright (C) 2023 Paul Cercueil
-#   
+# Copyright (C) 2026 Joseph Black
+#
 
 TARGET = lcd.elf
 OBJS = lcd.o
@@ -23,7 +25,5 @@ run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
 
 dist: $(TARGET)
-	-rm -f $(OBJS) 
+	-rm -f $(OBJS)
 	$(KOS_STRIP) $(TARGET)
-
-

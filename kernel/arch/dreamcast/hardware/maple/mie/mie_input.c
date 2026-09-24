@@ -2,6 +2,7 @@
 
    mie_input.c
    Copyright (C) 2026 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
    Input path: IOR fetch payload -> JVS state -> optional cont_state mapping.
    Callbacks run in a shared worker thread on rising-edge button/JVS input matches.
@@ -97,26 +98,44 @@ static void mie_coin_meter_apply(mie_drv_state_t *state,
                                   const uint16_t *raws, int raw_count);
 
 static void mie_cb_worker_fn(void *d) {
-    STAILQ_HEAD(, mie_callback_params) batch;
-    mie_callback_params_t *c, *n;
+    mie_callback_params_t *c;
+    mie_btn_callback_t cont_cb;
+    mie_jvs_callback_t jvs_cb;
+    mie_jvs_input_t input;
+    uint32_t value;
+    mie_cb_type_t type;
 
     (void)d;
 
-    STAILQ_INIT(&batch);
+    for(;;) {
+        mutex_lock(&cbs_mtx);
+        c = STAILQ_FIRST(&mie_cb_pending);
+        if(!c) {
+            mutex_unlock(&cbs_mtx);
+            return;
+        }
 
-    mutex_lock(&cbs_mtx);
-    STAILQ_CONCAT(&batch, &mie_cb_pending);
-    mutex_unlock(&cbs_mtx);
-
-    STAILQ_FOREACH_SAFE(c, &batch, pending, n) {
+        STAILQ_REMOVE_HEAD(&mie_cb_pending, pending);
         c->cb_pending = false;
-
-        if(c->type == MIE_CB_CONT) {
-            c->u.cont.cb(c->u.cont.cur);
+        type = c->type;
+        if(type == MIE_CB_CONT) {
+            cont_cb = c->u.cont.cb;
+            value = c->u.cont.cur;
         }
         else {
-            c->u.jvs.cb(c->u.jvs.cur_input, c->u.jvs.cur_mask);
+            jvs_cb = c->u.jvs.cb;
+            input = c->u.jvs.cur_input;
+            value = c->u.jvs.cur_mask;
         }
+        mutex_unlock(&cbs_mtx);
+
+        /* All invocation data is copied before releasing the mutex. A callback
+           may therefore unregister itself or another pending callback without
+           invalidating the dispatcher's current state. */
+        if(type == MIE_CB_CONT)
+            cont_cb(value);
+        else
+            jvs_cb(input, value);
     }
 }
 

@@ -2,6 +2,7 @@
 
    dc/vmu_fb.h
    Copyright (C) 2023 Paul Cercueil
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -16,6 +17,7 @@
     then be displayed on the VMUs connected to the system.
 
     \author Paul Cercueil
+    \author Joseph Black
 */
 
 #include <kos/cdefs.h>
@@ -133,6 +135,21 @@ void vmufb_paint_xbm(vmufb_t *fb,
     \param  dev             The maple device of the VMU to present to
  */
 void vmufb_present(const vmufb_t *fb, maple_device_t *dev);
+
+/** \brief Present a VMU framebuffer and report submission status.
+
+    This response-aware form uses the same orientation handling as
+    vmufb_present(), while allowing callers to distinguish an accepted write
+    from a busy, invalid, or failed submission.
+
+    \param  fb              Framebuffer to present.
+    \param  dev             LCD device to receive it.
+    \retval MAPLE_EOK       The write was queued.
+    \retval MAPLE_EAGAIN    The device frame is busy; retry later.
+    \retval MAPLE_EINVALID  Invalid or incompatible device or framebuffer.
+    \retval MAPLE_EFAIL     The frame could not be queued.
+*/
+int vmufb_present_ex(const vmufb_t *fb, maple_device_t *dev);
 
 /** \brief  Render a string into the VMU framebuffer
 

@@ -15,7 +15,8 @@ KOS_CFLAGS += $(KOS_CSTD)
 all: banner.h defaultall $(STUBS)
 	rm -f $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-ar rcs $(KOS_BASE)/lib/$(KOS_ARCH)/libromdiskbase.a romdisk/*.o
-	kos-ar rcs $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a build/*.o
+	# Do not archive stale objects from the other fiber bundle after a switch.
+	kos-ar rcs $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a $(filter-out build/fiber_service.o,$(wildcard build/*.o))
 	kos-ar rcs $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti_exports.a stubs/*.o
 	rm -f authors.h banner.h
 

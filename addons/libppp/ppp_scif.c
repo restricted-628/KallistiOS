@@ -2,6 +2,7 @@
 
    libppp/ppp_scif.c
    Copyright (C) 2014 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <stdio.h>
@@ -33,11 +34,12 @@ static int ppp_scif_tx(ppp_device_t *self, const uint8_t *data, size_t len,
     (void)flags;
 
     for(i = 0; i < len; ++i) {
-        scif_write(data[i]);
+        if(scif_write(data[i]) < 0)
+            return -1;
     }
 
-    if(flags & PPP_TX_END_OF_PKT)
-        scif_flush();
+    if((flags & PPP_TX_END_OF_PKT) && scif_flush() < 0)
+        return -1;
 
     return 0;
 }
@@ -87,12 +89,14 @@ int ppp_scif_init(int bps) {
 
     /* Initialize the serial port. */
     scif_set_parameters(bps, 1);
-    scif_init();
+    if(scif_init() < 0)
+        return -1;
 
     /* Clear any bytes that may already have been transmitted to us and enable
        buffered receives. */
     while(scif_read() != -1) ;
-    scif_set_irq_usage(1);
+    if(scif_set_irq_usage(1) < 0)
+        return -1;
     while(scif_read() != -1) ;
 
     /* Set our device with libppp. */

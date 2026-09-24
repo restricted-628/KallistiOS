@@ -1,0 +1,42 @@
+# Portable-backend coverage for the same strict validator and call fixtures.
+# Invoke from this directory; use separate BUILD_DIRs for each compiler lane.
+ROOT := ../../../..
+BUILD_DIR ?= .build-u16-host
+CPPFLAGS += -I$(ROOT)/addons/include
+CFLAGS ?= -O2 -std=gnu17 -Wall -Wextra
+CXXFLAGS ?= -O2 -std=gnu++17 -Wall -Wextra
+OBJS = $(addprefix $(BUILD_DIR)/,test.o strict.o fast.o ofast.o cpp.o)
+
+.PHONY: test clean
+test: $(BUILD_DIR)/u16-trig-test
+	$(BUILD_DIR)/u16-trig-test
+
+$(BUILD_DIR):
+	mkdir -p $@
+
+SHZ_HEADERS = $(wildcard $(ROOT)/addons/include/sh4zam/*.h \
+              $(ROOT)/addons/include/sh4zam/inline/*.h \
+              $(ROOT)/addons/include/sh4zam/inline/sw/*.h)
+$(OBJS): $(ROOT)/addons/include/kos/sh4zam.h $(SHZ_HEADERS) | $(BUILD_DIR)
+
+$(BUILD_DIR)/test.o: u16-trig-test.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fno-fast-math -fno-lto -c $< -o $@
+
+$(BUILD_DIR)/strict.o: u16-trig-call.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fno-fast-math -fno-lto -DTRIG_CALL=trig_strict -DTRIG_CONSTANT_CALL=trig_strict_constant -c $< -o $@
+
+$(BUILD_DIR)/fast.o: u16-trig-call.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -ffast-math -fno-lto -DTRIG_CALL=trig_fast -DTRIG_CONSTANT_CALL=trig_fast_constant -c $< -o $@
+
+$(BUILD_DIR)/ofast.o: u16-trig-call.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -Ofast -fno-lto -DTRIG_CALL=trig_ofast -DTRIG_CONSTANT_CALL=trig_ofast_constant -c $< -o $@
+
+$(BUILD_DIR)/cpp.o: u16-trig-call.c
+	$(CXX) -x c++ $(CPPFLAGS) $(CXXFLAGS) -ffast-math -fno-lto -DTRIG_CALL=trig_cpp -DTRIG_CONSTANT_CALL=trig_cpp_constant -c $< -o $@
+
+$(BUILD_DIR)/u16-trig-test: $(OBJS)
+	$(CC) $(CFLAGS) -fno-fast-math -fno-lto $(LDFLAGS) $^ -lm -o $@
+
+clean:
+	$(RM) $(OBJS) $(BUILD_DIR)/u16-trig-test
+	rmdir $(BUILD_DIR)

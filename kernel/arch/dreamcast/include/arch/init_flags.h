@@ -46,6 +46,8 @@ __BEGIN_DECLS
     \sa KOS_INIT_FLAGS()
 */
 #define KOS_INIT_FLAGS_ARCH(flags) \
+    KOS_INIT_FLAG(flags, INIT_MMU, arch_init_mmu); \
+    KOS_INIT_FLAG(flags, INIT_MMU, arch_shutdown_mmu); \
     KOS_INIT_FLAG_NONE(flags, INIT_NO_DCLOAD, dcload_init); \
     KOS_INIT_FLAG_NONE(flags, INIT_NO_DCLOAD, fs_dcload_init_console); \
     KOS_INIT_FLAG_NONE(flags, INIT_NO_DCLOAD, fs_dcload_shutdown); \
@@ -93,7 +95,7 @@ __BEGIN_DECLS
 */
 
 /** \brief Default init flags for the Dreamcast. */
-#define INIT_DEFAULT_ARCH   (INIT_MAPLE_ALL | INIT_CDROM)
+#define INIT_DEFAULT_ARCH   (INIT_MAPLE_ALL | INIT_CDROM | INIT_MMU)
 
 /** \brief Enable all Maple peripheral drivers. */
 #if defined(_arch_sub_naomi)
@@ -117,6 +119,7 @@ __BEGIN_DECLS
 #define INIT_MIE            0x00400000  /**< \brief Enable MIE/JVS maple driver */
 
 #define INIT_CDROM          0x01000000  /**< \brief Enable CD-ROM support */
+#define INIT_MMU            0x08000000  /**< \brief Enable MMU and TLB handlers (fork default) */
 
 static const uint32_t INIT_OCRAM __depr("INIT_OCRAM has been removed. Use dcache_toggle_ocram().") = 0;
 #define INIT_NO_DCLOAD      0x20000000  /**< \brief Disable dcload */

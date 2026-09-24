@@ -54,7 +54,7 @@ PROJECT_NUMBER         = "##version##"
 # for a project that appears at the top of each page and should give viewer a
 # quick idea about the purpose of the project. Keep the description short.
 
-PROJECT_BRIEF          = Independent SDK for the Sega Dreamcast
+PROJECT_BRIEF          = Independent SDK for the Dreamcast
 
 # With the PROJECT_LOGO tag one can specify a logo or an icon that is included
 # in the documentation. The maximum height of the logo should not exceed 55
@@ -475,7 +475,7 @@ LOOKUP_CACHE_SIZE      = 0
 # DOT_NUM_THREADS setting.
 # Minimum value: 0, maximum value: 32, default value: 1.
 
-NUM_PROC_THREADS       = 0
+NUM_PROC_THREADS       = 1
 
 #---------------------------------------------------------------------------
 # Build related configuration options
@@ -914,8 +914,20 @@ INPUT                  = $(KOS_BASE)/include \
                          $(KOS_BASE)/doc/license/LICENSE.KOS \
                          $(KOS_BASE)/doc/LICENSE.md \
                          $(KOS_BASE)/doc/FAQ.md \
-                         $(KOS_BASE)/doc/CHANGELOG.md \
                          $(KOS_BASE)/doc/README.md \
+                         $(KOS_BASE)/doc/workqueue-safety.md \
+                         $(KOS_BASE)/doc/background-execution-audit.md \
+                         $(KOS_BASE)/doc/cache-maintenance.md \
+                         $(KOS_BASE)/doc/mmu-mapping.md \
+                         $(KOS_BASE)/doc/store-queue-safety.md \
+                         $(KOS_BASE)/doc/independent-heaps.md \
+                         $(KOS_BASE)/doc/vblank-callback-safety.md \
+                         $(KOS_BASE)/doc/asic-event-ownership.md \
+                         $(KOS_BASE)/doc/g2-dma-safety.md \
+                         $(KOS_BASE)/doc/g1-bus-ownership.md \
+                         $(KOS_BASE)/doc/pvr-vq-palettes.md \
+                         $(KOS_BASE)/doc/pvr-vq-compact.md \
+                         $(KOS_BASE)/doc/pvr-texture-residency.md \
                          $(KOS_BASE)/addons/readme.md \
                          $(KOS_BASE)/utils/readme.md \
                          $(KOS_BASE)/examples \
@@ -2657,15 +2669,6 @@ DOT_GRAPH_MAX_NODES    = 50
 # This tag requires that the tag HAVE_DOT is set to YES.
 
 MAX_DOT_GRAPH_DEPTH    = 0
-
-# Set the DOT_MULTI_TARGETS tag to YES to allow dot to generate multiple output
-# files in one run (i.e. multiple -o and -T options on the command line). This
-# makes dot run faster, but since only newer versions of dot (>1.8.10) support
-# this, this feature is disabled by default.
-# The default value is: NO.
-# This tag requires that the tag HAVE_DOT is set to YES.
-
-DOT_MULTI_TARGETS      = NO
 
 # If the GENERATE_LEGEND tag is set to YES doxygen will generate a legend page
 # explaining the meaning of the various boxes and arrows in the dot generated

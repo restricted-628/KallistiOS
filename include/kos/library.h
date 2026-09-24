@@ -3,6 +3,7 @@
    include/kos/library.h
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2024 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -234,7 +235,9 @@ klibrary_t *library_lookup_fn(const char *fn);
     This function will close the specified library. This may involve simply
     decrementing its reference count, however, it may also involve actually
     closing and freeing the library. Thus, don't try to use the library after
-    calling this without reopening it first.
+    calling this successfully without reopening it first. If the library's
+    close hook fails, the image remains loaded with one owning reference so the
+    caller may correct the condition and retry.
 
     \param  lib             The library to close
     \retval 0               On success

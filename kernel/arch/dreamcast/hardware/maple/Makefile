@@ -11,10 +11,10 @@ OBJS := $(OBJS) maple_queue.o maple_utils.o
 
 # Various input devices
 OBJS := $(OBJS) controller.o keyboard.o mouse.o
-OBJS := $(OBJS) purupuru.o sip.o dreameye.o lightgun.o
+OBJS := $(OBJS) purupuru.o sip.o sip_stream.o dreameye.o lightgun.o
 
 # Output devices
-OBJS := $(OBJS) vmu.o
+OBJS := $(OBJS) vmu.o vmu_bank_protocol.o
 
 # MIE-JVS bridge
 SUBDIRS := mie

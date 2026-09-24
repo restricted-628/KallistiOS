@@ -4,6 +4,7 @@
 
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2005, 2013 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <string.h>
@@ -228,6 +229,14 @@ void net_shutdown(void) {
        down in here. */
     workqueue_kill(net_wq);
 
+    /* Quiesce packet producers before dismantling any protocol consumer.
+       Otherwise an RX worker can enter net_input() while socket, reassembly,
+       neighbor, or transport state is already being destroyed. */
+    LIST_FOREACH(cur, &net_if_list, if_list) {
+        if(cur->flags & NETIF_RUNNING && cur->if_stop)
+            cur->if_stop(cur);
+    }
+
     /* Shut down DHCP */
     net_dhcp_shutdown();
 
@@ -256,11 +265,8 @@ void net_shutdown(void) {
     /* Shut down the network thread */
     workqueue_destroy(net_wq);
 
-    /* Shut down all activated network devices */
+    /* Packet ingress is already stopped; now release device hardware. */
     LIST_FOREACH(cur, &net_if_list, if_list) {
-        if(cur->flags & NETIF_RUNNING && cur->if_stop)
-            cur->if_stop(cur);
-
         if(cur->flags & NETIF_INITIALIZED && cur->if_shutdown)
             cur->if_shutdown(cur);
     }

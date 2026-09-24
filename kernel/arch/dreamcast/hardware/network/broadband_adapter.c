@@ -5,6 +5,7 @@
    Copyright (C) 2001,2003,2005 Megan Potter
    Copyright (C) 2004 Vincent Penne
    Copyright (C) 2007, 2008, 2010 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
  */
 
@@ -14,9 +15,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <dc/net/broadband_adapter.h>
 #include <dc/asic.h>
 #include <dc/g2bus.h>
+#include <dc/gaps.h>
 #include <dc/flashrom.h>
 #include <dc/memory.h>
 #include <kos/cache.h>
@@ -28,8 +31,6 @@
 #include <kos/worker_thread.h>
 
 /* Configuration definitions */
-
-#define RTL_MEM                 (0x1840000)
 
 #define RX_BUFFER_SHIFT         1 /* 0 : 8Kb, 1 : 16Kb, 2 : 32Kb, 3 : 64Kb */
 
@@ -79,127 +80,10 @@ This driver has basically been rewritten since KOS 1.0.x.
 
 */
 
-/****************************************************************************/
-/* GAPS PCI stuff probably ought to be moved to another file... */
 #define GAPS_BASE 0xa1000000
 
-/* Detect a GAPS PCI bridge */
-static int gaps_detect(void) {
-    char str[16];
-
-    g2_read_block_8((uint8_t *)str, GAPS_BASE + 0x1400, 16);
-
-    if(!strncmp(str, "GAPSPCI_BRIDGE_2", 16))
-    {
-        /* Set this to 0 first thing */
-        g2_write_32(GAPS_BASE + 0x1414, 0x00000000);
-        /* Turn GAPS off */
-        g2_write_32(GAPS_BASE + 0x1418, 0x5a14a501);
-
-        return 0;
-    }
-    else
-        return -1;
-}
-
-/* Initialize GAPS PCI bridge */
-static int gaps_init(void) {
-    int i;
-
-    /* This shouldn't happen as init is done only if a detect succeeded. */
-    if(gaps_detect() < 0) {
-        dbglog(DBG_INFO, "bba: gaps_init called but no device detected\n");
-        return -1;
-    }
-
-    /* Initialize the "GAPS" PCI glue controller.
-       It ain't pretty but it works. */
-    g2_write_32(GAPS_BASE + 0x1418, 0x5a14a501);    /* M */
-    i = 10000;
-
-    while(!(g2_read_32(GAPS_BASE + 0x1418) & 1) && i > 0)
-        i--;
-
-    if(!(g2_read_32(GAPS_BASE + 0x1418) & 1)) {
-        dbglog(DBG_ERROR, "bba: GAPS PCI controller not responding; giving up!\n");
-        return -2;
-    }
-
-    g2_write_32(GAPS_BASE + 0x1420, 0x01000000);
-    g2_write_32(GAPS_BASE + 0x1424, 0x01000000);
-    g2_write_32(GAPS_BASE + 0x1428, RTL_MEM);       /* DMA Base */
-    g2_write_32(GAPS_BASE + 0x142c, RTL_MEM + 32 * 1024); /* DMA End */
-    g2_write_32(GAPS_BASE + 0x1414, 0x00000001);        /* Interrupt enable */
-    g2_write_32(GAPS_BASE + 0x1434, 0x00000001);
-
-    /* Configure PCI bridge (very very hacky). If we wanted to be proper,
-       we ought to implement a full PCI subsystem. In this case that is
-       ridiculous for accessing a single card that will probably never
-       change. Considering that the DC is now out of production officially,
-       there is a VERY good chance it will never change. */
-
-    /* VEN:DEV is 11db:1234 (vendor code is "Sega Enterprises, LTD")
-       The GAPS bridge is really just an MMU with a memory buffer that maps
-       the RTL8139C to the Dreamcast's memory space, so these are actually
-       the PCI configuration registers for the RTL8139, not GAPS (those are
-       just the 0x1400 regs).
-
-       It has a custom ven:dev ID, but the class ID in 0x1608 indicates a
-       network controller (byte 0x160b = 0x02 = network controller,
-       0x160a = 0x00 = Ethernet controller)
-
-       See PCI Local Bus Specification 2.2 (2.3 has all the 2.2 stuff in
-       it and the RTL8139C uses 2.2). This is also documented in the
-       RTL8139C's datasheet, under "PCI Configuration Space Registers"
-    */
-
-    g2_write_16(GAPS_BASE + 0x1606, 0xf900);     /* PCI Status Register */
-    g2_write_32(GAPS_BASE + 0x1630, 0x00000000); /* PCI BMAR */
-    g2_write_8(GAPS_BASE + 0x163c, 0x00);        /* Interrupt Line */
-    g2_write_8(GAPS_BASE + 0x160d, 0xf0);        /* Primary Latency Timer */
-
-    /* PCI Command Register (Fast Back-to-Back is read-only 0 on this bridge)
-       0x1610 (BAR0, I/O BAR) reads back as 0x00000001, which is I/O Space Indicator
-    */
-    g2_write_16(GAPS_BASE + 0x1604, g2_read_16(GAPS_BASE + 0x1604) | 0x6);
-
-    g2_write_32(GAPS_BASE + 0x1614, 0x01000000); /* BAR1 (Memory BAR) */
-
-    /* There are two extra regs here that are GAPS-specific (0x1650 and 0x1654). */
-    if(g2_read_8(GAPS_BASE + 0x1650) & 0x1)
-    {
-        g2_write_16(GAPS_BASE + 0x1654, (g2_read_16(GAPS_BASE + 0x1654) & 0xfffc) | 0x8000);
-    }
-
-    /* Apparently we do this again */
-    g2_write_32(GAPS_BASE + 0x1414, 0x00000001); /* Interrupt enable */
-
-    /* Clear GAPS mem */
-    g2_memset_8(RTL_MEM, 0, (RX_BUFFER_LEN + (TX_BUFFER_LEN * TX_NB_BUFFERS)));
-    //Apparently the Cache should be invalidated also. Don't want to import that.
-
-    /* Another magic number sequence, possibly checking previous init. */
-    /* ASCII for 'SEGA' in little-endian */
-    if(g2_read_32(GAPS_BASE + 0x141c) == 0x41474553) {
-        g2_write_32(GAPS_BASE + 0x141c, 0x55aaff00);
-
-        if(g2_read_32(GAPS_BASE + 0x141c) == 0x55aaff00) {
-            g2_write_32(GAPS_BASE + 0x141c, 0xaa5500ff);
-
-            if(g2_read_32(GAPS_BASE + 0x141c) == 0xaa5500ff) {
-                g2_write_32(GAPS_BASE + 0x141c, 0x41474553);
-                /* I think GAPS automatically pulls RSTB low for 120ns, which
-                   causes the EEPROM to autoload all the registers initially.
-                   So we don't need to worry about it.
-                */
-                return 0;
-            }
-        }
-    }
-
-    dbglog(DBG_ERROR, "bba: GAPS PCI controller init failed!\n");
-
-    return -3;
+int bba_probe(void) {
+    return gaps_probe();
 }
 
 /****************************************************************************/
@@ -216,18 +100,26 @@ struct {
 #define NIC(ADDR) (GAPS_BASE + 0x1700 + (ADDR))
 
 /* 8 and 32 bit access to the PCI MEMMAP space (configured by GAPS) */
-static uint32_t const rtl_mem = MEM_AREA_P2_BASE + RTL_MEM;
+static uint32_t rtl_mem;
 
 /* TX buffer pointers */
-static uint32_t const txdesc[TX_NB_BUFFERS] = {
-    MEM_AREA_P2_BASE + (TX_BUFFER_LEN * 0) + RTL_MEM + TX_BUFFER_OFFSET,
-    MEM_AREA_P2_BASE + (TX_BUFFER_LEN * 1) + RTL_MEM + TX_BUFFER_OFFSET,
-    MEM_AREA_P2_BASE + (TX_BUFFER_LEN * 2) + RTL_MEM + TX_BUFFER_OFFSET,
-    MEM_AREA_P2_BASE + (TX_BUFFER_LEN * 3) + RTL_MEM + TX_BUFFER_OFFSET,
-};
+static uint32_t txdesc[TX_NB_BUFFERS];
+static gaps_sram_lease_t rx_lease = GAPS_SRAM_LEASE_INVALID;
+static gaps_sram_lease_t rx_guard_lease = GAPS_SRAM_LEASE_INVALID;
+static gaps_sram_lease_t tx_lease = GAPS_SRAM_LEASE_INVALID;
+static gaps_owner_t gaps_owner = GAPS_OWNER_INVALID;
+static atomic_int dma_used;
+static uint8_t *next_dst;
+static uint8_t *next_src;
+static int next_len;
+/* Shutdown closes admission before waiting for the RX worker. Calls already
+   inside TX retain the device until they leave, including semaphore waiters. */
+static atomic_bool bba_stopping = true;
+static unsigned int tx_users;
 
 /* Is the link stabilized? */
 static bool link_stable;
+static asic_evt_claim_t bba_irq_claim = ASIC_EVT_CLAIM_INVALID;
 
 /* Receive callback */
 static eth_rx_callback_t eth_rx_callback;
@@ -262,6 +154,80 @@ static int rtl_reset(void) {
 
     return 0;
 }
+
+static int bba_release_sram(void) {
+    if(tx_lease != GAPS_SRAM_LEASE_INVALID) {
+        if(gaps_sram_free(tx_lease) == 0)
+            tx_lease = GAPS_SRAM_LEASE_INVALID;
+        else {
+            dbglog(DBG_ERROR, "bba: unable to release TX SRAM lease\n");
+            return -1;
+        }
+    }
+    if(rx_guard_lease != GAPS_SRAM_LEASE_INVALID) {
+        if(gaps_sram_free(rx_guard_lease) == 0)
+            rx_guard_lease = GAPS_SRAM_LEASE_INVALID;
+        else {
+            dbglog(DBG_ERROR, "bba: unable to release RX guard lease\n");
+            return -1;
+        }
+    }
+    if(rx_lease != GAPS_SRAM_LEASE_INVALID) {
+        if(gaps_sram_free(rx_lease) == 0)
+            rx_lease = GAPS_SRAM_LEASE_INVALID;
+        else {
+            dbglog(DBG_ERROR, "bba: unable to release RX SRAM lease\n");
+            return -1;
+        }
+    }
+    if(gaps_owner != GAPS_OWNER_INVALID) {
+        if(gaps_release(gaps_owner) == 0)
+            gaps_owner = GAPS_OWNER_INVALID;
+        else {
+            dbglog(DBG_ERROR, "bba: unable to release GAPS bridge\n");
+            return -1;
+        }
+    }
+    rtl_mem = 0;
+    memset(txdesc, 0, sizeof(txdesc));
+    return 0;
+}
+
+static int bba_acquire_sram(void) {
+    gaps_sram_info_t rx_info;
+    gaps_sram_info_t tx_info;
+    unsigned int i;
+
+    /* Do not overwrite a retained token after a failed shutdown. */
+    if(gaps_owner != GAPS_OWNER_INVALID) {
+        errno = EBUSY;
+        return -1;
+    }
+    if(gaps_acquire(GAPS_ROLE_NETWORK, &gaps_owner) < 0)
+        return -1;
+
+    /* Preserve the proven device layout. The middle 8 KiB is a wrap guard
+       for the receive ring, not an independently usable hardware bank. */
+    if(gaps_sram_reserve(gaps_owner, 0, RX_BUFFER_LEN, &rx_lease) < 0
+            || gaps_sram_reserve(gaps_owner, RX_BUFFER_LEN, 0x2000,
+                                 &rx_guard_lease) < 0
+            || gaps_sram_reserve(gaps_owner, TX_BUFFER_OFFSET,
+                                 TX_BUFFER_LEN * TX_NB_BUFFERS,
+                                 &tx_lease) < 0
+            || gaps_sram_get_info(rx_lease, &rx_info) < 0
+            || gaps_sram_get_info(tx_lease, &tx_info) < 0) {
+        bba_release_sram();
+        return -1;
+    }
+
+    rtl_mem = MEM_AREA_P2_BASE + rx_info.physical_address;
+    for(i = 0; i < TX_NB_BUFFERS; ++i) {
+        txdesc[i] = MEM_AREA_P2_BASE + tx_info.physical_address
+            + i * TX_BUFFER_LEN;
+    }
+    return 0;
+}
+
 /*
   Initializes the BBA
 
@@ -272,8 +238,7 @@ static int bba_hw_init(void) {
 
     link_stable = false;
 
-    /* Initialize GAPS */
-    if(gaps_init() < 0)
+    if(bba_acquire_sram() < 0)
         return -1;
 
     /* Read MAC address */
@@ -291,18 +256,19 @@ static int bba_hw_init(void) {
 
     /* Reset the chip and wait for it to come back */
     if(rtl_reset() < 0)
-        return -2;
+        goto fail;
 
     /* Setup RX buffer */
-    g2_write_32(NIC(RT_RXBUF), RTL_MEM);
+    g2_write_32(NIC(RT_RXBUF), rtl_mem & MEM_AREA_CACHE_MASK);
 
     /* Setup TX buffers */
     for(tmp=0; tmp<TX_NB_BUFFERS; tmp++)
-        g2_write_32(NIC(RT_TXADDR0 + (tmp*4)), RTL_MEM + (tmp* TX_BUFFER_LEN) + TX_BUFFER_OFFSET);
+        g2_write_32(NIC(RT_TXADDR0 + (tmp*4)),
+                    txdesc[tmp] & MEM_AREA_CACHE_MASK);
 
     /* Magic reset */
     if(rtl_reset() < 0)
-        return -3;
+        goto fail;
 
     /* Perform some magic enable/disable dance */
     g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE);
@@ -364,9 +330,14 @@ static int bba_hw_init(void) {
     /* Disable all multi-interrupts */
     g2_write_16(NIC(RT_MULTIINTR), 0);
 
-    /* Enable G2 interrupts */
-    asic_evt_set_handler(ASIC_EVT_EXP_PCI, bba_irq_hnd, NULL);
-    asic_evt_enable(ASIC_EVT_EXP_PCI, BBA_ASIC_IRQ);
+    /* Own the external interrupt until hardware shutdown. */
+    if(asic_evt_claim(ASIC_EVT_EXP_PCI, BBA_ASIC_IRQ, bba_irq_hnd,
+                      NULL, &bba_irq_claim) < 0) {
+        dbglog(DBG_ERROR, "bba: external interrupt is already owned\n");
+        g2_write_32(NIC(RT_RXCONFIG), 0);
+        g2_write_8(NIC(RT_CHIPCMD), 0);
+        goto fail;
+    }
 
     /* Enable receive interrupts */
     /* XXX need to handle more! */
@@ -397,7 +368,14 @@ static int bba_hw_init(void) {
     /* Enable receiving broadcast and physical match packets */
     g2_write_32(NIC(RT_RXCONFIG), g2_read_32(NIC(RT_RXCONFIG)) | RT_RXC_APM | RT_RXC_AB);
 
+    atomic_store(&bba_stopping, false);
     return 0;
+
+fail:
+    g2_write_32(NIC(RT_RXCONFIG), 0);
+    g2_write_8(NIC(RT_CHIPCMD), 0);
+    bba_release_sram();
+    return -1;
 }
 
 static void rx_reset(void) {
@@ -416,13 +394,38 @@ static void rx_reset(void) {
     g2_write_16(NIC(RT_INTRSTATUS), 0xffff);
 }
 
-static void bba_hw_shutdown(void) {
+static int bba_hw_shutdown(void) {
+    g2_dma_status_t dma_status;
+
+    irq_mask_t state = irq_disable();
+    atomic_store(&bba_stopping, true);
+    if(tx_users) {
+        irq_restore(state);
+        errno = EBUSY;
+        return -1; /* Keep all resources; caller may retry after TX drains. */
+    }
+    irq_restore(state);
     /* Disable receiver */
     g2_write_32(NIC(RT_RXCONFIG), 0);
+    g2_write_8(NIC(RT_CHIPCMD), 0);
+    g2_write_16(NIC(RT_INTRMASK), 0);
 
-    /* Disable G2 interrupts */
-    asic_evt_disable(ASIC_EVT_EXP_PCI, BBA_ASIC_IRQ);
-    asic_evt_remove_handler(ASIC_EVT_EXP_PCI);
+    if(bba_irq_claim != ASIC_EVT_CLAIM_INVALID) {
+        if(asic_evt_release(bba_irq_claim) < 0)
+            return -1;
+        bba_irq_claim = ASIC_EVT_CLAIM_INVALID;
+    }
+
+    /* The SRAM lease must outlive any engine still referencing it. */
+    if(g2_dma_get_status(G2_DMA_CHAN_BBA, &dma_status) < 0)
+        return -1;
+    if((dma_status.state == G2_DMA_STATE_RUNNING
+            || dma_status.state == G2_DMA_STATE_SUSPENDED)
+            && g2_dma_cancel(G2_DMA_CHAN_BBA) < 0 && errno != EALREADY)
+        return -1;
+    atomic_store(&dma_used, 0);
+    next_len = 0;
+    return bba_release_sram();
 }
 
 #define RXBSZ       (64 * 1024) /* must be a power of two */
@@ -439,8 +442,6 @@ static uint8_t *rxbuff;
 static uint32_t rxbuff_pos;
 static int rxin;
 static int rxout;
-static atomic_int dma_used;
-
 static uint32_t rx_size;
 
 static void bba_rx(void);
@@ -478,10 +479,6 @@ static void bba_rxbuf_free(void) {
 
 static semaphore_t tx_sema;
 
-static uint8_t *next_dst;
-static uint8_t *next_src;
-static int next_len;
-
 static kthread_worker_t *rx_worker;
 
 static void rx_finish_enq(int room) {
@@ -502,11 +499,19 @@ static void bba_dma_cb(void *p) {
     (void)p;
 
     if(next_len) {
-        g2_dma_transfer(next_dst, next_src, next_len, 0,
-                        bba_dma_cb, 0,  /* callback */
-                        G2_DMA_TO_SH4,
-                        0, G2_DMA_CHAN_BBA, 0);
+        int length = next_len;
+        uint8_t *destination = next_dst;
+        uint8_t *source = next_src;
+
         next_len = 0;
+        if(g2_dma_transfer(destination, source, length, 0,
+                           bba_dma_cb, 0,  /* callback */
+                           G2_DMA_TO_SH4,
+                           0, G2_DMA_CHAN_BBA, 0) < 0) {
+            dbglog(DBG_ERROR, "bba: unable to chain RX DMA\n");
+            dma_used = 0;
+            rx_reset();
+        }
     }
     else {
         rx_finish_enq(1);
@@ -534,10 +539,13 @@ static int bba_copy_packet(uint8_t *dst, uint32_t s, int len) {
 
         if(!dma_used) {
             dma_used = 1;
-            g2_dma_transfer(dst, src, len, 0,
-                            bba_dma_cb, 0,  /* callback */
-                            G2_DMA_TO_SH4,
-                            0, G2_DMA_CHAN_BBA, 0);
+            if(g2_dma_transfer(dst, src, len, 0,
+                               bba_dma_cb, 0,  /* callback */
+                               G2_DMA_TO_SH4,
+                               0, G2_DMA_CHAN_BBA, 0) < 0) {
+                dma_used = 0;
+                return -1;
+            }
         }
         else if(next_len) {
             /* RX DMA is really busy - notify that we couldn't read the packet */
@@ -597,12 +605,15 @@ static int rx_enq(int ring_offset, size_t pkt_size) {
 }
 
 static int bba_link_is_stable(void *d) {
-    return *(int *)d;
+    (void)d;
+    return atomic_load(&bba_stopping) || link_stable;
 }
 
 static int bba_can_tx(void *d) {
     (void)d;
 
+    if(atomic_load(&bba_stopping))
+        return 1;
     if(!(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_HOST_OWNS)) {
         if(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_ABORTED)
             g2_write_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx),
@@ -629,11 +640,14 @@ static bool bba_tx_dma(const uint8_t *pkt, int len) {
 
     /* Blocking DMA copy into the current TX buffer. Keep interrupts active to
        queue up RX packets. */
-    g2_dma_transfer((void *)pkt, (void *)txdesc[rtl.cur_tx], aligned,
-                    1,             /* block */
-                    NULL, NULL,    /* no callback */
-                    G2_DMA_TO_G2,
-                    0, G2_DMA_CHAN_BBA, 0);
+    if(g2_dma_transfer((void *)pkt, (void *)txdesc[rtl.cur_tx], aligned,
+                       1,             /* block */
+                       NULL, NULL,    /* no callback */
+                       G2_DMA_TO_G2,
+                       0, G2_DMA_CHAN_BBA, 0) < 0) {
+        atomic_store(&dma_used, 0);
+        return false;
+    }
 
     if(remainder) {
         g2_fifo_wait();
@@ -654,6 +668,10 @@ static bool bba_tx_dma(const uint8_t *pkt, int len) {
 /* Transmit a single packet */
 static int bba_rtx(const uint8_t *pkt, int len, int wait)
 {
+    if(atomic_load(&bba_stopping)) {
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
+    }
     if(wait == BBA_TX_WAIT) {
         assert(!irq_inside_int());
 
@@ -663,12 +681,22 @@ static int bba_rtx(const uint8_t *pkt, int len, int wait)
         return BBA_TX_AGAIN;
     }
 
+    if(atomic_load(&bba_stopping)) {
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
+    }
+
     /* Wait till it's clear to transmit */
     if(wait == BBA_TX_WAIT) {
         thd_poll(bba_can_tx, NULL, 0);
     }
     else if(!(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_HOST_OWNS)) {
         return BBA_TX_AGAIN;
+    }
+
+    if(atomic_load(&bba_stopping)) {
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
     }
 
     /* Copy the packet out to RTL memory */
@@ -698,17 +726,26 @@ static int bba_rtx(const uint8_t *pkt, int len, int wait)
 int bba_tx(const uint8_t *pkt, int len, int wait) {
     int res;
 
-    if(!__is_defined(TX_SEMA))
-        return bba_rtx(pkt, len, wait);
+    irq_mask_t state = irq_disable();
+    if(atomic_load(&bba_stopping)) {
+        irq_restore(state);
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
+    }
+    ++tx_users;
+    irq_restore(state);
 
-    if(sem_wait_irqsafe(&tx_sema)) {
-        //printf("bba_tx called from an irq while a thread was running it !\n");
-        return BBA_TX_OK;   /* sorry guys ... */
+    if(__is_defined(TX_SEMA) && sem_wait_irqsafe(&tx_sema))
+        res = BBA_TX_AGAIN;
+    else {
+        res = bba_rtx(pkt, len, wait);
+        if(__is_defined(TX_SEMA))
+            sem_signal(&tx_sema);
     }
 
-    res = bba_rtx(pkt, len, wait);
-    sem_signal(&tx_sema);
-
+    state = irq_disable();
+    --tx_users;
+    irq_restore(state);
     return res;
 }
 
@@ -868,7 +905,7 @@ static int bba_if_detect(netif_t *self) {
     if(bba_if.flags & NETIF_DETECTED)
         return 0;
 
-    if(gaps_detect() < 0)
+    if(!gaps_probe())
         return -1;
 
     bba_if.flags |= NETIF_DETECTED;
@@ -901,7 +938,8 @@ static int bba_if_shutdown(netif_t *self) {
     if(!(bba_if.flags & NETIF_INITIALIZED))
         return 0;
 
-    bba_hw_shutdown();
+    if(bba_hw_shutdown() < 0)
+        return -1;
     bba_rxbuf_free();
 
     bba_if.flags &= ~(NETIF_INITIALIZED | NETIF_RUNNING);
@@ -922,9 +960,20 @@ static int bba_if_start(netif_t *self) {
     if(bba_if.flags & NETIF_RUNNING)
         return 0;
 
+    if(bba_irq_claim == ASIC_EVT_CLAIM_INVALID) {
+        errno = EBUSY; /* Hardware shutdown failed part-way; finish it first. */
+        return -1;
+    }
+    atomic_store(&bba_stopping, false);
+
     // Start the BBA RX thread.
     assert(rx_worker == NULL);
     rx_worker = thd_worker_create_ex(&bba_rx_worker_attr, bba_rx_worker, NULL);
+    if(!rx_worker) {
+        atomic_store(&bba_stopping, true);
+        dbglog(DBG_ERROR, "bba: unable to create RX worker\n");
+        return -1;
+    }
 
     /* We need something like this to get DHCP to work (since it doesn't
        know anything about an activated and yet not-yet-receiving network
@@ -932,6 +981,7 @@ static int bba_if_start(netif_t *self) {
 
     /* Wait until the link is stabilized */
     if(!thd_poll(bba_link_is_stable, &link_stable, 10000)) {
+        atomic_store(&bba_stopping, true);
         dbglog(DBG_ERROR, "bba: timed out waiting for link to stabilize\n");
         thd_worker_destroy(rx_worker);
         rx_worker = NULL;
@@ -945,6 +995,8 @@ static int bba_if_start(netif_t *self) {
 static int bba_if_stop(netif_t *self) {
     (void)self;
 
+    /* Wake TX link/buffer polls before joining a worker that may be in TX. */
+    atomic_store(&bba_stopping, true);
     if(!(bba_if.flags & NETIF_RUNNING))
         return 0;
 
@@ -1156,10 +1208,10 @@ int bba_init(void) {
 /* Shutdown */
 int bba_shutdown(void) {
     /* Shutdown hardware */
-    if(bba_if.flags & NETIF_RUNNING)
-        bba_if.if_stop(&bba_if);
-    if(bba_if.flags & NETIF_INITIALIZED)
-        bba_if.if_shutdown(&bba_if);
+    if((bba_if.flags & NETIF_RUNNING) && bba_if.if_stop(&bba_if) < 0)
+        return -1;
+    if((bba_if.flags & NETIF_INITIALIZED) && bba_if.if_shutdown(&bba_if) < 0)
+        return -1;
 
     if(__is_defined(TX_SEMA))
         sem_destroy(&tx_sema);

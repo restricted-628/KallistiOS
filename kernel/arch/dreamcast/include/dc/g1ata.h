@@ -14,8 +14,7 @@
     including the flashrom and the GD-ROM drive. The interesting piece here is
     that the GD-ROM drive itself is actually an ATA device.
 
-    Luckily, Sega left everything in place to access both a master and slave
-    device on this ATA port. The GD-ROM drive should always be the master device
+    This ATA port supports access to both a master and slave device. The GD-ROM drive should always be the master device
     on the chain, but you can hook up a hard drive or some other device as a
     slave. The functions herein are for accessing just such a slave device.
 

@@ -1,0 +1,14 @@
+# Compact-model pipeline example geometry.
+mtllib chunk-resource-model.mtl
+v 160 120 0
+v 480 120 0
+v 160 360 0
+v 480 360 0
+vt 0 0
+vt 1 0
+vt 0 1
+vt 1 1
+vn 0 0 1
+usemtl checker
+f 1/1/1 2/2/1 3/3/1
+f 3/3/1 2/2/1 4/4/1

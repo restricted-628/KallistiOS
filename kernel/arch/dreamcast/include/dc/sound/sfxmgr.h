@@ -4,6 +4,7 @@
    Copyright (C) 2002 Megan Potter
    Copyright (C) 2023, 2024 Ruslan Rostovtsev
    Copyright (C) 2023 Andy Barajas
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -95,7 +96,7 @@ sfxhnd_t snd_sfx_load(const char *fn);
     or 16-bit uncompressed PCM samples, or 4-bit Yamaha ADPCM.
 
     \warning The sound effect you are loading must be at most 65534 samples
-    in length and multiple by 32 bytes for each channel.
+    in length.
 
     \param  fn              The file to load.
     \param  rate            The frequency of the sound.
@@ -113,7 +114,7 @@ sfxhnd_t snd_sfx_load_ex(const char *fn, uint32_t rate, uint16_t bitsize, uint16
     or 16-bit uncompressed PCM samples, or 4-bit Yamaha ADPCM.
 
     \warning The sound effect you are loading must be at most 65534 samples
-    in length and multiple by 32 bytes for each channel.
+    in length.
 
     \param  fd              The file handler.
     \param  len             The file length.
@@ -135,11 +136,28 @@ sfxhnd_t snd_sfx_load_fd(file_t fd, size_t len, uint32_t rate, uint16_t bitsize,
     \warning The sound effect you are loading must be at most 65534 samples
     in length.
 
+    \warning This legacy entry point has no buffer-size argument and can only
+    validate against the length declared inside the RIFF header. Prefer
+    snd_sfx_load_wav_buf() for untrusted or externally supplied data.
+
     \param  buf             The buffer to load.
     \return                 A handle to the sound effect on success. On error,
                             SFXHND_INVALID is returned.
 */
 sfxhnd_t snd_sfx_load_buf(char *buf);
+
+/** \brief Load a WAV sound effect from a bounded memory buffer.
+
+    Unlike snd_sfx_load_buf(), this function validates every RIFF chunk and
+    sample-data access against the supplied buffer size. New code should use
+    this entry point for memory-backed WAV data.
+
+    \param buffer          Complete RIFF/WAVE image.
+    \param buffer_size     Accessible size of \p buffer in bytes.
+    \return                A sound effect handle on success, or
+                           SFXHND_INVALID on failure with errno set.
+*/
+sfxhnd_t snd_sfx_load_wav_buf(const void *buffer, size_t buffer_size);
 
 /** \brief  Load a sound effect without wav header from buffer.
 
@@ -149,7 +167,7 @@ sfxhnd_t snd_sfx_load_buf(char *buf);
     ADPCM.
 
     \warning The sound effect you are loading must be at most 65534 samples
-    in length and multiple by 32 bytes for each channel.
+    in length.
 
     \param  buf             The buffer.
     \param  len             The file length.
@@ -198,8 +216,8 @@ int snd_sfx_play(sfxhnd_t idx, int vol, int pan);
 /** \brief  Play a sound effect on a specific channel.
 
     This function works similar to snd_sfx_play(), but allows you to specify the
-    channel to play on. No error checking is done with regard to the channel, so
-    be sure its safe to play on that channel before trying.
+    channel to play on. The channel must be in range, and a stereo effect cannot
+    start on channel 63 because it also occupies the following channel.
 
     \param  chn             The channel to play on (or in the case of stereo,
                             the left channel).
@@ -209,7 +227,8 @@ int snd_sfx_play(sfxhnd_t idx, int vol, int pan);
                             way to the left, 128 is center, 255 is all the way
                             to the right.
 
-    \return                 chn
+    \return                 chn on success, or -1 on invalid input or command
+                            submission failure.
 */
 int snd_sfx_play_chn(int chn, sfxhnd_t idx, int vol, int pan);
 
@@ -224,16 +243,17 @@ int snd_sfx_play_chn(int chn, sfxhnd_t idx, int vol, int pan);
     \param  data            The data structure containing the information needed
                             to play the sound effect.
 
-    \return                 chn
+    \return                 The selected channel on success, or -1 on invalid
+                            input, channel exhaustion, or command submission
+                            failure.
 */
 int snd_sfx_play_ex(sfx_play_data_t *data);
 
 /** \brief  Stop a single channel of sound.
 
-    This function stops the specified channel of sound from playing. It does no
-    checking to make sure that a sound effect is playing on the channel
-    specified, and thus can be used even if you're using the channel for some
-    other purpose than sound effects.
+    This function stops the specified channel of sound from playing. It does not
+    require that a sound effect owns the channel, but it rejects channel numbers
+    outside the hardware range.
 
     \param  chn             The channel to stop.
 */
@@ -270,4 +290,3 @@ void snd_sfx_chn_free(int chn);
 __END_DECLS
 
 #endif  /* __DC_SOUND_SFXMGR_H */
-

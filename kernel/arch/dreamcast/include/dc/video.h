@@ -4,6 +4,7 @@
 
    Copyright (C) 2001 Anders Clerwall (scav)
    Copyright (C) 2023-2024 Donald Haase
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -137,6 +138,16 @@ typedef enum vid_display_mode {
     DM_MODE_COUNT                   /**< \brief Number of modes */
 } vid_display_mode_t;
 
+/** \brief Refresh-standard preference for generic mode resolution. */
+typedef enum vid_mode_standard {
+    /** Preserve the established KOS table-order preference. */
+    VID_MODE_STANDARD_DEFAULT = 0,
+    /** Select a 60 Hz non-PAL mode. */
+    VID_MODE_STANDARD_60HZ,
+    /** Select a 50 Hz PAL mode. */
+    VID_MODE_STANDARD_50HZ
+} vid_mode_standard_t;
+
 /** \defgroup vid_flags Flags
     \brief              vid_mode_t Field Flags
     \ingroup            video_modes
@@ -168,8 +179,8 @@ typedef struct vid_mode {
     int8_t    cable_type; /**< \brief Allowed cable type */
     vid_pixel_mode_t  pm; /**< \brief Pixel mode */
 
-    uint16_t  scanlines;  /**< \brief Number of scanlines */
-    uint16_t  clocks;     /**< \brief Clocks per scanline */
+    uint16_t  scanlines;  /**< \brief Maximum physical scanline counter */
+    uint16_t  clocks;     /**< \brief Maximum clock counter per scanline */
     uint16_t  bitmapx;    /**< \brief Bitmap window X position */
     uint16_t  bitmapy;    /**< \brief Bitmap window Y position (automatically
                                     increased for PAL) */
@@ -185,6 +196,78 @@ typedef struct vid_mode {
     uint16_t  fb_count;   /**< \brief Number of framebuffers */
     size_t  fb_size;      /**< \brief Size of each framebuffer */
 } vid_mode_t;
+
+/** \brief Coherent snapshot of the physical display scanout state.
+    \ingroup video_display
+
+    The scanline is the raw hardware timing counter. It is not a framebuffer Y
+    coordinate: blanking, line doubling, interlace, and custom timing modes can
+    all make those values differ.
+*/
+typedef struct vid_scanout_status {
+    uint16_t scanline;    /**< \brief Physical scanline counter (0-1023). */
+    bool field;           /**< \brief Current interlaced field selector. */
+    bool blank;           /**< \brief Horizontal or vertical blanking active. */
+    bool hsync;           /**< \brief Horizontal synchronization active. */
+    bool vsync;           /**< \brief Vertical synchronization active. */
+} vid_scanout_status_t;
+
+/** \brief Framebuffer output-filter state.
+    \ingroup video_display
+
+    vertical_scale is the exact 16-bit hardware coefficient. The effective
+    scale factor is 1024 / vertical_scale. Exposing the coefficient avoids
+    assigning misleading names to values whose correct choice depends on the
+    complete display timing.
+*/
+typedef struct vid_display_filter {
+    bool dithering;          /**< \brief Framebuffer dithering enabled. */
+    bool antialiasing;       /**< \brief PVR-owned full-scene AA state. */
+    uint16_t vertical_scale; /**< \brief Vertical-scale coefficient. */
+} vid_display_filter_t;
+
+/** \defgroup video_fb_selectors Framebuffer selectors
+    \brief                         Special selectors for framebuffer queries
+    \ingroup                       video_fb
+    @{
+*/
+#define VID_FRAMEBUFFER_DISPLAYED (-1) /**< \brief Hardware scanout surface. */
+#define VID_FRAMEBUFFER_DRAW      (-2) /**< \brief Current CPU drawing surface. */
+/** @} */
+
+/** \brief Checked framebuffer-surface description.
+    \ingroup video_fb
+
+    index is nonnegative only when the surface begins at one of the configured
+    vid_mode_t framebuffer slots. PVR-managed and caller-selected scanout
+    addresses can therefore report index -1 and capacity_bytes zero while
+    retaining valid geometry and address information.
+*/
+typedef struct vid_framebuffer_info {
+    int32_t index;             /**< \brief Configured slot, or -1 if external. */
+    uint32_t vram_offset;      /**< \brief Offset in the 32-bit VRAM window. */
+    void *address;             /**< \brief Uncached 32-bit CPU VRAM address. */
+    uint32_t odd_field_offset; /**< \brief Interlaced odd-field offset, or UINT32_MAX. */
+    size_t visible_bytes;      /**< \brief Bytes occupied by visible rows. */
+    size_t capacity_bytes;     /**< \brief Configured slot capacity, or zero. */
+    uint32_t stride_bytes;     /**< \brief Bytes between adjacent rows. */
+    uint16_t width;            /**< \brief Visible width in pixels. */
+    uint16_t height;           /**< \brief Visible height in pixels. */
+    vid_pixel_mode_t pixel_mode; /**< \brief Framebuffer pixel encoding. */
+    bool displayed;            /**< \brief Surface is the hardware scanout base. */
+    bool draw_target;          /**< \brief Surface is the CPU drawing target. */
+    bool interlaced;           /**< \brief Active timing is interlaced. */
+} vid_framebuffer_info_t;
+
+/** \brief Physical-scanline callback invoked in interrupt context.
+    \ingroup video_display
+
+    The status pointer is valid only for the duration of the callback. A
+    callback must remain bounded, must not block or allocate, and may remove
+    itself or another raster handler.
+*/
+typedef void (*vid_raster_callback_t)(const vid_scanout_status_t *status,
+                                      void *user_data);
 
 /** \brief   The list of builtin video modes. Do not modify these!
     \ingroup video_modes
@@ -231,6 +314,161 @@ extern uint32_t *vram_l;
     \retval CT_COMPOSITE    If a composite cable or RF switch is connected.
 */
 int8_t vid_check_cable(void);
+
+/** \brief Resolve a display request without programming video hardware.
+
+    Specific DM_* indices resolve directly. Generic modes are selected for the
+    supplied cable and refresh-standard preference. The multibuffer flag is
+    honored and the resulting framebuffer count is bounded by available VRAM.
+
+    \param dm              Specific or generic display mode, optionally ORed
+                            with DM_MULTIBUFFER.
+    \param pm              Pixel mode.
+    \param cable_type      One of the connected CT_* values.
+    \param standard        Generic-mode refresh preference. VGA resolution is
+                            always 60 Hz regardless of this preference.
+    \param mode            Output resolved mode.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+*/
+int vid_mode_resolve(int dm, vid_pixel_mode_t pm, int8_t cable_type,
+                     vid_mode_standard_t standard, vid_mode_t *mode);
+
+/** \brief Validate a complete mode against a cable and available VRAM.
+
+    This function does not program hardware. A zero fb_size is accepted and
+    means that the checked setter should derive the tightly packed size.
+
+    \param mode            Mode to validate.
+    \param cable_type      Connected CT_* value or CT_ANY to skip the
+                            connection check.
+
+    \retval 0              On success.
+    \retval -1             On failure with errno set.
+*/
+int vid_mode_validate(const vid_mode_t *mode, int8_t cable_type);
+
+/** \brief Copy the current mode into caller-owned storage.
+
+    \param mode            Output mode snapshot.
+
+    \retval 0              On success.
+    \retval -1             If video is not initialized or mode is NULL.
+*/
+int vid_get_mode(vid_mode_t *mode);
+
+/** \brief Read a coherent snapshot of the physical display scanout state.
+    \ingroup video_display
+
+    The underlying register is sampled once, so every returned field describes
+    the same instant. This function allocates no memory and is IRQ-safe.
+
+    \param status          Output scanout snapshot.
+
+    \retval 0              On success.
+    \retval -1             If \p status is NULL, with errno set to EFAULT.
+*/
+int vid_get_scanout_status(vid_scanout_status_t *status);
+
+/** \brief Read the current framebuffer output-filter state.
+    \ingroup video_display
+
+    \param filter          Output filter snapshot.
+
+    \retval 0              On success.
+    \retval -1             If \p filter is NULL, with errno set to EFAULT.
+*/
+int vid_get_display_filter(vid_display_filter_t *filter);
+
+/** \brief Set framebuffer output filters without disturbing other fields.
+    \ingroup video_display
+
+    The framebuffer and scaler control registers are updated with
+    read-modify-write operations while interrupts are disabled. Alpha-related
+    framebuffer configuration and unrelated scaler fields are preserved.
+    antialiasing is a query-and-preserve field: it must match the current
+    value because changing full-scene antialiasing also requires the TA layout
+    selected by pvr_init(). Configure that mode through pvr_init_params_t.
+
+    \param filter          Requested filter state. vertical_scale must be
+                            nonzero.
+
+    \retval 0              On success.
+    \retval -1             On invalid or unsupported input, with errno set.
+*/
+int vid_set_display_filter(const vid_display_filter_t *filter);
+
+/** \brief Query a configured or active framebuffer surface.
+    \ingroup video_fb
+
+    A nonnegative selector names a configured vid_mode_t framebuffer slot.
+    VID_FRAMEBUFFER_DISPLAYED samples the hardware scanout address, while
+    VID_FRAMEBUFFER_DRAW describes the surface addressed by vram_l. The mode,
+    scanout registers, and drawing pointer are sampled under one IRQ fence.
+
+    The returned address uses the uncached 32-bit VRAM window suitable for
+    framebuffer CPU access. It is not a texture pointer. capacity_bytes is zero
+    when an active surface does not coincide with a configured video slot.
+
+    \param selector        Configured slot or VID_FRAMEBUFFER_* selector.
+    \param info            Output surface description, cleared on entry.
+
+    \retval 0              Surface described successfully.
+    \retval -1             Error, with errno set.
+*/
+int vid_get_framebuffer_info(int32_t selector, vid_framebuffer_info_t *info);
+
+/** \defgroup video_raster Raster events
+    \brief                  Opt-in physical-scanline event scheduling
+    \ingroup                video_display
+    @{
+*/
+
+/** \brief Select the physical scanline used by raster callbacks.
+
+    The display hardware has one scanline comparator. All registered raster
+    callbacks therefore share this line and run in registration order. The
+    horizontal-blank position field in the same register is preserved.
+
+    Changing to a mode in which the configured line is unreachable masks the
+    event; selecting a valid line unmasks it. This function is not permitted in
+    interrupt context.
+
+    \retval 0              Line selected.
+    \retval -1             Error, with errno set.
+*/
+int vid_raster_set_scanline(uint16_t scanline);
+
+/** \brief Retrieve the configured physical raster scanline.
+
+    \retval 0              Line copied to \p scanline.
+    \retval -1             No line is configured or the output is NULL.
+*/
+int vid_raster_get_scanline(uint16_t *scanline);
+
+/** \brief Register a callback at the configured physical raster scanline.
+
+    The first handler lazily claims the HBlank event source. If another
+    low-level owner already uses it, this function fails with `EBUSY` rather
+    than replacing that owner. No thread or permanent buffer is created.
+
+    \return                Nonnegative handler ID, or -1 with errno set.
+*/
+int vid_raster_handler_add(vid_raster_callback_t callback, void *user_data);
+
+/** \brief Remove a raster callback.
+
+    This operation is safe from a raster callback. Removing the last active
+    handler releases the HBlank event claim immediately; allocation storage is
+    reclaimed by the next thread-context raster API call or shutdown.
+
+    \retval 0              Handler removed.
+    \retval -1             Unknown or stale ID, with errno set to ENOENT.
+*/
+int vid_raster_handler_remove(int handle);
+
+/** @} */
 
 /** \brief   Set the VRAM convenience pointers.
     \ingroup video_fb
@@ -376,6 +614,26 @@ void vid_waitvbl(void);
 */
 void vid_set_mode(int dm, vid_pixel_mode_t pm);
 
+/** \brief Set a built-in or generic video mode with status reporting.
+
+    This checked counterpart preserves vid_set_mode()'s established generic
+    table-order policy. Use vid_mode_resolve() followed by
+    vid_set_mode_ex_checked() for an explicit 50/60-Hz preference.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_set_mode_checked(int dm, vid_pixel_mode_t pm);
+
+/** \brief Set a mode with an explicit generic refresh-standard preference.
+
+    Specific DM_* indices remain explicit and ignore \p standard. Generic
+    modes select a compatible 50 or 60 Hz timing before any register changes.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_set_mode_standard_checked(int dm, vid_pixel_mode_t pm,
+                                  vid_mode_standard_t standard);
+
 /** \brief   Set the video mode.
     \ingroup video_modes
 
@@ -387,6 +645,15 @@ void vid_set_mode(int dm, vid_pixel_mode_t pm);
     \param  mode            A filled in vid_mode_t for the mode wanted.
 */
 void vid_set_mode_ex(vid_mode_t *mode);
+
+/** \brief Validate and set a caller-defined mode without modifying it.
+
+    fb_size is derived when zero. All geometry, pixel-mode, cable, and VRAM
+    capacity checks complete before the display is blanked or registers change.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_set_mode_ex_checked(const vid_mode_t *mode);
 
 /** \defgroup video_init Initialization
     \brief               Initialization and shutdown of the video subsystem
@@ -405,6 +672,14 @@ void vid_set_mode_ex(vid_mode_t *mode);
     \param  pixel_mode      The pixel mode to use. One of the PM_* values.
 */
 void vid_init(int disp_mode, vid_pixel_mode_t pixel_mode);
+
+/** \brief Initialize video with status reporting.
+
+    VRAM is cleared only after the requested mode has been installed.
+
+    \return                 0 on success, or -1 with errno set.
+*/
+int vid_init_checked(int disp_mode, vid_pixel_mode_t pixel_mode);
 
 /** \brief   Shut down the video system.
 
@@ -442,8 +717,9 @@ size_t vid_screen_shot_data(uint8_t **buffer);
 /** \brief   Enable or disable dithering.
     \ingroup video_fb
 
-    This function can be used to enable or disable dithering when a 15-bit or
-    16-bit video mode is used.
+    This compatibility setter preserves every unrelated framebuffer-control
+    field. New code that needs checked updates or coherent filter queries can
+    use vid_set_display_filter() and vid_get_display_filter().
 
     \param  enable          Whether or not dithering should be enabled.
 */
@@ -452,4 +728,3 @@ void vid_set_dithering(bool enable);
 __END_DECLS
 
 #endif  /* __DC_VIDEO_H */
-

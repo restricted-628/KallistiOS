@@ -1,0 +1,942 @@
+# Graphics integration checkpoint: 2026-09-08
+
+This checkpoint follows sound commit `72c57216`. It integrates official KOS
+master through `33c6e0ba` without replacing the cumulative graphics, sound,
+or low-level driver work.
+
+## Upstream synchronization
+
+Five official commits were merged: C11 atomic flags, stack-protector module
+exports, generated-export cleanup, expired reader/writer semaphore deadlines,
+and optional GDB support in the toolchain Docker image. The merge required no
+manual conflict resolution. The Docker change does not rebuild or change the
+installed compilers.
+
+SH4ZAM upstream remains at `ad353dc2cea596a7c8c7b56b05cbe2e07b84ed4a`.
+There is no newer algorithm to import at this checkpoint. The bundle retains
+its GCC 16 FFT operand fix, documentation fixes, and source formatting.
+See `addons/libsh4zam/README.md`, `source-lock.json`, and
+`local-changes.patch` for the pinned source and local delta.
+
+## Checked material correction
+
+The material compiler previously checked filter and list enums independently,
+admitting punch-through plus either trilinear phase. The shared texture
+validator now rejects that combination and trilinear without mipmaps. It also
+requires square, twiddled/VQ mipmapped textures, matching the existing checked
+texture-layout contract. Palette-bank bits remain distinct from layout bits;
+disabled texture fields remain ignored.
+
+These rules apply to ordinary polygons, sprites, and each two-volume texture
+state. Existing asset bindings that compile through these APIs inherit them.
+Failed admission leaves the destination unchanged. Raw header encoders retain
+their encoding behavior. Validation does not certify that a collection of
+individually valid headers forms a correct accumulation recipe.
+
+## Remaining graphics agenda
+
+1. Completed on September 9: a bounded tile-map compiler over existing cell
+   geometry, with viewport clipping, wrap/clamp policies, and transformed maps.
+   See [scrolling tile maps](pvr-tilemaps.md) and the checkpoint below.
+2. Initial bounded compound trilinear and bump-material recipes landed on
+   September 10, including secondary RGBA accumulation and explicit ordering.
+   Physical composition/order validation and broader combinations remain open;
+   see [compound material recipes](pvr-material-recipes.md).
+3. Explicit multipass depth preserve/clear policy implemented September 10,
+   independently of color retention. Region-array checks pass; the Vulkan
+   emulator fails the clear-specific image checks. Physical depth validation
+   remains open. A bounded rectangular portal fixture is now implemented;
+   its disjoint-coverage route passes emulator checks, while its strict
+   depth-clear route retains the same image-validation gate.
+4. Model-asset roles for emissive/unlit, lightmaps, environment mapping and
+   bump inputs, using existing texture converters and prepared bindings.
+   Checked reusable context resolution now connects distinct texture inputs
+   to existing bump/trilinear recipes. Bounded lightmap/emissive composition is
+   now implemented too. Authored unlit metadata/import is now implemented;
+   auxiliary runtime layer descriptors and preparation are implemented, while
+   serialized per-material texture roles/import remain open;
+   see the September 10 entries below.
+5. Target numerical/ABI and performance fixtures for SH4ZAM consumers, with
+   explicit error tolerances, XMTRX preservation, and warm/cold measurements.
+6. Physical image tests for translucent accumulation, modifier clipping and
+   presort, compact VQ, global texture state, RTT visibility, and DMA/SQ use.
+
+The remaining parts of items 2-6 are distinct deliverables, not completed
+features. The existing
+animation, deformation, cells, particles, compact-model caches, and math
+bridges remain the basis for them. General scene ownership and game-specific
+policies belong above the current runtime.
+
+## Execution contract clarification
+
+The fiber math-context option saves XMTRX, not a complete per-fiber FPSCR,
+FPUL or TLS environment. Temporary FPU mode and exception-enable changes must
+be restored before a cooperative transfer. This clarification adds no switch
+work or allocation and does not change the default lightweight fiber mode.
+
+## Validation at this checkpoint
+
+- Clean GCC 16.2.0 SH-4 build and ARM sound-firmware build: passed.
+- All 54 host suites passed in each of four lanes: GCC 14 GNU17, GCC 14
+  strict C23, Apple Clang 16 GNU17, and Apple Clang 16 strict C2x.
+- Focused material validation with AddressSanitizer and UndefinedBehaviorSanitizer:
+  passed, including the list/filter/mipmap matrix and unchanged-output checks.
+- SH4ZAM source-lock verification: all 54 vendored files matched both the
+  bundled hashes and the pinned upstream revision.
+- Target C++17 and C++23 math-bridge probes compiled and linked; compiler and
+  linker traces selected the bundled headers and bundled archive.
+- Both SH4ZAM examples rebuilt. The integration example printed PASS in
+  Flycast with explicit interpreter and dynarec configurations, covering
+  camera, frustum, geometry, compact-model emission, and fiber matrix state.
+- The rebuilt KOS archive contains the new atomic-flag helpers, and its
+  module-export archive contains the stack-protector exports.
+
+These runs establish build and fixture correctness. They do not establish
+physical rendering conformance, instruction-wide numerical bounds, FFT
+accuracy, or performance improvements. Those remain in the agenda above.
+
+## September 9: scrolling tile maps
+
+Added `pvr_tilemap_measure()` and `pvr_tilemap_compile()`. Both operate on
+caller-owned arrays with an explicit candidate-work limit. The compiler
+reuses colored cell expansion, SH4ZAM target trigonometry, frustum clipping,
+and canonical geometry sinks. It introduces no allocation, runtime service,
+retained scene owner, or new texture-management policy. Atlas flips, padded
+rows, empty/hidden cells, independent finite/wrap/clamp axes, and transformed
+views retain explicit material/list/priority routing metadata.
+
+Validation for this addition:
+
+- Tile-map, cell, and geometry/frustum host suites passed under GCC 14 GNU17,
+  GCC 14 strict C23, Apple Clang GNU17, and Apple Clang strict C2x (12 runs).
+- The tile-map suite passed AddressSanitizer and UndefinedBehaviorSanitizer,
+  with rasterized coverage, interpolation, exact-capacity, and failure-atomic
+  admission checks. The full unrelated host suite was not rerun for this item.
+- Incremental KOS GCC 16.2.0 build and both new SH-4 ELF links passed. Both
+  public functions were confirmed in the kernel and module-export archives.
+- The procedural example completed all four address-policy phases and PVR
+  fault checks in Flycast interpreter and dynarec modes. Its transformed
+  clipped image was inspected. Target numerical checks also passed in both
+  modes, including preservation of a nonidentity XMTRX across measure/compile.
+- Focused Doxygen generation includes the new group and both public APIs,
+  with no warning attributed to the new header. Full-tree generation was
+  stopped after a prolonged run; existing unrelated group warnings remain.
+
+The example is a correctness fixture, not a performance benchmark. Physical
+console rasterization and timing remain open. Compound material recipes are
+the next implementation item; no sound or driver changes are part of this one.
+
+## September 10: compound material profiles
+
+Added checked trilinear and bump recipe compilers to the existing material
+layer. Four initial profiles cover opaque and translucent surfaces through
+two or three ordered headers, with role-specific vertex contracts. They add
+no allocation, scene owner, service or alternative geometry/math pipeline.
+Inputs and failed outputs are preserved, including rejected aliasing. The
+legacy depth-write-disable bit and secondary-buffer selectors now have
+explicit comments; their ABI and raw encoding are unchanged.
+
+Validation for this addition:
+
+- Existing material and new recipe suites passed GCC 14 GNU17/strict C23 and
+  Apple Clang 16 GNU17/strict C2x (eight focused runs). The new suite also
+  passed AddressSanitizer and UndefinedBehaviorSanitizer. Unrelated host
+  suites were not rerun for this item.
+- The incremental GCC 16.2.0 KOS build and both new ELF links passed. The
+  recipe fixture checks the actual target packet encoder, not only its host
+  test double; it passed in Flycast interpreter and dynarec configurations.
+- The procedural example's numeric RGB565 framebuffer check passed all seven
+  samples in the explicitly labeled autosort diagnostic: four surface colors,
+  the background, and two depth-occluding bars. This checks the emulator's
+  secondary resolver and the recipe arithmetic on isolated geometry.
+- The required presort configuration failed exactly the two translucent
+  samples (white resolve polygons); the other five samples passed. Flycast's
+  presorted TR route bypasses its secondary-buffer resolver. This known
+  failure is retained, not hidden by weakening the recipe ordering contract.
+- Both APIs were confirmed in the kernel and module-export archives and in
+  the focused Doxygen material group. The focused run's only warning was the
+  existing parent group omitted from that single-header input.
+
+Physical-console composition and ordering are still required, especially for
+overlapping surfaces. Fog-aware recipes, sprites, two-volume combinations,
+and combined bump/trilinear are outside these initial profiles. Multipass
+depth policy remains the next implementation item; no sound or driver changes
+are part of this checkpoint.
+
+## September 10: explicit multipass depth boundaries
+
+Added `pvr_init_multipass_depth()` and the CLEAR/PRESERVE policy enum. It shares
+the existing initializer, TA continuation and region layout rather than
+introducing a second pass scheduler. The original initializer still clears
+pass zero and preserves depth thereafter. Public configuration structures
+retain their ABI; the internal clear flag fits existing structure padding.
+Color retention, list routing and parameter/overflow cursors are unchanged.
+
+Validation:
+
+- Expanded host region tests enumerate every depth mask for one through eight
+  passes over multiple rows and columns, comparing every word with the legacy
+  baseline. GCC 14 GNU17/strict C23 and Apple Clang GNU17/strict C2x passed.
+  AddressSanitizer/UndefinedBehaviorSanitizer passed separately.
+- Incremental GCC 16.2.0 KOS build and new SH-4 example link passed. Kernel
+  and module-export archives contain the new API. Focused Doxygen includes
+  the function and enum in `pvr_init`; only missing parent/related groups
+  outside the focused input produce warnings.
+- In Flycast Vulkan, interpreter and dynarec runs each completed all nine
+  direct/DMA/hybrid and legacy/preserve/clear combinations. Invalid-policy
+  sentinel checks, pipeline fault checks and all submitted tile-control words
+  passed. The six legacy/preserve cases pass all image samples. The three
+  clear cases each fail the center sample: 3 mismatches out of 45 overall.
+  The example reports failure; no expected color was weakened to obtain PASS.
+  An additional OpenGL 4.1 dynarec run gives the same 3/45 mismatches.
+
+The emulator discrepancy and source evidence are recorded in the
+[multipass design](pvr-multipass-design.md#depth-boundary-validation).
+This closes the driver API/encoding item, not the physical depth-clear image
+gate or the portal/mirror integration fixture. No sound changes are included.
+
+## September 10: rectangular portal integration
+
+Added the [portal fixture](../examples/dreamcast/pvr/portal/) without a public
+scene-owner or portal API. It reuses homogeneous frustum clipping, the SH4ZAM
+target transform path, checked polygon materials, canonical geometry sinks,
+and direct/DMA/hybrid multipass registration. No production library code or
+allocation policy changes are needed for this integration.
+
+Two separate routes have an identical intended image. The disjoint-coverage
+route leaves a real hole in the first view's wall and preserves depth. The
+strict depth-clear route initially covers the opening, clears depth before
+the second view, and replays a foreground occluder whose depth was lost.
+Both clip remote geometry to the opening and preserve the final pass's depth.
+There is no silent emulator fallback between the routes.
+
+The shared host/target builder is checked by software rasterized full-frame
+goldens, analytic UV/depth checks and deliberate missing-clear/missing-replay
+negative controls. This closes the bounded portal integration fixture, not
+arbitrary portal traversal, mirror rendering, physical depth-clear validation
+or a scene graph. Model-asset material roles and SH4ZAM numerical/performance
+fixtures remain next in the graphics agenda.
+
+Validation for this fixture:
+
+- Portal and existing geometry/frustum suites passed GCC 14 GNU17/strict C23
+  and Apple Clang GNU17/strict C2x (eight focused runs). The portal suite also
+  passed AddressSanitizer/UndefinedBehaviorSanitizer. Its aperture is not
+  tile-aligned, and both analytic full-frame goldens retain exact coverage.
+- GCC 16.2.0 compiled and linked the example against the current KOS build.
+  No kernel/public API changes were made and no exports were needed.
+- Flycast Vulkan interpreter and dynarec runs preserve the nonidentity XMTRX
+  across all geometry
+  preparation calls, complete direct/DMA/hybrid submission without pipeline
+  faults, and pass all 27 disjoint-coverage pixel samples. The strict clear
+  route fails the two remote-object samples per mode (6/27), as in the
+  preceding depth-boundary test. The final result deliberately remains FAIL.
+- Unrelated host suites and physical-console tests were not run for this
+  fixture. It is not a performance benchmark or a general scene graph.
+
+## September 10: Compact resource inputs for material recipes
+
+Added `pvr_chunk_material_resolve_context()` to expose the checked polygon
+context and compile flags through the existing resource resolver. One shared
+mapping/validation path serves both APIs. Ordinary draws still compile one
+header, with no additional output-context copy; the opt-in API adds no
+allocation, texture ownership, worker, format revision or existing ABI change.
+
+The compound-material example now resolves color and bump identifiers from
+one caller-owned texture table before invoking the existing recipe compilers.
+All four opaque/translucent bump/trilinear recipes compare their actual TA
+headers against an independent explicit-context construction. The nonmipmapped
+bump reference explicitly uses normal mip bias, matching the resolver's
+established normalization of that inactive field.
+
+Validation:
+
+- Binding and material-recipe host suites passed GCC 14 GNU17/strict C23 and
+  Apple Clang GNU17/strict C2x. Both passed AddressSanitizer and
+  UndefinedBehaviorSanitizer. Checks include unchanged outputs on validation
+  and compiler failure, distinct texture inputs, compact-VQ address bias,
+  supersampling and two-volume state. The host binding compiler is a test
+  double; real packet equivalence is checked separately on the target.
+- GCC 16.2.0 rebuilt KOS and linked the example. The API is present in kernel
+  and module-export archives. Focused Doxygen places the API and type in the
+  resource-binding group (only the omitted parent group warns).
+- Flycast Vulkan interpreter and dynarec both passed all four exact recipe
+  packet comparisons and reached image validation with no pipeline fault.
+  Both retained three of seven strict pixel mismatches: opaque trilinear red
+  is 213 rather than 204 (tolerance eight), and both translucent centers are
+  white. The image assertion remains a failure, not a submission PASS.
+  Rebuilding the prior example from `ab4343b5` and running it with the same
+  dynarec/settings produced exactly the same seven pixel values. These image
+  failures are not introduced by resource resolution. No physical tests ran.
+
+This closes the reusable resource-to-recipe bridge, not all material roles.
+Per-material authored role metadata, lightmap/emissive composition, SH4ZAM
+numerical/performance fixtures and physical rendering validation remain open.
+Existing unlit and environment-map vertex policies are reused, not replaced.
+
+## September 10: lightmap and emissive composition
+
+Added `pvr_material_compile_lightmap()` and
+`pvr_material_compile_emissive()` over the established checked context,
+secondary-buffer, and canonical-geometry recipe path. Compact resource
+contexts feed both directly, with separate sampling flags for each input.
+The existing three-step recipe layout and previous role values are unchanged.
+No model format, asset importer, startup allocation, service or global state
+is added. The compiled recipe object (including the older bump/trilinear
+functions) reports 2,108 bytes in its text bucket and zero data/BSS with the
+current GCC 16.2.0 build; this is not a performance benchmark.
+
+Lightmaps multiply RGB with neutral alpha one. Emission adds unlit RGB with
+neutral alpha zero and saturates before the final surface blend. Neither
+operation changes surface opacity or repeats lighting. The caller supplies
+layer UVs/tint, matching coverage/depth and explicit ordering; unsupported
+compound combinations remain errors rather than approximations.
+
+Validation:
+
+- Material and recipe suites passed GCC 14 GNU17/strict C23 and Apple Clang
+  GNU17/strict C2x (eight runs). Recipe ASan/UBSan passed. Tests cover both
+  input masks, opacity/intensity endpoints and intermediates, RGB saturation,
+  preserved alpha, two input rejection paths, aliases and unchanged outputs.
+  Compact binding regressions also passed GCC 14 strict C23 and Clang GNU17.
+- KOS, the SH-4 recipe test and both example modes built with GCC 16.2.0.
+  Both APIs are present in kernel/module-export archives. Focused Doxygen
+  groups both APIs correctly; only the omitted parent group warns.
+- The recipe contract test uses the real header encoder on SH-4 and passed
+  under Flycast interpreter and dynarec. The layered example also passes all
+  four resource-versus-explicit TA packet comparisons in both modes.
+- Presorted Vulkan rendering in both modes passes the backdrop, opaque
+  lightmap, opaque emission and both occluder samples. Both translucent samples
+  are white rather than the expected composed colors: two of seven image
+  checks fail. The strict assertion is retained. This matches the recorded
+  secondary-resolve limitation; physical rendering validation remains open.
+- A separately labeled Vulkan per-pixel autosort diagnostic passed all seven
+  framebuffer samples, including partial-opacity layer composition with
+  nonidentity texture alpha. It supports arithmetic behavior on separated
+  quads, not presort ordering or physical-console conformance. No production
+  setting or expected pixel was weakened to obtain that diagnostic PASS.
+
+The bounded composition primitives are now present. Authored per-material role
+metadata/import, broader compound profiles and the SH4ZAM numerical/performance
+fixtures are still separate work. This does not claim complete graphics parity.
+
+## September 12: authored unlit materials
+
+The first authored material role now travels from glTF import through Compact
+streams, ordinary/two-volume prepared admission, portable cooked caches and
+standard resource/policy bindings. `PVR_CHUNK_STRIP_UNLIT` uses the formerly
+reserved strip bit `0x80`; no model/cache structures or container layouts grow.
+Existing flags retain their meaning. Newly flagged content requires the updated
+runtime because older checked renderers reject that reserved bit.
+
+Standard policy bindings bypass ambient/diffuse/specular and depth-cue
+evaluation for an authored unlit strip even in a lit scene. They retain decoded
+base color/alpha and optional vertex intensity, and clear offset color before
+the optional custom callback. Checked header resolution also disables specular
+without changing the caller's base context. Environment UV generation remains
+independent and still requires its normal inputs. `IGNORE_LIGHT` is unchanged:
+it does not mean unlit, because ambient evaluation remains independent.
+
+The converter accepts optional or required `KHR_materials_unlit`. Base-color
+factor, vertex colors, base-color textures, supported alpha modes and culling
+use the existing conversion path; unused core PBR fallback lighting inputs are
+ignored for this role. Unsupported extension combinations still fail. A mixed
+asset test confirms the next lit material and compiled base-color image remain
+unchanged. No extra material manager, worker, allocation, startup work or shader
+interface is introduced. Existing quantization/color-space limits remain;
+this is not a claim of exact glTF visual reproduction.
+
+Validation includes fixed expected color/alpha values, missing-normal behavior,
+environment-map rejection, specular suppression, list routing, raw-to-prepared
+flag preservation, cooked serialization/reopening/materialization, optional
+and required extension import, and failed-import output preservation.
+Binding, render and cache host suites pass GCC 14 GNU17/strict C23 and Apple
+Clang GNU17/strict C2x; ASan/UBSan runs pass for all three. Converter goldens
+pass Clang GNU17 and both compilers' strict language lanes. The strict Clang
+converter build uses the existing `HOST_LZ4_WARNINGS` exception for the bundled
+LZ4 constant-logical-operand warning; no vendor source or test expectation was
+changed to silence it.
+
+The cache suite also exposed an older target-fixture error: its host-only
+submission stub accepted current-list writes without a scene, whereas real
+KOS rejects those writes with `EPERM`. The target branch now checks that exact
+rejection and zero emitted vertices; the host still checks successful stub
+submission. No production submission check was weakened.
+
+The target cache suite passes Flycast interpreter and dynarec with GCC 16.2.0,
+and the full KOS build passes. These are parser/cache/numerical checks, not a
+physical-console or framebuffer proof of authored-material appearance.
+Auxiliary texture-role metadata/import, broader compound profiles and the
+SH4ZAM numerical/ABI/performance fixtures remain next; authored unlit does not
+implicitly create a multipass recipe.
+
+## September 12: auxiliary layer preparation bridge
+
+`pvr_chunk_material_layer_t` now carries caller-owned texture/sampler state,
+an explicit lightmap/emission role, RGB tint and two affine UV rows. It is
+runtime metadata, not a serialized asset record and not an allocation added
+to every model or strip. Applications associate it with their selected draw.
+
+`pvr_chunk_material_resolve_layer()` reuses a previously resolved Compact
+surface and the existing texture table, then calls the checked layer recipe
+compiler. Sampling and mip bias remain independent across inputs. The
+matching vertex helper preserves command/position/depth exactly while mapping
+the caller-supplied UV set and replacing already-lit colors with the layer's
+unlit tint and neutral alpha. Invalid metadata, missing textures, compilation
+failures and mapped UV overflow preserve output. No allocation, resource pin,
+scene owner or worker is introduced. Both resources must stay alive through
+render completion; existing stream manifests do not implicitly pin auxiliary
+textures supplied out of band.
+
+Validation:
+
+- Binding tests link the real recipe planner and pass GCC 14 GNU17/strict C23
+  and Clang GNU17/strict C2x. ASan/UBSan passes. Cases cover both roles and OP/TR
+  routing, independent sampling, fixed expected tint/alpha/UV results, in-place
+  preparation, invalid roles/tints, nonfinite/overflowed UVs, missing texture,
+  unsupported filtering, and unchanged outputs on compiler rejection.
+- Full KOS and both material-example modes build with GCC 16.2.0. Kernel and
+  module-export archives contain both APIs. Focused Doxygen groups them with
+  the Compact bindings; only the omitted parent group warns.
+- The layered example compares all four recipes with independent explicit
+  contexts and checks nonidentity UV mapping plus position/depth preservation.
+  It passes packet and submission checks in Flycast interpreter and dynarec.
+  Constant textures isolate composition, not varying-texture interpolation;
+  these runs do not close the existing presort/physical image-validation gates.
+
+This closes the runtime preparation side, not asset import. Next is a checked
+serialized material-to-layer association, independent UV-set handling and
+resource/loader integration before accepting auxiliary glTF materials. The
+existing PRT1 manifest describes direct stream usage; adding global role bits
+to its texture entries would not describe per-material associations correctly.
+SH4ZAM numerical/ABI/performance fixtures and physical image gates remain open.
+
+## September 12: serialized auxiliary associations
+
+The explicit PML1 codec now associates model/source-strip ranges with the
+existing lightmap/emission descriptor. It provides checked size queries,
+serialization, opening, indexed decode, binary-search lookup and concrete
+model-array validation. The 32-byte header and 64-byte entries are encoded
+field-by-field in little endian with separate header/payload CRCs. Runtime
+enum values are translated, not dumped. See [the wire contract](pvr-chunk-layers.md).
+
+Admission rejects overlapping/overflowing ranges, invalid samplers/tints,
+nonfinite UV transforms, unknown UV selectors, reserved bytes, malformed
+framing and CRCs. Writes validate the entire input and capacity before any
+mutation; views/accessor outputs cannot alias source bytes. Models referenced
+by associations are reopened once each during load-time validation. Immutable
+render-time lookups do not repeat CRC scans. No existing model/cache layout,
+allocation policy or ordinary scene lifecycle changes.
+
+The runtime helper and codec share a private metadata validator. The layered
+example now serializes, opens and looks up its procedural associations before
+resolving real texture-table entries and preparing recipe geometry. A new
+host/target suite uses independently encoded golden bytes and fixed CRCs, plus
+all truncations and single-byte corruptions, CRC-repaired malformed fields,
+alias rejection, range gaps/boundaries and real model-view validation.
+
+Automatic PCM2 scene consumption and auxiliary glTF import are deliberately
+still absent. Those require a required-material admission policy, container
+association, independent UV attributes and resource/recipe integration. A
+generic loader ignoring this new rendering meaning must not count as a
+successful import. Existing base-UV transforms must also be accounted for
+before deriving a canonical-to-layer UV mapping. These are the next steps;
+the codec is not a claim that the asset-import objective is complete.
+
+Validation:
+
+- Layer-codec and resource-binding suites pass GCC 14 GNU17/strict C23 and
+  Clang GNU17/strict C2x; the codec also passes ASan/UBSan.
+- Full KOS rebuild and SH-4 links of the codec test and both ordinary/layered
+  material examples pass. All six public functions have module exports and
+  appear in the focused Doxygen group output.
+- The codec test passes Flycast interpreter and dynarec. The serialized-layer
+  example passes its independent packet and submission checks in both modes.
+  These are not pixel-conformance or physical-hardware validation results;
+  the existing translucent presort/image gates remain open.
+
+## September 12: required layers in container loading
+
+PCM2 section type 16 carries PML1 and must set the new required-section flag.
+The flag was reserved zero in older readers, so they reject this authored
+meaning instead of dropping it. Unknown required types/flags are rejected.
+Structural inspection stays separate from semantic consumption: the explicit
+requirements check admits only caller-supported features, and ordinary model
+and scene loaders reject required layers before stream decoding.
+
+The layer-aware scene loader reads one unique raw PML1 section, shares the
+existing geometry workspace, and checks concrete model/strip associations
+before publishing the hierarchy and borrowed layer view. No extra allocation,
+thread, ownership manager or persistent workspace was added. Bad ranges clear
+the same model/node outputs as a failed ordinary scene load; preflight failures
+do not decode streams. The layer output is preserved on failure.
+
+Auxiliary table validation and pin preparation now use the ordinary texture
+table/residency adapter. Duplicate identifiers share pins. A later missing or
+loading texture leaves earlier successful pins tracked for the usual release;
+malformed section data acquires nothing. Recipe/profile validation still occurs
+when resolving the actual surface and auxiliary texture together.
+
+Material-role and layer-data declarations moved to lightweight shared headers
+without changing their values, fields or layouts. This prevents the host codec
+and scene loader from importing the complete material/residency interface.
+The shared sampler validator uses fixed encoded limits, with compile-time
+checks against PVR constants in the binding implementation.
+
+The converter still rejects unsupported auxiliary glTF materials. Independent
+UV attributes, mapping relative to any baked base transform, imported texture
+manifest integration and automatic recipe selection remain the next tranche.
+Existing PRT1 manifests continue to describe direct polygon-stream usage.
+
+The SH-4 interpreter scene suite passed all assertions and then printed a
+scheduler stack-bound trace after main returned; a repeat reproduced it. The
+small codec baseline and the previous scene test source did not reproduce it,
+nor did the new scene suite under dynarec. Symbolizing the trace locates the
+owned-stack guard in `thd_schedule_inner()`. This is an unresolved completion/
+shutdown observation, not evidence of a clean exit or a diagnosed loader
+defect. Isolating this timing/execution-path difference is the next regression
+gate before expanding the importer; this change does not alter the scheduler.
+
+Validation includes the scene, binding and codec suites under GCC 14 GNU17/
+strict C23 and Clang GNU17/strict C2x; scene/binding ASan/UBSan; the existing
+container suite (using the existing vendor warning exception for strict Clang
+LZ4); the converter regression suite; and the scene example's host integration
+and failure-cleanup fixtures. Full KOS builds and SH-4 scene-test links pass.
+All four new entry points are in the export archive and focused Doxygen groups.
+Target assertions pass in interpreter and dynarec, subject to the interpreter
+completion trace above. Physical image/presort gates remain open.
+
+## September 12: atomic restart stack-check correction
+
+The preceding interpreter completion trace is now diagnosed and corrected.
+The interrupted PC was in `mutex_trylock_thd()` inside a compiler soft-gUSA
+atomic region: r15 contained the negative restart length, while r1 held the
+real stack pointer. The scheduler incorrectly checked the raw r15 marker
+against the thread's stack allocation. This was a stack-guard false positive,
+not evidence of a scene-loader buffer overrun.
+
+`irq_context_stack_pointer()` recovers r1 only for the soft-gUSA marker range
+(-128 through -1); other values and atomic models retain ordinary raw-SP
+behavior. The scheduler uses that logical address for both owned stacks and
+the optional fiber bounds resolver. Saved registers, the existing IRQ restart
+protocol, and `CONTEXT_SP()` are unchanged. No stack guard is disabled, and no
+allocation, per-thread field or automatic fiber attachment is added. Guard
+failure diagnostics now use debug I/O, including when stdout is already closed
+during shutdown.
+
+A new `utils/irq-stack-test` suite checks every marker, both region-interior
+and region-end PCs, ordinary addresses, the adjacent -129 boundary, invalid
+preserved addresses and unchanged saved contexts. Its target stress phase
+temporarily raises preemption frequency, observes interrupted atomic regions,
+checks the atomic result and restores the previous IRQ observer and frequency.
+
+Validation:
+
+- Both synthetic atomic-model branches pass GCC 14 GNU17/strict C23 and
+  Clang GNU17/strict C2x, plus Clang ASan/UBSan.
+- Full KOS rebuild and target test/example links pass.
+- The fixed stress test passes Flycast interpreter with 6,334,464 operations
+  and 1,046 observed interrupted atomics, and dynarec with 32,858,112 operations
+  and 1,775 observed interrupted atomics.
+- A control build restoring only the raw-SP guard triggers its failure
+  diagnostics during the stress test and does not reach PASS. This verifies
+  that the target regression exercises the defect, not just the helper.
+- The rebuilt scene suite passes in interpreter without the previous trace
+  during the observed run. The fiber-context probe also passes in interpreter
+  (`scheduler=2 bounds=2`).
+
+This closes the diagnosed emulator regression gate. It does not establish
+physical-hardware coverage or close the existing image/presort gates. The next
+graphics work remains independent auxiliary UV attributes, base-transform
+mapping, imported texture manifests and recipe selection; those importer
+features have not been added by this scheduler correction.
+
+## September 12: host UV mapping preparation
+
+Base-texture conversion now uses a small host-only UV IR with explicit source
+attribute identity and double-precision affine rows. Offset, rotation, scale
+and post-transform V flip are compiled once per primitive, rather than doing
+trigonometry at every vertex. Emitted coordinates remain binary32 before the
+existing signed-fixed/float record selection. Reflections, repeating UVs and
+collapsed forward mappings are legal; invalid inputs and overflow fail before
+the destination pair is published.
+
+The same module can propose `auxiliary * inverse(base)` for a future layer
+using the same source set. Different sets, singular/ill-conditioned base maps
+and unrepresentable float coefficients request independent coordinates instead.
+That result is deliberately a preparation candidate, not proof of lossless
+reuse. A regression demonstrates an invertible base map whose signed-UV10
+encoding loses the information needed by its auxiliary layer. Import admission
+must compare actual decoded canonical corners against independently baked
+auxiliary corners before accepting a shared representation.
+
+This changes no target code, exported API, runtime allocation, thread, model or
+container layout. Auxiliary glTF materials remain rejected. Independent
+per-reference UV storage and its raw/prepared rendering binding come next,
+followed by imported auxiliary texture manifests and recipe selection. PML1's
+canonical-only contract has not been loosened.
+
+Validation:
+
+- The new UV suite passes GCC 14 GNU17/strict C23 and Clang GNU17/strict C2x,
+  plus Clang ASan/UBSan. It covers independent goldens, rotated/reflected maps,
+  all V-flip pairs, different sets, singular/ill-conditioned maps, overflow,
+  invalid inputs, in-place evaluation and failure-output preservation.
+- The full converter suite passes the same four compiler/language lanes.
+  New fixtures decode actual signed-UV strip references and compare literal
+  expected coordinates for V flip, negative scale and zero scale. Selecting a
+  missing source set fails without replacing the destination file.
+- These are host-tool tests, not emulator image or physical-hardware evidence.
+  No KOS kernel code changed in this tranche.
+
+## September 13: independent per-reference UV runtime path
+
+`pvr_chunk_uv_source_query()` and `pvr_chunk_uv_source_init()` bind a caller's
+finite UV pairs to every ordinary source strip reference and build a small
+caller-owned strip index. Position IDs are not attribute IDs: repeated indices
+can carry different UVs at a seam. Initialization validates the complete model,
+exact coordinate count, capacity and disjoint writable storage before publishing
+the index/source. Views and all borrowed storage are immutable during use.
+
+`pvr_chunk_model_emit_uv()` reuses the existing filtered/clipped renderer, with
+optional prepared vertex lookup. It selects coordinates before vertex policy
+and homogeneous clipping, corrects reversed-strip reference order, and keys
+lookup by source strip offset rather than an emitted-corner counter. SPLIT,
+DROP and ASSUME_VISIBLE retain their existing geometry behavior. Vertex policy
+also sees the replacement UV0 in decoded strip attributes.
+
+`pvr_chunk_model_cache_build_uv()` bakes these coordinates into an ordinary
+cache's existing packets before its one-time vertex callback. The UV source can
+be released after construction; no new field or packet type is added. Both base
+and auxiliary caches, if desired, cost caller-supplied cache storage. The direct
+path instead borrows eight bytes per corner plus a twelve-byte-per-strip index
+on SH-4. No cache, array, thread or manager is allocated automatically, and
+ordinary model/cache layouts remain unchanged.
+
+The source currently supports ordinary strips only. PML1's canonical-only wire
+contract and auxiliary glTF rejection remain intact. Explicit serialized UV
+storage/layer association comes next, then imported texture manifests and recipe
+selection. This is runtime integration, not a completed auxiliary importer.
+
+Validation:
+
+- Expanded cache tests pass GCC 14 GNU17/strict C23 and Clang GNU17/strict C2x,
+  plus Clang ASan/UBSan. The existing direct-render suite also passes GCC GNU17.
+- New cases cover shared IDs with distinct UVs, reversed strips, filtered-strip
+  identity, callback-visible coordinates, direct/cache packet equality, cache
+  independence after borrowed UV lifetime, failed initialization/output aliases,
+  near-plane UV interpolation against independently calculated values, and DROP.
+- Full KOS build and SH-4 cache-test link pass. All four public functions appear
+  in the implementation and export archives and focused Doxygen group output.
+- The expanded target suite passes Flycast interpreter and dynarec. These are
+  numerical/packet assertions, not texture-image or physical-hardware proof;
+  existing image/presort and real-hardware gates remain open.
+
+## September 13: serialized independent UV sources and layer associations
+
+The PUV1 codec stores full-model per-reference binary32 coordinate sources and
+sorted PML1-entry-to-source bindings. Layers can share a source without copying
+its coordinates; distinct sources can target the same model. The source order
+matches the runtime UV path before reversed-strip winding correction. PML1's
+existing bytes, Compact streams and prepared-cache layouts remain unchanged.
+
+Seven exported APIs query, write, admit, look up, inspect, decode and validate
+these sections. Serialization preflights every source and binding before
+writing; structural admission checks exact framing, two CRCs, dense source
+ranges, sorted unique bindings and finite UVs. Explicit semantic validation
+checks PML1 ranges, model identity and full-model reference counts. Callers
+decode into their own UV storage and bind it through the existing renderer or
+cache builder. No thread, allocation, pinning or persistent manager is added.
+
+PCM2 section type 17 carries a mandatory required flag and its own feature bit.
+Geometry-only and existing layer-aware loaders reject it before decoding rather
+than silently losing UV meaning. Feature acknowledgment is not a substitute for
+payload/model/layer validation. The complete layout and explicit loading steps
+are in [the PUV1 contract](pvr-chunk-uv-sources.md).
+
+Validation:
+
+- The new codec suite passes GCC 14 GNU17/strict C23 and Clang GNU17/strict C2x,
+  plus Clang ASan/UBSan. It includes a fixed independent byte/CRC golden,
+  truncation/corruption sweeps, repaired-CRC semantic failures, multiple/shared
+  sources, lookup gaps, late invalid coordinates and output/alias preservation.
+- A PML1/model round-trip decodes coordinates into the actual UV renderer and
+  checks seams and reversed-strip output numerically. Wrong model identities,
+  reference counts and layer ordinals fail explicit semantic validation.
+- Existing container tests pass GCC GNU17. Expanded scene tests pass GCC GNU17,
+  GCC strict C23 and Clang strict C2x, including required-feature rejection before
+  a decoder can run.
+- KOS kernel/archive build and target fixture link pass; all seven functions
+  occur in implementation and module-export archives. Focused Doxygen output
+  places them in the rendering group (the limited input set omits its outer
+  geometry group and produces that existing group warning).
+- The target fixture passes Flycast interpreter and dynarec. These are
+  numerical/admission assertions, not texture-image or physical-hardware proof.
+
+Next: an explicit UV-aware scene loader, auxiliary texture-manifest/recipe
+integration and importer admission. Auxiliary glTF materials are not enabled by
+this codec alone; existing image/presort and hardware gates remain separate.
+
+## September 13: UV-aware layered scene admission
+
+`pvr_chunk_scene_asset_load_layers_uv()` extends the existing coherent scene
+loader with exactly one raw/direct PML1 and PUV1 section. Both metadata payloads
+are admitted before geometry decoding. UV reference counts and bound model/layer
+identities are validated before hierarchy publication. No separate scene manager
+or automatic coordinate allocation is introduced: the existing geometry
+workspace query is sufficient, metadata views borrow immutable asset bytes,
+and the caller selects/decodes only sources it needs for runtime UV binding.
+
+Metadata outputs remain unchanged on failure. Late decoder or semantic failures
+clear model/node arrays and publish no hierarchy, while decoder workspace writes
+may remain. Ordinary/PML1-only loaders still reject required PUV1 rather than
+discarding its meaning. Compressed metadata remains explicitly unsupported by
+this direct-metadata loader, consistent with its PML1/model-table policy.
+
+The common loader uses a private admission adapter whose codec references are
+owned by the UV entry point. A pair of SH-4 link probes confirms that an ordinary
+loader executable retains no `pvr_chunk_uv_*` symbols, while the UV-aware probe
+retains the source validator. This keeps optional UV code out of ordinary scene
+users while sharing the existing publication and rollback implementation.
+
+Validation:
+
+- The expanded scene suite passes GCC 14 GNU17/strict C23, Clang GNU17/strict
+  C2x, and Clang ASan/UBSan. Twenty cases cover coherent UV-aware loading,
+  selection/decode/runtime binding, wrong model/count/layer associations,
+  inner/outer corruption, missing/duplicate/compressed metadata, capacity,
+  output aliases and a decoder which writes before returning EIO.
+- The ordinary scene integration and failure-cleanup suite passes with the
+  regenerated converter fixture. The full KOS build and SH-4 scene-test link
+  pass; the new API appears in both implementation and export archives.
+- Focused Doxygen output groups the API correctly without warnings.
+- The SH-4 scene suite passes Flycast interpreter and dynarec. These are
+  admission/numerical checks, not texture-image or physical-hardware evidence.
+
+Next is auxiliary texture-manifest/recipe integration and importer admission.
+The loader returns associations; applications still must use them when choosing
+UV sources and rendering passes. Auxiliary glTF materials remain disabled until
+the complete import/resource/render path can honor them.
+
+## September 17: packaged layer images and integrated target preparation
+
+`pvr_chunk_layer_section_validate_images()` checks PML1 auxiliary texture IDs
+against fully validated PTX1 images before VRAM acquisition. Shared IDs and
+unused packaged images are accepted; missing IDs and corrupt data are rejected.
+This is an optional load-time check, not a per-frame operation. PRT1 keeps its
+exact direct-stream-use meaning: packaged requirements are the union of base
+stream resources and auxiliary layer resources, not a new manifest format.
+
+The existing two-model scene fixture now includes textured base geometry,
+lightmap/emission layer descriptors, independent UV sources and two packaged
+images. Its SH-4 path uses real KOS surface allocation/upload, texture binding,
+material recipe compilation, UV rendering and prepared cache emission. Literal
+UV/color expectations and base/layer geometry comparisons precede byte-identical
+direct/cache packet checks. Missing bindings preserve an existing recipe and
+explicit release restores the free VRAM baseline. The test warms the allocator
+first: its initial aligned arena setup retains 24 bytes in these emulator runs,
+which is not a texture leak. No allocator reset masks the cleanup result.
+
+Validation:
+
+- Host scene tests pass GCC 14 GNU17/strict C23, Clang GNU17/strict C2x and
+  Clang ASan/UBSan. Existing resource-binding tests also pass, including shared
+  pins and partial-failure cleanup.
+- The full KOS build, SH-4 test link, implementation/module exports and focused
+  Doxygen grouping checks pass.
+- The integrated SH-4 fixture passes Flycast interpreter and dynarec. It uploads
+  textures and inspects generated packets but does not submit geometry: this
+  is not framebuffer composition, presort, imported-content or hardware proof.
+
+Next: host compiler extraction and serialization of supported auxiliary
+materials into the existing PML1/PUV1/PTX1 path, followed by imported-asset image
+validation. Unsupported importer features remain rejected. No additional scene
+manager, container version or permanent allocation is introduced here.
+
+## September 17: decoded-corner auxiliary UV selection
+
+The host-only `pvr_uv_ir_select()` closes the gap between proposing an affine
+inverse and deciding whether that inverse can safely reuse stored base UVs.
+It checks every supplied final strip-reference corner against independently
+evaluated authored layer coordinates using an explicit per-component error
+budget. Different attribute sets, unusable inverses, probe overflow and
+over-budget quantization choose independent storage. A bad late input fails
+without publishing a selection, even when an earlier corner forced fallback.
+
+Shared results contain relative PML1 rows. Independent results contain identity
+rows for a PUV1 source baked once from the authored auxiliary transform. This
+does not deduplicate position indices or discard UV seams. The helper allocates
+nothing and introduces no target code, model layout or wire-format version.
+Its binary32 arithmetic probe is not a claim about all target FP modes or
+post-clipping texture sampling.
+
+Validation:
+
+- Selection and codec/render tests pass GCC 14 GNU17/strict C23 and Clang
+  GNU17/strict C2x, plus Clang ASan/UBSan. Tests cover both signed precision
+  modes, exact budget boundaries, late seam differences, malformed inputs,
+  overlap rejection and preserved outputs.
+- The converter rebuild and existing Python conversion regression suite pass.
+- The extended codec fixture links the helper only for testing on SH-4. A
+  collapsed base map selects independent storage, round-trips through PML1 and
+  PUV1, and preserves literal baked coordinates on shared position IDs and a
+  reversed strip. Flycast interpreter and dynarec pass; no GPU image or real
+  hardware claim follows from the memory-sink fixture.
+
+The CLI importer still does not invoke this selection helper or admit new
+auxiliary materials. Next is wiring final source-reference correspondence and
+material/resource serialization into that importer. Occlusion is not a generic
+lightmap, and emissive sRGB texels with linear multipliers need a declared
+conversion policy before enabling those source features. Existing rejection
+checks remain intact until that integrated path is tested.
+
+## September 17: upstream SQ/FPSCR fixes and SH4ZAM ABI detection
+
+Fetched and merged official KOS master through
+`fcfa7d869471591ca1c777543261a7bfea7cb726` without conflicts. The two new
+commits preserve our SQ ownership/validation changes while correcting the
+8-byte-aligned copy path's source advance between 1 MiB batches (`757a8f9d`),
+and initialize new thread contexts from the creator's FPSCR (`fcfa7d86`).
+The latter preserves the creating thread's denormal/rounding environment;
+it does not add separate FP modes to fibers. Existing lightweight and opt-in
+XMTRX fiber contracts remain unchanged.
+
+SH4ZAM master advanced to `0bacf4b336368c0b47864ce9eeb59e7c07904b51`.
+The bundled header now selects the SH-4 backend by single-precision ABI macros
+rather than a Dreamcast platform macro. Both SH-4 ABI forms select SHZ_SH4
+without `__DREAMCAST__`, host builds select SHZ_SW, and an explicit backend
+override is preserved. This is backend detection, not a new platform port.
+The 54-file source lock was refreshed and verified; the local maintenance
+patch remains byte-identical, including the GCC 16 FFT fix. Upstream's GitLab
+emulator-test setting is not part of the vendored library.
+
+Validation:
+
+- Full KOS build, forced SH4ZAM archive rebuild and affected example links pass.
+- The SQ fixture crosses the 1 MiB boundary with both fast and slow source
+  alignment, in MMU-off and MMU-on modes. It checks the entire copied range
+  and destination guards. Both Flycast interpreter and dynarec pass.
+- The SH4ZAM fixture checks new-thread FPSCR inheritance in both rounding
+  modes, child-state preservation across scheduling and creator isolation,
+  then runs its existing camera, frustum, geometry and fiber/XMTRX checks.
+  Both Flycast modes pass. This is integration evidence, not a physical
+  hardware numerical or throughput certificate.
+- The UV asset fixture relinks against the updated library. Existing host
+  converter regressions pass; no auxiliary-import rejection gate was removed.
+
+The next graphics deliverable is still final-corner/material serialization
+in the host importer, followed by imported-image validation. No compiler
+upgrade, separate KOS installation or sound scope expansion was needed here.
+
+## September 17: final emitted-corner correspondence
+
+The CLI converter now keeps a host-only provenance record for every emitted
+strip reference. Its authored triangle/corner and expected position index are
+captured at the same point as geometry emission, including the newly appended
+corner of each joined triangle. After writing the streams, the actual Compact
+decoder verifies the map and supplies strip ordinals, reversed flags and final
+decoded canonical UVs. It does not repeat the quantization formula.
+
+This retains seam occurrences and the mapping through strip batching without
+altering PCM2, raw stream bytes, model versions or target RAM requirements.
+Host memory grows by one reference record per emitted corner and is released
+with the converted streams. The resolver performs a complete read-only pass
+before publishing metadata; late invalid tags/indices, malformed framing,
+overflow, overlap and unsupported model families leave the map untouched.
+
+Validation covers literal signed UV8/UV10 and float coordinates, untextured
+references, reversed strips, shared position IDs, and joined triangles with
+four references rather than six. The decoded map also feeds the existing
+storage-selection, PML1/PUV1 and memory-sink renderer fixture. The converter's
+existing Python golden suite exercises the new gate on ordinary CLI output,
+attribute seams and large joined-strip record boundaries.
+
+The focused suite passes GCC 14 GNU17/strict C23, Clang GNU17/strict C2x
+and Clang ASan/UBSan. Full converter regressions pass GCC 14 GNU17/strict
+C23 and the Clang ASan/UBSan build. The host helper is linked into the SH-4
+test executable only, not libkallisti, and passes Flycast interpreter and
+dynarec. These are compiler/codec and target numerical checks, not
+physical-hardware texture sampling or image-fidelity evidence.
+
+This is a correspondence checkpoint, not auxiliary-material admission. The
+next step is fetching auxiliary attributes by these authored occurrences and
+serializing their material/resource bindings. Auxiliary seam identity must be
+added to the join predicate before those materials are admitted. Occlusion
+remains distinct from a full-surface lightmap; emissive color/blending needs an
+explicit import policy. Existing CLI rejection gates remain in force.
+
+## September 19: opt-in emissive importer completion
+
+The host converter now provides `--pvr-emissive` for an explicitly approximate
+opaque-material profile. This closes the emitted-corner to auxiliary-material
+serialization path, using existing required PML1/PUV1 sections, PTX1 images,
+PMT1 scene metadata and the existing layer-aware runtime loader. No new target
+API, runtime worker or wire-format version was introduced.
+
+Auxiliary TEXCOORD selection/transforms are baked per authored corner before
+joining. Joins require matching auxiliary coordinates; the final provenance
+map emits independent binary32 coordinates in raw strip-reference order.
+Adjacent ranges share material associations. These sources remain independent
+of base fixed-point quantization, including collapsed base mappings.
+
+Emission images decode sRGB, apply linear factors, re-encode sRGB and become
+opaque RGB565. A separate image per emissive material prevents changes to a
+shared base image. Missing images produce constant 8x8 textures; zero emission
+adds no layer. PVR display-space addition is an opt-in approximation, not an
+exact glTF linear-light renderer. MASK/BLEND emission, occlusion, normal maps,
+unsupported extensions, mipmapped/mixed filters and external texture overrides
+remain rejected. Unlit lighting-fallback behavior is unchanged.
+
+Before publication, generated assets pass the real coherent scene loader with
+layer/UV admission and auxiliary image-coverage checks. Independent Python byte
+goldens cover required section flags, UV order/transforms, joined and flipped
+strips, material/model associations, sampler bits, sRGB factor baking, ignored
+emissive alpha, unchanged base-image bytes, constants and cooked/LZ4 paths.
+Negative cases verify existing output bytes and temporary-file cleanup.
+
+The cross-compiler run exposed a pre-existing host allocation assumption:
+32-byte-relative texture offsets do not make a malloc-based PCM2 blob itself
+32-byte aligned. Depending on heap placement, direct PTX1 loading could fail.
+Both blob builders now use checked, rounded aligned allocations while retaining
+the exact serialized size and CRCs. This does not change the wire format.
+
+The complete converter suite passes the optimized GCC 14 GNU17 build,
+GCC 14 strict C23, Clang strict C2x and Clang GNU17 ASan/UBSan.
+The Clang strict lane uses the existing
+`HOST_LZ4_WARNINGS=-Wno-constant-logical-operand` accommodation for vendored
+LZ4, without changing its source. Repeated zero-emission conversions exercise
+fresh allocation layouts. No new Flycast or physical-hardware rendering claim
+is made for this host-importer change.
+
+This is a bounded importer checkpoint, not a claim that all graphics or glTF
+features are complete. Image-fidelity and physical-hardware sampling remain
+separate validation gates.
+
+## September 19: SH4ZAM dependency ownership
+
+SH4ZAM now comes from an unmodified upstream Git submodule at the same
+`0bacf4b336368c0b47864ce9eeb59e7c07904b51` pin. The former copied headers,
+sources, hash manifest, and local patch are superseded by that Git dependency.
+The KOS addon adapter, public include paths, archive name, and graphics API
+remain in place. Build artifacts live outside the upstream checkout. Earlier
+entries describing a bundled maintenance patch are historical, not the current
+source arrangement; see `addons/libsh4zam/README.md` for current instructions.
+
+The upstream FFT constraints compile unchanged with the current SH-4 GCC
+16.2.0 at `-O1`, `-O2`, `-O3`, `-Os`, and `-Og`. At `-O0`, the eight-point
+routine fails with an impossible `GENERAL_REGS` allocation. The adapter now
+defaults only that source to `-O2`, retaining debug information. This replaces
+the broad memory-clobber source patch with a documented build requirement;
+it is not a measured hardware performance claim or proof of the historical
+failure's exact build configuration. Upstream formatting and documentation
+changes are also no longer carried locally.
+
+This is dependency maintenance, not the pending graphics hot-path audit or
+the extraction of high-level rendering into a separate library.
+
+Validation: full forced KOS/addon rebuild, an addon debug build with general
+`-O0` flags and the FFT-only override, C++17/C++23 bridge links, geometry and
+matrix host tests, ten dependency-identity tests, and both SH4ZAM example builds
+pass. The integration fixture reports PASS in Flycast interpreter and dynarec
+modes. Doxygen completes with warnings; this is not a warning-free docs claim.
+No physical-hardware timing or performance measurement was made.

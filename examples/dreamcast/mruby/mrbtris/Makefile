@@ -1,5 +1,5 @@
 # Mrbtris
-# A sample Tetris clone for Sega Dreamcast written in Ruby
+# A sample Tetris clone for Dreamcast written in Ruby
 # Copyright (C) 2019-2024 Yuji Yokoo
 # Copyright (C) 2020-2024 Mickaël "SiZiOUS" Cardoso
 

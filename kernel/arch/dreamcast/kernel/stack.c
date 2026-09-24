@@ -20,14 +20,16 @@ extern uintptr_t arch_stack_32m __attribute__((weak,alias("arch_stack_32m_dft"))
 
 /* Resolve the scan end for a stack walk.
 
-   When SP falls within the current thread's stack, use the actual end of that
-   stack so repeated unwind steps remain within one fixed stack window.
+   When SP falls within the current thread's owned stack, use its actual end.
+   An optional cooperative-context runtime may resolve an alternate stack only
+   when SP lies outside that common range.
    Otherwise, fall back to a conservative kernel-stack-sized scan. */
 static uintptr_t arch_stk_scan_end(uintptr_t sp) {
     uintptr_t scan_end = sp + THD_KERNEL_STACK_SIZE;
 
     if(thd_current && thd_current->stack && thd_current->stack_size) {
         uintptr_t stack_base = (uintptr_t)thd_current->stack;
+
         if(sp >= stack_base && sp - stack_base < thd_current->stack_size) {
             scan_end = stack_base + thd_current->stack_size;
         }

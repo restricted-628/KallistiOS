@@ -1,0 +1,30 @@
+# KallistiOS ##version##
+#
+# Host-side explicit camera matrix tests.
+# Copyright (C) 2026 Joseph Black
+
+CC ?= cc
+CFLAGS ?= -O2
+include ../Makefile.host-test
+
+KOS_ROOT = ../..
+MATH_DIR = $(KOS_ROOT)/kernel/arch/dreamcast/math
+INCLUDES = -Iinclude -I$(KOS_ROOT)/kernel/arch/dreamcast/include
+TARGET = matrix-camera-test
+SOURCES = matrix-camera-test.c $(MATH_DIR)/matrix_compose.c \
+          $(MATH_DIR)/matrix_camera.c
+
+.PHONY: all test clean
+
+all: test
+
+$(TARGET): $(SOURCES)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $(SOURCES) $(LDLIBS) -o $@
+
+test: $(TARGET)
+	./$(TARGET)
+
+clean:
+	$(RM) $(TARGET)
+
+include ../Makefile.sh4zam-state

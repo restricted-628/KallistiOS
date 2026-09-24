@@ -1,6 +1,6 @@
-# Mrbtris: Sample game for Sega Dreamcast written in Ruby
+# Mrbtris: Sample game for Dreamcast written in Ruby
 
-**Mrbtris** is a sample game for the **Sega Dreamcast** which is written in
+**Mrbtris** is a sample game for the **Dreamcast** which is written in
 **Ruby** as an proof-of-concept of using [mruby](https://mruby.org/).
 
 This project aims to provide a pratical example of how to use **KallistiOS**
@@ -20,7 +20,7 @@ To compile this, you need to install the `mruby` KallistiOS Port, using the
 
 * Make an `mrbgem` for the Dreamcast specific things
 * Create unit tests
-* Use more Sega Dreamcast features
+* Use more Dreamcast features
 
 ## License
 

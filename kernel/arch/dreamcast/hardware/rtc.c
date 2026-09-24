@@ -5,6 +5,7 @@
    Copyright (C) 2023 Falco Girgis
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2023 Megavolt85
+   Copyright (C) 2026 Joseph Black
 */
 
 /*
@@ -26,6 +27,7 @@
  */
 
 #include <arch/rtc.h>
+#include <kos/irq.h>
 #include <kos/timer.h>
 #include <dc/g2bus.h>
 
@@ -70,14 +72,7 @@
 #define RTC_CTRL_WRITE_EN         (1 << 0)
 
 /*
-   Second Delta between Sega and Unix Epochs
-
-   Twenty years in seconds.
-*/
-#define RTC_UNIX_EPOCH_DELTA    631152000
-
-/*
-    # of Read/Write Retry Attempts
+    Number of read/write retry attempts
 
     To ensure a coherent, race-free read/write operation.
 */
@@ -86,8 +81,9 @@
 /* The boot time; we'll save this in rtc_init() */
 time_t dc_boot_time;
 
-/* Returns the date/time value as a UNIX epoch time stamp */
-time_t arch_rtc_unix_secs(void) {
+/* The G2 bus must remain locked for every call to this helper. Holding that
+   lock prevents another thread or interrupt from observing half of a write. */
+static uint32_t read_counter_locked(void) {
     uint32_t rtcold, rtcnew;
     int i;
 
@@ -98,8 +94,9 @@ time_t arch_rtc_unix_secs(void) {
 
     for(;;) {
         for(i = 0; i < RTC_RETRY_COUNT; i++) {
-            rtcnew = ((g2_read_32(RTC_TIMESTAMP_HIGH_ADDR) & 0xffff) << 16) |
-                      (g2_read_32(RTC_TIMESTAMP_LOW_ADDR) & 0xffff);
+            rtcnew = ((g2_read_32_raw(RTC_TIMESTAMP_HIGH_ADDR) & 0xffff) <<
+                      16) |
+                     (g2_read_32_raw(RTC_TIMESTAMP_LOW_ADDR) & 0xffff);
 
             if(rtcnew != rtcold)
                 break;
@@ -111,60 +108,116 @@ time_t arch_rtc_unix_secs(void) {
             break;
     }
 
-    return rtcnew - RTC_UNIX_EPOCH_DELTA;
+    return rtcnew;
+}
+
+static void set_boot_time(time_t value) {
+    irq_mask_t irq = irq_disable();
+
+    dc_boot_time = value;
+    irq_restore(irq);
+}
+
+int arch_rtc_get_counter(uint32_t *counter) {
+    g2_ctx_t g2;
+
+    if(!counter) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    g2 = g2_lock();
+    *counter = read_counter_locked();
+    g2_unlock(g2);
+    return 0;
+}
+
+int rtc_get_counter(uint32_t *counter) {
+    return arch_rtc_get_counter(counter);
+}
+
+int arch_rtc_set_counter(uint32_t counter) {
+    g2_ctx_t g2;
+    uint32_t observed = 0;
+    uint32_t elapsed_secs, elapsed_millis;
+    int i;
+
+    /* The lock spans the complete protocol. In addition to protecting G2, its
+       IRQ mask prevents the scheduler from interleaving two setters between
+       the control, low-word, and high-word writes. */
+    g2 = g2_lock();
+    g2_write_32_raw(RTC_CTRL_ADDR, RTC_CTRL_WRITE_EN);
+    g2_fifo_wait();
+
+    for(i = 0; i < RTC_RETRY_COUNT; ++i) {
+        /* Writing the high half closes the RTC's write window, so the low half
+           must be committed first on every retry. */
+        g2_write_32_raw(RTC_TIMESTAMP_LOW_ADDR, counter & 0xffffu);
+        g2_write_32_raw(RTC_TIMESTAMP_HIGH_ADDR, counter >> 16);
+        g2_fifo_wait();
+
+        observed = read_counter_locked();
+        if(observed == counter ||
+           (counter != UINT32_MAX && observed == counter + 1u))
+            break;
+    }
+
+    g2_write_32_raw(RTC_CTRL_ADDR, 0);
+    g2_fifo_wait();
+
+    /* CLOCK_REALTIME is the counter value minus elapsed monotonic time. Keep
+       this update in the same non-preemptible transaction as the hardware
+       write so another setter cannot publish an older cached value afterward. */
+    timer_ms_gettime(&elapsed_secs, &elapsed_millis);
+    dc_boot_time = ((time_t)observed - RTC_COUNTER_UNIX_EPOCH) -
+                   elapsed_secs;
+    g2_unlock(g2);
+
+    if(i == RTC_RETRY_COUNT) {
+        errno = EPERM;
+        return -1;
+    }
+
+    return 0;
+}
+
+int rtc_set_counter(uint32_t counter) {
+    return arch_rtc_set_counter(counter);
+}
+
+/* Returns the date/time value as a Unix-epoch timestamp. */
+time_t arch_rtc_unix_secs(void) {
+    uint32_t counter;
+
+    arch_rtc_get_counter(&counter);
+    return (time_t)counter - RTC_COUNTER_UNIX_EPOCH;
 }
 
 /* Sets the date/time value from a UNIX epoch time stamp,
    returning 0 for success or -1 for failure. */
 int arch_rtc_set_unix_secs(time_t secs) {
-    int result = 0;
-    uint32_t rtcnew;
-    int i;
-    uint32_t s, ms;
-
-    /* Adjust by 20 years to get to the expected RTC time. */
-    const time_t adjusted_time = secs + RTC_UNIX_EPOCH_DELTA;
-    const uint32_t adjusted = (const uint32_t)adjusted_time;
-
-    /* Protect against underflowing or overflowing our 32-bit timestamp. */
-    if(adjusted_time < 0 || adjusted_time > UINT32_MAX) {
+    /* Check before adding the epoch delta so an extreme time_t cannot invoke
+       signed overflow before it is rejected. */
+    if(secs < -(time_t)RTC_COUNTER_UNIX_EPOCH ||
+       secs > (time_t)(UINT32_MAX - RTC_COUNTER_UNIX_EPOCH)) {
         errno = EINVAL;
         return -1;
     }
 
-    /* Enable writing by setting LSB of control */
-    g2_write_32(RTC_CTRL_ADDR, RTC_CTRL_WRITE_EN);
+    return arch_rtc_set_counter((uint32_t)(secs +
+                                           RTC_COUNTER_UNIX_EPOCH));
+}
 
-    /* Try 3 times to ensure we didn't write a value then have
-       the clock increment itself before the next. */
-    for(i = 0; i < RTC_RETRY_COUNT; i++) {
-        /* Write the least-significant 16-bits first, because
-           writing to the high 16-bits will lock RTC writes. */
-        g2_write_32(RTC_TIMESTAMP_LOW_ADDR, (adjusted) & 0xffff);
-        g2_write_32(RTC_TIMESTAMP_HIGH_ADDR, (adjusted >> 16) & 0xffff);
+time_t arch_rtc_boot_time(void) {
+    irq_mask_t irq = irq_disable();
+    time_t value = dc_boot_time;
 
-        /* Read the time back again, to ensure it was written properly. */
-        rtcnew = arch_rtc_unix_secs() + RTC_UNIX_EPOCH_DELTA;
+    irq_restore(irq);
+    return value;
+}
 
-        if(rtcnew == adjusted)
-            break;
-    }
+int arch_rtc_init(void) {
+    set_boot_time(arch_rtc_unix_secs());
 
-    /* Disable further writing by clearing LSB of control */
-    g2_write_32(RTC_CTRL_ADDR, 0);
-
-    /* Signify failure if the fetched time never matched the
-       time we attempted to set. */
-    if(i == RTC_RETRY_COUNT) {
-        errno = EPERM;
-        result = -1;
-    }
-
-    /* We have to update the boot time now as well, subtracting
-       the amount of time that has elapsed since boot from the
-       new time we've just set. */
-    timer_ms_gettime(&s, &ms);
-    dc_boot_time = ((time_t)rtcnew - RTC_UNIX_EPOCH_DELTA) - s;
-
-    return result;
+    return 0;
 }

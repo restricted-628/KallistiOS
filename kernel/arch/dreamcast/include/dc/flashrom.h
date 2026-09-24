@@ -3,6 +3,7 @@
    dc/flashrom.h
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2008 Lawrence Sebald
+   Copyright (C) 2026 Joseph Black
 
 */
 
@@ -79,6 +80,8 @@ __BEGIN_DECLS
 /** @} */
 
 #define FLASHROM_OFFSET_CRC         62      /**< \brief Location of CRC in each block */
+#define FLASHROM_BLOCK_SIZE         64      /**< \brief Physical logical-block record size */
+#define FLASHROM_BLOCK_DATA_SIZE    60      /**< \brief Application data bytes in a record */
 
 /** \defgroup fr_errs   Error Values
     \brief              Error values for the flashrom_get_block() function
@@ -95,6 +98,11 @@ __BEGIN_DECLS
 #define FLASHROM_ERR_READ_BITMAP    -7      /**< \brief Error reading bitmap */
 #define FLASHROM_ERR_EMPTY_PART     -8      /**< \brief Empty partition */
 #define FLASHROM_ERR_READ_BLOCK     -9      /**< \brief Error reading block */
+#define FLASHROM_ERR_BAD_DATA       -10     /**< \brief Record contents are inconsistent */
+#define FLASHROM_ERR_NO_SPACE       -11     /**< \brief Append area is full */
+#define FLASHROM_ERR_WRITE_BITMAP   -12     /**< \brief Allocation-map write failed */
+#define FLASHROM_ERR_WRITE_BLOCK    -13     /**< \brief Record write failed */
+#define FLASHROM_ERR_VERIFY         -14     /**< \brief Programmed data did not verify */
 /** @} */
 
 /** \brief   Retrieve information about the given partition.
@@ -170,11 +178,63 @@ int flashrom_delete(int offset);
 
     \param  partid          The partition ID to look in.
     \param  blockid         The logical block ID to look for.
-    \param  buffer_out      Space to store the data. Must be at least 60 bytes.
+    \param  buffer_out      Space to store the complete 64-byte record.
     \return                 0 on success, <0 on error.
     \see    fr_errs
 */
 int flashrom_get_block(int partid, int blockid, uint8_t *buffer_out);
+
+/** \brief   Information about a resolved logical block.
+    \ingroup flashrom
+
+    \headerfile dc/flashrom.h
+*/
+typedef struct flashrom_block_info {
+    uint16_t logical_id;       /**< \brief Logical block identifier. */
+    uint16_t physical_block;   /**< \brief Physical record within the partition. */
+} flashrom_block_info_t;
+
+/** \brief   Read the payload of the newest valid logical block.
+    \ingroup flashrom
+
+    Unlike flashrom_get_block(), this function copies only the 60-byte payload;
+    it does not expose the two-byte logical identifier or record CRC. The block
+    map, physical bounds, record identifier, and record CRC are validated before
+    the payload is published.
+
+    \param  partid          Partition ID to search.
+    \param  blockid         Logical block ID to locate.
+    \param  data_out        Optional 60-byte payload destination.
+    \param  info_out        Optional resolved-block information destination.
+    \return                 0 on success, or a negative value from fr_errs.
+*/
+int flashrom_read_block(int partid, uint16_t blockid, void *data_out,
+                        flashrom_block_info_t *info_out);
+
+/** \brief   Append and verify a logical block payload.
+    \ingroup flashrom
+
+    This function programs a new 64-byte record without erasing or refreshing
+    the partition. The allocation map is committed before the record and the
+    record CRC is programmed last. An interrupted operation may consume one
+    physical record, but the previous valid value remains readable.
+
+    This API never erases a full partition. FLASHROM_ERR_NO_SPACE tells the
+    caller that explicit maintenance would be required. It must be called from
+    thread context.
+
+    \note A write or verification error has ambiguous completion semantics.
+          Reread the logical block before retrying because the final program
+          operation may have completed before reporting an error.
+
+    \param  partid          Block-allocated partition ID (2 through 4).
+    \param  blockid         Logical block identifier.
+    \param  data            Exact 60-byte payload to append.
+    \param  info_out        Optional committed-record information.
+    \return                 0 on success, or a negative value from fr_errs.
+*/
+int flashrom_append_block(int partid, uint16_t blockid, const void *data,
+                          flashrom_block_info_t *info_out);
 
 
 /* Higher level functions */
@@ -211,6 +271,18 @@ typedef struct flashrom_syscfg {
     int autostart;  /**< \brief Autostart discs? 0 == off, 1 == on */
 } flashrom_syscfg_t;
 
+/** \brief   Extended validated system configuration.
+    \ingroup flashrom
+
+    \headerfile dc/flashrom.h
+*/
+typedef struct flashrom_syscfg_ex {
+    uint32_t settings_time; /**< \brief Seconds since 1950-01-01 when last set. */
+    int language;           /**< \brief Language setting from fr_langs. */
+    int audio;              /**< \brief 0 for mono, 1 for stereo. */
+    int autostart;          /**< \brief 0 for disabled, 1 for enabled. */
+} flashrom_syscfg_ex_t;
+
 /** \brief   Retrieve the current system configuration settings.
     \ingroup flashrom
 
@@ -219,6 +291,179 @@ typedef struct flashrom_syscfg {
     \see    fr_errs
 */
 int flashrom_get_syscfg(flashrom_syscfg_t *out);
+
+/** \brief   Retrieve and validate the complete known system configuration.
+    \ingroup flashrom
+
+    This strict form rejects unknown language, audio, or autostart encodings
+    instead of silently converting them to plausible values.
+
+    \param  out             Storage for the extended configuration.
+    \return                 0 on success, or a negative value from fr_errs.
+*/
+int flashrom_get_syscfg_ex(flashrom_syscfg_ex_t *out);
+
+/** \brief   Append a verified system-configuration update.
+    \ingroup flashrom
+
+    Unknown bytes from the current configuration record are preserved. The
+    supplied time is stored as seconds since 1950-01-01. No partition erase or
+    automatic refresh is performed. This function must be called from thread
+    context.
+
+    \note On a write or verification error, reread the configuration before
+          retrying because the new record may already be valid.
+
+    \param  settings        Validated configuration to store.
+    \return                 0 on success, or a negative value from fr_errs.
+*/
+int flashrom_set_syscfg_ex(const flashrom_syscfg_ex_t *settings);
+
+/** \brief   Decode a system-configuration block payload.
+    \ingroup flashrom
+
+    This hardware-independent helper is useful for validating flash images and
+    test fixtures. The input is the 60-byte payload returned by
+    flashrom_read_block().
+
+    \param  data            System-configuration payload.
+    \param  out             Storage for the decoded configuration.
+    \return                 0 on success, or FLASHROM_ERR_BAD_DATA.
+*/
+int flashrom_syscfg_decode(const uint8_t data[FLASHROM_BLOCK_DATA_SIZE],
+                           flashrom_syscfg_ex_t *out);
+
+/** \defgroup fr_play_history Play History
+    \brief              Validated access to title play-history records
+    \ingroup            flashrom
+    @{
+*/
+#define FLASHROM_PLAY_HISTORY_SLOTS       100 /**< \brief Maximum title slots. */
+#define FLASHROM_PLAY_HISTORY_USER_BYTES  32  /**< \brief Per-title user bytes. */
+#define FLASHROM_PLAY_HISTORY_BUCKETS     24  /**< \brief Play-time buckets. */
+
+/** \brief   Decoded play history for one title.
+
+    All integer members are converted to SH-4 host order. Time fields use the
+    flash record's seconds-since-1950 representation; play-time buckets and
+    network_total_minutes are measured in minutes.
+
+    \headerfile dc/flashrom.h
+*/
+typedef struct flashrom_play_history {
+    uint8_t version;                 /**< \brief Record format version. */
+    uint8_t autosave;                /**< \brief Title autosave setting. */
+    char product_number[11];         /**< \brief Ten-byte product number plus NUL. */
+    char product_name[49];           /**< \brief Primary title plus NUL. */
+    char product_name_alt[45];       /**< \brief Alternate title plus NUL. */
+    uint32_t kind;                   /**< \brief Title category value. */
+    uint32_t first_start_time;       /**< \brief First start time. */
+    uint8_t peripheral_info[6];      /**< \brief Recorded peripheral summary. */
+    uint32_t previous_start_time;    /**< \brief Previous start time. */
+    uint16_t start_count;            /**< \brief Number of starts. */
+    uint16_t play_time[FLASHROM_PLAY_HISTORY_BUCKETS];
+    uint16_t load_count;             /**< \brief Number of load events. */
+    uint32_t reserved_packet2;       /**< \brief Preserved packet-2 bytes. */
+    uint16_t save_count;             /**< \brief Number of save events. */
+    uint8_t evaluation;              /**< \brief Title-defined play evaluation. */
+    uint8_t progress;                /**< \brief Title-defined progress value. */
+    uint32_t first_network_time;     /**< \brief First network-play time. */
+    uint32_t previous_network_time;  /**< \brief Previous network-play time. */
+    uint16_t network_count;          /**< \brief Network-play count. */
+    uint16_t network_total_minutes;  /**< \brief Total network-play minutes. */
+    uint8_t user_data[FLASHROM_PLAY_HISTORY_USER_BYTES];
+    uint8_t reserved_packet3[10];    /**< \brief Preserved packet-3 bytes. */
+    uint16_t save_occurrences;       /**< \brief Flash save occurrence count. */
+} flashrom_play_history_t;
+
+/** \brief   Encode four play-history block payloads.
+
+    This hardware-independent helper converts host-order fields to their flash
+    representation and calculates the title CRC. Fixed-width strings and
+    reserved bytes are copied exactly from the structure.
+
+    \param  history         Host-order play-history record.
+    \param  packets         Four encoded 60-byte payloads.
+    \return                 0 on success, or FLASHROM_ERR_BAD_DATA.
+*/
+int flashrom_play_history_encode(
+    const flashrom_play_history_t *history,
+    uint8_t packets[4][FLASHROM_BLOCK_DATA_SIZE]);
+
+/** \brief   Decode four play-history block payloads.
+
+    This hardware-independent helper validates the title CRC and converts all
+    multi-byte fields to host order.
+
+    \param  packets         Four contiguous 60-byte payloads.
+    \param  out             Storage for the decoded record.
+    \return                 0 on success, or FLASHROM_ERR_BAD_DATA.
+*/
+int flashrom_play_history_decode(
+    const uint8_t packets[4][FLASHROM_BLOCK_DATA_SIZE],
+    flashrom_play_history_t *out);
+
+/** \brief   Read and validate a play-history slot.
+
+    \param  slot            Slot number in the range 0 through 99.
+    \param  out             Storage for the decoded record.
+    \return                 0 on success, or a negative value from fr_errs.
+*/
+int flashrom_play_history_read(unsigned int slot,
+                               flashrom_play_history_t *out);
+
+/** \brief   Find play history by its ten-byte product number.
+
+    Product numbers are fixed-width identifiers and need not contain a NUL.
+
+    \param  product_number  Ten-byte product number to locate.
+    \param  out             Optional storage for the decoded record.
+    \param  slot_out        Optional storage for the matching slot.
+    \return                 0 on success, or a negative value from fr_errs.
+*/
+int flashrom_play_history_find(const char product_number[10],
+                               flashrom_play_history_t *out,
+                               unsigned int *slot_out);
+
+/** \brief   Result of a multi-packet play-history update.
+
+    requested_mask identifies packets whose encoded bytes differed from the
+    latest stored copy. committed_mask identifies packets whose append and
+    readback verification completed. If failed_packet is nonnegative, that
+    packet has ambiguous completion semantics and must be reread.
+
+    \headerfile dc/flashrom.h
+*/
+typedef struct flashrom_play_history_write_result {
+    uint8_t requested_mask;          /**< \brief Packets selected for append. */
+    uint8_t committed_mask;          /**< \brief Packets verified this call. */
+    int failed_packet;               /**< \brief Ambiguous packet, or -1. */
+    flashrom_block_info_t records[4];/**< \brief Verified physical records. */
+} flashrom_play_history_write_result_t;
+
+/** \brief   Append changed packets for one play-history slot.
+
+    The function compares the encoded record with the latest stored packets,
+    preflights enough erased records for every change, and appends only packets
+    whose bytes differ. Packets 2 and 3 are written first, followed by packet 1
+    and packet 0, so a changed title identity is not accepted until its
+    cross-packet CRC agrees.
+
+    This operation cannot make all four records power-loss atomic because the
+    on-flash format provides no transaction marker. An interrupted counter-only
+    update may expose the successfully committed counters. An interruption
+    between changed packets 1 and 0 can make the title temporarily unreadable
+    until packet 0 is retried. No partition erase or refresh is performed.
+
+    \param  slot            Slot number in the range 0 through 99.
+    \param  history         Complete desired host-order record.
+    \param  result_out      Optional detailed packet result.
+    \return                 0 on success, or a negative value from fr_errs.
+*/
+int flashrom_play_history_write(
+    unsigned int slot, const flashrom_play_history_t *history,
+    flashrom_play_history_write_result_t *result_out);
+/** @} */
 
 
 /** \defgroup fr_region Region Settings

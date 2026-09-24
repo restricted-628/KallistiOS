@@ -3,6 +3,7 @@
    kernel/library.c
    Copyright (C) 2003 Megan Potter
    Copyright (C) 2024 Ruslan Rostovtsev
+   Copyright (C) 2026 Joseph Black
 */
 
 #include <assert.h>
@@ -14,6 +15,7 @@
 
 #include <kos/irq.h>
 #include <kos/library.h>
+#include <kos/dbglog.h>
 
 /*
 
@@ -139,18 +141,24 @@ klibrary_t * library_create(int flags) {
 }
 
 int library_destroy(klibrary_t *lib) {
-    int oldirq = 0;
+    int oldirq;
+
+    if(!lib) {
+        errno = EINVAL;
+        return -1;
+    }
 
     oldirq = irq_disable();
-
-    /* Free up the image */
-    if(lib->image.data)
-        elf_free(&lib->image);
 
     /* Remove it from the global list */
     LIST_REMOVE(lib, list);
 
     irq_restore(oldirq);
+
+    /* ELF teardown can release filesystem resources and must not run with
+       interrupts disabled merely to protect the library list. */
+    if(lib->image.data)
+        elf_free(&lib->image);
 
     /* Free the memory */
     free(lib);
@@ -297,14 +305,24 @@ int library_close(klibrary_t *lib) {
         return -1;
     }
 
+    if(lib->refcnt <= 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
     // Check for reference
     if(--lib->refcnt > 0) {
         return 0;
     }
 
     // Call down and "close" the lib.
-    if(lib->lib_close(lib) < 0)
+    if(lib->lib_close(lib) < 0) {
+        /* A failed close leaves the image loaded and callable. Restore one
+           owning reference so a later close can retry instead of underflowing
+           the count or reusing a logically dead library. */
+        lib->refcnt = 1;
         return -1;
+    }
 
     // Unload this lib.
     library_destroy(lib);
@@ -328,16 +346,28 @@ void library_init(void) {
 
 /* Shutdown */
 void library_shutdown(void) {
-    klibrary_t *n1, *n2;
+    klibrary_t *lib;
 
-    /* Kill remaining libraries */
-    n1 = LIST_FIRST(&library_list);
+    /* Newest libraries are at the head, which naturally tears down dependents
+       before older dependencies. Global shutdown closes each image once even
+       if a client leaked references; the process cannot retain them afterward. */
+    while((lib = LIST_FIRST(&library_list)) != NULL) {
+        lib->refcnt = 1;
 
-    while(n1 != NULL) {
-        n2 = LIST_NEXT(n1, list);
-        free(n1);
-        n1 = n2;
+        if(library_close(lib) < 0) {
+            int oldirq;
+
+            dbglog(DBG_ERROR,
+                   "library_shutdown: close failed for library %d\n",
+                   lib->libid);
+
+            /* Do not unload code after its cleanup contract failed: a retained
+               handler or worker may still point into the image. Detach it from
+               the shutdown list and deliberately leave it resident until the
+               process exits. */
+            oldirq = irq_disable();
+            LIST_REMOVE(lib, list);
+            irq_restore(oldirq);
+        }
     }
-
-    LIST_INIT(&library_list);
 }

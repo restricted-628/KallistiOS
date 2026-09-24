@@ -1,7 +1,7 @@
 # KallistiOS Toolchain Builder (`kos-chain`) with Cygwin #
 
 This document contains all the instructions to create a fully working
-toolchain targeting the **Sega Dreamcast** system under **Cygwin**.
+toolchain targeting the **Dreamcast** system under **Cygwin**.
 
 ## Introduction ##
 

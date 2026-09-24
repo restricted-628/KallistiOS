@@ -3,6 +3,7 @@
 #  crt0.s
 #  (c)2000-2002 Megan Potter
 #  (c)2026 Ruslan Rostovtsev
+#  (c)2026 Joseph Black
 #
 #  Startup for ARM program
 #  Adapted from Marcus' AICA example among a few other sources =)
@@ -110,7 +111,8 @@ arm_fiq_enable:
 	mrs	r0, CPSR
 	orr	r0, r0, #0x80
 	bic	r0, r0, #0x40
-	msr	CPSR_c, r0
+	# ARM7DI requires the complete status-register form used by its ISA.
+	msr	CPSR_all, r0
 	mov	pc, lr
 
 start:

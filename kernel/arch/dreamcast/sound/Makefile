@@ -6,8 +6,14 @@
 #
 
 OBJS = snd_iface.o \
+	snd_adx.o \
+	snd_adx_pipe.o \
+	snd_adx_input.o \
+	snd_dsp.o \
+	snd_dsp_program.o \
 	snd_sfxmgr.o \
 	snd_stream.o \
+	snd_stream_service.o \
 	snd_mem.o \
 	snd_pcm_split.o
 
@@ -19,7 +25,7 @@ include $(KOS_BASE)/Makefile.prefab
 
 arm/stream.drv: subdirs
 
-snd_iface.c: snd_stream_drv.c
+snd_iface.o: snd_stream_drv.c
 
 snd_stream_drv.c: arm/stream.drv $(KOS_BASE)/utils/bin2c/bin2c
 	$(KOS_BASE)/utils/bin2c/bin2c $< $@ snd_stream_drv

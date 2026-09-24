@@ -5,6 +5,7 @@
    Copyright (C) 2014 Lawrence Sebald
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2024 Falco Girgis
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file       dc/pvr/pvr_misc.h
@@ -115,6 +116,132 @@ void pvr_set_shadow_scale(bool enable, float scale_value);
 */
 void pvr_set_zclip(float zc);
 
+/** \brief Set the global small-polygon culling threshold.
+    \ingroup pvr_global
+
+    The threshold is compared with the polygon plane determinant whenever a
+    primitive uses PVR_CULLING_SMALL, PVR_CULLING_CCW, or PVR_CULLING_CW. The
+    default installed by pvr_init() is 1.0f. Callers should synchronize a
+    change with scene construction when it must take effect at a frame
+    boundary.
+
+    \param  threshold       Finite, non-negative determinant threshold.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_set_culling_threshold(float threshold);
+
+/** \brief Read the global small-polygon culling threshold.
+    \ingroup pvr_global
+
+    \param  threshold       Destination for the current threshold.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_get_culling_threshold(float *threshold);
+
+/** \brief Set global color-clamp endpoints.
+    \ingroup pvr_global
+
+    Color clamping is applied only by primitive headers that enable their
+    color-clamp bit. Each packed ARGB channel in minimum must be less than or
+    equal to the corresponding channel in maximum.
+
+    \param  minimum         Packed ARGB8888 lower endpoint.
+    \param  maximum         Packed ARGB8888 upper endpoint.
+
+    \retval 0               On success.
+    \retval -1              If PVR is unavailable or the endpoints are invalid,
+                            with errno set to ENODEV or EINVAL.
+*/
+int pvr_set_color_clamp(uint32_t minimum, uint32_t maximum);
+
+/** \brief Read the current global color-clamp endpoints.
+    \ingroup pvr_global
+
+    \param  minimum         Destination for the packed ARGB8888 lower endpoint.
+    \param  maximum         Distinct destination for the packed ARGB8888 upper
+                            endpoint.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_get_color_clamp(uint32_t *minimum, uint32_t *maximum);
+
+/** \brief Set the punch-through alpha comparison threshold.
+    \ingroup pvr_global
+
+    Punch-through fragments with alpha below threshold are discarded and
+    fragments at or above it are treated as fully opaque.
+
+    \param  threshold       Alpha threshold in the inclusive range 0 through
+                            255.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_set_punch_through_alpha(uint32_t threshold);
+
+/** \brief Read the punch-through alpha comparison threshold.
+    \ingroup pvr_global
+
+    \param  threshold       Destination for the current eight-bit threshold.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL or ENODEV.
+*/
+int pvr_get_punch_through_alpha(uint8_t *threshold);
+
+/** \brief One vertex of an untextured background plane.
+    \ingroup pvr_scene_mgmt
+
+    The color is stored as RGB888 in the low 24 bits. Background rendering uses
+    the PVR driver's established opaque, untextured render state.
+*/
+typedef struct pvr_background_vertex {
+    float x;                 /**< \brief Screen-space X coordinate. */
+    float y;                 /**< \brief Screen-space Y coordinate. */
+    float z;                 /**< \brief Positive inverse-depth value. */
+    uint32_t color;          /**< \brief RGB888 color in the low 24 bits. */
+} pvr_background_vertex_t;
+
+/** \brief Per-scene background-plane description.
+    \ingroup pvr_scene_mgmt
+*/
+typedef struct pvr_background_plane {
+    float depth;             /**< \brief Positive background depth clip. */
+    pvr_background_vertex_t vertices[3]; /**< \brief Background triangle. */
+} pvr_background_plane_t;
+
+/** \brief Set a checked background plane for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    Call after beginning a framebuffer or texture scene and before TA
+    registration starts. All coordinates and depths must be finite; depth and
+    vertex Z values must be positive. The triangle should cover every pixel
+    that may remain untouched by scene geometry.
+
+    \param  plane           Background-plane description.
+
+    \retval 0               On success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV, EPERM,
+                            or EBUSY.
+*/
+int pvr_scene_set_background_plane(const pvr_background_plane_t *plane);
+
+/** \brief Get the background plane configured for the active scene.
+    \ingroup pvr_scene_mgmt
+
+    \param  plane           Destination description.
+
+    \retval 0               On success.
+    \retval -1              If plane is NULL, PVR is unavailable, or no scene
+                            is active, with errno set appropriately.
+*/
+int pvr_scene_get_background_plane(pvr_background_plane_t *plane);
+
 /** \brief   Set the vertical scale factor.
     \ingroup pvr_global
 
@@ -193,6 +320,184 @@ typedef struct pvr_stats {
     \retval -1              If the PVR is not initialized
 */
 int pvr_get_stats(pvr_stats_t *stat);
+
+/** \defgroup pvr_pipeline_status Pipeline Status and Faults
+    \brief                         Coherent PVR pipeline state and fault records
+    \ingroup                       pvr_stats
+
+    @{
+*/
+
+/** \brief Persistent PVR fault flags.
+
+    These flags describe faults observed since initialization or since the
+    corresponding flag was cleared with pvr_clear_faults(). A fault remains
+    latched after its interrupt has returned so applications can diagnose
+    failures without parsing debug output.
+*/
+typedef enum pvr_fault {
+    PVR_FAULT_NONE              = 0,
+    PVR_FAULT_ISP_OUT_OF_MEMORY = 1u << 0,
+    PVR_FAULT_STRIP_HALT        = 1u << 1,
+    PVR_FAULT_OPB_OUT_OF_MEMORY = 1u << 2,
+    PVR_FAULT_TA_INPUT_ERROR    = 1u << 3,
+    PVR_FAULT_TA_INPUT_OVERFLOW = 1u << 4,
+    PVR_FAULT_DMA_INCOMPLETE    = 1u << 5,
+    PVR_FAULT_ALL               = (1u << 6) - 1u
+} pvr_fault_t;
+
+/** \brief Persistent details for the latest PVR fault.
+
+    Register values are sampled in interrupt context when the fault is
+    observed. They are diagnostic snapshots and must not be interpreted as
+    current register state after the pipeline continues.
+*/
+typedef struct pvr_fault_status {
+    uint32_t sequence;             /**< \brief Number of faults observed. */
+    uint32_t mask;                 /**< \brief Currently latched fault flags. */
+    pvr_fault_t last_fault;        /**< \brief Most recently observed fault. */
+    uint32_t last_event;           /**< \brief Raw ASIC event code, if applicable. */
+    uint32_t counts[6];            /**< \brief Count for fault bits 0 through 5. */
+    uint32_t opb_start;            /**< \brief TA object-pointer-buffer start. */
+    uint32_t opb_end;              /**< \brief TA object-pointer-buffer end. */
+    uint32_t opb_position;         /**< \brief TA object-pointer-buffer position. */
+    uint32_t vertex_start;         /**< \brief TA vertex-buffer start. */
+    uint32_t vertex_end;           /**< \brief TA vertex-buffer end. */
+    uint32_t vertex_position;      /**< \brief TA vertex-buffer position. */
+} pvr_fault_status_t;
+
+/** \brief Coherent snapshot of the software-visible PVR pipeline.
+
+    The complete structure is copied with interrupts disabled. The sequence
+    value advances on software-visible pipeline transitions; callers can use it
+    to detect whether a later snapshot represents new state.
+*/
+typedef struct pvr_pipeline_status {
+    uint32_t sequence;             /**< \brief Pipeline transition sequence. */
+    uint32_t initialized;          /**< \brief Non-zero when PVR is initialized. */
+    uint32_t scene_active;         /**< \brief Scene currently accepts geometry. */
+    uint32_t vertex_dma_enabled;   /**< \brief Buffered vertex DMA mode enabled. */
+    uint32_t dma_busy;             /**< \brief Shared PVR DMA engine is active. */
+    uint32_t ta_busy;              /**< \brief TA registration is in progress. */
+    uint32_t render_busy;          /**< \brief ISP/TSP rendering is in progress. */
+    uint32_t display_pending;      /**< \brief Completed frame awaits display. */
+    uint32_t registration_to_texture; /**< \brief TA scene targets texture RAM. */
+    uint32_t render_to_texture;    /**< \brief ISP/TSP render targets texture RAM. */
+    uint32_t enabled_lists;        /**< \brief Enabled pvr_list_t bit mask. */
+    uint32_t transferred_lists;    /**< \brief Lists accepted by the TA. */
+    uint32_t flushed_lists;        /**< \brief Current RAM-frame lists flushed early. */
+    int32_t open_list;             /**< \brief Open pvr_list_t or PVR_LIST_NONE. */
+    uint32_t ram_target;           /**< \brief Current RAM vertex-buffer index. */
+    uint32_t ta_target;            /**< \brief Current TA buffer index. */
+    uint32_t view_target;          /**< \brief Current displayed framebuffer index. */
+    uint64_t scene_render_id;      /**< \brief Active scene, or zero. */
+    uint64_t queued_render_id;     /**< \brief Most recently queued scene. */
+    uint64_t registration_render_id; /**< \brief Scene in TA registration, or zero. */
+    uint64_t registered_render_id; /**< \brief Latest completed registration. */
+    uint64_t render_started_id;    /**< \brief Latest render started by ISP/TSP. */
+    uint64_t active_render_id;     /**< \brief Render currently using ISP/TSP. */
+    uint64_t completed_render_id;  /**< \brief Latest completed ISP/TSP render. */
+    uint64_t pending_display_render_id; /**< \brief Frame awaiting page flip. */
+    uint64_t displayed_render_id;  /**< \brief Latest displayed framebuffer render. */
+    pvr_fault_status_t faults;     /**< \brief Persistent fault information. */
+} pvr_pipeline_status_t;
+
+/** \brief Read a coherent PVR pipeline and fault snapshot.
+
+    \param  status          Destination structure.
+
+    \retval 0               On success.
+    \retval -1              If status is NULL or PVR is not initialized, with
+                            errno set to EINVAL or ENODEV respectively.
+*/
+int pvr_get_pipeline_status(pvr_pipeline_status_t *status);
+
+/** \brief Clear selected persistent PVR fault flags.
+
+    Fault counters and the latest-fault record remain available as historical
+    diagnostics. A fault arriving concurrently with this call is ordered by
+    interrupt exclusion and cannot be lost.
+
+    \param  mask            Combination of pvr_fault_t flags to clear.
+
+    \retval 0               On success.
+    \retval -1              If mask contains unknown bits or PVR is not
+                            initialized, with errno set to EINVAL or ENODEV.
+*/
+int pvr_clear_faults(uint32_t mask);
+
+/** @} */
+
+/** \defgroup pvr_pipeline_events Pipeline Events
+    \brief                         Optional PVR completion and fault callbacks
+    \ingroup                       pvr_pipeline_status
+
+    @{
+*/
+
+/** \brief PVR pipeline event flags. */
+typedef enum pvr_event {
+    PVR_EVENT_REGISTRATION_COMPLETE = 1u << 0,
+    PVR_EVENT_RENDER_COMPLETE       = 1u << 1,
+    PVR_EVENT_DISPLAY               = 1u << 2,
+    PVR_EVENT_DMA_COMPLETE          = 1u << 3,
+    PVR_EVENT_FAULT                 = 1u << 4,
+    PVR_EVENT_ALL                   = (1u << 5) - 1u
+} pvr_event_t;
+
+/** \brief PVR event callback.
+
+    The callback runs in interrupt context and must remain bounded. It must not
+    allocate memory, block, start or stop the PVR, or submit rendering work. It
+    may call pvr_get_pipeline_status(), clear latched fault flags, or remove an
+    event handler.
+
+    The detail value depends on event:
+
+    - PVR_EVENT_REGISTRATION_COMPLETE: completed list mask;
+    - PVR_EVENT_RENDER_COMPLETE: non-zero for a texture render target;
+    - PVR_EVENT_DISPLAY: displayed framebuffer index;
+    - PVR_EVENT_DMA_COMPLETE: zero on success or PVR_FAULT_DMA_INCOMPLETE;
+    - PVR_EVENT_FAULT: the observed pvr_fault_t flag.
+
+    \param  event           One pvr_event_t flag.
+    \param  detail          Event-specific detail described above.
+    \param  user_data       Pointer supplied when registering the handler.
+*/
+typedef void (*pvr_event_callback_t)(pvr_event_t event, uint32_t detail,
+                                     void *user_data);
+
+/** \brief Register an optional PVR pipeline event handler.
+
+    Handlers run in registration order. Registration allocates one small
+    bookkeeping object; no event infrastructure allocates memory or creates a
+    thread merely because PVR support is initialized.
+
+    \param  event_mask      Non-zero combination of pvr_event_t flags.
+    \param  callback        Bounded interrupt-context callback.
+    \param  user_data       Pointer passed to callback.
+
+    \return                 Non-negative handler ID on success.
+    \retval -1              On error, with errno set to EINVAL, ENODEV,
+                            ENOMEM, EOVERFLOW, or EPERM.
+*/
+int pvr_event_handler_add(uint32_t event_mask,
+                          pvr_event_callback_t callback, void *user_data);
+
+/** \brief Remove a PVR pipeline event handler.
+
+    This function is safe from within an event callback. Removal takes effect
+    before a later handler dispatch when that handler has not already begun;
+    memory reclamation is deferred to thread context.
+
+    \param  handle          ID returned by pvr_event_handler_add().
+
+    \retval 0               On success.
+    \retval -1              If handle is unknown, with errno set to ENOENT.
+*/
+int pvr_event_handler_remove(int handle);
+
+/** @} */
 
 __END_DECLS
 

@@ -3,6 +3,7 @@
    matrix3d.c
    Copyright (C) 2000-2002 Megan Potter and Jordan DeLong
    Copyright (C) 2014 Josh Pearson
+   Copyright (C) 2026 Joseph Black
 
    Some 3D utils to use with the matrix functions
    Based on example code by Marcus Comstedt
@@ -15,69 +16,68 @@
 #include <dc/matrix3d.h>
 #include <dc/vec3f.h>
 
-static alignas(32) matrix_t tr_m = {
-    { 1.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 1.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 1.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 1.0f }
-};
 void mat_translate(float x, float y, float z) {
-    tr_m[3][0] = x;
-    tr_m[3][1] = y;
-    tr_m[3][2] = z;
-    mat_apply(&tr_m);
+    alignas(32) matrix_t m = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { x,    y,    z,    1.0f }
+    };
+
+    mat_apply(&m);
 }
 
-static alignas(32) matrix_t sc_m = {
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 1.0f }
-};
 void mat_scale(float xs, float ys, float zs) {
-    sc_m[0][0] = xs;
-    sc_m[1][1] = ys;
-    sc_m[2][2] = zs;
-    mat_apply(&sc_m);
+    alignas(32) matrix_t m = {
+        { xs,   0.0f, 0.0f, 0.0f },
+        { 0.0f, ys,   0.0f, 0.0f },
+        { 0.0f, 0.0f, zs,   0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+
+    mat_apply(&m);
 }
 
-static alignas(32) matrix_t rx_m = {
-    { 1.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 1.0f }
-};
 void mat_rotate_x(float r) {
-    __fsincosr(r, rx_m[2][1], rx_m[1][1]);
-    rx_m[2][2] = rx_m[1][1];
-    rx_m[1][2] = -rx_m[2][1];
-    mat_apply(&rx_m);
+    alignas(32) matrix_t m = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+
+    __fsincosr(r, m[2][1], m[1][1]);
+    m[2][2] = m[1][1];
+    m[1][2] = -m[2][1];
+    mat_apply(&m);
 }
 
-static alignas(32) matrix_t ry_m = {
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 1.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 1.0f }
-};
 void mat_rotate_y(float r) {
-    __fsincosr(r, ry_m[0][2], ry_m[0][0]);
-    ry_m[2][2] = ry_m[0][0];
-    ry_m[2][0] = -ry_m[0][2];
-    mat_apply(&ry_m);
+    alignas(32) matrix_t m = {
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+
+    __fsincosr(r, m[0][2], m[0][0]);
+    m[2][2] = m[0][0];
+    m[2][0] = -m[0][2];
+    mat_apply(&m);
 }
 
-static alignas(32) matrix_t rz_m = {
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 1.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 1.0f }
-};
 void mat_rotate_z(float r) {
-    __fsincosr(r, rz_m[1][0], rz_m[0][0]);
-    rz_m[1][1] = rz_m[0][0];
-    rz_m[0][1] = -rz_m[1][0];
-    mat_apply(&rz_m);
+    alignas(32) matrix_t m = {
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
+
+    __fsincosr(r, m[1][0], m[0][0]);
+    m[1][1] = m[0][0];
+    m[0][1] = -m[1][0];
+    mat_apply(&m);
 }
 
 void mat_rotate(float xr, float yr, float zr) {
@@ -86,42 +86,27 @@ void mat_rotate(float xr, float yr, float zr) {
     mat_rotate_z(zr);
 }
 
-/* Some #define's so we can keep the nice looking matrices for reference */
-#define XCENTER 0.0f
-#define YCENTER 0.0f
-#define COT_FOVY_2 1.0f
-#define ZNEAR 1.0f
-#define ZFAR 100.0f
-
-/* Screen view matrix (used to transform to screen space) */
-static matrix_t sv_mat = {
-    { YCENTER,    0.0f,   0.0f,  0.0f },
-    {    0.0f, YCENTER,   0.0f,  0.0f },
-    {    0.0f,    0.0f,   1.0f,  0.0f },
-    { XCENTER, YCENTER,   0.0f,  1.0f }
-};
-
-/* Frustum matrix (does perspective) */
-static matrix_t fr_mat = {
-    { COT_FOVY_2,       0.0f,                      0.0f,  0.0f },
-    {       0.0f, COT_FOVY_2,                      0.0f,  0.0f },
-    {       0.0f,       0.0f, (ZFAR + ZNEAR) / (ZNEAR - ZFAR), -1.0f },
-    {       0.0f,       0.0f, 2 * ZFAR*ZNEAR / (ZNEAR - ZFAR),  1.0f }
-};
-
 void mat_perspective(float xcenter, float ycenter, float cot_fovy_2,
                      float znear, float zfar) {
-    /* Setup the screenview matrix */
-    sv_mat[0][0] = sv_mat[1][1] = sv_mat[3][1] = ycenter;
-    sv_mat[3][0] = xcenter;
-    mat_apply(&sv_mat);
+    alignas(32) matrix_t screen = {
+        { ycenter, 0.0f,    0.0f, 0.0f },
+        { 0.0f,    ycenter, 0.0f, 0.0f },
+        { 0.0f,    0.0f,    1.0f, 0.0f },
+        { xcenter, ycenter, 0.0f, 1.0f }
+    };
+    alignas(32) matrix_t frustum = {
+        { cot_fovy_2, 0.0f,       0.0f, 0.0f },
+        { 0.0f,       cot_fovy_2, 0.0f, 0.0f },
+        { 0.0f,       0.0f,       0.0f, -1.0f },
+        { 0.0f,       0.0f,       0.0f, 1.0f }
+    };
 
-    /* Setup the frustum matrix */
     assert((znear - zfar) != 0);
-    fr_mat[0][0] = fr_mat[1][1] = cot_fovy_2;
-    fr_mat[2][2] = (zfar + znear) / (znear - zfar);
-    fr_mat[3][2] = 2 * zfar * znear / (znear - zfar);
-    mat_apply(&fr_mat);
+    frustum[2][2] = (zfar + znear) / (znear - zfar);
+    frustum[3][2] = 2 * zfar * znear / (znear - zfar);
+
+    mat_apply(&screen);
+    mat_apply(&frustum);
 }
 
 
@@ -133,15 +118,14 @@ static inline void cross(const vec3f_t *v1, const vec3f_t *v2, vec3f_t *r) {
     r->z = v1->x * v2->y - v1->y * v2->x;
 }
 
-static matrix_t ml __attribute__((aligned(32))) = {
-    { 1.0f, 0.0f, 0.0f, 0.0f },
-    { 0.0f, 1.0f, 0.0f, 0.0f },
-    { 0.0f, 0.0f, 1.0f, 0.0f },
-    { 0.0f, 0.0f, 0.0f, 1.0f }
-};
-
 void mat_lookat(const point_t *eye, const point_t *center,
                 const vector_t *upi) {
+    alignas(32) matrix_t m = {
+        { 1.0f, 0.0f, 0.0f, 0.0f },
+        { 0.0f, 1.0f, 0.0f, 0.0f },
+        { 0.0f, 0.0f, 1.0f, 0.0f },
+        { 0.0f, 0.0f, 0.0f, 1.0f }
+    };
     vec3f_t forward, side, up;
 
     forward.x = center->x - eye->x;
@@ -161,18 +145,18 @@ void mat_lookat(const point_t *eye, const point_t *center,
     /* Recompute up as: up = side x forward */
     cross(&side, &forward, &up);
 
-    ml[0][0] = side.x;
-    ml[1][0] = side.y;
-    ml[2][0] = side.z;
+    m[0][0] = side.x;
+    m[1][0] = side.y;
+    m[2][0] = side.z;
 
-    ml[0][1] = up.x;
-    ml[1][1] = up.y;
-    ml[2][1] = up.z;
+    m[0][1] = up.x;
+    m[1][1] = up.y;
+    m[2][1] = up.z;
 
-    ml[0][2] = -forward.x;
-    ml[1][2] = -forward.y;
-    ml[2][2] = -forward.z;
+    m[0][2] = -forward.x;
+    m[1][2] = -forward.y;
+    m[2][2] = -forward.z;
 
-    mat_apply(&ml);
+    mat_apply(&m);
     mat_translate(-eye->x, -eye->y, -eye->z);
 }
