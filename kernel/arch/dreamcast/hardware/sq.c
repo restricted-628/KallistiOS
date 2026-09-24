@@ -113,7 +113,7 @@ uint32_t *sq_lock(void *dest) {
 
     new_state = &sq_state_cache[sq_mutex.count - 1];
 
-    new_state->dest = (uint32_t)dest;
+    new_state->dest = (uint32_t)(uintptr_t)dest;
     new_state->with_mmu = with_mmu;
 
     mask = with_mmu ? 0x000fffe0 : 0x03ffffe0;
@@ -166,7 +166,7 @@ void sq_unlock(void) {
         sq_state_t *tmp_state = &sq_state_cache[sq_mutex.count - 2];
 
         if(tmp_state->with_mmu)
-            mmu_set_sq_addr((void *)tmp_state->dest);
+            mmu_set_sq_addr((void *)(uintptr_t)tmp_state->dest);
         else
             SET_QACR_REGS(tmp_state->dest, tmp_state->dest);
     }
@@ -182,14 +182,24 @@ bool arch_fiber_cooperative_state_switchable(void) {
 
 void sq_wait(void) {
     /* Wait for both store queues to complete */
-    uint32_t *d = (uint32_t *)MEM_AREA_SQ_BASE;
+    volatile uint32_t *d = (volatile uint32_t *)MEM_AREA_SQ_BASE;
     d[0] = d[8] = 0;
+}
+
+/* Stay within the MMU's two-page window and the QACR-selected 64 MiB
+   external area. Reacquire at the boundary before emitting another burst. */
+static size_t sq_batch_lines(const void *dest, size_t lines) {
+    size_t area_lines = (0x04000000u - ((uintptr_t)dest & 0x03ffffffu)) >> 5;
+
+    if(lines > 0x8000)
+        lines = 0x8000;
+    return lines < area_lines ? lines : area_lines;
 }
 
 /* Copies n bytes from src to dest, dest must be 32-byte aligned */
 __noinline void *sq_cpy(void *dest, const void *src, size_t n) {
     const uint32_t *s = src;
-    void *curr_dest = dest;
+    uint8_t *curr_dest = dest;
     uint32_t *d;
     size_t nb;
 
@@ -211,7 +221,7 @@ __noinline void *sq_cpy(void *dest, const void *src, size_t n) {
         /* Transfer maximum 1 MiB at once. This is because when using the
          * MMU the SQ area is 2 MiB, and the destination address may
          * not be on a page boundary. */
-        nb = n > 0x8000 ? 0x8000 : n;
+        nb = sq_batch_lines(curr_dest, n);
 
         d = sq_lock(curr_dest);
         if(!d)
@@ -266,7 +276,7 @@ void *sq_set16(void *dest, uint32_t c, size_t n) {
 
 /* Fills n bytes at dest with int c, dest must be 32-byte aligned */
 void *sq_set32(void *dest, uint32_t c, size_t n) {
-    void *curr_dest = dest;
+    uint8_t *curr_dest = dest;
     uint32_t *d;
     size_t nb;
 
@@ -286,7 +296,7 @@ void *sq_set32(void *dest, uint32_t c, size_t n) {
         /* Transfer maximum 1 MiB at once. This is because when using the
          * MMU the SQ area is 2 MiB, and the destination address may
          * not be on a page boundary. */
-        nb = n > 0x8000 ? 0x8000 : n;
+        nb = sq_batch_lines(curr_dest, n);
 
         d = sq_lock(curr_dest);
         if(!d)

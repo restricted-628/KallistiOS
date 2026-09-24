@@ -315,7 +315,8 @@ void snd_pcm16_split_sq(uint32_t *data, uintptr_t left, uintptr_t right, size_t 
     masked_left = SQ_MASK_DEST(left);
     masked_right = SQ_MASK_DEST(right);
 
-    sq_lock((void *)left);
+    if(!sq_lock((void *)left))
+        return;
     dcache_pref_line(s);
 
     g2_lock_scoped();
