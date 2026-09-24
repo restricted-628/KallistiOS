@@ -93,6 +93,7 @@ __BEGIN_DECLS
 #include <dc/pvr_cell.h>
 #include <dc/pvr_tilemap.h>
 #include <dc/pvr_cell_asset.h>
+#include <dc/elan.h>
 #include <dc/scif.h>
 #include <dc/sci.h>
 #include <dc/sd.h>
