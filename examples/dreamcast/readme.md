@@ -30,6 +30,7 @@ This page serves as an index for all KallistiOS examples.
   - stacktrace
   - sq-safety
   - threading
+    - tmu1-channel
     - atomics
     - barrier
     - compiler_tls

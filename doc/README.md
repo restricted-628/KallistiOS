@@ -2,6 +2,9 @@
 KallistiOS[^1] is a development library and unikernel operating system for
 the Dreamcast[^1] licensed under a [permissive software license](LICENSE.md).
 
+Opt-in hardware timer ownership is documented in the
+[TMU1 ownership guide](tmu-channel-ownership.md).
+
 Checked deferred-callback semantics are documented in the
 [workqueue safety guide](workqueue-safety.md). The ownership and resource rules
 for KOS-created background execution are recorded in the

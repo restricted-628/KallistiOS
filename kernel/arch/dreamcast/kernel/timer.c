@@ -341,7 +341,10 @@ timer_channel_t *timer_channel_claim(int channel) {
         return NULL;
 
     old = irq_disable();
-    if(timer_channel_owner || (TIMER8(TSTR) & BIT(TMU1))) {
+    /* A pending legacy underflow cannot be recreated by restoring TCR:
+       UNF is set by hardware, not by writing 1. Leave it for its owner. */
+    if(timer_channel_owner || (TIMER8(TSTR) & BIT(TMU1)) ||
+       (TIMER16(tcrs[TMU1]) & UNF)) {
         irq_restore(old);
         free(owner);
         errno = EBUSY;
@@ -419,6 +422,10 @@ int timer_channel_start(timer_channel_t *channel) {
         errno = EINVAL;
         return -1;
     }
+
+    /* Starting an already-running channel must not discard a pending IRQ. */
+    if(TIMER8(TSTR) & BIT(TMU1))
+        return 0;
 
     TIMER16(tcrs[TMU1]) &= ~UNF;
     if(channel->callback)

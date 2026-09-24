@@ -1,0 +1,1 @@
+/* Host driver tests do not use an architecture startup implementation. */
