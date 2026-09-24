@@ -51,6 +51,19 @@ entry is retired by the same hardware operation. The array write executes from
 P2 and observes the required instruction separation before returning to cached
 or translated code.
 
+Associative invalidation compares the supplied VPN against `PTEH.ASID`, not
+the ASID bits in the array-write value. The helper temporarily selects the
+requested ASID with exceptions blocked, then restores the complete `PTEH` and
+status register. This is required for retiring an inactive context without
+invalidating a private same-VPN entry belonging to the active context. KOS
+configures multiple-virtual mode (`MMUCR.SV=0`); shared entries match regardless
+of ASID. Applications must not create overlapping shared/private translations
+that would cause a multiple-hit exception. Changing SV independently is not
+supported by this per-context contract.
+
+The comparison and P2 array-access rules are specified in sections 3.4.3 and
+3.7 of the [Renesas SH7750/SH7750S/SH7750R hardware manual](https://www.renesas.com/en/document/mah/sh7750-sh7750s-sh7750r-group-users-manual-hardware).
+
 Cached data is retired by scanning physical tags from P2 before a cached mapping
 is changed. A P1 `ocbp` operand is insufficient: a translated page can have a
 different virtual cache index, especially when OIX uses virtual bit 25. The
@@ -107,6 +120,20 @@ range and cache-mode ownership with the application. No library auto-enables
 OIX, and the existing OCRAM layout must not be used concurrently with it.
 
 ## Validation
+
+`make -C utils/mmu-tlb-test test` executes the production invalidator's assembly
+in a limited register/MMIO model: all 256 ASIDs, active/inactive targets, four
+page sizes, shared entries, ITLB-only matches, caller register restoration,
+exception exclusion and P2 return spacing (6,144 cases). It is not a full CPU
+or cache model. Removing the temporary PTEH selection fails the inactive-ASID
+regression by leaving the target valid and invalidating its peer.
+
+`examples/dreamcast/basic/mmu/tlb-asid` seeds and reads UTLB/ITLB array entries.
+Its ten cases cover ASIDs 0/7/255, active/inactive targets, a shared entry, an
+ITLB-only match and inactive-context remap/cache-policy/unmap/destroy. The
+original PTEH and a same-VPN peer are preserved. Flycast interpreter and dynarec
+pass; the probe does not dereference translated P0 memory and does not prove
+data-cache retirement, hardware timing or physical-console compatibility.
 
 `examples/dreamcast/basic/mmu/mapping-safety` checks argument validation,
 page-table translations, cache-policy encoding and atomicity, remapping,
