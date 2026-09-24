@@ -18,6 +18,7 @@
     .globl _arch_icache_inval_range
     .globl _arch_icache_sync_range
     .globl _cache_write_ccr
+    .globl _mmu_purge_phys_page
 
 ! This routine goes through and flushes/invalidates the icache
 ! for a given range.
@@ -212,6 +213,66 @@ _arch_icache_sync_range:
 .iflush_exit:
     rts
     nop
+
+! Retire a 4 KiB physical page regardless of virtual index or active TLB/ASID.
+! Internal MMU lifecycle helper: r4 is a page-aligned physical address.
+! Physical tag [28:12] identifies the page; tag [11:10] and index [9:5]
+! identify its lines. Do not synthesize a P1 OCBP operand: its virtual color
+! can differ. Clearing V/U through the non-associative array writes dirty data
+! back using its physical tag. Never touch entries assigned to OCRAM.
+    .align 2
+_mmu_purge_phys_page:
+    mova     .mpp_p2, r0
+    mov.l    p2_mask, r1
+    or       r1, r0
+    jmp      @r0
+    nop
+    .align 2
+.mpp_p2:
+    stc      sr, r3
+    mov.l    block_bit, r0
+    or       r3, r0
+    ldc      r0, sr
+    mov.l    ccr_addr, r0
+    mov.l    @r0, r0
+    and      #32, r0
+    shll8    r0
+    shlr     r0             ! ORA -> address-array bit 12 (entry bit 7)
+    mov      r0, r7
+    mov.l    .mpp_page_mask, r1
+    mov.l    loc_tags, r5
+    mov.l    .mpp_end, r2
+.mpp_loop:
+    tst      r7, r5
+    bf       .mpp_next
+    mov.l    @r5, r0
+    tst      #1, r0         ! Valid?
+    bt       .mpp_next
+    and      r1, r0
+    cmp/eq   r4, r0
+    bf       .mpp_next
+    mov      #0, r0
+    mov.l    r0, @r5        ! Non-associative purge, preserving dirty data
+.mpp_next:
+    add      #32, r5
+    cmp/eq   r2, r5
+    bf       .mpp_loop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    nop
+    ldc      r3, sr
+    rts
+    nop
+    .align 2
+.mpp_page_mask:
+    .long    0x1ffff000
+.mpp_end:
+    .long    0xf4004000
 
 _cache_write_ccr:
     mov.l    ccr_addr, r6

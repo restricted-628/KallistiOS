@@ -2,6 +2,7 @@
 
    arch/dreamcast/kernel/mmu.c
    (c)2001 Megan Potter
+   Copyright (C) 2026 Joseph Black
 */
 
 /* SH-4 MMU related functions, ported up from KOS-MMU */
@@ -9,6 +10,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <errno.h>
 
 #include <arch/arch.h>
 #include <arch/mmu.h>
@@ -18,12 +20,12 @@
 #include <kos/cache.h>
 #include <kos/dbgio.h>
 #include <kos/irq.h>
-#include <kos/regfield.h>
 #include <kos/thread.h>
 
-#define MMU_TOP_MASK GENMASK(30, 21)            /**< \brief Top-level mask */
-#define MMU_BOT_MASK GENMASK(20, 12)            /**< \brief Bottom mask */
 #define MMU_IND_BITS 12                         /**< \brief Index bits */
+#define MMU_VIRTUAL_PAGES (MMU_PAGES * MMU_SUB_PAGES)
+#define MMU_PHYSICAL_PAGES (0x20000000u >> MMU_IND_BITS)
+#define MMU_STATIC_MAX 62u
 
 /********************************************************************************/
 /* Register definitions */
@@ -115,6 +117,10 @@ static inline void mmu_ldtlb_wait(void) {
 
 /* Defined in mmuitlb.s */
 void mmu_reset_itlb(void);
+void mmu_invalidate_tlb(uint32_t virt, uint32_t asid);
+void mmu_set_sq_addr_asm(uint32_t ptel1, uint32_t ptel2);
+/* P2 address-array scan; independent of virtual cache color and active ASID. */
+void mmu_purge_phys_page(uint32_t physical);
 
 /* Defined below */
 static mmupage_t *map_virt(mmucontext_t *context, int virtpage);
@@ -138,6 +144,11 @@ mmucontext_t *mmu_context_create(int asid) {
     mmucontext_t    *cont;
     int     i;
 
+    if(asid < 0 || asid > 255) {
+        errno = EINVAL;
+        return NULL;
+    }
+
     cont = (mmucontext_t*)malloc(sizeof(mmucontext_t));
 
     if(cont == NULL)
@@ -155,6 +166,43 @@ mmucontext_t *mmu_context_create(int asid) {
 void mmu_context_destroy(mmucontext_t *context) {
     int i;
 
+    if(!context)
+        return;
+
+    {
+        irq_disable_scoped();
+
+        /* Even an inactive context can retain ASID-tagged TLB translations and
+           dirty physical cache lines from its last use. Retire both before
+           freeing it without pulling in the purge-all eviction workspace. */
+        for(i = 0; i < MMU_PAGES; i++) {
+            int j;
+
+            if(!context->sub[i])
+                continue;
+
+            for(j = 0; j < MMU_SUB_PAGES; j++) {
+                if(context->sub[i]->page[j].valid) {
+                    mmupage_t *page = &context->sub[i]->page[j];
+                    uint32_t virtpage = i * MMU_SUB_PAGES + j;
+
+                    if(page->cache) {
+                        uintptr_t physical =
+                            (uintptr_t)page->physical << MMU_IND_BITS;
+
+                        mmu_purge_phys_page(physical);
+                    }
+
+                    mmu_invalidate_tlb(virtpage << MMU_IND_BITS,
+                                       context->asid);
+                }
+            }
+        }
+
+        if(context == mmu_cxt_current)
+            mmu_use_table(NULL);
+    }
+
     for(i = 0; i < MMU_PAGES; i++) {
         if(context->sub[i] != NULL)
             free(context->sub[i]);
@@ -171,12 +219,11 @@ static mmupage_t *map_virt(mmucontext_t *context, int virtpage) {
     mmupage_t   *page;
     int     top, bot;
 
-    /* Get back the virtual address */
-    virtpage = virtpage << MMU_IND_BITS;
+    if(!context || virtpage < 0 || virtpage >= MMU_VIRTUAL_PAGES)
+        return NULL;
 
-    /* Mask out and grab the top and bottom indices */
-    top = FIELD_GET(virtpage, MMU_TOP_MASK);
-    bot = FIELD_GET(virtpage, MMU_BOT_MASK);
+    top = (unsigned int)virtpage / MMU_SUB_PAGES;
+    bot = (unsigned int)virtpage % MMU_SUB_PAGES;
 
     /* Look up the top-level sub-context */
     sub = context->sub[top];
@@ -207,113 +254,279 @@ int mmu_virt_to_phys(mmucontext_t *context, int virtpage) {
         return page->physical;
 }
 
+/* Return the first virtual page mapped to the requested physical page. */
+int mmu_phys_to_virt(mmucontext_t *context, int physpage) {
+    int top;
+
+    if(!context || physpage < 0 ||
+       (unsigned int)physpage >= MMU_PHYSICAL_PAGES)
+        return -1;
+
+    for(top = 0; top < MMU_PAGES; top++) {
+        int bot;
+
+        if(!context->sub[top])
+            continue;
+
+        for(bot = 0; bot < MMU_SUB_PAGES; bot++) {
+            const mmupage_t *page = &context->sub[top]->page[bot];
+
+            if(page->valid && page->physical == (unsigned int)physpage)
+                return top * MMU_SUB_PAGES + bot;
+        }
+    }
+
+    return -1;
+}
+
 /* Switch to the given context; invalidate any caches as necessary */
 void mmu_switch_context(mmucontext_t *context) {
     SET_PTEH(0, context->asid);
 }
 
-static void mmu_page_uninstall(unsigned int virtpage)
-{
-    /* Note: bit 7 of the address is associativity bit. When set, each TLB entry
-     * corresponding to the value will be invalidated. */
-    *(volatile uint32_t *)(MEM_AREA_UTLB_ADDRESS_ARRAY_BASE | BIT(7))
-        = virtpage << PAGESIZE_BITS;
+static int validate_page_range(mmucontext_t *context, int virtpage,
+                               int physpage, int count,
+                               page_prot_t prot, page_cache_t cache) {
+    if(!context || virtpage < 0 || physpage < 0 || count <= 0 ||
+       prot < MMU_KERNEL_RDONLY || prot > MMU_ALL_RDWR ||
+       cache < MMU_NO_CACHE || cache > MMU_CACHE_WT ||
+       (unsigned int)virtpage >= MMU_VIRTUAL_PAGES ||
+       (unsigned int)count > MMU_VIRTUAL_PAGES - (unsigned int)virtpage ||
+       (unsigned int)physpage >= MMU_PHYSICAL_PAGES ||
+       (unsigned int)count > MMU_PHYSICAL_PAGES - (unsigned int)physpage) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    return 0;
 }
 
-void mmu_page_unmap(mmucontext_t *context, int virtpage, int count)
-{
-    mmupage_t *page;
+static void page_set_cache(mmupage_t *page, page_cache_t cache) {
+    page->cache = cache != MMU_NO_CACHE;
+    page->wthru = cache == MMU_CACHE_WT;
+}
 
-    while(count) {
-        page = map_virt(context, virtpage);
-        if(page) {
-            page->valid = 0;
-            mmu_page_uninstall(virtpage);
+static void page_compile(mmupage_t *page, int virtpage) {
+    uint32_t virt = (uint32_t)virtpage << MMU_IND_BITS;
+
+    page->pteh = BUILD_PTEH(virt, 0);
+    page->ptel = BUILD_PTEL(page->physical << PAGESIZE_BITS, 1,
+                            PAGE_SIZE_4K, page->prkey, page->cache,
+                            page->dirty, page->shared, page->wthru);
+}
+
+static void purge_cached_range(mmucontext_t *context,
+                               int virtpage, int count) {
+    int i;
+
+    for(i = 0; i < count; i++) {
+        mmupage_t *page = map_virt(context, virtpage + i);
+
+        if(page && page->cache) {
+            uintptr_t physical =
+                (uintptr_t)page->physical << MMU_IND_BITS;
+
+            /* The virtual index may differ from P1's physical index, both
+               with 4 KiB coloring and with OIX virtual bit 25. Scan tags so
+               inactive contexts and opposite-color dirty lines retire too. */
+            mmu_purge_phys_page(physical);
+        }
+    }
+}
+
+int mmu_page_map_ex(mmucontext_t *context,
+                    int virtpage, int physpage, int count,
+                    page_prot_t prot, page_cache_t cache,
+                    bool share, bool dirty) {
+    mmusubcontext_t **new_sub = NULL;
+    int first_top, last_top, top_count, missing = 0, top, i;
+
+    if(validate_page_range(context, virtpage, physpage, count,
+                           prot, cache) < 0)
+        return -1;
+
+    first_top = virtpage / MMU_SUB_PAGES;
+    last_top = (virtpage + count - 1) / MMU_SUB_PAGES;
+    top_count = last_top - first_top + 1;
+
+    for(top = first_top; top <= last_top; top++) {
+        if(!context->sub[top])
+            missing++;
+    }
+
+    if(missing) {
+        new_sub = calloc(top_count, sizeof(*new_sub));
+        if(!new_sub) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+
+    /* Allocate every missing second-level table before changing the mapping.
+       The checked API is therefore all-or-nothing on allocation failure. */
+    for(top = first_top; top <= last_top; top++) {
+        if(!context->sub[top]) {
+            int index = top - first_top;
+
+            new_sub[index] = calloc(1, sizeof(*new_sub[index]));
+            if(!new_sub[index]) {
+                int rollback;
+
+                for(rollback = 0; rollback < top_count; rollback++)
+                    free(new_sub[rollback]);
+
+                free(new_sub);
+                errno = ENOMEM;
+                return -1;
+            }
+        }
+    }
+
+    {
+        irq_disable_scoped();
+
+        /* An inactive context can retain dirty physical cache lines from its
+           last use, so cache retirement cannot depend on current selection. */
+        purge_cached_range(context, virtpage, count);
+
+        for(top = first_top; top <= last_top; top++) {
+            int index = top - first_top;
+
+            if(new_sub && new_sub[index])
+                context->sub[top] = new_sub[index];
         }
 
-        virtpage++;
-        count--;
+        for(i = 0; i < count; i++) {
+            int page_id = virtpage + i;
+            int page_top = page_id / MMU_SUB_PAGES;
+            int page_bot = page_id % MMU_SUB_PAGES;
+            mmupage_t *page = &context->sub[page_top]->page[page_bot];
+
+            /* A previous context using the same ASID may have left a
+               translation for this VPN even when this slot is empty. */
+            mmu_invalidate_tlb((uint32_t)page_id << MMU_IND_BITS,
+                               context->asid);
+
+            page->physical = physpage + i;
+            page->prkey = prot;
+            page_set_cache(page, cache);
+            page->dirty = dirty;
+            page->blank = 0;
+            page->shared = share;
+            page->valid = 1;
+            page_compile(page, page_id);
+        }
     }
+
+    free(new_sub);
+    return 0;
 }
 
-/* Set the given virtual page to map to the given physical page; implies
-   turning on the "valid" bit. */
-static void mmu_page_map_single(mmucontext_t *context,
-                                int virtpage, int physpage,
-                                page_prot_t prot, page_cache_t cache,
-                                bool share, bool dirty) {
-    mmusubcontext_t *sub;
-    mmupage_t   *page;
-    int     top, bot, i;
-    int vaddr;
-
-    /* Get back the virtual address */
-    vaddr = virtpage << MMU_IND_BITS;
-
-    /* Mask out and grab the top and bottom indices */
-    top = FIELD_GET(vaddr, MMU_TOP_MASK);
-    bot = FIELD_GET(vaddr, MMU_BOT_MASK);
-
-    /* Look up the top-level sub-context; if there isn't one, create one. */
-    sub = context->sub[top];
-
-    if(sub == NULL) {
-        sub = (mmusubcontext_t *)malloc(sizeof(mmusubcontext_t));
-        if(sub == NULL)
-            return;
-
-        for(i = 0; i < MMU_SUB_PAGES; i++)
-            sub->page[i].valid = 0;
-
-        context->sub[top] = sub;
-    }
-
-    /* Look up the bottom-level page */
-    page = sub->page + bot;
-
-    if(page->valid)
-        mmu_page_uninstall((unsigned int)virtpage);
-
-    page->physical = physpage;
-    page->prkey = prot;
-
-    switch(cache) {
-        case MMU_NO_CACHE:
-            page->cache = 0;
-            break;
-        case MMU_CACHE_BACK:
-            page->cache = 1;
-            page->wthru = 0;
-            break;
-        case MMU_CACHE_WT:
-            page->cache = 1;
-            page->wthru = 1;
-            break;
-    }
-
-    page->dirty = dirty;
-    page->blank = 0;
-    page->shared = share;
-    page->valid = 1;
-
-    page->pteh = BUILD_PTEH(vaddr, 0);
-    page->ptel = BUILD_PTEL(page->physical << PAGESIZE_BITS, 1, 1, page->prkey,
-                            page->cache, page->dirty, page->shared, page->wthru);
-}
-
-/* Map N pages sequentially */
+/* Preserve the original source and binary interface while giving new code an
+   error-reporting operation through mmu_page_map_ex(). */
 void mmu_page_map(mmucontext_t *context,
                   int virtpage, int physpage, int count,
                   page_prot_t prot, page_cache_t cache,
                   bool share, bool dirty) {
-    while(count > 0) {
-        mmu_page_map_single(context,
-                            virtpage, physpage,
-                            prot, cache, share, dirty);
-        virtpage++;
-        physpage++;
-        count--;
+    (void)mmu_page_map_ex(context, virtpage, physpage, count,
+                          prot, cache, share, dirty);
+}
+
+static bool subcontext_empty(const mmusubcontext_t *sub) {
+    int i;
+
+    for(i = 0; i < MMU_SUB_PAGES; i++) {
+        if(sub->page[i].valid)
+            return false;
     }
+
+    return true;
+}
+
+void mmu_page_unmap(mmucontext_t *context, int virtpage, int count) {
+    (void)mmu_page_unmap_ex(context, virtpage, count);
+}
+
+int mmu_page_unmap_ex(mmucontext_t *context, int virtpage, int count) {
+    int i;
+
+    if(!context || virtpage < 0 || count <= 0 ||
+       (unsigned int)virtpage >= MMU_VIRTUAL_PAGES ||
+       (unsigned int)count > MMU_VIRTUAL_PAGES - (unsigned int)virtpage) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    {
+        irq_disable_scoped();
+
+        purge_cached_range(context, virtpage, count);
+
+        for(i = 0; i < count; i++) {
+            int page_id = virtpage + i;
+            int top = page_id / MMU_SUB_PAGES;
+            int bot = page_id % MMU_SUB_PAGES;
+            mmusubcontext_t *sub = context->sub[top];
+            mmupage_t *page;
+
+            if(!sub)
+                continue;
+
+            page = &sub->page[bot];
+            if(page->valid) {
+                mmu_invalidate_tlb((uint32_t)page_id << MMU_IND_BITS,
+                                   context->asid);
+                memset(page, 0, sizeof(*page));
+            }
+        }
+    }
+
+    /* Empty tables no longer represent any mapping and can be reclaimed. */
+    for(i = virtpage / MMU_SUB_PAGES;
+        i <= (virtpage + count - 1) / MMU_SUB_PAGES; i++) {
+        if(context->sub[i] && subcontext_empty(context->sub[i])) {
+            free(context->sub[i]);
+            context->sub[i] = NULL;
+        }
+    }
+
+    return 0;
+}
+
+int mmu_page_set_cache(mmucontext_t *context, int virtpage, int count,
+                       page_cache_t cache) {
+    int i;
+
+    if(!context || virtpage < 0 || count <= 0 ||
+       cache < MMU_NO_CACHE || cache > MMU_CACHE_WT ||
+       (unsigned int)virtpage >= MMU_VIRTUAL_PAGES ||
+       (unsigned int)count > MMU_VIRTUAL_PAGES - (unsigned int)virtpage) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for(i = 0; i < count; i++) {
+        if(!map_virt(context, virtpage + i)) {
+            errno = ENOENT;
+            return -1;
+        }
+    }
+
+    irq_disable_scoped();
+
+    purge_cached_range(context, virtpage, count);
+
+    for(i = 0; i < count; i++) {
+        int page_id = virtpage + i;
+        mmupage_t *page = map_virt(context, page_id);
+
+        mmu_invalidate_tlb((uint32_t)page_id << MMU_IND_BITS,
+                           context->asid);
+        page_set_cache(page, cache);
+        page_compile(page, page_id);
+    }
+
+    return 0;
 }
 
 #if 0   /* Only applies to KOS-MMU */
@@ -370,7 +583,7 @@ int mmu_copyin(mmucontext_t *context, uint32_t srcaddr, uint32_t srccnt, void *b
     /* Setup source pointers */
     srcptr = (uint32_t)srcaddr;
 
-    if(!(srcptr & 0x8000000)) {
+    if(!(srcptr & 0x80000000)) {
         srcpage = map_virt(context, srcptr >> PAGESIZE_BITS);
 
         if(srcpage == NULL)
@@ -747,8 +960,30 @@ int mmu_page_map_static(uintptr_t virt, uintptr_t phys,
 {
     unsigned int head;
 
-    if(virt & phys & page_mask[page_size])
+    if(page_size < PAGE_SIZE_1K || page_size > PAGE_SIZE_1M ||
+       page_prot < MMU_KERNEL_RDONLY || page_prot > MMU_ALL_RDWR) {
+        errno = EINVAL;
         return -1;
+    }
+
+    if((virt | phys) & page_mask[page_size]) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* PTEL contains a 29-bit physical address. Reject a base or page span
+       that would otherwise be truncated by BUILD_PTEL(). */
+    if(phys > 0x1fffffffu - page_mask[page_size]) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Entry 0 must remain available to the hardware replacement cycle. The
+       two SQ translations created by mmu_init_basic() count against this cap. */
+    if(tlb_nb_static >= MMU_STATIC_MAX) {
+        errno = ENOSPC;
+        return -1;
+    }
 
     irq_disable_scoped();
 
@@ -767,12 +1002,21 @@ void mmu_init_basic(void) {
     /* Reset number of static mappings */
     tlb_nb_static = 0;
 
+    /* The boot environment may leave valid translations behind even though
+       address translation itself is disabled. Retaining them can make the
+       first KOS mapping hit an unrelated entry, so invalidate both TLBs before
+       reserving the static SQ slots. TI clears itself in hardware. */
+    SET_MMUCR(0, 0, 1, 0, 1, 0);
+    mmu_ldtlb_wait();
+
     /* Reserve TLB entries 62-63 for SQ translation. Register them as read-write
      * (since there's no write-only flag) with a 1 MiB page.
      * Note that mmu_page_map_static() will enable MMU so we don't have to do it
      * later. */
     mmu_page_map_static(0xe0100000, 0, PAGE_SIZE_1M, MMU_KERNEL_RDWR, false);
     mmu_page_map_static(0xe0000000, 0, PAGE_SIZE_1M, MMU_KERNEL_RDWR, false);
+    /* Kernel SQ mappings are global, not tied to startup ASID zero. */
+    mmu_set_sq_addr(NULL);
 
     /* Clear the ITLB */
     mmu_reset_itlb();
@@ -817,6 +1061,8 @@ void mmu_shutdown(void) {
 
     /* No more shortcuts */
     mmu_shortcut_ok = 0;
+    mmu_cxt_current = NULL;
+    map_func = NULL;
 
     /* Unhook the IRQ handlers */
     irq_set_handler(EXC_ITLB_MISS, NULL, NULL);
@@ -836,7 +1082,8 @@ void mmu_set_sq_addr(void *addr) {
     uint32_t ppn1 = (uint32_t)addr & 0x1ff00000;
     uint32_t ppn2 = ppn1 + 0x00100000;
 
-    /* Reset the base target address for the SQs */
-    *(uint32_t *)(MEM_AREA_UTLB_DATA_ARRAY1_BASE + (0x3e << 8)) = ppn1 | 0x1fc;
-    *(uint32_t *)(MEM_AREA_UTLB_DATA_ARRAY1_BASE + (0x3f << 8)) = ppn2 | 0x1fc;
+    /* Direct TLB array writes are only architecturally guaranteed from P2. */
+    /* SH=1 keeps these kernel-owned mappings usable after selecting a
+       translated decoder context with a nonzero ASID. SQMD still bars users. */
+    mmu_set_sq_addr_asm(ppn1 | 0x1fe, ppn2 | 0x1fe);
 }
