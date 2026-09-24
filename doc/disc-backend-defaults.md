@@ -77,6 +77,17 @@ Other diagnostic fields describe the last command attempted. Buffer-size,
 pointer-wrap, and FAD-span validation precede all I/O. There is no allocation
 or automatic backend switch. This does not change the generic BIOS aliases.
 
+`gdrom_direct_read_sectors_pio_async` now provides the same arbitrary-count
+PIO read as an explicit queued choice, including odd RAW2352 counts and
+two-byte-aligned buffers. Format and counts are copied at submission. Its
+execution deadline excludes initial queue residence; cancellation follows
+the polled transport's checks and bounded recovery. G1 releases between
+commands, but PIO occupies the request worker for the whole operation rather
+than requeueing like DMA chains. No payload staging or other transport is
+used. Request progress counts copied bytes after each command attempt, while
+the cumulative transport trace also includes excess bytes drained on error.
+The result remains untouched on pre-execution cancellation or admission failure.
+
 Direct DMA accepts RAW2352 for even counts, with a
 32-byte-aligned destination and exact sectors * 2352 byte accounting. This
 applies to synchronous/queued RAM or PVR destinations and leased GAPS SRAM.
@@ -103,8 +114,10 @@ buffer, or PIO fallback. Explicit PIO remains available for odd raw counts.
 Ranges and staged sessions remain cooked-only. The internal direct-chain
 constructor now accepts raw pairs and verifies every segment's exact wire
 count against its byte accounting, including requeued segments.
-Arbitrary-count raw DMA/staging still needs a separate contract before generic
-reads can switch. Generic BIOS APIs accept
+Odd raw DMA remains explicitly unsupported (`EINVAL`), with no implicit PIO
+tail or extra-sector read. Applications needing odd raw counts can deliberately
+select synchronous or queued PIO. Generic read routing must retain this DMA
+restriction or introduce a separately named mixed/staged contract. Generic BIOS APIs accept
 configured raw layouts, which must not be silently reinterpreted as cooked.
 
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
@@ -230,3 +243,20 @@ ASan/UBSan packet tests pass. Queued DMA, PIO, BIOS read, convenience, defaults,
 and G1 probes still pass 320/304/151/128/14/4 checks in both modes. Payload
 writes and real bus timing are not simulated by the MMIO probe; no physical
 DMA/cache/IRQ or drive-support claim follows from these results.
+
+The explicit queued-PIO pass expands `direct-raw-pio` to 776 checks, passing
+in both Flycast modes with production PIO transport logic and the real request
+worker/callback lifecycle. It covers cooked/raw and odd-count reads, partial
+and overflow progress, cancellation before execution and between commands,
+initial-queue-time exclusion, shutdown rejection, and destination guards.
+Custom executor progress metadata is now initialized at submission; previously
+the shared progress helper clamped partial results to an empty segment. The
+DMA-chain probe's 334 checks include synthetic custom-executor partial-error
+and capacity-clamp cases through the production request layer. These cases
+test accounting, not a physical bounded-DMA command.
+The full SH-4 GCC 16.2 build, both affected driver units and probes under
+`-Werror`, nine other example rebuilds, and GNU17/strict C23/Clang sanitizer
+packet tests pass. The PIO API is present in the kernel and export stubs.
+Existing DMA, BIOS read, convenience, defaults, and G1 tests still pass
+3346/151/128/14/4 checks in both modes. Simulated registers and payloads do
+not establish physical media, cache, IRQ, recovery, or throughput behavior.

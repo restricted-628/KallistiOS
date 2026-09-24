@@ -70,6 +70,7 @@ gdrom_direct_cdda_scan
 gdrom_direct_cdda_scan_async
 gdrom_direct_get_session
 gdrom_direct_read_sectors
+gdrom_direct_read_sectors_pio_async
 gdrom_direct_read_sectors_dma
 gdrom_direct_read_sectors_dma_async
 gdrom_direct_read_sectors_dma_gaps

@@ -585,6 +585,43 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
                               uint32_t timeout,
                               gdrom_direct_result_t *result);
 
+/** \brief Explicitly queue a direct PIO read, including odd raw sector counts.
+
+    Uses the same two-byte buffer alignment, explicit format, whole-range
+    validation, bounded commands, and cumulative transport diagnostics as
+    \ref gdrom_direct_read_sectors. Format and byte counts are copied at
+    submission, independently of BIOS sector-mode changes. No DMA, extra-sector
+    read, payload staging, or BIOS fallback is used. The normal request object
+    and its copied metadata are allocated by the common request layer.
+
+    The timeout starts at execution, excluding initial queue residence, and
+    covers the complete read. G1 is released between commands, but this PIO
+    executor occupies the request worker until completion; unlike DMA chains,
+    it does not requeue between commands. Cancellation is checked at transport
+    polling points and performs bounded recovery if a command is active.
+
+    Request progress is updated after each command attempt and counts only
+    bytes copied to the destination; the transport trace also counts excess
+    bytes drained on a protocol error. Both may contain partial progress on
+    failure. The destination and optional result must remain valid until the
+    request is terminal. Cancellation before execution leaves result untouched.
+
+    \param buffer         Two-byte-aligned writable destination for all sectors.
+    \param fad            First absolute frame address, at least 150.
+    \param sectors        Nonzero count fitting the FAD and destination span.
+    \param sector_type    Mode-1, Mode-2 Form-1, or complete RAW2352 sectors.
+    \param timeout        Required nonzero execution timeout in milliseconds.
+    \param result         Optional cumulative direct transport observations.
+    \param callback       Optional callback using normal request lifecycle rules.
+    \param callback_data  User data supplied to the callback.
+    \return Request handle, or NULL with errno set on admission failure.
+*/
+cdrom_request_t *gdrom_direct_read_sectors_pio_async(
+    void *buffer, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+    gdrom_direct_result_t *result,
+    cdrom_request_callback_t callback, void *callback_data);
+
 /** \brief Read cooked or raw sectors through the direct Holly GD-DMA transport.
 
     This experimental operation does not use the BIOS command server. The

@@ -153,6 +153,7 @@ static bool command_supported(cd_cmd_code_t command) {
 
 static bool executor_command_supported(cd_cmd_code_t command) {
     switch(command) {
+        case CD_CMD_PIOREAD:
         case CD_CMD_DMAREAD:
         case CD_CMD_SEEK:
         case CD_CMD_PLAY_TRACKS:
@@ -1704,6 +1705,15 @@ static cdrom_request_t *submit_request(cd_cmd_code_t command,
         .io_completed_bytes = 0,
     };
 
+    if(custom) {
+        /* Executors report progress through the same accounting helper as
+           DMA chains, but have no submitted DMA segment to copy. */
+        request->dma_segment = (cdrom_request_dma_segment_t) {
+            .io_bytes = io_bytes,
+            .data_bytes = data_bytes,
+            .data_direct = true,
+        };
+    }
     if(dma_read) {
         request->dma_segment = *segment;
         if(!dma_segment_valid(request, segment)) {

@@ -2,7 +2,8 @@
 TARGET = direct-raw-pio.elf
 OBJS = direct-raw-pio.o gdrom_direct_probe.o
 DRIVER = ../../../../kernel/arch/dreamcast/hardware/gdrom_direct.c
-WRAPPED = g1_bus_lock_timed g1_bus_unlock g1_bus_select_device_timed g1_bus_wait_status
+WRAPPED = g1_bus_lock_timed g1_bus_unlock g1_bus_select_device_timed g1_bus_wait_status \
+    cdrom_media_monitor_report_result
 
 all: $(TARGET)
 include $(KOS_BASE)/Makefile.rules

@@ -1754,10 +1754,36 @@ int gdrom_direct_get_session(uint8_t session,
     return 0;
 }
 
-int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
-                              gdrom_direct_sector_type_t sector_type,
-                              uint32_t timeout,
-                              gdrom_direct_result_t *result) {
+static size_t pio_read_bytes(void *buffer, uint32_t fad, size_t sectors,
+                             gdrom_direct_sector_type_t sector_type,
+                             uint32_t timeout) {
+    size_t sector_size;
+
+    if(!buffer || ((uintptr_t)buffer & 1u) || fad < 150u
+            || fad > GDROM_SPI_MAX_U24 || !sectors
+            || !timeout
+            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
+                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1
+                && sector_type != GDROM_DIRECT_SECTOR_RAW2352)
+            || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
+        errno = EINVAL;
+        return 0;
+    }
+    sector_size = sector_type == GDROM_DIRECT_SECTOR_RAW2352
+        ? GDROM_DIRECT_RAW_SECTOR_SIZE : GDROM_DIRECT_SECTOR_SIZE;
+    if(sectors > SIZE_MAX / sector_size
+            || sectors * sector_size > UINTPTR_MAX - (uintptr_t)buffer) {
+        errno = EINVAL;
+        return 0;
+    }
+    return sectors * sector_size;
+}
+
+static bool direct_request_cancelled(void *data);
+
+static int read_sectors_pio_internal(void *buffer, uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result, cdrom_request_t *request) {
     gdrom_spi_packet_t packet;
     gdrom_direct_result_t local_result;
     gdrom_direct_result_t *observed = result ? result : &local_result;
@@ -1768,18 +1794,8 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
     uint8_t data_select = GDROM_SPI_SELECT_DATA;
 
     memset(observed, 0, sizeof(*observed));
-
-    if(!buffer || ((uintptr_t)buffer & 1u) || fad < 150u
-            || fad > GDROM_SPI_MAX_U24 || !sectors
-            || !timeout
-            || (sector_type != GDROM_DIRECT_SECTOR_MODE1
-                && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1
-                && sector_type != GDROM_DIRECT_SECTOR_RAW2352)
-            || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
-        errno = EINVAL;
+    if(!pio_read_bytes(buffer, fad, sectors, sector_type, timeout))
         return -1;
-    }
-
     sector_size = GDROM_DIRECT_SECTOR_SIZE;
     expected_type = sector_type == GDROM_DIRECT_SECTOR_MODE1
         ? GDROM_SPI_EXPECT_MODE1 : GDROM_SPI_EXPECT_MODE2_FORM1;
@@ -1787,11 +1803,6 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
         sector_size = GDROM_DIRECT_RAW_SECTOR_SIZE;
         expected_type = GDROM_SPI_EXPECT_ANY;
         data_select = GDROM_SPI_SELECT_OTHER;
-    }
-    if(sectors > SIZE_MAX / sector_size
-            || sectors * sector_size > UINTPTR_MAX - (uintptr_t)buffer) {
-        errno = EINVAL;
-        return -1;
     }
 
     deadline = timer_ms_gettime64() + timeout;
@@ -1817,8 +1828,16 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
            packet owns and releases G1 independently, including on failure. */
         rv = packet_pio_data_in_deadline(&packet,
             (uint8_t *)buffer + prior_bytes, expected_bytes, timeout,
-            observed, false, true, NULL, NULL, NULL, deadline);
+            observed, false, true, NULL,
+            request ? direct_request_cancelled : NULL, request, deadline);
         transferred = observed->transferred;
+        if(request) {
+            int saved_errno = errno;
+            /* Excess protocol bytes are drained, not copied to the buffer. */
+            cdrom_request_update_direct_progress(request, prior_bytes
+                + (transferred < expected_bytes ? transferred : expected_bytes));
+            errno = saved_errno;
+        }
         observed->transferred = transferred > SIZE_MAX - prior_bytes
             ? SIZE_MAX : prior_bytes + transferred;
         if(rv < 0)
@@ -1831,6 +1850,43 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
         completed += chunk;
     }
     return 0;
+}
+
+int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
+                              gdrom_direct_sector_type_t sector_type,
+                              uint32_t timeout,
+                              gdrom_direct_result_t *result) {
+    return read_sectors_pio_internal(buffer, fad, sectors, sector_type,
+                                     timeout, result, NULL);
+}
+
+static int direct_pio_execute(cdrom_request_t *request, void *data) {
+    gdrom_direct_async_read_t *read = data;
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *result = read->result ? read->result : &local_result;
+
+    if(read_sectors_pio_internal(read->buffer, read->fad, read->sectors,
+            read->sector_type, read->timeout, result, request) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, result);
+}
+
+cdrom_request_t *gdrom_direct_read_sectors_pio_async(
+        void *buffer, uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    size_t bytes = pio_read_bytes(buffer, fad, sectors, sector_type, timeout);
+    gdrom_direct_async_read_t read = {
+        .buffer = buffer, .fad = fad, .sectors = sectors,
+        .sector_type = sector_type, .timeout = timeout, .result = result,
+    };
+
+    if(!bytes)
+        return NULL;
+    return cdrom_request_submit_executor(CD_CMD_PIOREAD, &read, sizeof(read),
+        bytes, bytes, bytes, timeout, direct_pio_execute, NULL, NULL,
+        callback, callback_data);
 }
 
 static int wait_dma_inactive(uint64_t deadline) {

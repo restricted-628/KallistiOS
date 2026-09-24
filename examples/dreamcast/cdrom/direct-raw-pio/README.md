@@ -13,6 +13,14 @@ A simulated clock checks decreasing lock budgets and expiration between
 commands, without sleeping. Partial transfers retain aggregate byte counts;
 short/oversized final commands and timeout leave the destination guards intact.
 
+The same cases also run through `gdrom_direct_read_sectors_pio_async` and the
+real request worker/callback lifecycle. The probe checks partial/capped copied
+byte progress separately from drained excess, queued cancellation without
+touching the trace, cancellation between commands, shutdown admission, and
+exclusion of initial queue residence from the operation timeout. This is an
+explicit PIO choice; DMA still rejects odd raw counts. PIO releases G1 between
+commands but occupies the request worker for the entire operation.
+
 No BIOS sector mode or real disc is required. This is a software transport
 regression, not proof of physical raw-sector contents, timing, recovery, or
 DMA support. A real-drive comparison remains required before hardware claims.

@@ -156,6 +156,17 @@ static void run_read(gdrom_direct_sector_type_t type, size_t sectors,
     verify_buffer(buffer, expected_bytes);
 }
 
+static int partial_executor(cdrom_request_t *request, void *data) {
+    cdrom_request_status_t status;
+    size_t bytes = *(size_t *)data;
+    cdrom_request_update_direct_progress(request, bytes);
+    CHECK(!cdrom_request_get_status(request, &status));
+    CHECK(status.state == CDROM_REQUEST_RUNNING
+          && status.completed_bytes == (bytes < 4704 ? bytes : 4704)
+          && status.io_completed_bytes == (bytes < 4704 ? bytes : 4704));
+    return ERR_SYS;
+}
+
 static int block_executor(cdrom_request_t *request, void *data) {
     (void)request; (void)data;
     sem_signal(&entered);
@@ -284,6 +295,18 @@ int main(void) {
     CHECK(status.state == CDROM_REQUEST_ERROR && status.completed_bytes == 4704);
     CHECK(calls == 1 && private_finalized == 1);
     verify_buffer(buffer, 4704);
+    /* Custom executors (including bounded DMA) have no submitted DMA segment.
+       Partial progress must still survive an error, and be clamped to capacity. */
+    for(unsigned over = 0; over < 2; ++over) {
+        size_t bytes = over ? SIZE_MAX : 2352;
+        r = cdrom_request_submit_executor(CD_CMD_DMAREAD, &bytes, sizeof(bytes),
+            4704, 4704, 4704, 100, partial_executor, NULL, NULL, NULL, NULL);
+        status = finish(r, false);
+        CHECK(status.state == CDROM_REQUEST_ERROR
+              && status.completed_bytes == (over ? 4704 : 2352)
+              && status.io_completed_bytes == (over ? 4704 : 2352)
+              && status.remaining_bytes == (over ? 0 : 2352));
+    }
     cdrom_request_system_shutdown();
     sem_destroy(&entered); sem_destroy(&release_worker);
     printf("DIRECT-DMA-CHAIN: %s checks=%u\n", failures ? "FAIL" : "PASS", checks);

@@ -11,6 +11,9 @@ chain timeout, callback ordering, metadata allocation failure and reclamation,
 shutdown admission, and alternating segments from two queued chains. Private
 segment admission rejects format/byte-count mismatches and oversized/odd raw
 segments. No payload staging allocation is allowed by the driver spy.
+Two synthetic custom-executor cases additionally verify partial-error progress
+and capacity clamping through the real request layer. This covers accounting
+used by bounded DMA executors, not their physical DMA transport.
 
 This is software queue/ownership evidence, not physical DMA, IRQ, cache, drive
 timing, payload-source, or throughput validation. The separate raw-DMA probe
