@@ -289,7 +289,8 @@ int main(void) {
     REJECT(0x8c200000, 149, 2, GDROM_DIRECT_SECTOR_RAW2352, 1000);
     REJECT(0x8c200000, 0xffffff, 2, GDROM_DIRECT_SECTOR_RAW2352, 1000);
     REJECT(0x8c200000, 150, 0, GDROM_DIRECT_SECTOR_RAW2352, 1000);
-    REJECT(0x8c200000, 150, 18, GDROM_DIRECT_SECTOR_RAW2352, 1000);
+    CHECK(gdrom_direct_read_sectors_dma((void *)0x8c200000, 150, 18,
+          GDROM_DIRECT_SECTOR_RAW2352, 1000, &result) == -1 && errno == EINVAL);
     REJECT(0x8c200000, 150, 2, (gdrom_direct_sector_type_t)99, 1000);
     REJECT(0x8c200000, 150, 2, GDROM_DIRECT_SECTOR_RAW2352, 0);
     /* 4096 bytes remain: two cooked sectors fit, two raw sectors do not. */

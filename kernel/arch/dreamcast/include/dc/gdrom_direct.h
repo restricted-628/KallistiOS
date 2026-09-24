@@ -629,22 +629,35 @@ int gdrom_direct_read_sectors_dma(
 /** \brief Queue a cooked or raw read through the direct GD-DMA transport.
 
     This is the asynchronous form of the experimental direct DMA operation.
+    Reads larger than sixteen sectors are split into bounded DMA commands and
+    requeued at the tail between commands, releasing G1 for other users. The
+    timeout covers the chain from its first execution, including intervening
+    queue time; initial queue residence is not charged to it. Bounded recovery
+    can take additional time after a transport failure.
     It returns a normal \ref cdrom_request_t and therefore uses the common KOS
     request queue, progress, cancellation, timeout, wait, callback, and destroy
     rules. The request status identifies
     `CDROM_REQUEST_BACKEND_DIRECT`; its BIOS response/detail fields are not a
     direct-drive result. `result`, when non-NULL, is populated if the direct
-    executor starts and must remain valid until the request becomes terminal.
-    A request cancelled while it is still queued leaves that object untouched.
+    transport starts and must remain valid until the request becomes terminal.
+    Cancellation before the first command leaves that object untouched.
+    For a chain, this trace describes the last hardware command executed; use
+    request status for cumulative progress and the final outcome.
 
     Cancellation wakes the sleeping direct-DMA owner and runs the same bounded
     Holly stop and SPI soft-reset recovery as the synchronous operation.
     Format and exact byte count are captured at submission. Raw reads require
     an even sector count, with the same buffer contract as the synchronous API.
+    Large-read admission checks the complete destination and FAD span. Chaining
+    allocates one small metadata record, not a payload/staging buffer, and
+    releases it before terminal publication on success, failure, or cancellation.
+    No later segment is sent after failure. Odd raw counts remain invalid;
+    there is no implicit PIO tail, extra-sector read, or BIOS fallback.
 
     \param  buffer        Destination aligned to 32 bytes in system or PVR RAM.
     \param  fad           First absolute frame address; must be at least 150.
-    \param  sectors       Required count from 1 through 16.
+    \param  sectors       Nonzero count fitting the FAD/destination span;
+                          raw counts must be even.
     \param  sector_type   Mode-1/Mode-2 Form-1, or RAW2352 with an even count.
     \param  timeout       Required nonzero operation timeout in milliseconds.
     \param  result        Optional direct transport result, valid at terminal state.

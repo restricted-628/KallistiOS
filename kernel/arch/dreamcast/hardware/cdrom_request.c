@@ -480,6 +480,20 @@ static bool dma_segment_valid(const cdrom_request_t *request,
             || segment->data_bytes > segment->io_bytes - segment->data_offset)
         return false;
 
+    if(request->direct_dma) {
+        size_t sectors = segment->params.num_sec;
+        bool raw = request->direct_sector_type == GDROM_DIRECT_SECTOR_RAW2352;
+        size_t sector_size = raw ? GDROM_DIRECT_RAW_SECTOR_SIZE
+            : GDROM_DIRECT_SECTOR_SIZE;
+        uint32_t fad = segment->params.start_sec;
+
+        if(sectors > GDROM_DIRECT_DMA_MAX_SECTORS || (raw && (sectors & 1u))
+                || fad < 150u || fad > 0x00ffffffu
+                || sectors - 1u > 0x00ffffffu - fad
+                || segment->io_bytes != sectors * sector_size)
+            return false;
+    }
+
     if(request->io_completed_base > request->status.io_bytes
             || segment->io_bytes
                 > request->status.io_bytes - request->io_completed_base)
@@ -1197,7 +1211,9 @@ static int direct_error_result(
 }
 
 static void process_direct_dma_segment(cdrom_request_t *request) {
-    gdrom_direct_result_t transport;
+    gdrom_direct_result_t local_transport;
+    gdrom_direct_result_t *transport = request->dma_segment.direct_result
+        ? request->dma_segment.direct_result : &local_transport;
     uint32_t timeout = DIRECT_DMA_COMMAND_TIMEOUT_MS;
     uint64_t now = timer_ms_gettime64();
     int result;
@@ -1219,7 +1235,7 @@ static void process_direct_dma_segment(cdrom_request_t *request) {
             request, request->dma_segment.buffer,
             request->dma_segment.params.start_sec,
             request->dma_segment.params.num_sec,
-            request->direct_sector_type, timeout, &transport) == 0) {
+            request->direct_sector_type, timeout, transport) == 0) {
         finish_dma_chain_segment(request);
         return;
     }
@@ -1230,7 +1246,7 @@ static void process_direct_dma_segment(cdrom_request_t *request) {
         return;
     }
 
-    result = direct_error_result(error, &transport);
+    result = direct_error_result(error, transport);
     if(result == ERR_TIMEOUT)
         finish_request(request, CDROM_REQUEST_TIMED_OUT, result);
     else
@@ -1609,7 +1625,8 @@ static cdrom_request_t *submit_request(cd_cmd_code_t command,
     if((direct_dma
             && (!dma_read || custom || staged_stream || no_op
                 || (sector_type != GDROM_DIRECT_SECTOR_MODE1
-                    && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1)))
+                    && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1
+                    && sector_type != GDROM_DIRECT_SECTOR_RAW2352)))
             || (custom
             && (staged_stream || no_op || dma_read
                 || !executor_command_supported(command)))

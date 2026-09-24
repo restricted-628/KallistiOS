@@ -35,6 +35,9 @@ typedef struct cdrom_request_dma_segment {
     size_t data_bytes;
     bool cacheable;
     bool data_direct;
+    /* Optional direct transport trace for this command, not aggregate progress.
+       The caller retains it through terminal publication. BIOS ignores it. */
+    gdrom_direct_result_t *direct_result;
 } cdrom_request_dma_segment_t;
 
 /* Runs on the request worker after a successful segment and cache publication,

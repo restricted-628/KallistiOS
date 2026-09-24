@@ -186,19 +186,32 @@ static int deadline_timeout(uint64_t deadline, uint32_t *timeout);
 
 /* A raw sector occupies 73.5 Holly transfer units. Require whole pairs
    instead of padding the transfer or reading beyond the caller's range. */
-static size_t dma_read_bytes(size_t sectors,
-                             gdrom_direct_sector_type_t sector_type) {
-    if(!sectors || sectors > GDROM_DIRECT_DMA_MAX_SECTORS)
+static size_t dma_range_bytes(size_t sectors,
+                              gdrom_direct_sector_type_t sector_type) {
+    size_t sector_size;
+
+    if(!sectors)
         return 0;
     switch(sector_type) {
         case GDROM_DIRECT_SECTOR_MODE1:
         case GDROM_DIRECT_SECTOR_MODE2_FORM1:
-            return sectors * GDROM_DIRECT_SECTOR_SIZE;
+            sector_size = GDROM_DIRECT_SECTOR_SIZE;
+            break;
         case GDROM_DIRECT_SECTOR_RAW2352:
-            return (sectors & 1u) ? 0 : sectors * GDROM_DIRECT_RAW_SECTOR_SIZE;
+            if(sectors & 1u)
+                return 0;
+            sector_size = GDROM_DIRECT_RAW_SECTOR_SIZE;
+            break;
         default:
             return 0;
     }
+    return sectors > SIZE_MAX / sector_size ? 0 : sectors * sector_size;
+}
+
+static size_t dma_read_bytes(size_t sectors,
+                             gdrom_direct_sector_type_t sector_type) {
+    return sectors > GDROM_DIRECT_DMA_MAX_SECTORS ? 0
+        : dma_range_bytes(sectors, sector_type);
 }
 
 static bool direct_command_irq(uint32_t code, void *data) {
@@ -2961,6 +2974,92 @@ static int direct_request_execute(cdrom_request_t *request, void *data) {
     return gdrom_direct_failure_result_internal(errno, result);
 }
 
+typedef struct direct_dma_chain {
+    uint8_t *buffer;
+    uint32_t fad;
+    size_t sectors;
+    size_t completed;
+    size_t sector_size;
+    gdrom_direct_result_t *result;
+} direct_dma_chain_t;
+
+static int direct_dma_chain_segment(direct_dma_chain_t *chain,
+                                     cdrom_request_dma_segment_t *segment) {
+    size_t sectors = chain->sectors - chain->completed;
+
+    if(sectors > GDROM_DIRECT_DMA_MAX_SECTORS)
+        sectors = GDROM_DIRECT_DMA_MAX_SECTORS;
+    if(cdrom_request_dma_segment_init_sized(segment,
+            chain->buffer + chain->completed * chain->sector_size,
+            chain->fad + (uint32_t)chain->completed, sectors,
+            chain->sector_size, 0, sectors * chain->sector_size, true) < 0)
+        return -1;
+    segment->direct_result = chain->result;
+    return 0;
+}
+
+static int direct_dma_chain_continue(cdrom_request_t *request,
+        const cdrom_request_dma_segment_t *completed,
+        cdrom_request_dma_segment_t *next, void *data) {
+    direct_dma_chain_t *chain = data;
+
+    (void)request;
+    chain->completed += completed->params.num_sec;
+    if(chain->completed == chain->sectors)
+        return 0;
+    return direct_dma_chain_segment(chain, next) < 0 ? -1 : 1;
+}
+
+static void direct_dma_chain_finalize(cdrom_request_t *request,
+        const cdrom_request_status_t *status, void *data) {
+    (void)request;
+    (void)status;
+    free(data);
+}
+
+/* Admission has already fixed the complete format/FAD span and byte count. */
+static cdrom_request_t *direct_dma_chain_submit(
+        void *buffer, uint32_t fad, size_t sectors, size_t bytes,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result,
+        cdrom_request_callback_t callback, void *callback_data) {
+    direct_dma_chain_t *chain;
+    cdrom_request_dma_segment_t first;
+    cdrom_request_t *request;
+    int saved_errno;
+
+    if(bytes > UINTPTR_MAX - (uintptr_t)buffer
+            || dma_destination_classify((uintptr_t)buffer, bytes, false)
+                == GDROM_DMA_DESTINATION_INVALID) {
+        errno = EFAULT;
+        return NULL;
+    }
+    chain = malloc(sizeof(*chain));
+    if(!chain)
+        return NULL;
+    *chain = (direct_dma_chain_t) {
+        .buffer = buffer, .fad = fad, .sectors = sectors,
+        .sector_size = sector_type == GDROM_DIRECT_SECTOR_RAW2352
+            ? GDROM_DIRECT_RAW_SECTOR_SIZE : GDROM_DIRECT_SECTOR_SIZE,
+        .result = result,
+    };
+    if(direct_dma_chain_segment(chain, &first) < 0) {
+        saved_errno = errno;
+        free(chain);
+        errno = saved_errno;
+        return NULL;
+    }
+    request = cdrom_request_submit_direct_dma_chain(&first, sector_type,
+        bytes, bytes, bytes, timeout, direct_dma_chain_continue, chain,
+        direct_dma_chain_finalize, chain, callback, callback_data);
+    if(!request) {
+        saved_errno = errno;
+        free(chain);
+        errno = saved_errno;
+    }
+    return request;
+}
+
 cdrom_request_t *gdrom_direct_read_sectors_dma_async(
         void *buffer, uint32_t fad, size_t sectors,
         gdrom_direct_sector_type_t sector_type, uint32_t timeout,
@@ -2975,7 +3074,7 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_async(
         .timeout = timeout,
         .result = result,
     };
-    size_t bytes = dma_read_bytes(sectors, sector_type);
+    size_t bytes = dma_range_bytes(sectors, sector_type);
 
     if(!buffer || ((uintptr_t)buffer & 31u) || fad < 150u
             || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
@@ -2983,6 +3082,10 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_async(
         errno = EINVAL;
         return NULL;
     }
+
+    if(sectors > GDROM_DIRECT_DMA_MAX_SECTORS)
+        return direct_dma_chain_submit(buffer, fad, sectors, bytes, sector_type,
+                                        timeout, result, callback, callback_data);
 
     return cdrom_request_submit_executor(
         CD_CMD_DMAREAD, &read, sizeof(read), bytes, bytes, bytes, timeout,

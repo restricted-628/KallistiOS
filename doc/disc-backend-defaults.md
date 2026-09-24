@@ -62,7 +62,7 @@ ownership does not make global sector-mode changes safe for queued reads.
 
 Before generic reads can switch, the direct path needs an explicit format
 contract for cooked and raw sectors, a policy for legacy automatic selection,
-and bounded DMA chaining beyond its current 16-sector command limit. Queued reads
+and compatible arbitrary-count DMA handling. Queued reads
 must capture their format rather than depend on a later global mode change.
 The synchronous `gdrom_direct_read_sectors` PIO entry point now also accepts
 `GDROM_DIRECT_SECTOR_RAW2352`: complete 2352-byte sectors without subchannel
@@ -77,18 +77,28 @@ Other diagnostic fields describe the last command attempted. Buffer-size,
 pointer-wrap, and FAD-span validation precede all I/O. There is no allocation
 or automatic backend switch. This does not change the generic BIOS aliases.
 
-Direct DMA now accepts RAW2352 for even counts from 2 through 16, with a
+Direct DMA accepts RAW2352 for even counts, with a
 32-byte-aligned destination and exact sectors * 2352 byte accounting. This
 applies to synchronous/queued RAM or PVR destinations and leased GAPS SRAM.
 The queued executor captures format and byte counts at submission and uses
-that same size for the execution-time lease claim. Two raw sectors occupy
+that same size for the execution-time lease claim. Synchronous DMA and GAPS
+operations remain limited to sixteen sectors. Normal queued RAM/PVR reads can
+span multiple commands: each is limited to sixteen sectors and requeued at
+the tail afterward. One chain deadline starts at first execution and includes
+time spent waiting between segments. Initial queue residence is not charged.
+The complete destination and FAD span are checked at admission. One small
+metadata record is reclaimed before terminal publication; no payload staging
+or per-segment allocation is used. Request status is cumulative; an optional
+transport trace describes the last hardware command executed. Two raw sectors occupy
 4704 bytes, an exact multiple of 32; odd counts are rejected before submission
 or G1 ownership. There is no padding, extra sector read, hidden temporary
 buffer, or PIO fallback. Explicit PIO remains available for odd raw counts.
 
-Ranges, chained-request constructors, and staged sessions remain cooked-only.
-Arbitrary-count raw DMA/staging and bounded large-DMA chaining still need a
-separate contract before generic reads can switch. Generic BIOS APIs accept
+Ranges and staged sessions remain cooked-only. The internal direct-chain
+constructor now accepts raw pairs and verifies every segment's exact wire
+count against its byte accounting, including requeued segments.
+Arbitrary-count raw DMA/staging still needs a separate contract before generic
+reads can switch. Generic BIOS APIs accept
 configured raw layouts, which must not be silently reinterpreted as cooked.
 
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
@@ -184,3 +194,20 @@ example rebuilds, and GCC 14 GNU17/strict C23 plus Clang ASan/UBSan packet
 tests pass. These are simulated transport tests, not physical-drive evidence.
 After relinking, the DMA, BIOS read, convenience, defaults, and G1 probes
 also pass all 1426/151/128/14/4 checks in both modes.
+
+The queued whole-range DMA pass adds `direct-dma-chain`: 320 checks pass in
+both Flycast modes using the production direct driver and request engine,
+with a simulated physical transfer and clock. Coverage includes cooked and
+even-count raw chains, exact segment offsets/counts and payload guards,
+tail-requeue fairness, partial failure, queued/active cancellation, a shared
+deadline excluding initial queue residence, invalid continuations, and
+metadata reclamation before callbacks. Admission/allocation failures issue
+no physical command. No payload staging or implicit PIO/BIOS fallback is used.
+The full SH-4 GCC 16.2 build, three driver units and the new probe under
+`-Werror`, ten existing example rebuilds, and GCC 14 GNU17/strict C23 plus
+Clang ASan/UBSan packet tests pass. After relinking, the PIO, bounded DMA,
+BIOS read, convenience, defaults, and G1 probes pass 304/1424/151/128/14/4
+checks in both modes. The bounded DMA probe now rejects 18-sector reads
+only through the synchronous API, since queued reads support chaining.
+These tests do not establish physical-drive payload, cache, IRQ, or timing
+correctness; hardware validation remains outstanding.

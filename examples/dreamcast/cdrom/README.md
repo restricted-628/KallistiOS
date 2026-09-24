@@ -25,6 +25,8 @@ than minimal application templates; read each directory's README before use.
 - `direct-raw-pio` and `direct-raw-dma` use the production driver with simulated
   register access to check raw-sector contracts. They need no disc and provide
   software regression coverage, not live transport or physical-drive proof.
+- `direct-dma-chain` exercises the real request queue and large-read planner
+  with simulated physical transfers, including fairness, cancellation, and cleanup.
 - `direct-read`, `direct-async`, and `direct-iso9660` compare direct data with
   the BIOS-backed path and verify DMA guards/progress.
 - `direct-cdda` actively controls audio playback.
