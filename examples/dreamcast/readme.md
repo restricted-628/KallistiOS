@@ -15,6 +15,7 @@ This page serves as an index for all KallistiOS examples.
   - stackprotector
   - stacktrace
   - threading
+    - tmu1-channel
   - watchdog
 - cdrom
   - stream
