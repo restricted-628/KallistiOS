@@ -9,7 +9,8 @@ OBJS = snd_iface.o \
 	snd_sfxmgr.o \
 	snd_stream.o \
 	snd_mem.o \
-	snd_pcm_split.o
+	snd_pcm_split.o \
+	snd_pcm16_sq.o
 
 KOS_CFLAGS += -I $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound
 

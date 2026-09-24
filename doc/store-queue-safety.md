@@ -96,8 +96,8 @@ mode policy, and the larger MMU/TLB retirement series. The integrated providers
 retain their existing cooperative-switch ownership guard.
 
 The caller audit adds failure handling to the direct PVR, SPU, stereo-split,
-and example acquisitions. It does not yet redesign the legacy stereo-split
-helper's two-destination MMU mapping; that remains a separate follow-up.
+and example acquisitions. The follow-up stereo-split mapping, sample-order,
+and tail corrections are described in [stereo SQ uploads](stereo-sq-upload.md).
 
 Recorded validation (2026-09-24): 2,097,250 host checks pass with GCC 14
 GNU17/strict C23, Clang GNU17/C2x, and Clang ASan/UBSan. Replacing the boundary
