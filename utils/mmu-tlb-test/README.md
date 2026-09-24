@@ -18,4 +18,4 @@ multiple-hit layouts are not legal inputs and are not installed by the probe.
 
 Neither test establishes real-hardware timing, general P0 data translation,
 cache coherency, OCINDEX behavior or 32 MiB compatibility. See
-`doc/mmu-mapping.md` for the public architecture reference and remaining gates.
+`doc/mmu-page-lifetime.md` for the public architecture reference and remaining gates.

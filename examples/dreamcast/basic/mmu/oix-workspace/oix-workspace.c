@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
             if(!check(a, 0x55550000u) || v[17] != (0x55550000u ^ 17))
                 goto out;
             fill(v, 0x56780000u);
-            if(mmu_page_unmap(c, va >> PAGESIZE_BITS, 1) < 0 || !check(a, 0x56780000u))
+            if(mmu_page_unmap_ex(c, va >> PAGESIZE_BITS, 1) < 0 || !check(a, 0x56780000u))
                 goto out;
             if(!map(c, va, a))
                 goto out;

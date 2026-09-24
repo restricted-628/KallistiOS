@@ -284,7 +284,7 @@ void mmu_switch_context(mmucontext_t *context);
     \param  prot            Memory protection for page (see
                             \ref mmu_prot_values).
     \param  cache           Cache scheme for page (see \ref mmu_cache_values).
-    \param  share           Set to share between processes (meaningless).
+    \param  share           Whether the translation is shared across ASIDs.
     \param  dirty           Set to mark the page as dirty.
 
     \note This legacy operation cannot report validation or allocation failure.
@@ -323,7 +323,18 @@ int mmu_page_map_ex(mmucontext_t *context,
                     page_prot_t prot, page_cache_t cache,
                     bool share, bool dirty);
 
-/** \brief   Remove sequential 4 KiB page mappings.
+/** \brief   Remove sequential 4 KiB page mappings (legacy interface).
+    \ingroup mmu
+
+    Delegates to mmu_page_unmap_ex(), but cannot report an error.
+
+    \param context          The context to modify.
+    \param virtpage         The first virtual page to unmap.
+    \param count            The number of sequential pages to unmap.
+*/
+void mmu_page_unmap(mmucontext_t *context, int virtpage, int count);
+
+/** \brief   Remove sequential 4 KiB page mappings with error reporting.
     \ingroup mmu
 
     Cached data is purged before current mappings are removed, and matching
@@ -339,7 +350,7 @@ int mmu_page_map_ex(mmucontext_t *context,
     \note The caller must serialize this operation against other page-table
           mutation and context destruction.
 */
-int mmu_page_unmap(mmucontext_t *context, int virtpage, int count);
+int mmu_page_unmap_ex(mmucontext_t *context, int virtpage, int count);
 
 /** \brief   Change the cache policy of mapped 4 KiB pages.
     \ingroup mmu

@@ -28,7 +28,7 @@ limited to the 512 MiB physical address space.
 
 The related checked operations are:
 
-- `mmu_page_unmap()`, which ignores already-unmapped pages and reclaims empty
+- `mmu_page_unmap_ex()`, which ignores already-unmapped pages and reclaims empty
   second-level tables;
 - `mmu_page_set_cache()`, which changes an entirely mapped range or changes
   nothing when any page is absent;
@@ -38,6 +38,9 @@ The related checked operations are:
 The old `mmu_page_map()` symbol and signature remain available. It delegates to
 the checked mapper but cannot report an error, so new code should prefer
 `mmu_page_map_ex()`.
+
+The legacy `void mmu_page_unmap()` signature is also preserved; callers that
+need error reporting use `mmu_page_unmap_ex()`.
 
 Page-table mutation is not internally serialized. An application using the MMU
 from multiple threads must serialize mapping, unmapping, cache-policy changes,

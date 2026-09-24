@@ -11,7 +11,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef INIT_MMU
 KOS_INIT_FLAGS(INIT_DEFAULT & ~INIT_MMU);
+#else
+KOS_INIT_FLAGS(INIT_DEFAULT);
+#endif
 
 /* Internal kernel helper under test, not a new public MMU API. */
 extern void mmu_invalidate_tlb(uint32_t virt, uint32_t asid);
@@ -85,7 +89,7 @@ static bool run_case(unsigned asid, enum action action,
             /* Same policy still retires the mapping; no physical cache scan. */
             ok &= mmu_page_set_cache(context, VPN >> 12, 1, MMU_NO_CACHE) == 0;
             break;
-        case UNMAP: ok &= mmu_page_unmap(context, VPN >> 12, 1) == 0; break;
+        case UNMAP: ok &= mmu_page_unmap_ex(context, VPN >> 12, 1) == 0; break;
         case DESTROY: mmu_context_destroy(context); context = NULL; break;
     }
     ok &= *pteh == (0x07654000u | ACTIVE);
