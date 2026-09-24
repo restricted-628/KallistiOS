@@ -1,6 +1,17 @@
+<!-- FORK BRANCH DESCRIPTION -->
+> **Integrated experimental KallistiOS fork** — `master` (integrated sdk).
+>
+> Development home for the combined OS, direct-I/O, graphics and service work. This is not the official KallistiOS master branch or a single upstream pull request.
+>
+> Read [this branch's scope and dependencies](BRANCH.md),
+> [the complete branch guide](https://github.com/restricted-628/KallistiOS/blob/master/BRANCHES.md), and
+> [how integrated master differs from upstream](https://github.com/restricted-628/KallistiOS/blob/master/FORK.md).
+> This is a branch of an experimental fork, not the official KallistiOS release.
+<!-- END FORK BRANCH DESCRIPTION -->
+
 <!-- PROJECT LOGO -->
 <div align="center">
-  <h1 align="center"><strong>KallistiOS</strong></h1>
+  <h1 align="center"><strong>KallistiOS — Integrated Experimental Fork</strong></h1>
   <p align="center">
     Independent SDK for the Dreamcast
     <br />
@@ -8,7 +19,19 @@
   </p>
 </div>
 
-## Overview
+## About this fork
+
+This master combines native OS improvements, direct-default disc access,
+Compact 2D/3D graphics, SH4ZAM integration, fibers and services. Its default
+Dreamcast initialization also enables the MMU. These are fork additions and
+policy choices, not features attributed to standard upstream KOS.
+
+Start with [what changes and what remains experimental](FORK.md), then
+[choose an integrated bundle or a focused contribution branch](BRANCHES.md).
+High-level graphics extraction is still in progress. Existing upstream
+credits, licensing and baseline setup documentation are retained below.
+
+## Upstream KallistiOS foundation
 
 KallistiOS is an independent development library and operating system for the Dreamcast game console, created by free software developers. Its flexible permissive license allows both homebrew and commercial use with little restrictions besides proper attribution. As a result, it powers most homebrew and commercial indie releases for the platform. Interfaces and drivers are included for a significant portion of the Dreamcast's hardware capabilities and accessories, including modifications created by hobbyists.
 
