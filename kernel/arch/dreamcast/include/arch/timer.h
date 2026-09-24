@@ -68,8 +68,7 @@ __BEGIN_DECLS
     The following are the constant `#define` identifiers for the 3 TMU channels.
 
     \warning
-    All three of these channels are typically reserved and are by KOS for
-    OS-related tasks.
+    TMU0 and TMU2 are reserved by KOS. Coordinate ownership before using TMU1.
 
     @{
 */
@@ -229,8 +228,9 @@ int timer_ints_enabled(int channel);
 
     This API provides typed, exclusive ownership of TMU1. It is intended for
     high-resolution periodic work that cannot use thread-context software
-    timers or VBlank callbacks. No memory or interrupt resources are consumed
-    until a caller claims the channel.
+    timers or VBlank callbacks. No control object is allocated or TMU1 handler
+    replaced until a caller claims the channel; the driver keeps one owner
+    pointer.
 
     While TMU1 is claimed, legacy mutating calls such as timer_prime(),
     timer_start(), timer_stop(), timer_clear(), timer_enable_ints(), and
@@ -288,8 +288,15 @@ typedef struct timer_channel_info {
 
     TMU1 is currently the only claimable channel. TMU0 and TMU2 are reserved by
     KOS and fail with `EBUSY`. A running TMU1 also fails with `EBUSY`; stop any
-    legacy use before claiming it. The previous stopped register and interrupt
-    configuration is restored by timer_channel_release().
+    legacy use before claiming it. A pending underflow also fails with `EBUSY`:
+    its legacy owner must handle or explicitly clear it before handoff. The
+    previous stopped register and interrupt configuration is restored by
+    timer_channel_release().
+
+    The handle is valid only until release. Before release, the caller must
+    prevent new users and finish all thread-context calls using that handle.
+    Direct register writes and irq_set_handler()/irq_set_priority() calls
+    bypass this ownership contract and must be coordinated separately.
 
     \param  channel         The channel to claim.
     \return                 A handle on success, or `NULL` with `errno` set.
@@ -298,10 +305,11 @@ timer_channel_t *timer_channel_claim(int channel);
 
 /** \brief Configure a claimed timer channel without starting it.
 
-    A logical period of N ticks is programmed as a reload value of N - 1, so
-    the callback cadence is exactly N selected input-clock ticks. The channel
-    must be stopped. If callback is `NULL`, irq_priority is ignored and the
-    channel may be polled through timer_channel_get_info().
+    A logical period of N ticks is programmed as a reload value of N - 1.
+    Counter underflows are N selected input-clock ticks apart; callback timing
+    depends on interrupt delivery, and masked underflows may coalesce. The
+    channel must be stopped. If callback is `NULL`, irq_priority is ignored
+    and the channel may be polled through timer_channel_get_info().
 
     \param  channel         A valid exclusive channel handle.
     \param  config          Configuration to apply.
@@ -312,6 +320,10 @@ int timer_channel_configure(timer_channel_t *channel,
                             const timer_channel_config_t *config);
 
 /** \brief Start a configured exclusive timer channel.
+
+    An already-running channel is unchanged, including pending underflow state.
+    Starting a stopped channel resumes its count and clears any pending flag;
+    configure it again first if a fresh full period is required.
 
     \param  channel         A valid exclusive channel handle.
     \retval 0               On success.

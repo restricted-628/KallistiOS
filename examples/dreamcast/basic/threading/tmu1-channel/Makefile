@@ -6,7 +6,6 @@
 
 TARGET = tmu1-channel.elf
 OBJS = tmu1-channel.o
-KOS_CFLAGS += -std=c11
 
 all: rm-elf $(TARGET)
 
