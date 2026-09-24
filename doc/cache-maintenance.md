@@ -35,6 +35,12 @@ in translated P3. Normalizing only its first byte would target a different
 range. The C helpers and assembly entry points reject it before cache work.
 Checks occur once on entry, not as extra validation in the cache-line loop.
 
+Data-cache ranges also normalize their endpoints once, before iteration.
+Their loops use internal already-normalized line primitives; standalone line
+APIs still accept P2 aliases. Existing volatile assembly and per-line memory
+operands are unchanged. This avoids repeating the P2 mask/compare in each
+iteration, which SH-4 GCC 16.2 otherwise retained at -O2.
+
 After validation, both the first and final touched cache lines are aligned down
 to the 32-byte line boundary. Iteration uses the inclusive final line instead
 of an overflowing exclusive endpoint. Large valid data-cache ranges retain the
@@ -71,6 +77,11 @@ P2 jump, rejecting unsupported instructions. It does not simulate cache tags,
 MMIO, instruction timing or full MMU translation. The pre-fix assembly fails
 this model's new cross-area regression.
 
+With the normal KOS environment, `make -C utils/cache-range-test codegen-test`
+compiles runtime-argument range probes and checks SH-4 GCC's generated bounded
+OCB loops for repeated alias masks. This is a compiler regression check, not a
+physical-hardware timing or throughput measurement.
+
 ### Upstream contribution boundary
 
 `pr/cache-range-safety` is based directly on upstream and changes only range
@@ -87,7 +98,7 @@ describes direct P1/P2 aliases, translated regions and cache operations.
 
 ### Validation snapshot (2026-09-24)
 
-The arithmetic suite passes 113,710 checks with GCC 14 GNU17/strict C23,
+The arithmetic suite passes 205,957 checks with GCC 14 GNU17/strict C23,
 Clang GNU17/C2x and ASan/UBSan. The assembly entry-path model passes 40,480
 cases. SH-4 GCC 16.2 builds and object-code inspection pass. Flycast interpreter
 and dynarec execute the smoke probe on the narrow branch, integrated master,
