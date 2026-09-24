@@ -1,3 +1,14 @@
+<!-- FORK BRANCH DESCRIPTION -->
+> **Graphics addon extraction workspace** — `addon/graphics-extraction` (extraction in progress).
+>
+> Ownership manifest and audit for a future shared 2D/3D graphics addon, not a finished independent library.
+>
+> Read [this branch's scope and dependencies](BRANCH.md),
+> [the complete branch guide](https://github.com/restricted-628/KallistiOS/blob/master/BRANCHES.md), and
+> [how integrated master differs from upstream](https://github.com/restricted-628/KallistiOS/blob/master/FORK.md).
+> This is a branch of an experimental fork, not the official KallistiOS release.
+<!-- END FORK BRANCH DESCRIPTION -->
+
 <!-- PROJECT LOGO -->
 <div align="center">
   <h1 align="center"><strong>KallistiOS</strong></h1>
