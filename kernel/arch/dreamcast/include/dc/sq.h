@@ -5,6 +5,7 @@
    Copyright (C) 2023 Falco Girgis
    Copyright (C) 2023 Ruslan Rostovtsev
    Copyright (C) 2023-2024 Andy Barajas
+   Copyright (C) 2026 Joseph Black
 */
 
 /** \file    dc/sq.h
@@ -46,6 +47,9 @@ __BEGIN_DECLS
 
 /** \brief   Mask dest to Store Queue area as address
     \ingroup store_queues
+
+    This mask describes the MMU-off mapping. Use the pointer returned by
+    sq_lock() when a caller can run with the MMU enabled.
 */
 #define SQ_MASK_DEST_ADDR(dest) \
     (MEM_AREA_SQ_BASE | ((uintptr_t)(dest) & 0x03ffffe0))
@@ -67,8 +71,28 @@ __BEGIN_DECLS
     however, it must be called manually when driving the SQs directly from outside
     of this API.
 
-    \param  dest            The destination address.
-    \return                 The translated address that can be directly written to.
+    A thread may acquire the lock recursively. Every recursive acquisition must
+    be released in reverse order, and the MMU enable state must remain unchanged
+    for the complete transaction.
+
+    This API programs a physical destination (or its direct P1/P2 alias); it
+    does not resolve arbitrary translated application pointers. The returned
+    pointer belongs to this acquisition and must not be used while a nested
+    acquisition is active. Unlock restores the outer mapping, not the contents
+    of the two queues: finish submitting any pending data before nesting.
+
+    \warning
+    This operation may block and must not be called from interrupt context.
+
+    \param  dest            The 32-byte-aligned destination address.
+    \return                 The translated address that can be directly written
+                            to, or NULL on error with errno set.
+
+    \par Error Conditions:
+    \em EINVAL - dest is NULL or is not 32-byte aligned. \n
+    \em EPERM - called from interrupt context. \n
+    \em EOVERFLOW - the recursion-state capacity is exhausted. \n
+    \em EBUSY - MMU enablement differs from the outer recursive lock. \n
 
     \sa sq_unlock()
 */
@@ -87,6 +111,11 @@ uint32_t *sq_lock(void *dest);
     by KOS; however, they must be called manually when driving the SQs directly from
     outside this API.
 
+    \warning
+    Calling this function from a thread that does not own the store queues is a
+    programming error. It must not be called from interrupt context. Changing
+    MMU enablement while locked is also unsupported.
+
     \sa sq_lock()
 */
 void sq_unlock(void);
@@ -94,7 +123,10 @@ void sq_unlock(void);
 /** \brief  Wait for both Store Queues to complete
     \ingroup store_queues
 
-    Wait for both store queues to complete by writing to SQ area.
+    Wait for both store queues to complete by writing to SQ area. These writes
+    overwrite one word in each queue; submit all pending data before waiting.
+    Keep ownership until this call returns if completion is required before
+    giving another thread access to the queues.
 
     \sa sq_lock()
 */
@@ -120,8 +152,8 @@ static inline void sq_flush(void *src) {
 /** \brief   Copy a block of memory.
     \ingroup store_queues
 
-    This function is similar to memcpy4(), but uses the store queues to do its
-    work.
+    This function is similar to memcpy(), but uses the store queues for an
+    explicitly aligned external-memory burst.
 
     \warning
     The dest pointer must be at least 32-byte aligned, the src pointer
@@ -129,9 +161,10 @@ static inline void sq_flush(void *src) {
     and n must be a multiple of 32!
 
     \param  dest            The address to copy to (32-byte aligned).
-    \param  src             The address to copy from (32-bit (4/8-byte) aligned).
+    \param  src             The address to copy from (at least 4-byte aligned).
     \param  n               The number of bytes to copy (multiple of 32).
-    \return                 The original value of dest.
+    \return                 The original value of dest, or NULL on error with
+                            errno set. A zero-length operation returns dest.
 
     \sa sq_fast_cpy()
 */
@@ -171,7 +204,8 @@ void *sq_fast_cpy(void *dest, const void *src, size_t n);
     \param  dest            The address to begin setting at (32-byte aligned).
     \param  c               The value to set (in the low 8-bits).
     \param  n               The number of bytes to set (multiple of 32).
-    \return                 The original value of dest.
+    \return                 The original value of dest, or NULL on error with
+                            errno set. A zero-length operation returns dest.
 
     \sa sq_set16(), sq_set32()
 */
@@ -180,8 +214,8 @@ void *sq_set(void *dest, uint32_t c, size_t n);
 /** \brief   Set a block of memory to a 16-bit value.
     \ingroup store_queues
 
-    This function is similar to calling memset2(), but uses the store queues to
-    do its work.
+    This function repeats the low 16-bit pattern through the destination using
+    the store queues.
 
     \warning
     The dest pointer must be a 32-byte aligned with n being a multiple of 32,
@@ -190,7 +224,8 @@ void *sq_set(void *dest, uint32_t c, size_t n);
     \param  dest            The address to begin setting at (32-byte aligned).
     \param  c               The value to set (in the low 16-bits).
     \param  n               The number of bytes to set (multiple of 32).
-    \return                 The original value of dest.
+    \return                 The original value of dest, or NULL on error with
+                            errno set. A zero-length operation returns dest.
 
     \sa sq_set(), sq_set32()
 */
@@ -199,8 +234,8 @@ void *sq_set16(void *dest, uint32_t c, size_t n);
 /** \brief   Set a block of memory to a 32-bit value.
     \ingroup store_queues
 
-    This function is similar to calling memset4(), but uses the store queues to
-    do its work.
+    This function repeats the 32-bit pattern through the destination using the
+    store queues.
 
     \warning
     The dest pointer must be a 32-byte aligned with n being a multiple of 32!
@@ -208,7 +243,8 @@ void *sq_set16(void *dest, uint32_t c, size_t n);
     \param  dest            The address to begin setting at (32-byte aligned).
     \param  c               The value to set (all 32-bits).
     \param  n               The number of bytes to set (multiple of 32).
-    \return                 The original value of dest.
+    \return                 The original value of dest, or NULL on error with
+                            errno set. A zero-length operation returns dest.
 
     \sa sq_set(), sq_set16()
 */
@@ -225,6 +261,10 @@ void *sq_set32(void *dest, uint32_t c, size_t n);
 
     \param  dest            The address to begin clearing at (32-byte aligned).
     \param  n               The number of bytes to clear (multiple of 32).
+
+    \note If the underlying store-queue operation fails, no further writes are
+          issued and errno records the failure; this legacy void interface
+          cannot return it directly.
 */
 void sq_clr(void *dest, size_t n);
 

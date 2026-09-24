@@ -281,7 +281,8 @@ int pvr_vertex_commit_zclip(pvr_vertex_t *src, int size)
 {
     pvr_vertex_t *dest = (pvr_vertex_t *)SQ_MASK_DEST((void *)PVR_TA_INPUT);
     pvr_vertex_t *top = dest;
-    sq_lock((void *)PVR_TA_INPUT);
+    if(!sq_lock((void *)PVR_TA_INPUT))
+        return -1;
     src = (pvr_vertex_t *)&src->flags;
     for (int strip_num = 2; size; size -= strip_num)
     {
@@ -381,7 +382,8 @@ int pvr_vertex_commit_zclip_intensity(pvr_vertex_t *src, int size)
 {
     pvr_vertex_t *dest = (pvr_vertex_t *)SQ_MASK_DEST((void *)PVR_TA_INPUT);
     pvr_vertex_t *top = dest;
-    sq_lock((void *)PVR_TA_INPUT);
+    if(!sq_lock((void *)PVR_TA_INPUT))
+        return -1;
     src = (pvr_vertex_t *)&src->flags;
     for (int strip_num = 2; size; size -= strip_num)
     {
@@ -622,7 +624,8 @@ int pvr_modifier_commit_zclip(pvr_mod_hdr_t *eol_header, pvr_modifier_vol_t *vol
     float *top = dest;
     float cover[3]; /* 3rd cover vertex */
     int cover_flag = 0;
-    sq_lock((void *)PVR_TA_INPUT);
+    if(!sq_lock((void *)PVR_TA_INPUT))
+        return -1;
     vol = (pvr_modifier_vol_t *)&vol->flags;
     for (int i = size; i; i--, vol++)
     {

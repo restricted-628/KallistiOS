@@ -195,7 +195,8 @@ int pvr_list_begin(pvr_list_t list) {
 
     if(!pvr_list_dma) {
         pvr_start_ta_rendering();
-        sq_lock((void *)PVR_TA_INPUT);
+        if(!sq_lock((void *)PVR_TA_INPUT))
+            return -1;
     }
 
     /* Ok, set the flag */
