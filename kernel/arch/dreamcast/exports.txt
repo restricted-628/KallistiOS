@@ -5,6 +5,8 @@ include dc/maple/mie.h
 # Cache management
 arch_icache_inval_range
 arch_icache_sync_range
+arch_dcache_purge_all_indexed
+arch_dcache_wback_all_indexed
 
 # ASIC
 asic_evt_set_handler
