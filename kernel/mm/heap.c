@@ -90,7 +90,8 @@ static int heap_lock(mm_heap_t *heap) {
 static int heap_validate_locked(const mm_heap_t *heap) {
     const mm_heap_block_t *block;
     const mm_heap_block_t *previous = NULL;
-    const uint8_t *expected;
+    uintptr_t expected;
+    uintptr_t end;
     size_t capacity = 0;
     size_t allocated = 0;
     size_t reserved = 0;
@@ -101,18 +102,29 @@ static int heap_validate_locked(const mm_heap_t *heap) {
         return -1;
     }
 
-    expected = heap->region_begin;
+    expected = (uintptr_t)heap->region_begin;
+    end = (uintptr_t)heap->region_end;
 
     for(block = heap->first; block; block = block->next) {
-        const uint8_t *block_address = (const uint8_t *)block;
-        const uint8_t *payload = block_address + sizeof(*block);
+        const uintptr_t block_address = (uintptr_t)block;
+        uintptr_t payload;
 
-        if(block_address != expected || block->magic != MM_HEAP_BLOCK_MAGIC ||
+        /* Establish room for the complete header and minimum payload before
+           reading any block fields, including a successor's back-link. */
+        if(block_address != expected || block_address > end ||
+           end - block_address < sizeof(*block) + MM_HEAP_ALIGNMENT) {
+            errno = EFAULT;
+            return -1;
+        }
+
+        payload = block_address + sizeof(*block);
+
+        if(block->magic != MM_HEAP_BLOCK_MAGIC ||
            block->previous != previous ||
            (block->flags & ~MM_HEAP_BLOCK_USED) != 0 ||
+           block->capacity < MM_HEAP_ALIGNMENT ||
            block->capacity % MM_HEAP_ALIGNMENT != 0 ||
-           payload > heap->region_end ||
-           block->capacity > (size_t)(heap->region_end - payload)) {
+           block->capacity > end - payload) {
             errno = EFAULT;
             return -1;
         }
@@ -136,8 +148,8 @@ static int heap_validate_locked(const mm_heap_t *heap) {
         expected = payload + block->capacity;
 
         if(block->next) {
-            if((const uint8_t *)block->next != expected ||
-               block->next->previous != block) {
+            if((uintptr_t)block->next != expected ||
+               end - expected < sizeof(*block) + MM_HEAP_ALIGNMENT) {
                 errno = EFAULT;
                 return -1;
             }
@@ -148,7 +160,7 @@ static int heap_validate_locked(const mm_heap_t *heap) {
         previous = block;
     }
 
-    if(expected != heap->region_end || capacity != heap->capacity ||
+    if(expected != end || capacity != heap->capacity ||
        allocated != heap->allocated || reserved != heap->reserved ||
        live != heap->live_allocations) {
         errno = EFAULT;
