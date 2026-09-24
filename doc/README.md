@@ -2,6 +2,9 @@
 KallistiOS[^1] is a development library and unikernel operating system for
 the Sega Dreamcast[^1] licensed under a [permissive software license](LICENSE.md).
 
+Caller-backed allocator ownership and resource costs are documented in the
+[independent heap guide](independent-heaps.md).
+
 KallistiOS is a modular monolithic kernel, like Linux or FreeBSD. This
 means that there is a kernel library which you link with your own code.
 This library (`libkallisti.a`) contains the whole core OS functionality. You

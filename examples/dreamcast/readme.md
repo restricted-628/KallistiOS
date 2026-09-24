@@ -9,6 +9,7 @@ This page serves as an index for all KallistiOS examples.
   - exec
   - fpu
   - gdb_breaking
+  - independent-heap
   - memtest32
   - mmu
   - posix_resource

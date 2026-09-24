@@ -34,6 +34,7 @@ __BEGIN_DECLS
 
 #include <kos/version.h>
 #include <kos/cache.h>
+#include <kos/heap.h>
 #include <kos/fs.h>
 #include <kos/fs_romdisk.h>
 #include <kos/fs_ramdisk.h>

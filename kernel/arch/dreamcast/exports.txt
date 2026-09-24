@@ -2,6 +2,16 @@ include kos.h
 include dc/sound/sound.h
 include dc/maple/mie.h
 
+# Independent heaps
+mm_heap_create
+mm_heap_destroy
+mm_heap_alloc
+mm_heap_calloc
+mm_heap_realloc
+mm_heap_free
+mm_heap_get_stats
+mm_heap_validate
+
 # Cache management
 arch_icache_inval_range
 arch_icache_sync_range
