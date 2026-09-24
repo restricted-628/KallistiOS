@@ -10,6 +10,7 @@
 #include <dc/sound/sound.h>
 
 #include <stdint.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,18 @@
 
 static alignas(32) uint8_t source[TRANSFER_BYTES];
 static alignas(32) uint8_t destination[TRANSFER_BYTES];
+static void *chain_address;
+static volatile unsigned int callbacks;
+static volatile bool chain_failed;
+
+static void chain(void *data) {
+    (void)data;
+    ++callbacks;
+    if(callbacks == 1 &&
+       g2_dma_transfer(source, chain_address, TRANSFER_BYTES, 0, chain, NULL,
+                       G2_DMA_TO_G2, 0, G2_DMA_CHAN_SPU, 0) < 0)
+        chain_failed = true;
+}
 
 static int status_complete(uint32_t channel, size_t bytes) {
     g2_dma_status_t status;
@@ -42,6 +55,10 @@ int main(int argc, char **argv) {
         source[index] = (uint8_t)(index * 7u + 3u);
     memset(destination, 0, sizeof(destination));
 
+    if(snd_init() < 0) {
+        printf("G2-STATE: FAIL sound initialization\n");
+        return EXIT_FAILURE;
+    }
     sound_offset = snd_mem_malloc(TRANSFER_BYTES);
     if(!sound_offset) {
         printf("G2-STATE: FAIL sound allocation\n");
@@ -61,7 +78,20 @@ int main(int argc, char **argv) {
         memcmp(source, destination, TRANSFER_BYTES) != 0))
         failed = 1;
 
+    chain_address = g2_address;
+    if(!failed &&
+       (g2_dma_transfer(source, g2_address, TRANSFER_BYTES, 1, chain, NULL,
+                        G2_DMA_TO_G2, 0, G2_DMA_CHAN_SPU, 0) < 0 ||
+        g2_dma_wait(G2_DMA_CHAN_SPU, 1000) < 0))
+        failed = 1;
+    if(callbacks != 2 || chain_failed) failed = 1;
+    /* A timed wait never returns buffer ownership. Drain any started channel
+       before releasing the sound allocation, even on the failure path. */
+    while(g2_dma_cancel(G2_DMA_CHAN_SPU) < 0 && errno == EBUSY)
+        (void)g2_dma_wait(G2_DMA_CHAN_SPU, 0);
     snd_mem_free(sound_offset);
-    printf("G2-STATE: %s\n", failed ? "FAIL" : "PASS");
+    snd_shutdown();
+    printf("G2-STATE: %s roundtrip=32 callbacks=%u\n",
+           failed ? "FAIL" : "PASS", callbacks);
     return failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

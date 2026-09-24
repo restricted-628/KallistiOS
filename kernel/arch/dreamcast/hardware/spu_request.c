@@ -225,7 +225,8 @@ static void dma_complete(void *data) {
         return;
 
     request->dma_active = false;
-    request->dma_result = 0;
+    request->dma_result = request->cancel_requested ? ECANCELED
+        : deadline_expired(request) ? ETIMEDOUT : 0;
     request->status.completed_bytes = request->status.requested_bytes;
     sem_signal(&request->dma_done);
 }
@@ -270,7 +271,10 @@ static void stop_request_dma_locked(spu_transfer_request_t *request,
 
         if(completed > request->status.completed_bytes)
             request->status.completed_bytes = completed;
-        (void)g2_dma_cancel(G2_DMA_CHAN_SPU);
+        /* An unsuccessful stop retains the DMA buffer and callback context.
+           The worker retries; a natural completion also wakes it safely. */
+        if(g2_dma_cancel(G2_DMA_CHAN_SPU) < 0 && errno != EALREADY)
+            return;
     }
 
     /* G2 shutdown cancels without invoking the channel callback. Always wake
