@@ -1,0 +1,1 @@
+/* Test declarations are supplied by shim.h. */
