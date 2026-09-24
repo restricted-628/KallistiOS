@@ -40,6 +40,8 @@ static volatile int periodic_requeue_result;
 static volatile unsigned order_count;
 static volatile unsigned order[2];
 static volatile unsigned unexpected_runs;
+static volatile int self_destroy_errno;
+static semaphore_t kill_finished;
 
 typedef struct ordered_job {
     workqueue_job_t job;
@@ -102,6 +104,27 @@ static void unexpected_callback(workqueue_t *wq, workqueue_job_t *job) {
     (void)wq;
     (void)job;
     ++unexpected_runs;
+}
+
+static void stop_callback(workqueue_t *wq, workqueue_job_t *job) {
+    (void)job;
+    errno = 0;
+    workqueue_destroy(wq);
+    self_destroy_errno = errno;
+    workqueue_kill(wq);
+    sem_signal(&self_finished);
+}
+
+static void parked_callback(workqueue_t *wq, workqueue_job_t *job) {
+    (void)wq; (void)job;
+    sem_signal(&active_started);
+    sem_wait(&active_release);
+}
+
+static void *kill_thread(void *data) {
+    workqueue_kill(data);
+    sem_signal(&kill_finished);
+    return NULL;
 }
 
 static bool wait_for_cancellation(workqueue_job_t *job) {
@@ -243,6 +266,54 @@ int main(int argc, char **argv) {
         failed = true;
 
     workqueue_destroy(queue);
+
+    /* A callback may stop, but must not destroy or join its own worker. */
+    queue = workqueue_create();
+    if(!queue) return EXIT_FAILURE;
+    self_job.time_ms = 0;
+    self_job.cb = stop_callback;
+    if(workqueue_enqueue_ex(queue, &self_job) < 0 ||
+       sem_wait_timed(&self_finished, TEST_TIMEOUT_MS) < 0)
+        failed = true;
+    workqueue_kill(queue);
+    if(self_destroy_errno != EDEADLK || workqueue_get_thread(queue) != NULL)
+        failed = true;
+    workqueue_destroy(queue);
+
+    /* Concurrent stops must both wait for the parked callback and join once. */
+    queue = workqueue_create();
+    if(!queue) return EXIT_FAILURE;
+    sem_init(&kill_finished, 0);
+    active_job.time_ms = 0;
+    active_job.cb = parked_callback;
+    if(workqueue_enqueue_ex(queue, &active_job) < 0 ||
+       sem_wait_timed(&active_started, TEST_TIMEOUT_MS) < 0)
+        failed = true;
+    kthread_t *killers[2] = {
+        thd_create(0, kill_thread, queue), thd_create(0, kill_thread, queue),
+    };
+    uint64_t deadline = timer_ms_gettime64() + TEST_TIMEOUT_MS;
+    stopped_job.time_ms = UINT64_MAX - 1;
+    bool stopped = false;
+    do {
+        if(workqueue_enqueue_ex(queue, &stopped_job) < 0 && errno == ECANCELED) {
+            stopped = true;
+            break;
+        }
+        thd_pass();
+    } while(timer_ms_gettime64() < deadline);
+    sem_signal(&active_release);
+    for(unsigned i = 0; i < 2; ++i) {
+        if(!killers[i] || sem_wait_timed(&kill_finished, TEST_TIMEOUT_MS) < 0 ||
+           thd_join(killers[i], NULL) < 0)
+            failed = true;
+    }
+    if(!stopped || workqueue_get_thread(queue) != NULL ||
+       workqueue_job_get_info(queue, &stopped_job, &info) < 0 ||
+       info.queued || info.running || info.cancelling)
+        failed = true;
+    workqueue_destroy(queue);
+    sem_destroy(&kill_finished);
     sem_destroy(&ordered_finished);
     sem_destroy(&periodic_finished);
     sem_destroy(&self_finished);
@@ -264,7 +335,7 @@ int main(int argc, char **argv) {
     }
 
     printf("KOSWORKQUEUE cancel=1 cross=1 duplicate=1 self=1 periodic=1 "
-           "order=%u%u\n",
+           "order=%u%u stop=1 joins=2\n",
            order[0], order[1]);
     return EXIT_SUCCESS;
 }

@@ -6,7 +6,6 @@
 
 TARGET = workqueue-safety.elf
 OBJS = workqueue-safety.o
-KOS_CFLAGS += -std=c11
 
 all: rm-elf $(TARGET)
 

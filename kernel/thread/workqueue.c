@@ -124,6 +124,11 @@ static const kthread_attr_t workqueue_attrs = {
 workqueue_t *workqueue_create(void) {
     workqueue_t *wq;
 
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return NULL;
+    }
+
     wq = calloc(1, sizeof(workqueue_t));
     if(!wq)
         return NULL;
@@ -135,7 +140,11 @@ workqueue_t *workqueue_create(void) {
 
     wq->thd = thd_create_ex(&workqueue_attrs, workqueue_thread, wq);
     if(!wq->thd) {
+        const int saved_errno = errno;
+        cond_destroy(&wq->cond);
+        mutex_destroy(&wq->lock);
         free(wq);
+        errno = saved_errno;
         return NULL;
     }
 
@@ -183,7 +192,8 @@ int workqueue_enqueue_ex(workqueue_t *wq, workqueue_job_t *job) {
     if(!elm)
         STAILQ_INSERT_TAIL(&wq->jobs, job, entry);
 
-    cond_signal(&wq->cond);
+    /* Cancellation and shutdown waiters share this condition with the worker. */
+    cond_broadcast(&wq->cond);
     return 0;
 }
 
@@ -261,12 +271,18 @@ int workqueue_job_get_info(workqueue_t *wq, workqueue_job_t *job,
 }
 
 void workqueue_kill(workqueue_t *wq) {
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return;
+    }
     if(!wq)
         return;
 
     mutex_lock(&wq->lock);
     if(!wq->quit) {
         wq->quit = true;
+        /* Pending jobs remain caller-owned; stopping never executes them. */
+        STAILQ_INIT(&wq->jobs);
         cond_broadcast(&wq->cond);
     }
 
@@ -287,16 +303,25 @@ void workqueue_kill(workqueue_t *wq) {
     wq->joining = true;
     mutex_unlock(&wq->lock);
 
-    (void)thd_join(wq->thd, NULL);
+    const int result = thd_join(wq->thd, NULL);
 
     mutex_lock(&wq->lock);
-    wq->joined = true;
+    if(result == 0) {
+        wq->joined = true;
+        wq->thd = NULL;
+    }
     wq->joining = false;
     cond_broadcast(&wq->cond);
     mutex_unlock(&wq->lock);
+    if(result < 0)
+        errno = EIO;
 }
 
 void workqueue_destroy(workqueue_t *wq) {
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return;
+    }
     if(!wq)
         return;
     if(thd_get_current() == wq->thd) {
@@ -305,11 +330,23 @@ void workqueue_destroy(workqueue_t *wq) {
     }
 
     workqueue_kill(wq);
+    /* A failed join is not proof that callbacks have stopped using the queue. */
+    if(!wq->joined)
+        return;
     cond_destroy(&wq->cond);
     mutex_destroy(&wq->lock);
     free(wq);
 }
 
 kthread_t *workqueue_get_thread(workqueue_t *wq) {
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return NULL;
+    }
+    if(!wq) {
+        errno = EINVAL;
+        return NULL;
+    }
+    mutex_lock_scoped(&wq->lock);
     return wq->thd;
 }
