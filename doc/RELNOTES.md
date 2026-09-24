@@ -532,7 +532,14 @@ lifecycle and naming conventions.
   generation-checked allocator for its complete 32 KiB SRAM window. The BBA
   now leases and releases its established receive, wrap-guard, and transmit
   ranges instead of owning hard-coded global addresses. G1 and G2 DMA claims
-  exclude one another on each lease.
+  exclude one another across the complete SRAM window.
+* Replaced reference-counted GAPS initialization with explicit exclusive
+  STAGING/NETWORK owner tokens and owner-authorized SRAM allocation. Resident
+  IP or unclassified dcload blocks staging before bridge mutation; native
+  loader device calls are guarded while KOS owns the bridge. BBA teardown now
+  retains ownership on failed drain/release. G1-to-BBA DMA remains available
+  under NETWORK ownership; only competing staging is excluded. See
+  `doc/gaps-ownership.md` for API migration and loader/hardware limitations.
 * Extended G2 DMA root-bus endpoints to both PVR-RAM apertures with explicit
   region status and cache behavior. Direct optical DMA likewise accepts
   system or PVR RAM, and adds synchronous/asynchronous reads into leased

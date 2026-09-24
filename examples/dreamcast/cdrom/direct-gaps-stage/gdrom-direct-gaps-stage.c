@@ -16,6 +16,7 @@
 #include <dc/gaps.h>
 #include <dc/gdrom_direct.h>
 #include <kos/init.h>
+#include <arch/arch.h>
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
@@ -37,6 +38,7 @@ int main(int argc, char **argv) {
     gdrom_direct_result_t transport;
     gdrom_direct_sector_type_t sector_type;
     gaps_sram_lease_t lease = GAPS_SRAM_LEASE_INVALID;
+    gaps_owner_t owner = GAPS_OWNER_INVALID;
     gaps_sram_info_t sram_info;
     cdrom_request_status_t request_status;
     cdrom_request_t *request = NULL;
@@ -48,14 +50,22 @@ int main(int argc, char **argv) {
     (void)argv;
 
     puts("Direct GD-to-GAPS staging validation");
-    if(!gaps_probe() || gaps_init() < 0) {
+    if(!gaps_probe()) {
         puts("DIRECT-GAPS-STAGE: SKIP bridge unavailable");
         return EXIT_SUCCESS;
     }
-    if(gaps_sram_alloc(TEST_BYTES, 2048, &lease) < 0) {
-        puts("DIRECT-GAPS-STAGE: SKIP SRAM already owned");
-        (void)gaps_shutdown();
-        return EXIT_SUCCESS;
+    if(gaps_acquire(GAPS_ROLE_STAGING, &owner) < 0) {
+        if(errno == EBUSY) {
+            puts("DIRECT-GAPS-STAGE: SKIP network/loader/other owner active");
+            return EXIT_SUCCESS;
+        }
+        perror("GAPS staging acquisition");
+        return EXIT_FAILURE;
+    }
+    if(gaps_sram_alloc(owner, TEST_BYTES, 2048, &lease) < 0) {
+        perror("SRAM allocation");
+        failed = 1;
+        goto done;
     }
     if(gaps_sram_get_info(lease, &sram_info) < 0) {
         failed = 1;
@@ -68,7 +78,7 @@ int main(int argc, char **argv) {
         failed = 1;
         goto done;
     }
-    if(cdrom_bios_read_toc(&toc, probe.status.disc_type == CD_GDROM) != ERR_OK) {
+    if(cdrom_read_toc(&toc, probe.status.disc_type == CD_GDROM) != ERR_OK) {
         puts("TOC read failed");
         failed = 1;
         goto done;
@@ -100,7 +110,6 @@ int main(int argc, char **argv) {
     if(destroy_request(request) < 0) {
         perror("request destroy");
         failed = 1;
-        request = NULL;
         goto done;
     }
     request = NULL;
@@ -113,7 +122,8 @@ int main(int argc, char **argv) {
         failed = 1;
         goto done;
     }
-    if(cdrom_bios_read_sectors(reference_buffer, fad, TEST_SECTORS) != ERR_OK
+    if(gdrom_direct_read_sectors(reference_buffer, fad, TEST_SECTORS,
+                                 sector_type, 4000, NULL) < 0
             || memcmp(staged_buffer, reference_buffer, TEST_BYTES)) {
         puts("payload comparison failed");
         failed = 1;
@@ -122,12 +132,16 @@ int main(int argc, char **argv) {
 done:
     if(request) {
         (void)cdrom_request_cancel(request);
-        (void)cdrom_request_wait(request, REQUEST_TIMEOUT_MS, NULL);
-        (void)destroy_request(request);
+        /* A cancellation request is not a quiescence guarantee. Keep the
+           handle, stack result and owner alive if the bounded drain fails. */
+        if(cdrom_request_wait(request, REQUEST_TIMEOUT_MS, NULL) < 0
+                || destroy_request(request) < 0)
+            arch_panic("GAPS request failed to retire; resources retained");
     }
-    if(lease != GAPS_SRAM_LEASE_INVALID)
-        (void)gaps_sram_free(lease);
-    (void)gaps_shutdown();
+    if(lease != GAPS_SRAM_LEASE_INVALID && gaps_sram_free(lease) < 0)
+        arch_panic("GAPS lease still busy; owner retained");
+    if(gaps_release(owner) < 0)
+        arch_panic("GAPS owner release failed");
     printf("DIRECT-GAPS-STAGE: %s\n", failed ? "FAIL" : "PASS");
     return failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }

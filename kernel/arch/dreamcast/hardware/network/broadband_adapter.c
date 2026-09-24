@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <errno.h>
 #include <dc/net/broadband_adapter.h>
 #include <dc/asic.h>
 #include <dc/g2bus.h>
@@ -106,11 +107,15 @@ static uint32_t txdesc[TX_NB_BUFFERS];
 static gaps_sram_lease_t rx_lease = GAPS_SRAM_LEASE_INVALID;
 static gaps_sram_lease_t rx_guard_lease = GAPS_SRAM_LEASE_INVALID;
 static gaps_sram_lease_t tx_lease = GAPS_SRAM_LEASE_INVALID;
-static bool gaps_reference;
+static gaps_owner_t gaps_owner = GAPS_OWNER_INVALID;
 static atomic_int dma_used;
 static uint8_t *next_dst;
 static uint8_t *next_src;
 static int next_len;
+/* Shutdown closes admission before waiting for the RX worker. Calls already
+   inside TX retain the device until they leave, including semaphore waiters. */
+static atomic_bool bba_stopping = true;
+static unsigned int tx_users;
 
 /* Is the link stabilized? */
 static bool link_stable;
@@ -150,33 +155,42 @@ static int rtl_reset(void) {
     return 0;
 }
 
-static void bba_release_sram(void) {
+static int bba_release_sram(void) {
     if(tx_lease != GAPS_SRAM_LEASE_INVALID) {
         if(gaps_sram_free(tx_lease) == 0)
             tx_lease = GAPS_SRAM_LEASE_INVALID;
-        else
+        else {
             dbglog(DBG_ERROR, "bba: unable to release TX SRAM lease\n");
+            return -1;
+        }
     }
     if(rx_guard_lease != GAPS_SRAM_LEASE_INVALID) {
         if(gaps_sram_free(rx_guard_lease) == 0)
             rx_guard_lease = GAPS_SRAM_LEASE_INVALID;
-        else
+        else {
             dbglog(DBG_ERROR, "bba: unable to release RX guard lease\n");
+            return -1;
+        }
     }
     if(rx_lease != GAPS_SRAM_LEASE_INVALID) {
         if(gaps_sram_free(rx_lease) == 0)
             rx_lease = GAPS_SRAM_LEASE_INVALID;
-        else
+        else {
             dbglog(DBG_ERROR, "bba: unable to release RX SRAM lease\n");
+            return -1;
+        }
     }
-    if(gaps_reference) {
-        if(gaps_shutdown() == 0)
-            gaps_reference = false;
-        else
+    if(gaps_owner != GAPS_OWNER_INVALID) {
+        if(gaps_release(gaps_owner) == 0)
+            gaps_owner = GAPS_OWNER_INVALID;
+        else {
             dbglog(DBG_ERROR, "bba: unable to release GAPS bridge\n");
+            return -1;
+        }
     }
     rtl_mem = 0;
     memset(txdesc, 0, sizeof(txdesc));
+    return 0;
 }
 
 static int bba_acquire_sram(void) {
@@ -184,16 +198,20 @@ static int bba_acquire_sram(void) {
     gaps_sram_info_t tx_info;
     unsigned int i;
 
-    if(gaps_init() < 0)
+    /* Do not overwrite a retained token after a failed shutdown. */
+    if(gaps_owner != GAPS_OWNER_INVALID) {
+        errno = EBUSY;
         return -1;
-    gaps_reference = true;
+    }
+    if(gaps_acquire(GAPS_ROLE_NETWORK, &gaps_owner) < 0)
+        return -1;
 
     /* Preserve the proven device layout. The middle 8 KiB is a wrap guard
        for the receive ring, not an independently usable hardware bank. */
-    if(gaps_sram_reserve(0, RX_BUFFER_LEN, &rx_lease) < 0
-            || gaps_sram_reserve(RX_BUFFER_LEN, 0x2000,
+    if(gaps_sram_reserve(gaps_owner, 0, RX_BUFFER_LEN, &rx_lease) < 0
+            || gaps_sram_reserve(gaps_owner, RX_BUFFER_LEN, 0x2000,
                                  &rx_guard_lease) < 0
-            || gaps_sram_reserve(TX_BUFFER_OFFSET,
+            || gaps_sram_reserve(gaps_owner, TX_BUFFER_OFFSET,
                                  TX_BUFFER_LEN * TX_NB_BUFFERS,
                                  &tx_lease) < 0
             || gaps_sram_get_info(rx_lease, &rx_info) < 0
@@ -350,6 +368,7 @@ static int bba_hw_init(void) {
     /* Enable receiving broadcast and physical match packets */
     g2_write_32(NIC(RT_RXCONFIG), g2_read_32(NIC(RT_RXCONFIG)) | RT_RXC_APM | RT_RXC_AB);
 
+    atomic_store(&bba_stopping, false);
     return 0;
 
 fail:
@@ -375,26 +394,38 @@ static void rx_reset(void) {
     g2_write_16(NIC(RT_INTRSTATUS), 0xffff);
 }
 
-static void bba_hw_shutdown(void) {
+static int bba_hw_shutdown(void) {
     g2_dma_status_t dma_status;
 
+    irq_mask_t state = irq_disable();
+    atomic_store(&bba_stopping, true);
+    if(tx_users) {
+        irq_restore(state);
+        errno = EBUSY;
+        return -1; /* Keep all resources; caller may retry after TX drains. */
+    }
+    irq_restore(state);
     /* Disable receiver */
     g2_write_32(NIC(RT_RXCONFIG), 0);
     g2_write_8(NIC(RT_CHIPCMD), 0);
+    g2_write_16(NIC(RT_INTRMASK), 0);
 
     if(bba_irq_claim != ASIC_EVT_CLAIM_INVALID) {
-        (void)asic_evt_release(bba_irq_claim);
+        if(asic_evt_release(bba_irq_claim) < 0)
+            return -1;
         bba_irq_claim = ASIC_EVT_CLAIM_INVALID;
     }
 
     /* The SRAM lease must outlive any engine still referencing it. */
-    if(g2_dma_get_status(G2_DMA_CHAN_BBA, &dma_status) == 0
-            && (dma_status.state == G2_DMA_STATE_RUNNING
-                || dma_status.state == G2_DMA_STATE_SUSPENDED))
-        (void)g2_dma_cancel(G2_DMA_CHAN_BBA);
+    if(g2_dma_get_status(G2_DMA_CHAN_BBA, &dma_status) < 0)
+        return -1;
+    if((dma_status.state == G2_DMA_STATE_RUNNING
+            || dma_status.state == G2_DMA_STATE_SUSPENDED)
+            && g2_dma_cancel(G2_DMA_CHAN_BBA) < 0 && errno != EALREADY)
+        return -1;
     atomic_store(&dma_used, 0);
     next_len = 0;
-    bba_release_sram();
+    return bba_release_sram();
 }
 
 #define RXBSZ       (64 * 1024) /* must be a power of two */
@@ -574,12 +605,15 @@ static int rx_enq(int ring_offset, size_t pkt_size) {
 }
 
 static int bba_link_is_stable(void *d) {
-    return *(int *)d;
+    (void)d;
+    return atomic_load(&bba_stopping) || link_stable;
 }
 
 static int bba_can_tx(void *d) {
     (void)d;
 
+    if(atomic_load(&bba_stopping))
+        return 1;
     if(!(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_HOST_OWNS)) {
         if(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_ABORTED)
             g2_write_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx),
@@ -634,6 +668,10 @@ static bool bba_tx_dma(const uint8_t *pkt, int len) {
 /* Transmit a single packet */
 static int bba_rtx(const uint8_t *pkt, int len, int wait)
 {
+    if(atomic_load(&bba_stopping)) {
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
+    }
     if(wait == BBA_TX_WAIT) {
         assert(!irq_inside_int());
 
@@ -643,12 +681,22 @@ static int bba_rtx(const uint8_t *pkt, int len, int wait)
         return BBA_TX_AGAIN;
     }
 
+    if(atomic_load(&bba_stopping)) {
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
+    }
+
     /* Wait till it's clear to transmit */
     if(wait == BBA_TX_WAIT) {
         thd_poll(bba_can_tx, NULL, 0);
     }
     else if(!(g2_read_32(NIC(RT_TXSTATUS0 + 4 * rtl.cur_tx)) & RT_TX_HOST_OWNS)) {
         return BBA_TX_AGAIN;
+    }
+
+    if(atomic_load(&bba_stopping)) {
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
     }
 
     /* Copy the packet out to RTL memory */
@@ -678,17 +726,26 @@ static int bba_rtx(const uint8_t *pkt, int len, int wait)
 int bba_tx(const uint8_t *pkt, int len, int wait) {
     int res;
 
-    if(!__is_defined(TX_SEMA))
-        return bba_rtx(pkt, len, wait);
+    irq_mask_t state = irq_disable();
+    if(atomic_load(&bba_stopping)) {
+        irq_restore(state);
+        errno = ENETDOWN;
+        return BBA_TX_ERROR;
+    }
+    ++tx_users;
+    irq_restore(state);
 
-    if(sem_wait_irqsafe(&tx_sema)) {
-        //printf("bba_tx called from an irq while a thread was running it !\n");
-        return BBA_TX_OK;   /* sorry guys ... */
+    if(__is_defined(TX_SEMA) && sem_wait_irqsafe(&tx_sema))
+        res = BBA_TX_AGAIN;
+    else {
+        res = bba_rtx(pkt, len, wait);
+        if(__is_defined(TX_SEMA))
+            sem_signal(&tx_sema);
     }
 
-    res = bba_rtx(pkt, len, wait);
-    sem_signal(&tx_sema);
-
+    state = irq_disable();
+    --tx_users;
+    irq_restore(state);
     return res;
 }
 
@@ -881,7 +938,8 @@ static int bba_if_shutdown(netif_t *self) {
     if(!(bba_if.flags & NETIF_INITIALIZED))
         return 0;
 
-    bba_hw_shutdown();
+    if(bba_hw_shutdown() < 0)
+        return -1;
     bba_rxbuf_free();
 
     bba_if.flags &= ~(NETIF_INITIALIZED | NETIF_RUNNING);
@@ -902,10 +960,17 @@ static int bba_if_start(netif_t *self) {
     if(bba_if.flags & NETIF_RUNNING)
         return 0;
 
+    if(bba_irq_claim == ASIC_EVT_CLAIM_INVALID) {
+        errno = EBUSY; /* Hardware shutdown failed part-way; finish it first. */
+        return -1;
+    }
+    atomic_store(&bba_stopping, false);
+
     // Start the BBA RX thread.
     assert(rx_worker == NULL);
     rx_worker = thd_worker_create_ex(&bba_rx_worker_attr, bba_rx_worker, NULL);
     if(!rx_worker) {
+        atomic_store(&bba_stopping, true);
         dbglog(DBG_ERROR, "bba: unable to create RX worker\n");
         return -1;
     }
@@ -916,6 +981,7 @@ static int bba_if_start(netif_t *self) {
 
     /* Wait until the link is stabilized */
     if(!thd_poll(bba_link_is_stable, &link_stable, 10000)) {
+        atomic_store(&bba_stopping, true);
         dbglog(DBG_ERROR, "bba: timed out waiting for link to stabilize\n");
         thd_worker_destroy(rx_worker);
         rx_worker = NULL;
@@ -929,6 +995,8 @@ static int bba_if_start(netif_t *self) {
 static int bba_if_stop(netif_t *self) {
     (void)self;
 
+    /* Wake TX link/buffer polls before joining a worker that may be in TX. */
+    atomic_store(&bba_stopping, true);
     if(!(bba_if.flags & NETIF_RUNNING))
         return 0;
 
@@ -1140,10 +1208,10 @@ int bba_init(void) {
 /* Shutdown */
 int bba_shutdown(void) {
     /* Shutdown hardware */
-    if(bba_if.flags & NETIF_RUNNING)
-        bba_if.if_stop(&bba_if);
-    if(bba_if.flags & NETIF_INITIALIZED)
-        bba_if.if_shutdown(&bba_if);
+    if((bba_if.flags & NETIF_RUNNING) && bba_if.if_stop(&bba_if) < 0)
+        return -1;
+    if((bba_if.flags & NETIF_INITIALIZED) && bba_if.if_shutdown(&bba_if) < 0)
+        return -1;
 
     if(__is_defined(TX_SEMA))
         sem_destroy(&tx_sema);

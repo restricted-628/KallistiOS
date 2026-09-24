@@ -14,7 +14,7 @@ each API's contract.
 | GAPS bridge SRAM | `cdrom/direct-gaps-stage`: explicit SRAM lease, GD-DMA completion, then G2 DMA to main RAM | No fiber adapter for the lease-based API; bridge/hardware validation remains separate |
 
 All example paths above are under `examples/dreamcast/`. The GAPS example is
-serialized: it does not overlap GD/G1 and G2 access to the same SRAM lease.
+serialized: it does not overlap GD/G1 and G2 access anywhere in bridge SRAM.
 A missing or already-owned bridge is a SKIP, not a passing DMA test.
 
 ## Other engines, not additional GD-DMA destinations
