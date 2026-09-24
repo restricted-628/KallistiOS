@@ -39,6 +39,11 @@ __BEGIN_DECLS
     be called at the start of every vblank period with the same parameters that
     were passed to the IRQ handler for vblanks.
 
+    Legacy handlers retain registration order at VBLANK_PRIORITY_DEFAULT.
+    Explicit-priority registrations at that priority run before legacy handlers.
+    This allocates memory and is restricted to thread context. Callbacks run
+    in interrupt context and must remain bounded and nonblocking.
+
     \param  hnd             The handler to add.
     \param  data            A user pointer that will be passed to the callback.
 
@@ -50,7 +55,9 @@ int vblank_handler_add(asic_evt_handler hnd, void *data);
 
     This function adds a handler to the vblank handler list. Handlers run in
     ascending priority order; lower numeric values execute first. Handlers
-    with the same priority retain their registration order.
+    with the same priority run newest registration first. At the default
+    priority, explicit registrations precede legacy registrations, which retain
+    their relative registration order.
 
     The callback executes in interrupt context and must remain bounded. It may
     remove itself or another registered handler with vblank_handler_remove().
