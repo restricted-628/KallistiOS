@@ -5,8 +5,14 @@ risk or media requirements.
 
 ## General API demonstrations
 
+For an inventory of DMA destinations and other transfer engines, see
+`doc/direct-dma-examples.md` at the repository root.
+
 - `backend-defaults` checks direct defaults and explicit BIOS selection without
   reading a disc; its staged-session dispatch endpoints are link-time spies.
+- `fiber-read` demonstrates direct DMA with application-owned fibers and the
+  optional `libfiber_disc` adapter, without a service executor. The separate
+  `fiber-disc-contract` probe tests lifetimes with a simulated transport.
 - `read-routing` checks generic direct format/read/reinitialization routing,
   independent BIOS state, and failure preservation with transport spies.
 - `convenience-routing` checks direct-default metadata, subcode, and playback

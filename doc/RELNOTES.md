@@ -11,6 +11,14 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Added optional `libfiber_disc` and an application-fiber direct-DMA example.
+  The existing disc worker retains hardware ownership; only the requesting
+  child fiber parks. Main-fiber pumping retires the request and its callback
+  before waking the child, preserving safe buffer/handle lifetimes. Includes
+  bounded admission, explicit cancellation/shutdown, a no-media regression,
+  and a DMA-target example inventory. No service-executor or kernel changes;
+  stream-session/GAPS-specific cooperative adapters remain separate work.
+
 * Removed the ambiguous legacy singleton `cdrom_stream_*` API names. Programs
   must migrate to direct stream sessions, or deliberately use the renamed
   `cdrom_bios_stream_*` functions and `cdrom_bios_stream_callback_t`. BIOS
