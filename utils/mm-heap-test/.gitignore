@@ -1,2 +1,4 @@
 /mm-heap-test
 /heap-corruption-test
+/mm-heap-test.dSYM/
+/heap-corruption-test.dSYM/
