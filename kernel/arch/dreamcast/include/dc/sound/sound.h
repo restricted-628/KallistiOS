@@ -250,22 +250,33 @@ void snd_poll_resp(void);
 */
 void snd_pcm16_split(uint32_t *data, uint32_t *left, uint32_t *right, size_t size);
 
-/** \brief  Separates stereo PCM samples into 2 mono channels with SQ transfer.
+/** \brief  Separates stereo PCM16 into two sound-RAM channels.
 
-    Splits a buffer containing 2 interleaved channels of 16-bit PCM samples
-    into 2 separate buffers of 16-bit PCM samples by using the store queues
-    for data transfer.
+    Source data and both destinations must be 32-byte aligned. size is the
+    interleaved byte count and must be divisible by 32; each destination needs
+    size / 2 bytes. Destinations may be sound-RAM offsets or direct physical,
+    P1, or P2 sound-RAM addresses, and must not overlap.
 
-    \warning
-    All arguments must be 32-byte aligned.
+    This function acquires its own store queues and handles either MMU state.
+    It does not resolve translated application destination pointers. Uploads
+    use bounded, separately mapped channel batches with no heap allocation.
+    The final 16 bytes per channel, when present, are written with PIO.
 
-    \param data   Source buffer of interleaved stereo samples
-    \param left   Destination buffer address for left mono samples
-    \param right  Destination buffer address for right mono samples
-    \param size   Size of the source buffer in bytes (must be divisible by 32)
+    The caller owns both destination ranges and must coordinate playback or
+    other writers. Completion is synchronous, but the two channel updates are
+    not atomic. This function may block and must not run in interrupt context.
+
+    \param data   Source buffer of interleaved little-endian L/R PCM16 frames
+    \param left   Left channel sound-RAM offset or direct address
+    \param right  Right channel sound-RAM offset or direct address
+    \param size   Source bytes (multiple of 32); zero is a no-op
+
+    \note This legacy void API records errors in errno: EINVAL for invalid
+    arguments/ranges, EPERM in interrupt context, or the sq_lock() error.
+    Argument errors occur before any writes. An acquisition failure in a
+    later batch can leave a completed prefix or one channel updated.
 
     \sa snd_pcm16_split()
-    Store queues must be prepared before.
 */
 void snd_pcm16_split_sq(uint32_t *data, uintptr_t left, uintptr_t right, size_t size);
 
