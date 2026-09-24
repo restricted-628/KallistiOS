@@ -57,7 +57,7 @@ extern bool cdrom_dma_request_snapshot(gdc_cmd_hnd_t handle,
                                        cd_cmd_chk_t *response,
                                        cd_cmd_chk_status_t *status);
 extern void cdrom_dma_request_end(gdc_cmd_hnd_t handle);
-extern int cdrom_stream_request_claim(void);
+extern int cdrom_bios_stream_request_claim(void);
 extern bool cdrom_stream_sector_size_matches(size_t sector_size);
 
 struct cdrom_stream_session;
@@ -1081,7 +1081,7 @@ static void process_stream_session(cdrom_request_t *request) {
         }
     }
 
-    if(cdrom_stream_request_claim() != ERR_OK) {
+    if(cdrom_bios_stream_request_claim() != ERR_OK) {
         g1_bus_unlock();
         finish_request(request, CDROM_REQUEST_ERROR, ERR_SYS);
         return;

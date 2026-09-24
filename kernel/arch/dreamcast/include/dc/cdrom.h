@@ -290,9 +290,9 @@ static const bool  CDROM_READ_DMA   __depr("Please just use true to use dma.") =
 #define TOC_TRACK(n) FIELD_GET(n, 0x00ff0000)
 /** @} */
 
-/** \brief  CD-ROM streams callback
+/** \brief Legacy BIOS stream callback (not a staged-session callback).
 */
-typedef void (*cdrom_stream_callback_t)(void *data);
+typedef void (*cdrom_bios_stream_callback_t)(void *data);
 
 /** \defgroup cdrom_requests Asynchronous GD-ROM requests
     \brief Asynchronous GD-ROM command requests.
@@ -369,7 +369,10 @@ typedef void (*cdrom_request_callback_t)(cdrom_request_t *request,
                                          const cdrom_request_status_t *status,
                                          void *data);
 
-/** \brief Submit an asynchronous GD-ROM control command.
+/** \brief Submit a raw asynchronous BIOS GD-ROM control command.
+
+    This is an explicitly firmware-level API, not backend-neutral dispatch.
+    It always uses the BIOS command server, independently of `/cd` selection.
 
     The parameter block is copied before this function returns. Any buffers
     referenced by pointers inside that block must remain valid until the
@@ -1172,21 +1175,25 @@ cdrom_request_t *cdrom_bios_seek_async(
     uint32_t sector, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data);
 
-/** \brief    Start streaming from a CD-ROM.
+/** \brief    Start a legacy stream explicitly through the BIOS server.
     \ingroup  gdrom
 
     This function pre-reads the specified number of sectors from the disc.
+    This is the old singleton PIO/DMA firmware interface, now deliberately
+    BIOS-prefixed. It does not inherit the filesystem backend selection and
+    can wait indefinitely. New direct applications should use
+    cdrom_stream_session_start() and the request/session lifetime API.
 
     \param  sector          The sector to start reading from.
     \param  cnt             The number of sectors to read, 0x1ff means until end of disc.
     \param  dma             True for read using dma, false for pio.
 
     \return                 \ref cd_cmd_response
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-int cdrom_stream_start(int sector, int cnt, bool dma);
+int cdrom_bios_stream_start(int sector, int cnt, bool dma);
 
-/** \brief    Stop streaming from a CD-ROM.
+/** \brief    Stop the legacy BIOS stream.
     \ingroup  gdrom
 
     This function finishing stream commands.
@@ -1194,11 +1201,11 @@ int cdrom_stream_start(int sector, int cnt, bool dma);
     \param  abort_dma       Abort current G1 DMA transfer.
 
     \return                 \ref cd_cmd_response
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-int cdrom_stream_stop(bool abort_dma);
+int cdrom_bios_stream_stop(bool abort_dma);
 
-/** \brief    Request stream transfer.
+/** \brief    Request a legacy BIOS stream transfer.
     \ingroup  gdrom
 
     This function request data from stream.
@@ -1207,31 +1214,34 @@ int cdrom_stream_stop(bool abort_dma);
     \param  size            The size in bytes to read (DMA min 32, PIO min 2).
     \param  block           True to block until DMA transfer completes.
     \return                 \ref cd_cmd_response
-    \see    cdrom_stream_start
+    \see    cdrom_bios_stream_start
 */
-int cdrom_stream_request(void *buffer, size_t size, bool block);
+int cdrom_bios_stream_request(void *buffer, size_t size, bool block);
 
-/** \brief    Check requested stream transfer.
+/** \brief    Check the legacy BIOS stream transfer.
     \ingroup  gdrom
 
     This function check requested stream transfer.
 
     \param  size            The transfered (if in progress) or remain size in bytes.
     \return                 1 - is in progress, 0 - done
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-int cdrom_stream_progress(size_t *size);
+int cdrom_bios_stream_progress(size_t *size);
 
-/** \brief    Setting up a callback for transfers.
+/** \brief    Set the legacy BIOS stream's transfer callback.
     \ingroup  gdrom
 
     This callback is called for every transfer request that is completed.
+    Retains the firmware/IRQ callback behavior, not the staged-session API's
+    thread-dispatched cdrom_request_callback_t contract. Callbacks must not
+    block or assume they own a separate request object.
 
     \param  callback        Callback function.
     \param  param           Callback function param.
-    \see    cdrom_transfer_request
+    \see    cdrom_bios_stream_request
 */
-void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param);
+void cdrom_bios_stream_set_callback(cdrom_bios_stream_callback_t callback, void *param);
 
 /** \brief    Read subcode data from the most recently read sectors.
     \ingroup  gdrom
@@ -1239,6 +1249,11 @@ void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param);
     After reading sectors, this can pull subcode data regarding the sectors
     read. If reading all subcode data with CD_SUB_CURRENT_POSITION, this needs
     to be performed one sector at a time.
+
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback,
+    independently of the filesystem backend. Transport recovery has its own
+    bounded cleanup time. Use gdrom_direct_get_subcode() for a custom timeout
+    or raw diagnostics. The buffer is undefined unless the call succeeds.
 
     \param  buffer          Space to store the read subcode data.
     \param  buflen          Amount of data to be read.
@@ -1248,6 +1263,13 @@ void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param);
     \see    cd_sub_type_t
 */
 int cdrom_get_subcode(void *buffer, size_t buflen, cd_sub_type_t which);
+
+/** \brief Read subcode explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains the legacy synchronous, unbounded BIOS query and ERR_* results.
+*/
+int cdrom_bios_get_subcode(void *buffer, size_t buflen, cd_sub_type_t which);
 
 /** \brief Decoded CDDA playback position and Q-subcode state.
     \ingroup gdrom
@@ -1339,6 +1361,12 @@ uint32_t cdrom_locate_data_track(cd_toc_t *toc);
 
     This function starts playback of CDDA audio.
 
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback,
+    independently of the filesystem backend. Recovery has its own bounded
+    cleanup time. Repeat counts above 15 saturate to 15 (infinite).
+    Invalid modes/ranges return ERR_SYS with errno EINVAL, rather than the
+    legacy BIOS wrapper's successful no-op for an invalid mode.
+
     \param  start           The track or sector to start playback from.
     \param  end             The track or sector to end playback at.
     \param  loops           The number of times to repeat (max of 15).
@@ -1347,28 +1375,58 @@ uint32_t cdrom_locate_data_track(cd_toc_t *toc);
 */
 int cdrom_cdda_play(uint32_t start, uint32_t end, uint32_t loops, int mode);
 
+/** \brief Play CDDA explicitly through the BIOS command server.
+    \ingroup gdrom
+
+    Retains legacy unbounded waits, repeat saturation, and invalid-mode no-op.
+*/
+int cdrom_bios_cdda_play(uint32_t start, uint32_t end, uint32_t loops, int mode);
+
 /** \brief    Pause CDDA audio playback.
     \ingroup  gdrom
+
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback.
+    Transport recovery has its own bounded cleanup time.
 
     \return                 \ref cd_cmd_response
 */
 int cdrom_cdda_pause(void);
 
+/** \brief Pause CDDA explicitly through the BIOS (legacy unbounded wait).
+    \ingroup gdrom
+*/
+int cdrom_bios_cdda_pause(void);
+
 /** \brief    Resume CDDA audio playback after a pause.
     \ingroup  gdrom
+
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback.
+    Transport recovery has its own bounded cleanup time.
 
     \return                 \ref cd_cmd_response
 */
 int cdrom_cdda_resume(void);
 
+/** \brief Resume CDDA explicitly through the BIOS (legacy unbounded wait).
+    \ingroup gdrom
+*/
+int cdrom_bios_cdda_resume(void);
+
 /** \brief    Spin down the CD.
     \ingroup  gdrom
 
     This stops the disc in the drive from spinning until it is accessed again.
+    Uses direct SPI with a 10000 ms command timeout and no BIOS fallback.
+    Transport recovery has its own bounded cleanup time.
 
     \return                 \ref cd_cmd_response
 */
 int cdrom_spin_down(void);
+
+/** \brief Spin down explicitly through the BIOS (legacy unbounded wait).
+    \ingroup gdrom
+*/
+int cdrom_bios_spin_down(void);
 
 /** \brief    Initialize the GD-ROM for reading CDs.
     \ingroup  gdrom

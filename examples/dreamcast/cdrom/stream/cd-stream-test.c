@@ -1,231 +1,160 @@
 /* KallistiOS ##version##
+   Copyright (C) 2026 Joseph Black
 
-   cd-stream-test.c
-   Copyright (C) 2025 Ruslan Rostovtsev
-
-   This example program simply shows how CD streams works.
+   Direct staged streaming, with explicit request/session lifetimes.
+   See ../stream-bios for the opt-in legacy BIOS PIO/DMA interface.
 */
-
+#include <kos.h>
+#include <dc/gdrom_direct.h>
+#include <errno.h>
 #include <stdio.h>
-#include <errno.h>
-#include <string.h>
 #include <stdlib.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <errno.h>
+#include <string.h>
 
-#include <dc/maple.h>
-#include <dc/maple/controller.h>
-#include <dc/cdrom.h>
+KOS_INIT_FLAGS(INIT_DEFAULT);
 
-#include <kos/cache.h>
-#include <kos/init.h>
-#include <kos/dbgio.h>
-#include <kos/dbglog.h>
+#define TEST_SECTORS 8u
+#define TEST_BYTES (TEST_SECTORS * 2048u)
+#define COMMAND_MS 10000u
+#define WAIT_MS 15000u
 
-#define BUFFER_SIZE (8 << 11)
+_Alignas(32) static uint8_t stream_data[TEST_BYTES];
+_Alignas(32) static uint8_t reference_data[TEST_BYTES];
+static unsigned int callbacks;
 
-static uint8_t dma_buf[BUFFER_SIZE] __attribute__((aligned(32)));
-static uint8_t pio_buf[BUFFER_SIZE] __attribute__((aligned(2)));
+static void transfer_done(cdrom_request_t *request,
+                          const cdrom_request_status_t *status, void *data) {
+    (void)request;
+    (void)status;
+    (void)data;
+    ++callbacks;
+}
 
-static void __attribute__((__noreturn__)) wait_exit(void) {
-    maple_device_t *dev;
-    cont_state_t *state;
+/* A failed bounded drain must not lead to freeing an active request or
+   returning to code that reuses its DMA buffer. Halt this diagnostic instead. */
+static void drain_request(cdrom_request_t *request) {
+    (void)cdrom_request_cancel(request);
+    if(cdrom_request_wait(request, WAIT_MS, NULL) < 0
+            || cdrom_request_wait_callback(request, WAIT_MS) < 0
+            || cdrom_request_destroy(request) < 0)
+        arch_panic("stream: request could not be safely drained");
+}
 
-    printf("Press any button to exit.\n");
+static int read_stream(uint32_t fad, gdrom_direct_sector_type_t type) {
+    cdrom_stream_session_t *session;
+    cdrom_stream_session_status_t status;
+    cdrom_request_t *request = NULL;
+    cdrom_request_status_t transfer;
+    int result = -1;
 
-    for(;;) {
-        dev = maple_enum_type(0, MAPLE_FUNC_CONTROLLER);
+    /* The generic constructor is direct Mode-1. Choose the explicit direct
+       constructor only when the disc needs the Mode-2 Form-1 layout. */
+    session = type == GDROM_DIRECT_SECTOR_MODE1
+        ? cdrom_stream_session_start(fad, TEST_SECTORS, COMMAND_MS, COMMAND_MS)
+        : gdrom_direct_stream_session_start(fad, TEST_SECTORS, type,
+                                             COMMAND_MS, COMMAND_MS);
+    if(!session) {
+        perror("stream start");
+        return -1;
+    }
+    if(cdrom_stream_session_wait_ready(session, WAIT_MS, &status) < 0) {
+        perror("stream ready wait");
+        goto out;
+    }
+    if(status.backend != CDROM_REQUEST_BACKEND_DIRECT
+            || status.state != CDROM_STREAM_SESSION_READY) {
+        printf("stream did not become direct/ready: state=%d error=%d\n",
+               status.state, status.error);
+        goto out;
+    }
 
-        if(dev) {
-            state = (cont_state_t *)maple_dev_status(dev);
-
-            if(state)   {
-                if(state->buttons)
-                    exit(0);
-            }
+    for(size_t offset = 0; offset < TEST_BYTES; offset += TEST_BYTES / 2) {
+        request = cdrom_stream_session_transfer_async(
+            session, stream_data + offset, TEST_BYTES / 2, COMMAND_MS,
+            transfer_done, NULL);
+        if(!request) {
+            perror("stream transfer submit");
+            goto out;
         }
-    }
-}
-
-static void cd_stream_callback(void *param) {
-    (*(size_t *)param)++;
-}
-
-static int cd_stream_test(uint32_t lba, uint8_t *buffer, size_t size, bool dma) {
-
-    int rs;
-    size_t cur_size = 0;
-    size_t cb_count = 0;
-    char *stream_name = (!dma ? "PIO" : "DMA");
-
-    dbglog(DBG_INFO, "Start %s stream.\n", stream_name);
-    rs = cdrom_stream_start(lba, size / 2048, dma);
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "Failed to start stream for %s.\n", stream_name);
-        return -1;
-    }
-
-    cdrom_stream_set_callback(cd_stream_callback, (void *)&cb_count);
-    rs = cdrom_stream_request(buffer, size / 2, 1);
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "Failed to request %s transfer.\n", stream_name);
-        return -1;
-    }
-
-    rs = cdrom_stream_progress(&cur_size);
-
-    if (rs != 0 || cur_size != (size / 2)) {
-        dbglog(DBG_ERROR, "Failed to check %s transfer: rs=%d sz=%d\n",
-            stream_name, rs, cur_size);
-        return -1;
-    }
-
-    rs = cdrom_stream_request(buffer + (size / 2), size / 2, 1);
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "Failed to request %s transfer.\n", stream_name);
-        return -1;
-    }
-
-    rs = cdrom_stream_progress(&cur_size);
-
-    if (rs != 0 || cur_size != 0) {
-        dbglog(DBG_ERROR, "Failed to check %s transfer: rs=%d sz=%d\n",
-            stream_name, rs, cur_size);
-        return -1;
-    }
-
-    rs = cdrom_stream_stop(false);
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "Failed to stop %s stream.\n", stream_name);
-        return -1;
-    }
-
-    if (cb_count != 2) {
-        dbglog(DBG_ERROR, "%s transfer is done, but callback fails: %d\n",
-            stream_name, cb_count);
-        return -1;
-    }
-
-    dbglog(DBG_INFO, "%s transfer is done.\n", stream_name);
-    return 0;
-}
-
-size_t print_diff(uint8_t *pio_buf, uint8_t *dma_buf, size_t size) {
-    size_t i, j, rv = 0;
-
-    for(i = 0; i < size; ++i) {
-        if (dma_buf[i] != pio_buf[i]) {
-            rv = i;
-            if (i >= 8) {
-                i -= 8;
-            }
-            break;
+        if(cdrom_request_wait(request, WAIT_MS, &transfer) < 0) {
+            perror("stream transfer wait");
+            goto out;
         }
+        if(cdrom_request_wait_callback(request, WAIT_MS) < 0) {
+            perror("stream callback wait");
+            goto out;
+        }
+        if(transfer.state != CDROM_REQUEST_COMPLETE
+                || transfer.completed_bytes != TEST_BYTES / 2
+                || transfer.backend != CDROM_REQUEST_BACKEND_DIRECT) {
+            printf("stream transfer failed: state=%d error=%d bytes=%zu\n",
+                   transfer.state, transfer.error, transfer.completed_bytes);
+            goto out;
+        }
+        if(cdrom_request_destroy(request) < 0) {
+            perror("stream transfer destroy");
+            goto out;
+        }
+        request = NULL;
     }
-    dbglog(DBG_INFO, "DMA[%d]: ", i);
+    if(cdrom_stream_session_wait(session, WAIT_MS, &status) < 0) {
+        perror("stream completion wait");
+        goto out;
+    }
+    if(status.state != CDROM_STREAM_SESSION_COMPLETE
+            || status.completed_bytes != TEST_BYTES || status.remaining_bytes
+            || callbacks != 2) {
+        puts("stream completion accounting mismatch");
+        goto out;
+    }
+    result = 0;
 
-    for(j = 0; j < 16; ++j) {
-        dbglog(DBG_INFO, "%02x", dma_buf[i + j]);
-    }
-    dbglog(DBG_INFO, "\nPIO[%d]: ", i);
-
-    for(j = 0; j < 16; ++j) {
-        dbglog(DBG_INFO, "%02x", pio_buf[i + j]);
-    }
-    dbglog(DBG_INFO, "\n\n");
-    return rv;
+out:
+    if(request)
+        drain_request(request);
+    (void)cdrom_stream_session_cancel(session);
+    if(cdrom_stream_session_wait(session, WAIT_MS, NULL) < 0
+            || cdrom_stream_session_destroy(session) < 0)
+        arch_panic("stream: session could not be safely drained");
+    return result;
 }
 
-int main(int argc, char *argv[]) {
-    int rs;
-    size_t i;
-    uint32_t lba;
+int main(void) {
     cd_toc_t toc;
+    int drive, disc;
+    uint32_t fad;
+    gdrom_direct_sector_type_t type;
 
-    dbgio_dev_select("fb");
-    dbglog(DBG_INFO, "CD-ROM stream test.\n\n");
-
-    rs = cdrom_read_toc(&toc, 0);
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "No disc present.\n");
-        goto exit;
+    puts("Direct staged stream test (requires at least eight data sectors)");
+    if(cdrom_get_status(&drive, &disc) < 0
+            || cdrom_read_toc(&toc, disc == CD_GDROM) != ERR_OK) {
+        puts("Cannot read disc status/TOC");
+        return EXIT_FAILURE;
     }
-    lba = cdrom_locate_data_track(&toc);
-
-    if (lba == 0) {
-        dbglog(DBG_ERROR, "No data track on disc.\n");
-        goto exit;
+    fad = cdrom_locate_data_track(&toc);
+    if(!fad) {
+        puts("No data track found");
+        return EXIT_FAILURE;
     }
+    type = disc == CD_CDROM_XA || disc == CD_CDI
+        ? GDROM_DIRECT_SECTOR_MODE2_FORM1 : GDROM_DIRECT_SECTOR_MODE1;
 
-    memset(dma_buf, 0xff, BUFFER_SIZE);
-    /* Inside the cdrom driver the cache will be invalidated,
-       but we need to save what we wrote to it by memset.
-       In normal cases you don't need to do this.
-    */
-    dcache_purge_range((uintptr_t)dma_buf, BUFFER_SIZE);
+    memset(stream_data, 0xa5, sizeof(stream_data));
+    dcache_purge_range((uintptr_t)stream_data, sizeof(stream_data));
+    if(read_stream(fad, type) < 0)
+        return EXIT_FAILURE;
 
-    rs = cd_stream_test(lba, dma_buf, BUFFER_SIZE, true);
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "DMA stream test failed.\n");
-        goto exit;
+    /* No command may interleave while the stream owns the drive. Only read
+       the independent PIO reference after session completion/destruction. */
+    if(gdrom_direct_read_sectors(reference_data, fad, TEST_SECTORS, type,
+                                     COMMAND_MS, NULL) < 0) {
+        perror("direct PIO reference");
+        return EXIT_FAILURE;
     }
-
-    memset(pio_buf, 0xee, BUFFER_SIZE);
-    rs = cd_stream_test(lba, pio_buf, BUFFER_SIZE, false);
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "PIO stream test failed.\n");
-        goto exit;
+    if(memcmp(stream_data, reference_data, TEST_BYTES)) {
+        puts("DIRECT-STREAM: FAIL payload mismatch");
+        return EXIT_FAILURE;
     }
-
-    if (memcmp(dma_buf, pio_buf, BUFFER_SIZE) == 0) {
-        dbglog(DBG_INFO, "Stream data matched.\n");
-        goto exit;
-    }
-
-    dbglog(DBG_ERROR, "Stream data mismatch:\n");
-    i = print_diff(pio_buf, dma_buf, BUFFER_SIZE);
-
-    if (dma_buf[i] == 0xff) {
-        dbglog(DBG_INFO, "Read DMA data.\n");
-        memset(dma_buf, 0xff, BUFFER_SIZE);
-        /* Inside the cdrom driver the cache will be invalidated,
-            but we need to save what we wrote to it by memset.
-            In normal cases you don't need to do this.
-        */
-        dcache_purge_range((uintptr_t)dma_buf, BUFFER_SIZE);
-
-        rs = cdrom_bios_read_sectors_ex(dma_buf, lba,
-            BUFFER_SIZE >> 11, true);
-    }
-    else {
-        dbglog(DBG_INFO, "Read PIO data.\n");
-        memset(pio_buf, 0xee, BUFFER_SIZE);
-        rs = cdrom_bios_read_sectors_ex(pio_buf, lba,
-            BUFFER_SIZE >> 11, false);
-    }
-
-    if (rs != ERR_OK) {
-        dbglog(DBG_ERROR, "%s read sectors failed.\n",
-            dma_buf[i] == 0xff ? "DMA" : "PIO");
-    }
-    else if (memcmp(dma_buf, pio_buf, BUFFER_SIZE)) {
-        dbglog(DBG_ERROR, "Stream and read data mismatch:\n");
-        print_diff(pio_buf, dma_buf, BUFFER_SIZE);
-    }
-    else {
-        dbglog(DBG_INFO, "Stream and read data matched.\n");
-    }
-
-exit:
-    dbglog(DBG_INFO, "\n");
-    wait_exit();
-    return 0;
+    puts("DIRECT-STREAM: PASS transfers=2 callbacks=2");
+    return EXIT_SUCCESS;
 }

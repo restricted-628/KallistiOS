@@ -11,10 +11,24 @@ UNRELEASED DREAMCAST CAPABILITY WORK
 This development series extends existing KOS drivers and retains their normal
 lifecycle and naming conventions.
 
+* Removed the ambiguous legacy singleton `cdrom_stream_*` API names. Programs
+  must migrate to direct stream sessions, or deliberately use the renamed
+  `cdrom_bios_stream_*` functions and `cdrom_bios_stream_callback_t`. BIOS
+  ISO9660 streaming keeps its explicit backend. The default streaming example
+  now demonstrates direct session/request lifetimes; the old firmware PIO/DMA
+  demonstration is retained as `stream-bios`. This is an intentional API/ABI
+  break, not a transparent replacement for legacy streaming semantics.
+
+* Routed generic subcode, CDDA play/pause/resume, and spin-down through direct
+  SPI, with named `cdrom_bios_*` alternatives. Direct calls use 10000 ms
+  command timeouts plus bounded recovery, preserve `ERR_*` results, and never
+  fall back to BIOS. Playback retains repeat saturation but now rejects
+  invalid modes/ranges. Explicit BIOS typed status remains fully BIOS-backed.
+
 * Added explicit BIOS sector-read, format, sector-size, and reinitialization
   APIs. BIOS filesystem/range and reference paths now name their backend;
-  generic sector APIs remain BIOS compatibility aliases pending direct raw
-  format/chaining support. Failed sector-mode updates no longer change cached
+  generic sector APIs now use direct PIO/DMA with separately captured format
+  state and bounded timeouts. Failed sector-mode updates no longer change cached
   sector size, and failed automatic track detection no longer submits a mode
   based on an uninitialized status value.
 

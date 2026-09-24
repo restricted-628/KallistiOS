@@ -14,6 +14,9 @@ The direct-default paths implemented so far are:
 | `cdrom_read_sectors`, `cdrom_read_sectors_ex`, `cdrom_read_sectors_async` | Direct PIO/DMA with captured generic format | Corresponding `cdrom_bios_read_sectors*` APIs |
 | `cdrom_change_datatype` | Generic direct-read format selection | `cdrom_bios_change_datatype` |
 | `cdrom_reinit`, `cdrom_reinit_ex`, `cdrom_set_sector_size` | Direct post-boot reset/probe and format selection | Corresponding `cdrom_bios_*` APIs |
+| `cdrom_get_subcode` | Direct SPI subcode query | `cdrom_bios_get_subcode` |
+| `cdrom_cdda_play`, `cdrom_cdda_pause`, `cdrom_cdda_resume`, `cdrom_spin_down` | Direct SPI playback/drive control | Corresponding `cdrom_bios_*` APIs |
+| Staged streaming | `cdrom_stream_session_start` and request/session lifecycle | `cdrom_bios_stream_session_start`, or legacy `cdrom_bios_stream_*` |
 
 The raw constructors do not inherit the filesystem's selection or the BIOS
 sector-size setting. Use the format-selecting `gdrom_direct_*` constructors
@@ -45,6 +48,14 @@ bounded G1 command path rejects interrupt-context calls with `EPERM`.
 TOC retains `ERR_*` results and both density-area choices. The explicit BIOS
 filesystem mount and BIOS-reference/reuse examples call the named BIOS
 versions, so their selected transport is not changed by these defaults.
+
+Raw subcode and playback controls also use direct SPI, independently of `/cd`,
+with 10000 ms primary-command timeouts plus bounded recovery and `ERR_*`
+results. Subcode output is only valid on success. Play retains repeat-count
+saturation at 15 (infinite), but now rejects invalid modes/ranges with
+`ERR_SYS`/`EINVAL`. The named BIOS play call retains the legacy invalid-mode
+successful no-op and unbounded wait. Explicit BIOS typed CDDA status uses the
+named BIOS subcode query; it does not cross into the direct driver.
 
 ## Sector formats and compatibility boundaries
 
@@ -147,13 +158,40 @@ select synchronous or queued PIO. Generic reads retain this DMA restriction.
 Explicit BIOS APIs accept
 configured raw layouts, which must not be silently reinterpreted as cooked.
 
-This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
-BIOS-command submission, raw subcode, playback controls, legacy streams, and their
-BIOS request helpers retain their current contracts. They require a separate
-compatibility/routing pass before the fork
-can claim that every generic convenience API defaults to direct. Applications
-needing the new direct behavior should use the default paths above or the
-explicit `gdrom_direct_*` API in the meantime.
+## Legacy streaming migration (intentional API break)
+
+The five old singleton `cdrom_stream_*` calls and `cdrom_stream_callback_t`
+are removed, not retained as BIOS aliases. Existing programs must deliberately
+choose BIOS by adding the `bios_` prefix, or migrate to direct sessions:
+
+| Removed call | Direct-session replacement | Explicit legacy BIOS call |
+| --- | --- | --- |
+| `cdrom_stream_start` | `cdrom_stream_session_start`, then `cdrom_stream_session_wait_ready` | `cdrom_bios_stream_start` |
+| `cdrom_stream_request` | `cdrom_stream_session_transfer_async` | `cdrom_bios_stream_request` |
+| `cdrom_stream_progress` | `cdrom_request_get_status` / `cdrom_stream_session_get_status` | `cdrom_bios_stream_progress` |
+| `cdrom_stream_set_callback` | Per-transfer `cdrom_request_callback_t` argument | `cdrom_bios_stream_set_callback` |
+| `cdrom_stream_stop` | Cancel, wait, and destroy requests/session | `cdrom_bios_stream_stop` |
+
+This is not a signature-only conversion. Direct sessions use explicit finite
+sector counts (1..65535), cooked Mode-1/Mode-2 Form-1 formats, nonzero start/idle
+timeouts, 32-byte-aligned DMA buffers and sizes, request objects, and callbacks
+dispatched in thread context. They do not reproduce legacy PIO streaming,
+firmware count sentinels, global callbacks, raw streaming, or progress conventions.
+For direct PIO use `gdrom_direct_read_sectors` or
+`gdrom_direct_read_sectors_pio_async`. An explicit BIOS stream still uses its
+configured BIOS sector format; its callback type is now
+`cdrom_bios_stream_callback_t`.
+
+`examples/dreamcast/cdrom/stream` demonstrates the direct lifecycle;
+`stream-bios` retains the explicitly named BIOS PIO/DMA demonstration. The
+BIOS-selected ISO9660 streaming path and request-worker takeover helper use
+the named BIOS calls, preserving their transport rather than crossing into
+a direct session. No implicit compatibility macro or symbol hides this choice.
+
+All ordinary convenience defaults covered above now use direct transport.
+Raw `cdrom_exec_cmd[_timed]`, `cdrom_request_submit`, and `cdrom_abort_cmd`
+remain low-level BIOS command-server interfaces: their command numbers and
+parameter blocks are firmware contracts, not backend-neutral operations.
 
 Boot-time drive authorization/initialization is also unchanged. Direct runtime
 I/O is not a replacement for the boot ROM. The direct transport remains
@@ -301,3 +339,24 @@ C23/Clang sanitizer packet tests pass. Boot-format seeding is compiled and
 source-reviewed but not exercised by this no-CDROM-init routing probe. Actual
 drive reset, live format detection/media changes, boot setup, and physical
 transfers still require hardware validation.
+
+The subcode/playback routing pass expands `convenience-routing` to 356 checks,
+passing in both Flycast modes. It covers each direct control's timeout and
+error/sense mapping, no BIOS fallback, repeat saturation, both play modes,
+subcode selector forwarding, and named BIOS controls with direct `/cd` selected.
+The 247/151/776/3346/334/14/4 read-routing/BIOS/PIO/DMA/queue/default/G1
+regressions also pass in both modes. The full SH-4 GCC 16.2 build, `cdrom.c`
+and ten disc probes/examples under `-Werror`, the basic CDDA example link,
+and GCC GNU17/strict C23/Clang sanitizer packet tests pass. Named BIOS symbols
+are generated in the export table and stubs. These routing spies do not
+validate physical playback, subcode contents, drive spin-down, or recovery.
+
+The final legacy-stream naming pass expands that probe to 405 checks in both
+Flycast modes, including explicit BIOS PIO transfer/callback cleanup and DMA
+submission-error unlock behavior under direct filesystem selection. Symbol
+inspection confirms that the five removed singleton names are absent from
+the rebuilt kernel and their BIOS-prefixed replacements are exported.
+The full build, all three affected driver/filesystem units under `-Werror`,
+and fifteen disc example/probe rebuilds pass. The new direct streaming
+example and retained BIOS example are compile/link validated, not live-media
+validated; the routing spies do not execute their end-to-end transfer paths.

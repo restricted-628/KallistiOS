@@ -1157,7 +1157,7 @@ static inline void iso_abort_stream(bool lock) {
         if(lock)
             mutex_lock(&fh_mutex);
 
-        cdrom_stream_stop(false);
+        cdrom_bios_stream_stop(false);
         stream_fd->stream_part = 0;
         stream_fd = NULL;
 
@@ -1239,7 +1239,7 @@ static int iso_close(void * h) {
 }
 
 static int iso_stream_done(size_t *remain_size) {
-    return cdrom_stream_progress(remain_size) != 1;
+    return cdrom_bios_stream_progress(remain_size) != 1;
 }
 
 /* Read from a file */
@@ -1308,12 +1308,12 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
 
             if(stream_fd == fd) {
                 toread &= ~31;
-                c = cdrom_stream_request(outbuf, toread, 1);
+                c = cdrom_bios_stream_request(outbuf, toread, 1);
 
                 if(c) {
                     goto read_error;
                 }
-                cdrom_stream_progress(&remain_size);
+                cdrom_bios_stream_progress(&remain_size);
                 // dbglog(DBG_DEBUG, "Stream request: read=%d remain=%d out=%p fd=%p\n",
                 //         toread, remain_size, outbuf, fd);
             }
@@ -1327,7 +1327,7 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
                     iso_abort_stream(false);
                     // dbglog(DBG_DEBUG, "Stream stop for file fd: %p -> %p\n", stream_fd, fd);
                 }
-                c = cdrom_stream_start(sector + 150, req_size / 2048, true);
+                c = cdrom_bios_stream_start(sector + 150, req_size / 2048, true);
 
                 if(c) {
                     goto read_loop;
@@ -1338,12 +1338,12 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
                 //     sector + 150, req_size / 2048, fd);
 
                 toread &= ~31;
-                c = cdrom_stream_request(outbuf, toread, 1);
+                c = cdrom_bios_stream_request(outbuf, toread, 1);
 
                 if(c) {
                     goto read_error;
                 }
-                cdrom_stream_progress(&remain_size);
+                cdrom_bios_stream_progress(&remain_size);
                 // dbglog(DBG_DEBUG, "Stream request: read=%d remain=%d out=%p fd=%p\n",
                 //         toread, remain_size, outbuf, fd);
             }
@@ -1362,7 +1362,7 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
 
             toread = (toread > thissect) ? thissect : toread;
 
-            c = cdrom_stream_request(fd->stream_data, 32, 0);
+            c = cdrom_bios_stream_request(fd->stream_data, 32, 0);
             if(c) {
                 goto read_error;
             }

@@ -81,7 +81,7 @@ static int vblank_hnd = -1;
 /* Streaming */
 static bool stream_enabled = false;
 static bool stream_dma = false;
-static cdrom_stream_callback_t stream_cb = NULL;
+static cdrom_bios_stream_callback_t stream_cb = NULL;
 static void *stream_cb_param = NULL;
 
 /* Initialization */
@@ -531,7 +531,7 @@ void cdrom_dma_request_end(gdc_cmd_hnd_t handle) {
 /* Called by the request worker with G1 ownership held. A legacy stream
    does not retain that semaphore between transfers, so it must be retired
    before a queued staged session can claim the command server. */
-int cdrom_stream_request_claim(void) {
+int cdrom_bios_stream_request_claim(void) {
     cd_cmd_chk_status_t status = { 0 };
     cd_cmd_chk_t response;
     gdc_cmd_hnd_t handle;
@@ -573,7 +573,7 @@ int cdrom_stream_request_claim(void) {
     cmd_hnd = 0;
     stream_enabled = false;
     if(stream_cb)
-        cdrom_stream_set_callback(NULL, NULL);
+        cdrom_bios_stream_set_callback(NULL, NULL);
 
     return response == CD_CMD_NOT_FOUND || response == CD_CMD_COMPLETED
         ? ERR_OK : ERR_TIMEOUT;
@@ -673,7 +673,7 @@ static int cdrom_check_transfer(void *d) {
     if(cmd_response == CD_CMD_NOT_FOUND || cmd_response == CD_CMD_COMPLETED)
         return ERR_NO_ACTIVE;
 
-    return cdrom_stream_progress(&data->size) == 0;
+    return cdrom_bios_stream_progress(&data->size) == 0;
 }
 
 /* Command execution sequence */
@@ -732,7 +732,7 @@ static int cdrom_abort_cmd_owned(uint32_t timeout) {
     cmd_hnd = 0;
     stream_enabled = false;
     if(stream_cb)
-        cdrom_stream_set_callback(0, NULL);
+        cdrom_bios_stream_set_callback(0, NULL);
     return rv;
 }
 
@@ -1670,7 +1670,7 @@ cdrom_stream_session_t *cdrom_bios_stream_session_start(
         GDROM_DIRECT_SECTOR_MODE1, NULL, NULL);
 }
 
-int cdrom_stream_start(int sector, int cnt, bool dma) {
+int cdrom_bios_stream_start(int sector, int cnt, bool dma) {
     struct {
         int sec;
         int num;
@@ -1681,7 +1681,7 @@ int cdrom_stream_start(int sector, int cnt, bool dma) {
     params.num = cnt;
 
     if(stream_enabled) {
-        cdrom_stream_stop(false);
+        cdrom_bios_stream_stop(false);
     }
     stream_dma = dma;
 
@@ -1698,7 +1698,7 @@ int cdrom_stream_start(int sector, int cnt, bool dma) {
     return rv;
 }
 
-int cdrom_stream_stop(bool abort_dma) {
+int cdrom_bios_stream_stop(bool abort_dma) {
     if(cmd_hnd <= 0) {
         return ERR_OK;
     }
@@ -1720,12 +1720,12 @@ int cdrom_stream_stop(bool abort_dma) {
     g1_bus_unlock();
 
     if(stream_cb) {
-        cdrom_stream_set_callback(0, NULL);
+        cdrom_bios_stream_set_callback(0, NULL);
     }
     return ERR_OK;
 }
 
-int cdrom_stream_request(void *buffer, size_t size, bool block) {
+int cdrom_bios_stream_request(void *buffer, size_t size, bool block) {
     int rs;
     uintptr_t buf_addr = ((uintptr_t)buffer);
     cd_transfer_params_t params;
@@ -1735,13 +1735,13 @@ int cdrom_stream_request(void *buffer, size_t size, bool block) {
         return ERR_NO_ACTIVE;
     }
     if(dma_in_progress) {
-        dbglog(DBG_ERROR, "cdrom_stream_request: Previous DMA request is in progress.\n");
+        dbglog(DBG_ERROR, "cdrom_bios_stream_request: Previous DMA request is in progress.\n");
         return ERR_SYS;
     }
 
     if(stream_dma) {
         if(!__builtin_is_aligned(buf_addr, 32)) {
-            dbglog(DBG_ERROR, "cdrom_stream_request: Unaligned memory for DMA (32-byte).\n");
+            dbglog(DBG_ERROR, "cdrom_bios_stream_request: Unaligned memory for DMA (32-byte).\n");
             return ERR_SYS;
         }
         /* Use the physical memory address. */
@@ -1761,7 +1761,7 @@ int cdrom_stream_request(void *buffer, size_t size, bool block) {
         params.addr = buffer;
 
         if(!__builtin_is_aligned(buf_addr, 2)) {
-            dbglog(DBG_ERROR, "cdrom_stream_request: Unaligned memory for PIO (2-byte).\n");
+            dbglog(DBG_ERROR, "cdrom_bios_stream_request: Unaligned memory for PIO (2-byte).\n");
             return ERR_SYS;
         }
     }
@@ -1818,7 +1818,7 @@ int cdrom_stream_request(void *buffer, size_t size, bool block) {
     return ERR_OK;
 }
 
-int cdrom_stream_progress(size_t *size) {
+int cdrom_bios_stream_progress(size_t *size) {
     int rv = 0;
     size_t check_size = 0;
 
@@ -1842,7 +1842,7 @@ int cdrom_stream_progress(size_t *size) {
     return rv;
 }
 
-void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param) {
+void cdrom_bios_stream_set_callback(cdrom_bios_stream_callback_t callback, void *param) {
     stream_cb = callback;
     stream_cb_param = param;
 
@@ -1857,6 +1857,15 @@ void cdrom_stream_set_callback(cdrom_stream_callback_t callback, void *param) {
 /* XXX: Use some CD-Gs and other stuff to test if you get more than just the 
    Q byte */
 int cdrom_get_subcode(void *buffer, size_t buflen, cd_sub_type_t which) {
+    gdrom_direct_result_t transport = { 0 };
+
+    if(gdrom_direct_get_subcode(buffer, buflen, which,
+            CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, &transport);
+}
+
+int cdrom_bios_get_subcode(void *buffer, size_t buflen, cd_sub_type_t which) {
     cd_cmd_getscd_params_t params = { .which = which, .buflen = buflen, .buffer = buffer };
     return cdrom_exec_cmd(CD_CMD_GETSCD, &params);
 }
@@ -1905,7 +1914,7 @@ int cdrom_bios_cdda_get_status(cdrom_cdda_status_t *status) {
         return ERR_SYS;
     }
 
-    result = cdrom_get_subcode(subcode, sizeof(subcode), CD_SUB_Q_CHANNEL);
+    result = cdrom_bios_get_subcode(subcode, sizeof(subcode), CD_SUB_Q_CHANNEL);
     if(result == ERR_OK)
         cdrom_decode_cdda_status_internal(subcode, status);
     return result;
@@ -1988,6 +1997,17 @@ uint32_t cdrom_locate_data_track(cd_toc_t *toc) {
    mode   -- CDDA_TRACKS or CDDA_SECTORS
  */
 int cdrom_cdda_play(uint32_t start, uint32_t end, uint32_t repeat, int mode) {
+    gdrom_direct_result_t transport = { 0 };
+
+    if(repeat > 15)
+        repeat = 15;
+    if(gdrom_direct_cdda_play(start, end, repeat, mode,
+            CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, &transport);
+}
+
+int cdrom_bios_cdda_play(uint32_t start, uint32_t end, uint32_t repeat, int mode) {
     cd_cmd_play_params_t params;
 
     /* Limit to 0-15 */
@@ -2008,16 +2028,40 @@ int cdrom_cdda_play(uint32_t start, uint32_t end, uint32_t repeat, int mode) {
 
 /* Pause CDDA audio playback */
 int cdrom_cdda_pause(void) {
+    gdrom_direct_result_t transport = { 0 };
+
+    if(gdrom_direct_cdda_pause(CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, &transport);
+}
+
+int cdrom_bios_cdda_pause(void) {
     return cdrom_exec_cmd(CD_CMD_PAUSE, NULL);
 }
 
 /* Resume CDDA audio playback */
 int cdrom_cdda_resume(void) {
+    gdrom_direct_result_t transport = { 0 };
+
+    if(gdrom_direct_cdda_resume(CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, &transport);
+}
+
+int cdrom_bios_cdda_resume(void) {
     return cdrom_exec_cmd(CD_CMD_RELEASE, NULL);
 }
 
 /* Spin down the CD */
 int cdrom_spin_down(void) {
+    gdrom_direct_result_t transport = { 0 };
+
+    if(gdrom_direct_cdda_stop(CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport) == 0)
+        return ERR_OK;
+    return gdrom_direct_failure_result_internal(errno, &transport);
+}
+
+int cdrom_bios_spin_down(void) {
     return cdrom_exec_cmd(CD_CMD_STOP, NULL);
 }
 

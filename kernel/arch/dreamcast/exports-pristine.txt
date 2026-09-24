@@ -138,11 +138,11 @@ cdrom_read_sectors
 cdrom_read_sectors_ex
 cdrom_read_sectors_async
 cdrom_seek_async
-cdrom_stream_start
-cdrom_stream_stop
-cdrom_stream_request
-cdrom_stream_progress
-cdrom_stream_set_callback
+cdrom_bios_stream_start
+cdrom_bios_stream_stop
+cdrom_bios_stream_request
+cdrom_bios_stream_progress
+cdrom_bios_stream_set_callback
 cdrom_request_submit
 cdrom_request_get_status
 cdrom_request_wait

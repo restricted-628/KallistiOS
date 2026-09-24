@@ -46,6 +46,11 @@ cdrom_bios_reinit_ex
 cdrom_bios_read_sectors
 cdrom_bios_read_sectors_ex
 cdrom_bios_read_sectors_async
+cdrom_bios_get_subcode
+cdrom_bios_cdda_play
+cdrom_bios_cdda_pause
+cdrom_bios_cdda_resume
+cdrom_bios_spin_down
 
 # ASIC
 asic_evt_set_handler

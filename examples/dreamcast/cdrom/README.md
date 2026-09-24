@@ -9,10 +9,15 @@ risk or media requirements.
   reading a disc; its staged-session dispatch endpoints are link-time spies.
 - `read-routing` checks generic direct format/read/reinitialization routing,
   independent BIOS state, and failure preservation with transport spies.
+- `convenience-routing` checks direct-default metadata, subcode, and playback
+  controls, explicit BIOS alternatives, and error mapping with transport spies.
 - `request` demonstrates request status, cancellation, callback dispatch, and
   the required wait/callback-wait/destroy lifetime sequence.
 - `sector-range` demonstrates bounded FAD ranges over BIOS and direct backends.
 - `media-recognition` demonstrates BootROM recognition and disc identity.
+- `stream` demonstrates direct staged DMA with two transfers and a direct PIO
+  reference comparison. `stream-bios` deliberately selects the legacy BIOS
+  PIO/DMA streaming interface; it is not the default streaming template.
 - `cdda-status` demonstrates typed synchronous/asynchronous CDDA status and an
   optional media-swap exercise. It requires audio track 2.
 
