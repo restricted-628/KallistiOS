@@ -62,14 +62,20 @@ ownership does not make global sector-mode changes safe for queued reads.
 
 Before generic reads can switch, the direct path needs an explicit format
 contract for cooked and raw sectors, a policy for legacy automatic selection,
-and bounded chaining beyond its current 16-sector command limit. Queued reads
+and bounded DMA chaining beyond its current 16-sector command limit. Queued reads
 must capture their format rather than depend on a later global mode change.
 The synchronous `gdrom_direct_read_sectors` PIO entry point now also accepts
-`GDROM_DIRECT_SECTOR_RAW2352`: one through sixteen complete 2352-byte sectors,
-without subchannel data, into a two-byte-aligned destination. Format selection
+`GDROM_DIRECT_SECTOR_RAW2352`: complete 2352-byte sectors without subchannel
+data, into a two-byte-aligned destination. Large PIO reads are split into
+commands of at most sixteen sectors, including odd raw tails, with one
+absolute deadline and G1 release between commands. Format selection
 is explicit per call, independent of the BIOS mode. Short transfers fail with
 `EPROTO`; excess data is drained without overrunning the destination and fails
-with `EMSGSIZE`. This does not change the generic BIOS compatibility aliases.
+with `EMSGSIZE`. No commands after the failure are issued; earlier output
+is retained and the transport record accumulates the transferred byte count.
+Other diagnostic fields describe the last command attempted. Buffer-size,
+pointer-wrap, and FAD-span validation precede all I/O. There is no allocation
+or automatic backend switch. This does not change the generic BIOS aliases.
 
 Direct DMA now accepts RAW2352 for even counts from 2 through 16, with a
 32-byte-aligned destination and exact sectors * 2352 byte accounting. This
@@ -81,7 +87,7 @@ or G1 ownership. There is no padding, extra sector read, hidden temporary
 buffer, or PIO fallback. Explicit PIO remains available for odd raw counts.
 
 Ranges, chained-request constructors, and staged sessions remain cooked-only.
-Arbitrary-count raw DMA/staging and bounded large-read chaining still need a
+Arbitrary-count raw DMA/staging and bounded large-DMA chaining still need a
 separate contract before generic reads can switch. Generic BIOS APIs accept
 configured raw layouts, which must not be silently reinterpreted as cooked.
 
@@ -165,3 +171,16 @@ simulated by this probe; actual raw-disc comparisons remain outstanding.
 After updating the former all-raw-DMA rejection checks to odd raw counts,
 the 90-check PIO probe passes in both modes. The prior BIOS read, convenience,
 defaults, and G1 probes also pass all 151/128/14/4 checks after relinking.
+
+The whole-range PIO pass expands `direct-raw-pio` to 304 checks, passing in
+both Flycast modes. The production driver is exercised across 17/32/33-sector
+boundaries with exact packet FAD/counts, buffer offsets and guards, odd raw
+tails, short/oversized middle and final responses, and no command after an
+error. A driver-local simulated clock verifies decreasing G1 lock budgets,
+one shared absolute deadline, and partial-byte accounting when time expires
+between commands. Size multiplication and pointer-wrap rejection precede I/O.
+The full SH-4 GCC 16.2 build, driver and PIO probe under `-Werror`, nine existing
+example rebuilds, and GCC 14 GNU17/strict C23 plus Clang ASan/UBSan packet
+tests pass. These are simulated transport tests, not physical-drive evidence.
+After relinking, the DMA, BIOS read, convenience, defaults, and G1 probes
+also pass all 1426/151/128/14/4 checks in both modes.

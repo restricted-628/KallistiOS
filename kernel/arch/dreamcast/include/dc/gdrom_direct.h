@@ -23,7 +23,7 @@ __BEGIN_DECLS
 /** \brief Byte size of a complete raw sector (without subchannel data). */
 #define GDROM_DIRECT_RAW_SECTOR_SIZE 2352u
 
-/** \brief Maximum sectors accepted by one bounded direct PIO read. */
+/** \brief Maximum sectors in each command of a direct PIO read. */
 #define GDROM_DIRECT_PIO_MAX_SECTORS 16u
 
 /** \brief Maximum sectors accepted by one bounded direct DMA diagnostic. */
@@ -546,21 +546,30 @@ cdrom_sector_range_t *gdrom_direct_sector_range_open(
 
 /** \brief Read cooked or raw sectors through the direct PIO transport.
 
-    This experimental operation issues one SPI `CD_READ` command without the
+    This experimental operation issues bounded SPI `CD_READ` commands without the
     BIOS command server. Cooked formats request the data field and verify
     Mode-1 or Mode-2 Form-1, transferring 2048 bytes per sector. RAW2352
     requests the complete 2352-byte sector without a sector-type constraint;
     it does not include subchannel data or reinterpret audio sample bytes.
     This selection is per call, independent of the BIOS sector-mode setting.
 
-    The caller must split larger operations. Limiting each command to sixteen
-    sectors bounds continuous G1 ownership and keeps the byte count within the
-    PIO command's 16-bit transfer capacity.
+    Larger reads are split into commands of at most sixteen sectors. This
+    bounds continuous G1 ownership and keeps each command within the 16-bit
+    PIO byte-count limit. The whole read shares one deadline; bounded transport
+    recovery can take additional time after a failure. G1 is released between
+    commands, so this is not an atomic operation against other disc users or
+    media/control changes. No allocation, DMA, or BIOS fallback is performed.
+
+    The complete FAD span and destination arithmetic are validated before any
+    I/O. On error, previously transferred bytes remain in the destination and
+    no later command is issued. `result->transferred` accumulates bytes across
+    commands (including drained excess on a protocol error, saturating at
+    SIZE_MAX); other result fields describe the last command attempted.
 
     \param  buffer       Destination aligned to at least two bytes, with space
                          for sectors * 2048 (cooked) or sectors * 2352 (raw).
     \param  fad          First absolute frame address; must be at least 150.
-    \param  sectors      Required count from 1 through 16.
+    \param  sectors      Nonzero count fitting the 24-bit FAD span and buffer.
     \param  sector_type  Cooked Mode-1/Mode-2 Form-1, or RAW2352.
     \param  timeout      Required nonzero whole-operation timeout in milliseconds.
     \param  result       Optional low-level diagnostic observations.

@@ -471,12 +471,11 @@ static void write_pio_group(const uint8_t *buffer, size_t size,
     }
 }
 
-static int packet_pio_data_in_ex(
+static int packet_pio_data_in_deadline(
         const gdrom_spi_packet_t *packet, void *buffer, size_t capacity,
         uint32_t timeout, gdrom_direct_result_t *result, bool bus_owned,
         bool diagnose_check, gdrom_direct_result_t *error_transport,
-        gdrom_direct_cancel_t cancel, void *cancel_data) {
-    uint64_t deadline;
+        gdrom_direct_cancel_t cancel, void *cancel_data, uint64_t deadline) {
     uint64_t now;
     uint8_t *output = buffer;
     uint8_t status;
@@ -500,7 +499,12 @@ static int packet_pio_data_in_ex(
         result->phase = GDROM_DIRECT_PHASE_WAIT_IDLE;
     }
 
-    deadline = timer_ms_gettime64() + timeout;
+    if(deadline) {
+        if(deadline_timeout(deadline, &timeout) < 0)
+            return -1;
+    }
+    else
+        deadline = timer_ms_gettime64() + timeout;
     if(!bus_owned && g1_bus_lock_timed(timeout) < 0)
         return -1;
     if(cancel && cancel(cancel_data)) {
@@ -647,6 +651,15 @@ out:
     if(rv < 0)
         errno = saved_errno;
     return rv;
+}
+
+static int packet_pio_data_in_ex(
+        const gdrom_spi_packet_t *packet, void *buffer, size_t capacity,
+        uint32_t timeout, gdrom_direct_result_t *result, bool bus_owned,
+        bool diagnose_check, gdrom_direct_result_t *error_transport,
+        gdrom_direct_cancel_t cancel, void *cancel_data) {
+    return packet_pio_data_in_deadline(packet, buffer, capacity, timeout,
+        result, bus_owned, diagnose_check, error_transport, cancel, cancel_data, 0);
 }
 
 static int packet_pio_data_in(const gdrom_spi_packet_t *packet,
@@ -1736,14 +1749,16 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
     gdrom_direct_result_t local_result;
     gdrom_direct_result_t *observed = result ? result : &local_result;
     gdrom_spi_expected_type_t expected_type;
-    size_t expected_bytes;
+    size_t sector_size;
+    size_t completed = 0;
+    uint64_t deadline;
     uint8_t data_select = GDROM_SPI_SELECT_DATA;
 
     memset(observed, 0, sizeof(*observed));
 
     if(!buffer || ((uintptr_t)buffer & 1u) || fad < 150u
             || fad > GDROM_SPI_MAX_U24 || !sectors
-            || sectors > GDROM_DIRECT_PIO_MAX_SECTORS || !timeout
+            || !timeout
             || (sector_type != GDROM_DIRECT_SECTOR_MODE1
                 && sector_type != GDROM_DIRECT_SECTOR_MODE2_FORM1
                 && sector_type != GDROM_DIRECT_SECTOR_RAW2352)
@@ -1752,30 +1767,55 @@ int gdrom_direct_read_sectors(void *buffer, uint32_t fad, size_t sectors,
         return -1;
     }
 
-    expected_bytes = sectors * GDROM_DIRECT_SECTOR_SIZE;
+    sector_size = GDROM_DIRECT_SECTOR_SIZE;
     expected_type = sector_type == GDROM_DIRECT_SECTOR_MODE1
         ? GDROM_SPI_EXPECT_MODE1 : GDROM_SPI_EXPECT_MODE2_FORM1;
     if(sector_type == GDROM_DIRECT_SECTOR_RAW2352) {
-        expected_bytes = sectors * GDROM_DIRECT_RAW_SECTOR_SIZE;
+        sector_size = GDROM_DIRECT_RAW_SECTOR_SIZE;
         expected_type = GDROM_SPI_EXPECT_ANY;
         data_select = GDROM_SPI_SELECT_OTHER;
     }
-    if(gdrom_spi_read(&packet, data_select,
-                      expected_type, GDROM_SPI_POINT_FAD,
-                      fad, (uint32_t)sectors) != 0) {
+    if(sectors > SIZE_MAX / sector_size
+            || sectors * sector_size > UINTPTR_MAX - (uintptr_t)buffer) {
         errno = EINVAL;
         return -1;
     }
 
-    if(packet_pio_data_in(&packet, buffer, expected_bytes,
-                          timeout, observed) < 0)
-        return -1;
+    deadline = timer_ms_gettime64() + timeout;
+    while(completed < sectors) {
+        size_t chunk = sectors - completed;
+        size_t prior_bytes = completed * sector_size;
+        size_t expected_bytes;
+        size_t transferred;
+        int rv;
 
-    /* Every supported layout has one exact transfer size.
-       Treat an early, otherwise clean completion as a protocol failure. */
-    if(observed->transferred != expected_bytes) {
-        errno = EPROTO;
-        return -1;
+        if(chunk > GDROM_DIRECT_PIO_MAX_SECTORS)
+            chunk = GDROM_DIRECT_PIO_MAX_SECTORS;
+        expected_bytes = chunk * sector_size;
+        /* The complete format/FAD span was checked before the first command. */
+        if(gdrom_spi_read(&packet, data_select, expected_type,
+                          GDROM_SPI_POINT_FAD, fad + (uint32_t)completed,
+                          (uint32_t)chunk) != 0) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        /* The absolute deadline survives preemption between commands. Each
+           packet owns and releases G1 independently, including on failure. */
+        rv = packet_pio_data_in_deadline(&packet,
+            (uint8_t *)buffer + prior_bytes, expected_bytes, timeout,
+            observed, false, true, NULL, NULL, NULL, deadline);
+        transferred = observed->transferred;
+        observed->transferred = transferred > SIZE_MAX - prior_bytes
+            ? SIZE_MAX : prior_bytes + transferred;
+        if(rv < 0)
+            return -1;
+        /* A clean early completion is still a protocol failure. */
+        if(transferred != expected_bytes) {
+            errno = EPROTO;
+            return -1;
+        }
+        completed += chunk;
     }
     return 0;
 }
