@@ -214,50 +214,58 @@ _arch_icache_sync_range:
     nop
 
 _cache_write_ccr:
-    mov.l    ccr_addr, r6
-    mov.l    @r6, r0
-
-    ! Clear mask
-    or       r4, r0
-    xor      r4, r0
-
-    ! Set bits
-    or       r5, r0
-
-    mov      r0, r4
-
-    !Block IRQs
-    mov.l    block_bit, r0
+    ! Exclude competing updates before reading the old configuration.
     stc      sr, r7
+    mov.l    block_bit, r0
     or       r7, r0
     ldc      r0, sr
 
-    !Jump to uncached P2 area before writing CCN
-    mova     1f, r0
-    mov      #0xa0, r1
-    shll16   r1
-    shll8    r1
+    ! Run the entire register transaction and retirement from P2.
+    mova     .ccr_p2, r0
+    mov.l    p2_mask, r1
     or       r1, r0
     jmp      @r0
     nop
+    .align 2
+.ccr_p2:
+    mov.l    ccr_addr, r6
+    mov.l    @r6, r0
+    mov      r0, r3         ! Old layout determines which entries hold data
 
-.align 2
-1:
-    !Flush and invalidate data cache
+    ! Preserve the existing API: new = (old & ~mask) | value.
+    or       r4, r0
+    xor      r4, r0
+    or       r5, r0
+    mov      r0, r4
+
+    mov      r3, r0
+    and      #32, r0
+    shll8    r0
+    shlr     r0
+    mov      r0, r3         ! Old ORA -> array bit 12 (entry bit 7)
+
+    ! Retire dirty cache lines before changing their interpretation. Never
+    ! access the address-array entries belonging to an active OCRAM bank.
     mov.l    loc_tags, r0
-    mov      #2, r1  ! 512 >> 8 = 2
+    mov      #2, r1
     shll8    r1
     mov      #0, r2
-1:
-    mov.l    r2, @r0
+.ccr_loop:
+    tst      r3, r0
+    bf       .ccr_next
+    mov.l    r2, @r0        ! Non-associative: old dirty valid data writes back
+.ccr_next:
     dt       r1
-    add      #32, r0   ! cache_line_size is 32
-    bf       1b
+    add      #32, r0
+    bf       .ccr_loop
 
-    !Write to CCR
-    mov.l    r4, @r6
+    ! OCI clears tags, not scratchpad data. After retirement it also prevents
+    ! former OCRAM tags becoming live cache entries when ORA is cleared.
+    mov      r4, r0
+    or       #8, r0
+    mov.l    r0, @r6
 
-    !Can't touch cache for a while after writing CCR
+    ! Preserve the CCR update-to-cached-access/return separation.
     nop
     nop
     nop
@@ -266,8 +274,6 @@ _cache_write_ccr:
     nop
     nop
     nop
-
-    !Restore SR (unblock IRQs)
     ldc      r7, sr
     rts
     nop

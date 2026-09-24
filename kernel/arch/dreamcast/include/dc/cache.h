@@ -45,8 +45,20 @@ __BEGIN_DECLS
 
     This function is used internally to write the cache control register.
 
+    The requested configuration is (old & ~mask) | value. The read/modify/write
+    transaction runs with exceptions blocked. Before changing modes, dirty
+    operand-cache lines are written back using the old OCRAM layout; active
+    scratchpad entries are excluded. OCI is then issued to invalidate all
+    operand-cache tags, including entries released by disabling OCRAM.
+
+    Scratchpad data is retained while OCRAM remains enabled, but changing OIX
+    changes its address mapping. Disabling OCRAM relinquishes that storage.
+    Callers must quiesce scratchpad/cache-workspace users and DMA, provide a
+    valid configuration (ORA requires OCE), and request ICI when required for
+    instruction-cache mode changes. This is not a cache-workspace allocator.
+
     \param  mask            Mask of the bits to update
-    \param  value           Value to replace the masked bits with
+    \param  value           Bits to set (may include self-clearing commands)
 */
 void cache_write_ccr(uint32_t mask, uint32_t value);
 
