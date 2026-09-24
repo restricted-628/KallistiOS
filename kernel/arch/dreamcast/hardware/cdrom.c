@@ -87,6 +87,22 @@ static void *stream_cb_param = NULL;
 /* Initialization */
 static bool inited = false;
 static int cur_sector_size = 2048;
+static int bios_track_type = 1024;
+/* Generic reads have their own format; BIOS clients never mutate it. */
+static gdrom_direct_sector_type_t direct_read_type = GDROM_DIRECT_SECTOR_MODE1;
+
+static gdrom_direct_sector_type_t direct_read_type_get(void) {
+    irq_mask_t irq = irq_disable();
+    gdrom_direct_sector_type_t type = direct_read_type;
+    irq_restore(irq);
+    return type;
+}
+
+static void direct_read_type_set(gdrom_direct_sector_type_t type) {
+    irq_mask_t irq = irq_disable();
+    direct_read_type = type;
+    irq_restore(irq);
+}
 
 /* Primary-command deadline for convenience APIs without a timeout argument.
    Direct transport recovery has its own bounded cleanup deadline. */
@@ -569,7 +585,7 @@ bool cdrom_stream_sector_size_matches(size_t sector_size) {
 
 /* Shortcut to cdrom_reinit_ex. Typically this is the only thing changed. */
 int cdrom_set_sector_size(int size) {
-    return cdrom_bios_set_sector_size(size);
+    return cdrom_reinit_ex(CDROM_READ_DEFAULT, -1, size);
 }
 
 int cdrom_bios_set_sector_size(int size) {
@@ -1222,9 +1238,73 @@ int cdrom_media_event_handler_remove(int handle) {
     return -1;
 }
 
-/* Wrapper for the change datatype syscall */
+/* Resolve supported layouts before any probing or destructive drive reset. */
+static int direct_read_layout(cd_read_sec_part_t part, int track, int size,
+                              gdrom_direct_sector_type_t *type, bool *automatic) {
+    *automatic = false;
+    if(size == -1)
+        size = 2048;
+    if(size == 2352 && (part == CDROM_READ_DEFAULT || part == CDROM_READ_WHOLE_SECTOR)
+            && (track == -1 || track == 0)) {
+        *type = GDROM_DIRECT_SECTOR_RAW2352;
+        return 0;
+    }
+    if(size == 2048 && (part == CDROM_READ_DEFAULT || part == CDROM_READ_DATA_AREA)
+            && (track == -1 || track == 1024 || track == 2048)) {
+        *automatic = track == -1;
+        *type = track == 2048 ? GDROM_DIRECT_SECTOR_MODE2_FORM1 : GDROM_DIRECT_SECTOR_MODE1;
+        return 0;
+    }
+    errno = ENOTSUP;
+    return -1;
+}
+
+static gdrom_direct_sector_type_t direct_disc_type(cd_disc_types_t disc) {
+    return disc == CD_CDROM_XA ? GDROM_DIRECT_SECTOR_MODE2_FORM1
+                             : GDROM_DIRECT_SECTOR_MODE1;
+}
+
+static const gdrom_direct_result_t *direct_probe_transport(
+        const gdrom_direct_probe_result_t *probe) {
+    switch(probe->last_command) {
+        case GDROM_DIRECT_PROBE_TEST_UNIT: return &probe->test_unit_transport;
+        case GDROM_DIRECT_PROBE_REQ_ERROR: return &probe->error_transport;
+        case GDROM_DIRECT_PROBE_REQ_STAT: return &probe->status_transport;
+        default: return NULL;
+    }
+}
+
+static int direct_format_from_probe(const gdrom_direct_probe_result_t *probe,
+                                    gdrom_direct_sector_type_t *type) {
+    if(probe->result != ERR_OK) {
+        errno = cdrom_result_to_errno(probe->result);
+        return probe->result;
+    }
+    if(!probe->status_valid) {
+        errno = EPROTO;
+        return ERR_SYS;
+    }
+    *type = direct_disc_type(probe->status.disc_type);
+    return ERR_OK;
+}
+
 int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int sector_size) {
-    return cdrom_bios_change_datatype(sector_part, track_type, sector_size);
+    gdrom_direct_sector_type_t type;
+    bool automatic;
+
+    if(direct_read_layout(sector_part, track_type, sector_size, &type, &automatic) < 0)
+        return ERR_SYS;
+    if(automatic) {
+        gdrom_direct_probe_result_t probe = { 0 };
+        int result;
+        if(gdrom_direct_probe(&probe, CDROM_DIRECT_COMMAND_TIMEOUT_MS) < 0)
+            return gdrom_direct_failure_result_internal(errno, direct_probe_transport(&probe));
+        result = direct_format_from_probe(&probe, &type);
+        if(result != ERR_OK)
+            return result;
+    }
+    direct_read_type_set(type);
+    return ERR_OK;
 }
 
 int cdrom_bios_change_datatype(cd_read_sec_part_t sector_part, int track_type,
@@ -1269,15 +1349,17 @@ int cdrom_bios_change_datatype(cd_read_sec_part_t sector_part, int track_type,
     params.sector_size = sector_size;   /* sector size */
 
     result = syscall_gdrom_sector_mode(&params);
-    if(result == 0)
+    if(result == 0) {
         cur_sector_size = sector_size;
+        bios_track_type = track_type;
+    }
     g1_bus_unlock();
     return result;
 }
 
 /* Re-init the drive, e.g., after a disc change, etc */
 int cdrom_reinit(void) {
-    return cdrom_bios_reinit();
+    return cdrom_reinit_ex(CDROM_READ_DEFAULT, -1, -1);
 }
 
 int cdrom_bios_reinit(void) {
@@ -1287,7 +1369,32 @@ int cdrom_bios_reinit(void) {
 
 /* Enhanced cdrom_reinit, takes the place of the old 'sector_size' function */
 int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size) {
-    return cdrom_bios_reinit_ex(sector_part, cdxa, sector_size);
+    gdrom_direct_sector_type_t type;
+    gdrom_direct_reinit_result_t reinit = { 0 };
+    bool automatic;
+
+    if(direct_read_layout(sector_part, cdxa, sector_size, &type, &automatic) < 0)
+        return ERR_SYS;
+    if(gdrom_direct_reinitialize(&reinit, CDROM_DIRECT_COMMAND_TIMEOUT_MS) < 0) {
+        const gdrom_direct_result_t *transport = &reinit.reset_transport;
+        if(reinit.reset_transport.recovery_succeeded) {
+            const gdrom_direct_result_t *probe = direct_probe_transport(&reinit.probe);
+            if(probe)
+                transport = probe;
+        }
+        return gdrom_direct_failure_result_internal(errno, transport);
+    }
+    if(reinit.probe.result != ERR_OK) {
+        errno = cdrom_result_to_errno(reinit.probe.result);
+        return reinit.probe.result;
+    }
+    if(automatic) {
+        int result = direct_format_from_probe(&reinit.probe, &type);
+        if(result != ERR_OK)
+            return result;
+    }
+    direct_read_type_set(type);
+    return ERR_OK;
 }
 
 int cdrom_bios_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size) {
@@ -1376,7 +1483,13 @@ static int cdrom_read_sectors_dma_irq(cd_read_params_t *params) {
 
 /* Enhanced Sector reading: Choose mode to read in. */
 int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma) {
-    return cdrom_bios_read_sectors_ex(buffer, sector, cnt, dma);
+    gdrom_direct_result_t transport = { 0 };
+    gdrom_direct_sector_type_t type = direct_read_type_get();
+    int rv = dma ? gdrom_direct_read_sectors_dma(buffer, sector, cnt, type,
+                    CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport)
+                 : gdrom_direct_read_sectors(buffer, sector, cnt, type,
+                    CDROM_DIRECT_COMMAND_TIMEOUT_MS, &transport);
+    return rv == 0 ? ERR_OK : gdrom_direct_failure_result_internal(errno, &transport);
 }
 
 int cdrom_bios_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma) {
@@ -1421,7 +1534,7 @@ int cdrom_bios_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool d
 
 /* Basic old sector read */
 int cdrom_read_sectors(void *buffer, uint32_t sector, size_t cnt) {
-    return cdrom_bios_read_sectors(buffer, sector, cnt);
+    return cdrom_read_sectors_ex(buffer, sector, cnt, false);
 }
 
 int cdrom_bios_read_sectors(void *buffer, uint32_t sector, size_t cnt) {
@@ -1431,8 +1544,8 @@ int cdrom_bios_read_sectors(void *buffer, uint32_t sector, size_t cnt) {
 cdrom_request_t *cdrom_read_sectors_async(
     void *buffer, uint32_t sector, size_t cnt, uint32_t timeout,
     cdrom_request_callback_t callback, void *callback_data) {
-    return cdrom_bios_read_sectors_async(
-        buffer, sector, cnt, timeout, callback, callback_data);
+    return gdrom_direct_read_sectors_dma_async(buffer, sector, cnt,
+        direct_read_type_get(), timeout, NULL, callback, callback_data);
 }
 
 cdrom_request_t *cdrom_bios_read_sectors_async(
@@ -2108,7 +2221,9 @@ void cdrom_init(void) {
     inited = true;
 
     /* Boot-time BIOS setup is independent of the generic runtime policy. */
-    cdrom_bios_reinit();
+    if(cdrom_bios_reinit() == 0)
+        direct_read_type_set(bios_track_type == 2048
+            ? GDROM_DIRECT_SECTOR_MODE2_FORM1 : GDROM_DIRECT_SECTOR_MODE1);
 
     (void)cdrom_request_system_init();
     /* Cached-state sampling is optional. Its thread is created by the first

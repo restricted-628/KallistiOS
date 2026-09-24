@@ -36,7 +36,8 @@ __BEGIN_DECLS
     These routines use the GD-ROM drive's packet interface directly,
     without submitting a command to the Dreamcast BIOS. Direct access is also
     the default for `/cd`, sector ranges, staged-session constructors, async
-    seek, drive status, TOC, and typed CDDA status in this fork. BIOS access
+    seek, drive status, TOC, typed CDDA status, generic sector reads and runtime
+    reinitialization in this fork. BIOS access
     remains available through explicit selection.
 
     Direct commands share KOS's G1 controller ownership with the BIOS-backed
@@ -78,7 +79,7 @@ typedef enum gdrom_direct_probe_command {
 } gdrom_direct_probe_command_t;
 
 /** \brief Sector format requested by a direct read.
-    Raw sectors are supported by synchronous PIO and even-count DMA reads.
+    Raw sectors are supported by synchronous/queued PIO and even-count DMA reads.
     Ranges and staged sessions still require a cooked format.
 */
 typedef enum gdrom_direct_sector_type {

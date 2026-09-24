@@ -745,7 +745,7 @@ int cdrom_set_sector_size(int size);
 /** \brief Set the BIOS read sector size, including BIOS reinitialization.
     \ingroup gdrom
     Explicit BIOS counterpart of cdrom_set_sector_size(). The generic function
-    remains a BIOS compatibility alias until direct format support is complete.
+    uses direct post-boot reinitialization and changes only the generic format.
 */
 int cdrom_bios_set_sector_size(int size);
 
@@ -934,14 +934,25 @@ int cdrom_media_event_handler_remove(int handle);
 /** \brief    Change the datatype of disc.
     \ingroup  gdrom
 
-    This function will take in all parameters to pass to the change_datatype
-    syscall. This allows these parameters to be modified without a reinit.
-    Each parameter allows -1 as a default, which is tied to the former static
-    values provided by cdrom_reinit and cdrom_set_sector_size.
+    Selects the generic direct-read format without resetting the drive or
+    changing BIOS sector mode. Supported layouts are DATA_AREA/2048 bytes
+    with track_type 1024 (Mode-1) or 2048 (Mode-2 Form-1), and WHOLE_SECTOR/2352
+    bytes with track_type 0 (raw). DEFAULT selects the corresponding part;
+    size -1 selects 2048 bytes. For cooked reads, track_type -1 runs one direct
+    readiness probe and selects Mode-2 Form-1 for CD_CDROM_XA, Mode-1 otherwise.
+    For raw reads, track_type -1 means any sector type, without a probe.
+
+    Unsupported combinations return ERR_SYS with errno=ENOTSUP before I/O.
+    Failure preserves the previous generic format. Reads capture the selected
+    format at invocation/submission; there is no per-read detection or fallback.
+    Boot setup seeds this format from its successful BIOS initialization;
+    before initialization the software default is Mode-1. After media changes,
+    callers must select/reinitialize the format again. This state is independent
+    of explicit gdrom_direct_* format arguments, /cd, ranges, and sessions.
 
     \param sector_part      How much of each sector to return.
     \param track_type       What CDXA mode to read as (if applicable).
-    \param sector_size      What sector size to read (eg. - 2048, 2532).
+    \param sector_size      2048, 2352, or -1 for 2048.
 
     \return                 \ref cd_cmd_response
     \see    cd_read_sector_part
@@ -951,9 +962,8 @@ int cdrom_change_datatype(cd_read_sec_part_t sector_part, int track_type, int se
 /** \brief Select the BIOS command server's sector layout explicitly.
     \ingroup gdrom
 
-    Same defaults and return values as cdrom_change_datatype(), which remains
-    a BIOS compatibility alias for now. Cached sector size changes only after
-    the BIOS accepts the mode. Failure to query an automatic track type does
+    Retains the legacy BIOS layout/default rules. Cached sector size changes
+    only after the BIOS accepts the mode. Failure to query an automatic track type does
     not submit a mode change. This state does not affect explicit direct APIs.
 
     The caller must serialize mode changes against all outstanding BIOS reads
@@ -966,8 +976,8 @@ int cdrom_bios_change_datatype(cd_read_sec_part_t sector_part, int track_type,
 /** \brief    Re-initialize the GD-ROM drive.
     \ingroup  gdrom
 
-    This function is for reinitializing the GD-ROM drive after a disc change to
-    its default settings. Calls cdrom_reinit(-1,-1,-1)
+    Uses direct post-boot reinitialization and automatic cooked-format selection:
+    cdrom_reinit_ex(CDROM_READ_DEFAULT, -1, -1). No BIOS fallback is performed.
 
     \return                 \ref cd_cmd_response
     \see    cdrom_reinit_ex
@@ -976,21 +986,25 @@ int cdrom_reinit(void);
 
 /** \brief Reinitialize through the BIOS and select its default sector layout.
     \ingroup gdrom
-    Explicit BIOS counterpart of cdrom_reinit(), currently a compatibility
-    alias. Boot initialization and BIOS filesystem mounts use this path.
+    Explicit BIOS counterpart of cdrom_reinit(). Boot initialization and BIOS
+    filesystem mounts use this path.
 */
 int cdrom_bios_reinit(void);
 
 /** \brief    Re-initialize the GD-ROM drive with custom parameters.
     \ingroup  gdrom
 
-    At the end of each cdrom_reinit(), cdrom_change_datatype is called.
-    This passes in the requested values to that function after
-    reinitialization, as opposed to defaults.
+    Validates the layout before a direct SPI reset/readiness sequence with a
+    10000 ms primary deadline plus bounded recovery. Automatic format selection
+    uses the status already obtained by that sequence, with no second probe.
+    The generic format changes only after success; a failed reset/probe may
+    still have changed hardware state. Callers must serialize reinitialization
+    against outstanding reads/streams on either backend. This is not boot-ROM
+    bring-up or media authorization. BIOS layout state is not changed.
 
     \param sector_part      How much of each sector to return.
     \param cdxa             What CDXA mode to read as (if applicable).
-    \param sector_size      What sector size to read (eg. - 2048, 2532).
+    \param sector_size      2048, 2352, or -1 for 2048.
 
     \return                 \ref cd_cmd_response
     \see    cd_read_sec_part_t
@@ -1000,7 +1014,7 @@ int cdrom_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size);
 
 /** \brief Reinitialize through the BIOS with an explicit sector layout.
     \ingroup gdrom
-    Retains cdrom_reinit_ex() defaults and error behavior. Do not change modes
+    Retains the legacy BIOS defaults and error behavior. Do not change modes
     with BIOS reads or streams outstanding; see cdrom_bios_change_datatype().
 */
 int cdrom_bios_reinit_ex(cd_read_sec_part_t sector_part, int cdxa, int sector_size);
@@ -1036,6 +1050,12 @@ int cdrom_bios_read_toc(cd_toc_t *toc_buffer, bool high_density);
     cdrom_change_datatype(). The buffer must have enough space to store the
     specified number of sectors and size must be a multiple of 32 for DMA.
 
+    Uses direct PIO or DMA with a 10000 ms whole-read deadline plus bounded
+    recovery, independently of /cd backend selection. Large reads use bounded
+    commands with G1 released between them. PIO accepts odd raw counts; raw DMA
+    requires even counts and rejects odd counts with ERR_SYS/errno=EINVAL.
+    There is no implicit PIO tail, overread, staging buffer, or BIOS fallback.
+
     \param  buffer          Space to store the read sectors.
     \param  sector          The sector to start reading from.
     \param  cnt             The number of sectors to read.
@@ -1051,8 +1071,7 @@ int cdrom_read_sectors_ex(void *buffer, uint32_t sector, size_t cnt, bool dma);
 
 /** \brief Read sectors explicitly through BIOS PIO or DMA.
     \ingroup gdrom
-    Same buffer, alignment, count, and result contract as
-    cdrom_read_sectors_ex(), currently a BIOS compatibility alias. Uses the
+    Retains the legacy BIOS buffer, alignment, count, and result contract. Uses the
     sector layout selected by cdrom_bios_change_datatype(), including raw
     sectors when configured; explicit direct reads use their own format.
 */
@@ -1074,7 +1093,7 @@ int cdrom_read_sectors(void *buffer, uint32_t sector, size_t cnt);
 /** \brief Read sectors explicitly through BIOS PIO.
     \ingroup gdrom
     Same contract as cdrom_bios_read_sectors_ex() with dma=false.
-    cdrom_read_sectors() remains a BIOS compatibility alias for now.
+    Independent of generic direct-read format selection.
 */
 int cdrom_bios_read_sectors(void *buffer, uint32_t sector, size_t cnt);
 
@@ -1085,23 +1104,27 @@ int cdrom_bios_read_sectors(void *buffer, uint32_t sector, size_t cnt);
     completes. The destination must remain valid, 32-byte aligned, and must not
     be accessed by the caller until the request reaches a terminal state. The
     request status exposes separate requested-data, useful-data, and physical
-    I/O totals plus live logical and physical progress, in addition to the raw
-    BIOS status. An optional callback is dispatched separately after the data
+    I/O totals plus live logical and physical progress. The backend is DIRECT;
+    BIOS detail fields do not describe this transport. An optional callback is
+    dispatched separately after the data
     is published. On any terminal state, the first `completed_bytes` in the
     destination are valid; subsequent bytes have undefined contents.
 
     \param  buffer          Space to store the read sectors.
     \param  sector          The sector to start reading from (FAD).
     \param  cnt             The number of sectors to read.
-    \param  timeout         Timeout after the command starts, in milliseconds,
-                            or zero for no timeout.
+    \param  timeout         Required nonzero execution timeout in milliseconds;
+                            initial queue residence is excluded. Zero is rejected.
     \param  callback        Optional completion callback in thread context.
     \param  callback_data   User data passed to the callback.
 
     \return                 A request handle, or NULL with errno set.
 
-    \note                   The transfer uses the sector size selected by
-                            cdrom_change_datatype(). For P2 destinations, the
+    \note                   The transfer captures the generic format selected by
+                            cdrom_change_datatype() at submission. Raw DMA requires
+                            even counts; use gdrom_direct_read_sectors_pio_async()
+                            explicitly for odd raw counts. There is no BIOS fallback.
+                            For P2 destinations, the
                             caller remains responsible for memory coherency.
 */
 cdrom_request_t *cdrom_read_sectors_async(
@@ -1110,9 +1133,9 @@ cdrom_request_t *cdrom_read_sectors_async(
 
 /** \brief Queue a sector read explicitly through BIOS GD DMA.
     \ingroup gdrom
-    Retains cdrom_read_sectors_async() request, callback, alignment, and
-    timeout contracts (zero permits no deadline). The generic call remains
-    a BIOS compatibility alias for now. The BIOS sector mode must not change
+    Retains the legacy request, callback, alignment, and timeout contracts
+    (zero permits no deadline, unlike the generic direct call). The BIOS sector
+    mode must not change
     before this request is terminal; see cdrom_bios_change_datatype().
 */
 cdrom_request_t *cdrom_bios_read_sectors_async(

@@ -7,6 +7,8 @@ risk or media requirements.
 
 - `backend-defaults` checks direct defaults and explicit BIOS selection without
   reading a disc; its staged-session dispatch endpoints are link-time spies.
+- `read-routing` checks generic direct format/read/reinitialization routing,
+  independent BIOS state, and failure preservation with transport spies.
 - `request` demonstrates request status, cancellation, callback dispatch, and
   the required wait/callback-wait/destroy lifetime sequence.
 - `sector-range` demonstrates bounded FAD ranges over BIOS and direct backends.

@@ -11,6 +11,9 @@ The direct-default paths implemented so far are:
 | `cdrom_seek_async` | Direct SPI seek | `cdrom_bios_seek_async` |
 | `cdrom_cdda_get_status`, `cdrom_cdda_get_status_async` | Direct SPI Q-channel query | `cdrom_bios_cdda_get_status`, `cdrom_bios_cdda_get_status_async` |
 | `cdrom_get_status`, `cdrom_read_toc` | Direct SPI status/TOC query | `cdrom_bios_get_status`, `cdrom_bios_read_toc` |
+| `cdrom_read_sectors`, `cdrom_read_sectors_ex`, `cdrom_read_sectors_async` | Direct PIO/DMA with captured generic format | Corresponding `cdrom_bios_read_sectors*` APIs |
+| `cdrom_change_datatype` | Generic direct-read format selection | `cdrom_bios_change_datatype` |
+| `cdrom_reinit`, `cdrom_reinit_ex`, `cdrom_set_sector_size` | Direct post-boot reset/probe and format selection | Corresponding `cdrom_bios_*` APIs |
 
 The raw constructors do not inherit the filesystem's selection or the BIOS
 sector-size setting. Use the format-selecting `gdrom_direct_*` constructors
@@ -43,16 +46,42 @@ TOC retains `ERR_*` results and both density-area choices. The explicit BIOS
 filesystem mount and BIOS-reference/reuse examples call the named BIOS
 versions, so their selected transport is not changed by these defaults.
 
-## Compatibility work still outstanding
+## Sector formats and compatibility boundaries
 
 The BIOS side of sector reads and format selection now has explicit names:
 `cdrom_bios_read_sectors`, `cdrom_bios_read_sectors_ex`,
 `cdrom_bios_read_sectors_async`, `cdrom_bios_change_datatype`,
 `cdrom_bios_reinit`, `cdrom_bios_reinit_ex`, and `cdrom_bios_set_sector_size`.
-Their generic counterparts remain BIOS compatibility aliases in this step;
-this is not a direct-read default switch. Boot setup, BIOS filesystem/range
-paths, and BIOS read-reference examples use the explicit functions so later
-generic routing cannot silently change their selected backend.
+Their generic counterparts now use direct transport. Boot setup, BIOS
+filesystem/range paths, and BIOS read-reference examples use explicit functions
+and retain their selected backend.
+
+Generic format state is independent of the BIOS mode and explicit direct API
+arguments. Supported cooked layouts are DATA_AREA/2048 with track type 1024
+(Mode-1) or 2048 (Mode-2 Form-1); full raw is WHOLE_SECTOR/2352 with track type
+0. DEFAULT part selects the corresponding layout, and size -1 means 2048.
+Cooked track type -1 performs a direct readiness probe only during selection,
+choosing Mode-2 Form-1 for CD_CDROM_XA and Mode-1 otherwise, preserving the
+legacy selection rule. Raw track type -1 means any type without a probe.
+Unsupported combinations fail with ERR_SYS/ENOTSUP before probing/resetting.
+Failed selection preserves the old format. Successful boot-time BIOS setup
+seeds the generic format once; before initialization it defaults to Mode-1.
+After a media change, callers must select/reinitialize again.
+
+Generic synchronous reads use one 10000 ms execution deadline. Generic async
+reads capture the format at submission and require a nonzero timeout; unlike
+the old BIOS alias, zero is now rejected with EINVAL. The explicit BIOS async
+API retains zero-as-unlimited. Raw DMA requires even counts; deliberate PIO
+selection supports odd counts. No read performs automatic format probing,
+mode mutation, or transport fallback.
+
+Generic reinitialization validates the format before the direct SPI reset and
+uses the resulting readiness status for automatic selection, without a second
+probe. A 10000 ms primary deadline plus bounded recovery applies. Media-state
+errors are propagated even when reset transport succeeded. Format publication
+occurs only on success, although failure may still have changed hardware state.
+Callers must serialize reset/reinitialization against reads and streams on
+both backends; G1 ownership does not make a multi-command read atomic.
 
 BIOS sector-size bookkeeping now changes only after the firmware accepts a
 mode update. Failed automatic track-type queries stop before submitting any
@@ -60,10 +89,8 @@ mode change. Callers must still serialize mode changes against outstanding
 BIOS reads/streams, including requests waiting in the queue; command-level G1
 ownership does not make global sector-mode changes safe for queued reads.
 
-Before generic reads can switch, the direct path needs an explicit format
-contract for cooked and raw sectors, a policy for legacy automatic selection,
-and compatible arbitrary-count DMA handling. Queued reads
-must capture their format rather than depend on a later global mode change.
+The direct path has an explicit per-call format contract for cooked/raw sectors.
+Queued reads capture their format rather than depend on a later mode change.
 The synchronous `gdrom_direct_read_sectors` PIO entry point now also accepts
 `GDROM_DIRECT_SECTOR_RAW2352`: complete 2352-byte sectors without subchannel
 data, into a two-byte-aligned destination. Large PIO reads are split into
@@ -75,7 +102,7 @@ with `EMSGSIZE`. No commands after the failure are issued; earlier output
 is retained and the transport record accumulates the transferred byte count.
 Other diagnostic fields describe the last command attempted. Buffer-size,
 pointer-wrap, and FAD-span validation precede all I/O. There is no allocation
-or automatic backend switch. This does not change the generic BIOS aliases.
+or automatic backend switch.
 
 `gdrom_direct_read_sectors_pio_async` now provides the same arbitrary-count
 PIO read as an explicit queued choice, including odd RAW2352 counts and
@@ -116,13 +143,12 @@ constructor now accepts raw pairs and verifies every segment's exact wire
 count against its byte accounting, including requeued segments.
 Odd raw DMA remains explicitly unsupported (`EINVAL`), with no implicit PIO
 tail or extra-sector read. Applications needing odd raw counts can deliberately
-select synchronous or queued PIO. Generic read routing must retain this DMA
-restriction or introduce a separately named mixed/staged contract. Generic BIOS APIs accept
+select synchronous or queued PIO. Generic reads retain this DMA restriction.
+Explicit BIOS APIs accept
 configured raw layouts, which must not be silently reinterpreted as cooked.
 
 This is not yet a universal rerouting of all `cdrom_*` functions. Legacy raw
-BIOS-command submission, reinitialization/sector-mode control, sector reads
-(sync and async), raw subcode, playback controls, legacy streams, and their
+BIOS-command submission, raw subcode, playback controls, legacy streams, and their
 BIOS request helpers retain their current contracts. They require a separate
 compatibility/routing pass before the fork
 can claim that every generic convenience API defaults to direct. Applications
@@ -260,3 +286,18 @@ packet tests pass. The PIO API is present in the kernel and export stubs.
 Existing DMA, BIOS read, convenience, defaults, and G1 tests still pass
 3346/151/128/14/4 checks in both modes. Simulated registers and payloads do
 not establish physical media, cache, IRQ, recovery, or throughput behavior.
+
+The generic read/format/reinitialization routing pass adds `read-routing`:
+247 checks pass in both Flycast modes. Production wrappers are checked with
+transport/submission spies for supported and rejected layouts, captured format,
+independent BIOS and filesystem selection, no per-read probing, failed-selection
+preservation, reset/probe error-source mapping, direct-only PIO/DMA dispatch,
+and nonzero async timeout policy. Explicit BIOS regression coverage remains
+151 checks after replacing its historical generic-alias calls with named BIOS
+calls. The 776/3346/334/128/14/4 PIO/DMA/queue/convenience/default/G1 regressions
+also pass in both modes. The full SH-4 GCC 16.2 build, affected driver and
+routing probes under `-Werror`, eleven other example rebuilds, and GNU17/strict
+C23/Clang sanitizer packet tests pass. Boot-format seeding is compiled and
+source-reviewed but not exercised by this no-CDROM-init routing probe. Actual
+drive reset, live format detection/media changes, boot setup, and physical
+transfers still require hardware validation.

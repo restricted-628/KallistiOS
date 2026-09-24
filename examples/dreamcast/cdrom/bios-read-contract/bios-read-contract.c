@@ -141,7 +141,7 @@ int main(void) {
     mode_fail = true;
     CHECK(cdrom_bios_change_datatype(CDROM_READ_DATA_AREA, 1024, 2048) == -1);
     CHECK(cdrom_sector_size_internal() == 2352 && !held);
-    CHECK(cdrom_change_datatype(CDROM_READ_DATA_AREA, 1024, 2048) == -1);
+    CHECK(cdrom_bios_change_datatype(CDROM_READ_DATA_AREA, 1024, 2048) == -1);
     CHECK(cdrom_sector_size_internal() == 2352 && !held);
     mode_fail = false;
     query_fail = true;
@@ -155,16 +155,16 @@ int main(void) {
           && mode_calls == before && cdrom_sector_size_internal() == 2352);
     lock_fail = false;
 
-    /* Explicit raw BIOS requests remain valid beyond the direct 16-sector
-       cooked-read limit. No transfer occurs: firmware and queue are spies. */
+    /* BIOS selection is explicit even after generic reads switch to direct.
+       No transfer occurs: firmware and queue are spies. */
     CHECK(cdrom_bios_read_sectors(buffer, 150, 17) == ERR_OK);
-    CHECK(cdrom_read_sectors(buffer, 150, 17) == ERR_OK);
+    CHECK(cdrom_bios_read_sectors(buffer, 150, 17) == ERR_OK);
     CHECK(cdrom_bios_read_sectors_ex(buffer, 150, 17, false) == ERR_OK);
-    CHECK(cdrom_read_sectors_ex(buffer, 150, 17, false) == ERR_OK);
+    CHECK(cdrom_bios_read_sectors_ex(buffer, 150, 17, false) == ERR_OK);
     CHECK(read_calls == 4);
     CHECK(cdrom_bios_read_sectors_async(buffer, 150, 17, 0, callback, &callback_data)
           == (cdrom_request_t *)&token);
-    CHECK(cdrom_read_sectors_async(buffer, 150, 17, 0, callback, &callback_data)
+    CHECK(cdrom_bios_read_sectors_async(buffer, 150, 17, 0, callback, &callback_data)
           == (cdrom_request_t *)&token);
     submit_fail = true;
     CHECK(!cdrom_bios_read_sectors_async(buffer, 150, 17, 0, callback, &callback_data)
@@ -177,13 +177,13 @@ int main(void) {
     CHECK(last_mode.sector_part == CDROM_READ_DATA_AREA && last_mode.track_type == 2048
           && last_mode.sector_size == 2048 && cdrom_sector_size_internal() == 2048);
     disc_type = CD_CDROM;
-    CHECK(cdrom_reinit() == 0 && init_calls == 2 && last_mode.track_type == 1024);
+    CHECK(cdrom_bios_reinit() == 0 && init_calls == 2 && last_mode.track_type == 1024);
     CHECK(cdrom_bios_reinit_ex(CDROM_READ_WHOLE_SECTOR, 0, 2352) == 0
           && init_calls == 3 && cdrom_sector_size_internal() == 2352);
-    CHECK(cdrom_reinit_ex(CDROM_READ_DATA_AREA, 1024, 2048) == 0 && init_calls == 4);
+    CHECK(cdrom_bios_reinit_ex(CDROM_READ_DATA_AREA, 1024, 2048) == 0 && init_calls == 4);
     CHECK(cdrom_bios_set_sector_size(2352) == 0 && init_calls == 5
           && cdrom_sector_size_internal() == 2352);
-    CHECK(cdrom_set_sector_size(2048) == 0 && init_calls == 6
+    CHECK(cdrom_bios_set_sector_size(2048) == 0 && init_calls == 6
           && cdrom_sector_size_internal() == 2048);
     CHECK(cdrom_bios_read_sectors_async(buffer, 150, 17, 0, callback, &callback_data)
           == (cdrom_request_t *)&token && submissions == 4);

@@ -1,7 +1,7 @@
 # BIOS read and sector-mode contract regression
 
 This probe uses production BIOS wrappers, with firmware/G1/request-submission
-spies. It checks the explicit BIOS API and its temporary generic aliases,
+spies. It checks the explicit BIOS API independently of generic direct routing,
 automatic and explicit sector modes, failed-mode state preservation, failed
 automatic track detection, reinitialization, and raw 2352-byte / cooked
 2048-byte async byte accounting for requests larger than 16 sectors.
