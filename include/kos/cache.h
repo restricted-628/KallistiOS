@@ -109,8 +109,8 @@ __BEGIN_DECLS
     This instruction invalidates a range of the instruction cache.
 
     A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
-    A range whose final byte wraps the address space is rejected without
-    touching cache state.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
 
     \param  start           The physical address to begin invalidation at.
     \param  count           The number of bytes to invalidate.
@@ -127,8 +127,8 @@ static inline void icache_inval_range(uintptr_t start, size_t count) {
     implemented in a more optimized way.
 
     A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
-    A range whose final byte wraps the address space is rejected without
-    touching cache state.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
 
     \param  start           The physical address to begin invalidation at.
     \param  count           The number of bytes to invalidate.
@@ -144,8 +144,8 @@ static inline void icache_sync_range(uintptr_t start, size_t count) {
     dcache_wback_range() before using this function.
 
     A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
-    A range whose final byte wraps the address space is rejected without
-    touching cache state.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
 
     \param  start           The physical address to begin invalidating at.
     \param  count           The number of bytes to invalidate.
@@ -164,8 +164,8 @@ static inline void dcache_inval_range(uintptr_t start, size_t count) {
     function or use dcache_purge_range() instead of dcache_wback_range().
 
     A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
-    A range whose final byte wraps the address space is rejected without
-    touching cache state.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
 
     \param  start           The physical address to begin flushing at.
     \param  count           The number of bytes to write back.
@@ -189,8 +189,8 @@ static inline void dcache_wback_all(void) {
     back and then invalidates all of the data in the specified range.
 
     A P2 uncached alias is normalized to the corresponding P1 cacheable alias.
-    A range whose final byte wraps the address space is rejected without
-    touching cache state.
+    Zero-length ranges are no-ops. Ranges that wrap or cross a 512 MiB
+    address-area boundary are rejected without touching cache state.
 
     \param  start           The physical address to begin purging at.
     \param  count           The number of bytes to purge.
