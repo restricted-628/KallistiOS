@@ -1,5 +1,13 @@
-> Complete fiber SDK bundle: `pr/core-fibers`. See [checkout, build and provider rules](FIBER-BUNDLE.md).
-> The narrow upstream fiber proposal is preserved as `pr/core-fibers-submission`.
+<!-- FORK BRANCH DESCRIPTION -->
+> **Complete core-fiber SDK bundle** — `pr/core-fibers` (complete sdk bundle).
+>
+> One integrated checkout with the KOS core fiber provider and the surrounding SDK prerequisites. Despite its pr/ prefix, this is not a narrow upstream submission.
+>
+> Read [this branch's scope and dependencies](BRANCH.md),
+> [the complete branch guide](https://github.com/restricted-628/KallistiOS/blob/master/BRANCHES.md), and
+> [how integrated master differs from upstream](https://github.com/restricted-628/KallistiOS/blob/master/FORK.md).
+> This is a branch of an experimental fork, not the official KallistiOS release.
+<!-- END FORK BRANCH DESCRIPTION -->
 
 <!-- PROJECT LOGO -->
 <div align="center">

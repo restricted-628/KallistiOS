@@ -3,9 +3,10 @@
 This is the user-facing `pr/core-fibers` integration branch. One checkout contains
 the runtime, OS prerequisites, direct disc/G1/G2/GAPS support, `libfiber_disc`,
 and RAM/VRAM examples. Do not assemble it from other branches or link against
-another checkout's archives. This is a complete SDK based on integrated master
-`80be9175`, not a minimal upstream fiber patch; existing SDK graphics and
-other integrated features remain present.
+another checkout's archives. This is a complete SDK originally assembled from integrated master
+`80be9175` and subsequently updated with shared fixes. See [this branch's
+current description snapshot](BRANCH.md). It is not a minimal upstream fiber
+patch; existing SDK graphics and other integrated features remain present.
 
 The narrow upstream candidate is preserved as `pr/core-fibers-submission`
 at `ecde7863`. Submit that topic (and its saved-SP prerequisite) for focused
