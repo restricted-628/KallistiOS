@@ -10,9 +10,10 @@ include kos.h
 # Expansion port
 expansion_probe
 bba_probe
-gaps_init
+gaps_acquire
+gaps_get_role
 gaps_probe
-gaps_shutdown
+gaps_release
 gaps_sram_alloc
 gaps_sram_free
 gaps_sram_get_info

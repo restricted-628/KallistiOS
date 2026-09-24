@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <arch/arch.h>
 #include <dc/fs_iso9660.h>
 #include <dc/gaps.h>
 #include <dc/g2bus.h>
@@ -130,6 +131,7 @@ int main(int argc, char **argv) {
     pvr_chunk_model_info_t ram_info;
     pvr_chunk_model_info_t gaps_info;
     gaps_sram_lease_t lease = GAPS_SRAM_LEASE_INVALID;
+    gaps_owner_t owner = GAPS_OWNER_INVALID;
     uint8_t *ram_asset = NULL;
     uint8_t *gaps_asset = NULL;
     size_t asset_bytes;
@@ -192,14 +194,19 @@ int main(int argc, char **argv) {
         result = EXIT_SUCCESS;
         goto out;
     }
-    if(gaps_init() < 0) {
+    if(gaps_acquire(GAPS_ROLE_STAGING, &owner) < 0) {
+        if(errno == EBUSY) {
+            puts("CHUNK-ASSET-DISC: PASS RAM; SKIP GAPS owner/loader active");
+            result = EXIT_SUCCESS;
+            goto out;
+        }
         perror("GAPS initialization");
         goto out;
     }
     gaps_initialized = 1;
     staging_bytes = physical_bytes < GAPS_SRAM_SIZE
         ? physical_bytes : GAPS_SRAM_SIZE;
-    if(gaps_sram_alloc(staging_bytes, GDROM_DIRECT_SECTOR_SIZE,
+    if(gaps_sram_alloc(owner, staging_bytes, GDROM_DIRECT_SECTOR_SIZE,
                        &lease) < 0) {
         if(errno == ENOMEM) {
             puts("CHUNK-ASSET-DISC: PASS RAM; GAPS SRAM already owned");
@@ -230,10 +237,10 @@ int main(int argc, char **argv) {
     result = EXIT_SUCCESS;
 
 out:
-    if(lease != GAPS_SRAM_LEASE_INVALID)
-        (void)gaps_sram_free(lease);
-    if(gaps_initialized)
-        (void)gaps_shutdown();
+    if(lease != GAPS_SRAM_LEASE_INVALID && gaps_sram_free(lease) < 0)
+        arch_panic("GAPS lease still busy; pipeline resources retained");
+    if(gaps_initialized && gaps_release(owner) < 0)
+        arch_panic("GAPS owner release failed");
     free(gaps_asset);
     free(ram_asset);
     return result;

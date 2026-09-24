@@ -15,5 +15,8 @@ The build creates `chunk-asset-model.pcm`; place that file at the root of the
 test ISO as `/chunk-asset-model.pcm`. The normal ISO9660 path is used only to
 discover its FAD and exact recorded size. Defining both `CHUNK_ASSET_FAD` and
 `CHUNK_ASSET_BYTES` bypasses even that metadata lookup. The GAPS comparison is
-skipped when the bridge is absent or its SRAM is already leased by another
-driver; the direct-RAM pipeline must still pass.
+skipped when the bridge is absent, another owner holds it, or a resident
+IP/unclassified dcload loader protects it; the direct-RAM pipeline must still
+pass. The comparison acquires exclusive STAGING ownership and releases its
+lease and owner only after DMA retires. Use disc or known serial-loader boot
+for staging; stopping KOS networking alone does not detach an IP loader.

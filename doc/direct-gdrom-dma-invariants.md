@@ -66,8 +66,12 @@ physical upper-bank GD-ROM DMA correctness on a modified console.
   bridge SRAM do not pass through the SH-4 data cache.
 - With the MMU enabled, destinations must use a direct P1/P2 alias; translated
   P0/P3 mappings are rejected rather than masked into an unrelated range.
-- A bridge-SRAM lease is claimed for the complete GD-DMA operation. G2 DMA to
-  the same lease begins only after G1 has stopped and the request is terminal.
+- A bridge-SRAM lease is claimed for the complete GD-DMA operation. Another
+  G1/G2 transfer anywhere in that window begins only after the claim retires.
+  NETWORK ownership does not prohibit G1 DMA: the network owner may authorize
+  it through its lease, while separately coordinating NIC access to the buffer.
+  Independent staging cannot acquire the bridge from that owner. See
+  [GAPS ownership](gaps-ownership.md).
 - Cache aliases are normalized before programming the physical destination.
 - Arithmetic uses subtraction-based bounds checks so address and length sums
   cannot wrap.

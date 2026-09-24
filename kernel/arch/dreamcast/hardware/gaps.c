@@ -13,6 +13,7 @@
 #include <string.h>
 #include <dc/g2bus.h>
 #include <dc/gaps.h>
+#include <dc/fs_dcload.h>
 #include <kos/irq.h>
 #include "gaps_internal.h"
 
@@ -37,8 +38,33 @@ typedef struct gaps_lease_record {
 static uint32_t allocation_bitmap[GAPS_BITMAP_WORDS];
 static gaps_lease_record_t leases[GAPS_MAX_LEASES];
 static unsigned int next_generation = 1;
-static unsigned int init_references;
+static gaps_owner_t active_owner;
+static gaps_owner_t next_owner = 1;
+static gaps_role_t active_role;
 static bool lifecycle_busy;
+static gaps_sram_lease_t dma_lease = GAPS_SRAM_LEASE_INVALID;
+
+static bool loader_owns_bridge(void) {
+    /* INIT_NO_DCLOAD is not proof that an already-running loader relinquished
+       its hardware. Unknown resident loaders are deliberately conservative. */
+    return syscall_dcload_detected() && dcload_type != DCLOAD_TYPE_SER;
+}
+
+gaps_role_t gaps_get_role(void) {
+    irq_mask_t state = irq_disable();
+    gaps_role_t role = lifecycle_busy ? GAPS_ROLE_TRANSITION : active_role;
+    if(role == GAPS_ROLE_NONE && loader_owns_bridge())
+        role = GAPS_ROLE_LOADER;
+    irq_restore(state);
+    return role;
+}
+
+bool gaps_native_loader_allowed(void) {
+    irq_mask_t state = irq_disable();
+    bool allowed = !loader_owns_bridge() || (!active_owner && !lifecycle_busy);
+    irq_restore(state);
+    return allowed;
+}
 
 static bool unit_is_set(size_t unit) {
     return allocation_bitmap[unit >> 5] & (1u << (unit & 31u));
@@ -120,7 +146,7 @@ int gaps_probe(void) {
     return !memcmp(signature, GAPS_SIGNATURE, GAPS_SIGNATURE_LENGTH);
 }
 
-static int bridge_initialize(void) {
+static int bridge_initialize(gaps_role_t role) {
     int countdown;
 
     if(!gaps_probe()) {
@@ -153,8 +179,10 @@ static int bridge_initialize(void) {
     g2_write_32(GAPS_BASE + 0x1630, 0x00000000);
     g2_write_8(GAPS_BASE + 0x163c, 0x00);
     g2_write_8(GAPS_BASE + 0x160d, 0xf0);
+    /* PCI command: memory space enabled, bus mastering only for networking. */
     g2_write_16(GAPS_BASE + 0x1604,
-                g2_read_16(GAPS_BASE + 0x1604) | 0x6);
+                (g2_read_16(GAPS_BASE + 0x1604) & ~0x4u)
+                | (role == GAPS_ROLE_NETWORK ? 0x6u : 0x2u));
     g2_write_32(GAPS_BASE + 0x1614, 0x01000000);
     if(g2_read_8(GAPS_BASE + 0x1650) & 0x1) {
         g2_write_16(GAPS_BASE + 0x1654,
@@ -162,7 +190,12 @@ static int bridge_initialize(void) {
     }
     g2_write_32(GAPS_BASE + 0x1414, 0x00000001);
 
-    /* No client owns SRAM on first initialization, so clear the full window. */
+    /* RTL8139 IMR / ChipCmd: stop NIC activity before reusing its buffers.
+       Staging never enables it; networking performs its normal setup later. */
+    g2_write_16(GAPS_BASE + 0x173c, 0);
+    g2_write_8(GAPS_BASE + 0x1737, 0);
+
+    /* The acquiring owner has exclusive access, so clear the full window. */
     g2_memset_8(GAPS_SRAM_PHYS_BASE, 0, GAPS_SRAM_SIZE);
 
     /* Verify the bridge's writable handshake register before admitting users. */
@@ -183,34 +216,36 @@ protocol_error:
     return -1;
 }
 
-int gaps_init(void) {
+int gaps_acquire(gaps_role_t role, gaps_owner_t *owner) {
     irq_mask_t irq_state;
 
+    if(owner)
+        *owner = GAPS_OWNER_INVALID;
+    if(!owner || (role != GAPS_ROLE_STAGING && role != GAPS_ROLE_NETWORK)) {
+        errno = EINVAL;
+        return -1;
+    }
     if(irq_inside_int()) {
         errno = EPERM;
         return -1;
     }
 
     irq_state = irq_disable();
-    if(init_references) {
-        if(init_references == UINT_MAX) {
-            irq_restore(irq_state);
-            errno = EOVERFLOW;
-            return -1;
-        }
-        ++init_references;
-        irq_restore(irq_state);
-        return 0;
-    }
-    if(lifecycle_busy) {
+    if(active_owner || lifecycle_busy
+            || (role == GAPS_ROLE_STAGING && loader_owns_bridge())) {
         irq_restore(irq_state);
         errno = EBUSY;
+        return -1;
+    }
+    if(!next_owner) {
+        irq_restore(irq_state);
+        errno = EOVERFLOW;
         return -1;
     }
     lifecycle_busy = true;
     irq_restore(irq_state);
 
-    if(bridge_initialize() < 0) {
+    if(bridge_initialize(role) < 0) {
         irq_state = irq_disable();
         lifecycle_busy = false;
         irq_restore(irq_state);
@@ -220,13 +255,16 @@ int gaps_init(void) {
     irq_state = irq_disable();
     memset(allocation_bitmap, 0, sizeof(allocation_bitmap));
     memset(leases, 0, sizeof(leases));
-    init_references = 1;
+    active_owner = next_owner++;
+    active_role = role;
+    dma_lease = GAPS_SRAM_LEASE_INVALID;
+    *owner = active_owner;
     lifecycle_busy = false;
     irq_restore(irq_state);
     return 0;
 }
 
-int gaps_shutdown(void) {
+int gaps_release(gaps_owner_t owner) {
     irq_mask_t irq_state;
     int i;
 
@@ -236,15 +274,15 @@ int gaps_shutdown(void) {
     }
 
     irq_state = irq_disable();
-    if(!init_references) {
+    if(lifecycle_busy) {
         irq_restore(irq_state);
-        errno = ENODEV;
+        errno = EBUSY;
         return -1;
     }
-    if(init_references > 1) {
-        --init_references;
+    if(!owner || owner != active_owner) {
         irq_restore(irq_state);
-        return 0;
+        errno = EBADF;
+        return -1;
     }
     for(i = 0; i < GAPS_MAX_LEASES; ++i) {
         if(leases[i].active) {
@@ -253,13 +291,21 @@ int gaps_shutdown(void) {
             return -1;
         }
     }
-    init_references = 0;
+    lifecycle_busy = true;
+    irq_restore(irq_state);
+    g2_write_16(GAPS_BASE + 0x173c, 0);
+    g2_write_8(GAPS_BASE + 0x1737, 0);
+    g2_write_16(GAPS_BASE + 0x1604, g2_read_16(GAPS_BASE + 0x1604) & ~0x4u);
     g2_write_32(GAPS_BASE + 0x1414, 0);
+    irq_state = irq_disable();
+    active_owner = GAPS_OWNER_INVALID;
+    active_role = GAPS_ROLE_NONE;
+    lifecycle_busy = false;
     irq_restore(irq_state);
     return 0;
 }
 
-int gaps_sram_reserve(size_t offset, size_t size,
+int gaps_sram_reserve(gaps_owner_t owner, size_t offset, size_t size,
                       gaps_sram_lease_t *lease) {
     irq_mask_t irq_state;
     size_t first;
@@ -268,6 +314,10 @@ int gaps_sram_reserve(size_t offset, size_t size,
 
     if(lease)
         *lease = GAPS_SRAM_LEASE_INVALID;
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
     if(!lease || !size || (offset & (GAPS_SRAM_ALIGNMENT - 1u))
             || (size & (GAPS_SRAM_ALIGNMENT - 1u))
             || offset >= GAPS_SRAM_SIZE || size > GAPS_SRAM_SIZE - offset) {
@@ -278,9 +328,9 @@ int gaps_sram_reserve(size_t offset, size_t size,
     first = offset / GAPS_SRAM_ALIGNMENT;
     count = size / GAPS_SRAM_ALIGNMENT;
     irq_state = irq_disable();
-    if(!init_references) {
+    if(!owner || owner != active_owner || lifecycle_busy) {
         irq_restore(irq_state);
-        errno = ENODEV;
+        errno = EBADF;
         return -1;
     }
     if(!range_is_free(first, count)) {
@@ -293,7 +343,7 @@ int gaps_sram_reserve(size_t offset, size_t size,
     return rv;
 }
 
-int gaps_sram_alloc(size_t size, size_t alignment,
+int gaps_sram_alloc(gaps_owner_t owner, size_t size, size_t alignment,
                     gaps_sram_lease_t *lease) {
     irq_mask_t irq_state;
     size_t rounded_size;
@@ -305,6 +355,10 @@ int gaps_sram_alloc(size_t size, size_t alignment,
 
     if(lease)
         *lease = GAPS_SRAM_LEASE_INVALID;
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
     if(!lease || !size || alignment < GAPS_SRAM_ALIGNMENT
             || alignment > GAPS_SRAM_SIZE
             || (alignment & (alignment - 1u))) {
@@ -322,9 +376,9 @@ int gaps_sram_alloc(size_t size, size_t alignment,
     alignment_units = alignment / GAPS_SRAM_ALIGNMENT;
 
     irq_state = irq_disable();
-    if(!init_references) {
+    if(!owner || owner != active_owner || lifecycle_busy) {
         irq_restore(irq_state);
-        errno = ENODEV;
+        errno = EBADF;
         return -1;
     }
 
@@ -373,6 +427,10 @@ int gaps_sram_free(gaps_sram_lease_t lease) {
     gaps_lease_record_t *record;
     size_t i;
 
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
     irq_state = irq_disable();
     record = lookup_lease(lease);
     if(!record) {
@@ -417,13 +475,14 @@ int gaps_sram_dma_claim(gaps_sram_lease_t lease, size_t offset, size_t size,
     }
     lease_size = (size_t)record->unit_count * GAPS_SRAM_ALIGNMENT;
     if(offset >= lease_size || size > lease_size - offset
-            || record->dma_owner) {
+            || dma_lease != GAPS_SRAM_LEASE_INVALID) {
         irq_restore(irq_state);
         errno = offset >= lease_size || size > lease_size - offset
             ? EFAULT : EBUSY;
         return -1;
     }
     record->dma_owner = owner;
+    dma_lease = lease;
     *physical_address = GAPS_SRAM_PHYS_BASE
         + (uint32_t)record->first_unit * GAPS_SRAM_ALIGNMENT
         + (uint32_t)offset;
@@ -456,6 +515,11 @@ int gaps_sram_dma_claim_address(uint32_t physical_address, size_t size,
     last = (physical_address - GAPS_SRAM_PHYS_BASE + size - 1u)
         / GAPS_SRAM_ALIGNMENT;
     irq_state = irq_disable();
+    if(dma_lease != GAPS_SRAM_LEASE_INVALID) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return -1;
+    }
     for(i = 0; i < GAPS_MAX_LEASES; ++i) {
         size_t lease_first;
         size_t lease_last;
@@ -473,6 +537,7 @@ int gaps_sram_dma_claim_address(uint32_t physical_address, size_t size,
             leases[i].dma_owner = owner;
             *lease = (int)((leases[i].generation
                             << GAPS_LEASE_INDEX_BITS) | (unsigned int)i);
+            dma_lease = *lease;
             irq_restore(irq_state);
             return 0;
         }
@@ -487,7 +552,9 @@ void gaps_sram_dma_release(gaps_sram_lease_t lease,
     irq_mask_t irq_state = irq_disable();
     gaps_lease_record_t *record = lookup_lease(lease);
 
-    if(record && record->dma_owner == owner)
+    if(record && record->dma_owner == owner && dma_lease == lease) {
         record->dma_owner = 0;
+        dma_lease = GAPS_SRAM_LEASE_INVALID;
+    }
     irq_restore(irq_state);
 }

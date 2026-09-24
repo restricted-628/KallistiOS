@@ -7,7 +7,7 @@ CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
 ROOT := ../..
-INCLUDES := -I../g2dma-test/include \
+INCLUDES := -Iinclude -I../g2dma-test/include \
 	-I$(ROOT)/kernel/arch/dreamcast/include \
 	-I$(ROOT)/kernel/arch/dreamcast/hardware
 TARGET := gaps-sram-test

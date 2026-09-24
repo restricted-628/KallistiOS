@@ -12,6 +12,10 @@
 #include <dc/memory.h>
 
 #include <kos/irq.h>
+#include <errno.h>
+#ifndef __NAOMI__
+#include "gaps_internal.h"
+#endif
 
 /* This is the address where the function pointer for the dcload syscall is fetched from */
 #define VEC_DCLOAD        (MEM_AREA_P1_BASE | 0x0C004008)
@@ -22,12 +26,24 @@
 */
 
 int dcload_syscall_native(dcload_cmd_t cmd, void *param1, void *param2, void *param3) {
+    /* Disable IRQs until the syscall returns */
+    irq_disable_scoped();
+
+    /* A resident IP loader bypasses KOS's BBA driver and SRAM leases. Once a
+       KOS owner takes over, never re-enter its network I/O behind that owner's
+       back (including after socket-backend shutdown restores this transport).
+       These two metadata calls are retained for KOS's normal startup handoff. */
+#ifndef __NAOMI__
+    if(cmd != DCLOAD_ASSIGNWRKMEM && cmd != DCLOAD_GETHOSTINFO
+            && !gaps_native_loader_allowed()) {
+        errno = EBUSY;
+        return -1;
+    }
+#endif
+
     uintptr_t *syscall_ptr = (uintptr_t *)VEC_DCLOAD;
     int (*syscall)(uintptr_t, uintptr_t, uintptr_t, uintptr_t) =
         (int (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t))(*syscall_ptr);
-
-    /* Disable IRQs until the syscall returns */
-    irq_disable_scoped();
 
     /* Ensure that the FIFO buffer is clear */
     /* XXX - Is this needed? It seems like something only for serial. */

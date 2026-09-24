@@ -50,8 +50,11 @@ range.
 The bridge SRAM window has an additional ownership rule. Every G2 transfer
 whose external endpoint falls in that window must be fully contained in a live
 SRAM lease. The transfer claims that lease until completion or cancellation.
-A simultaneous G1 disc DMA to the same lease therefore fails with `EBUSY`
-instead of relying on undocumented DMA ordering.
+A simultaneous G1 or G2 DMA anywhere in the bridge SRAM window therefore fails
+with `EBUSY`, even on a different lease, instead of relying on undocumented DMA
+ordering. Both NETWORK and STAGING owners may authorize either engine. The
+claim does not fence autonomous NIC RX/TX; the network driver must coordinate
+its own buffers. See [GAPS ownership](gaps-ownership.md).
 
 Every channel exposes a coherent status snapshot containing state, requested
 and remaining bytes, sequence, completion/cancellation totals, result, and
