@@ -9,7 +9,7 @@
 # target processor. Other routines may be present as well, but
 # that minimum set must be present.
 
-COPYOBJS = cache.o entry.o irq.o init.o panic.o
+COPYOBJS = cache.o cache_all.o entry.o irq.o init.o panic.o
 COPYOBJS += timer.o perfctr.o perf_monitor.o
 COPYOBJS += mmu.o itlb.o
 COPYOBJS += exec.o execasm.o stack.o thdswitch.o

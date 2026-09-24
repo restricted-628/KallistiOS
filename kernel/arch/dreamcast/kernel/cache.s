@@ -19,8 +19,6 @@
     .globl _arch_icache_sync_range
     .globl _cache_write_ccr
     .globl _mmu_purge_phys_page
-    .globl _arch_dcache_purge_all_indexed
-    .globl _arch_dcache_wback_all_indexed
 
 ! This routine goes through and flushes/invalidates the icache
 ! for a given range.
@@ -223,18 +221,7 @@ _arch_icache_sync_range:
 ! can differ. Clearing V/U through the non-associative array writes dirty data
 ! back using its physical tag. Never touch entries assigned to OCRAM.
     .align 2
-_arch_dcache_wback_all_indexed:
-    mov      #-1, r4        ! No page filter
-    bra      .mpp_enter
-    mov      #2, r7         ! Write-back only (preserve valid/tag)
-    .align 2
-_arch_dcache_purge_all_indexed:
-    bra      _mmu_purge_phys_page
-    mov      #-1, r4        ! No page filter
-    .align 2
 _mmu_purge_phys_page:
-    mov      #0, r7         ! Purge (clear valid/tag)
-.mpp_enter:
     mova     .mpp_p2, r0
     mov.l    p2_mask, r1
     or       r1, r0
@@ -251,7 +238,7 @@ _mmu_purge_phys_page:
     and      #32, r0
     shll8    r0
     shlr     r0             ! ORA -> address-array bit 12 (entry bit 7)
-    or       r0, r7
+    mov      r0, r7
     mov.l    .mpp_page_mask, r1
     mov.l    loc_tags, r5
     mov.l    .mpp_end, r2
@@ -261,22 +248,10 @@ _mmu_purge_phys_page:
     mov.l    @r5, r0
     tst      #1, r0         ! Valid?
     bt       .mpp_next
-    mov      #-1, r6
-    cmp/eq   r4, r6
-    bt       .mpp_purge
     and      r1, r0
     cmp/eq   r4, r0
     bf       .mpp_next
-.mpp_purge:
-    mov      #2, r6
-    tst      r6, r7
-    bt       .mpp_clear
-    mov.l    .mpp_tag_mask, r6
-    bra      .mpp_write
-    and      r6, r0         ! Preserve tag/V, clear U and reserved bits
-.mpp_clear:
     mov      #0, r0
-.mpp_write:
     mov.l    r0, @r5        ! Non-associative purge, preserving dirty data
 .mpp_next:
     add      #32, r5
@@ -296,8 +271,6 @@ _mmu_purge_phys_page:
     .align 2
 .mpp_page_mask:
     .long    0x1ffff000
-.mpp_tag_mask:
-    .long    0x1ffffc01
 .mpp_end:
     .long    0xf4004000
 
