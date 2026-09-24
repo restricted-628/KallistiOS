@@ -33,6 +33,12 @@ g2_write_block_16
 g2_read_block_32
 g2_write_block_32
 g2_fifo_wait
+g2_dma_transfer
+g2_dma_get_status
+g2_dma_wait
+g2_dma_suspend
+g2_dma_resume
+g2_dma_cancel
 
 # VBlank
 vblank_handler_add
