@@ -26,6 +26,18 @@ static void range(uintptr_t start, size_t count) {
     else {
         CHECK(first == 17 && last == 19);
     }
+
+    uintptr_t cached_first = 17, cached_last = 19;
+    CHECK(arch_cache_range_cacheable(start, count, &cached_first, &cached_last) == valid);
+    if(valid) {
+        uintptr_t offset = (start & ~(uintptr_t)0x1fffffff) == 0xa0000000
+            ? 0x20000000 : 0;
+        CHECK(cached_first == first - offset);
+        CHECK(cached_last == last - offset);
+    }
+    else {
+        CHECK(cached_first == 17 && cached_last == 19);
+    }
 }
 
 int main(void) {

@@ -114,8 +114,8 @@ static inline void arch_dcache_zero_alloc_line(void *src) {
     ptr[1] = ptr[2] = ptr[3] = ptr[4] = ptr[5] = ptr[6] = ptr[7] = 0;
 }
 
-static inline void arch_dcache_inval_line(void *src) {
-    src = (void *)arch_cacheable_alias((uintptr_t)src);
+/* Internal: the operand has already been normalized to a cacheable alias. */
+static inline void arch_dcache_inval_line_impl(void *src) {
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("ocbi @%8\n\t"
@@ -131,8 +131,8 @@ static inline void arch_dcache_inval_line(void *src) {
     );
 }
 
-static inline void arch_dcache_purge_line(void *src) {
-    src = (void *)arch_cacheable_alias((uintptr_t)src);
+/* Internal: the operand has already been normalized to a cacheable alias. */
+static inline void arch_dcache_purge_line_impl(void *src) {
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("ocbp @%8\n\t"
@@ -148,8 +148,8 @@ static inline void arch_dcache_purge_line(void *src) {
     );
 }
 
-static inline void arch_dcache_wback_line(void *src) {
-    src = (void *)arch_cacheable_alias((uintptr_t)src);
+/* Internal: the operand has already been normalized to a cacheable alias. */
+static inline void arch_dcache_wback_line_impl(void *src) {
     uintptr_t *ptr = (uintptr_t *)src;
 
     __asm__ __volatile__("ocbwb @%8\n\t"
@@ -165,14 +165,26 @@ static inline void arch_dcache_wback_line(void *src) {
     );
 }
 
+static inline void arch_dcache_inval_line(void *src) {
+    arch_dcache_inval_line_impl((void *)arch_cacheable_alias((uintptr_t)src));
+}
+
+static inline void arch_dcache_purge_line(void *src) {
+    arch_dcache_purge_line_impl((void *)arch_cacheable_alias((uintptr_t)src));
+}
+
+static inline void arch_dcache_wback_line(void *src) {
+    arch_dcache_wback_line_impl((void *)arch_cacheable_alias((uintptr_t)src));
+}
+
 static inline void arch_dcache_inval_range(uintptr_t start, size_t count) {
     uintptr_t last;
 
-    if(!arch_cache_range(start, count, &start, &last))
+    if(!arch_cache_range_cacheable(start, count, &start, &last))
         return;
 
     for(;;) {
-        arch_dcache_inval_line((void *)start);
+        arch_dcache_inval_line_impl((void *)start);
 
         if(start == last)
             break;
@@ -192,7 +204,7 @@ static inline void arch_dcache_wback_all(void) {
 static inline void arch_dcache_wback_range(uintptr_t start, size_t count) {
     uintptr_t last;
 
-    if(!arch_cache_range(start, count, &start, &last))
+    if(!arch_cache_range_cacheable(start, count, &start, &last))
         return;
 
     if(count >= 65560) {
@@ -201,7 +213,7 @@ static inline void arch_dcache_wback_range(uintptr_t start, size_t count) {
     }
     else {
         for(;;) {
-            arch_dcache_wback_line((void *)start);
+            arch_dcache_wback_line_impl((void *)start);
 
             if(start == last)
                 break;
@@ -235,7 +247,7 @@ static inline void arch_dcache_purge_all(void) {
 static inline void arch_dcache_purge_range(uintptr_t start, size_t count) {
     uintptr_t last;
 
-    if(!arch_cache_range(start, count, &start, &last))
+    if(!arch_cache_range_cacheable(start, count, &start, &last))
         return;
 
     if(count >= 39936) {
@@ -244,7 +256,7 @@ static inline void arch_dcache_purge_range(uintptr_t start, size_t count) {
     }
     else {
         for(;;) {
-            arch_dcache_purge_line((void *)start);
+            arch_dcache_purge_line_impl((void *)start);
 
             if(start == last)
                 break;
