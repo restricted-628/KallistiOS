@@ -31,6 +31,9 @@ static bool run_async;
 static unsigned callbacks;
 static cdrom_request_t *cancel_target;
 static unsigned cancel_after;
+static bool cdda_test;
+static unsigned cdda_commands;
+static uint8_t toc_bytes[408];
 static semaphore_t entered, release_worker;
 
 #define CHECK(c) do { ++checks; if(!(c)) { ++failures; \
@@ -92,7 +95,8 @@ uint16_t raw_probe_in16(uintptr_t address) {
     uint16_t word;
     if(!held || address != G1_ATA_DATA || phase != DATA || consumed >= response_bytes)
         mmio_error = true;
-    word = payload(consumed) | ((uint16_t)payload(consumed + 1) << 8);
+    word = cdda_test ? toc_bytes[consumed] | ((uint16_t)toc_bytes[consumed + 1] << 8)
+        : payload(consumed) | ((uint16_t)payload(consumed + 1) << 8);
     consumed += 2;
     if(consumed == command_end)
         phase = DONE;
@@ -115,7 +119,7 @@ void raw_probe_out8(uintptr_t address, uint8_t value) {
     else if(address == G1_ATA_LBA_HIGH)
         capacity = (capacity & 0xff) | ((uint16_t)value << 8);
     else if(address == G1_ATA_COMMAND_REG) {
-        if(value != G1_ATA_CMD_PACKET || phase != IDLE)
+        if(value != G1_ATA_CMD_PACKET || (phase != IDLE && !(cdda_test && phase == DONE)))
             mmio_error = true;
         packet_bytes = 0;
         phase = PACKET;
@@ -132,6 +136,23 @@ void raw_probe_out16(uintptr_t address, uint16_t value) {
     packet[packet_bytes++] = (uint8_t)value;
     packet[packet_bytes++] = (uint8_t)(value >> 8);
     if(packet_bytes == 12) {
+        if(cdda_test) {
+            ++cdda_commands;
+            if(packet[0] == 0x14) {
+                const uint8_t wanted[12] = {0x14, 0, 0, 1, 0x98};
+                CHECK(!memcmp(packet, wanted, sizeof(wanted)) && capacity == 408);
+                response_bytes = command_end = sizeof(toc_bytes);
+                consumed = 0;
+                phase = DATA;
+            }
+            else {
+                const uint8_t wanted[12] = {0x20, 1, 0, 0, 150, 0, 0, 0, 0, 0x10, 0};
+                CHECK(!memcmp(packet, wanted, sizeof(wanted)));
+                response_bytes = command_end = consumed = 0;
+                phase = DONE;
+            }
+            return;
+        }
         size_t start = (locks - 1) * 16;
         size_t count = total_sectors - start;
         uint32_t fad = 150 + start;
@@ -273,6 +294,28 @@ static void run_cases(void) {
     error_command = 0;
 }
 
+static void check_cdda_density(void) {
+    cdda_test = true;
+    memset(toc_bytes, 0xff, sizeof(toc_bytes));
+    memcpy(toc_bytes, (const uint8_t[]){1, 0, 0, 150}, 4);
+    memcpy(toc_bytes + 396, (const uint8_t[]){1, 1, 0, 0}, 4);
+    memcpy(toc_bytes + 400, (const uint8_t[]){1, 1, 0, 0}, 4);
+    memcpy(toc_bytes + 404, (const uint8_t[]){1, 0, 0x10, 0}, 4);
+    for(unsigned track = 1; track <= 2; ++track) {
+        gdrom_direct_result_t result = {0};
+        locks = unlocks = cdda_commands = 0;
+        consumed = response_bytes = command_end = 0;
+        fake_time = 100; time_step = 0; phase = IDLE; mmio_error = false;
+        int rv = gdrom_direct_cdda_play(track, track, 0, CDDA_TRACKS, 1000, &result);
+        if(track == 1)
+            CHECK(rv == 0 && cdda_commands == 2);
+        else
+            CHECK(rv == -1 && errno == ENOENT && cdda_commands == 1);
+        CHECK(locks == 1 && unlocks == 1 && !held && !mmio_error);
+    }
+    cdda_test = false;
+}
+
 int main(void) {
     gdrom_direct_result_t result;
     CHECK(!cdrom_request_system_init());
@@ -344,6 +387,7 @@ int main(void) {
         CHECK(okay && storage[0] == 0xa5 && buffer[17 * 2352] == 0xa5);
         cancel_target = NULL;
     }
+    check_cdda_density();
     cdrom_request_system_shutdown();
     locks = 0;
     memset(&result, 0xa5, sizeof(result));
