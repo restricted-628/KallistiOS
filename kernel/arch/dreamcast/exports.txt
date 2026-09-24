@@ -1061,6 +1061,7 @@ mmu_switch_context
 mmu_page_map
 mmu_page_map_ex
 mmu_page_unmap
+mmu_page_unmap_ex
 mmu_page_set_cache
 mmu_copyin
 mmu_copyv

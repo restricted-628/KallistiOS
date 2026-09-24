@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
         goto destroy;
     }
 
-    if(mmu_page_unmap(context, TEST_VIRTUAL_PAGE, 1) < 0 ||
+    if(mmu_page_unmap_ex(context, TEST_VIRTUAL_PAGE, 1) < 0 ||
        mmu_virt_to_phys(context, TEST_VIRTUAL_PAGE) != -1) {
         errno = EIO;
         result = fail("unmap");
