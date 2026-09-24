@@ -85,6 +85,14 @@ _arch_icache_inval_range:
     mov.l    ic_entry_mask, r2
     mov.l    ic_valid_mask, r3
 
+    ! The address array always uses bits [12:5]; IIX changes fetch indexing,
+    ! not array indexing. Select once while exceptions are blocked.
+    mov.l    ccr_addr, r0
+    mov.l    @r0, r0
+    shlr8    r0
+    tst      #0x80, r0
+    bf       .iinval_iix_setup
+
     .align 2
 .iinval_loop:
     ! Invalidate I cache
@@ -98,6 +106,26 @@ _arch_icache_inval_range:
     bt       .iinval_done
     bra      .iinval_loop
     add      #32, r4       ! Move on to next cache block
+
+    ! IIX entry bit 7 comes from effective address bit 25, not bit 12.
+.iinval_iix_setup:
+    mov.l    ic_iix_high, r2
+    mov.l    ic_iix_low, r3
+    mov      #-13, r0
+.iinval_iix_loop:
+    mov      r4, r6
+    shld     r0, r6
+    and      r2, r6
+    mov      r4, r7
+    and      r3, r7
+    or       r7, r6
+    or       r1, r6
+    mov      #0, r7         ! Non-associative invalidation needs no translation
+    mov.l    r7, @r6
+    cmp/eq   r5, r4
+    bt       .iinval_done
+    bra      .iinval_iix_loop
+    add      #32, r4
 
 .iinval_done:
     ! make sure we have enough instrs before returning to P1
@@ -182,6 +210,12 @@ _arch_icache_sync_range:
     mov.l    ic_entry_mask, r2
     mov.l    ic_valid_mask, r3
 
+    mov.l    ccr_addr, r0
+    mov.l    @r0, r0
+    shlr8    r0
+    tst      #0x80, r0
+    bf       .iflush_iix_setup
+
 .iflush_loop:
     ! Invalidate I cache
     mov      r4, r6
@@ -195,6 +229,26 @@ _arch_icache_sync_range:
     bt       .iflush_done
     bra      .iflush_loop
     add      #32, r4       ! Move on to next cache block
+
+.iflush_iix_setup:
+    mov.l    ic_iix_high, r2
+    mov.l    ic_iix_low, r3
+    mov      #-13, r0
+.iflush_iix_loop:
+    ocbwb    @r4           ! Preserve the effective data address and OIX color
+    mov      r4, r6
+    shld     r0, r6
+    and      r2, r6
+    mov      r4, r7
+    and      r3, r7
+    or       r7, r6
+    or       r1, r6
+    mov      #0, r7
+    mov.l    r7, @r6
+    cmp/eq   r5, r4
+    bt       .iflush_done
+    bra      .iflush_iix_loop
+    add      #32, r4
 
 .iflush_done:
     ! make sure we have enough instrs before returning to P1
@@ -341,6 +395,10 @@ ica_addr:
     .long    0xf0000000    ! icache array address
 ic_entry_mask:
     .long    0x1fe0        ! CACHE_IC_ENTRY_MASK
+ic_iix_high:
+    .long    0x1000        ! (effective address >> 13) & 0x1000
+ic_iix_low:
+    .long    0x0fe0        ! Effective address bits [11:5]
 ic_valid_mask:
     .long    0xfffffc00
 ifr_addr:
