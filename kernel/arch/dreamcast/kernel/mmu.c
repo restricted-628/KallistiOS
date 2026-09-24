@@ -443,7 +443,11 @@ static bool subcontext_empty(const mmusubcontext_t *sub) {
     return true;
 }
 
-int mmu_page_unmap(mmucontext_t *context, int virtpage, int count) {
+void mmu_page_unmap(mmucontext_t *context, int virtpage, int count) {
+    (void)mmu_page_unmap_ex(context, virtpage, count);
+}
+
+int mmu_page_unmap_ex(mmucontext_t *context, int virtpage, int count) {
     int i;
 
     if(!context || virtpage < 0 || count <= 0 ||
