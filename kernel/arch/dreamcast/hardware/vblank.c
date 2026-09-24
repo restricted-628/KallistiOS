@@ -85,8 +85,8 @@ static void vblank_handler(uint32_t src, void *data) {
     --vblank_dispatch_depth;
 }
 
-int vblank_handler_add_prio(asic_evt_handler hnd, void *data,
-                            uint8_t priority) {
+static int vblank_handler_add_internal(asic_evt_handler hnd, void *data,
+                                      uint8_t priority, bool newest_first) {
     struct vblhnd *handler, *position;
     int old;
 
@@ -127,9 +127,11 @@ int vblank_handler_add_prio(asic_evt_handler hnd, void *data,
     handler->handler = hnd;
     handler->data = data;
 
-    /* Preserve registration order among handlers at the same priority. */
+    /* Explicit priorities insert before ties; legacy registration appends
+       after ties, preserving the relative order of all legacy handlers. */
     TAILQ_FOREACH(position, &vblhnds, listent) {
-        if(!position->removed && priority < position->priority) {
+        if(!position->removed && (priority < position->priority ||
+           (newest_first && priority == position->priority))) {
             TAILQ_INSERT_BEFORE(position, handler, listent);
             break;
         }
@@ -144,7 +146,13 @@ int vblank_handler_add_prio(asic_evt_handler hnd, void *data,
 }
 
 int vblank_handler_add(asic_evt_handler hnd, void *data) {
-    return vblank_handler_add_prio(hnd, data, VBLANK_PRIORITY_DEFAULT);
+    return vblank_handler_add_internal(hnd, data, VBLANK_PRIORITY_DEFAULT,
+                                       false);
+}
+
+int vblank_handler_add_prio(asic_evt_handler hnd, void *data,
+                            uint8_t priority) {
+    return vblank_handler_add_internal(hnd, data, priority, true);
 }
 
 int vblank_handler_remove(int handle) {

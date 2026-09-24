@@ -65,3 +65,12 @@ No proprietary middleware, BIOS, media or reverse-engineering data is added.
 
 See [validation results and limits](doc/fiber-bundle-validation.md). Changes
 to the provider, disc adapter or driver must be retested in both bundles.
+
+## Ordered VBlank work
+
+The shared IRQ API preserves legacy FIFO registration while explicit priorities
+run lower-first, newest-first on ties. Link `-lfiber_vblank` for bounded,
+coalescing deferred batches on an application-owned child fiber. The SH4ZAM
+bundle additionally supports the Service Executor example; the core bundle
+does not include that example or acquire an executor dependency. Neither path
+adds a competing fiber provider or math backend. See [contracts and examples](doc/fiber-vblank.md).

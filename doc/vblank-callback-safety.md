@@ -8,8 +8,11 @@ permanent buffer beyond the existing VBlank interrupt.
 ## Ordering
 
 `vblank_handler_add_prio()` accepts priorities from 0 through 255. Lower values
-run first. Handlers registered at the same priority retain registration order.
-The legacy `vblank_handler_add()` remains available and uses priority 128.
+run first. Explicit registrations at the same priority run newest first.
+The legacy `vblank_handler_add()` uses priority 128 and preserves registration
+order among legacy handlers. Explicit registrations at 128 run ahead of legacy
+handlers, even when registration of the two APIs is interleaved. Existing code
+using only the legacy API therefore keeps its previous ordering.
 
 Registration allocates one small handler record and therefore remains a
 thread-context operation. A null callback fails with `EINVAL`; interrupt-context
@@ -35,7 +38,8 @@ unbounded work.
 ## Validation
 
 `examples/dreamcast/basic/threading/vblank-priority` verifies priority order,
-stable equal-priority order, self-removal, and continued dispatch. The host-side
+newest-first priority ties, legacy FIFO order, self-removal, and continued
+dispatch. The host-side
 VBlank list test executes the production implementation with instrumented
 allocation, verifying that self-removal and deferred reclamation never call the
 allocator from interrupt context.

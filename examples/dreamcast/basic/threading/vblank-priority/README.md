@@ -1,12 +1,9 @@
-# VBlank priority and removal probe
+# VBlank priority regression
 
-This probe registers four VBlank handlers at different priorities, including
-one handler through the legacy default-priority entry point. It verifies:
+Registers interleaved legacy and explicit-priority IRQ callbacks, then records
+two frames. Lower numbers run first, explicit ties run newest first, and legacy
+callbacks retain FIFO order at priority 128. One callback removes itself.
+Recording is armed only after all registrations have succeeded.
 
-- ascending priority execution;
-- registration-order stability at a shared priority;
-- safe self-removal from interrupt context;
-- continued dispatch of the remaining handlers on the next VBlank.
-
-The program prints `VBLANK-PRIORITY: PASS` and exits when all checks pass.
-Callbacks deliberately do no I/O and only update bounded probe state.
+Expected marker: `VBLANK-PRIORITY: PASS events=13 ties=432 legacy=56 removal=0`.
+Callbacks only record state; they never block or allocate in the IRQ.
