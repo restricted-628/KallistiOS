@@ -392,6 +392,10 @@ cdrom_request_t *gdrom_direct_reinitialize_async(
     Existing `TOC_*` accessors and \ref cdrom_locate_data_track therefore work
     identically for BIOS-backed and direct TOCs.
 
+    The explicit area argument preserves the existing KOS TOC-query API.
+    Querying metadata does not imply support for high-density GD-ROM data
+    reads. Filesystem mounting and examples select the low-density area only.
+
     \param  toc          Output for all 99 track slots, first/last, and lead-out.
     \param  high_density False for the single-density area, true for GD high density.
     \param  timeout      Required nonzero whole-operation timeout in milliseconds.
@@ -445,9 +449,9 @@ cdrom_request_t *gdrom_direct_cdda_get_status_async(
 
     `mode` accepts the existing `CDDA_TRACKS` and `CDDA_SECTORS` values. Sector
     mode sends `start` and `end` as FADs directly. Track mode resolves the
-    inclusive range through the single-density or GD high-density TOC while
-    retaining G1 ownership through TOC lookup and playback. A range cannot
-    cross the two discontinuous areas. `loops` is 0 through 15, where 15 is
+    inclusive range through the low-density TOC only while retaining G1
+    ownership through TOC lookup and playback. Missing tracks return `ENOENT`;
+    there is no high-density fallback. `loops` is 0 through 15, where 15 is
     endless. An `end` FAD of zero means play to lead-out.
 */
 int gdrom_direct_cdda_play(
