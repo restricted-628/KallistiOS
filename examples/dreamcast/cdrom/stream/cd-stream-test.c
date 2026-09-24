@@ -127,7 +127,7 @@ int main(void) {
 
     puts("Direct staged stream test (requires at least eight data sectors)");
     if(cdrom_get_status(&drive, &disc) < 0
-            || cdrom_read_toc(&toc, disc == CD_GDROM) != ERR_OK) {
+            || cdrom_read_toc(&toc, false) != ERR_OK) {
         puts("Cannot read disc status/TOC");
         return EXIT_FAILURE;
     }

@@ -28,7 +28,6 @@ int main(int argc, char **argv) {
     uint32_t bios_fad = 0;
     int direct_error = 0;
     int bios_result = ERR_SYS;
-    bool high_density = false;
     bool passed;
 
     (void)argc;
@@ -46,8 +45,7 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    high_density = probe.status.disc_type == CD_GDROM;
-    if(gdrom_direct_read_toc(&direct_toc, high_density, 4000,
+    if(gdrom_direct_read_toc(&direct_toc, false, 4000,
                              &toc_transport) < 0) {
         direct_error = errno;
         printf("direct TOC failed: %s (%d)\n",
@@ -64,7 +62,7 @@ int main(int argc, char **argv) {
         goto done;
     }
 
-    bios_result = cdrom_bios_read_toc(&bios_toc, high_density);
+    bios_result = cdrom_bios_read_toc(&bios_toc, false);
     if(bios_result == ERR_OK)
         bios_fad = cdrom_locate_data_track(&bios_toc);
 
@@ -84,7 +82,7 @@ done:
 
     printf("%s: direct_errno=%d bios=%d area=%s toc=%lu session=%lu\n",
            passed ? "PASS" : "FAIL", direct_error, bios_result,
-           high_density ? "high" : "low",
+           "low",
            (unsigned long)toc_transport.transferred,
            (unsigned long)session_transport.transferred);
     printf("tracks=%lu-%lu sessions=%u status=%d\n",

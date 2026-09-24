@@ -61,7 +61,7 @@ int main(void) {
 
     /* Synchronous setup is before fiber dispatch, not inside a child fiber. */
     if(cdrom_get_status(&drive, &disc_type) < 0
-            || cdrom_read_toc(&toc, disc_type == CD_GDROM) != ERR_OK
+            || cdrom_read_toc(&toc, false) != ERR_OK
             || !(fad = cdrom_locate_data_track(&toc))) {
         puts("FIBER-READ: no readable data track");
         return EXIT_FAILURE;
