@@ -38,4 +38,17 @@ static inline bool arch_cache_range(uintptr_t start, size_t count,
     return true;
 }
 
+/* Normalize once for a complete admitted data-cache range. The area check
+   guarantees that both endpoints require the same alias conversion. */
+static inline bool arch_cache_range_cacheable(uintptr_t start, size_t count,
+                                              uintptr_t *first, uintptr_t *last) {
+    if(!arch_cache_range(start, count, first, last))
+        return false;
+
+    uintptr_t normalized = arch_cacheable_alias(*first);
+    *last = normalized + (*last - *first);
+    *first = normalized;
+    return true;
+}
+
 #endif /* __ARCH_CACHE_RANGE_H */
