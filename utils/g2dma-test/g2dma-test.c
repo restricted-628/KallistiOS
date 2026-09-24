@@ -73,8 +73,14 @@ static uint16_t claim_generation[4];
 static int claim_failure_channel = -1;
 static unsigned int claim_count;
 static unsigned int release_count;
+static bool stop_stuck;
+static uint64_t test_time;
+static unsigned int checks;
+static unsigned int acknowledgements;
+static int sem_failure_after = -1;
 
 #define CHECK(condition) do { \
+    ++checks; \
     if(!(condition)) { \
         fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #condition); \
         ++failures; \
@@ -103,6 +109,18 @@ void gaps_sram_dma_release(gaps_sram_lease_t lease,
 
 static test_dma_regs_t *registers(void) {
     return (test_dma_regs_t *)g2_test_dma_registers;
+}
+
+uint64_t timer_ms_gettime64(void) { return test_time; }
+uint32_t g2_test_start_read(uint32_t channel) {
+    return registers()->dma[channel].start;
+}
+void g2_test_start_write(uint32_t channel, uint32_t value) {
+    if(value || !stop_stuck) registers()->dma[channel].start = value;
+}
+void g2_test_ack(uint32_t channel) {
+    CHECK(channel < 4);
+    ++acknowledgements;
 }
 
 uint32_t g2_test_suspend_read(uint32_t channel) {
@@ -162,6 +180,8 @@ void thd_schedule(bool front_of_line) {
 }
 
 int sem_init(semaphore_t *semaphore, int count) {
+    if(sem_failure_after == 0) { errno = ENOMEM; return -1; }
+    if(sem_failure_after > 0) --sem_failure_after;
     semaphore->count = count;
     semaphore->initialized = 1;
     ++semaphore_inits;
@@ -176,7 +196,6 @@ int sem_destroy(semaphore_t *semaphore) {
 }
 
 int sem_wait_timed(semaphore_t *semaphore, unsigned int timeout) {
-    (void)timeout;
     CHECK(semaphore->initialized);
 
     if(semaphore->count <= 0 && semaphore_wait_hook) {
@@ -191,6 +210,7 @@ int sem_wait_timed(semaphore_t *semaphore, unsigned int timeout) {
         return 0;
     }
 
+    test_time += timeout ? timeout : 1;
     errno = ETIMEDOUT;
     return -1;
 }
@@ -265,6 +285,7 @@ static void invoke_completion(uint32_t channel) {
 
     CHECK(channel < 4 && claim_handlers[channel] != NULL);
     registers()->dma[channel].size = 0;
+    registers()->dma[channel].start = 0;
     inside_irq = true;
     claim_handlers[channel](ASIC_EVT_G2_DMA0 + channel, claim_data[channel]);
     inside_irq = previous;
@@ -584,6 +605,114 @@ static void test_callback_chaining(void) {
     CHECK(!status.callback_pending);
 }
 
+static int submit_zero(uint32_t block, g2_dma_callback_t callback) {
+    return g2_dma_transfer((void *)(uintptr_t)UINT32_C(0x8c000200),
+                          (void *)(uintptr_t)UINT32_C(0x00800200), 32,
+                          block, callback, NULL, G2_DMA_TO_G2, 0, 0, 0);
+}
+
+static void chain_cancelled(void *data) {
+    (void)data;
+    /* A second blocking operation cannot take the old waiter's slot, but an
+       asynchronous callback chain is still supported. */
+    inside_irq = false; /* model another thread before the waiter resumes */
+    CHECK(submit_zero(1, NULL) < 0 && errno == EBUSY);
+    inside_irq = true;
+    CHECK(submit_zero(0, NULL) == 0);
+    CHECK(g2_dma_cancel(0) == 0);
+}
+
+static void cancel_then_replace(void) {
+    CHECK(g2_dma_wait(0, 1) < 0 && errno == EBUSY);
+    CHECK(g2_dma_cancel(0) == 0);
+    CHECK(submit_zero(0, NULL) == 0);
+    invoke_completion(0);
+}
+
+static void shutdown_while_waiting(void) {
+    unsigned int destroyed = semaphore_destroys, released = release_count;
+    errno = 0;
+    g2_dma_shutdown();
+    CHECK(errno == EBUSY);
+    CHECK(g2_dma_init() == 0);
+    invoke_completion(0);
+    errno = 0;
+    g2_dma_shutdown();
+    CHECK(errno == EBUSY); /* signaled is not the same as consumed */
+    CHECK(semaphore_destroys == destroyed && release_count == released);
+}
+
+static void test_waiter_generations(void) {
+    g2_dma_status_t status;
+    semaphore_wait_hook = complete_channel_zero;
+    CHECK(submit_zero(1, chain_cancelled) == 0);
+    CHECK(g2_dma_get_status(0, &status) == 0);
+    CHECK(status.state == G2_DMA_STATE_CANCELLED); /* later generation */
+
+    CHECK(submit_zero(0, NULL) == 0);
+    semaphore_wait_hook = cancel_then_replace;
+    CHECK(g2_dma_wait(0, 10) < 0 && errno == ECANCELED);
+    CHECK(g2_dma_get_status(0, &status) == 0);
+    CHECK(status.state == G2_DMA_STATE_COMPLETE); /* old cancellation retained */
+
+    semaphore_wait_hook = shutdown_while_waiting;
+    CHECK(submit_zero(1, NULL) == 0);
+    CHECK(submit_zero(0, NULL) == 0);
+    CHECK(g2_dma_wait(0, 7) < 0 && errno == ETIMEDOUT);
+    /* Timed-out wait role is released; another waiter may attach. */
+    semaphore_wait_hook = complete_channel_zero;
+    CHECK(g2_dma_wait(0, 10) == 0);
+}
+
+static void test_failed_stop_retains_ownership(void) {
+    g2_dma_status_t before, after;
+    unsigned int released = gaps_releases, invalidated = cache_invalidations;
+    unsigned int calls = callback_count, destroyed = semaphore_destroys;
+    unsigned int irq_releases = release_count;
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0x8c000200),
+                          (void *)(uintptr_t)GAPS_SRAM_PHYS_BASE, 32, 0,
+                          count_callback, &callback_count, G2_DMA_TO_SH4,
+                          0, 1, 0) == 0);
+    CHECK(g2_dma_get_status(1, &before) == 0);
+    stop_stuck = true;
+    CHECK(g2_dma_cancel(1) < 0 && errno == EBUSY);
+    CHECK(gaps_releases == released && callback_count == calls);
+    CHECK(cache_invalidations == invalidated + 1);
+    errno = 0;
+    g2_dma_shutdown();
+    CHECK(errno == EBUSY);
+    CHECK(semaphore_destroys == destroyed && release_count == irq_releases);
+    CHECK(g2_dma_init() == 0);
+    CHECK(g2_dma_get_status(1, &after) == 0);
+    CHECK(after.sequence == before.sequence && after.callback_pending);
+    CHECK(after.state == G2_DMA_STATE_RUNNING && after.result == EINPROGRESS);
+    /* A delayed old event must not publish success for a still-busy engine. */
+    inside_irq = true;
+    claim_handlers[1](ASIC_EVT_G2_DMA1, claim_data[1]);
+    inside_irq = false;
+    CHECK(callback_count == calls && gaps_releases == released);
+    stop_stuck = false;
+    invoke_completion(1);
+    CHECK(callback_count == calls + 1 && gaps_releases == released + 1);
+    CHECK(cache_invalidations == invalidated + 2);
+
+    CHECK(submit_zero(0, NULL) == 0);
+    CHECK(g2_dma_suspend(0) == 0);
+    CHECK(g2_dma_cancel(0) == 0);
+    CHECK(submit_zero(0, NULL) == 0);
+    CHECK(registers()->dma[0].suspend == 0);
+    CHECK(g2_dma_cancel(0) == 0);
+
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0x8c000200),
+                          (void *)(uintptr_t)UINT32_C(0x04000000), 32, 0,
+                          NULL, NULL, G2_DMA_TO_G2, 0, 0, 0) < 0
+          && errno == EFAULT);
+    CHECK(g2_dma_transfer((void *)(uintptr_t)UINT32_C(0x8c000200),
+                          (void *)(uintptr_t)UINT32_C(0x03ffffe0), 64, 0,
+                          NULL, NULL, G2_DMA_TO_G2, 0, 0, 0) < 0
+          && errno == EFAULT);
+}
+
 static void test_init_failure_and_shutdown(void) {
     unsigned int releases_before;
     unsigned int destroys_before;
@@ -624,6 +753,21 @@ static void test_init_failure_and_shutdown(void) {
 
     g2_dma_shutdown();
 
+    for(int failure = 0; failure < 4; ++failure) {
+        unsigned int destroyed = semaphore_destroys;
+        unsigned int released = release_count;
+        sem_failure_after = failure;
+        CHECK(g2_dma_init() < 0 && errno == ENOMEM);
+        CHECK(semaphore_destroys == destroyed + (unsigned int)failure);
+        CHECK(release_count == released + (unsigned int)failure);
+    }
+    sem_failure_after = -1;
+    registers()->dma[0].start = 1;
+    CHECK(g2_dma_init() < 0 && errno == EBUSY);
+    registers()->dma[0].start = 0;
+    CHECK(g2_dma_init() == 0);
+    g2_dma_shutdown();
+
     inside_irq = true;
     errno = 0;
     CHECK(g2_dma_init() < 0 && errno == EPERM);
@@ -645,6 +789,8 @@ int main(void) {
     test_suspend_cancel_and_wait();
     test_blocking_transfer();
     test_callback_chaining();
+    test_waiter_generations();
+    test_failed_stop_retains_ownership();
     test_init_failure_and_shutdown();
 
     CHECK(irq_depth == 0);
@@ -655,6 +801,6 @@ int main(void) {
         return EXIT_FAILURE;
     }
 
-    puts("G2 DMA tests passed");
+    printf("G2 DMA tests passed: checks=%u\n", checks);
     return EXIT_SUCCESS;
 }

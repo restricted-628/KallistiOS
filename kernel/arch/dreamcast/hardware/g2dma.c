@@ -20,6 +20,7 @@
 #include <kos/dbglog.h>
 #include <kos/sem.h>
 #include <kos/thread.h>
+#include <kos/timer.h>
 
 #include "dma_memory.h"
 
@@ -55,20 +56,21 @@ typedef struct {
    semaphore is only a wakeup token for the one active waiter. */
 static semaphore_t dma_done[4];
 static int dma_progress[4];
-/* Reserves completion for the legacy blocking caller, including before it
-   sleeps. g2_dma_wait() must not admit a competing waiter in that window. */
-static int dma_blocking[4];
+/* One reserved wait result survives callback chaining and is not overwritten
+   by later transfers. The semaphore belongs to that waiter, not the channel's
+   most recent transfer. */
 static bool dma_waiting[4];
+static bool dma_wait_ready[4];
+static uint64_t dma_wait_sequence[4];
+static int dma_wait_result[4];
 static g2_dma_callback_t dma_callback[4];
 static void *dma_cbdata[4];
 static g2_dma_state_t dma_state[4];
 static size_t dma_requested[4];
 static uint64_t dma_sequence[4];
-static uint64_t dma_terminal_sequence[4];
 static uint64_t dma_completions[4];
 static uint64_t dma_cancellations[4];
 static int dma_result[4];
-static int dma_terminal_result[4];
 static bool dma_callback_pending[4];
 static asic_evt_claim_t dma_irq_claim[4];
 static uintptr_t dma_root_address[4];
@@ -87,6 +89,18 @@ static bool dma_lifecycle_busy;
 #define G2_DMA_REG_BASE 0xa05f7800
 #endif
 static volatile g2_dma_reg_t * const g2_dma = (g2_dma_reg_t *)G2_DMA_REG_BASE;
+
+/* Testable MMIO boundaries. A stop write is not an idle acknowledgement. */
+#ifndef G2_DMA_START_READ
+#define G2_DMA_START_READ(channel) (g2_dma->dma[channel].start)
+#endif
+#ifndef G2_DMA_START_WRITE
+#define G2_DMA_START_WRITE(channel, value) (g2_dma->dma[channel].start = (value))
+#endif
+#ifndef G2_DMA_ACK
+#define G2_DMA_ACK(channel) \
+    (*(volatile uint32_t *)0xa05f6900 = UINT32_C(1) << (15u + (channel)))
+#endif
 
 #define DMA_SIZE_MASK 0x7fffffffu
 #define VRAM_64_PHYSICAL_BASE 0x04000000u
@@ -145,13 +159,15 @@ static bool dma_g2_range_valid(const void *address, size_t length) {
     uintptr_t virtual_address = (uintptr_t)address;
     uintptr_t physical_address = virtual_address & MEM_AREA_CACHE_MASK;
     uintptr_t area = virtual_address & ~MEM_AREA_CACHE_MASK;
+    uintptr_t bus_area = physical_address >> 26;
 
     /* A G2 endpoint is a bus address, not an SH-4 virtual mapping. Physical
        addresses and the ordinary P1/P2/P3 aliases all normalize through the
        controller's 29-bit address field even while the MMU is active. */
     return (area == MEM_AREA_P0_BASE || area == MEM_AREA_P1_BASE
             || area == MEM_AREA_P2_BASE || area == MEM_AREA_P3_BASE)
-        && length <= (uintptr_t)MEM_AREA_CACHE_MASK - physical_address + 1u;
+        && (bus_area == 0 || bus_area == 5)
+        && length <= ((bus_area + 1) << 26) - physical_address;
 }
 
 #if !defined(__NAOMI__) && !defined(G2DMA_NO_GAPS)
@@ -279,9 +295,60 @@ static void dma_gaps_reset(uint32_t channel) {
 #define DS_CYCLE_OVERRIDE  27
 
 /* Disable the DMA */
-inline static void dma_disable(uint32_t chn) {
+inline static bool dma_disable(uint32_t chn) {
     g2_dma->dma[chn].enable = 0;
-    g2_dma->dma[chn].start = 0;
+    G2_DMA_START_WRITE(chn, 0);
+    return !(G2_DMA_START_READ(chn) & 1u);
+}
+
+/* Called with IRQs fenced. Only the matching generation may signal a waiter. */
+static void dma_publish_wait(uint32_t channel, int result) {
+    if(dma_waiting[channel] && !dma_wait_ready[channel]
+       && dma_wait_sequence[channel] == dma_sequence[channel]) {
+        dma_wait_result[channel] = result;
+        dma_wait_ready[channel] = true;
+        sem_signal(&dma_done[channel]);
+        if(irq_inside_int()) thd_schedule(true);
+    }
+}
+
+static void dma_reserve_wait(uint32_t channel) {
+    while(sem_count(&dma_done[channel]) > 0)
+        (void)sem_trywait(&dma_done[channel]);
+    dma_waiting[channel] = true;
+    dma_wait_ready[channel] = false;
+    dma_wait_sequence[channel] = dma_sequence[channel];
+}
+
+/* A timeout releases only the wait role, never hardware/buffer ownership. */
+static int dma_finish_wait(uint32_t channel, uint32_t timeout) {
+    uint64_t deadline = timeout ? timer_ms_gettime64() + timeout : 0;
+    int wait_error = 0;
+    for(;;) {
+        uint32_t remaining = 0;
+        irq_mask_t old = irq_disable();
+        if(dma_wait_ready[channel]) {
+            int result = dma_wait_result[channel];
+            dma_waiting[channel] = false;
+            irq_restore(old);
+            if(result) { errno = result; return -1; }
+            return 0;
+        }
+        if(deadline) {
+            uint64_t now = timer_ms_gettime64();
+            if(now >= deadline) wait_error = ETIMEDOUT;
+            else remaining = (uint32_t)(deadline - now);
+        }
+        if(wait_error) {
+            dma_waiting[channel] = false;
+            irq_restore(old);
+            errno = wait_error;
+            return -1;
+        }
+        irq_restore(old);
+        if(sem_wait_timed(&dma_done[channel], remaining) < 0)
+            wait_error = errno;
+    }
 }
 
 static void g2_dma_irq_hnd(uint32_t code, void *data) {
@@ -289,7 +356,6 @@ static void g2_dma_irq_hnd(uint32_t code, void *data) {
     g2_dma_callback_t callback;
     void *callback_data;
     uint64_t sequence;
-    bool blocking;
 
     (void)data;
 
@@ -300,11 +366,12 @@ static void g2_dma_irq_hnd(uint32_t code, void *data) {
 
     /* VP : changed the order of things so that we can chain dma calls */
 
-    if(dma_progress[chn]) {
+    /* A late interrupt from a cancelled generation cannot complete a newly
+       started engine that is still busy. */
+    if(dma_progress[chn] && !(G2_DMA_START_READ(chn) & 1u)) {
         callback = dma_callback[chn];
         callback_data = dma_cbdata[chn];
         sequence = dma_sequence[chn];
-        blocking = dma_blocking[chn] != 0;
 
         /* Publish device-to-memory writes only after the engine is terminal. */
         if(dma_direction[chn] == G2_DMA_TO_SH4
@@ -313,22 +380,15 @@ static void g2_dma_irq_hnd(uint32_t code, void *data) {
         }
 
         dma_progress[chn] = 0;
-        dma_blocking[chn] = 0;
         dma_callback[chn] = NULL;
         dma_cbdata[chn] = NULL;
         dma_state[chn] = G2_DMA_STATE_COMPLETE;
         dma_result[chn] = 0;
-        dma_terminal_sequence[chn] = sequence;
-        dma_terminal_result[chn] = 0;
         ++dma_completions[chn];
 
         dma_gaps_release(chn);
 
-        /* Both legacy blocking callers and g2_dma_wait() use this event. */
-        sem_signal(&dma_done[chn]);
-
-        if(blocking)
-            thd_schedule(true);
+        dma_publish_wait(chn, 0);
 
         /* Call the callback, if any. */
         if(callback)
@@ -399,8 +459,13 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
     }
 
     /* Make sure we're not already DMA'ing */
-    if(dma_progress[g2chn] != 0) {
+    if(dma_progress[g2chn] != 0 || (G2_DMA_START_READ(g2chn) & 1u)) {
         errno = EINPROGRESS;
+        return -1;
+    }
+
+    if(block && dma_waiting[g2chn]) {
+        errno = EBUSY;
         return -1;
     }
 
@@ -408,11 +473,6 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
         return -1;
     dma_progress[g2chn] = 1;
 
-    /* Discard a completion token left by a prior asynchronous transfer. */
-    while(sem_count(&dma_done[g2chn]) > 0)
-        (void)sem_trywait(&dma_done[g2chn]);
-
-    dma_blocking[g2chn] = block;
     dma_callback[g2chn] = callback;
     dma_cbdata[g2chn] = cbdata;
     dma_requested[g2chn] = length;
@@ -428,6 +488,7 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
 
     if(!sequence)
         sequence = ++dma_sequence[g2chn];
+    if(block) dma_reserve_wait(g2chn);
 
     if(dma_root_cacheable[g2chn]) {
         if(dir == G2_DMA_TO_G2)
@@ -451,26 +512,14 @@ int g2_dma_transfer(void *sh4, void *g2bus, size_t length, uint32_t block,
     }
 
     /* Start the DMA transfer */
+    G2_DMA_ACK(g2chn);
+    g2_dma->dma[g2chn].suspend = 0;
     g2_dma->dma[g2chn].enable = 1;
-    g2_dma->dma[g2chn].start = 1;
+    G2_DMA_START_WRITE(g2chn, 1);
 
     /* Wait for us to be signaled */
-    if(block) {
-        if(sem_wait(&dma_done[g2chn]) < 0)
-            return -1;
-
-        irq_disable_scoped();
-
-        if(dma_terminal_sequence[g2chn] < sequence) {
-            errno = EIO;
-            return -1;
-        }
-
-        if(dma_terminal_result[g2chn]) {
-            errno = dma_terminal_result[g2chn];
-            return -1;
-        }
-    }
+    if(block)
+        return dma_finish_wait(g2chn, 0);
 
     return 0;
 }
@@ -522,7 +571,6 @@ int g2_dma_get_status(uint32_t channel, g2_dma_status_t *status) {
 int g2_dma_wait(uint32_t channel, uint32_t timeout) {
     irq_mask_t irq_state;
     g2_dma_state_t state;
-    uint64_t sequence;
     int result;
 
     if(channel > G2_DMA_CHAN_CH3) {
@@ -549,18 +597,17 @@ int g2_dma_wait(uint32_t channel, uint32_t timeout) {
     }
 
     state = dma_state[channel];
-    sequence = dma_sequence[channel];
     result = dma_result[channel];
 
     if((state == G2_DMA_STATE_RUNNING || state == G2_DMA_STATE_SUSPENDED)
-            && (dma_blocking[channel] || dma_waiting[channel])) {
+            && dma_waiting[channel]) {
         irq_restore(irq_state);
         errno = EBUSY;
         return -1;
     }
 
     if(state == G2_DMA_STATE_RUNNING || state == G2_DMA_STATE_SUSPENDED)
-        dma_waiting[channel] = true;
+        dma_reserve_wait(channel);
 
     irq_restore(irq_state);
 
@@ -569,26 +616,8 @@ int g2_dma_wait(uint32_t channel, uint32_t timeout) {
         return -1;
     }
 
-    if(state == G2_DMA_STATE_RUNNING || state == G2_DMA_STATE_SUSPENDED) {
-        if(sem_wait_timed(&dma_done[channel], timeout) < 0) {
-            irq_state = irq_disable();
-            dma_waiting[channel] = false;
-            irq_restore(irq_state);
-            return -1;
-        }
-
-        irq_state = irq_disable();
-        dma_waiting[channel] = false;
-
-        if(dma_terminal_sequence[channel] < sequence) {
-            irq_restore(irq_state);
-            errno = EIO;
-            return -1;
-        }
-
-        result = dma_terminal_result[channel];
-        irq_restore(irq_state);
-    }
+    if(state == G2_DMA_STATE_RUNNING || state == G2_DMA_STATE_SUSPENDED)
+        return dma_finish_wait(channel, timeout);
 
     if(result) {
         errno = result;
@@ -667,7 +696,6 @@ int g2_dma_resume(uint32_t channel) {
 
 int g2_dma_cancel(uint32_t channel) {
     irq_mask_t irq_state;
-    bool blocking;
 
     if(channel > G2_DMA_CHAN_CH3) {
         errno = EINVAL;
@@ -693,8 +721,12 @@ int g2_dma_cancel(uint32_t channel) {
         return -1;
     }
 
-    blocking = dma_blocking[channel] != 0;
-    dma_disable(channel);
+    if(!dma_disable(channel)) {
+        irq_restore(irq_state);
+        errno = EBUSY;
+        return -1;
+    }
+    G2_DMA_ACK(channel);
 
     if(dma_direction[channel] == G2_DMA_TO_SH4
             && dma_root_cacheable[channel]) {
@@ -702,21 +734,15 @@ int g2_dma_cancel(uint32_t channel) {
     }
 
     dma_progress[channel] = 0;
-    dma_blocking[channel] = 0;
     dma_callback[channel] = NULL;
     dma_cbdata[channel] = NULL;
     dma_callback_pending[channel] = false;
     dma_state[channel] = G2_DMA_STATE_CANCELLED;
     dma_result[channel] = ECANCELED;
-    dma_terminal_sequence[channel] = dma_sequence[channel];
-    dma_terminal_result[channel] = ECANCELED;
     ++dma_cancellations[channel];
     dma_gaps_release(channel);
-    sem_signal(&dma_done[channel]);
+    dma_publish_wait(channel, ECANCELED);
     irq_restore(irq_state);
-
-    if(blocking && irq_inside_int())
-        thd_schedule(true);
 
     return 0;
 }
@@ -745,26 +771,35 @@ int g2_dma_init(void) {
         return -1;
     }
 
+    for(i = 0; i < 4; ++i) {
+        if(G2_DMA_START_READ(i) & 1u) {
+            irq_restore(irq_state);
+            errno = EBUSY;
+            return -1;
+        }
+    }
+
     dma_lifecycle_busy = true;
     irq_restore(irq_state);
 
     for(i = 0; i < 4; i++) {
         /* Create an initially blocked semaphore */
-        sem_init(&dma_done[i], 0);
+        if(sem_init(&dma_done[i], 0) < 0)
+            goto fail;
         ++semaphores_initialized;
         dma_progress[i] = 0;
-        dma_blocking[i] = 0;
         dma_waiting[i] = false;
+        dma_wait_ready[i] = false;
+        dma_wait_sequence[i] = 0;
+        dma_wait_result[i] = 0;
         dma_callback[i] = NULL;
         dma_cbdata[i] = NULL;
         dma_state[i] = G2_DMA_STATE_IDLE;
         dma_requested[i] = 0;
         dma_sequence[i] = 0;
-        dma_terminal_sequence[i] = 0;
         dma_completions[i] = 0;
         dma_cancellations[i] = 0;
         dma_result[i] = 0;
-        dma_terminal_result[i] = 0;
         dma_callback_pending[i] = false;
         dma_irq_claim[i] = ASIC_EVT_CLAIM_INVALID;
         dma_root_address[i] = 0;
@@ -829,7 +864,33 @@ void g2_dma_shutdown(void) {
     if(!dma_init)
         goto out;
 
+    /* A signaled thread may not have consumed its result yet. Never destroy
+       or reinitialize its semaphore/state underneath it. */
+    for(i = 0; i < 4; ++i) {
+        if(dma_waiting[i]) {
+            errno = EBUSY;
+            goto out;
+        }
+    }
+
     dma_lifecycle_busy = true;
+
+    /* Stop active channels before detaching any IRQ or releasing ownership.
+       Failure is retryable: leave the driver initialized and claims intact.
+       Channels already stopped during this attempt remain cancelled. */
+    for(i = 0; i < 4; ++i) {
+        if(dma_progress[i]) {
+            if(g2_dma_cancel(i) < 0) {
+                dma_lifecycle_busy = false;
+                goto out;
+            }
+        }
+        else if(!dma_disable(i)) {
+            dma_lifecycle_busy = false;
+            errno = EBUSY;
+            goto out;
+        }
+    }
 
     /* Detach every completion source while IRQ delivery is fenced. Otherwise
        a terminal interrupt can land between the active check and channel
@@ -840,39 +901,14 @@ void g2_dma_shutdown(void) {
     dma_init = false;
 
     for(i = 0; i < 4; i++) {
-        if(dma_progress[i]) {
-            dma_disable(i);
-
-            if(dma_direction[i] == G2_DMA_TO_SH4
-                    && dma_root_cacheable[i]) {
-                dcache_inval_range(dma_root_address[i], dma_requested[i]);
-            }
-
-            dma_progress[i] = 0;
-            dma_blocking[i] = 0;
-            dma_waiting[i] = false;
-            dma_state[i] = G2_DMA_STATE_CANCELLED;
-            dma_result[i] = ECANCELED;
-            dma_terminal_sequence[i] = dma_sequence[i];
-            dma_terminal_result[i] = ECANCELED;
-            dma_callback[i] = NULL;
-            dma_cbdata[i] = NULL;
-            dma_callback_pending[i] = false;
-            ++dma_cancellations[i];
-            dma_gaps_release(i);
-            sem_signal(&dma_done[i]);
-        }
-
+        G2_DMA_ACK(i);
         /* Release the completion source owned by this channel. */
         if(dma_irq_claim[i] != ASIC_EVT_CLAIM_INVALID) {
             (void)asic_evt_release(dma_irq_claim[i]);
             dma_irq_claim[i] = ASIC_EVT_CLAIM_INVALID;
         }
 
-        /* Turn off any remaining DMA before allowing IRQ delivery again. */
-        dma_disable(i);
-
-        /* Wake any remaining waiter with a destroyed-semaphore error. */
+        /* No waiter can still be using this semaphore. */
         sem_destroy(&dma_done[i]);
     }
 

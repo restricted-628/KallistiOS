@@ -233,7 +233,9 @@ typedef void (*spu_transfer_callback_t)(spu_transfer_request_t *request,
     by the console mode. A timeout of zero disables the execution deadline;
     nonzero values start when the request is admitted and cover both queue time
     and transfer time. Waiting has its own independent timeout and never
-    cancels a request automatically.
+    cancels a request automatically. Cancellation/deadline completion may be
+    delayed while a DMA engine has not acknowledged a stop. The request and
+    buffer remain borrowed until terminal status, even after the deadline.
 
     \param direction         Copy direction.
     \param sound_address     Byte offset in sound RAM; no mapped base included.
