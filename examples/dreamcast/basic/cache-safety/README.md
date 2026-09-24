@@ -6,4 +6,9 @@ cache line. It also sends deliberately wrapping instruction- and data-cache
 ranges through the public API; those invalid ranges must return without
 iterating through wrapped addresses.
 
-Success prints `KOSCACHE alias=1 overflow=1`.
+Cross-area requests are also tested. Success prints
+`KOSCACHE alias=1 overflow=1 area=1`.
+
+An emulator which bypasses cache modeling can pass without exercising actual
+write-back or tag behavior. This is a runtime smoke check, not hardware proof;
+repeat on a physical console before claiming cache-coherency validation.

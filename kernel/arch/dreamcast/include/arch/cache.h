@@ -59,25 +59,7 @@ void arch_icache_sync_range(uintptr_t start, size_t count);
 void arch_dcache_purge_all_indexed(void);
 void arch_dcache_wback_all_indexed(void);
 
-/* Cache-control instructions are no-ops when their operand names P2. Convert
-   that direct, uncached alias back to the equivalent cacheable P1 address.
-   P0/P3 addresses are left intact because they may carry MMU translations. */
-static inline uintptr_t arch_cacheable_alias(uintptr_t address) {
-    if((address & ~MEM_AREA_CACHE_MASK) == MEM_AREA_P2_BASE)
-        return (address & MEM_AREA_CACHE_MASK) | MEM_AREA_P1_BASE;
-
-    return address;
-}
-
-static inline bool arch_cache_range(uintptr_t start, size_t count,
-                                    uintptr_t *first, uintptr_t *last) {
-    if(!count || count - 1 > UINTPTR_MAX - start)
-        return false;
-
-    *first = start & ~(uintptr_t)0x1f;
-    *last = (start + count - 1) & ~(uintptr_t)0x1f;
-    return true;
-}
+#include <arch/cache_range.h>
 
 __depr("dcache_wback_sq is deprecated. Use sq_flush() from <dc/sq.h>")
 static __always_inline void dcache_wback_sq(void *src) {

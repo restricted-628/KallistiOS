@@ -42,6 +42,13 @@ _arch_icache_inval_range:
     cmp/hs   r4, r3
     bf       .iinval_exit
 
+    ! Match the C range helpers: both endpoints must share an address area.
+    mov      r4, r2
+    xor      r3, r2
+    mov.l    area_mask, r1
+    tst      r1, r2
+    bf       .iinval_exit
+
     ! Cache tags and OCB* operands must name the cacheable alias. P2 carries
     ! the same physical address, but cache-control operations against it are
     ! ineffective.
@@ -130,6 +137,13 @@ _arch_icache_sync_range:
     mov      r4, r3
     add      r2, r3
     cmp/hs   r4, r3
+    bf       .iflush_exit
+
+    ! Reject cross-area ranges before normalizing a P2 starting address.
+    mov      r4, r2
+    xor      r3, r2
+    mov.l    area_mask, r1
+    tst      r1, r2
     bf       .iflush_exit
 
     ! Normalize a direct P2 alias before both the data-cache write-back and

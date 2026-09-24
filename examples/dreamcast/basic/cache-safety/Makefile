@@ -6,7 +6,6 @@
 
 TARGET = cache-safety.elf
 OBJS = cache-safety.o
-KOS_CFLAGS += -std=c11
 
 all: rm-elf $(TARGET)
 

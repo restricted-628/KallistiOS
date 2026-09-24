@@ -64,9 +64,17 @@ int main(int argc, char **argv) {
     icache_inval_range(UINTPTR_MAX - 15u, 32u);
     icache_sync_range(UINTPTR_MAX - 15u, 32u);
 
+    /* The start is in P2 but the last byte would be in translated P3.
+       Reject the complete request instead of normalizing just its start. */
+    dcache_inval_range(0xbfffffe0u, 64);
+    dcache_wback_range(0xbfffffe0u, 64);
+    dcache_purge_range(0xbfffffe0u, 64);
+    icache_inval_range(0xbfffffe0u, 64);
+    icache_sync_range(0xbfffffe0u, 64);
+
     dcache_inval_range((uintptr_t)cache_line, 0);
     icache_inval_range((uintptr_t)cache_line, 0);
 
-    printf("KOSCACHE alias=1 overflow=1\n");
+    printf("KOSCACHE alias=1 overflow=1 area=1\n");
     return EXIT_SUCCESS;
 }
