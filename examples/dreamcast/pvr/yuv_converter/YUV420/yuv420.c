@@ -185,7 +185,8 @@ static void convert_YUV420_to_YUV422_texture(void) {
     uint8_t *v_block = (uint8_t *)SQ_MASK_DEST_ADDR(PVR_TA_YUV_CONV + 64);
     uint8_t *y_block = (uint8_t *)SQ_MASK_DEST_ADDR(PVR_TA_YUV_CONV + 128);
 
-    sq_lock((void *)PVR_TA_YUV_CONV);
+    if(!sq_lock((void *)PVR_TA_YUV_CONV))
+        return;
 
     for(y_blk = 0; y_blk < FRAME_TEXTURE_HEIGHT; y_blk += 16) {
         for(x_blk = 0; x_blk < FRAME_TEXTURE_WIDTH; x_blk += 16) {

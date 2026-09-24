@@ -134,8 +134,11 @@ static void draw_sphere(sphere_t *s, pvr_list_t list) {
 
     /* Transform and write vertices to the TA via the store queues */
     vd = (pvr_vertex_t *)pvr_vertbuf_tail(list);
-    sq_lock(vd);
-    sqd = (void *) SQ_MASK_DEST_ADDR(vd);
+    sqd = sq_lock(vd);
+    if(!sqd) {
+        irq_enable();
+        return;
+    }
     /* {
         int o = irq_disable();
         printf("transforming to %p, len %d\n",
@@ -302,4 +305,3 @@ int main(int argc, char **argv) {
 
     return 0;
 }
-

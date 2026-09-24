@@ -47,6 +47,9 @@ __BEGIN_DECLS
 
 /** \brief   Mask dest to Store Queue area as address
     \ingroup store_queues
+
+    This mask describes the MMU-off mapping. Use the pointer returned by
+    sq_lock() when a caller can run with the MMU enabled.
 */
 #define SQ_MASK_DEST_ADDR(dest) \
     (MEM_AREA_SQ_BASE | ((uintptr_t)(dest) & 0x03ffffe0))
@@ -71,6 +74,12 @@ __BEGIN_DECLS
     A thread may acquire the lock recursively. Every recursive acquisition must
     be released in reverse order, and the MMU enable state must remain unchanged
     for the complete transaction.
+
+    This API programs a physical destination (or its direct P1/P2 alias); it
+    does not resolve arbitrary translated application pointers. The returned
+    pointer belongs to this acquisition and must not be used while a nested
+    acquisition is active. Unlock restores the outer mapping, not the contents
+    of the two queues: finish submitting any pending data before nesting.
 
     \warning
     This operation may block and must not be called from interrupt context.
@@ -114,7 +123,10 @@ void sq_unlock(void);
 /** \brief  Wait for both Store Queues to complete
     \ingroup store_queues
 
-    Wait for both store queues to complete by writing to SQ area.
+    Wait for both store queues to complete by writing to SQ area. These writes
+    overwrite one word in each queue; submit all pending data before waiting.
+    Keep ownership until this call returns if completion is required before
+    giving another thread access to the queues.
 
     \sa sq_lock()
 */

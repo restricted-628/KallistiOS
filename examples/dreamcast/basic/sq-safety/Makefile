@@ -6,7 +6,6 @@
 
 TARGET = sq-safety.elf
 OBJS = sq-safety.o
-KOS_CFLAGS += -std=c11
 
 all: rm-elf $(TARGET)
 

@@ -124,7 +124,12 @@ void spu_memload_sq(uintptr_t dst, const void *src_void, size_t length) {
     /* Make sure the FIFOs are empty */
     g2_fifo_wait();
 
-    sq_cpy((void *)dst, src, aligned_len);
+    if(!sq_cpy((void *)dst, src, aligned_len)) {
+        sq_wait();
+        sq_unlock();
+        g2_unlock(ctx);
+        return;
+    }
 
     /* We have some free time here to finish up the SQs work
        before we unlock G2 and enable IRQ. So we'll unlock it first. */
@@ -286,7 +291,12 @@ void spu_memset_sq(uintptr_t dst, uint32_t what, size_t length) {
     /* Make sure the FIFOs are empty */
     g2_fifo_wait();
 
-    sq_set32((void *)dst, what, aligned_len);
+    if(!sq_set32((void *)dst, what, aligned_len)) {
+        sq_wait();
+        sq_unlock();
+        g2_unlock(ctx);
+        return;
+    }
 
     /* We have some free time here to finish up the SQs work
        before we unlock G2 and enable IRQ. So we'll unlock it first. */
