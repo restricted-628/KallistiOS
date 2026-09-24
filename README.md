@@ -1,5 +1,13 @@
-> Complete fiber SDK bundle: `addon/fiber-service-sh4zam`. See [checkout, build and provider rules](FIBER-BUNDLE.md).
-> The narrow upstream fiber proposal is preserved as `pr/core-fibers-submission`.
+<!-- FORK BRANCH DESCRIPTION -->
+> **Complete SH4ZAM fiber and Service Executor SDK** — `addon/fiber-service-sh4zam` (complete sdk bundle).
+>
+> One integrated checkout whose sole fiber provider is libfiber_sh4zam, including the Fiber Service Executor.
+>
+> Read [this branch's scope and dependencies](BRANCH.md),
+> [the complete branch guide](https://github.com/restricted-628/KallistiOS/blob/master/BRANCHES.md), and
+> [how integrated master differs from upstream](https://github.com/restricted-628/KallistiOS/blob/master/FORK.md).
+> This is a branch of an experimental fork, not the official KallistiOS release.
+<!-- END FORK BRANCH DESCRIPTION -->
 
 <!-- PROJECT LOGO -->
 <div align="center">
