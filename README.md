@@ -1,3 +1,14 @@
+<!-- FORK BRANCH DESCRIPTION -->
+> **Ordered cache-mode transitions** — `pr/cache-mode-transition` (stacked upstream candidate).
+>
+> Protects CCR read/modify/write and retires cache state according to the old mode before applying the new one.
+>
+> Read [this branch's scope and dependencies](BRANCH.md),
+> [the complete branch guide](https://github.com/restricted-628/KallistiOS/blob/master/BRANCHES.md), and
+> [how integrated master differs from upstream](https://github.com/restricted-628/KallistiOS/blob/master/FORK.md).
+> This is a branch of an experimental fork, not the official KallistiOS release.
+<!-- END FORK BRANCH DESCRIPTION -->
+
 <!-- PROJECT LOGO -->
 <div align="center">
   <h1 align="center"><strong>KallistiOS</strong></h1>
