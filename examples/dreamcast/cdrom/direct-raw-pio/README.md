@@ -24,3 +24,8 @@ commands but occupies the request worker for the entire operation.
 No BIOS sector mode or real disc is required. This is a software transport
 regression, not proof of physical raw-sector contents, timing, recovery, or
 DMA support. A real-drive comparison remains required before hardware claims.
+
+CDDA track-mode regression cases provide a one-track low-density TOC: track 1
+plays with one GET_TOC and one PLAY under one G1 acquisition; missing track 2
+returns ENOENT after exactly one low-density GET_TOC and never queries the
+high-density area. The packet model checks the actual production driver path.

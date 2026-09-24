@@ -68,7 +68,7 @@ int main(int argc, char **argv) {
         failed = 1;
         goto done;
     }
-    if(cdrom_bios_read_toc(&toc, probe.status.disc_type == CD_GDROM) != ERR_OK) {
+    if(cdrom_bios_read_toc(&toc, false) != ERR_OK) {
         puts("TOC read failed");
         failed = 1;
         goto done;

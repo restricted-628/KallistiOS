@@ -157,7 +157,7 @@ int main(int argc, char **argv) {
     }
 
     draw_stage("BIOS TOC read");
-    bios_result = cdrom_bios_read_toc(&toc, probe.status.disc_type == CD_GDROM);
+    bios_result = cdrom_bios_read_toc(&toc, false);
     if(bios_result != ERR_OK) {
         printf("TOC read failed: result=%d\n", bios_result);
         goto done;
