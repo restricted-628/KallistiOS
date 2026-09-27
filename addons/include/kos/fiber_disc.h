@@ -20,9 +20,11 @@ __BEGIN_DECLS
  */
 typedef struct fiber_disc fiber_disc_t;
 typedef struct fiber_disc_read fiber_disc_read_t;
+typedef struct fiber_disc_stream fiber_disc_stream_t;
 
-/** Create after fiber_attach(). capacity bounds live read handles, including
- * completed handles not yet released. No payload buffers are allocated.
+/** Create after fiber_attach(). capacity bounds live read and stream handles,
+ * including completed handles not yet released. Reserve at least two slots
+ * for a stream and its transfer. No payload buffers are allocated.
  */
 fiber_disc_t *fiber_disc_create(size_t capacity);
 
@@ -51,7 +53,7 @@ fiber_disc_read_t *fiber_disc_read_dma_gaps(fiber_disc_t *disc,
 
 /** Completion pump, called by the owner main fiber. Never waits for device
  * or callback completion; retirement may use ordinary allocator locks.
- * Returns the number of reads still awaiting safe retirement, or -1.
+ * Returns the number of reads and sessions still awaiting safe retirement, or -1.
  * A child is made ready only after the request and its callback are finished
  * and the underlying request has been destroyed. No fiber is switched here.
  */
@@ -59,8 +61,8 @@ int fiber_disc_pump(fiber_disc_t *disc);
 
 /** Main-fiber-only bounded idle wait, after dispatching all ready fibers.
  * Pump again after return. A completion-before-wait notification is retained.
- * An early callback notification may require a 1 ms retry to let that callback
- * return; no kernel callback-wait is performed on a child fiber.
+ * An early callback notification or a live stream uses a 1 ms sleep/retry;
+ * sessions have no readiness callback. No kernel wait runs on a child fiber.
  * timeout must be nonzero. ETIMEDOUT is an idle timeout, not read cancellation.
  */
 int fiber_disc_idle(fiber_disc_t *disc, uint32_t timeout);
@@ -85,6 +87,46 @@ int fiber_disc_shutdown(fiber_disc_t *disc);
 
 /** Release a retired read with no active awaiter; otherwise EBUSY. */
 int fiber_disc_read_destroy(fiber_disc_read_t *read);
+
+/** Start a direct-only staged session. Driver format/range/timeout rules apply.
+ * One capacity slot is held until stream_destroy. G1 remains owned until all
+ * staged bytes are transferred, cancellation, failure, or idle timeout. Do not
+ * queue unrelated disc work and await it while retaining a ready stream.
+ */
+fiber_disc_stream_t *fiber_disc_stream_start(fiber_disc_t *disc,
+    uint32_t fad, size_t sectors, gdrom_direct_sector_type_t type,
+    uint32_t start_timeout, uint32_t idle_timeout);
+
+/** Await READY or safe terminal retirement from a child fiber. Returns 0 for
+ * either outcome: inspect status.state before submitting transfers. One session
+ * waiter at a time. Readiness is a snapshot, not a reservation against timeout.
+ */
+int fiber_disc_stream_await_ready(fiber_disc_stream_t *stream,
+    cdrom_stream_session_status_t *status);
+
+/** Submit a session DMA transfer using one additional read slot. Driver
+ * destination/alignment rules apply; no GAPS lease-based streaming is added.
+ * Await/cancel/destroy the result with the ordinary fiber_disc_read APIs.
+ * Only one transport transfer may be active; retire it before submitting more.
+ */
+fiber_disc_read_t *fiber_disc_stream_transfer(fiber_disc_stream_t *stream,
+    void *buffer, size_t bytes, uint32_t timeout);
+
+/** Await terminal session retirement from a child fiber. The pump waits for
+ * all adapter transfer requests/callbacks and non-waiting session destruction
+ * before waking this waiter. Returns 0 even on failure; inspect status. This
+ * does not submit transfers or cancel an idle stream. No per-wait deadline.
+ */
+int fiber_disc_stream_await(fiber_disc_stream_t *stream,
+    cdrom_stream_session_status_t *status);
+
+/** Request cancellation; keep pumping and awaiting before releasing storage. */
+int fiber_disc_stream_cancel(fiber_disc_stream_t *stream);
+
+/** Release a retired session handle with no waiter; otherwise EBUSY. Transfer
+ * read handles remain independently owned and must also be destroyed.
+ */
+int fiber_disc_stream_destroy(fiber_disc_stream_t *stream);
 
 /** Destroy an empty adapter (all read handles released), otherwise EBUSY. */
 int fiber_disc_destroy(fiber_disc_t *disc);

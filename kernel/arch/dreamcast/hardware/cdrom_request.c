@@ -2135,7 +2135,7 @@ int cdrom_stream_session_cancel(cdrom_stream_session_t *session) {
     return 0;
 }
 
-int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
+static int stream_session_destroy(cdrom_stream_session_t *session, bool wait) {
     irq_mask_t irq;
     bool busy;
 
@@ -2153,7 +2153,7 @@ int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
         return -1;
     }
 
-    if(cdrom_request_wait(session->owner_request, 0, NULL) < 0)
+    if(wait && cdrom_request_wait(session->owner_request, 0, NULL) < 0)
         return -1;
 
     if(cdrom_request_destroy(session->owner_request) < 0)
@@ -2162,6 +2162,14 @@ int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
     sem_destroy(&session->work);
     free(session);
     return 0;
+}
+
+int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
+    return stream_session_destroy(session, true);
+}
+
+int cdrom_stream_session_try_destroy(cdrom_stream_session_t *session) {
+    return stream_session_destroy(session, false);
 }
 
 int cdrom_request_get_status(const cdrom_request_t *request,

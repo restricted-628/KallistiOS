@@ -35,6 +35,7 @@ typedef struct job {
     int result;
 } job_t;
 static job_t jobs[16];
+int fiber_disc_stream_contract(void);
 
 static int execute(cdrom_request_t *request, void *params) {
     job_t *job = *(job_t **)params;
@@ -294,6 +295,7 @@ int main(void) {
     run_contract();
     use_gaps = true;
     run_contract();
+    if(fiber_disc_stream_contract()) ++failures;
     printf("FIBER-DISC: %s checks=%u siblings=%u callbacks=%u targets=ram,gaps\n",
            failures ? "FAIL" : "PASS", checks, steps, callbacks_done);
     return failures ? 1 : 0;
