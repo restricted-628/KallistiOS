@@ -50,6 +50,10 @@ __BEGIN_DECLS
     It does not replace the boot ROM's power-on initialization or GD-media
     authorization state; cold-boot drive bring-up is a separate layer.
 
+    If Holly DMA cannot be stopped within bounded cleanup, the system halts
+    without returning or releasing the destination; manual reset is required.
+    Ordinary errors/timeouts still return once DMA is inactive.
+
     A supplied timeout bounds the primary command or sequence. Mandatory
     cleanup has its own fixed bound: a stranded command may require SPI soft
     reset, and CHECK acknowledgement may require `REQ_ERROR`, before G1 can be

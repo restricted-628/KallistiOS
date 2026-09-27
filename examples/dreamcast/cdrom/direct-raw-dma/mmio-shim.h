@@ -12,6 +12,8 @@ void dma_probe_out8(uintptr_t address, uint8_t value);
 void dma_probe_out16(uintptr_t address, uint16_t value);
 void dma_probe_out32(uintptr_t address, uint32_t value);
 void dma_probe_invalidate(uintptr_t address, size_t size);
+void dma_probe_halt(void) __attribute__((noreturn));
+#define G1_DMA_HALT() dma_probe_halt()
 #define G1_IN8(a) dma_probe_in8(a)
 #define G1_IN16(a) dma_probe_in16(a)
 #define G1_IN32(a) dma_probe_in32(a)

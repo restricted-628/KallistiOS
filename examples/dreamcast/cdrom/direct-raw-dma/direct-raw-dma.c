@@ -6,12 +6,14 @@
 #include <dc/gdrom_direct.h>
 #include <dc/gaps.h>
 #include <errno.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <string.h>
 #include "mmio-shim.h"
 #include "../../../../kernel/arch/dreamcast/hardware/g1_bus.h"
 #include "../../../../kernel/arch/dreamcast/hardware/cdrom_request.h"
 #include "../../../../kernel/arch/dreamcast/hardware/gaps_internal.h"
+#include "../../../../kernel/arch/dreamcast/hardware/gdrom_direct_internal.h"
 
 KOS_INIT_FLAGS(INIT_DEFAULT & ~INIT_CDROM);
 
@@ -36,8 +38,16 @@ static uintptr_t destinations[8];
 static size_t total_sectors, wire_size;
 static unsigned short_command, fail_lock;
 static bool chaining;
+static bool stuck_dma, fault_latched, watchdog_disabled, stream_probe;
+static bool stop_succeeds, cancel_on_start;
+static unsigned halts;
+static jmp_buf halt_return;
+static irq_mask_t halt_irq_state;
 
-uint64_t dma_probe_time(void) { return fake_time; }
+uint64_t dma_probe_time(void) {
+    if(stuck_dma) fake_time += 10;
+    return fake_time;
+}
 
 #define CHECK(c) do { ++checks; if(!(c)) { ++failures; \
     printf("DIRECT-RAW-DMA: failed line=%d errno=%d\n", __LINE__, errno); \
@@ -79,7 +89,7 @@ void dma_probe_out8(uintptr_t reg, uint8_t value) {
             CHECK(feature == G1_ATA_FEATURE_XFER_MODE && mode == G1_ATA_XFER_WDMA(2));
         else {
             CHECK(value == G1_ATA_CMD_PACKET && feature == G1_ATA_FEATURE_DMA);
-            CHECK(enabled == 1 && length == wanted_bytes);
+            CHECK(stream_probe || (enabled == 1 && length == wanted_bytes));
             packet_phase = true;
         }
     }
@@ -122,6 +132,7 @@ void dma_probe_out32(uintptr_t reg, uint32_t value) {
             CHECK(protection == (0x88430000u | (((address >> 20) & 127u) << 8)
                                  | (((address + length - 1) >> 20) & 127u)));
             ++starts;
+            if(cancel_on_start) cancelled = true;
             transferred = (uint32_t)((int)length +
                 (short_command ? (starts == short_command ? -32 : 0) : transfer_delta));
             done = true;
@@ -214,8 +225,23 @@ int __wrap_g1_bus_gd_command_client_unregister(void) {
 }
 int __wrap_g1_bus_gd_command_client_mask(void) { masked = true; return 0; }
 int __wrap_g1_bus_gd_command_client_unmask(void) { masked = false; return 0; }
-int __wrap_g1_bus_dma_in_progress(void) { return 0; }
+int __wrap_g1_bus_dma_in_progress(void) {
+    return stuck_dma && starts != 0 && (enabled || !stop_succeeds);
+}
 void __wrap_g1_bus_dma_disable(void) { CHECK(held); enabled = 0; }
+void __wrap_g1_bus_mark_faulted(void) { fault_latched = true; }
+bool __wrap_g1_bus_is_faulted(void) { return fault_latched; }
+void __wrap_wdt_disable(void) { watchdog_disabled = true; }
+
+void dma_probe_halt(void) {
+    CHECK(stuck_dma && starts && held && fault_latched && watchdog_disabled);
+    CHECK((irq_disable() & 0xf0u) == 0xf0u);
+    CHECK(!unlocks && !releases && dma_handler && command_handler);
+    ++halts;
+    /* Test-only escape; production never resumes from this boundary. */
+    irq_restore(halt_irq_state);
+    longjmp(halt_return, 1);
+}
 
 cdrom_request_t *__wrap_cdrom_request_submit_executor(
         cd_cmd_code_t command, const void *params, size_t params_size,
@@ -268,12 +294,93 @@ static void prepare(uintptr_t dest, size_t bytes) {
     transfer_delta = 0; progress_bytes = 0; execute = NULL;
     lease_size = GAPS_SRAM_SIZE;
     chaining = false;
+    stuck_dma = fault_latched = watchdog_disabled = stream_probe = false;
+    stop_succeeds = cancel_on_start = false;
     fake_time = 1000;
     unlock_step = lock_step = short_command = fail_lock = 0;
     memset(budgets, 0, sizeof(budgets));
     memset(fads, 0, sizeof(fads));
     memset(counts, 0, sizeof(counts));
     memset(destinations, 0, sizeof(destinations));
+}
+
+static void halt_case(unsigned kind) {
+    gdrom_direct_result_t result;
+    /* Preserve test cleanup values across the simulated fatal escape. */
+    gdrom_direct_stream_t *volatile stream = NULL;
+    bool gaps = kind == 2 || kind == 3;
+    const volatile uintptr_t dest = gaps ? 0xa0000000u + GAPS_SRAM_PHYS_BASE + 32
+        : kind == 1 ? 0xa4000000u : 0x8c200000u;
+
+    prepare(dest, 4096);
+    if(kind >= 4) {
+        stream_probe = true;
+        stream = gdrom_direct_stream_begin(request, &event, 150, 2,
+            GDROM_DIRECT_SECTOR_MODE1, 1000, &result);
+        CHECK(stream != NULL);
+        if(!stream) return;
+    }
+    halt_irq_state = irq_disable();
+    irq_restore(halt_irq_state);
+    if(!setjmp(halt_return)) {
+        stuck_dma = true;
+        if(kind == 3) {
+            CHECK(gdrom_direct_read_sectors_dma_gaps_async(7, 32, 150, 2,
+                GDROM_DIRECT_SECTOR_MODE1, 1000, &result, NULL, NULL) == request);
+            (void)execute(request, captured);
+        }
+        else if(kind == 2)
+            (void)gdrom_direct_read_sectors_dma_gaps(7, 32, 150, 2,
+                GDROM_DIRECT_SECTOR_MODE1, 1000, &result);
+        else if(kind == 4) {
+            /* Simulate a live engine when the owner closes its stream. */
+            starts = 1;
+            (void)gdrom_direct_stream_end(stream, &result);
+            stream = NULL;
+        }
+        else if(kind == 5) {
+            cancelled = true;
+            (void)gdrom_direct_stream_transfer(stream, request, request,
+                (void *)dest, 4096, 1000, &result);
+        }
+        else
+            (void)gdrom_direct_read_sectors_dma((void *)dest, 150, 2,
+                GDROM_DIRECT_SECTOR_MODE1, 1000, &result);
+        CHECK(false); /* No request, buffer or lease may retire through here. */
+    }
+    CHECK(invalidations == (kind == 0 || kind == 5 ? 1u : 0u));
+    CHECK(claims == (gaps ? 1u : 0u) && releases == 0);
+    /* Reset simulated state only; this is not a production recovery path. */
+    free(stream);
+    held = false;
+    dma_handler = command_handler = NULL;
+}
+
+static void recoverable_stop_case(unsigned kind) {
+    gdrom_direct_result_t result;
+    prepare(0x8c200000u, 4096);
+    stuck_dma = stop_succeeds = true;
+    cancel_on_start = kind != 0;
+    if(kind == 2) {
+        stream_probe = true;
+        gdrom_direct_stream_t *stream = gdrom_direct_stream_begin(request,
+            &event, 150, 2, GDROM_DIRECT_SECTOR_MODE1, 1000, &result);
+        CHECK(stream != NULL);
+        if(!stream) return;
+        CHECK(gdrom_direct_stream_transfer(stream, request, request,
+            (void *)wanted_address, 4096, 1000, &result) == -1 && errno == ECANCELED);
+        CHECK(!gdrom_direct_stream_end(stream, &result));
+    }
+    else if(kind == 1) {
+        CHECK(gdrom_direct_read_sectors_dma_async((void *)wanted_address, 150, 2,
+            GDROM_DIRECT_SECTOR_MODE1, 1000, &result, NULL, NULL) == request);
+        CHECK(execute(request, captured) == ERR_ABORTED);
+    }
+    else
+        CHECK(gdrom_direct_read_sectors_dma((void *)wanted_address, 150, 2,
+            GDROM_DIRECT_SECTOR_MODE1, 1000, &result) == -1 && errno == ETIMEDOUT);
+    CHECK(!held && !enabled && !fault_latched && !watchdog_disabled);
+    CHECK(starts == 1 && unlocks == 1 && invalidations == 2);
 }
 static void verify(gdrom_direct_sector_type_t type, unsigned sectors, unsigned cache_calls) {
     uint8_t flags = type == GDROM_DIRECT_SECTOR_RAW2352 ? 0x10
@@ -449,6 +556,11 @@ int main(void) {
     CHECK(gdrom_direct_read_sectors_dma((void *)0x8c200000u, 150, SIZE_MAX,
           GDROM_DIRECT_SECTOR_MODE1, 1000, &result) == -1 && errno == EINVAL);
     CHECK(!locks && !starts && !invalidations && result.transferred == 0);
+    for(unsigned kind = 0; kind < 3; ++kind) recoverable_stop_case(kind);
+    CHECK(halts == 0);
+    for(unsigned kind = 0; kind < 6; ++kind) halt_case(kind);
+    CHECK(halts == 6);
+    printf("DIRECT-RAW-DMA: fatal_stop_cases=%u\n", halts);
     sem_destroy(&event);
     testing = false;
     printf("DIRECT-RAW-DMA: %s checks=%u\n", failures ? "FAIL" : "PASS", checks);

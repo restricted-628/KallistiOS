@@ -93,7 +93,7 @@ Cache maintenance brackets every cacheable DMA destination:
 - invalidate again after DMA has stopped and before terminal status is visible.
 
 If DMA cannot be proven stopped, cleanup must not invalidate a range that the
-engine may still be writing.
+engine may still be writing or return its destination to the caller.
 
 Uncached/P2 destinations bypass cache operations but retain all alignment,
 range, ownership, and completion rules.
@@ -130,7 +130,18 @@ Recovery is deliberately conservative:
 2. Attempt to disable and quiesce GD DMA.
 3. Collect command and drive error state when safe.
 4. Soft-reset and reprobe the post-boot drive when permitted.
-5. Mark G1 faulted if safe quiescence cannot be established.
+5. If Holly DMA remains active after the bounded stop wait, disable interrupts
+   and the watchdog, mark G1 faulted, and halt without returning. No destination,
+   GAPS DMA claim, callback context, or stream storage is released. This applies
+   to one-shot reads, stream-transfer failures, and stream teardown.
+
+The fatal path deliberately does not call the ordinary panic/abort routines:
+they can return to a loader, which could reuse memory still owned by DMA. It
+also avoids logging through potentially blocking or loader-backed services.
+The application freezes and requires a manual reset; halting the CPU does not
+itself prove that DMA stopped. Errors and cancellations remain recoverable when
+DMA stops successfully. A failed drive-command recovery with DMA already idle
+still faults G1 and returns an error, rather than taking this fatal path.
 
 The direct backend does not attempt cold-boot optical-drive authorization.
 
