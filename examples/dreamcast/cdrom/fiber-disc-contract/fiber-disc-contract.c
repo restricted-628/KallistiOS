@@ -11,7 +11,10 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT & ~INIT_CDROM);
 static unsigned int checks, failures, steps, callbacks_done, slots;
-static bool hold_worker, hold_callback, fail_submit;
+static bool hold_worker, hold_callback, fail_submit, use_gaps;
+/* Routing tokens only: this no-media probe never allocates physical SRAM. */
+static const gaps_sram_lease_t test_lease = 37;
+static const size_t test_offset = 64;
 static int transport_result;
 static semaphore_t worker_entered, worker_release, callback_entered, callback_release;
 static kthread_t *owner;
@@ -57,12 +60,11 @@ static void complete(cdrom_request_t *request,
     ++callbacks_done;
 }
 
-cdrom_request_t *__wrap_gdrom_direct_read_sectors_dma_async(
-    void *dest, uint32_t fad, size_t sectors, gdrom_direct_sector_type_t type,
-    uint32_t timeout, gdrom_direct_result_t *trace,
+static cdrom_request_t *submit_job(uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t type, uint32_t timeout, gdrom_direct_result_t *trace,
     cdrom_request_callback_t callback, void *data) {
     job_t *job;
-    CHECK(dest == buffer && fad == 150 && sectors == 2
+    CHECK(fad == 150 && sectors == 2
           && type == GDROM_DIRECT_SECTOR_MODE1 && timeout == 1000
           && !trace && callback && data);
     if(fail_submit) { errno = ENOMEM; return NULL; }
@@ -74,7 +76,29 @@ cdrom_request_t *__wrap_gdrom_direct_read_sectors_dma_async(
         NULL, NULL, complete, job);
 }
 
+cdrom_request_t *__wrap_gdrom_direct_read_sectors_dma_async(
+    void *dest, uint32_t fad, size_t sectors, gdrom_direct_sector_type_t type,
+    uint32_t timeout, gdrom_direct_result_t *trace,
+    cdrom_request_callback_t callback, void *data) {
+    CHECK(!use_gaps && dest == buffer);
+    return submit_job(fad, sectors, type, timeout, trace, callback, data);
+}
+
+cdrom_request_t *__wrap_gdrom_direct_read_sectors_dma_gaps_async(
+    gaps_sram_lease_t lease, size_t offset, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t type, uint32_t timeout, gdrom_direct_result_t *trace,
+    cdrom_request_callback_t callback, void *data) {
+    CHECK(use_gaps && offset == test_offset);
+    /* Invalid leases must still route here, not fall back to the RAM API. */
+    if(lease == GAPS_SRAM_LEASE_INVALID) { errno = ENOENT; return NULL; }
+    CHECK(lease == test_lease);
+    return submit_job(fad, sectors, type, timeout, trace, callback, data);
+}
+
 static fiber_disc_read_t *submit(void) {
+    if(use_gaps)
+        return fiber_disc_read_dma_gaps(disc, test_lease, test_offset, 150, 2,
+                                       GDROM_DIRECT_SECTOR_MODE1, 1000);
     return fiber_disc_read_dma(disc, buffer, 150, 2,
                               GDROM_DIRECT_SECTOR_MODE1, 1000);
 }
@@ -127,18 +151,18 @@ static void *wrong_owner(void *unused) {
     (void)unused;
     CHECK(fiber_disc_pump(disc) < 0 && errno == EXDEV);
     CHECK(fiber_disc_shutdown(disc) < 0 && errno == EXDEV);
+    CHECK(!submit() && errno == EXDEV);
     return NULL;
 }
 
-int main(void) {
+static void run_contract(void) {
     kthread_t *other;
+    unsigned int previous_steps = steps, previous_callbacks = callbacks_done;
+    hold_worker = hold_callback = fail_submit = false;
+    transport_result = ERR_OK;
     CHECK(!cdrom_request_system_init());
     CHECK(!sem_init(&worker_entered, 0) && !sem_init(&worker_release, 0)
           && !sem_init(&callback_entered, 0) && !sem_init(&callback_release, 0));
-    owner = thd_get_current();
-    CHECK(!fiber_disc_create(2) && errno == EPERM);
-    main_fiber = fiber_attach();
-    CHECK(main_fiber != NULL);
     CHECK(!fiber_disc_create(0) && errno == EINVAL);
     disc = fiber_disc_create(2);
     CHECK(disc != NULL);
@@ -148,6 +172,11 @@ int main(void) {
     fail_submit = true;
     CHECK(!submit() && errno == ENOMEM);
     fail_submit = false;
+    if(use_gaps) {
+        CHECK(!fiber_disc_read_dma_gaps(disc, GAPS_SRAM_LEASE_INVALID,
+            test_offset, 150, 2, GDROM_DIRECT_SECTOR_MODE1, 1000)
+            && errno == ENOENT);
+    }
 
     /* A parked reader must not stop another fiber on the same OS thread. */
     hold_worker = true;
@@ -162,7 +191,7 @@ int main(void) {
     b = fiber_create(stack_b, sizeof(stack_b), sibling, NULL);
     CHECK(b != NULL);
     for(unsigned int i = 0; i < 4; ++i) CHECK(!fiber_switch(b));
-    CHECK(steps == 3 && fiber_get_state(a) == KFIBER_STATE_WAITING);
+    CHECK(steps == previous_steps + 3 && fiber_get_state(a) == KFIBER_STATE_WAITING);
     CHECK(!fiber_destroy(b));
     sem_signal(&worker_release);
     run_until_done(a);
@@ -250,8 +279,22 @@ int main(void) {
     cdrom_request_system_shutdown();
     CHECK(!submit() && errno == ENODEV);
     CHECK(!fiber_disc_destroy(disc));
-    CHECK(callbacks_done == 7);
-    printf("FIBER-DISC: %s checks=%u siblings=%u callbacks=%u\n",
+    CHECK(callbacks_done == previous_callbacks + 7);
+    sem_destroy(&worker_entered);
+    sem_destroy(&worker_release);
+    sem_destroy(&callback_entered);
+    sem_destroy(&callback_release);
+}
+
+int main(void) {
+    owner = thd_get_current();
+    CHECK(!fiber_disc_create(2) && errno == EPERM);
+    main_fiber = fiber_attach();
+    CHECK(main_fiber != NULL);
+    run_contract();
+    use_gaps = true;
+    run_contract();
+    printf("FIBER-DISC: %s checks=%u siblings=%u callbacks=%u targets=ram,gaps\n",
            failures ? "FAIL" : "PASS", checks, steps, callbacks_done);
     return failures ? 1 : 0;
 }

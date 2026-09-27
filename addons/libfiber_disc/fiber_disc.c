@@ -74,7 +74,8 @@ fiber_disc_t *fiber_disc_create(size_t capacity) {
     return disc;
 }
 
-fiber_disc_read_t *fiber_disc_read_dma(fiber_disc_t *disc, void *buffer,
+static fiber_disc_read_t *read_dma(fiber_disc_t *disc, void *buffer,
+    bool gaps, gaps_sram_lease_t lease, size_t offset,
     uint32_t fad, size_t sectors, gdrom_direct_sector_type_t type,
     uint32_t timeout) {
     fiber_disc_read_t *read;
@@ -86,8 +87,12 @@ fiber_disc_read_t *fiber_disc_read_dma(fiber_disc_t *disc, void *buffer,
     read->ready = fiber_event_create(false);
     if(!read->ready) { free(read); return NULL; }
     read->disc = disc;
-    read->request = gdrom_direct_read_sectors_dma_async(
-        buffer, fad, sectors, type, timeout, NULL, completed, disc);
+    if(gaps)
+        read->request = gdrom_direct_read_sectors_dma_gaps_async(
+            lease, offset, fad, sectors, type, timeout, NULL, completed, disc);
+    else
+        read->request = gdrom_direct_read_sectors_dma_async(
+            buffer, fad, sectors, type, timeout, NULL, completed, disc);
     if(!read->request) {
         int error = errno;
         fiber_event_destroy(read->ready);
@@ -101,6 +106,20 @@ fiber_disc_read_t *fiber_disc_read_dma(fiber_disc_t *disc, void *buffer,
     disc->reads = read;
     ++disc->count;
     return read;
+}
+
+fiber_disc_read_t *fiber_disc_read_dma(fiber_disc_t *disc, void *buffer,
+    uint32_t fad, size_t sectors, gdrom_direct_sector_type_t type,
+    uint32_t timeout) {
+    return read_dma(disc, buffer, false, GAPS_SRAM_LEASE_INVALID, 0,
+                    fad, sectors, type, timeout);
+}
+
+fiber_disc_read_t *fiber_disc_read_dma_gaps(fiber_disc_t *disc,
+    gaps_sram_lease_t lease, size_t offset, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t type, uint32_t timeout) {
+    return read_dma(disc, NULL, true, lease, offset,
+                    fad, sectors, type, timeout);
 }
 
 int fiber_disc_pump(fiber_disc_t *disc) {

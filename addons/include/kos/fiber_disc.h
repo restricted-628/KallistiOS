@@ -35,6 +35,20 @@ fiber_disc_read_t *fiber_disc_read_dma(fiber_disc_t *disc, void *buffer,
     uint32_t fad, size_t sectors, gdrom_direct_sector_type_t type,
     uint32_t timeout);
 
+/** Submit direct DMA into an existing GAPS SRAM lease at a byte offset.
+ * Uses gdrom_direct_read_sectors_dma_gaps_async() validation and pinning;
+ * it does not acquire, release, or transfer ownership of the caller's lease.
+ * Retain the lease and leave the destination untouched from submission until
+ * await completes, including queue residence and cancellation. Only then may
+ * the caller release/reuse it or begin a subsequent transfer (for example G2).
+ * Inspect the returned status before consuming data; completion can be failure.
+ * The driver pins the lease during execution, not while queued. The same
+ * capacity, owner, shutdown and timeout rules as fiber_disc_read_dma() apply.
+ */
+fiber_disc_read_t *fiber_disc_read_dma_gaps(fiber_disc_t *disc,
+    gaps_sram_lease_t lease, size_t offset, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t type, uint32_t timeout);
+
 /** Completion pump, called by the owner main fiber. Never waits for device
  * or callback completion; retirement may use ordinary allocator locks.
  * Returns the number of reads still awaiting safe retirement, or -1.

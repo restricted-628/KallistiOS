@@ -17,7 +17,8 @@ and is not a plug-in for the Fiber Service Executor's private dispatch loop.
 1. Attach the application thread and create the adapter with a live-handle
    capacity. Capacity includes completed handles until explicitly released.
 2. Create application fibers on caller-owned stacks. A loader submits with
-   `fiber_disc_read_dma`, then calls `fiber_disc_await`.
+   `fiber_disc_read_dma` (RAM/VRAM) or `fiber_disc_read_dma_gaps` (an existing
+   GAPS lease and byte offset), then calls `fiber_disc_await`.
 3. The main fiber calls `fiber_disc_pump` and dispatches ready children with
    `fiber_switch`. If all children are parked, it may call the bounded
    `fiber_disc_idle`; otherwise it keeps dispatching useful work.
@@ -46,7 +47,13 @@ No payload buffer is allocated or copied by this adapter.
 
 - Direct DMA uses the driver's current format/alignment/range rules. Ordinary
   RAM and permitted PVR RAM aliases go through the same submission entry point;
-  GAPS lease-based submission is not wrapped by this first adapter.
+  GAPS submissions use the driver's separate lease-based entry point.
+- GAPS leases remain caller-owned. Retain the lease and leave the destination
+  untouched until await completes, even while queued or cancelling. The driver
+  pins the lease only during execution; the adapter does not allocate or release
+  it and does not change BBA ownership policy. After successful completion, a
+  subsequent G2 transfer may consume the data. Failed reads may leave partial
+  data: inspect status before consuming it.
 - The driver manages cache visibility. The caller owns the destination and
   must not access, free, remap, or share it with another transfer before await
   completes. Dirty data sharing a destination cache line is not safe.
