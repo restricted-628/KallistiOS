@@ -9,7 +9,7 @@ adapter and integration documentation; separate KOS helpers live under
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`0fd3a1e1fa0809d33198c062632b1494ec2f57df`, official **v0.9.0**, from
+`ae8d4c190bc52d4e01e8ec7a0a9b5a7b4fd7d69b`, upstream **master after v0.9.1**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
 and license are retained; no build-time source patches are applied. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
@@ -51,8 +51,10 @@ to the submodule's headers, so existing `#include <sh4zam/...>` users do not
 change. The KOS recipe builds the upstream sources into `.build/` outside the
 submodule and produces `addons/lib/dreamcast/libsh4zam.a`.
 
-The target build uses the optimized SH-4 backend and implicit TLS. The upstream
-portable software backend remains available for host applications. KOS's
+The target build defaults to the optimized SH-4 backend and implicit TLS. The
+archive also includes upstream's software XMTRX and FFT objects, allowing the
+software backend to be selected on SH-4 as supported by v0.9.1. Host tests
+explicitly select pthread TLS for the portable backend. KOS's
 current default link group includes `-lsh4zam`; this migration does not make
 the graphics stack optional or move it into a separate port.
 
@@ -141,7 +143,7 @@ in each of these eight lanes. The smaller direct-API reproducer is retained.
 See the [standalone regression report](../../doc/sh4zam-0.8.1-fast-trig.md)
 for cardinal-angle results and reproduction instructions.
 
-## 0.9.0 upgrade validation
+## Historical 0.9.0 upgrade validation
 
 See [the integration report](../../doc/sh4zam-0.9.0-upgrade.md) for the forced
 target rebuild, expanded matrix/trig checks, compiler lanes, and emulator
