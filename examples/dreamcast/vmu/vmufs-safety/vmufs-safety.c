@@ -245,7 +245,8 @@ static int test_maintenance(maple_device_t *dev) {
     }
 
     request = vmufs_defragment_async(dev, NULL, NULL);
-    if(finish_maintenance_request(request, 7, 5) < 0 ||
+    /* Five data blocks plus staging FAT, directory, and old-chain cleanup. */
+    if(finish_maintenance_request(request, 8, 5) < 0 ||
        get_card_space(dev, &free_blocks, &executable_free) < 0 ||
        free_blocks != 190 || executable_free != 190 ||
        verify_file(dev, DEFRAG_A_NAME, a, sizeof(a)) < 0 ||
@@ -348,6 +349,31 @@ static int test_cancellation(maple_device_t *dev) {
         return -1;
     }
 
+    return 0;
+}
+
+static int test_read_failure_outputs(maple_device_t *dev) {
+    uint8_t sentinel = 0xa5;
+    void *buffer = &sentinel;
+    int size = 123;
+    const vmu_dir_t invalid = {
+        .filetype = VMU_FILE_DATA,
+        .firstblk = VMU_FAT_UNALLOCATED,
+        .filesize = 1
+    };
+
+    /* Exercise setup failure, missing file, and invalid FAT-chain failure. */
+    if(vmufs_read(NULL, CANCEL_NAME, &buffer, &size) >= 0 ||
+       buffer != &sentinel || size != 123)
+        return -1;
+    if(vmufs_read(dev, CANCEL_NAME, &buffer, &size) != -2 ||
+       buffer != &sentinel || size != 123)
+        return -1;
+    if(vmufs_read_dirent(dev, &invalid, &buffer, &size) >= 0 ||
+       buffer != &sentinel || size != 123 || sentinel != 0xa5)
+        return -1;
+
+    puts("VMU read failure outputs: PASS");
     return 0;
 }
 
@@ -458,6 +484,8 @@ int main(void) {
         return report_failure(dev, (uint8_t)-maintenance_result);
     if(test_cancellation(dev) < 0)
         return report_failure(dev, 3);
+    if(test_read_failure_outputs(dev) < 0)
+        return report_failure(dev, 9);
     if(test_low_level(dev) < 0)
         return report_failure(dev, 4);
     if(test_vfs(dev) < 0)

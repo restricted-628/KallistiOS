@@ -77,6 +77,11 @@ static void check_set(void) {
     errno = 0;
     CHECK(clock_settime(CLOCK_REALTIME, NULL) == -1);
     CHECK(errno == EFAULT);
+    ts = (struct timespec){-1, 0};
+    errno = 0;
+    CHECK(clock_settime(CLOCK_REALTIME, &ts) == -1);
+    CHECK(errno == EINVAL);
+    ts.tv_sec = 1700000000;
     ts.tv_nsec = 0;
     for(unsigned i = 0; i < sizeof(readonly) / sizeof(readonly[0]); ++i) {
         errno = 0;
