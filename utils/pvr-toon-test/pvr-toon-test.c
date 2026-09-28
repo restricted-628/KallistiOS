@@ -186,8 +186,14 @@ static void test_binary_split(void) {
                                         v->normal.z * v->normal.z);
 
             assert(CLOSE(normal_length, 1.0f));
-            if(v->source_index == PVR_TOON_GENERATED_INDEX)
+            if(v->source_index == PVR_TOON_GENERATED_INDEX) {
                 assert(v->shade == 0.0f);
+                /* Halfway byte channels round up in both edge directions. */
+                assert(v->argb == (v->position.x < 0.0f ?
+                                  UINT32_C(0xff808000) : UINT32_C(0xff800080)));
+                assert(v->oargb == (v->position.x < 0.0f ?
+                                   UINT32_C(0xff8080ff) : UINT32_C(0xff80ff80)));
+            }
         }
     }
     assert(band_count[0] == 2 && band_count[1] == 1);

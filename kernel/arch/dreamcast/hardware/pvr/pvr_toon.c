@@ -353,7 +353,8 @@ static uint32_t color_lerp(uint32_t low, uint32_t high, float amount) {
     for(shift = 0; shift < 32u; shift += 8u) {
         float a = (float)((low >> shift) & UINT32_C(0xff));
         float b = (float)((high >> shift) & UINT32_C(0xff));
-        uint32_t channel = (uint32_t)floorf(a + (b - a) * amount + 0.5f);
+        /* Admitted interpolation keeps this inside shz_floorf's int32 range. */
+        uint32_t channel = (uint32_t)shz_floorf(a + (b - a) * amount + 0.5f);
 
         if(channel > UINT32_C(0xff))
             channel = UINT32_C(0xff);
