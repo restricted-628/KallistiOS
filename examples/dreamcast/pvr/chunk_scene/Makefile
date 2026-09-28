@@ -36,6 +36,28 @@ skin-grid.pcm: skin-grid.gltf $(MODEL_CONVERTER)
 skin-grid-asset.c: skin-grid.pcm $(BIN2C)
 	$(BIN2C) $< $@ skin_grid_asset
 
+# Opt-in interactive showcase; the original fixtures and goldens stay separate.
+animated-showcase.gltf: skin-grid.gltf generate-showcase.py
+	$(PYTHON) generate-showcase.py $< $@
+
+animated-showcase.pcm: animated-showcase.gltf $(MODEL_CONVERTER)
+	$(MODEL_CONVERTER) --emit-asset --section-directory --cooked-cache --join-strips --texture-id 7 $< $@
+
+animated-showcase-asset.c: animated-showcase.pcm $(BIN2C)
+	$(BIN2C) $< $@ animated_showcase_asset
+
+animated-showcase.o: chunk-scene.c animated-showcase.h ../showcase_common.h
+	kos-cc $(CFLAGS) $(CPPFLAGS) -std=gnu23 -Wall -Wextra -Werror -DCHUNK_SCENE_GRID -DCHUNK_SCENE_SHOWCASE -c $< -o $@
+
+animated-showcase-smoke.o: chunk-scene.c animated-showcase.h ../showcase_common.h
+	kos-cc $(CFLAGS) $(CPPFLAGS) -std=gnu23 -Wall -Wextra -Werror -DCHUNK_SCENE_GRID -DCHUNK_SCENE_SHOWCASE -DCHUNK_SCENE_SHOWCASE_SMOKE -c $< -o $@
+
+animated-showcase.elf: animated-showcase.o animated-showcase-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
+	kos-cc -o $@ animated-showcase.o animated-showcase-asset.o
+
+animated-showcase-smoke.elf: animated-showcase-smoke.o animated-showcase-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
+	kos-cc -o $@ animated-showcase-smoke.o animated-showcase-asset.o
+
 chunk-skin-grid.o: chunk-scene.c grid-goldens.h
 	kos-cc $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_GRID -c $< -o $@
 
@@ -69,6 +91,7 @@ run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
 
 clean:
+	-rm -f animated-showcase.elf animated-showcase-smoke.elf animated-showcase.o animated-showcase-smoke.o animated-showcase-asset.o animated-showcase-asset.c animated-showcase.pcm animated-showcase.gltf
 	-rm -f chunk-skin-compact.elf chunk-skin-compact.o
 	-rm -f chunk-skin-clip.elf chunk-skin-clip.o
 	-rm -f chunk-skin-grid.elf chunk-skin-grid.o skin-grid-asset.o skin-grid-asset.c skin-grid.pcm skin-grid.gltf

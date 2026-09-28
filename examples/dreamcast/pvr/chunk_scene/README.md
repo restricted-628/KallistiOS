@@ -6,6 +6,36 @@ sparse-morph, animation-catalog, transform-clip, morph-weight, and cooked-cache
 APIs. It does not introduce a scene graph, renderer, resource manager, or new
 library API.
 
+## Interactive animation showcase
+
+Build `make animated-showcase.elf` for a side-by-side flexible-sleeve demo:
+the cyan model uses skeletal animation alone; the orange model adds a bulge
+morph before the same skinning pass. Each original procedural mesh has 289
+vertices, 512 triangles, two blended joints, and a position/normal morph target.
+Both use the shared PCM2 loader, affine hierarchy, prepared skin palette, and
+admitted cooked-cache draw path below. No new renderer or kernel API is added.
+
+Build the showcase with assertions enabled; `NDEBUG` is rejected because
+assertions check rendering calls as well as their results.
+
+- **A:** toggle skeletal bending; **B:** toggle the right-hand morph.
+- **X:** switch textured lighting / wireframe; **Y:** pause the clip clock.
+- **START:** exit and report pipeline status.
+
+The timeline advances by a fixed step per rendered frame, not wall-clock time.
+The models are open sleeves, not capped solids. The generated morph includes
+normal deltas; these are blended target normals, not reconstructed triangle
+normals. The view matrix uses SH4ZAM directly; no KOS matrix-stack calls are
+introduced. The established prepared palette remains the default.
+
+`make animated-showcase-smoke.elf` builds a 180-frame automated variant covering
+all eight bend/morph/wire combinations and a paused segment. It checks the
+authored control effects before drawing, emitted geometry, and PVR fault state.
+Its serial completion record starts `KOSANIM frames=180 control_modes=ff`.
+The original fixture goldens remain in the original targets; they are not
+applied to this different mesh. Showcase assets are generated separately by
+`generate-showcase.py` and do not change `skin-grid.gltf`.
+
 Skeleton setup now prepares compact SH4ZAM 3x4 inverse-bind and topology
 snapshots. Each sampled hierarchy pose is evaluated directly into 3x4 world
 matrices and shared by both models, with no 4x4 world array or packing pass;

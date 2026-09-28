@@ -48,6 +48,12 @@
 #define CLIP_TRACKS 1u
 #endif
 #define PACKETS (STRIPS * STRIP_VERTICES)
+#ifdef CHUNK_SCENE_SHOWCASE
+#define SHAPE_DELTAS VERTICES
+static bool showcase_bend = true, showcase_morph = true;
+#else
+#define SHAPE_DELTAS 1u
+#endif
 /* The prepared source-index table is page-granular. */
 #define LOOKUP (((VERTICES + PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE - 1u) / \
                  PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE) * PVR_CHUNK_VERTEX_INDEX_PAGE_SIZE)
@@ -85,7 +91,7 @@ typedef struct model_state {
     scene_skin_palette_t prepared_palette;
     pvr_chunk_shape_section_view_t shape_view;
     pvr_chunk_shape_target_t shape_target;
-    pvr_chunk_shape_delta_t shape_delta;
+    pvr_chunk_shape_delta_t shape_delta[SHAPE_DELTAS];
     pvr_chunk_shape_set_t shapes;
     uint32_t shape_lookup[LOOKUP];
     pvr_chunk_shape_binding_t shape_binding;
@@ -227,7 +233,7 @@ static int model_load(size_t index) {
                  record.morph_ordinal, &data, &bytes) < 0 ||
        pvr_chunk_shape_section_open(data, bytes, &m->shape_view) < 0 ||
        pvr_chunk_shape_section_materialize(&m->shape_view, &m->shape_target,
-                                            1, &m->shape_delta, 1,
+                                            1, m->shape_delta, SHAPE_DELTAS,
                                             &m->shapes) < 0 ||
        pvr_chunk_shape_query(&m->plan, 1, &shape_req) < 0 ||
        require(shape_req.source_bytes <= sizeof(m->shape_storage) &&
@@ -353,10 +359,15 @@ static int sample(float time) {
     anim_morph_result_t morph_result;
     pvr_deform_result_t deform_result;
     size_t i;
+    float joint_time = time;
+#ifdef CHUNK_SCENE_SHOWCASE
+    if(!showcase_bend)
+        joint_time = 0;
+#endif
 
     /* Skeleton palettes already contain hierarchy world transforms. Do not
        transform their output by the mesh node again when rendering. */
-    if(anim_clip_sample(&app.clip, time, app.local, NODES,
+    if(anim_clip_sample(&app.clip, joint_time, app.local, NODES,
                           &animation_result) < 0 ||
        pvr_chunk_hierarchy_pose_build_affine(&app.affine_hierarchy,
            app.local, NODES, NULL, app.affine_world, NODES,
@@ -372,8 +383,13 @@ static int sample(float time) {
                JOINTS, &m->prepared_palette) < 0 ||
            anim_morph_targets_sample(&m->morph_tracks, 1, time,
                                        &m->morph_target, 1,
-                                       &morph_result) < 0 ||
-           pvr_chunk_shape_apply(&m->shape_source, &m->morph_target, 1,
+                                       &morph_result) < 0)
+            return failure("deform-pose");
+#ifdef CHUNK_SCENE_SHOWCASE
+        if(!showcase_morph)
+            m->morph_target.weight = 0;
+#endif
+        if(pvr_chunk_shape_apply(&m->shape_source, &m->morph_target, 1,
                                    m->morphed, VERTICES,
                                    &deform_result) < 0)
             return failure("deform-pose");
@@ -393,6 +409,7 @@ static int resolve(uint16_t index, pvr_deform_vertex_t *vertex, void *data) {
     return pvr_chunk_skin_general_pose_vertex_get(&m->pose, index, vertex);
 }
 
+#ifndef CHUNK_SCENE_SHOWCASE
 #ifdef CHUNK_SCENE_GRID
 #include "grid-goldens.h"
 #ifdef CHUNK_SCENE_CLIP
@@ -500,8 +517,12 @@ static int check_pose(float time) {
     }
     return 0;
 }
+#endif /* !CHUNK_SCENE_SHOWCASE */
 
 #ifndef CHUNK_SCENE_HOST
+#ifdef CHUNK_SCENE_SHOWCASE
+#include "animated-showcase.h"
+#else
 static pvr_poly_hdr_t draw_header;
 
 static int begin_strip(const pvr_chunk_cached_strip_t *strip, void *data) {
@@ -647,13 +668,16 @@ fail:
 }
 #endif
 #endif
+#endif
 
 #if !defined(CHUNK_SCENE_GRID) && (defined(CHUNK_SCENE_HOST) || defined(CHUNK_SCENE_WORKLOAD))
 #include "scene-workload.h"
 #endif
 
 int main(int argc, char **argv) {
+#ifndef CHUNK_SCENE_SHOWCASE
     static const float times[] = { 0, 0.25f, 0.5f, 1, 1.5f, 2 };
+#endif
     const void *data;
     size_t bytes;
     size_t i;
@@ -684,7 +708,12 @@ int main(int argc, char **argv) {
     fclose(file);
     data = storage;
 #else
-#ifdef CHUNK_SCENE_GRID
+#ifdef CHUNK_SCENE_SHOWCASE
+    extern const unsigned char animated_showcase_asset_data[];
+    extern const int animated_showcase_asset_size;
+    data = animated_showcase_asset_data;
+    bytes = (size_t)animated_showcase_asset_size;
+#elif defined(CHUNK_SCENE_GRID)
     extern const unsigned char skin_grid_asset_data[];
     extern const int skin_grid_asset_size;
     data = skin_grid_asset_data;
@@ -700,6 +729,7 @@ int main(int argc, char **argv) {
 #endif
     if(scene_load(data, bytes) < 0)
         goto out;
+#ifndef CHUNK_SCENE_SHOWCASE
     for(i = 0; i < sizeof(times) / sizeof(times[0]); ++i)
         if(check_pose(times[i]) < 0)
             goto out;
@@ -711,6 +741,7 @@ int main(int argc, char **argv) {
     puts("KOSSCENE grid_vertices=578 grid_triangles=1024 packet_guards=PASS uv_goldens=PASS");
     puts("KOSSCENE rotation_scale=PASS normal_goldens=PASS lighting_goldens=PASS");
 #endif
+#endif /* !CHUNK_SCENE_SHOWCASE */
 #ifdef CHUNK_SCENE_CLIP
     if(grid_clip_check() < 0)
         goto out;
