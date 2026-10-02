@@ -11,8 +11,6 @@ for KOS-created background execution are recorded in the
 [background execution audit](background-execution-audit.md).
 Checked cache ranges and P2 alias handling are documented in the
 [cache-maintenance safety guide](cache-maintenance.md).
-Checked page-table mutation and targeted TLB retirement are documented in the
-[MMU mapping safety guide](mmu-mapping.md).
 Store-queue ownership, recursion, and MMU-mode invariants are documented in the
 [store-queue safety guide](store-queue-safety.md).
 Caller-backed allocator ownership, validation, and resource behavior are
