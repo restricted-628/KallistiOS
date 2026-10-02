@@ -66,7 +66,10 @@ physical upper-bank GD-ROM DMA correctness on a modified console.
   bridge SRAM do not pass through the SH-4 data cache.
 - With the MMU enabled, destinations must use a direct P1/P2 alias; translated
   P0/P3 mappings are rejected rather than masked into an unrelated range.
-- A bridge-SRAM lease is claimed for the complete GD-DMA operation. Another
+- A bridge-SRAM lease is claimed during execution through GD-DMA retirement;
+  queued admission does not pin it. The caller must retain the lease and leave
+  the destination untouched through request completion and any callback use
+  (through await completion for the fiber adapter). Another
   G1/G2 transfer anywhere in that window begins only after the claim retires.
   NETWORK ownership does not prohibit G1 DMA: the network owner may authorize
   it through its lease, while separately coordinating NIC access to the buffer.
@@ -76,12 +79,20 @@ physical upper-bank GD-ROM DMA correctness on a modified console.
 - Arithmetic uses subtraction-based bounds checks so address and length sums
   cannot wrap.
 - Zero-length transfers are rejected before hardware access.
-- One public command transfers at most sixteen sectors, bounding continuous
-  G1 ownership. Callers must divide larger operations.
+- Each ordinary read command transfers at most sixteen sectors, bounding
+  continuous G1 ownership. `gdrom_direct_read_sectors_dma` splits larger
+  RAM/VRAM ranges internally, releasing G1 between commands under one absolute
+  deadline that includes G1 waits and time between commands.
+- `gdrom_direct_read_sectors_dma_async` requeues larger reads at the queue tail
+  between commands. Its shared deadline starts at first execution and includes
+  subsequent queue time; initial queue residence is excluded. Bounded recovery
+  can take additional time for either API.
+- `gdrom_direct_read_sectors_dma_gaps` and its `_async` form remain bounded to
+  one command of at most sixteen sectors, fitting the lease's available byte
+  span. Callers must divide larger GAPS operations. Raw 2352-byte DMA reads
+  require even sector counts for an exact 32-byte-aligned transfer length.
 - The transport result reports bytes actually transferred before completion
   or failure.
-- Request-engine reads divide larger operations into bounded segments and
-  requeue between them so unrelated G1 clients can make progress.
 - Requested payload, useful data, and physical I/O remain separate counters
   in asynchronous status.
 
@@ -107,8 +118,9 @@ registered clients.
 - Interrupt clients wake only the thread which owns the direct command.
 - Stale interrupt state is matched against the active DMA operation before it
   can terminate anything.
-- Application callbacks run on the isolated callback worker, never in
-  interrupt context or on the transport worker.
+- Application callbacks normally run on the isolated callback worker. The
+  request layer has an exceptional inline fallback if that worker is absent;
+  callback-thread isolation is not unconditional on that teardown path.
 - Access-during-DMA, illegal-address, and overrun conditions are terminal bus
   faults unless safe quiescence is established.
 
@@ -121,6 +133,14 @@ registered clients.
 - A failed stop proceeds to bounded recovery.
 - A timeout never becomes an unbounded wait during cleanup.
 - Transfer accounting includes only bytes observed before the terminal state.
+
+Terminal request status follows transport cleanup and driver finalization, but
+an application callback may still be pending or running. `cdrom_request_wait`
+waits for terminal status; `cdrom_request_wait_callback` also waits for callback
+return. `cdrom_request_destroy` returns `EBUSY` until both have finished. Keep
+callback context and any buffers or leases it uses alive through that return;
+cancellation alone permits no reuse. The fiber adapter pumps this retirement
+before waking an awaiter; see [targets and scheduling](direct-dma-examples.md).
 
 ## Recovery
 
@@ -157,6 +177,13 @@ buffer. Transfers from that buffer use ordinary request objects.
 - Transfers bypass the normal command queue because the session already owns
   the drive.
 - Session state and transfer progress remain separate.
+- Direct staged transfers accept system RAM only. Ordinary RAM/VRAM range
+  segmentation and leased GAPS reads do not add VRAM or GAPS streaming.
+- The optional `fiber_disc_stream_*` adapter lets a child await readiness,
+  transfers and terminal retirement while its owner pumps and dispatches.
+  Its terminal await also drains adapter transfer callbacks and waits for
+  nonblocking session destruction. Read and stream handles still require
+  explicit release; do not await other queued disc work while retaining G1.
 
 ## ISO9660 integration
 
@@ -170,9 +197,10 @@ in-flight requests therefore cannot cross between BIOS and direct transports.
   It is allocated only by the first request which needs it. The serialized
   request worker copies each completed bounce segment into its caller buffer
   before another request can reuse the workspace.
-- Async finalizers release retained file descriptions and update descriptor
-  state before terminal completion becomes visible. User callbacks remain on
-  the separate callback worker.
+- Async finalizers update descriptor state before terminal completion becomes
+  visible. Read adapters without a user callback release their retained file
+  description and metadata there; those with a callback retain them until that
+  callback returns.
 - Directory snapshots retain at most 128 KiB. Each in-flight prefetch may also
   own a transient, sector-rounded image of up to 128 KiB until installation.
 - Snapshot identity includes the media generation as well as extent and size.
