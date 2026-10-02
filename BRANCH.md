@@ -29,7 +29,6 @@ as a single upstream kernel change.
 
 - [FORK.md](FORK.md)
 - [BRANCHES.md](BRANCHES.md)
-- [doc/fiber-runtime.md](doc/fiber-runtime.md)
 - [doc/disc-backend-defaults.md](doc/disc-backend-defaults.md)
 
 Reviewed code snapshot: [`163e4a5b635e`](https://github.com/restricted-628/KallistiOS/commit/163e4a5b635eb106b7c4d49597b15aca022da231).

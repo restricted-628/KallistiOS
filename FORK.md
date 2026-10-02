@@ -54,14 +54,12 @@ submodule; its source, authorship, license and history remain upstream-owned.
 
 ## Read before migrating
 
-- [Fiber/thread ownership](doc/fiber-runtime.md)
 - [Direct-default APIs and explicit BIOS migration](doc/disc-backend-defaults.md)
 - [Direct DMA examples and remaining adapters](doc/direct-dma-examples.md)
 - [GAPS/BBA/resident-loader ownership](doc/gaps-ownership.md)
 - [Direct graphics math](doc/sh4zam-direct-graphics-math.md)
 - [Affine skeleton integration](doc/sh4zam-affine-skeleton.md)
 - [LZ4 memory and stepping contracts](addons/liblz4/README.md)
-- [Experimental ADX compatibility profile](doc/adx-decoder.md)
 
 ## Validation and contribution status
 
