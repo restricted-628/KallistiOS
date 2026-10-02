@@ -98,10 +98,7 @@ bool maple_dev_connection_direction(const maple_device_t *dev,
 }
 
 /* Return the Nth device of the requested type (where N is zero-indexed) */
-maple_device_t *maple_enum_type(int n, uint32_t func) {
-
-    if(n < 0)
-        return NULL;
+maple_device_t *maple_enum_type(size_t n, uint32_t func) {
 
     for(size_t p = 0; p < MAPLE_PORT_COUNT; p++) {
         for(size_t u = 0; u < MAPLE_UNIT_COUNT; u++) {
@@ -120,11 +117,11 @@ maple_device_t *maple_enum_type(int n, uint32_t func) {
 
 /* Return the Nth device that is of the requested type and supports the list of
    capabilities given. */
-maple_device_t *maple_enum_type_ex(int n, uint32_t func, uint32_t cap) {
+maple_device_t *maple_enum_type_ex(size_t n, uint32_t func, uint32_t cap) {
     uint32_t function_data;
 
     /* Function-data indexing is only defined for one function at a time. */
-    if(n < 0 || !func || (func & (func - 1)))
+    if(!func || (func & (func - 1)))
         return NULL;
 
     for(size_t p = 0; p < MAPLE_PORT_COUNT; ++p) {

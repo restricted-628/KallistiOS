@@ -180,7 +180,7 @@ int main(int argc, char *argv[]) {
     if(maple_enum_dev(-1, 0) ||
        maple_enum_dev(MAPLE_PORT_COUNT, 0) ||
        maple_enum_dev(0, MAPLE_UNIT_COUNT) ||
-       maple_enum_type(-1, MAPLE_FUNC_CONTROLLER)) {
+       maple_enum_type(SIZE_MAX, MAPLE_FUNC_CONTROLLER)) {
         printf("FAIL: out-of-range enumeration was accepted\n");
         finish_test();
     }

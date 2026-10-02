@@ -6,6 +6,30 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-01 — upstream ancestry and MMU example reconciliation
+
+- Merge upstream from `7d0972e32d2d9e7af8d90f52bf0eb5a4dec1bfd7` through
+  `d458073c00025f065cc68bebb8ef15ea83264e2b`, preserving the fork's direct-I/O
+  defaults and previously adapted ISO9660 locking rather than replacing them
+  with upstream's single-lock implementation.
+- Retain shared SQ mappings (`SH=1`) through the fork's P2 helper. Add the
+  upstream ASID example using startup-owned MMU lifecycle and checked mapping
+  failure handling. Keep the existing whole-object keyboard initialization.
+- Adopt unsigned Maple enumeration indexes and upstream documentation while
+  retaining checked function descriptors and NULL results for invalid masks.
+  Update the controller snapshot example's out-of-range index accordingly.
+- Import upstream's TCP poll-wakeup lock-order fix and GCC 13.5 profile/patch
+  maintenance. The active GCC 16.2 toolchain and pinned SH4ZAM revision
+  `ae8d4c190bc52d4e01e8ec7a0a9b5a7b4fd7d69b` are unchanged.
+- Host validation: MMU page and TLB models, SQ ownership, all 41 ISO9660 cases,
+  and a focused Maple enumeration probe with ASan/UBSan pass. These do not
+  establish physical cache, bus or DMA behavior.
+- A fresh isolated build of the kernel, addons and utilities passes with SH-4
+  GCC 16.2.0 (GNU17 kernel). ASID, controller snapshot, asynchronous ISO9660
+  and direct ISO9660 examples compile with GNU17/Wall/Wextra/Werror and link.
+  Maple header checks pass for GNU17 and GNU++17. Inherited build warnings
+  remain; no emulator or physical-hardware run was performed.
+
 ## 2026-10-01 — ISO9660 cache lifetime and storage guidance
 
 - Keep shared sector-cache bytes protected through foreground parsing/copying
