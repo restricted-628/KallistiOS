@@ -10,7 +10,7 @@ interpreter and dynarec modes. No physical Dreamcast result is claimed.
 The new release uses runtime SH-4 inline FSCA even under fast-math and fixes
 the portable/constant paths to use 65536 units per turn. The failure results
 below are historical and apply to the exact original 0.8.1 commit above;
-upstream subsequently moved that tag. See [0.9.0 integration](sh4zam-0.9.0-upgrade.md).
+upstream subsequently moved that tag.
 
 ## Symptom
 
