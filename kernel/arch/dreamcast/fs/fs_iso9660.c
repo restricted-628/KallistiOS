@@ -56,6 +56,8 @@ ISO9660 systems, as these were used as references as well.
 #include <sys/ioctl.h>
 
 static int init_percd(void);
+static int iso_reset_locked(void);
+static mutex_t cache_mutex;
 static bool percd_done;
 static bool iso_bios_recognition_pending;
 static mutex_t backend_mutex;
@@ -77,6 +79,7 @@ int fs_iso9660_set_backend(fs_iso9660_backend_t backend) {
         return -1;
     }
 
+    mutex_lock_scoped(&cache_mutex);
     mutex_lock(&backend_mutex);
     if(iso_backend_locked && backend != iso_backend) {
         mutex_unlock(&backend_mutex);
@@ -301,9 +304,8 @@ static TAILQ_HEAD(directory_snapshot_list, directory_snapshot)
     directory_snapshots = TAILQ_HEAD_INITIALIZER(directory_snapshots);
 /* Lookups hold this mutex while scanning so eviction cannot free their image.
    The GD request worker also takes it for generation checks and installation.
-   Like fh_mutex and cache_mutex, every hold must remain bounded and must never
-   include disc I/O or application callbacks: KOS mutexes have no priority
-   inheritance. */
+   Like fh_mutex, it never covers disc I/O or application callbacks.
+   KOS mutexes have no priority inheritance. */
 static mutex_t directory_snapshot_mutex;
 /* Snapshot keys intentionally contain only extent and size. This generation
    is therefore part of their identity: every cache/media reset must clear the
@@ -311,8 +313,13 @@ static mutex_t directory_snapshot_mutex;
 static uint32_t directory_snapshot_generation;
 static iso9660_cache_stats_t cache_stats;
 
-/* Cache modification mutex */
-static mutex_t cache_mutex;
+/* cache_mutex covers foreground mount/cache operations through the final
+   parse/copy, including synchronous transport waits. Lock order is cache_mutex
+   -> fh_mutex -> directory_snapshot_mutex; backend_mutex is only held briefly.
+   Request retirement uses fh_mutex. Direct async admission uses only
+   fh_mutex; BIOS admission additionally serializes legacy stream teardown with
+   cache_mutex, before taking fh_mutex. Neither short lock covers transport waits
+   or application callbacks. Cache helpers below require cache_mutex. */
 
 static int iso_direct_error_result(
         int error, const gdrom_direct_result_t *transport) {
@@ -422,17 +429,13 @@ static void directory_snapshot_clear(void) {
 }
 
 static void cache_stats_reset(void) {
-    mutex_lock(&cache_mutex);
     mutex_lock(&directory_snapshot_mutex);
     memset(&cache_stats, 0, sizeof(cache_stats));
     mutex_unlock(&directory_snapshot_mutex);
-    mutex_unlock(&cache_mutex);
 }
 
 /* Clears all cache blocks */
 static void bclear_cache(cache_block_t **cache) {
-    mutex_lock_scoped(&cache_mutex);
-
     for(size_t i = 0; i < NUM_CACHE_BLOCKS; i++)
         cache[i]->sector = (uint32_t)-1;
 }
@@ -457,13 +460,12 @@ static void bgrad_cache(cache_block_t **cache, int block) {
    block index. Note that the sector in question may already be in the
    cache, in which case it just returns the containing block. */
 static void iso_break_all(void);
-static void iso_abort_stream(bool lock);
+static void iso_abort_stream(void);
 static int bread_cache(cache_block_t **cache, uint32_t sector) {
     int i, j = ERR_OK, rv;
     bool remount = false;
 
     rv = -1;
-    mutex_lock(&cache_mutex);
 
     /* Look for a pre-existing cache block */
     for(i = NUM_CACHE_BLOCKS - 1; i >= 0; i--) {
@@ -491,9 +493,11 @@ static int bread_cache(cache_block_t **cache, uint32_t sector) {
     if(cache == icache)
         cache_stats.metadata_sector_misses++;
 
-    iso_abort_stream(cache == icache);
+    iso_abort_stream();
     // dbglog(DBG_DEBUG, "Stream stop for %s read\n", cache == icache ? "cached" : "inode");
 
+    /* A failed transfer may already have overwritten part of the old data. */
+    cache[i]->sector = (uint32_t)-1;
     /* Load the requested block */
     j = iso_backend_read_sectors(cache[i]->data, sector + 150, 1);
 
@@ -514,7 +518,8 @@ static int bread_cache(cache_block_t **cache, uint32_t sector) {
 
     /* Return the new cache block index */
 bread_exit:
-    mutex_unlock(&cache_mutex);
+    if(rv < 0)
+        errno = cdrom_result_to_errno(j);
     /* init_percd() clears both caches and may itself be reading metadata.
        Calling it here used to deadlock on cache_mutex and could recurse on a
        persistent no-disc result. Mark the mount stale and let the next
@@ -579,7 +584,7 @@ static int init_percd(void) {
     dbglog(DBG_NOTICE, "fs_iso9660: disc change detected\n");
 
     /* Start off with no cached blocks and no open files*/
-    iso_reset();
+    iso_reset_locked();
 
     /* A mount attempt permanently binds this driver instance to one physical
        implementation. This prevents file handles and async chains from
@@ -677,15 +682,20 @@ static int init_percd(void) {
         if((i = cdrom_bios_reinit()) != 0) {
             dbglog(DBG_ERROR,
                    "fs_iso9660:init_percd: cdrom_bios_reinit returned %d\n", i);
+            errno = cdrom_result_to_errno(i);
             return -1;
         }
 
-        if((i = cdrom_bios_read_toc(&toc, false)) != 0)
-            return i;
+        if((i = cdrom_bios_read_toc(&toc, false)) != 0) {
+            errno = cdrom_result_to_errno(i);
+            return -1;
+        }
     }
 
-    if(!(session_base = cdrom_locate_data_track(&toc)))
+    if(!(session_base = cdrom_locate_data_track(&toc))) {
+        errno = ENODEV;
         return -1;
+    }
 
     /* Check for joliet extensions */
     joliet = 0;
@@ -708,10 +718,11 @@ static int init_percd(void) {
         /* Grab and check the volume descriptor */
         blk = biread(session_base + 16 - 150);
 
-        if(blk < 0) return i;
+        if(blk < 0) return -1;
 
         if(memcmp((char*)icache[blk]->data, "\01CD001", 6)) {
             dbglog(DBG_ERROR, "fs_iso9660: disc is not iso9660\r\n");
+            errno = ENODEV;
             return -1;
         }
     }
@@ -838,8 +849,10 @@ static int find_object_in_image(const char *fn, int dir, const uint8_t *image,
         }
 
         if(de->length > sector_left || de->length > image_left
-                || de->length < sizeof(*de))
+                || de->length < sizeof(*de)) {
+            errno = EIO;
             return -1;
+        }
 
         if(dirent_matches(fn, dir, de, ucsname)) {
             memcpy(result, de, sizeof(*result));
@@ -849,6 +862,7 @@ static int find_object_in_image(const char *fn, int dir, const uint8_t *image,
         offset += de->length;
     }
 
+    errno = ENOENT;
     return -1;
 }
 
@@ -979,6 +993,7 @@ static int find_object(const char *fn, int dir, uint32_t dir_extent,
         size_left -= 2048;
     }
 
+    errno = ENOENT;
     return -1;
 }
 
@@ -1027,8 +1042,10 @@ static int find_object_path(const char *fn, int dir,
                            result);
     }
 
-    if(!dir)
+    if(!dir) {
+        errno = ENOENT;
         return -1;
+    }
 
     *result = current;
     return 0;
@@ -1048,6 +1065,7 @@ typedef struct iso_fd {
     uint8_t file_unit_size;     /* Interleaved file unit size */
     uint8_t interleave_gap;     /* Interleaved gap size */
     dirent_t dirent;            /* A static dirent to pass back to clients */
+    bool sync_busy;              /* Foreground operation owns mutable position */
     bool broken;                /* True if the CD has been swapped out since open */
     cdrom_request_t *async_request; /* Active sector request, if any */
     cdrom_stream_session_t *stream_session; /* Active staged stream, if any */
@@ -1066,7 +1084,7 @@ static iso_fd_t *stream_fd = NULL;
 static vfs_handler_t vh;
 
 static inline bool iso_fd_async_busy(const iso_fd_t *fd) {
-    return fd->async_request || fd->stream_session;
+    return fd->sync_busy || fd->async_request || fd->stream_session;
 }
 
 typedef struct iso_async_read {
@@ -1145,23 +1163,65 @@ static inline void iso_break_all(void) {
     }
 }
 
-/* Abort the current stream. */
-static inline void iso_abort_stream(bool lock) {
-    if(stream_fd) {
-        if(lock)
-            mutex_lock(&fh_mutex);
+/* Caller owns cache_mutex. stream_fd changes also take fh_mutex, allowing
+   non-stream closes (including retained closes in finalizers) to avoid the
+   foreground lock entirely. Never wait for the BIOS while holding fh_mutex. */
+static inline void iso_abort_stream(void) {
+    bool active;
 
-        cdrom_bios_stream_stop(false);
+    if(iso_backend != FS_ISO9660_BACKEND_BIOS)
+        return;
+    mutex_lock(&fh_mutex);
+    active = stream_fd != NULL;
+    if(active) {
         stream_fd->stream_part = 0;
         stream_fd = NULL;
-
-        if(lock)
-            mutex_unlock(&fh_mutex);
     }
+    mutex_unlock(&fh_mutex);
+    if(active)
+        cdrom_bios_stream_stop(false);
+}
+
+/* Protect position while synchronous I/O runs without the finalizer lock.
+   Callers hold cache_mutex until after iso_sync_end(). */
+static int iso_sync_begin(iso_fd_t *fd) {
+    mutex_lock_scoped(&fh_mutex);
+    if(!fd->first_extent || fd->broken) {
+        errno = EBADF;
+        return -1;
+    }
+    if(iso_fd_async_busy(fd)) {
+        errno = EBUSY;
+        return -1;
+    }
+    fd->sync_busy = true;
+    return 0;
+}
+
+static void iso_sync_end(iso_fd_t **fd) {
+    mutex_lock_scoped(&fh_mutex);
+    (*fd)->sync_busy = false;
+}
+
+/* BIOS alone shares its foreground stream with request admission. Once a
+   descriptor exists the selected backend cannot change. */
+static void iso_submit_lock(void) {
+    if(iso_backend == FS_ISO9660_BACKEND_BIOS) {
+        mutex_lock(&cache_mutex);
+        iso_abort_stream();
+    }
+    mutex_lock(&fh_mutex);
+}
+
+static void iso_submit_unlock(void) {
+    mutex_unlock(&fh_mutex);
+    if(iso_backend == FS_ISO9660_BACKEND_BIOS)
+        mutex_unlock(&cache_mutex);
 }
 
 /* Open a file or directory */
 static void * iso_open(vfs_handler_t * vfs, const char *fn, int mode) {
+    mutex_lock_scoped(&cache_mutex);
     iso_dirent_t de;
     iso_fd_t *fd;
 
@@ -1175,7 +1235,6 @@ static void * iso_open(vfs_handler_t * vfs, const char *fn, int mode) {
 
     /* Do this only when we need to (this is still imperfect) */
     if(!percd_done && init_percd() < 0) {
-        errno = ENODEV;
         return 0;
     }
 
@@ -1184,7 +1243,6 @@ static void * iso_open(vfs_handler_t * vfs, const char *fn, int mode) {
     /* Find the file we want */
     if(find_object_path(fn, (mode & O_DIR) ? 1 : 0,
                         &root_dirent, &de) < 0) {
-        errno = ENOENT;
         return 0;
     }
 
@@ -1216,19 +1274,29 @@ static void * iso_open(vfs_handler_t * vfs, const char *fn, int mode) {
 }
 
 /* Close a file or directory */
-static int iso_close(void * h) {
-    iso_fd_t *fd = (iso_fd_t *)h;
+static int iso_close(void *h) {
+    iso_fd_t *fd = h;
 
-    mutex_lock_scoped(&fh_mutex);
-
+    mutex_lock(&fh_mutex);
     if(fd == stream_fd) {
-        iso_abort_stream(false);
-        // dbglog(DBG_DEBUG, "Stream stop on close, fd=%p\n", fd);
+        /* Only a legacy BIOS stream close needs foreground serialization.
+           Submission stops that stream before publishing an async request.
+           A later foreground read may start a new stream; even in that case
+           this wait holds no lock and no cache owner waits for requests. */
+        mutex_unlock(&fh_mutex);
+        mutex_lock(&cache_mutex);
+        if(fd == stream_fd)
+            iso_abort_stream();
+        mutex_lock(&fh_mutex);
+        TAILQ_REMOVE(&iso_fd_queue, fd, next);
+        mutex_unlock(&fh_mutex);
+        mutex_unlock(&cache_mutex);
     }
-
-    TAILQ_REMOVE(&iso_fd_queue, fd, next);
+    else {
+        TAILQ_REMOVE(&iso_fd_queue, fd, next);
+        mutex_unlock(&fh_mutex);
+    }
     free(fd);
-
     return 0;
 }
 
@@ -1244,12 +1312,11 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
     size_t remain_size = 0, req_size;
     uint32_t data_extent, sector;
     iso_fd_t *fd = (iso_fd_t *)h;
-
-    /* Check that the fd is valid */
-    if(fd->first_extent == 0 || fd->broken) {
-        errno = EBADF;
+    mutex_lock_scoped(&cache_mutex);
+    if(iso_sync_begin(fd) < 0)
         return -1;
-    }
+    iso_fd_t *sync_fd __attribute__((cleanup(iso_sync_end))) = fd;
+
     if(iso_data_extent(fd->first_extent, fd->ext_attr_length,
                        &data_extent) < 0
             || (fd->size && (uint64_t)data_extent
@@ -1260,13 +1327,6 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
 
     rv = 0;
     outbuf = (uint8_t *)buf;
-    mutex_lock(&fh_mutex);
-
-    if(iso_fd_async_busy(fd)) {
-        errno = EBUSY;
-        mutex_unlock(&fh_mutex);
-        return -1;
-    }
 
     /* Read zero or more sectors into the buffer from the current pos */
     while(bytes > 0) {
@@ -1318,7 +1378,7 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
                     req_size = (req_size + 2048) & ~2047;
                 }
                 if(stream_fd) {
-                    iso_abort_stream(false);
+                    iso_abort_stream();
                     // dbglog(DBG_DEBUG, "Stream stop for file fd: %p -> %p\n", stream_fd, fd);
                 }
                 c = cdrom_bios_stream_start(sector + 150, req_size / 2048, true);
@@ -1327,7 +1387,9 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
                     goto read_loop;
                 }
                 fd->stream_part = 0;
+                mutex_lock(&fh_mutex);
                 stream_fd = fd;
+                mutex_unlock(&fh_mutex);
                 // dbglog(DBG_DEBUG, "Stream start: lba=%ld cnt=%d fd=%p\n",
                 //     sector + 150, req_size / 2048, fd);
 
@@ -1346,7 +1408,7 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
             }
 
             if(remain_size == 0) {
-                iso_abort_stream(false);
+                iso_abort_stream();
                 // dbglog(DBG_DEBUG, "Stream stop on end, fd=%p\n", fd);
             }
             goto end_loop;
@@ -1370,7 +1432,7 @@ static ssize_t iso_read(void *h, void *buf, size_t bytes) {
             //         toread, remain_size, fd->stream_part, outbuf, fd);
 
             if(remain_size == 0) {
-                iso_abort_stream(false);
+                iso_abort_stream();
                 // dbglog(DBG_DEBUG, "Stream stop on end, fd=%p\n", fd);
             }
             goto end_loop;
@@ -1408,12 +1470,11 @@ end_loop:
         rv += toread;
     }
 
-    mutex_unlock(&fh_mutex);
     return rv;
 
 read_error:
-    errno = cdrom_result_to_errno(c);
-    mutex_unlock(&fh_mutex);
+    if(c >= 0)
+        errno = cdrom_result_to_errno(c);
     return -1;
 }
 
@@ -1421,19 +1482,10 @@ read_error:
 static off_t iso_seek(void * h, off_t offset, int whence) {
     uint32_t old_ptr;
     iso_fd_t *fd = (iso_fd_t *)h;
-
-    /* Check that the fd is valid */
-    if(fd->first_extent == 0 || fd->broken) {
-        errno = EBADF;
+    mutex_lock_scoped(&cache_mutex);
+    if(iso_sync_begin(fd) < 0)
         return -1;
-    }
-
-    mutex_lock_scoped(&fh_mutex);
-
-    if(iso_fd_async_busy(fd)) {
-        errno = EBUSY;
-        return -1;
-    }
+    iso_fd_t *sync_fd __attribute__((cleanup(iso_sync_end))) = fd;
 
     old_ptr = fd->ptr;
 
@@ -1475,7 +1527,7 @@ static off_t iso_seek(void * h, off_t offset, int whence) {
     if(fd->ptr > fd->size) fd->ptr = fd->size;
 
     if(fd == stream_fd && old_ptr != fd->ptr) {
-        iso_abort_stream(false);
+        iso_abort_stream();
         // dbglog(DBG_DEBUG, "Stream stop on seek: %ld != %ld\n", old_ptr, fd->ptr);
     }
 
@@ -1485,6 +1537,8 @@ static off_t iso_seek(void * h, off_t offset, int whence) {
 /* Tell where in the file we are */
 static off_t iso_tell(void * h) {
     iso_fd_t *fd = (iso_fd_t *)h;
+    mutex_lock_scoped(&cache_mutex);
+    mutex_lock_scoped(&fh_mutex);
 
     if(fd->first_extent == 0 || fd->broken) {
         errno = EBADF;
@@ -1497,6 +1551,7 @@ static off_t iso_tell(void * h) {
 /* Tell how big the file is */
 static size_t iso_total(void * h) {
     iso_fd_t *fd = (iso_fd_t *)h;
+    mutex_lock_scoped(&fh_mutex);
 
     if(fd->first_extent == 0 || fd->broken) {
         errno = EBADF;
@@ -1535,6 +1590,10 @@ static const dirent_t *iso_readdir(void * h) {
     uint8_t       *pnt;
 
     iso_fd_t *fd = (iso_fd_t *)h;
+    mutex_lock_scoped(&cache_mutex);
+    if(iso_sync_begin(fd) < 0)
+        return NULL;
+    iso_fd_t *sync_fd __attribute__((cleanup(iso_sync_end))) = fd;
 
     if(fd->first_extent == 0 || !fd->dir || fd->broken) {
         errno = EBADF;
@@ -1624,6 +1683,8 @@ static const dirent_t *iso_readdir(void * h) {
 
 static int iso_ioctl(void *h, int cmd, va_list ap) {
     iso_fd_t *fd = (iso_fd_t *)h;
+    mutex_lock_scoped(&cache_mutex);
+    mutex_lock_scoped(&fh_mutex);
     void *arg = va_arg(ap, void*);
 
     switch(cmd) {
@@ -1848,7 +1909,7 @@ cdrom_request_t *fs_iso9660_prefetch_directory_async(
         goto fail;
     }
 
-    mutex_lock(&fh_mutex);
+    iso_submit_lock();
     if(!fd->first_extent || fd->broken) {
         errno = EBADF;
         goto fail_locked;
@@ -1900,8 +1961,6 @@ cdrom_request_t *fs_iso9660_prefetch_directory_async(
     if(iso_directory_prefetch_make_segment(async, &first) < 0)
         goto fail_locked;
 
-    if(stream_fd)
-        iso_abort_stream(false);
     request = iso_backend_submit_dma_chain(
         &first, 0, 0, async->span, timeout,
         iso_directory_prefetch_continue, async,
@@ -1911,12 +1970,12 @@ cdrom_request_t *fs_iso9660_prefetch_directory_async(
     if(!request)
         goto fail_locked;
     fd->async_request = request;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     return request;
 
 fail_locked:
     saved_errno = errno;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     free(async ? async->snapshot : NULL);
     free(async ? async->buffer : NULL);
     free(async);
@@ -2093,7 +2152,7 @@ cdrom_request_t *fs_iso9660_read_direct_async(
         goto fail;
     }
 
-    mutex_lock(&fh_mutex);
+    iso_submit_lock();
 
     if(!fd->first_extent || fd->broken) {
         errno = EBADF;
@@ -2146,9 +2205,6 @@ cdrom_request_t *fs_iso9660_read_direct_async(
         if(iso_async_read_make_segment(async, &first) < 0)
             goto fail_locked;
 
-        if(stream_fd)
-            iso_abort_stream(false);
-
         request = iso_backend_submit_dma_chain(
             &first, requested_size, async->data_size, async->transfer_size,
             timeout, iso_async_read_continue, async,
@@ -2164,12 +2220,12 @@ cdrom_request_t *fs_iso9660_read_direct_async(
         goto fail_locked;
 
     fd->async_request = request;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     return request;
 
 fail_locked:
     saved_errno = errno;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     free(async);
     fs_close(retained);
     errno = saved_errno;
@@ -2383,7 +2439,7 @@ cdrom_request_t *fs_iso9660_read_async(
         goto fail;
     }
 
-    mutex_lock(&fh_mutex);
+    iso_submit_lock();
 
     if(!fd->first_extent || fd->broken) {
         errno = EBADF;
@@ -2438,9 +2494,6 @@ cdrom_request_t *fs_iso9660_read_async(
         if(iso_async_byte_make_segment(async, &first) < 0)
             goto fail_locked;
 
-        if(stream_fd)
-            iso_abort_stream(false);
-
         request = iso_backend_submit_dma_chain(
             &first, bytes, async->data_size, io_bytes, timeout,
             iso_async_byte_continue, async, iso_async_byte_finalize, async,
@@ -2456,12 +2509,12 @@ cdrom_request_t *fs_iso9660_read_async(
         goto fail_locked;
 
     fd->async_request = request;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     return request;
 
 fail_locked:
     saved_errno = errno;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     free(async);
     fs_close(retained);
     errno = saved_errno;
@@ -2532,7 +2585,7 @@ cdrom_stream_session_t *fs_iso9660_stream_start(
         goto fail;
     }
 
-    mutex_lock(&fh_mutex);
+    iso_submit_lock();
 
     if(!fd->first_extent || fd->broken) {
         errno = EBADF;
@@ -2578,9 +2631,6 @@ cdrom_stream_session_t *fs_iso9660_stream_start(
     async->retained_fd = retained;
     async->start = fd->ptr;
 
-    if(stream_fd)
-        iso_abort_stream(false);
-
     session = cdrom_stream_session_start_internal(
         (uint32_t)fad, active, 2048, data_size,
         iso_backend == FS_ISO9660_BACKEND_DIRECT && !start_timeout
@@ -2593,12 +2643,12 @@ cdrom_stream_session_t *fs_iso9660_stream_start(
         goto fail_locked;
 
     fd->stream_session = session;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     return session;
 
 fail_locked:
     saved_errno = errno;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     free(async);
     fs_close(retained);
     errno = saved_errno;
@@ -2672,7 +2722,7 @@ cdrom_request_t *fs_iso9660_preseek_async(
         goto fail;
     }
 
-    mutex_lock(&fh_mutex);
+    iso_submit_lock();
 
     if(!fd->first_extent || fd->broken) {
         errno = EBADF;
@@ -2710,9 +2760,6 @@ cdrom_request_t *fs_iso9660_preseek_async(
     async->callback = callback;
     async->callback_data = callback_data;
 
-    if(stream_fd)
-        iso_abort_stream(false);
-
     if(iso_backend == FS_ISO9660_BACKEND_DIRECT) {
         request = gdrom_direct_seek_async_internal(
             (uint32_t)fad,
@@ -2729,12 +2776,12 @@ cdrom_request_t *fs_iso9660_preseek_async(
         goto fail_locked;
 
     fd->async_request = request;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     return request;
 
 fail_locked:
     saved_errno = errno;
-    mutex_unlock(&fh_mutex);
+    iso_submit_unlock();
     free(async);
     fs_close(retained);
     errno = saved_errno;
@@ -2751,6 +2798,10 @@ fail:
 
 static int iso_rewinddir(void * h) {
     iso_fd_t *fd = (iso_fd_t *)h;
+    mutex_lock_scoped(&cache_mutex);
+    if(iso_sync_begin(fd) < 0)
+        return -1;
+    iso_fd_t *sync_fd __attribute__((cleanup(iso_sync_end))) = fd;
 
     if(fd->first_extent == 0 || !fd->dir || fd->broken) {
         errno = EBADF;
@@ -2762,12 +2813,17 @@ static int iso_rewinddir(void * h) {
     return 0;
 }
 
-int iso_reset(void) {
+static int iso_reset_locked(void) {
     iso_break_all();
     bclear();
-    iso_abort_stream(false);
+    iso_abort_stream();
     percd_done = false;
     return 0;
+}
+
+int iso_reset(void) {
+    mutex_lock_scoped(&cache_mutex);
+    return iso_reset_locked();
 }
 
 /* Media callbacks run in thread context. Conservatively mark the mount stale
@@ -2779,6 +2835,7 @@ static mutex_t iso_media_event_mutex;
 static bool iso_media_monitor_warning;
 
 static void iso_media_event(const cdrom_media_event_t *event, void *data) {
+    mutex_lock_scoped(&cache_mutex);
     (void)data;
 
     /* The generation is a retry budget, not disc identity: each significant
@@ -2795,6 +2852,8 @@ static void iso_media_event(const cdrom_media_event_t *event, void *data) {
         iso_bios_recognition_pending = true;
     mutex_unlock(&backend_mutex);
 
+    iso_break_all();
+    bclear();
     percd_done = false;
 }
 
@@ -2826,6 +2885,7 @@ static int iso_media_monitor_ensure(void) {
 
 static int iso_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
                     int flag) {
+    mutex_lock_scoped(&cache_mutex);
     mode_t md;
     iso_dirent_t de;
     size_t len = strlen(path);
@@ -2847,7 +2907,6 @@ static int iso_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
 
     /* Do this only when we need to (this is still imperfect) */
     if(!percd_done && init_percd() < 0) {
-        errno = ENODEV;
         return -1;
     }
 
@@ -2859,8 +2918,8 @@ static int iso_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
     }
     else {
         /* If we couldn't get it as a file, try as a directory. */
-        if(find_object_path(path, 1, &root_dirent, &de) < 0) {
-            errno = ENOENT;
+        if(errno != ENOENT
+                || find_object_path(path, 1, &root_dirent, &de) < 0) {
             return -1;
         }
         md = S_IFDIR;
@@ -2878,6 +2937,7 @@ static int iso_stat(vfs_handler_t *vfs, const char *path, struct stat *st,
 
 static int iso_fcntl(void *h, int cmd, va_list ap) {
     iso_fd_t *fd = (iso_fd_t *)h;
+    mutex_lock_scoped(&fh_mutex);
     int rv = -1;
 
     (void)ap;
@@ -2911,6 +2971,7 @@ static int iso_fcntl(void *h, int cmd, va_list ap) {
 
 static int iso_fstat(void *h, struct stat *st) {
     iso_fd_t *fd = (iso_fd_t *)h;
+    mutex_lock_scoped(&fh_mutex);
 
     if(!fd->first_extent || fd->broken) {
         errno = EBADF;
