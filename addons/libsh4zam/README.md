@@ -141,13 +141,6 @@ in each of these eight lanes. The smaller direct-API reproducer is retained.
 See the [standalone regression report](../../doc/sh4zam-0.8.1-fast-trig.md)
 for cardinal-angle results and reproduction instructions.
 
-## 0.9.0 upgrade validation
-
-See [the integration report](../../doc/sh4zam-0.9.0-upgrade.md) for the forced
-target rebuild, expanded matrix/trig checks, compiler lanes, and emulator
-results. The pinned upstream checkout is unmodified. No physical-hardware
-performance or accuracy certification is implied.
-
 ## Historical 0.8.1 upgrade validation
 
 The entire KOS target build was forced with SH-4 GCC 16.2.0 to rebuild inline
