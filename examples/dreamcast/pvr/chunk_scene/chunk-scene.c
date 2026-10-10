@@ -172,7 +172,6 @@ static int model_load(size_t index) {
     pvr_chunk_skeleton_joint_t joints[JOINTS];
     pvr_chunk_skeleton_t skeleton;
     pvr_chunk_shape_requirements_t shape_req;
-    pvr_chunk_cache_section_view_t cache_view;
     pvr_chunk_cache_section_requirements_t cache_req;
     const void *data;
     size_t bytes;
@@ -247,14 +246,15 @@ static int model_load(size_t index) {
 
     if(section(PVR_CHUNK_ASSET_SECTION_COOKED_CACHE,
                  record.cooked_cache_ordinal, &data, &bytes) < 0 ||
-       pvr_chunk_cache_section_open(data, bytes, &cache_view) < 0 ||
-       pvr_chunk_cache_section_workspace_query(&cache_view, &cache_req) < 0)
+       pvr_chunk_cache_section_ordinary_query(data, bytes, &cache_req) < 0)
         return failure("cache-query");
     m->cache_storage = aligned_alloc(cache_req.alignment, cache_req.bytes);
-    if(!m->cache_storage || pvr_chunk_cache_section_materialize_ordinary(
-           &cache_view, m->cache_storage, cache_req.bytes, &m->cache) < 0 ||
-       pvr_chunk_model_cache_draw_prepare(&m->cache, &m->draw) < 0)
+    if(!m->cache_storage || pvr_chunk_cache_section_load_ordinary(
+           data, bytes, m->cache_storage, cache_req.bytes, &m->draw) < 0)
         return failure("cache");
+    m->cache = m->draw.cache;
+    /* This PCC1 source is no longer borrowed by the cache. Keep app.asset:
+       the scene and other section views still borrow the outer file. */
     if(require(m->cache.vertex_count == PACKETS &&
                m->cache.strip_count == STRIPS &&
                m->cache.maximum_strip_vertices == STRIP_VERTICES) < 0)

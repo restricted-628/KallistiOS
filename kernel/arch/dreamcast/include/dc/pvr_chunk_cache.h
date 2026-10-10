@@ -85,7 +85,8 @@ typedef struct pvr_chunk_model_cache {
 
 /** \brief Admitted ordinary cache for repeated draws without static rescans.
 
-    Initialize only with pvr_chunk_model_cache_draw_prepare(). This snapshot
+    Initialize only with pvr_chunk_model_cache_draw_prepare() or
+    pvr_chunk_cache_section_load_ordinary(). This snapshot
     and its borrowed cache storage must remain immutable and accessible until
     the last draw completes, including throughout callbacks. Rebuild and
     prepare again after any storage change. It owns no memory and may be

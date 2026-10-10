@@ -500,6 +500,187 @@ static pvr_chunk_model_t make_model(const uint16_t *polygon_words,
 
 alignas(32) static uint8_t cooked_section_bytes[16384];
 alignas(32) static uint8_t cooked_cache_storage[8192];
+alignas(32) static uint8_t loaded_cache_storage[8192];
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+size_t pvr_chunk_cache_asset_test_counts[5];
+#endif
+
+static uint32_t cooked_crc(const uint8_t *data, size_t bytes) {
+    uint32_t crc = UINT32_MAX;
+    for(size_t i = 0; i < bytes; ++i) {
+        crc ^= data[i];
+        for(unsigned bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (UINT32_C(0xedb88320) & (0u - (crc & 1u)));
+    }
+    return ~crc;
+}
+
+static void cooked_write32(uint8_t *where, uint32_t value) {
+    for(unsigned i = 0; i < 4; ++i)
+        where[i] = (uint8_t)(value >> (i * 8));
+}
+
+static void cooked_reseal(size_t bytes) {
+    cooked_write32(cooked_section_bytes + 84,
+                   cooked_crc(cooked_section_bytes + 128, bytes - 128));
+    cooked_write32(cooked_section_bytes + 124,
+                   cooked_crc(cooked_section_bytes, 124));
+}
+
+static void test_ordinary_load(const pvr_chunk_model_cache_t *cache,
+                              size_t bytes) {
+    pvr_chunk_cache_draw_t draw, before;
+    pvr_chunk_cache_section_requirements_t req, sentinel;
+    uint8_t saved_wire[sizeof(cooked_section_bytes)];
+    uint8_t saved_native[sizeof(loaded_cache_storage)];
+    memcpy(saved_wire, cooked_section_bytes, bytes);
+    memset(&req, 0x55, sizeof(req));
+    sentinel = req;
+    assert(pvr_chunk_cache_section_ordinary_query(cooked_section_bytes,
+                                                  bytes - 1, &req) == -1);
+    assert(memcmp(&req, &sentinel, sizeof(req)) == 0);
+    errno = 0;
+    assert(pvr_chunk_cache_section_ordinary_query(cooked_section_bytes, bytes,
+        (pvr_chunk_cache_section_requirements_t *)cooked_section_bytes) == -1);
+    assert(errno == EINVAL);
+    assert(memcmp(saved_wire, cooked_section_bytes, bytes) == 0);
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+    memset(pvr_chunk_cache_asset_test_counts, 0,
+           sizeof(pvr_chunk_cache_asset_test_counts));
+#endif
+    assert(pvr_chunk_cache_section_ordinary_query(cooked_section_bytes,
+                                                  bytes, &req) == 0);
+    assert(req.bytes == cache->storage_bytes && req.alignment == 32);
+    printf("PCC1 memory: wire=%zu native=%zu library_allocations=0\n", bytes, req.bytes);
+    assert(pvr_chunk_cache_section_load_ordinary(cooked_section_bytes, bytes,
+        loaded_cache_storage, req.bytes, &draw) == 0);
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+    assert(pvr_chunk_cache_asset_test_counts[0] == 2);
+    assert(pvr_chunk_cache_asset_test_counts[1] == bytes - 128);
+    assert(pvr_chunk_cache_asset_test_counts[2] == cache->strip_count);
+    assert(pvr_chunk_cache_asset_test_counts[3] == cache->vertex_count);
+    assert(pvr_chunk_cache_asset_test_counts[4] == cache->vertex_count);
+    printf("PCC1 new: headers=2 payload_bytes=%zu strips=%zu packets=%zu deform=%zu\n",
+           bytes - 128, cache->strip_count, cache->vertex_count, cache->vertex_count);
+#endif
+    assert(memcmp(loaded_cache_storage, cache->storage, req.bytes) == 0);
+    assert(draw.cache.strip_count == cache->strip_count);
+    assert(draw.cache.vertex_count == cache->vertex_count);
+    assert(draw.cache.maximum_strip_vertices == cache->maximum_strip_vertices);
+    assert(memcmp(draw.cache.center, cache->center, sizeof(cache->center)) == 0);
+    assert(draw.cache.radius == cache->radius);
+    /* Independently check the constructor against the original admission. */
+    assert(pvr_chunk_model_cache_draw_prepare(&draw.cache, &before) == 0);
+    assert(memcmp(&draw, &before, sizeof(draw)) == 0);
+    memcpy(saved_native, loaded_cache_storage, sizeof(saved_native));
+
+#define LOAD_REJECT(input, length, storage, capacity, output, error) do { \
+    errno = 0; \
+    assert(pvr_chunk_cache_section_load_ordinary(input, length, storage, capacity, output) == -1); \
+    assert(errno == (error)); \
+    assert(memcmp(&draw, &before, sizeof(draw)) == 0); \
+    assert(memcmp(saved_native, loaded_cache_storage, sizeof(saved_native)) == 0); \
+} while(0)
+    LOAD_REJECT(cooked_section_bytes, bytes - 1, loaded_cache_storage,
+                req.bytes, &draw, EILSEQ);
+    LOAD_REJECT(cooked_section_bytes, bytes, loaded_cache_storage,
+                req.bytes - 1, &draw, ENOSPC);
+    LOAD_REJECT(cooked_section_bytes, bytes, loaded_cache_storage + 1,
+                req.bytes, &draw, EINVAL);
+    LOAD_REJECT(cooked_section_bytes, bytes, cooked_section_bytes,
+                req.bytes, &draw, EINVAL);
+    LOAD_REJECT(cooked_section_bytes, bytes, loaded_cache_storage,
+                req.bytes, (pvr_chunk_cache_draw_t *)loaded_cache_storage, EINVAL);
+    LOAD_REJECT(cooked_section_bytes, bytes, loaded_cache_storage,
+                req.bytes, (pvr_chunk_cache_draw_t *)cooked_section_bytes, EINVAL);
+    LOAD_REJECT(NULL, bytes, loaded_cache_storage, req.bytes, &draw, EINVAL);
+    LOAD_REJECT(cooked_section_bytes, SIZE_MAX, loaded_cache_storage,
+                req.bytes, &draw, EINVAL);
+    LOAD_REJECT(cooked_section_bytes, bytes, loaded_cache_storage,
+                req.bytes, NULL, EINVAL);
+    /* Corrupt payload with intact header: sizing is intentionally not admission. */
+    cooked_section_bytes[bytes - 1] ^= 1;
+    assert(pvr_chunk_cache_section_ordinary_query(cooked_section_bytes, bytes, &req) == 0);
+    LOAD_REJECT(cooked_section_bytes, bytes, loaded_cache_storage,
+                req.bytes, &draw, EILSEQ);
+    memcpy(cooked_section_bytes, saved_wire, bytes);
+    /* Recomputed CRC must not bypass semantic checks. */
+    pvr_chunk_cache_section_view_t wire;
+    assert(pvr_chunk_cache_section_open(cooked_section_bytes, bytes, &wire) == 0);
+    size_t offsets[] = {128 + 96,
+        (const uint8_t *)wire.vertices - cooked_section_bytes,
+        (const uint8_t *)wire.deform_vertices - cooked_section_bytes};
+    uint32_t invalid[] = {1, 0, UINT32_C(0x7fc00000)};
+    for(size_t i = 0; i < 3; ++i) {
+        cooked_write32(cooked_section_bytes + offsets[i], invalid[i]);
+        cooked_reseal(bytes);
+        assert(pvr_chunk_cache_section_open(cooked_section_bytes, bytes, &wire) == -1);
+        LOAD_REJECT(cooked_section_bytes, bytes, loaded_cache_storage,
+                    req.bytes, &draw, EILSEQ);
+        memcpy(cooked_section_bytes, saved_wire, bytes);
+    }
+#undef LOAD_REJECT
+    /* Same-address reload must admit current bytes, not remember the query. */
+    cooked_write32(cooked_section_bytes + 56, UINT32_C(0x40a00000));
+    cooked_reseal(bytes);
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+    memset(pvr_chunk_cache_asset_test_counts, 0,
+           sizeof(pvr_chunk_cache_asset_test_counts));
+#endif
+    assert(pvr_chunk_cache_section_load_ordinary(cooked_section_bytes, bytes,
+        loaded_cache_storage, req.bytes, &draw) == 0);
+    assert(draw.cache.center[0] == 5.0f);
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+    assert(pvr_chunk_cache_asset_test_counts[1] == bytes - 128);
+#endif
+    /* The isolated PCC1 bytes are no longer borrowed after success. */
+    memset(cooked_section_bytes, 0, bytes);
+    assert(pvr_chunk_model_cache_draw_prepare(&draw.cache, &before) == 0);
+    assert(memcmp(loaded_cache_storage, cache->storage, req.bytes) == 0);
+    memcpy(cooked_section_bytes, saved_wire, bytes);
+}
+
+static void test_cooked_mutations(size_t bytes) {
+    uint8_t saved[sizeof(cooked_section_bytes)];
+    memcpy(saved, cooked_section_bytes, bytes);
+    for(size_t offset = 0; offset < bytes; ++offset) {
+        pvr_chunk_cache_section_view_t view;
+        pvr_chunk_model_cache_t cache;
+        pvr_chunk_cache_draw_t old_draw, new_draw, sentinel;
+        uint8_t before[sizeof(loaded_cache_storage)];
+        memcpy(cooked_section_bytes, saved, bytes);
+        cooked_section_bytes[offset] ^= 0x80;
+        cooked_reseal(bytes);
+        errno = 0;
+        int old_status = pvr_chunk_cache_section_open(cooked_section_bytes,
+                                                      bytes, &view);
+        if(!old_status)
+            old_status = pvr_chunk_cache_section_materialize_ordinary(&view,
+                cooked_cache_storage, sizeof(cooked_cache_storage), &cache);
+        if(!old_status)
+            old_status = pvr_chunk_model_cache_draw_prepare(&cache, &old_draw);
+        int old_errno = errno;
+        memset(&new_draw, 0x5a, sizeof(new_draw));
+        sentinel = new_draw;
+        memcpy(before, loaded_cache_storage, sizeof(before));
+        errno = 0;
+        int new_status = pvr_chunk_cache_section_load_ordinary(cooked_section_bytes,
+            bytes, loaded_cache_storage, sizeof(loaded_cache_storage), &new_draw);
+        assert(old_status == new_status);
+        if(old_status) {
+            assert(errno == old_errno);
+            assert(memcmp(&new_draw, &sentinel, sizeof(new_draw)) == 0);
+            assert(memcmp(before, loaded_cache_storage, sizeof(before)) == 0);
+        }
+        else {
+            assert(new_draw.cache.storage_bytes == cache.storage_bytes);
+            assert(memcmp(loaded_cache_storage, cooked_cache_storage,
+                          cache.storage_bytes) == 0);
+        }
+    }
+    memcpy(cooked_section_bytes, saved, bytes);
+    printf("PCC1 resealed-byte parity: %zu mutations PASS\n", bytes);
+}
 
 static void test_ordinary_cooked_section(
     const pvr_chunk_model_cache_t *source) {
@@ -516,6 +697,10 @@ static void test_ordinary_cooked_section(
     assert(errno == EINVAL);
     assert(pvr_chunk_model_cache_section_serialize(
         source, cooked_section_bytes, sizeof(cooked_section_bytes)) == 0);
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+    memset(pvr_chunk_cache_asset_test_counts, 0,
+           sizeof(pvr_chunk_cache_asset_test_counts));
+#endif
     assert(pvr_chunk_cache_section_open(
         cooked_section_bytes, bytes, &view) == 0);
     assert(view.kind == PVR_CHUNK_CACHE_SECTION_ORDINARY);
@@ -525,6 +710,18 @@ static void test_ordinary_cooked_section(
     assert(pvr_chunk_cache_section_materialize_ordinary(
         &view, cooked_cache_storage, sizeof(cooked_cache_storage),
         &cache) == 0);
+    pvr_chunk_cache_draw_t old_draw;
+    assert(pvr_chunk_model_cache_draw_prepare(&cache, &old_draw) == 0);
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+    assert(pvr_chunk_cache_asset_test_counts[0] == 3);
+    assert(pvr_chunk_cache_asset_test_counts[1] == 3 * (bytes - 128));
+    assert(pvr_chunk_cache_asset_test_counts[2] == 3 * cache.strip_count);
+    assert(pvr_chunk_cache_asset_test_counts[3] == 3 * cache.vertex_count);
+    assert(pvr_chunk_cache_asset_test_counts[4] == 3 * cache.vertex_count);
+    printf("PCC1 old: headers=3 payload_bytes=%zu strips=%zu packets=%zu deform=%zu\n",
+           3 * (bytes - 128), 3 * cache.strip_count, 3 * cache.vertex_count, 3 * cache.vertex_count);
+#endif
+    test_ordinary_load(&cache, bytes);
     assert(cache.strip_count == source->strip_count);
     assert(cache.vertex_count == source->vertex_count);
     for(size_t i = 0; i < cache.strip_count; ++i) {
@@ -543,6 +740,7 @@ static void test_ordinary_cooked_section(
         cooked_section_bytes, bytes, &view) == -1);
     assert(errno == EILSEQ);
     cooked_section_bytes[bytes - 1u] ^= 1u;
+    test_cooked_mutations(bytes);
 }
 
 static void test_unlit_cooked_section(void) {
@@ -566,6 +764,45 @@ static void test_unlit_cooked_section(void) {
     assert(cache.strips[0].state.strip_flags == PVR_CHUNK_STRIP_UNLIT);
     assert(pvr_chunk_model_cache_validate(&cache) == 0);
     test_admitted_draw(&cache);
+    test_ordinary_cooked_section(&cache);
+}
+
+static void test_cooked_query_replacement(void) {
+    static const uint16_t twice[] = {
+        PVR_CHUNK_STRIP_INDEX, 9, 2, 3, 0, 1, 2, 3, 0, 1, 2, 0xff
+    };
+    pvr_chunk_model_t model = make_model(twice, sizeof(twice) / sizeof(twice[0]));
+    pvr_chunk_model_view_t view;
+    pvr_chunk_vertex_index_entry_t entries[256];
+    pvr_chunk_model_plan_t plan;
+    alignas(32) uint8_t storage[2048];
+    pvr_chunk_model_cache_t cache;
+    pvr_chunk_cache_section_requirements_t small, large;
+    pvr_chunk_cache_draw_t draw, sentinel;
+    size_t bytes = 512; /* Previous one-strip fixture. */
+    assert(pvr_chunk_cache_section_ordinary_query(cooked_section_bytes, bytes, &small) == 0);
+    assert(pvr_chunk_model_open(&model, &view) == 0);
+    assert(pvr_chunk_model_plan_build(&view, entries, 256, &plan) == 0);
+    assert(pvr_chunk_model_cache_build(&plan, storage, sizeof(storage),
+                                      NULL, NULL, &cache) == 0);
+    assert(pvr_chunk_model_cache_section_query(&cache, &bytes) == 0);
+    assert(pvr_chunk_model_cache_section_serialize(&cache, cooked_section_bytes,
+                                                  sizeof(cooked_section_bytes)) == 0);
+    assert(pvr_chunk_cache_section_ordinary_query(cooked_section_bytes, bytes, &large) == 0);
+    assert(large.bytes > small.bytes);
+    memset(&draw, 0x5a, sizeof(draw));
+    sentinel = draw;
+    memset(loaded_cache_storage, 0x77, sizeof(loaded_cache_storage));
+    errno = 0;
+    assert(pvr_chunk_cache_section_load_ordinary(cooked_section_bytes, bytes,
+        loaded_cache_storage, small.bytes, &draw) == -1);
+    assert(errno == ENOSPC);
+    assert(memcmp(&draw, &sentinel, sizeof(draw)) == 0);
+    for(size_t i = 0; i < sizeof(loaded_cache_storage); ++i)
+        assert(loaded_cache_storage[i] == 0x77);
+    assert(pvr_chunk_cache_section_load_ordinary(cooked_section_bytes, bytes,
+        loaded_cache_storage, large.bytes, &draw) == 0);
+    assert(draw.cache.strip_count == 2 && draw.cache.vertex_count == 6);
     test_ordinary_cooked_section(&cache);
 }
 
@@ -1982,6 +2219,7 @@ int main(void) {
     assert(pvr_chunk_model_cache_validate(&cache) == 0);
     test_ordinary_cooked_section(&cache);
     test_unlit_cooked_section();
+    test_cooked_query_replacement();
     assert(toon_draw_fixtures());
     assert(two_volume_toon_fixtures());
     test_toon_cache(&cache);

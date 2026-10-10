@@ -13,6 +13,14 @@
 
 #include "pvr_chunk_render_internal.h"
 
+#ifdef PVR_CHUNK_CACHE_ASSET_TEST
+/* Header parses, payload CRC bytes, strips, packets, deformation records. */
+extern size_t pvr_chunk_cache_asset_test_counts[5];
+#define COUNT_SCAN(slot, count) (pvr_chunk_cache_asset_test_counts[slot] += (count))
+#else
+#define COUNT_SCAN(slot, count) ((void)0)
+#endif
+
 /* PCC1 mirrors the information in a published draw cache, not its native
    layout. Fixed-size descriptors and separate canonical arrays keep host
    pointer width, structure padding, and runtime texture addresses out of
@@ -106,6 +114,11 @@ static uint32_t crc32_bytes(const void *data, size_t size) {
                    (uint32_t)-(int32_t)(crc & 1u));
     }
     return ~crc;
+}
+
+static uint32_t payload_crc(const void *data, size_t size) {
+    COUNT_SCAN(1, size);
+    return crc32_bytes(data, size);
 }
 
 static int add_size(size_t left, size_t right, size_t *result) {
@@ -327,6 +340,7 @@ static int packet_valid(const uint8_t *bytes, size_t bytes_per_vertex,
     size_t float_words;
     size_t index;
 
+    COUNT_SCAN(3, 1);
     if((kind == PVR_CHUNK_CACHE_SECTION_MODIFIER &&
         command != PVR_CMD_VERTEX_EOL) ||
        (kind != PVR_CHUNK_CACHE_SECTION_MODIFIER &&
@@ -357,6 +371,7 @@ static int packet_valid(const uint8_t *bytes, size_t bytes_per_vertex,
 }
 
 static int deform_valid(const uint8_t *bytes) {
+    COUNT_SCAN(4, 1);
     return vector_valid(bytes, 1.0f) && vector_valid(bytes + 16, 0.0f);
 }
 
@@ -393,6 +408,7 @@ static int validate_strips(const uint8_t *bytes, size_t strip_count,
         uint8_t source_type = record[136];
         uint8_t source_flags = record[137];
 
+        COUNT_SCAN(2, 1);
         if(!state_valid(record) || first != cursor || count < 3u ||
            count > vertex_count - cursor ||
            !strip_type_valid(source_type, kind, format) ||
@@ -467,8 +483,8 @@ static int checked_view(const pvr_chunk_cache_section_view_t *view,
     return pvr_chunk_cache_section_open(view->data, view->size, checked);
 }
 
-int pvr_chunk_cache_section_open(
-    const void *data, size_t size, pvr_chunk_cache_section_view_t *view) {
+static int section_parse(const void *data, size_t size,
+                         pvr_chunk_cache_section_view_t *view, int payload) {
     const uint8_t *bytes = data;
     pvr_chunk_cache_section_view_t parsed;
     pvr_chunk_cache_section_kind_t kind;
@@ -487,6 +503,7 @@ int pvr_chunk_cache_section_open(
         errno = EINVAL;
         return -1;
     }
+    COUNT_SCAN(0, 1);
     if(size < PVR_CHUNK_CACHE_SECTION_HEADER_BYTES ||
        read_le32(bytes) != PVR_CHUNK_CACHE_SECTION_MAGIC ||
        read_le16(bytes + 4) != PVR_CHUNK_CACHE_SECTION_VERSION ||
@@ -539,37 +556,39 @@ int pvr_chunk_cache_section_open(
        read_le16(bytes + HEADER_INDEX_BYTES_OFFSET) != sizeof(uint16_t) ||
        read_le16(bytes + HEADER_USER_BYTES_OFFSET) !=
            (kind == PVR_CHUNK_CACHE_SECTION_MODIFIER ? sizeof(uint16_t) : 0u) ||
-       read_le32(bytes + HEADER_PAYLOAD_CRC_OFFSET) != crc32_bytes(
+       (payload && read_le32(bytes + HEADER_PAYLOAD_CRC_OFFSET) != payload_crc(
            bytes + PVR_CHUNK_CACHE_SECTION_HEADER_BYTES,
-           size - PVR_CHUNK_CACHE_SECTION_HEADER_BYTES)) {
+           size - PVR_CHUNK_CACHE_SECTION_HEADER_BYTES))) {
         if(!errno)
             errno = EILSEQ;
         return -1;
     }
-    if(kind == PVR_CHUNK_CACHE_SECTION_MODIFIER) {
-        if(validate_modifiers(bytes + layout.descriptors_offset, primary,
-                              secondary, tertiary, user_words) < 0)
-            return -1;
-    }
-    else if(validate_strips(bytes + layout.descriptors_offset, primary,
-                            secondary, tertiary, kind, format) < 0)
-        return -1;
-
-    for(index = 0; index < secondary; ++index) {
-        if(!packet_valid(bytes + layout.vertices_offset +
-                         index * layout.vertex_size,
-                         layout.vertex_size, kind)) {
-            errno = EILSEQ;
-            return -1;
+    if(payload) {
+        if(kind == PVR_CHUNK_CACHE_SECTION_MODIFIER) {
+            if(validate_modifiers(bytes + layout.descriptors_offset, primary,
+                                  secondary, tertiary, user_words) < 0)
+                return -1;
         }
-    }
-    deform_count = kind == PVR_CHUNK_CACHE_SECTION_MODIFIER ?
-                   tertiary : secondary;
-    for(index = 0; index < deform_count; ++index) {
-        if(!deform_valid(bytes + layout.deform_offset +
-                         index * sizeof(pvr_deform_vertex_t))) {
-            errno = EILSEQ;
+        else if(validate_strips(bytes + layout.descriptors_offset, primary,
+                                secondary, tertiary, kind, format) < 0)
             return -1;
+
+        for(index = 0; index < secondary; ++index) {
+            if(!packet_valid(bytes + layout.vertices_offset +
+                             index * layout.vertex_size,
+                             layout.vertex_size, kind)) {
+                errno = EILSEQ;
+                return -1;
+            }
+        }
+        deform_count = kind == PVR_CHUNK_CACHE_SECTION_MODIFIER ?
+                       tertiary : secondary;
+        for(index = 0; index < deform_count; ++index) {
+            if(!deform_valid(bytes + layout.deform_offset +
+                             index * sizeof(pvr_deform_vertex_t))) {
+                errno = EILSEQ;
+                return -1;
+            }
         }
     }
     if(!isfinite(read_float(bytes + HEADER_CENTER_OFFSET)) ||
@@ -601,6 +620,46 @@ int pvr_chunk_cache_section_open(
     parsed.format = format;
     parsed.version = PVR_CHUNK_CACHE_SECTION_VERSION;
     *view = parsed;
+    return 0;
+}
+
+int pvr_chunk_cache_section_open(
+    const void *data, size_t size, pvr_chunk_cache_section_view_t *view) {
+    return section_parse(data, size, view, 1);
+}
+
+int pvr_chunk_cache_section_ordinary_query(
+    const void *data, size_t size,
+    pvr_chunk_cache_section_requirements_t *requirements) {
+    pvr_chunk_cache_section_view_t header;
+    native_layout_t layout;
+    pvr_chunk_cache_section_requirements_t result;
+
+    if(!data || !requirements ||
+       ((uintptr_t)requirements &
+        (_Alignof(pvr_chunk_cache_section_requirements_t) - 1u)) ||
+       size > UINTPTR_MAX - (uintptr_t)data ||
+       sizeof(*requirements) > UINTPTR_MAX - (uintptr_t)requirements) {
+        errno = EINVAL;
+        return -1;
+    }
+    if((uintptr_t)requirements < (uintptr_t)data + size &&
+       (uintptr_t)data < (uintptr_t)requirements + sizeof(*requirements)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(section_parse(data, size, &header, 0) < 0)
+        return -1;
+    if(header.kind != PVR_CHUNK_CACHE_SECTION_ORDINARY) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(native_layout_get(&header, &layout) < 0)
+        return -1;
+    result.alignment = PVR_CHUNK_CACHE_ALIGNMENT;
+    result.bytes = layout.bytes;
+    result.kind = header.kind;
+    *requirements = result;
     return 0;
 }
 
@@ -731,13 +790,87 @@ static void decode_strips(const pvr_chunk_cache_section_view_t *view,
                      strips + index);
 }
 
+static void decode_ordinary(const pvr_chunk_cache_section_view_t *checked,
+                             const native_layout_t *layout, void *storage,
+                             pvr_chunk_model_cache_t *result) {
+    size_t index;
+
+    memset(storage, 0, layout->bytes);
+    decode_strips(checked, storage);
+    for(index = 0; index < checked->secondary_count; ++index)
+        decode_packet_words((const uint8_t *)checked->vertices + index * 32u,
+            (uint8_t *)storage + layout->vertices_offset + index * 32u, 32u);
+    decode_deformations(checked,
+        (pvr_deform_vertex_t *)((uint8_t *)storage + layout->deform_offset),
+        checked->secondary_count);
+    decode_indices(checked,
+        (uint16_t *)((uint8_t *)storage + layout->indices_offset),
+        checked->secondary_count);
+
+    memset(result, 0, sizeof(*result));
+    result->version = PVR_CHUNK_CACHE_VERSION;
+    result->storage = storage;
+    result->storage_bytes = layout->bytes;
+    result->strips = storage;
+    result->strip_count = checked->primary_count;
+    result->vertices = (const pvr_vertex_t *)((uint8_t *)storage +
+                                             layout->vertices_offset);
+    result->deform_vertices = (const pvr_deform_vertex_t *)(
+        (uint8_t *)storage + layout->deform_offset);
+    result->source_indices = (const uint16_t *)((uint8_t *)storage +
+                                               layout->indices_offset);
+    result->vertex_count = checked->secondary_count;
+    result->maximum_strip_vertices = checked->tertiary_count;
+    memcpy(result->center, checked->center, sizeof(result->center));
+    result->radius = checked->radius;
+}
+
+int pvr_chunk_cache_section_load_ordinary(
+    const void *data, size_t size, void *storage, size_t storage_bytes,
+    pvr_chunk_cache_draw_t *draw) {
+    pvr_chunk_cache_section_view_t checked;
+    native_layout_t layout;
+    pvr_chunk_cache_draw_t result;
+
+    if(!data || !storage || !draw || ((uintptr_t)storage & 31u) ||
+       ((uintptr_t)draw & (_Alignof(pvr_chunk_cache_draw_t) - 1u)) ||
+       size > UINTPTR_MAX - (uintptr_t)data ||
+       storage_bytes > UINTPTR_MAX - (uintptr_t)storage ||
+       sizeof(*draw) > UINTPTR_MAX - (uintptr_t)draw ||
+       ranges_overlap(data, size, storage, storage_bytes) ||
+       ranges_overlap(data, size, draw, sizeof(*draw)) ||
+       ranges_overlap(storage, storage_bytes, draw, sizeof(*draw))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pvr_chunk_cache_section_open(data, size, &checked) < 0)
+        return -1;
+    if(checked.kind != PVR_CHUNK_CACHE_SECTION_ORDINARY) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(native_layout_get(&checked, &layout) < 0)
+        return -1;
+    if(storage_bytes < layout.bytes) {
+        errno = ENOSPC;
+        return -1;
+    }
+
+    /* The synchronous immutable-input interval spans admission and decoding.
+       Wire admission proves strip coverage, bounds and finite deformation;
+       the shared decoder constructs the native layout itself. No fallible
+       operation follows the first write, so publication needs no rescan. */
+    decode_ordinary(&checked, &layout, storage, &result.cache);
+    *draw = result;
+    return 0;
+}
+
 int pvr_chunk_cache_section_materialize_ordinary(
     const pvr_chunk_cache_section_view_t *view,
     void *storage, size_t storage_bytes, pvr_chunk_model_cache_t *cache) {
     pvr_chunk_cache_section_view_t checked;
     native_layout_t layout;
     pvr_chunk_model_cache_t result;
-    size_t index;
 
     if(cache)
         memset(cache, 0, sizeof(*cache));
@@ -748,34 +881,7 @@ int pvr_chunk_cache_section_materialize_ordinary(
             errno = EINVAL;
         return -1;
     }
-    memset(storage, 0, layout.bytes);
-    decode_strips(&checked, storage);
-    for(index = 0; index < checked.secondary_count; ++index)
-        decode_packet_words((const uint8_t *)checked.vertices + index * 32u,
-            (uint8_t *)storage + layout.vertices_offset + index * 32u, 32u);
-    decode_deformations(&checked,
-        (pvr_deform_vertex_t *)((uint8_t *)storage + layout.deform_offset),
-        checked.secondary_count);
-    decode_indices(&checked,
-        (uint16_t *)((uint8_t *)storage + layout.indices_offset),
-        checked.secondary_count);
-
-    memset(&result, 0, sizeof(result));
-    result.version = PVR_CHUNK_CACHE_VERSION;
-    result.storage = storage;
-    result.storage_bytes = layout.bytes;
-    result.strips = storage;
-    result.strip_count = checked.primary_count;
-    result.vertices = (const pvr_vertex_t *)((uint8_t *)storage +
-                                             layout.vertices_offset);
-    result.deform_vertices = (const pvr_deform_vertex_t *)(
-        (uint8_t *)storage + layout.deform_offset);
-    result.source_indices = (const uint16_t *)((uint8_t *)storage +
-                                               layout.indices_offset);
-    result.vertex_count = checked.secondary_count;
-    result.maximum_strip_vertices = checked.tertiary_count;
-    memcpy(result.center, checked.center, sizeof(result.center));
-    result.radius = checked.radius;
+    decode_ordinary(&checked, &layout, storage, &result);
     if(pvr_chunk_model_cache_validate(&result) < 0)
         return -1;
     *cache = result;
