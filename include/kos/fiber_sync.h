@@ -23,7 +23,8 @@ __BEGIN_DECLS
 
     These objects suspend only the calling fiber. A contended wait transfers
     to the owner thread's main fiber, which must continue dispatching ready
-    fibers. Waiting from the main fiber itself is therefore rejected.
+    fibers. Parking the main fiber itself is therefore rejected; operations
+    which can complete immediately do not need to park.
 
     Objects bind to the attached fiber runtime which creates them. They must be
     destroyed before that owner thread exits. They do not replace KOS mutexes
@@ -49,12 +50,15 @@ kfiber_event_t *fiber_event_create(bool signaled);
 */
 int fiber_event_destroy(kfiber_event_t *event);
 
-/** \brief Park the calling child fiber until the event is set.
+/** \brief Wait for an event owned by the calling fiber runtime.
 
-    If the event is already set, this returns immediately. Otherwise the
-    calling fiber becomes `KFIBER_STATE_WAITING` and transfers to its main
-    fiber. The owner must later dispatch it after fiber_event_set() makes it
-    ready. The main fiber cannot wait.
+    The caller must belong to the event's owner runtime, even if the event is
+    already set. An already-set event returns immediately, including from the
+    owner main fiber. Otherwise the calling fiber becomes `KFIBER_STATE_WAITING`
+    and transfers to its main fiber. The owner must later dispatch it after
+    fiber_event_set() makes it ready. The main fiber cannot park (`EDEADLK`).
+    Foreign or unattached callers fail with `EXDEV`; interrupt-context callers
+    fail with `EPERM`.
 */
 int fiber_event_wait(kfiber_event_t *event);
 

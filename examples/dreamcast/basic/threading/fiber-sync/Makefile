@@ -5,7 +5,7 @@
 #
 
 TARGET = fiber-sync.elf
-OBJS = fiber-sync.o
+OBJS = fiber-sync.o ownership.o
 KOS_CFLAGS += -std=c11
 
 all: rm-elf $(TARGET)
@@ -13,13 +13,13 @@ all: rm-elf $(TARGET)
 include $(KOS_BASE)/Makefile.rules
 
 clean: rm-elf
-	-rm -f $(OBJS)
+	-rm -f $(OBJS) $(TARGET).map
 
 rm-elf:
 	-rm -f $(TARGET)
 
 $(TARGET): $(OBJS)
-	kos-cc -o $(TARGET) $(OBJS)
+	kos-cc -Wl,-Map,$(TARGET).map -o $(TARGET) $(OBJS)
 
 run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)

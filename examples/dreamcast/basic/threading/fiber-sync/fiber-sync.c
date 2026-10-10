@@ -26,6 +26,8 @@ static kfiber_mutex_t *mutex;
 static unsigned sequence;
 static bool failed;
 
+int fiber_sync_ownership_test(void);
+
 static void entry_a(void *data) {
     (void)data;
 
@@ -146,6 +148,9 @@ int main(int argc, char **argv) {
     if(fiber_destroy(fiber_a) < 0 || fiber_destroy(fiber_b) < 0 ||
        fiber_destroy(fiber_c) < 0 ||
        fiber_mutex_destroy(mutex) < 0 || fiber_event_destroy(event) < 0)
+        failed = true;
+
+    if(fiber_sync_ownership_test())
         failed = true;
 
     if(failed) {
