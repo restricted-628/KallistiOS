@@ -12,6 +12,12 @@ an invalid preserved r1, and byte-for-byte context preservation. The small host
 shim supplies only generic IRQ declarations; the tested helper is not mocked.
 The suite participates in `utils/run-host-tests.sh` GNU17 and strict C23 lanes.
 
+On a Clang host, use `make test CC=gcc-14` (verified with GCC 14.4).
+Clang rejects the SH-4 `t` register clobber in an unused IRQ-control inline;
+GCC permits this header when those target-only functions are not emitted.
+The host test covers the context accessor, not the IRQ assembly, which must
+be checked with the SH-4 toolchain.
+
 After sourcing the KOS environment, `make dreamcast` builds an ELF that also
 runs atomic fetch-add and compare/exchange under a temporary 1000 Hz scheduler
 tick for two seconds. It restores the prior tick rate and global IRQ observer.

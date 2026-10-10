@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-10 — upstream IRQ compiler-state correction
+
+- Merge upstream `84ed47b77b2c7823c13e48aea32e4f4c0f3d5b14`: declare the T
+  register clobbered by `arch_irq_restore()` so compiler condition-state
+  tracking accounts for SR restoration. IRQ masks, saved values and the
+  separate exception-return sequence are unchanged. SH4ZAM stays pinned.
+- Fresh GCC 16.2.0 SH-4 kernel/addon/utility build and four synchronization/
+  context example links pass. Focused C/C++ IRQ-header probes pass at three
+  optimization levels; no old-code wrong-branch failure was reproduced.
+- GCC 14.4 logical-stack host tests pass. Document the Clang host-header
+  limitation; legacy general-threading/C++ examples retain their unrelated
+  warning exceptions. No emulator or physical-hardware validation is claimed.
+
 ## 2026-10-10 — publication of reviewed integration fixes
 
 - Publish the accepted fiber-event ownership, disc-request retirement and
