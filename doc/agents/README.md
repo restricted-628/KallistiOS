@@ -91,6 +91,15 @@ examples require that checkout's actual KOS environment and dependencies.
 Test directories listed in guides are relevant candidates, not an exhaustive
 validation matrix or a pre-existing success claim.
 
+## Sequential implementation and source evidence
+
+Follow [the subsystem implementation plan](implementation-plan.md) before new
+fix proposals or implementation. One lead lane is active at a time; supplied
+manuals/SDKs and relevant Ghidra evidence are a required, recorded gate rather
+than an optional reminder. The private control folder names the current bounded
+assignment and exceptions. Old worktree guidance does not override newer owner
+policy supplied with that assignment.
+
 ## Keeping this map current
 
 When adding a public API, source family, addon, test suite or branch-only

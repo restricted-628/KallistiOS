@@ -6,6 +6,64 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-10 — publication of reviewed integration fixes
+
+- Publish the accepted fiber-event ownership, disc-request retirement and
+  ordinary PCC1 single-admission changes as separate focused commits, followed
+  by their fork guidance and decision records. Complete fiber bundles and
+  upstream PR branches are unchanged.
+- Rechecked the exact source against the retained October 3 validation
+  artifacts and reviewed the outgoing diffs. The test/build results below are
+  retained evidence, not newly executed tests for this publication pass.
+- Kernel TLS, mutex and condition-variable findings remain research awaiting
+  bounded implementation and regression work. Other unaccepted subsystem
+  candidates and private research are not part of this publication.
+- No new emulator, physical-hardware, DMA/cache timing or FPS claim is made.
+
+## 2026-10-03 — sequential subsystem implementation policy
+
+- Clarify that Kernel's phased investigation covers its complete primary/shared
+  responsibility, starting with coverage and whole-startup mapping, rather than
+  treating G2-focused lifecycle work as the entire scope.
+- Record D17 and a dependency-ordered implementation plan with one lead lane,
+  explicit completion gates and mandatory recorded documentation/SDK/Ghidra
+  evidence before dependent changes. Source-only exceptions need review.
+- Guidance only; no runtime changes or new validation claims in this iteration.
+
+## 2026-10-03 — request retirement and single-pass cooked-cache loading
+
+- Retain disc requests until completion handling, worker references and callbacks
+  retire. Destruction rejects live internal owners; callback-free waits preserve
+  wait-then-destroy behavior, while callback-bearing ordinary waits remain early.
+  DMA stop policy, GAPS ownership and direct-disc defaults are unchanged.
+- Add ordinary PCC1 header-only sizing and single-admission loading APIs, including
+  module exports. The chunk-scene consumer now validates the payload once instead
+  of three times and avoids redundant native-cache scans. Existing checked APIs
+  remain supported; failed admission leaves output storage and draw state intact.
+- Fresh isolated validation: 14 modeled request cases pass ASan/UBSan; cache tests
+  pass normally and with sanitizers, including 1,888 mutation comparisons; scene
+  integration/failure-cleanup checks pass using final public headers. GCC 16.2.0
+  rebuilds affected SH-4 code and links three disc consumers plus chunk-scene
+  against checkout-local archives. Unchanged build prerequisites are reused.
+- These are local integrations, not published branch updates. No new emulator,
+  physical-console, timing or FPS result is claimed.
+
+## 2026-10-03 — fiber event ownership and graphics work direction
+
+- Check the caller's fiber-runtime ownership before an already-signaled event
+  can return success. Foreign and unattached callers receive `EXDEV`; preserve
+  IRQ rejection, owner-main immediate success and child-fiber parking behavior.
+- Clarify the public event-wait contract and add the focused ownership cases
+  to the existing fiber-sync example. The core provider gains no SH4ZAM or
+  Service Executor dependency; alternative provider branches are unchanged.
+- Integration reran all 11 modeled host cases with Clang ASan/UBSan successfully
+  and rebuilt the affected SH-4 code/example with GCC 16.2.0. Unaffected isolated
+  build prerequisites were reused. Reviewed helper interpreter/dynarec logs
+  each pass 42 ownership checks and the original synchronization sequence;
+  no fresh emulator or physical-console run is claimed by integration.
+- Record the accepted host-preparation/repeated-check-removal direction in D16.
+  Single-admission cooked-cache loading is assigned work, not delivered code.
+
 ## 2026-10-01 — upstream ancestry and MMU example reconciliation
 
 - Merge upstream from `7d0972e32d2d9e7af8d90f52bf0eb5a4dec1bfd7` through

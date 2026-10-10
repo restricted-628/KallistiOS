@@ -12,6 +12,7 @@ and rendering integration contracts.
 
 - `kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset.c`
 - `kernel/arch/dreamcast/hardware/pvr/pvr_chunk_asset_io.c`
+- `kernel/arch/dreamcast/hardware/pvr/pvr_chunk_cache_asset.c`
 - `kernel/arch/dreamcast/hardware/pvr/pvr_chunk_resource_asset.c`
 - `kernel/arch/dreamcast/hardware/pvr/pvr_chunk_texture_asset.c`
 - `kernel/arch/dreamcast/hardware/pvr/pvr_texture_residency.c`
@@ -34,6 +35,7 @@ Relevant existing documentation (dated claims must be rechecked):
 - Treat file formats as interfaces: version/endian, bounded offsets/counts, integer overflow, overlap and partial input all need explicit behavior.
 - Keep encoded assets, CPU staging, decoded workspace, resident VRAM and in-flight DMA/render references distinct.
 - Check converter/runtime parity and round trips; never silently reinterpret existing versioned content.
+- Ordinary PCC1 uses header-only `pvr_chunk_cache_section_ordinary_query` followed by `pvr_chunk_cache_section_load_ordinary`; do not chain full validators around this constructor. Retain immutable input during loading and native storage through the last draw.
 - Compression and service adapters are optional. Preserve input/output budgets, progress/cancel and upstream licenses; do not import proprietary assets into fixtures.
 
 ## Coordinate before changing

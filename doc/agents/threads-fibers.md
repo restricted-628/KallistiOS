@@ -63,7 +63,9 @@ revision and result. Separate host, target-link, emulator and hardware evidence.
 
 ## Known gate and task handoff
 
-Current bootstrap reports an event-wait ownership discrepancy; reproduce and review it in a separately assigned task before fixing.
+The event-wait ready-path ownership correction is integrated locally as of
+2026-10-03; see CHANGELOG.fork.md for evidence limits. Recheck the actual branch
+before treating the old bootstrap finding as still open or reapplying its fix.
 
 Before editing, state the bounded bug/feature, file scope, owning checkout,
 related decision IDs in `notes.md`, and interface partners. On completion or

@@ -151,6 +151,58 @@ provenance and licenses; do not describe a source import as a history merge.
 Anchors: `doc/agents/nindows-kosh.md`, `addons/libkosh/README.md` and
 `addons/libconio/README.md`.
 
+## D16 — Host preparation and non-repeated graphics admission
+
+**Accepted, 2026-10-03:** Move asset-dependent preparation and expensive content
+validation to the development PC wherever practical. The primary optimization
+goal is eliminating unnecessary repeated checking and reconstruction, not adding
+new preparation/validation layers. A cooked loading path should establish the
+necessary loaded-buffer integrity, layout and bindings once, then reuse those
+facts while the admitted storage remains stable. Rendering retains checks
+justified by changing values, resources and output capacity, not repeated scans
+of unchanged asset content. Existing general-purpose checked APIs retain their
+contracts; optimized paths must not chain them and repeat the same work.
+
+Authority: owner's host-offload direction and subsequent clarification that
+removing redundant checks is the goal. Loading cost and frame cost are separate;
+neither a source call count nor host cooking alone proves an FPS improvement.
+First bounded implementation target is ordinary cooked-cache single-admission
+loading. Compiled skin/morph/animation formats remain separate follow-ups, not
+implemented features. Coordinate graphics asset interfaces with storage/codec
+owners; keep numerical behavior and file/I/O/RAM costs explicit.
+
+**Implementation, 2026-10-03:** Ordinary PCC1 now has header-only sizing and a
+single-admission native draw constructor; chunk-scene uses that path. Existing
+checked APIs and outer-container/codec checks remain intact. Host operation
+counts confirm three full PCC1 admissions become one; timing is unmeasured.
+See the matching CHANGELOG.fork.md entry for validation limits.
+
+## D17 — Sequential, source-led subsystem implementation
+
+**Accepted, 2026-10-03:** Work one helper's subsystem at a time, with named
+interface reviews instead of independently advancing all backlogs. Automatically
+read the supplied documentation and relevant SDK material, inspect applicable
+SDK binaries with Ghidra, and compare fork/upstream implementations before
+proposing fixes. No repeated owner reminder is needed within an assigned scope.
+Integration reviews concrete evidence and any justified source-only exception
+before implementation. An old report, SDK directory listing or decompiler guess
+does not establish a fact; contradictory manuals/binaries remain explicit.
+
+Use `doc/agents/implementation-plan.md` for the dependency-ordered first pass,
+source gate and completion criteria. Private control records carry live task
+assignments and source paths. This changes workflow, not production behavior;
+it neither certifies earlier deliveries nor authorizes new publication, hardware
+writes, proprietary code imports or broad rewrites.
+
+### D17 clarification — full Kernel responsibility
+
+**Owner clarified, 2026-10-03:** The phased Kernel investigation is to cover
+all of its primary and shared responsibilities, not repeatedly narrow back to
+G2. Establish a current coverage map, including inherited implementation, then
+review the complete startup sequence and remaining component areas. Keep
+cross-lane ownership and per-phase evidence/implementation gates; broad research
+authority is not permission for wholesale runtime changes or publication.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,
