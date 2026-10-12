@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-12 — exception-return guard and core fiber diagnostics
+
+- Set BL together with RB before restoring saved SPC/SSR on both normal and
+  forced exception return. Preserve saved task SR, register layout and public
+  ABI; production code has no diagnostic instrumentation.
+- Add an emitted-code regression, separate live-SR diagnostic and public core
+  fiber-runtime probe. Correct the older local-switch probe's coverage claims.
+- GCC 16.2.0 affected builds and target links pass. In Flycast interpreter and
+  dynarec modes, corrected live-SR and both fiber probes pass; the original
+  return sequence fails the live-BL negative control as expected in both modes.
+- No physical-hardware exception-window, NMI/UBC, general nesting or exclusive
+  addon-provider validation is claimed. Separate TLS/mutex findings remain open.
+
 ## 2026-10-12 — bounded acceptance workflow
 
 - Owner subsequently authorized Integration to commit/publish routine reviewed
