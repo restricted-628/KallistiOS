@@ -70,6 +70,13 @@ helpers against their stated domains and an actual rendering use case. Do not
 silently substitute KOS math, add blanket clobbers, or claim unmeasured speedups.
 Anchor: `addons/libsh4zam/README.md`, `doc/sh4zam-direct-graphics-math.md`.
 
+**Scoped exception, 2026-10-11:** The owner authorizes a fork-local SH4ZAM
+matrix-alignment correction without upstream coordination. Preserve the
+official pinned submodule and licenses, with an explicit exact-base patch and
+source verification. This does not authorize arbitrary vendor edits or moving
+pins. Native matrix alignment and raw-buffer contracts must agree without
+adding repeated runtime checks or broad memory clobbers.
+
 ## D08 — Language intent is not build configuration
 
 **Accepted direction:** The owner prefers C23 for the fork; upstream patches

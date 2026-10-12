@@ -6,6 +6,28 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-11 — SH4ZAM update and local alignment correction
+
+- Advance SH4ZAM from `ae8d4c1` to official `7747e5d`, retaining its source
+  history and license. Carry an explicit exact-base matrix-alignment patch;
+  setup applies it on request and verification rejects unexpected changes.
+- Let native matrices/software state retain their required vector alignment.
+  Keep raw-buffer XMTRX paths independent of that type alignment, preserving
+  existing SH-4 instruction strings, dispatch checks and precise memory spans.
+  The KOS memcpy bridge no longer requires equal native/legacy alignment.
+- Isolated validation: eight GCC/Clang host-suite runs and a Clang sanitizer
+  run pass; Mac utilities rebuild; GCC 16.2.0 force-rebuilds kernel/addons and
+  links six integration/context examples. Focused SH-4 O2 wrapper assembly is
+  unchanged apart from source-line annotations. Inherited build warnings remain.
+- Follow-up canonical rebuild: utilities, kernel/addons and the six selected
+  examples rebuild; all eight host-suite runs pass. SH4ZAM integration (including
+  native/raw alignment) and the core fiber context probe pass in Flycast v2.7
+  interpreter and dynarec modes. Existing unrelated source edits are preserved;
+  this dirty-checkout run does not accept those edits as reviewed changes.
+- Rebuild other consumers before use because native containing-layout strides
+  can change. No hardware or performance claim; alternate fiber bundles and
+  unrelated dirty experiments remain outside this validation.
+
 ## 2026-10-10 — upstream IRQ compiler-state correction
 
 - Merge upstream `84ed47b77b2c7823c13e48aea32e4f4c0f3d5b14`: declare the T

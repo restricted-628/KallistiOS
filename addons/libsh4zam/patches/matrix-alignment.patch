@@ -1,0 +1,256 @@
+diff --git a/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h b/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
+index 2b8f6c77649024d52fa36ef37195ccf8c2d20ce2..cc38abf05f7d7b21d5d034d3aea99f3ea9354321 100644
+--- a/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
++++ b/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
+@@ -272,7 +272,11 @@ SHZ_FORCE_INLINE void shz_xmtrx_swap_rows_sh4(unsigned idx1, unsigned idx2) SHZ_
+ #undef SHZ_SWAP_FVR_
+ #undef SHZ_SWAP_FPR_
+ 
+-SHZ_INLINE void shz_xmtrx_load_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++/* These raw-buffer entry points are shared by native matrices and unaligned
++   dispatch. Non-transpose double-load/store paths require 8-byte alignment;
++   transpose paths require float alignment. Describe all 16 floats to the
++   compiler without imposing the public matrix type's stronger alignment. */
++SHZ_INLINE void shz_xmtrx_load_4x4_sh4(const void* matrix) SHZ_NOEXCEPT {
+     asm volatile(R"(
+         fschg
+         fmov.d  @%[mtx]+, xd0
+@@ -289,7 +293,7 @@ SHZ_INLINE void shz_xmtrx_load_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT
+         fschg
+     )"
+     : [mtx] "+r" (matrix)
+-    : "m" (*matrix));
++    : "m" (*(const float (*)[16])matrix));
+ }
+ 
+ SHZ_INLINE void shz_xmtrx_load_wxyz_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
+@@ -415,7 +419,7 @@ SHZ_INLINE void shz_xmtrx_load_rows_4x4_sh4(const shz_vec4_t* r1,
+     : "m" (*r1), "m" (*r2), "m" (*r3), "m" (*r4));
+ }
+ 
+-SHZ_INLINE void shz_xmtrx_load_transpose_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++SHZ_INLINE void shz_xmtrx_load_transpose_4x4_sh4(const void* matrix) SHZ_NOEXCEPT {
+     asm volatile(R"(
+         frchg
+ 
+@@ -446,7 +450,7 @@ SHZ_INLINE void shz_xmtrx_load_transpose_4x4_sh4(const shz_mat4x4_t* matrix) SHZ
+         frchg
+     )"
+     : [mtx] "+r" (matrix)
+-    : "m" (*matrix));
++    : "m" (*(const float (*)[16])matrix));
+ }
+ 
+ SHZ_INLINE void shz_xmtrx_load_apply_4x4_sh4(const shz_mat4x4_t* matrix1,
+@@ -976,7 +980,7 @@ SHZ_INLINE void shz_xmtrx_load_2x2_sh4(const shz_mat2x2_t* matrix) SHZ_NOEXCEPT
+     : "fpul");
+ }
+ 
+-SHZ_INLINE void shz_xmtrx_store_4x4_sh4(shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++SHZ_INLINE void shz_xmtrx_store_4x4_sh4(void* matrix) SHZ_NOEXCEPT {
+     asm volatile(R"(
+         pref    @%[mtx]
+         add     #64, %[mtx]
+@@ -991,7 +995,7 @@ SHZ_INLINE void shz_xmtrx_store_4x4_sh4(shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
+         fmov.d  xd0, @-%[mtx]
+         fschg
+     )"
+-    : "=m" (*matrix)
++    : "=m" (*(float (*)[16])matrix)
+     : [mtx] "r" (matrix));
+ }
+ 
+@@ -1024,7 +1028,7 @@ SHZ_INLINE void shz_xmtrx_store_aligned4_4x4_sh4(float matrix[16]) SHZ_NOEXCEPT
+     : [mtx] "r" (matrix));
+ }
+ 
+-SHZ_INLINE void shz_xmtrx_store_transpose_4x4_sh4(shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++SHZ_INLINE void shz_xmtrx_store_transpose_4x4_sh4(void* matrix) SHZ_NOEXCEPT {
+     asm volatile(R"(
+         frchg
+         add     #64-4, %[mtx]
+@@ -1049,7 +1053,7 @@ SHZ_INLINE void shz_xmtrx_store_transpose_4x4_sh4(shz_mat4x4_t* matrix) SHZ_NOEX
+         fmov.s  fr0, @-%[mtx]
+         frchg
+     )"
+-    : [mtx] "+&r" (matrix), "=m" (*matrix));
++    : [mtx] "+&r" (matrix), "=m" (*(float (*)[16])matrix));
+ }
+ 
+ SHZ_INLINE void shz_xmtrx_store_3x4_sh4(shz_mat3x4_t* mat) SHZ_NOEXCEPT {
+@@ -1787,7 +1791,7 @@ SHZ_INLINE void shz_xmtrx_apply_symmetric_skew_sh4(float x, float y, float z) SH
+       "m" (x), "m" (y), "m" (z));
+ }
+ 
+-SHZ_FORCE_INLINE void shz_xmtrx_apply_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++SHZ_FORCE_INLINE void shz_xmtrx_apply_4x4_sh4(const void* matrix) SHZ_NOEXCEPT {
+     uintptr_t scratch;
+ 
+     asm volatile(R"(
+@@ -1818,12 +1822,12 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NO
+         frchg
+     )"
+     : [mtx] "+&r" (matrix), [scr] "=r" (scratch)
+-    : "m" (*matrix)
++    : "m" (*(const float (*)[16])matrix)
+     : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7",
+       "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
+ }
+ 
+-SHZ_INLINE void shz_xmtrx_apply_transpose_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++SHZ_INLINE void shz_xmtrx_apply_transpose_4x4_sh4(const void* matrix) SHZ_NOEXCEPT {
+     asm volatile(R"(
+         fmov.s  @%[mtx]+, fr0
+         add     #28, %[mtx]
+@@ -1857,7 +1861,7 @@ SHZ_INLINE void shz_xmtrx_apply_transpose_4x4_sh4(const shz_mat4x4_t* matrix) SH
+         frchg
+     )"
+     : [mtx] "+r" (matrix)
+-    : "m" (*matrix)
++    : "m" (*(const float (*)[16])matrix)
+     : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7",
+       "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
+ }
+@@ -1932,7 +1936,7 @@ SHZ_INLINE void shz_xmtrx_scale_reverse_sh4(float x, float y, float z) SHZ_NOEXC
+       "fr8", "fr9", "fr11", "fr12", "fr13", "fr14", "fr15", "fpul");
+ }
+ 
+-SHZ_INLINE void shz_xmtrx_apply_reverse_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++SHZ_INLINE void shz_xmtrx_apply_reverse_4x4_sh4(const void* matrix) SHZ_NOEXCEPT {
+     uintptr_t scratch;
+ 
+     asm volatile(R"(
+@@ -1963,7 +1967,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_
+         frchg
+     )"
+     : [mtx] "+&r" (matrix), [scr] "=r" (scratch)
+-    : "m" (*matrix)
++    : "m" (*(const float (*)[16])matrix)
+     : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7",
+       "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
+ }
+@@ -2003,7 +2007,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_aligned4_4x4_sh4(const float matrix[16])
+       "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
+ }
+ 
+-SHZ_INLINE void shz_xmtrx_apply_reverse_transpose_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NOEXCEPT {
++SHZ_INLINE void shz_xmtrx_apply_reverse_transpose_4x4_sh4(const void* matrix) SHZ_NOEXCEPT {
+     asm volatile(R"(
+         fmov.s  @%[mtx]+, fr0
+         add     #28, %[mtx]
+@@ -2033,7 +2037,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_transpose_4x4_sh4(const shz_mat4x4_t* ma
+         frchg
+     )"
+     : [mtx] "+r" (matrix)
+-    : "m" (*matrix)
++    : "m" (*(const float (*)[16])matrix)
+     : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7",
+       "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
+ }
+diff --git a/include/sh4zam/inline/shz_xmtrx.inl.h b/include/sh4zam/inline/shz_xmtrx.inl.h
+index 3025a86317b41b9a6f133f191d6645c2cb2c1d40..f199bd792d4195add215bd8019787b006a3bac2c 100644
+--- a/include/sh4zam/inline/shz_xmtrx.inl.h
++++ b/include/sh4zam/inline/shz_xmtrx.inl.h
+@@ -111,7 +111,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_load_aligned4_4x4(const float matrix[16]) SHZ_NO
+ SHZ_FORCE_INLINE void shz_xmtrx_load_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+     if(!((uintptr_t)matrix & 7))
+-        shz_xmtrx_load_4x4((const shz_mat4x4_t*)matrix);
++        shz_xmtrx_load_4x4_sh4(matrix);
+     else
+         shz_xmtrx_load_aligned4_4x4(matrix);
+ #else
+@@ -151,7 +151,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_load_transpose_4x4(const shz_mat4x4_t* matrix) S
+ 
+ SHZ_FORCE_INLINE void shz_xmtrx_load_transpose_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+-    shz_xmtrx_load_transpose_4x4((const shz_mat4x4_t*)matrix);
++    shz_xmtrx_load_transpose_4x4_sh4(matrix);
+ #else
+     shz_xmtrx_load_transpose_unaligned_4x4_sw(matrix);
+ #endif
+@@ -249,7 +249,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_store_aligned4_4x4(float matrix[16]) SHZ_NOEXCEP
+ SHZ_INLINE void shz_xmtrx_store_unaligned_4x4(float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+     if(!((uintptr_t)matrix & 7))
+-        shz_xmtrx_store_4x4((shz_mat4x4_t*)matrix);
++        shz_xmtrx_store_4x4_sh4(matrix);
+     else
+         shz_xmtrx_store_aligned4_4x4(matrix);
+ #else
+@@ -267,7 +267,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_store_transpose_4x4(shz_mat4x4_t* matrix) SHZ_NO
+ 
+ SHZ_FORCE_INLINE void shz_xmtrx_store_transpose_unaligned_4x4(float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+-    shz_xmtrx_store_transpose_4x4((shz_mat4x4_t*)matrix);
++    shz_xmtrx_store_transpose_4x4_sh4(matrix);
+ #else
+     shz_xmtrx_store_transpose_unaligned_4x4_sw(matrix);
+ #endif
+@@ -525,7 +525,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_aligned4_4x4(const float matrix[16]) SHZ_N
+ SHZ_INLINE void shz_xmtrx_apply_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+     if(!((uintptr_t)matrix & 0x7))
+-        shz_xmtrx_apply_4x4((const shz_mat4x4_t*)matrix);
++        shz_xmtrx_apply_4x4_sh4(matrix);
+     else
+         shz_xmtrx_apply_aligned4_4x4(matrix);
+ #else
+@@ -543,7 +543,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_transpose_4x4(const shz_mat4x4_t* matrix)
+ 
+ SHZ_FORCE_INLINE void shz_xmtrx_apply_transpose_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+-    shz_xmtrx_apply_transpose_4x4((const shz_mat4x4_t*)matrix);
++    shz_xmtrx_apply_transpose_4x4_sh4(matrix);
+ #else
+     shz_xmtrx_apply_transpose_unaligned_4x4_sw(matrix);
+ #endif
+@@ -568,7 +568,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_aligned4_4x4(const float matrix[16
+ SHZ_INLINE void shz_xmtrx_apply_reverse_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+     if(!((uintptr_t)matrix & 0x7))
+-        shz_xmtrx_apply_reverse_4x4((const shz_mat4x4_t*)matrix);
++        shz_xmtrx_apply_reverse_4x4_sh4(matrix);
+     else
+         shz_xmtrx_apply_reverse_aligned4_4x4(matrix);
+ #else
+@@ -586,7 +586,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_transpose_4x4(const shz_mat4x4_t*
+ 
+ SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_transpose_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
+ #if SHZ_BACKEND == SHZ_SH4
+-    shz_xmtrx_apply_reverse_transpose_4x4((const shz_mat4x4_t*)matrix);
++    shz_xmtrx_apply_reverse_transpose_4x4_sh4(matrix);
+ #else
+     shz_xmtrx_apply_reverse_transpose_aligned4_4x4_sw(matrix);
+ #endif
+diff --git a/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h b/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
+index 6b905567593dcfcca3a6d07e888c9f9876727255..00ed132549bce53f619e9cb72a82aadda823d3fd 100644
+--- a/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
++++ b/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
+@@ -30,7 +30,7 @@
+ #include <stdalign.h>
+ 
+ /* Internal state: 4 column vectors = 16 floats, matching shz_mat4x4_t layout */
+-typedef SHZ_ALIGNAS(8) struct shz_xmtrx_ {
++typedef struct SHZ_ALIGNAS(8) shz_xmtrx_ {
+     union {
+         float      elem[16];
+         shz_vec4_t col[4];
+diff --git a/include/sh4zam/shz_matrix.h b/include/sh4zam/shz_matrix.h
+index 0cbaba2ed098becc34c07d9c17ac41fec6c55774..38b357e3d80636d41af0190d11aebfd01955d597 100644
+--- a/include/sh4zam/shz_matrix.h
++++ b/include/sh4zam/shz_matrix.h
+@@ -60,9 +60,11 @@ SHZ_DECLS_BEGIN
+ /*! Structure representing a 4x4 column-major matrix.
+ 
+     \warning
+-    This structure MUST be aligned on 8-byte boundaries!
++    Use this type's native alignment, which may exceed 8 bytes when its
++    column vectors require stronger alignment. Raw float buffers should use
++    the unaligned XMTRX APIs instead of being cast to this type.
+ */
+-typedef SHZ_ALIGNAS(8) struct shz_mat4x4 {
++typedef struct SHZ_ALIGNAS(8) shz_mat4x4 {
+     union {                     //!< Inner convenience union.
+         float      elem[16];        //!< Access the matrix as a 1D array of 16 single-precision floats.
+         float      elem2D[4][4];    //!< Access the matrix as a 2D array of 4x4 single-precision floats.

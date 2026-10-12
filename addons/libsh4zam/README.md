@@ -4,18 +4,20 @@ SH4ZAM is developed by Falco Girgis and the SH4ZAM contributors at
 https://github.com/gyrovorbis/sh4zam. Its upstream MIT license and author
 notices are preserved unchanged. This directory supplies the KOS build
 adapter and integration documentation; separate KOS helpers live under
-`addons/include/kos/`. The library is not a KOS-authored fork.
+`addons/include/kos/`. The local compatibility patch below is a KOS change,
+not an upstream SH4ZAM release or an independently authored library.
 
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`ae8d4c190bc52d4e01e8ec7a0a9b5a7b4fd7d69b`, upstream **master after v0.9.1**, from
+`7747e5d281a75dd4ffce10df2758748feb421c66`, upstream **master after v0.9.1**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
-and license are retained; no build-time source patches are applied. Updating
+and license are retained; no build-time source patches are applied. The explicit
+setup step applies `patches/matrix-alignment.patch` to this exact base. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
-This replaces the temporary PR #70 pin
+This advances the previous official pin `ae8d4c1`. That pin replaced PR #70
 `0c1ccb5f5614314e36e2fec3179c8ca3ae844770`. The official release uses inline
 FSCA for runtime SH-4 u16 calls even with fast-math, and fixes the portable
 and constant-input paths to use 65536 units per turn. The temporary fork URL
@@ -32,17 +34,43 @@ KOS revisions, run from the KOS root:
 ```sh
 git submodule sync -- addons/libsh4zam/upstream
 git submodule update --init --recursive
+python3 utils/check-sh4zam-source.py --apply-local-patch
 python3 utils/check-sh4zam-source.py
 ```
 
-The checker verifies the Git index's pinned revision, clean submodule checkout,
+The checker verifies the Git index's pinned revision, the exact local patch,
 official repository URL, public header symlink, and unchanged license copy.
-Fork URLs are rejected.
-It replaces the former copied-source hash manifest and maintenance patch.
+Fork URLs, unexpected tracked changes and untracked source files are rejected.
+The apply option is idempotent; it refuses to apply over unrelated edits or a
+different base. Normal verification and builds never apply the patch themselves.
+Git will show the submodule as modified because the reviewed patch is applied;
+the parent repository tracks both its upstream base and the explicit delta.
+Before a future repin, reconcile or retire the patch rather than resetting the
+submodule or applying it blindly. No upstream history is rewritten.
 Ordinary GitHub source ZIPs and `git archive` do not embed submodule contents;
 use a recursive clone, or explicitly include the pinned dependency when making
 a complete source distribution. A missing checkout produces an actionable
 addon build error rather than downloading code during compilation.
+
+## Local matrix alignment correction
+
+The new vector storage increases the native matrix alignment. Applying an
+8-byte alignment attribute to its typedef caused Clang to disagree with the
+underlying struct alignment. The patch puts the minimum alignment on the
+matrix and software-state structs. Native matrix objects use their type's
+alignment; callers must not assume that an 8-byte buffer is a native matrix.
+
+Raw-buffer XMTRX entry points retain their existing dispatch and SH-4 assembly.
+Their internal operands describe 16 floats without casting the buffer to the
+more-aligned matrix type. No extra runtime checks, copies, or broad memory
+clobbers are added. Matrix storage remains 64 bytes; containing structures can
+have different padding/stride than with the earlier pin. Rebuild all consumers
+and do not serialize native prepared structures or mix old/new archives.
+
+The release fixture covers float-buffer offsets 0, 4, 8 and 12 modulo 16 for
+load/store, transpose and forward/reverse multiplication against a scalar
+reference with guards. Host checks do not execute the SH-4 assembly paths;
+target execution and physical-hardware validation remain separate.
 
 ## KOS build and linkage
 

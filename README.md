@@ -76,8 +76,11 @@ A beginner's guide to development for the Dreamcast along with detailed instruct
 
 This branch uses a pinned SH4ZAM submodule. Clone with `--recurse-submodules`,
 or run `git submodule update --init --recursive` in an existing checkout before
-building. After changing revisions, run the same command to select their pinned
-dependencies. See [the SH4ZAM build adapter](addons/libsh4zam/README.md).
+building, then explicitly apply the reviewed compatibility patch with
+`python3 utils/check-sh4zam-source.py --apply-local-patch`.
+After changing revisions, follow [the SH4ZAM build adapter](addons/libsh4zam/README.md)
+to reconcile any existing patch and select the pinned dependency; do not discard
+local changes. Builds do not apply source patches automatically.
 
 ## Licensing
 KallistiOS itself is licensed under the BSD-like **KOS License**. **Attribution is not optional**. Additionally, this distribution contains code licensed under various free software licenses.

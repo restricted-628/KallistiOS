@@ -700,6 +700,9 @@ int main(int argc, char **argv) {
     if(!verify_release_3x4())
         FAIL("SH4ZAM 0.9.1 XMTRX 3x4 regression");
     puts("SH4ZAM 0.9.1 XMTRX 3x4 scalar oracle: PASS");
+    if(!verify_release_alignment())
+        FAIL("SH4ZAM native/raw matrix alignment regression");
+    puts("SH4ZAM native/raw matrix alignment: PASS");
     show_result(true, "SH4ZAM 0.9.1 camera, frustum, geometry, and fibers");
     return 0;
 }
