@@ -124,7 +124,7 @@ _irq_save_regs:
 	mov.l		hdl_except,r2	! Call handle_exception
 	jsr		@r2
 	nop
-	bra		_save_regs_finish
+	bra		_irq_force_return
 	nop
 
 	.align 2
@@ -133,8 +133,8 @@ irqd_and:
 irqd_or:
 	.long	0x000000f0
 
-! irq_force_return() jumps here; make sure we're in register
-! bank 1 (as opposed to 0)
+! Both normal and forced returns must block exceptions before restoring
+! SPC/SSR, and use register bank 1. RTE restores the saved thread SR.
 _irq_force_return:
 	mov.l	_irqfr_or,r1
 	stc	sr,r0
@@ -202,7 +202,7 @@ _save_regs_finish:
 
 	.align 2
 _irqfr_or:
-	.long	0x20000000
+	.long	0x30000000
 stkaddr:
 	.long	krn_stack
 _irq_srt_addr:

@@ -1,0 +1,5 @@
+.build/
+*.o
+*.elf
+*.map
+entry-probe.s
