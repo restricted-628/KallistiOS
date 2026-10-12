@@ -191,8 +191,9 @@ interface reviews instead of independently advancing all backlogs. Automatically
 read the supplied documentation and relevant SDK material, inspect applicable
 SDK binaries with Ghidra, and compare fork/upstream implementations before
 proposing fixes. No repeated owner reminder is needed within an assigned scope.
-Integration reviews concrete evidence and any justified source-only exception
-before implementation. An old report, SDK directory listing or decompiler guess
+The original blanket Integration review before implementation is superseded by
+the 2026-10-11 amendment below; source-only exceptions still need that review.
+An old report, SDK directory listing or decompiler guess
 does not establish a fact; contradictory manuals/binaries remain explicit.
 
 Use `doc/agents/implementation-plan.md` for the dependency-ordered first pass,
@@ -209,6 +210,58 @@ G2. Establish a current coverage map, including inherited implementation, then
 review the complete startup sequence and remaining component areas. Keep
 cross-lane ownership and per-phase evidence/implementation gates; broad research
 authority is not permission for wholesale runtime changes or publication.
+
+### D17 amendment — owner-delivered implementations
+
+**Accepted, 2026-10-11:** To avoid paying for the same implementation twice,
+the assigned subsystem owns investigation, implementation, focused validation
+and a review/commit-ready handoff. Within a bounded assigned issue and established
+contracts, complete the source gate and proceed without a separate routine
+research-only stop. Integration reviews the actual diff and evidence, performs
+appropriate integration checks and handles authorized commits/publication;
+requested corrections return to the owning agent.
+
+The delivery checklist and stop conditions live in
+`doc/agents/implementation-plan.md`. Evidence exceptions, unresolved design or
+shared-interface decisions, scope expansion and checkout conflicts still need
+disposition before dependent code. Explicit audit-only assignments and specific
+holds remain; parked lanes are not restarted by this policy. No runtime behavior
+or test result changes, and no new commit/push authority is granted.
+
+### D17 restart exception — parallel bounded delivery
+
+**Accepted, 2026-10-11:** The owner's subsequent request to get all helpers
+working authorizes a parallel round, replacing parking for its assigned tasks.
+Each lane gets a bounded deliverable and isolated checkout; Integration retains
+serialized review/integration. Shared-interface coordination, D11's networking
+research hold and unresolved failure/hardware policy are not lifted. The existing
+queue remains a dependency order, not permission to advance whole backlogs.
+
+### D17 clarification — review once, integrate the delivered patch
+
+**Accepted, 2026-10-12:** The owner identified repeated investigation and patch
+reconstruction as wasted work. Keep one owner, patch and compact evidence handoff
+per issue. Integration reviews the exact diff and remaining acceptance gaps,
+reuses matching artifacts, and returns concrete corrections instead of repeating
+the investigation or independently rewriting the fix. Reopen only named evidence
+gaps, contradictions or affected base/interface changes. A missing execution
+check is a bounded validation task. Track disposition and one next action in a
+single private queue; integrate accepted changes individually when authorized.
+The acceptance loop in the implementation plan operationalizes this policy;
+source/hardware gates and publication authority are unchanged.
+
+## D18 — Routine Integration publication authority
+
+**Accepted, 2026-10-12:** The owner explicitly authorized committing the reviewed
+merge/workflow changes to the fork and clarified that Integration may make
+commits for this kind of work. Once the required review and validation pass,
+Integration may commit/publish routine fixes, accepted helper deliveries and
+approved upstream merges to fork master without another permission round. Use
+the GitHub plugin and inspect the exact outgoing diff. This supersedes a separate
+publication checkpoint for those changes, not source/validation gates, explicit
+implementation holds, unresolved policy decisions, unrelated branch updates,
+force-pushes, published-history rewrites or upstream PR creation. Helpers still
+deliver to Integration unless separately authorized to publish.
 
 ## Updating this register
 

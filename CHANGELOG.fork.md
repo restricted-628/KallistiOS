@@ -6,6 +6,39 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-12 — bounded acceptance workflow
+
+- Owner subsequently authorized Integration to commit/publish routine reviewed
+  changes to fork master once required gates pass, without another permission
+  round. Unresolved designs, upstream PRs and history rewrites remain excluded.
+- Keep one owner, patch and compact handoff per issue; reuse matching evidence
+  and limit Integration rechecks to the actual diff and acceptance gaps.
+- Return specific corrections to the owner and integrate the delivered patch
+  rather than rebuilding it from a second investigation. Preserve explicit
+  source, runtime and hardware gates.
+
+## 2026-10-12 — upstream TCP close retirement
+
+- Merge upstream `568c3404c292a941bcf550465bd968f4fa249aa2` unchanged: reset
+  established connections closed with unread data or receiving payload after
+  application close, and bound selected closing states when the peer disappears.
+- Fresh isolated GCC 16.2.0 utilities/kernel/addon build and HTTP server example
+  link pass. Existing warnings remain. No packet-level runtime, emulator or
+  hardware validation; BBA shutdown findings remain separate. SH4ZAM unchanged.
+
+## 2026-10-11 — subsystem-owned review-ready delivery
+
+- Make the assigned subsystem responsible for investigation, implementation and
+  focused validation, with an exact diff/evidence handoff for Integration review
+  and authorized commit. Return corrections to the owner instead of routinely
+  reimplementing findings in Integration.
+- Retain the source gate, isolated ownership, shared-interface coordination and
+  explicit blockers; replace the blanket findings-only/pre-code-review default.
+  Documentation-only workflow change, not a runtime fix or validation claim.
+- The subsequent all-helper restart permits a bounded parallel round with
+  isolated ownership; review/master integration remains serialized and specific
+  research/design holds remain in force.
+
 ## 2026-10-11 — SH4ZAM update and local alignment correction
 
 - Advance SH4ZAM from `ae8d4c1` to official `7747e5d`, retaining its source

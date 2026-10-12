@@ -44,13 +44,18 @@ without claiming a new per-path recount.
 For example:
 
 > Read AGENTS.md, relevant decisions in notes.md, and
-> doc/agents/disc-g1.md. In the assigned checkout, inspect the direct-stream
-> cancellation/retirement contract. Identify the exact source paths and existing
-> tests, then report gaps without implementing changes. Do not change defaults,
-> dependencies or other subsystems.
+> doc/agents/disc-g1.md. In the assigned isolated checkout/base, investigate the
+> named direct-stream cancellation/retirement issue. Complete the source gate,
+> implement the smallest justified correction within the existing contract, and
+> run the focused regression and affected build checks. Deliver the owned diff
+> and evidence for Integration review/commit. Do not change defaults, dependencies
+> or other subsystems; escalate if the fix requires those changes. Do not publish.
 
-For implementation, also specify the bounded requested change, assigned isolated
-checkout/base revision, completion criteria and whether publication is authorized.
+Supply the actual issue, owner, isolated checkout/base revision, allowed scope
+and completion criteria when using this example. Investigation, implementation
+and validation belong to that owner by default; explicitly say "audit only" for
+a findings-only task. See the implementation plan's review-ready checklist.
+Helpers do not publish without separate authority; Integration follows notes.md D18.
 A subject such as "work on networking" is not enough to start a wholesale port.
 The eight subsystem chats are broad work groups; these guides let any one of
 them take a smaller component task without inheriting the entire project chat.
