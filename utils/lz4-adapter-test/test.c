@@ -16,6 +16,7 @@ static unsigned callbacks, previous_callbacks;
 static bool check_fairness;
 static pvr_chunk_asset_lz4_job_t *requeue_job;
 static pvr_chunk_asset_lz4_service_t *requeue_service;
+static void (*yield_observer)(fiber_service_t *service);
 
 fiber_service_t *fiber_service_add(fiber_service_executor_t *executor,
     void *stack, size_t size, void (*entry)(fiber_service_t *, void *), void *data) {
@@ -41,6 +42,8 @@ int fiber_service_yield(fiber_service_t *service) {
         previous_callbacks = callbacks;
     }
     ++service->yields;
+    if(yield_observer)
+        yield_observer(service);
     if(service->stop_after && service->yields == service->stop_after) {
         service->stop = true;
         errno = ECANCELED;
@@ -209,6 +212,115 @@ static void service_test(int mode, bool stop) {
     assert(pvr_chunk_asset_lz4_service_destroy(service) == 0);
     assert(test_alloc_live == 0 && test_irq_depth == 0);
     test_alloc_fail_at = 0;
+}
+
+/* Model a foreground owner at the service's cooperative yields. Cancellation
+   must retain a partial job through its callback; after callback return the
+   owner may free both job and output before the service resumes. */
+struct running_cancel_fixture {
+    pvr_chunk_asset_lz4_job_t *job;
+    pvr_chunk_asset_lz4_service_t *service;
+    uint8_t *destination;
+    pvr_chunk_asset_lz4_job_status_t terminal;
+    unsigned callbacks;
+};
+static struct running_cancel_fixture *running_cancel;
+
+static void running_cancel_complete(pvr_chunk_asset_lz4_job_t *job, void *data) {
+    struct running_cancel_fixture *test = data;
+
+    assert(test_irq_depth == 0 && job == test->job);
+    assert(++test->callbacks == 1);
+    assert(pvr_chunk_asset_lz4_job_get_status(job, &test->terminal) == 0);
+    assert(test->terminal.state == PVR_CHUNK_ASSET_LZ4_JOB_CANCELLED);
+    assert(test->terminal.error == ECANCELED);
+    assert(test->terminal.output_bytes == 7);
+    assert(test->terminal.output_total == 100);
+    assert(!memcmp(test->destination + 1, plain, 7));
+    assert(test->destination[0] == 0xa5);
+    for(size_t i = 8; i < 102; ++i)
+        assert(test->destination[i] == 0xa5);
+    errno = 0;
+    assert(pvr_chunk_asset_lz4_job_destroy(job) == -1 && errno == EBUSY);
+    errno = 0;
+    assert(pvr_chunk_asset_lz4_job_cancel(job) == -1 && errno == EALREADY);
+    errno = 0;
+    assert(pvr_chunk_asset_lz4_service_submit(test->service, job) == -1 &&
+           errno == EBUSY);
+}
+
+static void running_cancel_yield(fiber_service_t *fiber_service) {
+    struct running_cancel_fixture *test = running_cancel;
+    pvr_chunk_asset_lz4_job_status_t status;
+
+    assert(test_irq_depth == 0);
+    assert(pvr_chunk_asset_lz4_job_get_status(test->job, &status) == 0);
+    if(fiber_service->yields == 1) {
+        assert(status.state == PVR_CHUNK_ASSET_LZ4_JOB_RUNNING);
+        assert(status.output_bytes == 7 && status.output_total == 100);
+        assert(test->callbacks == 0);
+        errno = 0;
+        assert(pvr_chunk_asset_lz4_job_destroy(test->job) == -1 && errno == EBUSY);
+        assert(pvr_chunk_asset_lz4_job_cancel(test->job) == 0);
+        assert(pvr_chunk_asset_lz4_job_get_status(test->job, &status) == 0);
+        assert(status.state == PVR_CHUNK_ASSET_LZ4_JOB_RUNNING);
+        assert(status.output_bytes == 7 && test->callbacks == 0);
+        errno = 0;
+        assert(pvr_chunk_asset_lz4_job_destroy(test->job) == -1 && errno == EBUSY);
+    }
+    else {
+        assert(fiber_service->yields == 2 && test->callbacks == 1);
+        assert(status.state == PVR_CHUNK_ASSET_LZ4_JOB_CANCELLED);
+        assert(status.output_bytes == 7 && status.error == ECANCELED);
+        assert(pvr_chunk_asset_lz4_job_destroy(test->job) == 0);
+        test->job = NULL;
+        free(test->destination);
+        test->destination = NULL;
+        /* The service entry is still live even though this job has retired. */
+        errno = 0;
+        assert(pvr_chunk_asset_lz4_service_destroy(test->service) == -1 &&
+               errno == EBUSY);
+        yield_observer = NULL;
+    }
+}
+
+static void running_cancel_test(void) {
+    pvr_chunk_asset_section_t section = fixture(100, false);
+    fiber_service_executor_t executor = {0};
+    uint8_t stack[64];
+    struct running_cancel_fixture test = {0};
+    pvr_chunk_asset_lz4_job_status_t status;
+
+    assert(test_alloc_live == 0 && test_irq_depth == 0);
+    check_fairness = false;
+    test.destination = malloc(102);
+    assert(test.destination);
+    memset(test.destination, 0xa5, 102);
+    test.service = pvr_chunk_asset_lz4_service_create(
+        &executor, stack, sizeof(stack), 1, 7);
+    assert(test.service);
+    test.service->entry_started = true; /* Modeled start, not executor coverage. */
+    test.job = pvr_chunk_asset_lz4_job_create(
+        &section, test.destination + 1, 100, NULL, running_cancel_complete, &test);
+    assert(test.job);
+    assert(pvr_chunk_asset_lz4_service_submit(test.service, test.job) == 0);
+    assert(pvr_chunk_asset_lz4_job_get_status(test.job, &status) == 0);
+    assert(status.state == PVR_CHUNK_ASSET_LZ4_JOB_QUEUED);
+    errno = 0;
+    assert(pvr_chunk_asset_lz4_job_destroy(test.job) == -1 && errno == EBUSY);
+    size_t prepared_calls = test_alloc_calls;
+    test_alloc_fail_at = prepared_calls + 1;
+    running_cancel = &test;
+    yield_observer = running_cancel_yield;
+    executor.service.entry(&executor.service, executor.service.data);
+    assert(!yield_observer && !test.job && !test.destination);
+    assert(test.callbacks == 1 && executor.service.yields == 2);
+    assert(test_alloc_calls == prepared_calls);
+    assert(pvr_chunk_asset_lz4_service_destroy(test.service) == 0);
+    assert(test_alloc_live == 0 && test_irq_depth == 0);
+    running_cancel = NULL;
+    test_alloc_fail_at = 0;
+    puts("LZ4 running cancel/callback retirement test passed");
 }
 
 static void dictionary_test(bool linked) {
@@ -450,6 +562,8 @@ static void requirements_error_test(void) {
     encoded[header - 1] ^= 1;
 }
 
+#include "frame-cases.h"
+
 int main(void) {
     allocation_test(false, 100, 7);
     allocation_test(true, 100, 7);
@@ -461,6 +575,7 @@ int main(void) {
     }
     service_test(3, true);
     service_test(4, false);
+    running_cancel_test();
     dictionary_test(false);
     dictionary_test(true);
     requirements_error_test();
@@ -470,6 +585,7 @@ int main(void) {
         limits_test(LZ4F_max1MB, 1048576, linked);
         limits_test(LZ4F_max4MB, 4194304, linked);
     }
+    frame_cases_test();
     puts("LZ4 allocation, admission, failure, and service-yield tests passed");
     return 0;
 }

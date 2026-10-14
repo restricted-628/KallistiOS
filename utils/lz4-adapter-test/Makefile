@@ -10,7 +10,7 @@ SOURCES = test.c test-alloc.c \
           ../../addons/liblz4/pvr_chunk_asset_lz4.c \
           ../../addons/liblz4/lz4.c ../../addons/liblz4/lz4frame.c \
           ../../addons/liblz4/lz4hc.c ../../addons/liblz4/xxhash.c
-HEADERS = test-alloc.h $(wildcard include/*/*.h) \
+HEADERS = test-alloc.h frame-cases.h $(wildcard include/*/*.h) \
           ../../addons/include/kos/pvr_chunk_asset_lz4.h \
           ../../addons/include/kos/pvr_chunk_asset_lz4_service.h \
           ../../addons/liblz4/pvr_chunk_asset_lz4_service.c

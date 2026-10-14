@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-14 — LZ4 frame and cancellation regressions
+
+- Add a deterministic 4,693-case resident-frame corpus covering truncation,
+  checksums, lengths, dictionaries, multiple blocks and buffer offsets. Each
+  case exercises synchronous decode and three stepped output budgets.
+- Cover cancellation after partial output, callback-time destruction refusal,
+  and job/output reclamation before service continuation. Production decoder,
+  service, executor and upstream LZ4 sources remain unchanged.
+- All five host lanes pass: Clang GNU17/C2x, GCC GNU17/C23 and Clang ASan/UBSan.
+  The GCC 16.2.0 Compact asset consumer builds/links against current core/addon
+  archives. Scheduler/IRQ doubles do not prove real executor races; no new
+  target execution, DMA/cache, hardware or performance validation is claimed.
+
 ## 2026-10-14 — direct-stream cancellation regression
 
 - Extend the no-media fiber/disc probe to cancel queued transfers, active
