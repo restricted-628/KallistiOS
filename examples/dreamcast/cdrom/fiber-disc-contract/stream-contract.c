@@ -24,6 +24,8 @@ static cdrom_stream_session_status_t session_status;
 static cdrom_request_status_t read_status;
 _Alignas(32) static uint8_t stack[8192], sibling_stack[8192], buffer[4096];
 static int transport_token;
+static semaphore_t callback_entered, callback_release;
+static unsigned int cancelled_callbacks;
 #define CHECK(c) do { ++checks; if(!(c)) { ++failures; \
     printf("FIBER-STREAM: failed line=%d errno=%d\n", __LINE__, errno); \
 } } while(0)
@@ -154,6 +156,93 @@ static void start(uint32_t idle_timeout) {
     CHECK(stream != NULL);
 }
 
+static void cancelled_transfer_callback(cdrom_request_t *request,
+    const cdrom_request_status_t *status, void *unused) {
+    (void)unused;
+    CHECK(thd_get_current() != owner_thread);
+    CHECK(status->state == CDROM_REQUEST_CANCELLED);
+    CHECK(!cdrom_request_wait(request, 1000, NULL));
+    CHECK(cdrom_request_destroy(request) < 0 && errno == EBUSY);
+    CHECK(cdrom_request_wait_callback(request, 1000) < 0 && errno == EDEADLK);
+    sem_signal(&callback_entered);
+    CHECK(!sem_wait_timed(&callback_release, 5000));
+    ++cancelled_callbacks;
+}
+
+static void raw_stream_cancel_contract(void) {
+    CHECK(!sem_init(&callback_entered, 0));
+    CHECK(!sem_init(&callback_release, 0));
+
+    for(unsigned int path = 0; path < 3; ++path) {
+        cdrom_stream_session_status_t status;
+        cdrom_request_status_t transfer_status;
+        cdrom_request_t *transfer;
+
+        reset_gates();
+        hold_transfer = path != 0;
+        cdrom_stream_session_t *session = gdrom_direct_stream_session_start(
+            150, 2, GDROM_DIRECT_SECTOR_MODE1, 1000, 1000);
+        CHECK(session != NULL);
+        CHECK(!cdrom_stream_session_wait_ready(session, 1000, &status));
+        CHECK(status.state == CDROM_STREAM_SESSION_READY);
+        CHECK(!sem_wait_timed(&entered, 1000)); /* Begin transport. */
+
+        if(path == 0) {
+            /* Keep the worker from starting the transfer before cancellation. */
+            irq_mask_t irq = irq_disable();
+            transfer = cdrom_stream_session_transfer_async(session, buffer,
+                sizeof(buffer), 1000, cancelled_transfer_callback, NULL);
+            CHECK(transfer != NULL);
+            CHECK(!cdrom_request_get_status(transfer, &transfer_status));
+            CHECK(transfer_status.state == CDROM_REQUEST_QUEUED);
+            CHECK(!cdrom_request_cancel(transfer));
+            irq_restore(irq);
+        }
+        else {
+            transfer = cdrom_stream_session_transfer_async(session, buffer,
+                sizeof(buffer), 1000, cancelled_transfer_callback, NULL);
+            CHECK(transfer != NULL && !sem_wait_timed(&entered, 1000));
+            CHECK(cdrom_request_wait(transfer, 1, NULL) < 0
+                  && errno == ETIMEDOUT);
+            CHECK(cdrom_stream_session_try_destroy(session) < 0
+                  && errno == EBUSY);
+            if(path == 1)
+                CHECK(!cdrom_request_cancel(transfer));
+            else
+                CHECK(!cdrom_stream_session_cancel(session));
+        }
+
+        CHECK(!sem_wait_timed(&callback_entered, 1000));
+        if(path == 0) {
+            /* Cancelling a queued transfer leaves its ready parent usable. */
+            CHECK(!cdrom_stream_session_wait_ready(session, 1000, &status));
+            CHECK(status.state == CDROM_STREAM_SESSION_READY
+                  && status.remaining_bytes == sizeof(buffer)
+                  && !status.transfer_active);
+            CHECK(!cdrom_stream_session_cancel(session));
+        }
+        CHECK(!cdrom_stream_session_wait(session, 1000, &status));
+        CHECK(status.state == CDROM_STREAM_SESSION_CANCELLED);
+        /* A raw transfer's callback/destruction lifecycle is independent. */
+        probe_session = NULL;
+        probe_owner = NULL;
+        CHECK(!cdrom_stream_session_try_destroy(session));
+        CHECK(!cdrom_request_cancel(transfer));
+        CHECK(!cdrom_request_wait(transfer, 1000, &transfer_status));
+        CHECK(transfer_status.state == CDROM_REQUEST_CANCELLED);
+        CHECK(cdrom_request_wait_callback(transfer, 1) < 0
+              && errno == ETIMEDOUT);
+        CHECK(cdrom_request_destroy(transfer) < 0 && errno == EBUSY);
+        sem_signal(&callback_release);
+        CHECK(!cdrom_request_wait_callback(transfer, 1000));
+        CHECK(!cdrom_request_destroy(transfer));
+    }
+
+    CHECK(cancelled_callbacks == 3);
+    sem_destroy(&callback_entered);
+    sem_destroy(&callback_release);
+}
+
 int fiber_disc_stream_contract(void) {
     owner_thread = thd_get_current();
     main_fiber = fiber_main();
@@ -244,10 +333,11 @@ int fiber_disc_stream_contract(void) {
     CHECK(read_status.state == CDROM_REQUEST_CANCELLED);
     CHECK(!fiber_destroy(waiter) && !fiber_disc_read_destroy(transfer_read));
     CHECK(!fiber_disc_destroy(disc));
+    raw_stream_cancel_contract();
     cdrom_request_system_shutdown();
     sem_destroy(&entered);
     sem_destroy(&release);
-    CHECK(sibling_steps == 1 && ends == 3 && busy_retirements >= 1);
+    CHECK(sibling_steps == 1 && ends == 6 && busy_retirements >= 1);
     printf("FIBER-STREAM: %s checks=%u siblings=%u cleanups=%u busy=%u\n",
            failures ? "FAIL" : "PASS", checks, sibling_steps, ends, busy_retirements);
     return failures ? -1 : 0;

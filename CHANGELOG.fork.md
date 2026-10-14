@@ -6,6 +6,18 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-14 — direct-stream cancellation regression
+
+- Extend the no-media fiber/disc probe to cancel queued transfers, active
+  transfers and their parent sessions while holding transfer callbacks past
+  parent destruction. Verify detached requests cannot be destroyed until their
+  callbacks retire. Existing request-engine retirement guards are unchanged.
+- GCC 16.2.0 probe build/link and strict warning check pass. Flycast interpreter
+  and dynarec runs pass the stream suite (230 checks, six cleanups) and enclosing
+  RAM/GAPS routing suite (six sibling steps, fourteen callbacks).
+- Transport spies exercise real request/fiber/callback workers, not physical
+  disc commands or DMA. Hardware/cache/media and global teardown remain separate.
+
 ## 2026-10-12 — exception-return guard and core fiber diagnostics
 
 - Set BL together with RB before restoring saved SPC/SSR on both normal and
