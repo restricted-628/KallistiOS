@@ -10,6 +10,7 @@ SH-4 cache/TLB maintenance, address aliases, page lifetime, OCRAM and SQ ownersh
 - `kernel/arch/dreamcast/kernel/cache.s`
 - `kernel/arch/dreamcast/kernel/cache_all.s`
 - `kernel/arch/dreamcast/kernel/mmu.c`
+- `kernel/mm/vm.c` and `include/kos/vm.h` — opt-in resident data ownership
 - `kernel/arch/dreamcast/kernel/itlb.s`
 - `kernel/arch/dreamcast/hardware/sq.c`
 - `kernel/arch/dreamcast/include/arch/cache_range.h`
@@ -24,6 +25,7 @@ Relevant existing documentation (dated claims must be rechecked):
 - `doc/icache-iix.md`
 - `doc/itlb-reset.md`
 - `doc/mmu-page-lifetime.md`
+- `doc/resident-vm.md`
 - `doc/store-queue-safety.md`
 
 ## Preserve these boundaries
@@ -50,6 +52,7 @@ Host test directories with inspected Makefile targets:
 - `utils/icache-iix-test` — candidate `make -C utils/icache-iix-test test` in an assigned checkout.
 - `utils/itlb-reset-test` — candidate `make -C utils/itlb-reset-test test` in an assigned checkout.
 - `utils/mmu-page-test` — candidate `make -C utils/mmu-page-test test` in an assigned checkout.
+- `utils/vm-test` — actual VM/MMU production code with host platform substitutes.
 - `utils/mmu-tlb-test` — candidate `make -C utils/mmu-tlb-test test` in an assigned checkout.
 - `utils/sq-test` — candidate `make -C utils/sq-test test` in an assigned checkout.
 
@@ -57,6 +60,7 @@ Target/example directories (source the assigned checkout's environment and inspe
 
 - `examples/dreamcast/basic/cache-safety`
 - `examples/dreamcast/basic/mmu`
+- `examples/dreamcast/basic/mmu/resident-vm` — translated data and carrier/fiber probe.
 - `examples/dreamcast/basic/sq-safety`
 
 These are entry points, not a request to run all tests or a claim of success.

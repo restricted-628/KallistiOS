@@ -263,6 +263,44 @@ implementation holds, unresolved policy decisions, unrelated branch updates,
 force-pushes, published-history rewrites or upstream PR creation. Helpers still
 deliver to Integration unless separately authorized to publish.
 
+## D19 — Selective KOS-native virtual memory
+
+**Accepted direction, 2026-10-14:** Add useful memory-management capabilities
+around KOS and this fork's contracts, not another OS's process architecture.
+Preserve direct-mapped P1 code/data and ordinary allocation behavior; provide
+opt-in translated regions so applications can choose protection, backing-store
+flexibility and their associated costs. P1 code may access translated data.
+MMU-on does not imply universal translation or protection from direct aliases.
+
+Threads and their fibers retain the existing shared-address-space/carrier
+contract. Resident pages may still incur TLB misses. Blocking storage faults,
+fiber-local suspension, DMA pinning, reclamation policy and fault recovery need
+explicit contracts; no automatic scheduling or isolation guarantees follow.
+Do not silently replace malloc, require the Service Executor, import process
+slots, revive cross-system quarantine, or claim that arbitrary faults are safely
+recoverable. Kosh isolation remains a possible later design, not a prerequisite.
+
+The original direction did not itself establish an implemented VM service or API.
+Kernel owns the phased implementation with named interface reviews. SDK research
+remains private; reuse inspected evidence and independently implement the selected
+capabilities. Validation must distinguish source, host, target and hardware results.
+
+### D19 milestone — resident ordinary-data regions
+
+**Accepted, 2026-10-18:** `<kos/vm.h>` and `kernel/mm/vm.c` implement explicit
+reserve, zeroed commit, protect, decommit, release, copied query and empty-space
+destruction. Arenas exclude OCRAM. The application owns context/ASID selection
+and must quiesce raw-pointer users before mutation; ordinary allocation and P1
+access remain unchanged. See `doc/resident-vm.md` for the complete contract.
+
+Host regressions/sanitizers, GCC 16.2.0 kernel/probe builds and translated-data
+execution across core fibers/carrier preemption pass in both modes of a private
+strict-MMU Flycast runtime. An unchanged emulator quadword-alignment assertion
+fails separately; this aligned-data probe does not establish full MMU conformance.
+Physical cache behavior, prohibited-write faults, alternate-provider execution
+and performance remain unverified. Fault recovery, pinning, file-backed paging,
+managed stacks and executable overlays are not part of this milestone.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-18 — opt-in resident virtual data regions
+
+- Add explicit reserve/commit/protect/decommit/release/query APIs above the
+  checked MMU helpers, with zeroed backing and rollback/retirement before reuse.
+  Exclude OCRAM; retain caller-owned context/ASID selection and quiescence.
+  Ordinary allocation, P1 access, scheduler and memory defaults are unchanged.
+- Add focused production-code host regressions and a translated-data probe
+  spanning page tables, core fibers and carrier preemption. Current-base host
+  and sanitizer checks, GCC 16.2.0 builds/links and both private strict-MMU
+  Flycast modes pass. A separate emulator alignment-test failure remains open.
+- This is resident CPU data only, not paging, DMA pinning, managed stacks,
+  fault recovery or executable loading. No hardware/cache/performance claim.
+
 ## 2026-10-17 — upstream empty command-line correction
 
 - Merge upstream `8e704086ecd4990627b85fb4905770dfffe29c00`, including

@@ -9,6 +9,7 @@ Independent arenas, allocation lifetimes, validation and memory budgets.
 
 - `kernel/mm/heap.c`
 - `include/kos/heap.h`
+- `kernel/mm/vm.c` and `include/kos/vm.h` — resident backing ownership; primary guide is [cache/MMU](cache-mmu-sq.md)
 - `kernel/mm/Makefile`
 
 Relevant existing documentation (dated claims must be rechecked):
