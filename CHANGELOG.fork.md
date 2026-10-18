@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-18 — exception register dumps bypass stdio
+
+- Send generic exception dumps directly to the selected debug device, retaining
+  severity filtering, register values, text and stack/unwind calls. A bounded
+  private integer converter avoids stdio and shared formatting storage.
+- Sanitized host regressions and GCC 16.2.0 emitted-code checks pass. The generic
+  fault reproducer now reaches its dump, panic and abort output in the tested
+  interpreter; static dump stack use is unchanged. Backend progress, nested
+  failures and existing stack formatter limitations remain outside this fix.
+
 ## 2026-10-18 — panic output bypasses filesystem locking
 
 - Route panic and abort messages through debug string output so exception

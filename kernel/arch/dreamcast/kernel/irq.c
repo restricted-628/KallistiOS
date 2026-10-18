@@ -126,7 +126,26 @@ static char *irq_exception_string(irq_t evt) {
     }
 }
 
-/* Print a kernel panic reg dump */
+/* Format only the dump's 32-bit integers, without stdio or shared storage.
+   Callers use base 10 or 16 and at most eight padding digits. */
+static void irq_dump_number(uint32_t value, unsigned int base, unsigned int width) {
+    char buffer[11];
+    char *end = buffer + sizeof(buffer) - 1;
+    char *p = end;
+
+    *p = '\0';
+    do {
+        *--p = "0123456789abcdef"[value % base];
+        value /= base;
+    } while(value);
+
+    while((unsigned int)(end - p) < width)
+        *--p = '0';
+
+    dbgio_write_str(p);
+}
+
+/* Print a kernel panic reg dump through the selected debug device. */
 extern irq_context_t *irq_srt_addr;
 void irq_dump_regs(int code, irq_t evt) {
     uintptr_t sp;
@@ -136,40 +155,80 @@ void irq_dump_regs(int code, irq_t evt) {
     bool valid_pc;
     bool valid_pr;
 
-    dbglog(DBG_DEAD, "Unhandled exception: PC %08lx, code %d, evt %04x\n",
-           irq_srt_addr->pc, code, (uint16_t)evt);
-    dbglog(DBG_DEAD, " R0-R7: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
-           regs[0], regs[1], regs[2], regs[3], regs[4], regs[5], regs[6], regs[7]);
-    dbglog(DBG_DEAD, " R8-R15: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
-           regs[8], regs[9], regs[10], regs[11], regs[12], regs[13], regs[14], regs[15]);
-    dbglog(DBG_DEAD, " SR %08lx PR %08lx\n", irq_srt_addr->sr, irq_srt_addr->pr);
+    if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+        dbgio_write_str("Unhandled exception: PC ");
+        irq_dump_number(irq_srt_addr->pc, 16, 8);
+        dbgio_write_str(", code ");
+        if(code < 0)
+            dbgio_write_str("-");
+        irq_dump_number(code < 0 ? 0u - (uint32_t)code : (uint32_t)code, 10, 0);
+        dbgio_write_str(", evt ");
+        irq_dump_number((uint16_t)evt, 16, 4);
+        dbgio_write_str("\n");
+    }
+    if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+        dbgio_write_str(" R0-R7:");
+        for(unsigned int i = 0; i < 8; ++i) {
+            dbgio_write_str(" ");
+            irq_dump_number(regs[i], 16, 8);
+        }
+        dbgio_write_str("\n");
+    }
+    if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+        dbgio_write_str(" R8-R15:");
+        for(unsigned int i = 8; i < 16; ++i) {
+            dbgio_write_str(" ");
+            irq_dump_number(regs[i], 16, 8);
+        }
+        dbgio_write_str("\n");
+    }
+    if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+        dbgio_write_str(" SR ");
+        irq_dump_number(irq_srt_addr->sr, 16, 8);
+        dbgio_write_str(" PR ");
+        irq_dump_number(irq_srt_addr->pr, 16, 8);
+        dbgio_write_str("\n");
+    }
     sp = regs[15];
     arch_stk_trace_at(sp, 0);
 
     if(code == 1) {
-        dbglog(DBG_DEAD, "\nEncountered %s. ", irq_exception_string(evt));
+        if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+            dbgio_write_str("\nEncountered ");
+            dbgio_write_str(irq_exception_string(evt));
+            dbgio_write_str(". ");
+        }
 
         valid_pc = arch_valid_text_address(irq_srt_addr->pc);
         valid_pr = arch_valid_text_address(irq_srt_addr->pr);
         /* Construct template message only if either PC/PR address is valid */
         if(valid_pc || valid_pr) {
-            dbglog(DBG_DEAD, "Use this template terminal command to help"
-                " diagnose:\n\n\t$KOS_ADDR2LINE -f -C -i -e prog.elf");
+            if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level)
+                dbgio_write_str("Use this template terminal command to help"
+                    " diagnose:\n\n\t$KOS_ADDR2LINE -f -C -i -e prog.elf");
 
-            if(valid_pc)
-                dbglog(DBG_DEAD, " %08lx", irq_srt_addr->pc);
+            if(valid_pc && DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+                dbgio_write_str(" ");
+                irq_dump_number(irq_srt_addr->pc, 16, 8);
+            }
 
-            if(valid_pr)
-                dbglog(DBG_DEAD, " %08lx", irq_srt_addr->pr);
+            if(valid_pr && DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+                dbgio_write_str(" ");
+                irq_dump_number(irq_srt_addr->pr, 16, 8);
+            }
 
             while(arch_stk_unwind_step(sp, &ret_addr, &next_sp)) {
                 /* Log the call site (the BSR/BSRF/JSR itself) */
-                dbglog(DBG_DEAD, " %08x", ret_addr - 4);
+                if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level) {
+                    dbgio_write_str(" ");
+                    irq_dump_number(ret_addr - 4, 16, 8);
+                }
                 sp = next_sp;
             }
         }
 
-        dbglog(DBG_DEAD, "\n");
+        if(DBG_DEAD <= DBGLOG_LEVEL_SUPPORT && DBG_DEAD <= dbglog_level)
+            dbgio_write_str("\n");
     }
 }
 
