@@ -6,6 +6,15 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-17 — upstream empty command-line correction
+
+- Merge upstream `8e704086ecd4990627b85fb4905770dfffe29c00`, including
+  `310899d0`: pass a writable, null-terminated argument-pointer array to
+  `main()` when `argc` is zero. Preserve fork MMU and shutdown sequencing.
+- GCC 16.2.0 kernel rebuild and strict probe links pass. The startup argument
+  probe and SH4ZAM integration probe pass in both Flycast modes. No physical
+  hardware validation or unrelated startup-policy change is claimed.
+
 ## 2026-10-17 — SH4ZAM blend and software-backend update
 
 - Advance the official SH4ZAM pin from `7747e5d` to `c18faab`, preserving
