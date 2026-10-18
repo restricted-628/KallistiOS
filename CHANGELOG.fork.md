@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-18 — keep logical-stack recovery visible to the compiler
+
+- Use `__is_defined()` in the saved-stack accessor so disabled soft-gUSA code
+  remains compiler-checked. Preserve saved-r1 recovery, marker bounds and the
+  existing fiber-aware scheduler checks; do not adopt upstream's deferred check.
+- Route the host regression to the real KOS configuration macros. Host checks
+  and GCC 16.2.0 consumer compiles pass; helper assembly is identical before and
+  after at both O0 and O2 for soft-gUSA and non-atomic modes. No new hardware
+  or interrupt-runtime validation is claimed.
+
 ## 2026-10-18 — opt-in resident virtual data regions
 
 - Add explicit reserve/commit/protect/decommit/release/query APIs above the

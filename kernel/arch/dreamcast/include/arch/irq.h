@@ -139,10 +139,9 @@ struct __attribute__((aligned(32))) irq_context {
     identical to CONTEXT_SP(). The context must be non-NULL.
 */
 static inline uint32_t irq_context_stack_pointer(const irq_context_t *context) {
-#if defined(__SH_ATOMIC_MODEL_SOFT_GUSA__) && __SH_ATOMIC_MODEL_SOFT_GUSA__
-    if(context->r[15] >= UINT32_MAX - 127u)
+    if(__is_defined(__SH_ATOMIC_MODEL_SOFT_GUSA__) &&
+       context->r[15] >= UINT32_MAX - 127u)
         return context->r[1];
-#endif
     return context->r[15];
 }
 

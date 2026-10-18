@@ -3,10 +3,10 @@
 CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
-CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
+CPPFLAGS += -Iinclude -idirafter ../../include \
             -I../../kernel/arch/dreamcast/include
 TARGET = irq-stack-test
-HEADER = ../../kernel/arch/dreamcast/include/arch/irq.h
+HEADER = ../../kernel/arch/dreamcast/include/arch/irq.h ../../include/kos/cdefs.h
 .PHONY: all test clean dreamcast
 all: $(TARGET) $(TARGET)-plain
 $(TARGET): irq-stack-test.c $(HEADER)
