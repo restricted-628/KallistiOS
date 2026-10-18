@@ -6,6 +6,15 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-18 — panic output bypasses filesystem locking
+
+- Route panic and abort messages through debug string output so exception
+  reporting does not re-enter the mutex-protected filesystem path. Preserve
+  abort-message filtering and the existing teardown sequence.
+- Actual-function host regressions, GCC 16.2.0 builds and recorded fatal-output
+  emulator checks pass. Printed abort output is not proof of completed shutdown
+  or loader return; arbitrary debug-backend progress is not guaranteed.
+
 ## 2026-10-18 — keep logical-stack recovery visible to the compiler
 
 - Use `__is_defined()` in the saved-stack accessor so disabled soft-gUSA code
