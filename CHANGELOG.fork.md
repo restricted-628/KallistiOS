@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-18 — resident page pinning and physical byte runs
+
+- Add independent pin tokens for committed ordinary-data regions, with exact
+  physical byte-run enumeration. Reject overlapping mapping/backing mutations
+  until every covering token is released; preserve unrelated-page progress.
+- Keep final ownership explicit: callers retire all handle users and consumers
+  before release. Pinning does not submit DMA, synchronize caches, resolve
+  faults, select an address space or automatically drain cancelled work.
+- Production-code host/sanitizer tests, GCC 16.2.0 build/link and recorded
+  core/exclusive-addon interpreter/dynarec pin and carrier-blocking probes pass.
+  Provider links reuse accepted provider archives with the new VM object.
+  Hardware DMA/cache, loader and emulator-alignment limits remain unverified;
+  no VM-buffer driver adapter, file-backed paging or overlay loader is added.
+
 ## 2026-10-18 — prepared resident fault recovery
 
 - Add explicit one-page zero-commit and guard tickets with thread-context

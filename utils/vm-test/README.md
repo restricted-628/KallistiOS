@@ -15,5 +15,15 @@ Free spies reject backing still mapped or lacking cache/TLB retirement; commit
 spies require the zeroed direct alias to have been purged before mapping.
 
 This is not SH-4 execution, a physical cache model, a proof of KOS mutex/scheduler
-behavior, or DMA/hardware validation. The target companion is
-examples/dreamcast/basic/mmu/resident-vm. No production fault recovery is added.
+behavior, or DMA/hardware validation. Target companions are the resident-vm,
+resident-fault and resident-pin examples under examples/dreamcast/basic/mmu.
+
+VM3 cases in `pin-tests.inc` exercise the actual manager code, including controlled
+contiguous/fragmented/reversed host backing, byte edges, count/capacity errors,
+unchanged outputs, ticket precedence, counter/allocation failure, overlapping
+leases, unrelated VM2 resolution during admission, and queued enumerator drain
+before release by a different thread. Host allocation and interrupt substitutes
+are explicit; delayed consumer stages are a lifetime model, not DMA execution.
+The resident-pin target probe separately exercises real fiber suspension and
+carrier ownership transfer. No freed handle is used as a supported stale-handle
+test. Both suites require assertions and complete result markers.

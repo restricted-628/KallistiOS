@@ -321,6 +321,26 @@ target raw-gUSA/nested rejection and physical cache/timing remain explicit limit
 This milestone does not implement DMA pinning, disc-backed paging, managed
 stacks or executable overlays, and does not change ordinary allocation defaults.
 
+### D19 milestone — resident pin tokens and physical byte runs
+
+**Accepted, 2026-10-18:** Independent pin tokens retain committed ordinary-data
+backing and mapping interpretation. Live fault tickets exclude acquisition;
+covered pages reject mutation until their last pin is released. Physical runs
+describe exact useful CPU-physical bytes, not device bus addresses or presumed
+contiguity. Copied metadata grants no independent lease. The final owner must
+close admission and retire all handle users and memory/device consumers before
+release; cancellation, callback completion or fiber destruction alone is not
+retirement. See `doc/resident-vm.md` for the API and failure-order contract.
+
+Actual-source host/sanitizer regressions, GCC 16.2.0 build/link and recorded
+core/exclusive-addon pin and carrier-blocking emulator probes pass. Provider
+executions use accepted provider archives with a fresh VM object, not fresh
+whole-provider rebuilds. Hardware DMA/cache and real-loader behavior remain
+unverified, with existing emulator alignment limits retained. Pinning does not
+add cache synchronization, transport admission, automatic lifetime management,
+file-backed residency or executable overlays. Ordinary allocation, P1 access
+and provider defaults are unchanged.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

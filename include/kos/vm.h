@@ -18,8 +18,9 @@
     destroy, close admission and join all manager users, including lock waiters.
     Handles, arguments/results and metadata must remain directly mapped.
 
-    Ordinary CPU data only: no managed stacks, executable code, DMA/device/SQ
-    use or application-created aliases. Fault-driven commitment requires an
+    Ordinary data only: no managed stacks, executable code, device/SQ access
+    or application-created aliases. Pins retain backing and describe physical
+    bytes; they do not authorize DMA or change existing driver admission. Fault-driven commitment requires an
     explicitly prepared one-page ticket; see vm_fault_arm(). Direct aliases
     bypass protection. Never pass a returned P0 pointer to free(). Resident
     pages can still miss in the TLB. See doc/resident-vm.md for the full contract.
@@ -30,6 +31,7 @@
 #include <kos/cdefs.h>
 #include <arch/mmu.h>
 #include <stddef.h>
+#include <stdint.h>
 __BEGIN_DECLS
 
 typedef struct vm_space vm_space_t;
@@ -69,6 +71,65 @@ int vm_decommit(vm_space_t *space, void *address, size_t bytes);
 int vm_release(vm_space_t *space, void *reservation_base);
 /** Query any byte in the arena; free runs and reservation/page runs are distinct. */
 int vm_query(vm_space_t *space, const void *address, vm_info_t *result);
+
+typedef struct vm_pin vm_pin_t;
+typedef enum {
+    VM_PIN_READ = 1, VM_PIN_WRITE = 2, VM_PIN_READWRITE = 3
+} vm_pin_access_t;
+
+/** Exact useful bytes, in logical order. Physical is a CPU MMU byte address,
+    not a page ID, direct alias or bus address. Offset is from the pin address. */
+typedef struct {
+    uintptr_t physical;
+    size_t offset;
+    size_t bytes;
+} vm_phys_run_t;
+
+/** Immutable copied identity/geometry; no independent pointer lease. */
+typedef struct {
+    const void *address;
+    size_t bytes;
+    vm_pin_access_t access;
+    size_t run_count;
+    mmucontext_t *context;
+    unsigned asid;
+} vm_pin_info_t;
+
+/** Retain already committed ordinary data within one reservation. Byte endpoints
+    may be unaligned; every touched page is retained. READ/WRITE describe the
+    consumer's memory access (disc-to-RAM is WRITE). WRITE requires VM_READWRITE.
+    No implicit fault, commit, protection change, context switch or cache sync.
+
+    Every live fault ticket, including RESOLVED, excludes pin admission. All
+    overlapping mutations (even same-protection protect) fail EBUSY while pinned.
+    Independent overlapping pins are allowed; they do not serialize data access.
+
+    Error precedence: caller EPERM; null/zero EINVAL; address wrap EOVERFLOW;
+    arena EINVAL; access ENOTSUP; lock error; free start ENOENT/cross-reservation
+    EINVAL; any ticket EBUSY; any uncommitted page ENOENT; write protection EACCES;
+    counter/allocation arithmetic EOVERFLOW; allocation ENOMEM. Outputs unchanged
+    on failure. Space/context/ASID and resident caller state outlive the token.
+    See doc/resident-vm.md for the complete ownership/transfer/cache contract. */
+int vm_pin_acquire(vm_space_t *space, const void *address, size_t bytes,
+                   vm_pin_access_t access, vm_pin_t **result);
+int vm_pin_query(vm_pin_t *pin, vm_pin_info_t *result);
+/** Copy min(capacity, run_count-first) immutable runs; short capacity is successful
+    partial enumeration, not transfer admission. Continue at first+written until
+    run_count. Zero capacity permits NULL runs and makes no progress; first==count
+    succeeds with zero written, first>count fails EINVAL. written is required;
+    nonzero capacity requires runs. Capacity multiplication overflow: EOVERFLOW.
+    Errors leave all outputs unchanged; success leaves unused elements unchanged.
+    Outputs must not overlap. Retain the same token through count and all copies. */
+int vm_pin_runs(vm_pin_t *pin, size_t first, vm_phys_run_t *runs,
+                size_t capacity, size_t *written);
+/** One final owner closes admission and joins other token API users/mutex waiters
+    and suspended holders, separately from retiring all memory/device/IRQ/worker/
+    finalizer/callback users, BEFORE release. Cancel/timeout/status is not retirement.
+    Ordinary IRQ-enabled thread only; another carrier or inactive context is OK.
+    No retain/clone, automatic consumer drain, stale-handle or double-release safety.
+    Success invalidates the handle, leaves backing committed and releases only this
+    token's counts. Copied runs/identity grant no lease. No IRQ/TLS-hook cleanup. */
+int vm_pin_release(vm_pin_t *pin);
 
 typedef struct vm_fault vm_fault_t;
 typedef enum { VM_FAULT_ZERO_COMMIT, VM_FAULT_GUARD } vm_fault_kind_t;
@@ -135,7 +196,8 @@ int vm_fault_query(vm_fault_t *ticket, vm_fault_info_t *result);
 int vm_fault_release(vm_fault_t *ticket);
 
 /* Integer calls return 0 or -1 with errno. Outputs stay unchanged on failure.
-   Mutating ranges are nonzero, 4096-byte aligned and within one reservation:
+   Commit/protect/decommit ranges are nonzero, 4096-byte aligned and within
+   one reservation:
    EINVAL for invalid arguments/crossing, ENOENT for a start in free space.
    Commit/protect accept only VM_READ or VM_READWRITE (otherwise ENOTSUP).
    Success need not clear errno. Stale nonnull handles/pointers are invalid;

@@ -19,6 +19,7 @@ typedef struct vm_page {
     void *backing;
     unsigned protection;
     vm_fault_t *ticket;
+    uint32_t pins;
 } vm_page_t;
 
 typedef struct vm_region {
@@ -43,6 +44,15 @@ struct vm_space {
     uint64_t generation;
     unsigned ticket_count;
     uint32_t sequence;
+    uint32_t pin_count;
+};
+
+struct vm_pin {
+    vm_space_t *space;
+    vm_region_t *region;
+    size_t first, count;
+    vm_pin_info_t info;
+    vm_phys_run_t runs[];
 };
 
 struct vm_fault {
@@ -169,7 +179,7 @@ int vm_space_destroy(vm_space_t *s) {
         return vm_error(EINVAL);
     if(mutex_lock(&s->mutex) < 0)
         return -1;
-    if(s->regions || s->ticket_count) {
+    if(s->regions || s->ticket_count || s->pin_count) {
         mutex_unlock(&s->mutex);
         return vm_error(EBUSY);
     }
@@ -251,7 +261,7 @@ static vm_region_t *vm_begin(vm_space_t *s, void *address, size_t bytes,
     if(r) {
         size_t first = ((uintptr_t)address - r->base) / VM_PAGE_BYTES;
         for(size_t i = 0; i < bytes / VM_PAGE_BYTES; ++i) {
-            if(r->pages[first + i].ticket) {
+            if(r->pages[first + i].ticket || r->pages[first + i].pins) {
                 vm_error(EBUSY);
                 r = NULL;
                 break;
@@ -359,7 +369,7 @@ int vm_release(vm_space_t *s, void *base) {
         return vm_error(ENOENT);
     }
     for(size_t i = 0; i < r->bytes / VM_PAGE_BYTES; ++i) {
-        if(r->pages[i].ticket) {
+        if(r->pages[i].ticket || r->pages[i].pins) {
             mutex_unlock(&s->mutex);
             return vm_error(EBUSY);
         }
@@ -620,4 +630,148 @@ mmupage_t *vm_fault_resolve(mmucontext_t *c, irq_t event,
     t->info.state = VM_FAULT_RESOLVED;
     ++s->sequence;
     return pte;
+}
+
+/* Byte-range admission is deliberately separate from page-aligned mutations.
+   The category scans give tickets precedence over holes/protection errors. */
+int vm_pin_acquire(vm_space_t *s, const void *address, size_t bytes,
+                   vm_pin_access_t access, vm_pin_t **result) {
+    uintptr_t base = (uintptr_t)address;
+    if(vm_caller() < 0)
+        return -1;
+    if(!s || !result || !base || !bytes)
+        return vm_error(EINVAL);
+    if(bytes > UINTPTR_MAX - base)
+        return vm_error(EOVERFLOW);
+    if(base < s->base || base - s->base >= s->bytes ||
+       bytes > s->bytes - (base - s->base))
+        return vm_error(EINVAL);
+    if(access != VM_PIN_READ && access != VM_PIN_WRITE &&
+       access != VM_PIN_READWRITE)
+        return vm_error(ENOTSUP);
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    vm_region_t *r = vm_region_range(s, base, bytes);
+    if(!r) {
+        mutex_unlock(&s->mutex);
+        return -1;
+    }
+    size_t first = (base - r->base) / VM_PAGE_BYTES;
+    size_t last = (base - r->base + bytes - 1) / VM_PAGE_BYTES;
+    size_t count = last - first + 1;
+    vm_page_t *pages = r->pages + first;
+    int error = 0;
+    /* Resolution leaves the ticket pointer installed. Once this scan passes,
+       no exception can change these pages; arm/release share this mutex. */
+    for(size_t i = 0; i < count; ++i) {
+        if(pages[i].ticket) { error = EBUSY; goto fail; }
+    }
+    for(size_t i = 0; i < count; ++i) {
+        if(!pages[i].backing || !pages[i].protection) {
+            error = ENOENT;
+            goto fail;
+        }
+    }
+    if(access & VM_PIN_WRITE) {
+        for(size_t i = 0; i < count; ++i) {
+            if(pages[i].protection != VM_READWRITE) {
+                error = EACCES;
+                goto fail;
+            }
+        }
+    }
+    if(count > (SIZE_MAX - sizeof(vm_pin_t)) / sizeof(vm_phys_run_t) ||
+       s->pin_count == UINT32_MAX) {
+        error = EOVERFLOW;
+        goto fail;
+    }
+    for(size_t i = 0; i < count; ++i) {
+        if(pages[i].pins == UINT32_MAX) { error = EOVERFLOW; goto fail; }
+    }
+    vm_pin_t *p = malloc(sizeof(*p) + count * sizeof(*p->runs));
+    if(!p) { error = ENOMEM; goto fail; }
+    p->space = s;
+    p->region = r;
+    p->first = first;
+    p->count = count;
+    p->info = (vm_pin_info_t){.address = address, .bytes = bytes,
+        .access = access, .context = s->context, .asid = s->context->asid};
+    size_t offset = 0;
+    for(size_t i = 0; i < count; ++i) {
+        size_t edge = i ? 0 : base % VM_PAGE_BYTES;
+        size_t length = VM_PAGE_BYTES - edge;
+        if(length > bytes - offset) length = bytes - offset;
+        uintptr_t physical = ((uintptr_t)pages[i].backing & MEM_AREA_CACHE_MASK) + edge;
+        vm_phys_run_t *prev = p->info.run_count ? &p->runs[p->info.run_count - 1] : NULL;
+        if(prev && prev->bytes <= UINTPTR_MAX - prev->physical &&
+           prev->physical + prev->bytes == physical &&
+           prev->offset + prev->bytes == offset) {
+            prev->bytes += length;
+        }
+        else {
+            p->runs[p->info.run_count++] = (vm_phys_run_t){physical, offset, length};
+        }
+        offset += length;
+    }
+    /* Nothing after this point can fail. Publish the complete independent lease. */
+    for(size_t i = 0; i < count; ++i) ++pages[i].pins;
+    ++s->pin_count;
+    *result = p;
+    mutex_unlock(&s->mutex);
+    return 0;
+fail:
+    mutex_unlock(&s->mutex);
+    return vm_error(error);
+}
+
+int vm_pin_query(vm_pin_t *p, vm_pin_info_t *result) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!p || !result)
+        return vm_error(EINVAL);
+    if(mutex_lock(&p->space->mutex) < 0)
+        return -1;
+    *result = p->info;
+    mutex_unlock(&p->space->mutex);
+    return 0;
+}
+
+int vm_pin_runs(vm_pin_t *p, size_t first, vm_phys_run_t *runs,
+                size_t capacity, size_t *written) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!p || !written || (capacity && !runs))
+        return vm_error(EINVAL);
+    if(capacity > SIZE_MAX / sizeof(*runs))
+        return vm_error(EOVERFLOW);
+    if(mutex_lock(&p->space->mutex) < 0)
+        return -1;
+    if(first > p->info.run_count) {
+        mutex_unlock(&p->space->mutex);
+        return vm_error(EINVAL);
+    }
+    size_t count = p->info.run_count - first;
+    if(count > capacity) count = capacity;
+    if(count) memcpy(runs, p->runs + first, count * sizeof(*runs));
+    *written = count;
+    mutex_unlock(&p->space->mutex);
+    return 0;
+}
+
+int vm_pin_release(vm_pin_t *p) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!p)
+        return vm_error(EINVAL);
+    /* Owner has closed admission and joined handle/API waiters AND consumers.
+       The mutex cannot establish that protocol or detect stale handles. */
+    vm_space_t *s = p->space;
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    for(size_t i = 0; i < p->count; ++i)
+        --p->region->pages[p->first + i].pins;
+    --s->pin_count;
+    mutex_unlock(&s->mutex);
+    free(p);
+    return 0;
 }

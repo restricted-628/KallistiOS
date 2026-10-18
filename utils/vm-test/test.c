@@ -26,6 +26,10 @@ typedef struct {
     bool backing, prepared, mapped, retired_cache, retired_tlb;
 } allocation_t;
 static allocation_t allocations[128];
+/* Deterministic host backing geometry; never changes VM control flow. */
+static unsigned char *backing_pool;
+static unsigned pool_order[8], pool_next;
+static void (*allocation_inject)(void);
 static mmucontext_t *contexts[8];
 static void verify_free(allocation_t *a);
 static allocation_t *allocation(void *p) {
@@ -44,8 +48,18 @@ static allocation_t *physical(unsigned p) {
 }
 static void *allocate(size_t bytes, bool aligned) {
     CHECK(!irq_depth);
+    if(allocation_inject) {
+        void (*fn)(void) = allocation_inject;
+        allocation_inject = NULL;
+        fn();
+    }
     if(++attempts == fail_at) { errno = ENOMEM; return NULL; }
-    void *p = aligned ? aligned_alloc(4096, bytes) : malloc(bytes);
+    void *p;
+    if(aligned && backing_pool) {
+        CHECK(pool_next < 8);
+        p = backing_pool + pool_order[pool_next++] * 4096;
+    }
+    else p = aligned ? aligned_alloc(4096, bytes) : malloc(bytes);
     CHECK(p);
     for(unsigned i = 0; i < 128; ++i) {
         if(!allocations[i].p) {
@@ -77,7 +91,9 @@ static void test_free(void *p) {
     *a = (allocation_t){0};
     CHECK(live);
     --live;
-    free(p);
+    if(!backing_pool || (uintptr_t)p < (uintptr_t)backing_pool ||
+       (uintptr_t)p >= (uintptr_t)backing_pool + 8 * 4096)
+        free(p);
 }
 /* Inject an interrupt at the platform exclusion boundary, without replacing
    production VM control flow. Used only by the single-thread query fixture. */
@@ -710,10 +726,13 @@ static void fault_retirement(void) {
     expect(s, BASE, VM_COMMITTED, 4096, VM_READWRITE);
     CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); CHECK(!live);
 }
+#include "pin-tests.inc"
+
 int main(void) {
     bounds(); lifetime(); failures(); callers(); ranges_and_runs();
     rollback_preserves_neighbor(); separation(); preexisting_mapping(); serialization();
     fault_lifetime(); fault_failures(); fault_admission(); fault_query_and_pins(); fault_callers(); fault_retirement();
+    pin_tests();
     printf("VM production PASS: %u checks; cache purges=%u TLB retirements=%u\n",
            atomic_load(&checks), purges, invalidations);
     return 0;
