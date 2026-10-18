@@ -101,8 +101,8 @@ static char *irq_exception_string(irq_t evt) {
             return "General FPU exception";
         case EXC_SLOT_FPU:
             return "Slot FPU exception";
-        case EXC_DATA_ADDRESS_READ:
-            return "Data address error (read)";
+        case EXC_DATA_ADDRESS_READ:  /* or EXC_INSTR_ADDRESS */
+            return "Instruction or Data(read) address error";
         case EXC_DATA_ADDRESS_WRITE:
             return "Data address error (write)";
         case EXC_DTLB_MISS_READ:  /* or EXC_ITLB_MISS */

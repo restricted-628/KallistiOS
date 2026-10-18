@@ -19,6 +19,8 @@ static _Thread_local uint32_t test_sr;
 static _Thread_local int test_irq, fail_lock;
 static _Thread_local unsigned irq_depth;
 static unsigned attempts, fail_at, live, map_calls, purges, invalidations;
+static void *watched_mutex;
+static atomic_uint mutex_waiters;
 typedef struct {
     void *p;
     bool backing, prepared, mapped, retired_cache, retired_tlb;
@@ -77,8 +79,20 @@ static void test_free(void *p) {
     --live;
     free(p);
 }
+/* Inject an interrupt at the platform exclusion boundary, without replacing
+   production VM control flow. Used only by the single-thread query fixture. */
+static void (*irq_inject)(void);
+static unsigned irq_countdown;
+static unsigned disable_irq(void) {
+    if(!irq_depth && irq_inject && --irq_countdown == 0) {
+        void (*fn)(void) = irq_inject;
+        irq_inject = NULL;
+        fn();
+    }
+    return irq_depth++;
+}
 static void restore_irq(unsigned *old) { irq_depth = *old; }
-#define irq_disable_scoped() unsigned old_irq __attribute__((cleanup(restore_irq))) = irq_depth++
+#define irq_disable_scoped() unsigned old_irq __attribute__((cleanup(restore_irq))) = disable_irq()
 static mmupage_t *map_virt(mmucontext_t *, int);
 void mmu_purge_phys_page(uint32_t p) {
     CHECK(irq_depth);
@@ -105,6 +119,7 @@ static mmu_mapfunc_t map_func;
 static uint32_t pteh_value;
 static volatile uint32_t *const pteh = &pteh_value;
 #define PAGESIZE_BITS 12
+#include "vm-internal.h"
 #define malloc test_malloc
 #define calloc test_calloc
 #define free test_free
@@ -433,9 +448,272 @@ static void serialization(void) {
     for(unsigned i = 0; i < 4; ++i) CHECK(!pthread_join(threads[i], NULL));
     CHECK(!vm_space_destroy(s)); drop(0); CHECK(!live);
 }
+
+static irq_context_t fault_frame(void) {
+    irq_context_t f;
+    memset(&f, 0x39, sizeof(f));
+    f.pc = 0x8c001000; f.sr = 0x40000001; f.r[15] = 0x8c345000;
+    return f;
+}
+/* Publish tracking models the hardware mapping side effect only. */
+static mmupage_t *resolve(vm_space_t *s, irq_context_t *f, unsigned event,
+                          uint32_t address, unsigned asid, unsigned control) {
+    unsigned before = attempts;
+    int saved = errno;
+    irq_context_t copy = *f;
+    ++irq_depth;
+    mmupage_t *p = vm_fault_resolve(s->context, event, f, address, asid, control, 0x8c123400);
+    --irq_depth;
+    CHECK(attempts == before && errno == saved && !memcmp(f, &copy, sizeof(copy)));
+    if(p) {
+        allocation_t *a = physical(p->physical);
+        a->mapped = true; a->retired_cache = a->retired_tlb = false;
+    }
+    return p;
+}
+static mmupage_t *resolve_ok(vm_space_t *s, vm_fault_t *t, unsigned event) {
+    irq_context_t f = fault_frame();
+    mmupage_t *p = resolve(s, &f, event, (uintptr_t)t->info.page + 28,
+                          s->context->asid, 1);
+    CHECK(p);
+    vm_fault_info_t i;
+    CHECK(!vm_fault_query(t, &i));
+    CHECK(i.state == VM_FAULT_RESOLVED && i.snapshot_valid);
+    CHECK(i.snapshot.pc == f.pc && i.snapshot.sr == f.sr && i.snapshot.sp == f.r[15]);
+    CHECK(i.snapshot.address == (uintptr_t)i.page + 28 && i.snapshot.event == event);
+    CHECK(i.snapshot.table == (uintptr_t)s->context && i.snapshot.carrier == 0x8c123400);
+    CHECK(i.snapshot.asid == (unsigned)s->context->asid && i.snapshot.mmucr == 1);
+    CHECK(i.snapshot.outcome == VM_FAULT_RETRY && i.snapshot.classification == VM_FAULT_MANAGED);
+    CHECK(i.snapshot.access == (event == 0x60 ? VM_FAULT_WRITE : VM_FAULT_READ_OR_FETCH));
+    CHECK(!resolve(s, &f, event, (uintptr_t)i.page, s->context->asid, 1));
+    return p;
+}
+static void busy_ticket(vm_space_t *s, void *page) {
+    vm_fault_t *sentinel = (void *)123;
+    unsigned before = attempts;
+    CHECK(vm_fault_arm(s, page, VM_FAULT_GUARD, VM_READWRITE, &sentinel) < 0 && errno == EBUSY);
+    CHECK(sentinel == (void *)123);
+    CHECK(vm_commit(s, page, 4096, VM_READWRITE) < 0 && errno == EBUSY);
+    CHECK(vm_protect(s, page, 4096, VM_READ) < 0 && errno == EBUSY);
+    CHECK(vm_decommit(s, page, 4096) < 0 && errno == EBUSY);
+    CHECK(vm_release(s, P(BASE)) < 0 && errno == EBUSY);
+    CHECK(vm_space_destroy(s) < 0 && errno == EBUSY);
+    CHECK(attempts == before);
+}
+static void fault_lifetime(void) {
+    for(unsigned guard = 0; guard < 2; ++guard) {
+        for(unsigned resolved = 0; resolved < 2; ++resolved) {
+            mmucontext_t *c = context(0); mmu_use_table(c);
+            vm_space_t *s = vm_space_create(c, P(BASE), 4 * 4096);
+            void *v; vm_fault_t *t;
+            CHECK(s && !vm_reserve(s, P(BASE), 4 * 4096, &v));
+            CHECK(!vm_space_create(c, P(BASE + 8 * 4096), 4096) && errno == EEXIST);
+            if(guard) {
+                CHECK(!vm_commit(s, v, 4096, VM_READWRITE));
+                ((unsigned char *)s->regions->pages[0].backing)[73] = 0x67;
+            }
+            CHECK(!vm_fault_arm(s, v, guard ? VM_FAULT_GUARD : VM_FAULT_ZERO_COMMIT, VM_READWRITE, &t));
+            CHECK(t->info.generation == 1 && !t->info.snapshot_valid);
+            void *backing = t->backing;
+            expect(s, BASE, guard ? VM_GUARDED : VM_RESERVED, guard ? 4096 : 4 * 4096, guard ? VM_READWRITE : 0);
+            CHECK(!map_virt(c, BASE >> 12));
+            busy_ticket(s, v);
+            if(resolved) {
+                CHECK(resolve_ok(s, t, 0x60)->physical == (((uintptr_t)backing & 0x1fffffff) >> 12));
+                expect(s, BASE, VM_COMMITTED, 4096, VM_READWRITE);
+                busy_ticket(s, v);
+                if(!guard) for(unsigned i = 0; i < 4096; ++i) CHECK(!((unsigned char *)backing)[i]);
+            }
+            if(guard) CHECK(((unsigned char *)backing)[73] == 0x67);
+            CHECK(!vm_fault_release(t));
+            expect(s, BASE, (guard || resolved) ? VM_COMMITTED : VM_RESERVED,
+                   (guard || resolved) ? 4096 : 4 * 4096, (guard || resolved) ? VM_READWRITE : 0);
+            if(guard || resolved) CHECK(s->regions->pages[0].backing == backing);
+            else CHECK(!c->sub[(BASE >> 12) / MMU_SUB_PAGES]);
+            CHECK(!s->ticket_count && !s->faults[(BASE >> 12) / MMU_SUB_PAGES]);
+            CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); CHECK(!live);
+        }
+    }
+}
+static void fault_failures(void) {
+    for(unsigned guard = 0; guard < 2; ++guard) {
+        /* ZERO: descriptor, backing, lookup, MMU table; GUARD: descriptor, lookup. */
+        unsigned count = guard ? 2 : 4;
+        for(unsigned f = 1; f <= count + 1; ++f) {
+            mmucontext_t *c = context(0);
+            vm_space_t *s = vm_space_create(c, P(BASE), 4096);
+            void *v; vm_fault_t *t = (void *)123;
+            CHECK(s && !vm_reserve(s, NULL, 4096, &v));
+            if(guard) CHECK(!vm_commit(s, v, 4096, VM_READ));
+            mmupage_t old = guard ? *map_virt(c, BASE >> 12) : (mmupage_t){0};
+            unsigned before = live;
+            reset_failure(); fail_at = f;
+            int rc = vm_fault_arm(s, v, guard ? VM_FAULT_GUARD : VM_FAULT_ZERO_COMMIT, VM_READ, &t);
+            if(f <= count) {
+                CHECK(rc < 0 && errno == ENOMEM && live == before && t == (void *)123);
+                CHECK(!s->generation && !s->ticket_count);
+                if(guard) CHECK(!memcmp(&old, map_virt(c, BASE >> 12), sizeof(old)));
+                else CHECK(!c->sub[(BASE >> 12) / MMU_SUB_PAGES]);
+            }
+            else CHECK(!rc && !vm_fault_release(t));
+            reset_failure(); CHECK(!vm_release(s, v) && !vm_space_destroy(s));
+            drop(0); CHECK(!live);
+        }
+    }
+}
+static void fault_admission(void) {
+    mmucontext_t *c = context(0), *other = context(1); mmu_use_table(c);
+    vm_space_t *s = vm_space_create(c, P(BASE), 4096);
+    void *v; vm_fault_t *t;
+    CHECK(s && !vm_reserve(s, NULL, 4096, &v));
+    CHECK(vm_fault_arm(s, v, VM_FAULT_GUARD, VM_READ, &t) < 0 && errno == EALREADY);
+    CHECK(vm_fault_arm(s, P(BASE + 1), VM_FAULT_ZERO_COMMIT, VM_READ, &t) < 0 && errno == EINVAL);
+    CHECK(vm_fault_arm(s, v, 42, VM_READ, &t) < 0 && errno == EINVAL);
+    CHECK(!vm_fault_arm(s, v, VM_FAULT_ZERO_COMMIT, VM_READ, &t));
+    irq_context_t f = fault_frame();
+    const unsigned bad_sr[] = {0, 0x20000000, 0x50000000, 0x60000000, 0x70000000,
+                              0x40000010, 0x40000020, 0x40000040, 0x40000080, 0x400000f0};
+    for(unsigned i = 0; i < sizeof(bad_sr)/sizeof(*bad_sr); ++i) {
+        f.sr = bad_sr[i]; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1));
+    }
+    f = fault_frame();
+    for(uint64_t sp = 0xffffff80; sp <= UINT32_MAX; ++sp) {
+        f.r[15] = sp; f.r[0] = f.pc; /* Includes the gUSA region-end window. */
+        CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1));
+    }
+    const unsigned bad_direct[] = {0, 0x7ffffffc, 0xa0000000, 0xffffffff, 0x8c001003};
+    for(unsigned i = 0; i < sizeof(bad_direct)/sizeof(*bad_direct); ++i) {
+        f = fault_frame(); f.pc = bad_direct[i]; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1));
+        f = fault_frame(); f.r[15] = bad_direct[i]; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1));
+    }
+    f = fault_frame();
+    const unsigned events[] = {0, 0x60, 0x80, 0xa0, 0xc0, 0xe0, 0x100, 0x140};
+    for(unsigned i = 0; i < sizeof(events)/sizeof(*events); ++i)
+        CHECK(!resolve(s, &f, events[i], BASE, c->asid, 1));
+    CHECK(!resolve(s, &f, 0x40, BASE, other->asid, 1));
+    CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 0));
+    CHECK(!resolve(s, &f, 0x40, BASE - 1, c->asid, 1));
+    CHECK(!resolve(s, &f, 0x40, BASE + 4096, c->asid, 1));
+    mmu_use_table(other); CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1)); mmu_use_table(c);
+    vm_spaces[c->asid] = NULL; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1)); vm_spaces[c->asid] = s;
+    mmusubcontext_t *sub = c->sub[(BASE >> 12)/MMU_SUB_PAGES];
+    mmupage_t *p = &sub->page[(BASE >> 12)%MMU_SUB_PAGES];
+    p->valid = 1; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1)); p->valid = 0;
+    p->blank = 0; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1)); p->blank = MMU_VM_PIN;
+    c->sub[(BASE >> 12)/MMU_SUB_PAGES] = NULL;
+    CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1)); c->sub[(BASE >> 12)/MMU_SUB_PAGES] = sub;
+    t->prepared.valid = 0; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1)); t->prepared.valid = 1;
+    t->prepared.ptel &= ~0x100u; CHECK(!resolve(s, &f, 0x40, BASE, c->asid, 1)); t->prepared.ptel |= 0x100;
+    CHECK(t->info.state == VM_FAULT_ARMED && !t->info.snapshot_valid && !s->sequence);
+    CHECK(resolve_ok(s, t, 0x40)); CHECK(s->sequence == 1);
+    CHECK(!vm_fault_release(t));
+    CHECK(vm_fault_arm(s, v, VM_FAULT_ZERO_COMMIT, VM_READ, &t) < 0 && errno == EALREADY);
+    CHECK(vm_fault_arm(s, v, VM_FAULT_GUARD, VM_READWRITE, &t) < 0 && errno == EINVAL);
+    s->generation = UINT64_MAX;
+    CHECK(vm_fault_arm(s, v, VM_FAULT_GUARD, VM_READ, &t) < 0 && errno == EOVERFLOW);
+    CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); drop(1); CHECK(!live);
+}
+static vm_space_t *inject_space;
+static vm_fault_t *inject_tickets[2];
+static void interrupt_scan(void) {
+    irq_context_t f = fault_frame();
+    for(unsigned i = 0; i < 2; ++i)
+        CHECK(resolve(inject_space, &f, 0x40, (uintptr_t)inject_tickets[i]->info.page,
+                      inject_space->context->asid, 1));
+}
+static void fault_query_and_pins(void) {
+  for(unsigned guard = 0; guard < 2; ++guard) {
+    mmucontext_t *c = context(0); mmu_use_table(c);
+    /* Start after the 512-page boundary so all pages share one MMU table. */
+    uintptr_t base = BASE + 4096;
+    vm_space_t *s = vm_space_create(c, P(base), 4 * 4096);
+    void *v; vm_fault_t *t[2]; CHECK(s && !vm_reserve(s, NULL, 4 * 4096, &v));
+    CHECK(!vm_commit(s, P(base + 8192), 4096, VM_READ));
+    if(guard) CHECK(!vm_commit(s, v, 8192, VM_READ));
+    for(unsigned i = 0; i < 2; ++i) CHECK(!vm_fault_arm(s, P(base + i*4096), guard ? VM_FAULT_GUARD : VM_FAULT_ZERO_COMMIT, VM_READ, &t[i]));
+    mmusubcontext_t *sub = c->sub[(base >> 12)/MMU_SUB_PAGES];
+    CHECK(!vm_decommit(s, P(base + 8192), 4096));
+    CHECK(c->sub[(base >> 12)/MMU_SUB_PAGES] == sub);
+    s->sequence = UINT32_MAX - 1; inject_space = s;
+    inject_tickets[0] = t[0]; inject_tickets[1] = t[1];
+    /* Resolve after the old run was scanned, just before its validation mask. */
+    irq_countdown = 2; irq_inject = interrupt_scan;
+    vm_info_t info;
+    CHECK(!vm_query(s, v, &info));
+    CHECK(!irq_inject && s->sequence == 0 && info.state == VM_COMMITTED);
+    CHECK(info.protection == VM_READ && info.run_base == v && info.run_size == 8192);
+    CHECK(!vm_fault_release(t[0])); CHECK(c->sub[(base >> 12)/MMU_SUB_PAGES] == sub);
+    CHECK(!vm_fault_release(t[1]));
+    CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); CHECK(!live);
+  }
+}
+static void fault_callers(void) {
+    vm_space_t *s = vm_space_create(context(0), P(BASE), 4096);
+    void *v; vm_fault_t *t, *out = (void *)123;
+    CHECK(s && !vm_reserve(s, NULL, 4096, &v));
+    CHECK(!vm_fault_arm(s, v, VM_FAULT_ZERO_COMMIT, VM_READ, &t));
+    vm_fault_info_t info, before; memset(&info, 0x51, sizeof(info)); before = info;
+    const unsigned masks[] = {0x10, 0x20, 0x40, 0x80, 0xf0, 0x10000000, 0};
+    for(unsigned i = 0; i < 7; ++i) {
+        test_sr = masks[i]; test_irq = i == 6; unsigned n = attempts;
+        CHECK(vm_fault_arm(s, v, VM_FAULT_ZERO_COMMIT, VM_READ, &out) < 0 && errno == EPERM);
+        CHECK(vm_fault_query(t, &info) < 0 && errno == EPERM);
+        CHECK(vm_fault_release(t) < 0 && errno == EPERM);
+        CHECK(out == (void *)123 && !memcmp(&info, &before, sizeof(info)) && attempts == n);
+    }
+    test_sr = 0; test_irq = 0; fail_lock = 1;
+    CHECK(vm_fault_query(t, &info) < 0 && errno == EAGAIN);
+    CHECK(vm_fault_release(t) < 0 && errno == EAGAIN);
+    fail_lock = 0;
+    CHECK(!vm_fault_release(t)); CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); CHECK(!live);
+}
+
+
+/* Caller-owned retirement: a queued query is still a handle borrower. Joining
+   that borrower does not retire the independently suspended page callback. */
+typedef struct { vm_fault_t *ticket; unsigned char *page; atomic_bool resume; } retirement_t;
+static void *query_waiter(void *arg) {
+    vm_fault_info_t info;
+    CHECK(!vm_fault_query(arg, &info) && info.state == VM_FAULT_ARMED);
+    return NULL;
+}
+static void *page_callback(void *arg) {
+    retirement_t *r = arg;
+    while(!atomic_load(&r->resume)) sched_yield();
+    CHECK(r->page[73] == 0x42); r->page[74] = 0x43;
+    return NULL;
+}
+static void *sole_releaser(void *arg) { CHECK(!vm_fault_release(arg)); return NULL; }
+static void fault_retirement(void) {
+    vm_space_t *s = vm_space_create(context(0), P(BASE), 4096);
+    void *v; vm_fault_t *t;
+    CHECK(s && !vm_reserve(s, NULL, 4096, &v) && !vm_commit(s, v, 4096, VM_READWRITE));
+    unsigned char *backing = s->regions->pages[0].backing; backing[73] = 0x42;
+    CHECK(!vm_fault_arm(s, v, VM_FAULT_GUARD, VM_READWRITE, &t));
+    retirement_t r = {.ticket=t, .page=backing};
+    pthread_t query, callback, releaser;
+    CHECK(!mutex_lock(&s->mutex)); watched_mutex = &s->mutex; atomic_store(&mutex_waiters, 0);
+    CHECK(!pthread_create(&query, NULL, query_waiter, t));
+    while(!atomic_load(&mutex_waiters)) sched_yield();
+    CHECK(!pthread_create(&callback, NULL, page_callback, &r));
+    /* Close external admission here. No later thread is given a borrowed handle.
+       Cancellation alone would not drain callback: explicitly resume and join. */
+    CHECK(!mutex_unlock(&s->mutex)); CHECK(!pthread_join(query, NULL));
+    CHECK(s->ticket_count == 1 && !atomic_load(&r.resume));
+    atomic_store(&r.resume, true); CHECK(!pthread_join(callback, NULL));
+    CHECK(backing[74] == 0x43);
+    CHECK(!mutex_lock(&s->mutex)); atomic_store(&mutex_waiters, 0);
+    CHECK(!pthread_create(&releaser, NULL, sole_releaser, t));
+    while(!atomic_load(&mutex_waiters)) sched_yield();
+    CHECK(s->ticket_count == 1); CHECK(!mutex_unlock(&s->mutex));
+    CHECK(!pthread_join(releaser, NULL)); watched_mutex = NULL;
+    expect(s, BASE, VM_COMMITTED, 4096, VM_READWRITE);
+    CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); CHECK(!live);
+}
 int main(void) {
     bounds(); lifetime(); failures(); callers(); ranges_and_runs();
     rollback_preserves_neighbor(); separation(); preexisting_mapping(); serialization();
+    fault_lifetime(); fault_failures(); fault_admission(); fault_query_and_pins(); fault_callers(); fault_retirement();
     printf("VM production PASS: %u checks; cache purges=%u TLB retirements=%u\n",
            atomic_load(&checks), purges, invalidations);
     return 0;

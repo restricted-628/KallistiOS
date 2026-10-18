@@ -29,7 +29,14 @@ with tempfile.TemporaryDirectory(prefix='kos-vm-test.') as td:
     (tmp / 'kos').mkdir()
     (tmp / 'kos/vm.h').symlink_to(root / 'include/kos/vm.h')
     (tmp / 'kos/cdefs.h').write_text('#include <sys/cdefs.h>\n')
-    (tmp / 'kos/irq.h').write_text('#pragma once\nstatic inline int irq_inside_int(void) { return test_irq; }\n')
+    (tmp / 'kos/irq.h').write_text('''#pragma once
+typedef uint32_t irq_t;
+typedef struct irq_context { uint32_t r[16], pc, sr; } irq_context_t;
+#define EXC_DTLB_MISS_READ 0x40u
+#define EXC_DTLB_MISS_WRITE 0x60u
+static inline int irq_inside_int(void) { return test_irq; }
+''')
+    (tmp / 'vm-internal.h').symlink_to(root / 'kernel/mm/vm-internal.h')
     (tmp / 'kos/cache.h').write_text('#pragma once\nvoid dcache_purge_range(uintptr_t, size_t);\n')
     (tmp / 'kos/mutex.h').write_text('''#pragma once
 #include <pthread.h>
@@ -38,6 +45,7 @@ typedef pthread_mutex_t mutex_t;
 static int mutex_init(mutex_t *m, int type) { (void)type; return pthread_mutex_init(m, NULL); }
 static int mutex_lock(mutex_t *m) {
     if(fail_lock) { errno = EAGAIN; return -1; }
+    if(m == watched_mutex) atomic_fetch_add(&mutex_waiters, 1);
     return pthread_mutex_lock(m);
 }
 static int mutex_unlock(mutex_t *m) { return pthread_mutex_unlock(m); }

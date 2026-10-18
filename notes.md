@@ -301,6 +301,26 @@ Physical cache behavior, prohibited-write faults, alternate-provider execution
 and performance remain unverified. Fault recovery, pinning, file-backed paging,
 managed stacks and executable overlays are not part of this milestone.
 
+### D19 milestone — prepared resident fault tickets
+
+**Accepted, 2026-10-18:** Explicit one-page zero-commit and guard tickets prepare
+backing and page-table storage in thread context. The exception path may publish
+only that prepared resident mapping for an eligible interrupted state; it does
+not allocate, block, perform I/O or suspend a fiber. Ticket lifetime and mapped
+page lifetime remain distinct. Unarmed and ineligible faults retain fatal policy.
+See `doc/resident-vm.md` for admission, ownership and query contracts.
+
+Production-code host checks, GCC 16.2.0 builds/links, resident recovery/state
+probes and complete core/exclusive-addon provider tests pass in the recorded
+private strict-MMU emulator configurations. Fatal reporting uses the selected
+debug device rather than stdio/VFS; ordinary logging is unchanged. Generic and
+VM2 fatal cases reach the real exit sequence, but direct-ELF launch stack reuse
+prevents a genuine loader return in that setup. Real-loader completion and
+physical teardown remain deferred/unverified, not passed. Dynarec alignment,
+target raw-gUSA/nested rejection and physical cache/timing remain explicit limits.
+This milestone does not implement DMA pinning, disc-backed paging, managed
+stacks or executable overlays, and does not change ordinary allocation defaults.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

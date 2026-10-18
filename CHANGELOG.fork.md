@@ -6,6 +6,18 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-18 — prepared resident fault recovery
+
+- Add explicit one-page zero-commit and guard tickets with thread-context
+  preparation, resident-only fault resolution and separate ticket/page lifetime.
+  Preserve fatal handling for unarmed or ineligible accesses; no exception-time
+  allocation, I/O, blocking or provider switch is introduced.
+- Add production-code host coverage and a full-state translated recovery probe.
+  Host checks, GCC 16.2.0 builds/links and recorded interpreter/dynarec recovery
+  and complete-provider tests pass. Real-loader return, physical teardown,
+  dynarec alignment and target raw-gUSA/nested behavior are not certified.
+- This is not DMA pinning, file-backed paging, managed stacks or overlays.
+
 ## 2026-10-18 — exception register dumps bypass stdio
 
 - Send generic exception dumps directly to the selected debug device, retaining

@@ -10,6 +10,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include "vm-internal.h"
 
 #define VM_PAGE_BYTES 4096u
 #define VM_ARENA_END 0x7c000000u
@@ -17,6 +18,7 @@
 typedef struct vm_page {
     void *backing;
     unsigned protection;
+    vm_fault_t *ticket;
 } vm_page_t;
 
 typedef struct vm_region {
@@ -26,13 +28,34 @@ typedef struct vm_region {
     vm_page_t pages[];
 } vm_region_t;
 
+typedef struct vm_fault_table {
+    vm_fault_t *tickets[MMU_SUB_PAGES];
+    unsigned count;
+} vm_fault_table_t;
+
 struct vm_space {
     mmucontext_t *context;
     uintptr_t base;
     size_t bytes;
     vm_region_t *regions;
     mutex_t mutex;
+    vm_fault_table_t *faults[MMU_PAGES];
+    uint64_t generation;
+    unsigned ticket_count;
+    uint32_t sequence;
 };
+
+struct vm_fault {
+    vm_space_t *space;
+    vm_page_t *owner;
+    void *backing;
+    mmupage_t prepared;
+    unsigned vpn;
+    vm_fault_info_t info;
+};
+
+/* Borrowed unique-live-ASID ownership. Publish/detach under IRQ exclusion. */
+static vm_space_t *vm_spaces[256];
 
 static int vm_error(int error) {
     errno = error;
@@ -123,6 +146,19 @@ vm_space_t *vm_space_create(mmucontext_t *context, void *arena, size_t bytes) {
         errno = error;
         return NULL;
     }
+    bool occupied;
+    {
+        irq_disable_scoped();
+        occupied = vm_spaces[context->asid] != NULL;
+        if(!occupied)
+            vm_spaces[context->asid] = s;
+    }
+    if(occupied) {
+        mutex_destroy(&s->mutex);
+        free(s);
+        vm_error(EEXIST);
+        return NULL;
+    }
     return s;
 }
 
@@ -133,12 +169,16 @@ int vm_space_destroy(vm_space_t *s) {
         return vm_error(EINVAL);
     if(mutex_lock(&s->mutex) < 0)
         return -1;
-    if(s->regions) {
+    if(s->regions || s->ticket_count) {
         mutex_unlock(&s->mutex);
         return vm_error(EBUSY);
     }
     mutex_unlock(&s->mutex);
     /* Caller has closed admission and joined even threads awaiting this lock. */
+    {
+        irq_disable_scoped();
+        vm_spaces[s->context->asid] = NULL;
+    }
     mutex_destroy(&s->mutex);
     free(s);
     return 0;
@@ -208,6 +248,16 @@ static vm_region_t *vm_begin(vm_space_t *s, void *address, size_t bytes,
     if(mutex_lock(&s->mutex) < 0)
         return NULL;
     vm_region_t *r = vm_region_range(s, (uintptr_t)address, bytes);
+    if(r) {
+        size_t first = ((uintptr_t)address - r->base) / VM_PAGE_BYTES;
+        for(size_t i = 0; i < bytes / VM_PAGE_BYTES; ++i) {
+            if(r->pages[first + i].ticket) {
+                vm_error(EBUSY);
+                r = NULL;
+                break;
+            }
+        }
+    }
     if(!r)
         mutex_unlock(&s->mutex);
     return r;
@@ -308,12 +358,25 @@ int vm_release(vm_space_t *s, void *base) {
         mutex_unlock(&s->mutex);
         return vm_error(ENOENT);
     }
+    for(size_t i = 0; i < r->bytes / VM_PAGE_BYTES; ++i) {
+        if(r->pages[i].ticket) {
+            mutex_unlock(&s->mutex);
+            return vm_error(EBUSY);
+        }
+    }
     vm_unmap(s, r->base, r->bytes);
     vm_free_pages(r->pages, r->bytes / VM_PAGE_BYTES);
     *link = r->next;
     free(r);
     mutex_unlock(&s->mutex);
     return 0;
+}
+
+static vm_state_t vm_page_state(const vm_page_t *p) {
+    if(p->ticket && p->ticket->info.kind == VM_FAULT_GUARD &&
+       p->ticket->info.state == VM_FAULT_ARMED)
+        return VM_GUARDED;
+    return p->protection ? VM_COMMITTED : VM_RESERVED;
 }
 
 int vm_query(vm_space_t *s, const void *address, vm_info_t *result) {
@@ -324,6 +387,12 @@ int vm_query(vm_space_t *s, const void *address, vm_info_t *result) {
         return vm_error(EINVAL);
     if(mutex_lock(&s->mutex) < 0)
         return -1;
+retry: ;
+    uint32_t sequence;
+    {
+        irq_disable_scoped();
+        sequence = s->sequence;
+    }
     uintptr_t begin = s->base;
     vm_region_t *r = s->regions;
     while(r && r->base + r->bytes <= addr) {
@@ -340,18 +409,215 @@ int vm_query(vm_space_t *s, const void *address, vm_info_t *result) {
         size_t first = (addr - r->base) / VM_PAGE_BYTES;
         size_t end = first + 1, count = r->bytes / VM_PAGE_BYTES;
         unsigned prot = r->pages[first].protection;
-        while(first && r->pages[first - 1].protection == prot)
+        vm_state_t state = vm_page_state(&r->pages[first]);
+        while(first && r->pages[first - 1].protection == prot &&
+              vm_page_state(&r->pages[first - 1]) == state)
             --first;
-        while(end < count && r->pages[end].protection == prot)
+        while(end < count && r->pages[end].protection == prot &&
+              vm_page_state(&r->pages[end]) == state)
             ++end;
         info.region_base = (void *)r->base;
         info.region_size = r->bytes;
         info.run_base = (void *)(r->base + first * VM_PAGE_BYTES);
         info.run_size = (end - first) * VM_PAGE_BYTES;
-        info.state = prot ? VM_COMMITTED : VM_RESERVED;
+        info.state = state;
         info.protection = prot;
     }
-    *result = info;
+    {
+        irq_disable_scoped();
+        /* Only already-armed pages can resolve while this mutex is held.
+           There are fewer than 2^19 pages: sequence cannot wrap a whole 2^32
+           during this scan. Avoid a page-count-sized IRQ exclusion. */
+        if(sequence != s->sequence)
+            goto retry;
+        *result = info;
+    }
     mutex_unlock(&s->mutex);
     return 0;
+}
+
+int vm_fault_arm(vm_space_t *s, void *address, vm_fault_kind_t kind,
+                 vm_prot_t prot, vm_fault_t **result) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!result || (kind != VM_FAULT_ZERO_COMMIT && kind != VM_FAULT_GUARD))
+        return vm_error(EINVAL);
+    vm_region_t *r = vm_begin(s, address, VM_PAGE_BYTES, prot, true);
+    if(!r)
+        return -1;
+    vm_page_t *p = &r->pages[((uintptr_t)address - r->base) / VM_PAGE_BYTES];
+    int error;
+    if((kind == VM_FAULT_ZERO_COMMIT) != (p->protection == 0)) {
+        error = EALREADY;
+        goto fail_state;
+    }
+    if(kind == VM_FAULT_GUARD && p->protection != (unsigned)prot) {
+        error = EINVAL;
+        goto fail_state;
+    }
+    if(s->generation == UINT64_MAX) {
+        error = EOVERFLOW;
+        goto fail_state;
+    }
+    unsigned vpn = (uintptr_t)address / VM_PAGE_BYTES;
+    unsigned top = vpn / MMU_SUB_PAGES;
+    vm_fault_table_t *table = s->faults[top];
+    vm_fault_t *t = calloc(1, sizeof(*t));
+    if(!t) {
+        error = ENOMEM;
+        goto fail_state;
+    }
+    t->backing = p->backing;
+    if(kind == VM_FAULT_ZERO_COMMIT) {
+        t->backing = aligned_alloc(VM_PAGE_BYTES, VM_PAGE_BYTES);
+        if(!t->backing) goto fail_ticket;
+        memset(t->backing, 0, VM_PAGE_BYTES);
+        dcache_purge_range((uintptr_t)t->backing, VM_PAGE_BYTES);
+    }
+    if(!table) {
+        table = calloc(1, sizeof(*table));
+        if(!table) goto fail_ticket;
+    }
+    if(mmu_vm_prepare(s->context, vpn,
+            ((uintptr_t)t->backing & MEM_AREA_CACHE_MASK) / VM_PAGE_BYTES,
+            prot == VM_READ ? MMU_KERNEL_RDONLY : MMU_KERNEL_RDWR,
+            &t->prepared) < 0)
+        goto fail_ticket;
+
+    /* Preparation succeeded; the remaining transition cannot allocate/fail.
+       All affected raw-pointer users are quiescent before admission. */
+    t->space = s;
+    t->owner = p;
+    t->vpn = vpn;
+    t->info.page = address;
+    t->info.kind = kind;
+    t->info.protection = prot;
+    t->info.generation = ++s->generation;
+    t->info.state = VM_FAULT_ARMED;
+    mmu_vm_hide(s->context, vpn);
+    {
+        irq_disable_scoped();
+        s->faults[top] = table;
+        table->tickets[vpn % MMU_SUB_PAGES] = t;
+        ++table->count;
+        ++s->ticket_count;
+        p->ticket = t;
+    }
+    *result = t;
+    mutex_unlock(&s->mutex);
+    return 0;
+
+fail_ticket:
+    if(table != s->faults[top]) free(table);
+    if(kind == VM_FAULT_ZERO_COMMIT) free(t->backing);
+    free(t);
+    error = ENOMEM;
+fail_state:
+    mutex_unlock(&s->mutex);
+    return vm_error(error);
+}
+
+int vm_fault_query(vm_fault_t *t, vm_fault_info_t *result) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!t || !result)
+        return vm_error(EINVAL);
+    vm_space_t *s = t->space;
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    {
+        irq_disable_scoped();
+        *result = t->info;
+    }
+    mutex_unlock(&s->mutex);
+    return 0;
+}
+
+int vm_fault_release(vm_fault_t *t) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!t)
+        return vm_error(EINVAL);
+    /* R2: caller has closed ticket admission and joined all other handle/API
+       users, including mutex waiters, separately from affected page users. */
+    vm_space_t *s = t->space;
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    unsigned top = t->vpn / MMU_SUB_PAGES;
+    vm_fault_table_t *table = s->faults[top];
+    bool unused = t->info.state == VM_FAULT_ARMED;
+    {
+        irq_disable_scoped();
+        table->tickets[t->vpn % MMU_SUB_PAGES] = NULL;
+        t->owner->ticket = NULL;
+        --table->count;
+        --s->ticket_count;
+        if(!table->count) s->faults[top] = NULL;
+        if(unused && t->info.kind == VM_FAULT_GUARD)
+            s->context->sub[top]->page[t->vpn % MMU_SUB_PAGES] = t->prepared;
+    }
+    if(unused && t->info.kind == VM_FAULT_ZERO_COMMIT)
+        mmu_vm_hide(s->context, t->vpn);
+    mmu_vm_unpin(s->context, t->vpn);
+    if(unused && t->info.kind == VM_FAULT_ZERO_COMMIT) free(t->backing);
+    if(!table->count) free(table);
+    free(t);
+    mutex_unlock(&s->mutex);
+    return 0;
+}
+
+static bool vm_direct(uint32_t address) {
+    return address >= 0x80000000u && address < 0xa0000000u;
+}
+
+mmupage_t *vm_fault_resolve(mmucontext_t *c, irq_t event,
+                          const irq_context_t *frame, uint32_t address,
+                          uint32_t fault_pteh, uint32_t control,
+                          uintptr_t carrier) {
+    /* Raw sentinel check must precede any logical stack conversion. No stack
+       discovery/provider/TLS callback: valid direct extent is caller-owned. */
+    if((event != EXC_DTLB_MISS_READ && event != EXC_DTLB_MISS_WRITE) ||
+       !c || c != mmu_cxt_current || c->asid < 0 || c->asid > 255 || !(control & 1) ||
+       (fault_pteh & 255) != (unsigned)c->asid ||
+       (frame->sr & 0x700000f0u) != 0x40000000u ||
+       frame->r[15] >= UINT32_MAX - 127u ||
+       !vm_direct(frame->pc) || !vm_direct(frame->r[15]) ||
+       (frame->pc & 1) || (frame->r[15] & 3))
+        return NULL;
+    vm_space_t *s = vm_spaces[c->asid];
+    if(!s || s->context != c || address < s->base || address - s->base >= s->bytes)
+        return NULL;
+    unsigned vpn = address / VM_PAGE_BYTES;
+    vm_fault_table_t *table = s->faults[vpn / MMU_SUB_PAGES];
+    vm_fault_t *t = table ? table->tickets[vpn % MMU_SUB_PAGES] : NULL;
+    if(!t || t->info.state != VM_FAULT_ARMED ||
+       (event == EXC_DTLB_MISS_WRITE && t->info.protection != VM_READWRITE))
+        return NULL;
+    mmusubcontext_t *sub = c->sub[vpn / MMU_SUB_PAGES];
+    mmupage_t *pte = sub ? &sub->page[vpn % MMU_SUB_PAGES] : NULL;
+    if(!pte || pte->valid || !(pte->blank & MMU_VM_PIN) ||
+       !t->prepared.valid || !(t->prepared.ptel & 0x100))
+        return NULL; /* No state progress / prepared publication possible. */
+
+    vm_fault_snapshot_t *snap = &t->info.snapshot;
+    snap->event = event;
+    snap->address = address;
+    snap->pteh = fault_pteh;
+    snap->mmucr = control;
+    snap->pc = frame->pc;
+    snap->sr = frame->sr;
+    snap->sp = frame->r[15];
+    snap->table = (uintptr_t)c;
+    snap->carrier = carrier;
+    snap->asid = c->asid;
+    snap->access = event == EXC_DTLB_MISS_WRITE ? VM_FAULT_WRITE : VM_FAULT_READ_OR_FETCH;
+    snap->classification = VM_FAULT_MANAGED;
+    snap->outcome = VM_FAULT_RETRY;
+    *pte = t->prepared;
+    t->owner->backing = t->backing;
+    t->owner->protection = t->info.protection;
+    t->info.snapshot_valid = true;
+    t->info.state = VM_FAULT_RESOLVED;
+    ++s->sequence;
+    return pte;
 }

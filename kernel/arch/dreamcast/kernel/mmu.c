@@ -21,6 +21,7 @@
 #include <kos/dbgio.h>
 #include <kos/irq.h>
 #include <kos/thread.h>
+#include "../../../mm/vm-internal.h"
 
 #define MMU_IND_BITS 12                         /**< \brief Index bits */
 #define MMU_VIRTUAL_PAGES (MMU_PAGES * MMU_SUB_PAGES)
@@ -436,11 +437,55 @@ static bool subcontext_empty(const mmusubcontext_t *sub) {
     int i;
 
     for(i = 0; i < MMU_SUB_PAGES; i++) {
-        if(sub->page[i].valid)
+        if(sub->page[i].valid || (sub->page[i].blank & MMU_VM_PIN))
             return false;
     }
 
     return true;
+}
+
+/* Allocate before admitting a fault, then pin the otherwise-empty software
+   slot. No hardware entry is published by preparation. */
+int mmu_vm_prepare(mmucontext_t *c, unsigned vpn, unsigned physical,
+                   page_prot_t protection, mmupage_t *prepared) {
+    if(validate_page_range(c, vpn, physical, 1, protection, MMU_CACHE_BACK) < 0)
+        return -1;
+    unsigned top = vpn / MMU_SUB_PAGES;
+    mmusubcontext_t *sub = c->sub[top];
+    if(!sub) {
+        sub = calloc(1, sizeof(*sub));
+        if(!sub) {
+            errno = ENOMEM;
+            return -1;
+        }
+    }
+    *prepared = (mmupage_t){.physical = physical, .prkey = protection,
+        .valid = 1, .cache = 1, .dirty = 1, .blank = MMU_VM_PIN};
+    page_compile(prepared, vpn);
+    {
+        irq_disable_scoped();
+        c->sub[top] = sub;
+        sub->page[vpn % MMU_SUB_PAGES].blank |= MMU_VM_PIN;
+    }
+    return 0;
+}
+
+void mmu_vm_hide(mmucontext_t *c, unsigned vpn) {
+    irq_disable_scoped();
+    purge_cached_range(c, vpn, 1);
+    mmu_invalidate_tlb(vpn << MMU_IND_BITS, c->asid);
+    c->sub[vpn / MMU_SUB_PAGES]->page[vpn % MMU_SUB_PAGES] =
+        (mmupage_t){.blank = MMU_VM_PIN};
+}
+
+void mmu_vm_unpin(mmucontext_t *c, unsigned vpn) {
+    unsigned top = vpn / MMU_SUB_PAGES;
+    mmusubcontext_t *sub = c->sub[top];
+    sub->page[vpn % MMU_SUB_PAGES].blank &= ~MMU_VM_PIN;
+    if(subcontext_empty(sub)) {
+        c->sub[top] = NULL;
+        free(sub);
+    }
 }
 
 void mmu_page_unmap(mmucontext_t *context, int virtpage, int count) {
@@ -838,8 +883,9 @@ mmu_mapfunc_t mmu_map_set_callback(mmu_mapfunc_t newfunc) {
 static void unhandled_mmu(irq_t source, irq_context_t *context) {
     int i;
 
-    (void)source;
-
+    dbgio_printf(" MMU event = %03x, table = %p, ASID = %d\n",
+                 (unsigned)source, (void *)mmu_cxt_current,
+                 mmu_cxt_current ? mmu_cxt_current->asid : -1);
     dbgio_printf("Exception happened in tid %d at PC %08lx, SR %08lx\n",
                  thd_current->tid, context->pc, context->sr);
     dbgio_printf(" PTEH = %08lx, PTEL = %08lx\n", *pteh, *ptel);
@@ -878,6 +924,10 @@ void mmu_gen_tlb_miss(const char *what, irq_t source, irq_context_t *context) {
 
     /* Translate it to the proper physical address */
     page = map_func(mmu_cxt_current, addr >> PAGESIZE_BITS);
+
+    if(!page && map_func == map_virt)
+        page = vm_fault_resolve(mmu_cxt_current, source, context, addr,
+                                *pteh, *mmucr, (uintptr_t)thd_current);
 
     if(!page) {
         dbgio_printf("%s: cannot map virtual address %08lx\n", what, addr);
@@ -921,7 +971,8 @@ static void itlb_pv(irq_t source, irq_context_t *context, void *data) {
 /* Data TLB miss (read) */
 static void dtlb_miss_read(irq_t source, irq_context_t *context, void *data) {
     (void)data;
-    mmu_gen_tlb_miss("dtlb_miss_read", source, context);
+    /* EXPEVT 0x040 also represents an instruction-fetch miss. */
+    mmu_gen_tlb_miss("tlb_miss_read_or_fetch", source, context);
 }
 
 /* Data TLB miss (write) */
@@ -933,7 +984,8 @@ static void dtlb_miss_write(irq_t source, irq_context_t *context, void *data) {
 /* Data TLB protection violation (read) */
 static void dtlb_pv_read(irq_t source, irq_context_t *context, void *data) {
     (void)data;
-    dbgio_printf("dtlb_pv_read\n");
+    /* EXPEVT 0x0a0 also represents an instruction-fetch violation. */
+    dbgio_printf("tlb_pv_read_or_fetch\n");
     unhandled_mmu(source, context);
 }
 
