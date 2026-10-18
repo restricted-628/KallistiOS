@@ -253,6 +253,27 @@ static bool verify_release_3x4(void) {
     shz_xmtrx_load_3x4(&a);
     shz_xmtrx_apply_reverse_transpose_3x4(&row_b);
     passed &= release_xmtrx_matches(expected);
+
+    /* Weighted affine accumulation must preserve every fourth-row lane. */
+    shz_mat4x4_t start;
+    for(unsigned i = 0; i < 16; ++i)
+        start.elem[i] = expected[i] = (float)((int)i - 5);
+    shz_xmtrx_load_4x4(&start);
+    shz_xmtrx_blend_3x4(&a, 0.25f);
+    shz_xmtrx_blend_3x4(&b, -0.5f);
+    for(unsigned c = 0; c < 4; ++c)
+        for(unsigned r = 0; r < 3; ++r)
+            expected[c * 4 + r] += a.elem[c * 3 + r] * 0.25f -
+                                   b.elem[c * 3 + r] * 0.5f;
+    passed &= release_xmtrx_matches(expected);
+    shz_xmtrx_blend_3x4(&a, 0.0f);
+    passed &= release_xmtrx_matches(expected);
+
+    /* The explicitly named full-matrix operation updates all sixteen lanes. */
+    shz_xmtrx_blend_4x4(&start, 0.5f);
+    for(unsigned i = 0; i < 16; ++i)
+        expected[i] += start.elem[i] * 0.5f;
+    passed &= release_xmtrx_matches(expected);
     shz_xmtrx_load_4x4(&saved);
     return passed;
 }

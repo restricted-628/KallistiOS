@@ -10,14 +10,26 @@ not an upstream SH4ZAM release or an independently authored library.
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`7747e5d281a75dd4ffce10df2758748feb421c66`, upstream **master after v0.9.1**, from
+`c18faab269dd66fd9153536a1eda94e61b398aab`, upstream **master after v0.9.1**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
 and license are retained; no build-time source patches are applied. The explicit
 setup step applies `patches/matrix-alignment.patch` to this exact base. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
-This advances the previous official pin `ae8d4c1`. That pin replaced PR #70
+This advances `7747e5d`, adding weighted 3x4 XMTRX blending, software-backend
+inverse-trigonometry fixes, target/TLS fixes and the new upstream documentation
+site. The existing `shz_xmtrx_blend()` name remains a deprecated wrapper for
+`shz_xmtrx_blend_4x4()`. The 3x4 variant preserves the fourth row; callers must
+initialize the accumulator appropriately. No graphics consumer is switched to
+the new blending algorithm by this dependency update.
+
+Use <https://sh4zam.com/for-agents/> and its symbol index for API contracts;
+check the site's source revision against this pin. Fork-specific alignment,
+fiber context and lifetime rules below still apply. The local alignment patch
+is retained with unchanged semantics and refreshed for this exact base.
+
+Earlier, `7747e5d` advanced the official pin `ae8d4c1`. That pin replaced PR #70
 `0c1ccb5f5614314e36e2fec3179c8ca3ae844770`. The official release uses inline
 FSCA for runtime SH-4 u16 calls even with fast-math, and fixes the portable
 and constant-input paths to use 65536 units per turn. The temporary fork URL

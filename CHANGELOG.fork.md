@@ -6,6 +6,18 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-17 — SH4ZAM blend and software-backend update
+
+- Advance the official SH4ZAM pin from `7747e5d` to `c18faab`, preserving
+  licenses and the explicit exact-base matrix-alignment correction.
+- Add weighted 3x4/4x4 accumulation regression coverage and route API guidance
+  to upstream's new documentation site. Existing graphics algorithms remain
+  unchanged; the update also fixes software-backend inverse-trig endpoints.
+- Clang/GCC host consumers, sanitized release fixtures, fresh GCC 16.2.0
+  kernel/addon builds and affected example links pass. The full integration
+  probe passes in both Flycast modes. Runtime host endpoint checks reproduce
+  the old fast-math NaNs and pass on the new pin. No hardware speed claim.
+
 ## 2026-10-14 — LZ4 frame and cancellation regressions
 
 - Add a deterministic 4,693-case resident-frame corpus covering truncation,

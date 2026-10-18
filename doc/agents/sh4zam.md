@@ -14,6 +14,11 @@ Pinned library integration, portable/SH-4 backends, direct math consumers and co
 - `utils/Makefile.sh4zam-state`
 - `examples/dreamcast/sh4zam/integration`
 
+Upstream API reference: <https://sh4zam.com/for-agents/> routes to Markdown
+pages, signatures and a machine-readable symbol index. Check its recorded
+upstream commit against the pinned headers before adopting a call. These docs
+do not supersede this fork's explicit alignment patch or fiber/DMA contracts.
+
 Relevant existing documentation (dated claims must be rechecked):
 
 - `addons/libsh4zam/README.md`

@@ -1,5 +1,5 @@
 diff --git a/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h b/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
-index 2b8f6c77649024d52fa36ef37195ccf8c2d20ce2..cc38abf05f7d7b21d5d034d3aea99f3ea9354321 100644
+index 2acf31aa6e87defcf89ad95588dbe3b53c47c607..8cf78d4011fe42f76da9608f0b53f8ce0eb1b5df 100644
 --- a/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
 +++ b/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
 @@ -272,7 +272,11 @@ SHZ_FORCE_INLINE void shz_xmtrx_swap_rows_sh4(unsigned idx1, unsigned idx2) SHZ_
@@ -148,7 +148,7 @@ index 2b8f6c77649024d52fa36ef37195ccf8c2d20ce2..cc38abf05f7d7b21d5d034d3aea99f3e
        "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
  }
 diff --git a/include/sh4zam/inline/shz_xmtrx.inl.h b/include/sh4zam/inline/shz_xmtrx.inl.h
-index 3025a86317b41b9a6f133f191d6645c2cb2c1d40..f199bd792d4195add215bd8019787b006a3bac2c 100644
+index f05d865b8e882c86dc86725767492ef7c329d90a..5edb1f6d8d7724e7dc6ae2ba3459c470e93bb2a3 100644
 --- a/include/sh4zam/inline/shz_xmtrx.inl.h
 +++ b/include/sh4zam/inline/shz_xmtrx.inl.h
 @@ -111,7 +111,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_load_aligned4_4x4(const float matrix[16]) SHZ_NO
@@ -224,7 +224,7 @@ index 3025a86317b41b9a6f133f191d6645c2cb2c1d40..f199bd792d4195add215bd8019787b00
      shz_xmtrx_apply_reverse_transpose_aligned4_4x4_sw(matrix);
  #endif
 diff --git a/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h b/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
-index 6b905567593dcfcca3a6d07e888c9f9876727255..00ed132549bce53f619e9cb72a82aadda823d3fd 100644
+index 4d2dff9e8d2110522be0c63ff8c20121da1baaa7..5a4e3980b441dbf2300ccb09d72a2e30a2dd3b15 100644
 --- a/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
 +++ b/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
 @@ -30,7 +30,7 @@
@@ -237,7 +237,7 @@ index 6b905567593dcfcca3a6d07e888c9f9876727255..00ed132549bce53f619e9cb72a82aadd
          float      elem[16];
          shz_vec4_t col[4];
 diff --git a/include/sh4zam/shz_matrix.h b/include/sh4zam/shz_matrix.h
-index 0cbaba2ed098becc34c07d9c17ac41fec6c55774..38b357e3d80636d41af0190d11aebfd01955d597 100644
+index a3dff39f37ba3cbec1d6c4b8fd1a7eeb94678edc..c5f3bd0b25342328b309edc691a9523ef4b8fdfa 100644
 --- a/include/sh4zam/shz_matrix.h
 +++ b/include/sh4zam/shz_matrix.h
 @@ -60,9 +60,11 @@ SHZ_DECLS_BEGIN
