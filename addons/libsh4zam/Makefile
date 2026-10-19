@@ -13,7 +13,9 @@ OBJS = .build/shz_matrix.o \
        .build/shz_xmtrx.o \
        .build/sh4/shz_complex_sh4.o \
        .build/sh4/shz_xmtrx_sh4.o \
-       .build/sh4/shz_mem_sh4.o
+       .build/sh4/shz_mem_sh4.o \
+       .build/sw/shz_complex_sw.o \
+       .build/sw/shz_xmtrx_sw.o
 
 ifeq ($(wildcard upstream/include/sh4zam/shz_sh4zam.h),)
 ifneq ($(MAKECMDGOALS),clean)
@@ -23,7 +25,8 @@ endif
 
 SHZ_HEADERS = $(wildcard upstream/include/sh4zam/*.h \
               upstream/include/sh4zam/inline/*.h \
-              upstream/include/sh4zam/inline/sh4/*.h)
+              upstream/include/sh4zam/inline/sh4/*.h \
+              upstream/include/sh4zam/inline/sw/*.h)
 
 KOS_CFLAGS += $(KOS_CSTD) -Wextra -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT
 

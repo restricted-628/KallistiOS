@@ -11,7 +11,7 @@
 
 <!-- PROJECT LOGO -->
 <div align="center">
-  <h1 align="center"><strong>KallistiOS</strong></h1>
+  <h1 align="center"><strong>KallistiOS — Integrated Experimental Fork</strong></h1>
   <p align="center">
     Independent SDK for the Dreamcast
     <br />
@@ -19,7 +19,19 @@
   </p>
 </div>
 
-## Overview
+## About this fork
+
+This master combines native OS improvements, direct-default disc access,
+Compact 2D/3D graphics, SH4ZAM integration, fibers and services. Its default
+Dreamcast initialization also enables the MMU. These are fork additions and
+policy choices, not features attributed to standard upstream KOS.
+
+Start with [what changes and what remains experimental](FORK.md), then
+[choose an integrated bundle or a focused contribution branch](BRANCHES.md).
+High-level graphics extraction is still in progress. Existing upstream
+credits, licensing and baseline setup documentation are retained below.
+
+## Upstream KallistiOS foundation
 
 KallistiOS is an independent development library and operating system for the Dreamcast game console, created by free software developers. Its flexible permissive license allows both homebrew and commercial use with little restrictions besides proper attribution. As a result, it powers most homebrew and commercial indie releases for the platform. Interfaces and drivers are included for a significant portion of the Dreamcast's hardware capabilities and accessories, including modifications created by hobbyists.
 
@@ -64,8 +76,11 @@ A beginner's guide to development for the Dreamcast along with detailed instruct
 
 This branch uses a pinned SH4ZAM submodule. Clone with `--recurse-submodules`,
 or run `git submodule update --init --recursive` in an existing checkout before
-building. After changing revisions, run the same command to select their pinned
-dependencies. See [the SH4ZAM build adapter](addons/libsh4zam/README.md).
+building, then explicitly apply the reviewed compatibility patch with
+`python3 utils/check-sh4zam-source.py --apply-local-patch`.
+After changing revisions, follow [the SH4ZAM build adapter](addons/libsh4zam/README.md)
+to reconcile any existing patch and select the pinned dependency; do not discard
+local changes. Builds do not apply source patches automatically.
 
 ## Licensing
 KallistiOS itself is licensed under the BSD-like **KOS License**. **Attribution is not optional**. Additionally, this distribution contains code licensed under various free software licenses.

@@ -79,6 +79,8 @@ struct cdrom_request {
     bool cancel_requested;
     bool callback_pending;
     bool callback_running;
+    bool completing;
+    bool worker_active;
     bool no_op;
     bool dma_read;
     bool direct_dma;
@@ -126,6 +128,14 @@ static bool request_is_terminal(cdrom_request_state_t state) {
         || state == CDROM_REQUEST_CANCELLED
         || state == CDROM_REQUEST_ERROR
         || state == CDROM_REQUEST_TIMED_OUT;
+}
+
+/* Caller holds the IRQ fence. Terminal status alone does not retire the
+   completion producer or the worker's active_request reference. */
+static bool request_is_busy(const cdrom_request_t *request) {
+    return !request_is_terminal(request->status.state)
+        || request->completing || request->worker_active
+        || request->callback_pending || request->callback_running;
 }
 
 static int map_command_result(cd_cmd_chk_t response,
@@ -312,6 +322,7 @@ static void finish_request(cdrom_request_t *request,
     cdrom_request_status_t status;
     irq_mask_t irq = irq_disable();
 
+    request->completing = true;
     status = request->status;
     status.state = state;
     status.result = result;
@@ -358,8 +369,14 @@ static void finish_request(cdrom_request_t *request,
         irq = irq_disable();
         request->callback_running = false;
         irq_restore(irq);
-        genwait_wake_all(request);
     }
+
+    /* Wake retirement waiters before restoring preemption; after this fence
+       the request may be destroyed, so do not access it again. */
+    irq = irq_disable();
+    request->completing = false;
+    genwait_wake_all(request);
+    irq_restore(irq);
 }
 
 static void callback_worker_routine(void *data) {
@@ -396,13 +413,12 @@ static void callback_worker_routine(void *data) {
 
         callback(request, &status, callback_data);
 
-        irq = irq_disable();
-        request->callback_running = false;
-        irq_restore(irq);
-        genwait_wake_all(request);
-
         mutex_lock(&callback_queue_mutex);
         active_callback = NULL;
+        irq = irq_disable();
+        request->callback_running = false;
+        genwait_wake_all(request);
+        irq_restore(irq);
         if(STAILQ_EMPTY(&callback_queue))
             cond_broadcast(&callback_queue_idle);
         mutex_unlock(&callback_queue_mutex);
@@ -1487,6 +1503,7 @@ static void request_worker_routine(void *data) {
 
         STAILQ_REMOVE_HEAD(&request_queue, entry);
         active_request = request;
+        request->worker_active = true;
         set_request_running(request);
         mutex_unlock(&request_queue_mutex);
 
@@ -1494,6 +1511,13 @@ static void request_worker_routine(void *data) {
 
         mutex_lock(&request_queue_mutex);
         active_request = NULL;
+        {
+            irq_mask_t irq = irq_disable();
+
+            request->worker_active = false;
+            genwait_wake_all(request);
+            irq_restore(irq);
+        }
         mutex_unlock(&request_queue_mutex);
     }
 }
@@ -2135,7 +2159,7 @@ int cdrom_stream_session_cancel(cdrom_stream_session_t *session) {
     return 0;
 }
 
-int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
+static int stream_session_destroy(cdrom_stream_session_t *session, bool wait) {
     irq_mask_t irq;
     bool busy;
 
@@ -2153,7 +2177,7 @@ int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
         return -1;
     }
 
-    if(cdrom_request_wait(session->owner_request, 0, NULL) < 0)
+    if(wait && cdrom_request_wait(session->owner_request, 0, NULL) < 0)
         return -1;
 
     if(cdrom_request_destroy(session->owner_request) < 0)
@@ -2162,6 +2186,14 @@ int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
     sem_destroy(&session->work);
     free(session);
     return 0;
+}
+
+int cdrom_stream_session_destroy(cdrom_stream_session_t *session) {
+    return stream_session_destroy(session, true);
+}
+
+int cdrom_stream_session_try_destroy(cdrom_stream_session_t *session) {
+    return stream_session_destroy(session, false);
 }
 
 int cdrom_request_get_status(const cdrom_request_t *request,
@@ -2222,9 +2254,13 @@ static int wait_for_request(cdrom_request_t *request, uint32_t timeout,
 
     irq = irq_disable();
 
+    /* Keep wait-then-destroy valid for requests without callbacks. With a
+       callback, the ordinary wait still observes terminal status early;
+       wait_callback includes every remaining internal owner. */
     while(!request_is_terminal(request->status.state)
-            || (wait_for_callback
-                && (request->callback_pending || request->callback_running))) {
+            || (wait_for_callback && request_is_busy(request))
+            || (!request->callback
+                && (request->completing || request->worker_active))) {
         uint32_t remaining = 0;
 
         if(deadline) {
@@ -2328,8 +2364,7 @@ int cdrom_request_destroy(cdrom_request_t *request) {
     }
 
     irq = irq_disable();
-    busy = !request_is_terminal(request->status.state)
-        || request->callback_pending || request->callback_running;
+    busy = request_is_busy(request);
     irq_restore(irq);
 
     if(busy) {

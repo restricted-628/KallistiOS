@@ -8,8 +8,8 @@ to the main context. It does not carry a second copy of the switch assembly.
 
 Interrupts remain enabled while each alternate stack is running. Both fibers
 force scheduler passes to a helper KOS thread, validating that preemption,
-resume, lazily resolved continuation-stack bounds, and the thread-owned MMU/TLS
-identity remain coherent. Only the short bookkeeping and context-transfer
+resume and lazily resolved continuation-stack bounds remain coherent. This
+probe does not directly check MMU/TLS identity. Only the short bookkeeping and context-transfer
 window is masked.
 
 Success prints `KOSFIBERCTX scheduler=N bounds=N` and exits with status zero.

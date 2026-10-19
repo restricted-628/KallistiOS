@@ -10,7 +10,7 @@ SH4ZAM_ROOT ?= $(KOS_BASE)/addons/libsh4zam/upstream
 INSTALLED = $(KOS_BASE)/addons/lib/$(KOS_ARCH)/libfiber_sh4zam.a
 
 ifeq ($(wildcard $(SH4ZAM_ROOT)/include/sh4zam/shz_xmtrx.h),)
-$(error Set SH4ZAM_ROOT to a SH4ZAM 0.9.0 source checkout)
+$(error Initialize the pinned SH4ZAM submodule and follow addons/libsh4zam/README.md)
 endif
 
 KOS_CFLAGS += -std=gnu17 -I$(ADDON_ROOT)/include -I$(SH4ZAM_ROOT)/include \

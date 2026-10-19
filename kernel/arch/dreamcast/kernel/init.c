@@ -344,7 +344,7 @@ void arch_main(void) {
     _init();
 
     /* Call the user's main function */
-    rv = main(0, NULL);
+    rv = main(0, (char *[]){ NULL });
 
     /* Call kernel exit */
     exit(rv);
@@ -446,7 +446,8 @@ void arch_abort(void) {
     /* Turn off UBC breakpoints, if any */
     ubc_shutdown();
 
-    dbglog(DBG_CRITICAL, "arch: aborting the system\n");
+    if(DBG_CRITICAL <= DBGLOG_LEVEL_SUPPORT && DBG_CRITICAL <= dbglog_level)
+        dbgio_write_str("arch: aborting the system\n");
 
     /* PVR disable-by-fire */
     PVR_SET(PVR_RESET, PVR_RESET_ALL);

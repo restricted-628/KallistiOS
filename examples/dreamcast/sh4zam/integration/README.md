@@ -1,6 +1,6 @@
 # First-class SH4ZAM integration
 
-This example verifies that the bundled SH4ZAM 0.9.0 library is available through
+This example verifies that the bundled SH4ZAM 0.9.1 library is available through
 the normal KOS include and link environment. Its Makefile deliberately does not
 add `-lsh4zam`; the standard grouped KOS libraries supply the implementation and
 discard unused sections normally.
@@ -182,15 +182,15 @@ vec3 transformation with XMTRX preservation, and an independent scalar oracle
 for compact 3x4 load/store, transpose, forward/reverse products and fused products.
 
 ```text
-SH4ZAM 0.9.0 memory copies and guards: PASS
-SH4ZAM 0.9.0 scales, screen init, strict u16 trig: PASS
-SH4ZAM 0.9.0 XMTRX 3x4 scalar oracle: PASS
+SH4ZAM 0.9.1 memory copies and guards: PASS
+SH4ZAM 0.9.1 scales, screen init, strict u16 trig: PASS
+SH4ZAM 0.9.1 XMTRX 3x4 scalar oracle: PASS
 ```
 
 Successful completion prints:
 
 ```text
-RESULT: PASS (SH4ZAM 0.9.0 camera, frustum, geometry, and fibers)
+RESULT: PASS (SH4ZAM 0.9.1 camera, frustum, geometry, and fibers)
 ```
 
 The same result is shown on a green framebuffer for emulator or hardware

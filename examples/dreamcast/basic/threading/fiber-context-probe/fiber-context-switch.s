@@ -3,8 +3,8 @@
 !   fiber-context-switch.s
 !   Copyright (C) 2026 Joseph Black
 !
-! Example-local cooperative context transfer. The probe keeps interrupts
-! masked for its entire run; scheduler integration is tested separately.
+! Example-local cooperative context transfer. Only bookkeeping and transfer
+! are masked; alternate-stack execution permits carrier rescheduling.
 
 	.text
 	.balign	4

@@ -30,7 +30,9 @@ with tempfile.TemporaryDirectory(prefix='kos-mmu-page-test.') as td:
     tmp = Path(td)
     (tmp / 'kos').mkdir()
     (tmp / 'kos/cdefs.h').write_text('#include <sys/cdefs.h>\n')
-    (tmp / 'production.inc').write_text(defines + pte + mmucr + table + static_map)
+    pin = next(line for line in (root / 'kernel/mm/vm-internal.h').read_text().splitlines()
+               if line.startswith('#define MMU_VM_PIN ')) + '\n'
+    (tmp / 'production.inc').write_text(pin + defines + pte + mmucr + table + static_map)
     exe = tmp / 'test'
     subprocess.run(shlex.split(a.cc) + shlex.split(a.cflags) + [
         '-I' + str(tmp), '-I' + str(root / 'kernel/arch/dreamcast/include'),

@@ -27,7 +27,10 @@ No separate source checkout is required. No upstream SH4ZAM source is
 copied, renamed, or reattributed here. The current register operations inline
 from its public headers; clients using out-of-line SH4ZAM routines must also link
 their compatible SH4ZAM library. Tested dependency:
-`gyrovorbis/sh4zam` commit `0fd3a1e1fa0809d33198c062632b1494ec2f57df`.
+`gyrovorbis/sh4zam` commit `c18faab269dd66fd9153536a1eda94e61b398aab`,
+with the exact-pin alignment patch described in
+[the SH4ZAM adapter guide](../libsh4zam/README.md). Rebuild all consumers;
+do not reuse archives compiled against the older pin.
 
 With a configured KOS environment:
 

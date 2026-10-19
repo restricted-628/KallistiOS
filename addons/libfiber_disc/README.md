@@ -20,9 +20,11 @@ and is not a plug-in for the Fiber Service Executor's private dispatch loop.
 ## Owner loop and lifetimes
 
 1. Attach the application thread and create the adapter with a live-handle
-   capacity. Capacity includes completed handles until explicitly released.
+   capacity. Capacity includes streams and completed handles until explicitly
+   released; a stream plus its transfer needs at least two slots.
 2. Create application fibers on caller-owned stacks. A loader submits with
-   `fiber_disc_read_dma`, then calls `fiber_disc_await`.
+   `fiber_disc_read_dma` (RAM/VRAM) or `fiber_disc_read_dma_gaps` (an existing
+   GAPS lease and byte offset), then calls `fiber_disc_await`.
 3. The main fiber calls `fiber_disc_pump` and dispatches ready children with
    `fiber_switch`. If all children are parked, it may call the bounded
    `fiber_disc_idle`; otherwise it keeps dispatching useful work.
@@ -42,16 +44,43 @@ Do not switch fibers while holding an ordinary KOS mutex or G1 transaction.
 The callback only posts a semaphore hint. It cannot switch a fiber. The pump
 samples terminal status and tries nonblocking request destruction; `EBUSY`
 means the callback has not returned yet. It keeps the read/context alive and
-retries. The idle path sleeps at most 1 ms between such retries, allowing a
+retries. The idle path requests a 1 ms sleep between such retries, allowing a
 lower-priority callback thread to finish. Only successful retirement sets the
 fiber event. Early completions and completion-before-wait remain latched.
 No payload buffer is allocated or copied by this adapter.
+
+## Staged streams
+
+Start with `fiber_disc_stream_start`, then call `fiber_disc_stream_await_ready`
+from a child. Inspect the returned state: startup failure also wakes the waiter.
+For a READY session, submit `fiber_disc_stream_transfer`, then use the ordinary
+`fiber_disc_await` and read-handle destruction APIs before submitting the next
+chunk. The direct driver retains G1 across those transfers; do not await other
+queued disc work while holding the stream open.
+
+After the final transfer, call `fiber_disc_stream_await`, inspect status, and
+destroy the stream handle. To stop early, request `fiber_disc_stream_cancel`
+and follow the same drain. Adapter shutdown cancels streams and reads together.
+Terminal session waits also drain all adapter transfer callbacks, but each
+read handle still needs explicit destruction.
+
+Sessions expose status rather than readiness callbacks. The main-fiber pump
+samples it, and idle requests a 1 ms sleep while any session is live. The pump
+uses `cdrom_stream_session_try_destroy`: terminal status alone may precede
+owner-request completion. The existing thread-blocking destructor is not used.
+This costs periodic polling while a stream is open; it adds no worker thread.
 
 ## Boundaries
 
 - Direct DMA uses the driver's current format/alignment/range rules. Ordinary
   RAM and permitted PVR RAM aliases go through the same submission entry point;
-  GAPS lease-based submission is not wrapped by this first adapter.
+  GAPS submissions use the driver's separate lease-based entry point.
+- GAPS leases remain caller-owned. Retain the lease and leave the destination
+  untouched until await completes, even while queued or cancelling. The driver
+  pins the lease only during execution; the adapter does not allocate or release
+  it and does not change BBA ownership policy. After successful completion, a
+  subsequent G2 transfer may consume the data. Failed reads may leave partial
+  data: inspect status before consuming it.
 - The driver manages cache visibility. The caller owns the destination and
   must not access, free, remap, or share it with another transfer before await
   completes. Dirty data sharing a destination cache line is not safe.
@@ -63,8 +92,8 @@ No payload buffer is allocated or copied by this adapter.
 - One waiter per handle. Do not forcibly destroy a waiting fiber or terminate
   its owner thread. The adapter deliberately refuses destruction with live
   handles; it does not silently abandon DMA or callbacks during teardown.
-- Stream-session readiness, stream transfers, PIO reads, and other DMA engines
-  are not wrapped yet. Do not substitute their thread-blocking waits.
+- PIO reads, lease-based GAPS stream transfers, and other DMA engines are not
+  wrapped. Do not substitute their thread-blocking waits.
 
 See `examples/dreamcast/cdrom/fiber-read` for a live-media usage template and
 `fiber-disc-contract` for a no-media lifetime/scheduling regression. Neither

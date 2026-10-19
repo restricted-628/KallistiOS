@@ -50,15 +50,15 @@ kfiber_event_t *fiber_event_create(bool signaled);
 */
 int fiber_event_destroy(kfiber_event_t *event);
 
-/** \brief Wait for an event in its owning fiber runtime.
+/** \brief Wait for an event owned by the calling fiber runtime.
 
-    Must be called by the event's owner thread, even if already signaled;
-    a different or unattached thread is rejected with `EXDEV`.
-    If the event is already set, this returns immediately (including for the
-    owner's main fiber). Otherwise the calling fiber becomes
-    `KFIBER_STATE_WAITING` and transfers to its main
-    fiber. The owner must later dispatch it after fiber_event_set() makes it
-    ready. The main fiber cannot park and is rejected with `EDEADLK`.
+    The caller must belong to the event's owner runtime, even if the event is
+    already set. An already-set event returns immediately, including from the
+    owner main fiber. Otherwise the calling fiber becomes `KFIBER_STATE_WAITING`
+    and transfers to its main fiber. The owner must later dispatch it after
+    fiber_event_set() makes it ready. The main fiber cannot park (`EDEADLK`).
+    Foreign or unattached callers fail with `EXDEV`; interrupt-context callers
+    fail with `EPERM`.
 */
 int fiber_event_wait(kfiber_event_t *event);
 

@@ -604,6 +604,15 @@ int cdrom_stream_session_cancel(cdrom_stream_session_t *session);
 /** \brief Destroy a terminal staged stream with no active transfer request. */
 int cdrom_stream_session_destroy(cdrom_stream_session_t *session);
 
+/** \brief Destroy a stream without waiting for its owner request.
+
+    Returns -1 with EBUSY until the session is terminal, no transfer is active,
+    and its owner request can be destroyed. On EBUSY the session remains valid;
+    retry later. Like the ordinary destructor, callers must serialize ownership
+    and must not access the session after successful destruction.
+*/
+int cdrom_stream_session_try_destroy(cdrom_stream_session_t *session);
+
 /** @} */
 
 /** \defgroup cdrom_sector_ranges Bounded raw-disc sector ranges

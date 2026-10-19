@@ -9,7 +9,8 @@ WRAPPED = g1_bus_lock_timed g1_bus_unlock g1_bus_select_device_timed \
     g1_bus_dma_in_progress g1_bus_dma_disable thd_schedule \
     cdrom_request_submit_executor cdrom_request_event_internal \
     cdrom_request_cancel_requested_internal cdrom_request_update_direct_progress \
-    gaps_sram_dma_claim gaps_sram_dma_release gaps_sram_get_info
+    gaps_sram_dma_claim gaps_sram_dma_release gaps_sram_get_info \
+    g1_bus_mark_faulted g1_bus_is_faulted wdt_disable
 
 all: $(TARGET)
 include $(KOS_BASE)/Makefile.rules

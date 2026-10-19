@@ -88,6 +88,53 @@ typedef struct pvr_chunk_cache_section_requirements {
 int pvr_chunk_cache_section_open(
     const void *data, size_t size, pvr_chunk_cache_section_view_t *view);
 
+/** \brief Size ordinary native storage without admitting the PCC1 payload.
+
+    Checks the fixed header, its CRC, canonical framing and size arithmetic;
+    does not scan payload CRC, strips, packets or deformation data. Success is
+    only an allocation requirement, not permission to draw. Apply the caller's
+    allocation budget before allocating requirements->bytes at its alignment.
+    \p size is the complete accessible section length, not buffer capacity or
+    padded transport length. Input remains live and immutable for this call.
+    Requirements must be naturally aligned and disjoint from input, and remain
+    unchanged on failure. No allocation or input borrowing survives return.
+*/
+int pvr_chunk_cache_section_ordinary_query(
+    const void *data, size_t size,
+    pvr_chunk_cache_section_requirements_t *requirements);
+
+/** \brief Admit, decode and publish an ordinary draw cache in one operation.
+
+    Accepts a complete, CPU-readable, uncompressed PCC1 section. Storage/codec
+    success and producer/callback handoff must precede entry; partial output,
+    cancellation or terminal status alone does not establish readiness. Input
+    stays live and immutable through validation and the last decode read.
+
+    Independently checks the current header and fully validates its payload
+    once, then constructs native layout and an admitted draw snapshot without
+    repeating native semantic scans. No query result or caller-created marker
+    confers admission. A different complete input after ordinary_query is
+    allowed; capacity is recalculated. Existing outer-container and codec
+    checks remain the producer's responsibility, even if their byte spans or
+    algorithms overlap. PCC1 header/payload CRCs do not replace those checks.
+
+    Storage must be 32-byte aligned and draw naturally aligned. All supplied
+    source/storage/draw ranges must be representable and mutually disjoint.
+    All fallible work precedes the first destination write; failure leaves
+    storage and draw unchanged. No allocation occurs. Success retains no
+    input pointer; other section/container borrowers may still retain input.
+
+    The published snapshot and its native storage must remain alive and
+    immutable through the last draw/callback. Reload is a fresh admission.
+    Wait for all old readers before in-place reload; success invalidates old
+    snapshots of that storage. Replacement storage may publish on success,
+    with old storage retained until old users finish. The API neither pins
+    buffers nor retires consumers. A checked cache can be copied from draw->cache.
+*/
+int pvr_chunk_cache_section_load_ordinary(
+    const void *data, size_t size, void *storage, size_t storage_bytes,
+    pvr_chunk_cache_draw_t *draw);
+
 /** \brief Query exact 32-byte-aligned cache storage for one checked section. */
 int pvr_chunk_cache_section_workspace_query(
     const pvr_chunk_cache_section_view_t *view,

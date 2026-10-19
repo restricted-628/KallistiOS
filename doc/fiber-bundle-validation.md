@@ -1,5 +1,31 @@
 # Complete fiber bundle validation
 
+## Current-master refresh (2026-10-18)
+
+Refreshed the exclusive addon bundle from `6d437e1c9457` against accepted
+integrated master `cf53f5c5a18e`, including VM1–VM3 and shared storage fixes.
+SH4ZAM is pinned to `c18faab269dd66fd9153536a1eda94e61b398aab` with the
+explicit, verified matrix-alignment patch. VM4 and uncommitted experiments
+are not included.
+
+- Clean full SDK build with SH-4 GCC 16.2.0, GNU17 and implicit SH4ZAM TLS passed.
+- `utils/check-fiber-bundle.sh` passed: one selected provider, kernel excludes
+  the addon-owned runtime, and disc/VBlank consumers link the correct archives.
+- All eight standalone addon probe builds and link-map/import audits passed;
+  no KOS/libm math fallback. A deliberately mixed-provider link was rejected
+  with duplicate `fiber_attach_ex` definitions.
+- All eight addon probes passed in both interpreter and dynarec modes of the
+  separately validated strict-MMU Flycast runtime: 16 guest-evidence passes.
+  Context, API, synchronization, math, teardown and executor wake/sync/queue
+  checks passed; executor math reported 32 rounds per service, 64 competing
+  matrix overwrites, and preserved shutdown state.
+
+This refresh adds no new fiber scheduling or math algorithm. Runtime and
+executor sources match the previously accepted complete-provider setup;
+the current bundle is rebuilt rather than reusing its archives. Build/link
+and emulator evidence do not establish physical Dreamcast timing or DMA
+behavior. No hardware validation or whole-VM revalidation is claimed here.
+
 ## VBlank addition (2026-09-24)
 
 - Integrated master `cb73cbc2` adds compatible IRQ priorities and the optional

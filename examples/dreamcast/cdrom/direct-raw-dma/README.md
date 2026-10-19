@@ -10,6 +10,14 @@ Deferred executor calls check copied format and byte accounting, cancellation
 before the command, progress reporting, and GAPS lease claim/release/failure.
 A lease sized for two cooked sectors must reject two raw sectors.
 
+Fault injection also holds DMA active after disable for six fatal-stop cases:
+RAM, VRAM, synchronous/queued GAPS reads, stream teardown, and stream-transfer
+cancellation. A test-only escape replaces the final halt loop and checks that
+interrupts/watchdog are disabled and no claim, handler, or buffer has retired.
+Three controls let DMA stop after timeout/cancellation and require ordinary
+error return, cache invalidation, and G1 release without a halt. These simulate
+register state; they do not induce physical DMA faults.
+
 Whole-range synchronous reads cover 17/18/32/33/34-sector boundaries, cached
 and uncached RAM and PVR destinations, exact FAD/count/address progression,
 per-command cache maintenance, middle/final short transfers, and failure to

@@ -4,7 +4,7 @@ Branch: `addon/fiber-service-sh4zam`
 
 Role: Complete SDK bundle
 
-Description snapshot: 2026-09-24
+Description snapshot: 2026-10-18
 
 One integrated checkout whose sole fiber provider is libfiber_sh4zam, including the Fiber Service Executor.
 
@@ -30,17 +30,18 @@ as a single upstream kernel change.
 - [addons/libfiber_sh4zam/README.md](addons/libfiber_sh4zam/README.md)
 - [doc/fiber-bundle-validation.md](doc/fiber-bundle-validation.md)
 
-Reviewed code snapshot: [`21419b22ddb5`](https://github.com/restricted-628/KallistiOS/commit/21419b22ddb5bd7e5e09b1fb02102e943de9a0da).
+Refresh baseline: integrated master
+[`cf53f5c5a18e`](https://github.com/restricted-628/KallistiOS/commit/cf53f5c5a18e78ab7e5b79455675d1ba70b22647),
+including accepted VM1–VM3 and shared storage fixes. VM4 is not included.
 
 Common ancestor with the inspected upstream master:
 [`55da82831f4c`](https://github.com/restricted-628/KallistiOS/commit/55da82831f4cadef233b02c95493011428fb917f).
 This records the inspected baseline, not a claim of being rebased to today's upstream.
 
-The description pass changes documentation only. It does not rerun code tests,
-prove hardware behavior, or certify every inherited feature. Follow the linked
-contracts and reproduce the relevant host, target and emulator checks; physical
-hardware validation remains a separate gate. Private research and uncommitted
-experiments are not part of this description.
+Follow the validation record for exact tested revisions and limits. Updating
+this SDK does not certify every inherited feature; physical hardware validation
+remains a separate gate. Private research and uncommitted experiments are not
+part of the bundle.
 
 [All published branches](https://github.com/restricted-628/KallistiOS/blob/master/BRANCHES.md) ·
 [Integrated fork differences](https://github.com/restricted-628/KallistiOS/blob/master/FORK.md) ·

@@ -13,3 +13,6 @@ HOST_PEDANTIC ?=
 CFLAGS += -std=$(HOST_CSTD) $(HOST_WARNINGS) $(HOST_PEDANTIC)
 # Graphics and asset-tool consumers use SH4ZAM's portable backend on hosts.
 CPPFLAGS += -isystem ../../addons/include
+# Keep software XMTRX thread-local even when upstream detects a native host
+# architecture without selecting a default TLS model.
+CPPFLAGS += -DSHZ_TLS_MODEL=SHZ_TLS_PTHREAD

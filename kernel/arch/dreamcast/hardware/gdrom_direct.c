@@ -17,6 +17,7 @@
 #include <dc/gaps.h>
 #include <dc/gdrom_direct.h>
 #include <dc/memory.h>
+#include <dc/wdt.h>
 
 #include <kos/cache.h>
 #include <kos/irq.h>
@@ -1890,6 +1891,33 @@ static int wait_dma_inactive(uint64_t deadline) {
     return 0;
 }
 
+/* The MMIO regression replaces only the final non-returning instruction loop. */
+#ifndef G1_DMA_HALT
+#define G1_DMA_HALT() do { for(;;) arch_sleep(); } while(0)
+#endif
+
+static void stop_dma_or_halt(void) {
+    int saved_errno = errno;
+
+    g1_bus_dma_disable();
+    if(wait_dma_inactive(timer_ms_gettime64() + GDROM_DMA_CLEANUP_MS) < 0) {
+        irq_mask_t irq_state = irq_disable();
+
+        if(g1_bus_dma_in_progress()) {
+            /* A bus fault alone cannot protect the destination once a read
+               returns. Keep all storage/claims live and stop scheduling before
+               publishing completion. Do not panic/abort: those paths may return
+               to a loader which could reuse RAM while DMA still owns it. No
+               logging here either: it may take locks or call that loader. */
+            wdt_disable();
+            g1_bus_mark_faulted();
+            G1_DMA_HALT();
+        }
+        irq_restore(irq_state);
+    }
+    errno = saved_errno;
+}
+
 static bool dma_range_contains(uint32_t address, size_t size,
                                uint32_t lower, uint32_t upper) {
     return address >= lower && address < upper && size <= upper - address;
@@ -2009,7 +2037,6 @@ static int read_sectors_dma_deadline(
     uintptr_t buffer_address = (uintptr_t)buffer;
     uint32_t physical_address;
     uint32_t expected_bytes = (uint32_t)dma_read_bytes(sectors, sector_type);
-    uint64_t cleanup_deadline;
     uint32_t remaining;
     uint8_t status;
     uint8_t reason;
@@ -2251,18 +2278,7 @@ static int read_sectors_dma_deadline(
 out_stop_dma:
     if(rv < 0)
         saved_errno = errno;
-    g1_bus_dma_disable();
-    cleanup_deadline = timer_ms_gettime64() + GDROM_DMA_CLEANUP_MS;
-    if(wait_dma_inactive(cleanup_deadline) < 0) {
-        if(!saved_errno)
-            saved_errno = errno;
-        if(g1_bus_dma_in_progress()) {
-            /* Releasing G1 while SB_GDST remains active permits precisely the
-               access-during-DMA fault this backend is designed to prevent. */
-            g1_bus_mark_faulted();
-            bus_faulted = true;
-        }
-    }
+    stop_dma_or_halt();
 
     if(!bus_faulted && command_active
             && settle_or_recover_command(&command_active, true,
@@ -2685,13 +2701,7 @@ static void direct_stream_release(gdrom_direct_stream_t *stream,
     if(!stream)
         return;
 
-    g1_bus_dma_disable();
-    if(g1_bus_dma_in_progress()
-            && wait_dma_inactive(timer_ms_gettime64()
-                                 + GDROM_DMA_CLEANUP_MS) < 0) {
-        g1_bus_mark_faulted();
-        stream->bus_faulted = true;
-    }
+    stop_dma_or_halt();
 
     if(!stream->bus_faulted && stream->command_active
             && settle_or_recover_command(&stream->command_active, true,
@@ -2701,7 +2711,7 @@ static void direct_stream_release(gdrom_direct_stream_t *stream,
     }
 
     if(stream->operation.command_masked && !stream->bus_faulted) {
-        *(volatile uint32_t *)ASIC_ACK_B = 1u;
+        G1_OUT32(ASIC_ACK_B, 1u);
         (void)g1_bus_gd_command_client_unmask();
         stream->operation.command_masked = false;
     }
@@ -2781,7 +2791,7 @@ gdrom_direct_stream_t *gdrom_direct_stream_begin(
 
     G1_OUT8(G1_ATA_CTL, GDROM_CTL_INTERRUPTS_OFF);
     (void)G1_IN8(G1_ATA_STATUS_REG);
-    *(volatile uint32_t *)ASIC_ACK_B = 1u;
+    G1_OUT32(ASIC_ACK_B, 1u);
 
     stream->command_active = true;
     if(set_dma_mode2(deadline, observed) < 0)
@@ -3001,12 +3011,7 @@ int gdrom_direct_stream_transfer(
     return 0;
 
 fail_dma:
-    g1_bus_dma_disable();
-    if(wait_dma_inactive(timer_ms_gettime64() + GDROM_DMA_CLEANUP_MS) < 0
-            && g1_bus_dma_in_progress()) {
-        g1_bus_mark_faulted();
-        stream->bus_faulted = true;
-    }
+    stop_dma_or_halt();
     if(cacheable && !g1_bus_dma_in_progress())
         dcache_inval_range(buffer_address, bytes);
     return -1;

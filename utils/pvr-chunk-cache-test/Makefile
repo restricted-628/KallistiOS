@@ -2,7 +2,8 @@ CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
 CPPFLAGS += -Iinclude -I../pvr-chunk-render-test/include \
-	-I../../kernel/arch/dreamcast/include -DWIRE_COUNT_PROJECTION
+	-I../../kernel/arch/dreamcast/include -DWIRE_COUNT_PROJECTION \
+	-DPVR_CHUNK_CACHE_ASSET_TEST
 LDLIBS += -lm
 
 TARGET = pvr-chunk-cache-test

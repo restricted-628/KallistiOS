@@ -4,7 +4,8 @@ This example performs full and quick format, deliberate fragmentation,
 asynchronous defragmentation with byte-for-byte payload checks, asynchronous
 write and copy-on-write replacement, block-level progress and callback
 validation, pre-commit cancellation, asynchronous deletion, padded readback,
-package-backed and raw VFS writes, metadata validation, and cleanup on the
+package-backed and raw VFS writes, unchanged read outputs on failure,
+metadata validation, and cleanup on the
 first attached memory card.
 
 This test formats the entire first card and destroys every file on it. Run it

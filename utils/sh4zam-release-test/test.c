@@ -18,6 +18,7 @@ int main(void) {
     bool passed = verify_release_memory();
     passed &= verify_release_math();
     passed &= verify_release_3x4();
+    passed &= verify_release_alignment();
     puts(passed ? "SH4ZAM release fixtures: PASS" : "SH4ZAM release fixtures: FAIL");
     return !passed;
 }

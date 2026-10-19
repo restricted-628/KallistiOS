@@ -1,10 +1,84 @@
 /* KallistiOS ##version##
    Copyright (C) 2026 Joseph Black
 
-   KOS-side regression probes for the unmodified SH4ZAM release dependency.
+   KOS-side regression probes for the pinned SH4ZAM dependency.
 */
 #ifndef SH4ZAM_RELEASE_FIXTURES_H
 #define SH4ZAM_RELEASE_FIXTURES_H
+
+/* Raw float buffers must not inherit the native matrix's vector alignment.
+   Exercise every offset modulo 16 that is valid for a float buffer. */
+static bool verify_release_alignment(void) {
+    float input[20] __attribute__((aligned(16)));
+    float output[20] __attribute__((aligned(16)));
+    shz_mat4x4_t a, b, saved;
+    bool passed = true;
+
+    _Static_assert(__alignof__(shz_mat4x4_t) ==
+                   __alignof__(struct shz_mat4x4), "matrix type alignment");
+    _Static_assert(sizeof(shz_mat4x4_t) == 16 * sizeof(float), "matrix size");
+    for(unsigned i = 0; i < 16; ++i) {
+        a.elem[i] = (float)((int)(i * 3 % 11) - 5);
+        b.elem[i] = (float)((int)(i * 7 % 13) - 6);
+    }
+    shz_xmtrx_store_4x4(&saved);
+    for(unsigned offset = 0; offset < 4; ++offset) {
+        for(unsigned i = 0; i < 20; ++i)
+            input[i] = -999;
+        memcpy(input + offset, b.elem, sizeof(b));
+        for(unsigned op = 0; op < 8; ++op) {
+            float expected[16];
+            for(unsigned col = 0; col < 4; ++col) {
+                for(unsigned row = 0; row < 4; ++row) {
+                    unsigned i = col * 4 + row;
+                    if(op < 2)
+                        expected[i] = b.elem[op ? row * 4 + col : i];
+                    else if(op >= 6)
+                        expected[i] = a.elem[op == 7 ? row * 4 + col : i];
+                    else {
+                        float sum = 0;
+                        for(unsigned k = 0; k < 4; ++k) {
+                            float left = op < 4 ? a.elem[k * 4 + row] :
+                                b.elem[op == 5 ? row * 4 + k : k * 4 + row];
+                            float right = op >= 4 ? a.elem[col * 4 + k] :
+                                b.elem[op == 3 ? k * 4 + col : col * 4 + k];
+                            sum += left * right;
+                        }
+                        expected[i] = sum;
+                    }
+                }
+            }
+            for(unsigned i = 0; i < 20; ++i)
+                output[i] = -999;
+            shz_xmtrx_load_4x4(&a);
+            switch(op) {
+                case 0: shz_xmtrx_load_unaligned_4x4(input + offset); break;
+                case 1: shz_xmtrx_load_transpose_unaligned_4x4(input + offset); break;
+                case 2: shz_xmtrx_apply_unaligned_4x4(input + offset); break;
+                case 3: shz_xmtrx_apply_transpose_unaligned_4x4(input + offset); break;
+                case 4: shz_xmtrx_apply_reverse_unaligned_4x4(input + offset); break;
+                case 5: shz_xmtrx_apply_reverse_transpose_unaligned_4x4(input + offset); break;
+                default: break;
+            }
+            if(op == 7)
+                shz_xmtrx_store_transpose_unaligned_4x4(output + offset);
+            else
+                shz_xmtrx_store_unaligned_4x4(output + offset);
+            for(unsigned i = 0; i < 20; ++i) {
+                bool inside = i >= offset && i < offset + 16;
+                float want = inside ? expected[i - offset] : -999;
+                float source = inside ? b.elem[i - offset] : -999;
+                if(!close_enough(output[i], want) || input[i] != source) {
+                    printf("SH4ZAM alignment mismatch: offset=%u op=%u index=%u\n",
+                           offset, op, i);
+                    passed = false;
+                }
+            }
+        }
+    }
+    shz_xmtrx_load_4x4(&saved);
+    return passed;
+}
 
 static bool verify_release_memory(void) {
     uint8_t source[256] __attribute__((aligned(32)));
@@ -178,6 +252,27 @@ static bool verify_release_3x4(void) {
     passed &= release_xmtrx_matches(expected);
     shz_xmtrx_load_3x4(&a);
     shz_xmtrx_apply_reverse_transpose_3x4(&row_b);
+    passed &= release_xmtrx_matches(expected);
+
+    /* Weighted affine accumulation must preserve every fourth-row lane. */
+    shz_mat4x4_t start;
+    for(unsigned i = 0; i < 16; ++i)
+        start.elem[i] = expected[i] = (float)((int)i - 5);
+    shz_xmtrx_load_4x4(&start);
+    shz_xmtrx_blend_3x4(&a, 0.25f);
+    shz_xmtrx_blend_3x4(&b, -0.5f);
+    for(unsigned c = 0; c < 4; ++c)
+        for(unsigned r = 0; r < 3; ++r)
+            expected[c * 4 + r] += a.elem[c * 3 + r] * 0.25f -
+                                   b.elem[c * 3 + r] * 0.5f;
+    passed &= release_xmtrx_matches(expected);
+    shz_xmtrx_blend_3x4(&a, 0.0f);
+    passed &= release_xmtrx_matches(expected);
+
+    /* The explicitly named full-matrix operation updates all sixteen lanes. */
+    shz_xmtrx_blend_4x4(&start, 0.5f);
+    for(unsigned i = 0; i < 16; ++i)
+        expected[i] += start.elem[i] * 0.5f;
     passed &= release_xmtrx_matches(expected);
     shz_xmtrx_load_4x4(&saved);
     return passed;

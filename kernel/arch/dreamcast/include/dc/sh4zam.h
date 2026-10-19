@@ -33,7 +33,6 @@ __BEGIN_DECLS
 
 #if defined(__cplusplus)
 static_assert(sizeof(matrix_t) == sizeof(shz_mat4x4_t));
-static_assert(alignof(matrix_t) == alignof(shz_mat4x4_t));
 static_assert(sizeof(vector_t) == sizeof(shz_vec4_t));
 static_assert(offsetof(vector_t, x) == offsetof(shz_vec4_t, x));
 static_assert(offsetof(vector_t, y) == offsetof(shz_vec4_t, y));
@@ -41,7 +40,6 @@ static_assert(offsetof(vector_t, z) == offsetof(shz_vec4_t, z));
 static_assert(offsetof(vector_t, w) == offsetof(shz_vec4_t, w));
 #else
 _Static_assert(sizeof(matrix_t) == sizeof(shz_mat4x4_t), "matrix size");
-_Static_assert(_Alignof(matrix_t) == _Alignof(shz_mat4x4_t), "matrix alignment");
 _Static_assert(sizeof(vector_t) == sizeof(shz_vec4_t), "vector size");
 _Static_assert(offsetof(vector_t, x) == offsetof(shz_vec4_t, x), "vector x");
 _Static_assert(offsetof(vector_t, y) == offsetof(shz_vec4_t, y), "vector y");
@@ -51,10 +49,12 @@ _Static_assert(offsetof(vector_t, w) == offsetof(shz_vec4_t, w), "vector w");
 
 /** \brief Import an established KOS matrix into a SH4ZAM matrix.
 
-    The representations have identical size, alignment, component order, and
-    column-major layout. Copying through this helper avoids violating the C and
-    C++ aliasing rules. New performance-sensitive code should retain
-    `shz_mat4x4_t` throughout its pipeline instead of repeatedly converting.
+    The representations have identical size, component order, and column-major
+    layout, but may require different alignment. Each pointer must refer to a
+    valid object aligned for its own type. Copying through this helper avoids
+    violating the C and C++ aliasing rules. New performance-sensitive code
+    should retain `shz_mat4x4_t` throughout its pipeline instead of repeatedly
+    converting.
 */
 static inline void shz_kos_matrix_import(shz_mat4x4_t *dst,
                                          const matrix_t *src) {

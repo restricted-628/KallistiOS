@@ -24,8 +24,16 @@ cd kos-fibers
 ```
 
 The pinned SH4ZAM submodule preserves its upstream history. If cloned without
-submodules, run `git submodule update --init --recursive`. No separate SH4ZAM
-source checkout or manual branch merge is needed.
+submodules, run `git submodule update --init --recursive`. Then apply and verify
+the exact-pin compatibility patch:
+
+```sh
+python3 utils/check-sh4zam-source.py --apply-local-patch
+python3 utils/check-sh4zam-source.py
+```
+
+No separate SH4ZAM source checkout or manual branch merge is needed. The patch
+is explicit setup, never an automatic build-time edit.
 
 Configure the normal KOS toolchain environment for **this** directory
 (`KOS_BASE` must point here), following [KOS setup](doc/README.md).
@@ -59,7 +67,8 @@ It does not run disc I/O on the Service Executor.
   transfer, with explicit owner/lease lifetimes.
 
 GAPS belongs to the shared direct-access series; it is not a fiber provider.
-The first fiber-disc adapter does not yet wrap GAPS leases or staged streams.
+The fiber-disc adapter includes cooperative direct stream-session waits.
+GAPS lease ownership and staged transfers remain explicit caller contracts.
 Resident-loader detach/hot switching and physical BBA validation are still
 open. See [GAPS ownership](doc/gaps-ownership.md) and the example READMEs.
 No proprietary middleware, BIOS, media or reverse-engineering data is added.

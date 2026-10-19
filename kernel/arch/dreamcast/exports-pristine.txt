@@ -157,6 +157,7 @@ cdrom_stream_session_wait
 cdrom_stream_session_transfer_async
 cdrom_stream_session_cancel
 cdrom_stream_session_destroy
+cdrom_stream_session_try_destroy
 cdrom_locate_data_track
 cdrom_cdda_play
 cdrom_cdda_pause
