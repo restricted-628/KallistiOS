@@ -341,6 +341,29 @@ add cache synchronization, transport admission, automatic lifetime management,
 file-backed residency or executable overlays. Ordinary allocation, P1 access
 and provider defaults are unchanged.
 
+### D19 milestone — explicit read-only file residency
+
+**Accepted, 2026-10-20:** File-owned ordinary-data reservations support bounded,
+synchronous one-page prefetch, eviction and reload from a stable immutable
+regular-file source. One private cursor and reusable page-sized P1 staging
+buffer serve each file; exact reads and initialized backing precede read-only
+publication. Resident-page budgets are explicit, not a whole-system RAM cap.
+Consumers acquire independent VM3 READ pins before use; prefetch alone grants
+no lease. Eviction and close reject live pins or loads. Cancellation does not
+abort storage I/O or retire consumers. Final owners must join users before close.
+
+Production-code host/sanitizer checks, GCC 16.2.0 build/link and recorded
+core/exclusive-addon interpreter/dynarec direct-disc probes pass. The example
+uses ISO9660 /cd through direct GD-ROM, not an embedded RAM filesystem.
+Provider probes reuse accepted archives with a fresh VM object. Emulator
+optical-source results do not certify physical media, cache/DMA visibility,
+real-loader return or timing; no ISO mount-drain result is claimed.
+See `doc/resident-vm.md` for source, close and memory-accounting contracts.
+
+This is explicit residency, not transparent page-fault I/O, compressed paging,
+writeback, managed stacks or executable overlays. Ordinary allocation, P1
+access, provider defaults and the physical-drive scheduler remain unchanged.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

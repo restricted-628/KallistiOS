@@ -6,6 +6,22 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-20 — explicit read-only file residency
+
+- Add file-owned virtual reservations with synchronous page prefetch, bounded
+  resident backing, eviction and reload. Publish only fully initialized
+  read-only pages; reuse per-file staging and preserve independent pin lifetimes.
+- Keep source immutability and final consumer retirement explicit. Cancellation
+  is not I/O abort, prefetch is not a lease, and close rejects active loads/pins.
+  No automatic page-fault I/O, writeback, compressed paging or overlays are added.
+- Add production-code host coverage and an ISO9660 /cd example selecting direct
+  GD-ROM. Sanitizers pass 2,615,842 checks; GCC 16.2.0 build/link and recorded
+  core/exclusive-addon interpreter/dynarec direct-disc probes pass. Provider
+  probes reuse accepted archives with the fresh VM object.
+- Physical media/cache/DMA, loader return, hardware timing and ISO mount-drain
+  remain unverified. Existing unrelated drivers, providers and defaults are
+  unchanged; the example does not use an embedded RAM filesystem.
+
 ## 2026-10-18 — resident page pinning and physical byte runs
 
 - Add independent pin tokens for committed ordinary-data regions, with exact

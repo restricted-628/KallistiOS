@@ -158,12 +158,16 @@ static void verify_free(allocation_t *a) {
         }
     }
 }
+static void (*check_page)(const unsigned char *, size_t);
+static void (*purge_inject)(void);
 void dcache_purge_range(uintptr_t p, size_t n) {
     CHECK(!irq_depth && n == 4096);
     allocation_t *a = allocation((void *)p);
     CHECK(a->backing && !a->mapped);
-    for(size_t i = 0; i < n; ++i) CHECK(((unsigned char *)p)[i] == 0);
+    if(check_page) check_page((const unsigned char *)p, n);
+    else for(size_t i = 0; i < n; ++i) CHECK(((unsigned char *)p)[i] == 0);
     a->prepared = true;
+    if(purge_inject) purge_inject();
 }
 static int checked_map(mmucontext_t *c, int v, int p, int n, page_prot_t prot,
                        page_cache_t cache, bool shared, bool dirty) {
@@ -182,6 +186,9 @@ static int checked_map(mmucontext_t *c, int v, int p, int n, page_prot_t prot,
 #define calloc test_calloc
 #define free test_free
 #define aligned_alloc test_aligned_alloc
+#define FILE_TEST_VFS_SETUP
+#include "file-tests.inc"
+#undef FILE_TEST_VFS_SETUP
 #define mmu_page_map_ex checked_map
 #include "vm.inc"
 #undef malloc
@@ -727,12 +734,14 @@ static void fault_retirement(void) {
     CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); CHECK(!live);
 }
 #include "pin-tests.inc"
+#include "file-tests.inc"
 
 int main(void) {
     bounds(); lifetime(); failures(); callers(); ranges_and_runs();
     rollback_preserves_neighbor(); separation(); preexisting_mapping(); serialization();
     fault_lifetime(); fault_failures(); fault_admission(); fault_query_and_pins(); fault_callers(); fault_retirement();
     pin_tests();
+    file_tests();
     printf("VM production PASS: %u checks; cache purges=%u TLB retirements=%u\n",
            atomic_load(&checks), purges, invalidations);
     return 0;

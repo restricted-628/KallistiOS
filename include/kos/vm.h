@@ -72,6 +72,63 @@ int vm_release(vm_space_t *space, void *reservation_base);
 /** Query any byte in the arena; free runs and reservation/page runs are distinct. */
 int vm_query(vm_space_t *space, const void *address, vm_info_t *result);
 
+/** Explicit read-only file residency. All file-wide caller/lifetime restrictions
+    above apply. These synchronous operations may block a child fiber's carrier;
+    they never dispatch siblings or initiate I/O from an exception. */
+typedef struct vm_file vm_file_t;
+typedef enum {
+    VM_FILE_ABSENT, VM_FILE_LOADING, VM_FILE_READY
+} vm_file_page_state_t;
+
+typedef struct {
+    void *requested;             /**< NULL first fit, otherwise whole-page base. */
+    uint64_t offset;             /**< Source offset; offset+bytes <= INT32_MAX. */
+    size_t bytes;                /**< Nonzero useful length; last page zero padded. */
+    size_t resident_limit;       /**< Maximum READY + LOADING pages, in [1,pages]. */
+    size_t budget_bytes;         /**< VM payload envelope; see resident-vm.md. */
+} vm_file_options_t;
+
+typedef struct {
+    const void *address;         /**< Snapshot only, not a use lease. */
+    uint64_t offset;
+    size_t bytes, pages;
+    size_t resident_limit, resident_pages, loading_pages;
+    size_t budget_bytes, fixed_bytes, table_reserve_bytes, charged_bytes;
+    int cancelled;
+} vm_file_info_t;
+
+typedef struct {
+    vm_file_page_state_t state;
+    size_t valid_bytes;
+} vm_file_page_info_t;
+
+/** Own a fresh private O_RDONLY open and new reservation. Source must remain
+    immutable, synchronous and seekable through final close. Regular source size
+    <= INT32_MAX; fstat/total checked only at open. No shared fd or pathname reopen.
+    Generic VM mutations and fault tickets reject the file-owned region EBUSY.
+    Outputs unchanged on failure; construction unwinds its private open once. */
+int vm_file_open(vm_space_t *space, const char *path,
+                 const vm_file_options_t *options, vm_file_t **result);
+int vm_file_query(vm_file_t *file, vm_file_info_t *result);
+int vm_file_page_query(vm_file_t *file, size_t page,
+                       vm_file_page_info_t *result);
+/** Load at most one page using exact seek/read and complete initialization.
+    ECANCELED for stopped admission, EBUSY for another load, EAGAIN for capacity.
+    Prefetch grants no lease: acquire a VM3 READ pin before use and retry if
+    eviction won the gap. ABSENT/LOADING CPU accesses retain fatal fault policy. */
+int vm_file_prefetch(vm_file_t *file, size_t page);
+/** Evict one unpinned page; EBUSY for LOADING or pins. ABSENT is a no-op. */
+int vm_file_evict(vm_file_t *file, size_t page);
+/** Sticky logical cancellation; may block on mutex, never joins/aborts I/O. */
+int vm_file_cancel(vm_file_t *file);
+/** Final owner joins all callers/waiters/consumers first. Active load or pins:
+    EBUSY with ownership/output unchanged. Success consumes the object and writes
+    backend close errno (or zero) separately; never retry a consumed handle/fd.
+    Private descriptor ownership, no global descriptor drain/shutdown, no forced
+    carrier destruction/error wake and synchronous backend retirement are required
+    from construction through close. Generic fs_close errors need not consume. */
+int vm_file_close(vm_file_t *file, int *source_close_error);
+
 typedef struct vm_pin vm_pin_t;
 typedef enum {
     VM_PIN_READ = 1, VM_PIN_WRITE = 2, VM_PIN_READWRITE = 3

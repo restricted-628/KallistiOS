@@ -2,14 +2,15 @@
 
 `<kos/vm.h>` adds explicit virtual reservations and owned backing above the
 Dreamcast checked MMU helpers. Ordinary malloc and P1 code/data are unchanged.
-This is resident ordinary data with explicit pin lifetimes and physical-run
-descriptions, not executable loading, managed stacks, paging, a DMA adapter,
-NX or process isolation. Explicit one-page resident fault tickets are
-described below; they do not provide disc-backed paging.
+This provides ordinary-data regions, explicit pin lifetimes, physical-run
+descriptions and explicit read-only file residency. Executable loading, managed
+stacks, transparent paging, DMA adapters, NX and process isolation are outside
+this API. The one-page resident fault tickets and synchronous file loading
+described below remain separate operations.
 
 Create an MMU context with a caller-assigned unique live ASID, then create one
-VM space borrowing that context and an empty arena. Addresses and lengths must
-be whole 4096-byte pages within `[0x00001000, 0x7c000000)`; the upper aperture is
+VM space borrowing that context and an empty arena. Space and raw reservation
+addresses and lengths must be whole 4096-byte pages within `[0x00001000, 0x7c000000)`; the upper aperture is
 OCRAM, not an ordinary translated arena. Creation rejects existing dynamic
 mappings. The caller must exclude static/global mappings too, and must not
 mutate the context externally until destroying the space. Existing mappings
@@ -170,8 +171,8 @@ carrier and direct child stacks, comparing integer/special registers and both
 FPU banks, plus carrier TLS/errno and ticket snapshots. Its current-worker core
 results cannot substitute for separate complete core and exclusive SH4ZAM bundle
 validation. Fault-conformance, physical cache/timing and hardware evidence remain
-separate. VM4 file-backed residency remains a later contract: neither storage I/O
-nor LZ4 decompression belongs in this resident resolver.
+separate. Explicit file residency below performs I/O in ordinary thread context;
+neither storage I/O nor LZ4 decompression belongs in this resident resolver.
 
 
 ## Resident pin tokens and physical byte runs
@@ -309,3 +310,102 @@ ABI the page record is 16 bytes (previously 12), the token header 40 bytes and
 runs 12 bytes each, excluding allocator overhead; space padding is ABI-dependent.
 No allocation occurs during run copying. Host geometry/retirement models and
 translated CPU probes remain distinct from physical cache/DMA validation.
+
+## Explicit read-only file residency
+
+`vm_file_open()` owns a fresh private `O_RDONLY` source and a new page-rounded
+reservation. The source must be a stable immutable regular file, with successful
+`fstat` and matching `fs_total64` size at open. Both source size and offset plus
+length are limited to `INT32_MAX`. Unaligned source offsets are supported.
+The last page's unused bytes are zero. Read-only opening does not exclude other
+writers, truncation or media replacement: the application must do so until final
+close, even while all pages are evicted. No per-load size polling or mutation
+snapshot is provided. A pathname is never reopened after eviction.
+
+`vm_file_prefetch(file, page)` synchronously loads one page. It admits one
+LOADING page per file, performs one exact seek and one exact read (at most 4096
+bytes) into a private aligned direct P1 buffer, then copies into fresh zeroed
+backing, purges it and publishes a read-only mapping. No VM mutex or descriptor
+lock spans a backend callback. A failed allocation, seek, read or mapping leaves
+that page ABSENT and returns its backing charge. Negative backend results retain
+errno; an unexpected seek result or short/zero/oversized read is `EIO`. Retry
+reseeks the same private open. Missing backend operations fail when first used;
+open does not dry-run seek/read. Backends must finish all access to the staging
+buffer before synchronous read returns. Retained BIOS session state still needs
+final close; asynchronous buffer use after return is unsupported.
+
+Every call retains the file-wide context restrictions at the top of `kos/vm.h`:
+ordinary IRQ-enabled callers only, with no enclosing SQ ownership, allocator
+lock, provider hook or masked TLS destructor. Calls from a child may block its
+whole carrier; they never cooperatively dispatch siblings. There is no VM
+worker, callback, queue, timeout, storage scheduler or implicit fault I/O.
+Accessing an ABSENT/LOADING page remains an unarmed fatal access. Existing TLB
+refill and VM2 tickets for other reservations are unchanged.
+
+Successful prefetch and query snapshots grant no use lease. Acquire a VM3
+`VM_PIN_READ` token before reading under the correct explicit MMU context; if
+an eviction wins between prefetch and pin admission, retry prefetch/pin.
+`VM_PIN_WRITE` and `VM_PIN_READWRITE` fail with `EACCES` on READY data.
+`vm_file_evict()` rejects the selected LOADING page or any pin with `EBUSY`;
+unpinned READY backing is retired before its resident charge is returned.
+ABSENT eviction is a no-op. Other pages may be evicted while one loads.
+Generic commit/protect/decommit/release and VM2 ticket admission reject file-owned
+regions with `EBUSY`; only file close releases their reservation.
+
+Prefetch checks cancellation, then any active load (`EBUSY`), then READY
+(idempotent success), then capacity (`EAGAIN`). `vm_file_cancel()` is sticky and
+stops even READY prefetch requests with `ECANCELED`. It neither interrupts nor
+joins I/O. Cancellation and mapping publication serialize on the space mutex:
+if cancellation wins, the in-flight backing is discarded; if publication wins,
+the completed page stays READY. Queries, pin retirement, eviction and close
+remain usable after cancellation. An in-flight claim lasts through cleanup.
+
+A resident final owner must close admission and join all API users, lock waiters,
+workers, CPU/device consumers and suspended continuations before close. An
+abandoned waiting child cannot be the only owner of an external worker's inputs.
+Never destroy a child/carrier while its synchronous call still executes.
+`vm_file_close(file, &source_close_error)` rejects active loading or pins without
+changing ownership/output. Otherwise it consumes the object, returns zero and
+reports a backend close error separately. Keep the space/context alive through
+that backend callback, then destroy the empty space if desired.
+
+This consumption guarantee requires the unchanged private descriptor, no
+external close/dup2/descriptor-table drain/global VFS shutdown, and normal
+untimed mutex operation. Forced nonzero foreign wait wakes and destruction of
+an executing carrier are unsupported. Generic `fs_close` can fail before detach;
+these preconditions exclude that path. Backend errors after detach consume the
+wrapper, and supported backends must release their owned state on close error.
+Never retry the old numeric descriptor. Failed `fs_open` unwinds inside VFS;
+a later construction failure closes the successful private open once while
+preserving the primary error. Independent unmount may unpublish then wait for
+this open; the final owner must remain able to close it. Do not synchronously
+unmount from that same owner or introduce a lock cycle. Caller-owned ROMFS image
+storage stays immutable and resident until actual mount drain completes.
+
+### File budget
+
+For N pages and T touched 2-MiB page-table spans, open reserves:
+
+- F = `sizeof(vm_file_t) + sizeof(vm_region_t) + N*sizeof(vm_page_t) + 4096`.
+- P = `T*sizeof(mmusubcontext_t) + sizeof(mmusubcontext_t *)`.
+- Envelope = F + P + `resident_limit*4096`.
+
+Insufficient `budget_bytes` gives `EAGAIN` before reservation publication.
+`resident_limit` is in [1,N] and counts READY plus LOADING; capacity never waits
+for a sibling to release it. Query reports F, P and the current charge
+`F + P + 4096*(READY + LOADING)`. P conservatively reserves full table capacity
+even when tables are shared; it includes the one-page mapper's temporary pointer.
+The envelope is payload accounting, not a measurement of exclusively allocated
+RAM. It excludes allocator headers/alignment waste, existing space/context,
+independent pin tokens, VFS/backend objects, global filesystem/cache/transport
+pools and caller-created worker stacks. There is no whole-system memory cap.
+Open/close may scan bounded pages/regions; one prefetch reads at most one page,
+but backend and carrier latency are not bounded.
+
+The `resident-file` integration example selects the direct GD-ROM backend and
+loads deterministic data from an actual ISO9660 image through `/cd`. It checks
+translated bytes, eviction/reload, pin/yield lifetime, carrier blocking,
+cancellation and external worker ownership. Synthetic read delays retain the
+same underlying `/cd` source. It performs no filesystem mount drain. Host tests execute VM/MMU and VFS descriptor paths
+with platform substitutes. Neither proves physical media/cache/DMA, device
+failure retirement, loader return or hardware timing.

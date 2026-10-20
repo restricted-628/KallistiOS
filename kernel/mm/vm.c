@@ -1,6 +1,9 @@
 /* KallistiOS ##version##
    Copyright (C) 2026 Joseph Black */
 #include <kos/vm.h>
+#include <kos/fs.h>
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <kos/cache.h>
 #include <kos/irq.h>
 #include <kos/mutex.h>
@@ -26,6 +29,7 @@ typedef struct vm_region {
     struct vm_region *next;
     uintptr_t base;
     size_t bytes;
+    vm_file_t *file;
     vm_page_t pages[];
 } vm_region_t;
 
@@ -45,6 +49,15 @@ struct vm_space {
     unsigned ticket_count;
     uint32_t sequence;
     uint32_t pin_count;
+};
+
+struct vm_file {
+    vm_space_t *space;
+    vm_region_t *region;
+    file_t fd;
+    void *staging;
+    vm_file_info_t info;
+    size_t loading_page;
 };
 
 struct vm_pin {
@@ -194,15 +207,10 @@ int vm_space_destroy(vm_space_t *s) {
     return 0;
 }
 
-int vm_reserve(vm_space_t *s, void *requested, size_t bytes, void **result) {
+/* Space locked; publish reservation and optional file ownership together. */
+static vm_region_t *vm_reserve_locked(vm_space_t *s, void *requested,
+                                      size_t bytes, vm_file_t *file) {
     uintptr_t base = (uintptr_t)requested;
-    if(vm_caller() < 0)
-        return -1;
-    if(!s || !result || !vm_size(bytes) ||
-       (requested && !vm_range(s, base, bytes)))
-        return vm_error(EINVAL);
-    if(mutex_lock(&s->mutex) < 0)
-        return -1;
     vm_region_t **link = &s->regions;
     if(!requested) {
         base = s->base;
@@ -211,35 +219,74 @@ int vm_reserve(vm_space_t *s, void *requested, size_t bytes, void **result) {
             link = &(*link)->next;
         }
         if(bytes > s->bytes - (base - s->base)) {
-            mutex_unlock(&s->mutex);
-            return vm_error(ENOMEM);
+            vm_error(ENOMEM);
+            return NULL;
         }
     }
     else {
         while(*link && (*link)->base + (*link)->bytes <= base)
             link = &(*link)->next;
         if(*link && (*link)->base < base + bytes) {
-            mutex_unlock(&s->mutex);
-            return vm_error(EEXIST);
+            vm_error(EEXIST);
+            return NULL;
         }
     }
     size_t count = bytes / VM_PAGE_BYTES;
     if(count > (SIZE_MAX - sizeof(vm_region_t)) / sizeof(vm_page_t)) {
-        mutex_unlock(&s->mutex);
-        return vm_error(ENOMEM);
+        vm_error(file ? EOVERFLOW : ENOMEM);
+        return NULL;
+    }
+    size_t metadata = sizeof(vm_region_t) + count * sizeof(vm_page_t);
+    if(file) {
+        /* Reserve the complete payload/table envelope before publication. */
+        size_t span = VM_PAGE_BYTES * MMU_SUB_PAGES;
+        size_t tables = (base + bytes - 1) / span - base / span + 1;
+        size_t table_bytes = tables * sizeof(mmusubcontext_t) + sizeof(mmusubcontext_t *);
+        if(metadata > SIZE_MAX - sizeof(*file) - VM_PAGE_BYTES) {
+            vm_error(EOVERFLOW);
+            return NULL;
+        }
+        size_t fixed = metadata + sizeof(*file) + VM_PAGE_BYTES;
+        if(table_bytes > SIZE_MAX - fixed ||
+           file->info.resident_limit > (SIZE_MAX - fixed - table_bytes) / VM_PAGE_BYTES) {
+            vm_error(EOVERFLOW);
+            return NULL;
+        }
+        if(fixed + table_bytes + file->info.resident_limit * VM_PAGE_BYTES >
+           file->info.budget_bytes) {
+            vm_error(EAGAIN);
+            return NULL;
+        }
+        file->info.fixed_bytes = fixed;
+        file->info.table_reserve_bytes = table_bytes;
+        file->info.charged_bytes = fixed + table_bytes;
     }
     vm_region_t *r = calloc(1, sizeof(*r) + count * sizeof(vm_page_t));
     if(!r) {
-        mutex_unlock(&s->mutex);
-        return vm_error(ENOMEM);
+        vm_error(ENOMEM);
+        return NULL;
     }
+    r->file = file;
     r->base = base;
     r->bytes = bytes;
     r->next = *link;
     *link = r;
-    *result = (void *)base;
+    return r;
+}
+
+int vm_reserve(vm_space_t *s, void *requested, size_t bytes, void **result) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!s || !result || !vm_size(bytes) ||
+       (requested && !vm_range(s, (uintptr_t)requested, bytes)))
+        return vm_error(EINVAL);
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    vm_region_t *r = vm_reserve_locked(s, requested, bytes, NULL);
+    if(r)
+        *result = (void *)r->base;
     mutex_unlock(&s->mutex);
-    return 0;
+    return r ? 0 : -1;
 }
 
 /* Common admission; returns with the space locked on success. */
@@ -258,6 +305,10 @@ static vm_region_t *vm_begin(vm_space_t *s, void *address, size_t bytes,
     if(mutex_lock(&s->mutex) < 0)
         return NULL;
     vm_region_t *r = vm_region_range(s, (uintptr_t)address, bytes);
+    if(r && r->file) {
+        vm_error(EBUSY);
+        r = NULL;
+    }
     if(r) {
         size_t first = ((uintptr_t)address - r->base) / VM_PAGE_BYTES;
         for(size_t i = 0; i < bytes / VM_PAGE_BYTES; ++i) {
@@ -367,6 +418,10 @@ int vm_release(vm_space_t *s, void *base) {
     if(!r || r->base != (uintptr_t)base) {
         mutex_unlock(&s->mutex);
         return vm_error(ENOENT);
+    }
+    if(r->file) {
+        mutex_unlock(&s->mutex);
+        return vm_error(EBUSY);
     }
     for(size_t i = 0; i < r->bytes / VM_PAGE_BYTES; ++i) {
         if(r->pages[i].ticket || r->pages[i].pins) {
@@ -773,5 +828,271 @@ int vm_pin_release(vm_pin_t *p) {
     --s->pin_count;
     mutex_unlock(&s->mutex);
     free(p);
+    return 0;
+}
+
+/* File sources are private, immutable and synchronous. No manager lock spans
+   VFS calls; an active-load claim retains ownership while this lock is dropped. */
+int vm_file_open(vm_space_t *s, const char *path,
+                 const vm_file_options_t *options, vm_file_t **result) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!s || !path || !options || !result || !options->bytes ||
+       !options->resident_limit)
+        return vm_error(EINVAL);
+    vm_file_options_t o = *options;
+    if(o.bytes > SIZE_MAX - (VM_PAGE_BYTES - 1) ||
+       o.offset > UINT64_MAX - o.bytes || o.offset + o.bytes > INT32_MAX)
+        return vm_error(EOVERFLOW);
+    size_t rounded = (o.bytes + VM_PAGE_BYTES - 1) & ~(size_t)(VM_PAGE_BYTES - 1);
+    size_t pages = rounded / VM_PAGE_BYTES;
+    if(pages > (SIZE_MAX - sizeof(vm_region_t)) / sizeof(vm_page_t))
+        return vm_error(EOVERFLOW);
+    if((o.requested && !vm_range(s, (uintptr_t)o.requested, rounded)) ||
+       o.resident_limit > pages)
+        return vm_error(EINVAL);
+    vm_file_t *f = calloc(1, sizeof(*f));
+    if(!f)
+        return vm_error(ENOMEM);
+    f->space = s;
+    f->fd = fs_open(path, O_RDONLY);
+    if(f->fd == FILEHND_INVALID) {
+        int error = errno;
+        free(f);
+        return vm_error(error);
+    }
+    struct stat st;
+    if(fs_fstat(f->fd, &st) < 0)
+        goto fail;
+    if(!S_ISREG(st.st_mode)) {
+        errno = ENOTSUP;
+        goto fail;
+    }
+    if(st.st_size < 0) {
+        errno = EINVAL;
+        goto fail;
+    }
+    if((uint64_t)st.st_size > INT32_MAX) {
+        errno = EOVERFLOW;
+        goto fail;
+    }
+    int64_t total = fs_total64(f->fd);
+    if(total < 0)
+        goto fail;
+    if(total != st.st_size) {
+        errno = EIO;
+        goto fail;
+    }
+    if(o.offset + o.bytes > (uint64_t)total) {
+        errno = EINVAL;
+        goto fail;
+    }
+    f->info = (vm_file_info_t){.offset = o.offset, .bytes = o.bytes,
+        .pages = pages, .resident_limit = o.resident_limit,
+        .budget_bytes = o.budget_bytes};
+    f->staging = aligned_alloc(VM_PAGE_BYTES, VM_PAGE_BYTES);
+    if(!f->staging) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    if(mutex_lock(&s->mutex) < 0)
+        goto fail;
+    f->region = vm_reserve_locked(s, o.requested, rounded, f);
+    if(f->region) {
+        f->info.address = (const void *)f->region->base;
+        *result = f;
+    }
+    mutex_unlock(&s->mutex);
+    if(f->region)
+        return 0;
+fail: {
+        int error = errno;
+        /* Eligible private fd + normal untimed lock: close reaches detach.
+           Backend failure consumes too. Never retry a possibly reused number. */
+        fs_close(f->fd);
+        free(f->staging);
+        free(f);
+        return vm_error(error);
+    }
+}
+
+int vm_file_query(vm_file_t *f, vm_file_info_t *result) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!f || !result)
+        return vm_error(EINVAL);
+    if(mutex_lock(&f->space->mutex) < 0)
+        return -1;
+    *result = f->info;
+    mutex_unlock(&f->space->mutex);
+    return 0;
+}
+
+static size_t vm_file_valid_bytes(vm_file_t *f, size_t page) {
+    size_t bytes = f->info.bytes - page * VM_PAGE_BYTES;
+    return bytes < VM_PAGE_BYTES ? bytes : VM_PAGE_BYTES;
+}
+
+int vm_file_page_query(vm_file_t *f, size_t page, vm_file_page_info_t *result) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!f || !result || page >= f->info.pages)
+        return vm_error(EINVAL);
+    if(mutex_lock(&f->space->mutex) < 0)
+        return -1;
+    vm_file_page_state_t state = VM_FILE_ABSENT;
+    if(f->info.loading_pages && f->loading_page == page)
+        state = VM_FILE_LOADING;
+    else if(f->region->pages[page].protection)
+        state = VM_FILE_READY;
+    *result = (vm_file_page_info_t){state, vm_file_valid_bytes(f, page)};
+    mutex_unlock(&f->space->mutex);
+    return 0;
+}
+
+int vm_file_prefetch(vm_file_t *f, size_t page) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!f || page >= f->info.pages)
+        return vm_error(EINVAL);
+    vm_space_t *s = f->space;
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    int error = 0;
+    if(f->info.cancelled)
+        error = ECANCELED;
+    else if(f->info.loading_pages)
+        error = EBUSY;
+    else if(f->region->pages[page].protection) {
+        mutex_unlock(&s->mutex);
+        return 0;
+    }
+    else if(f->info.resident_pages == f->info.resident_limit)
+        error = EAGAIN;
+    if(error) {
+        mutex_unlock(&s->mutex);
+        return vm_error(error);
+    }
+    f->loading_page = page;
+    f->info.loading_pages = 1;
+    f->info.charged_bytes += VM_PAGE_BYTES;
+    mutex_unlock(&s->mutex);
+
+    vm_page_t candidate = {0};
+    candidate.backing = aligned_alloc(VM_PAGE_BYTES, VM_PAGE_BYTES);
+    if(!candidate.backing)
+        error = ENOMEM;
+    else {
+        memset(candidate.backing, 0, VM_PAGE_BYTES);
+        off_t offset = (off_t)(f->info.offset + page * VM_PAGE_BYTES);
+        off_t position = fs_seek(f->fd, offset, SEEK_SET);
+        if(position < 0)
+            error = errno;
+        else if(position != offset)
+            error = EIO;
+        else {
+            size_t bytes = vm_file_valid_bytes(f, page);
+            ssize_t read_bytes = fs_read(f->fd, f->staging, bytes);
+            if(read_bytes < 0)
+                error = errno;
+            else if((size_t)read_bytes != bytes)
+                error = EIO;
+            else {
+                memcpy(candidate.backing, f->staging, bytes);
+                dcache_purge_range((uintptr_t)candidate.backing, VM_PAGE_BYTES);
+            }
+        }
+    }
+    /* The normal untimed mutex cannot fail under the live-owner/no-foreign-
+       error-wake contract. The active claim survives all unlocked cleanup. */
+    int locked = mutex_lock(&s->mutex);
+    assert(locked == 0);
+    (void)locked;
+    if(f->info.cancelled)
+        error = ECANCELED;
+    if(!error && vm_map_page(s, f->region->base + page * VM_PAGE_BYTES,
+                            &candidate, VM_READ) < 0)
+        error = errno;
+    if(!error) {
+        candidate.protection = VM_READ;
+        f->region->pages[page] = candidate;
+        ++f->info.resident_pages;
+    }
+    else {
+        free(candidate.backing);
+        f->info.charged_bytes -= VM_PAGE_BYTES;
+    }
+    /* No operation can still access unpublished backing once LOADING clears. */
+    f->info.loading_pages = 0;
+    mutex_unlock(&s->mutex);
+    return error ? vm_error(error) : 0;
+}
+
+int vm_file_evict(vm_file_t *f, size_t page) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!f || page >= f->info.pages)
+        return vm_error(EINVAL);
+    vm_space_t *s = f->space;
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    vm_page_t *p = &f->region->pages[page];
+    if((f->info.loading_pages && f->loading_page == page) || p->pins) {
+        mutex_unlock(&s->mutex);
+        return vm_error(EBUSY);
+    }
+    if(p->protection) {
+        vm_unmap(s, f->region->base + page * VM_PAGE_BYTES, VM_PAGE_BYTES);
+        vm_free_pages(p, 1);
+        --f->info.resident_pages;
+        f->info.charged_bytes -= VM_PAGE_BYTES;
+    }
+    mutex_unlock(&s->mutex);
+    return 0;
+}
+
+int vm_file_cancel(vm_file_t *f) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!f)
+        return vm_error(EINVAL);
+    if(mutex_lock(&f->space->mutex) < 0)
+        return -1;
+    f->info.cancelled = 1;
+    mutex_unlock(&f->space->mutex);
+    return 0;
+}
+
+int vm_file_close(vm_file_t *f, int *source_close_error) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!f || !source_close_error)
+        return vm_error(EINVAL);
+    vm_space_t *s = f->space;
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    if(f->info.loading_pages) {
+        mutex_unlock(&s->mutex);
+        return vm_error(EBUSY);
+    }
+    vm_region_t *r = f->region;
+    for(size_t i = 0; i < f->info.pages; ++i) {
+        if(r->pages[i].pins) {
+            mutex_unlock(&s->mutex);
+            return vm_error(EBUSY);
+        }
+    }
+    vm_unmap(s, r->base, r->bytes);
+    vm_free_pages(r->pages, f->info.pages);
+    vm_region_t **link = &s->regions;
+    while(*link != r)
+        link = &(*link)->next;
+    *link = r->next;
+    free(r);
+    mutex_unlock(&s->mutex);
+    int error = fs_close(f->fd) < 0 ? errno : 0;
+    free(f->staging);
+    free(f);
+    *source_close_error = error;
     return 0;
 }

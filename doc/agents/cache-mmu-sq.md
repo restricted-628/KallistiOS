@@ -63,6 +63,7 @@ Target/example directories (source the assigned checkout's environment and inspe
 - `examples/dreamcast/basic/mmu/resident-vm` — translated data and carrier/fiber probe.
 - `examples/dreamcast/basic/mmu/resident-fault` — prepared guard/zero-commit and full-state retry probe.
 - `examples/dreamcast/basic/mmu/resident-pin` — retained mappings, exact physical byte runs and caller-owned token lifetime.
+- `examples/dreamcast/basic/mmu/resident-file` — explicit read-only residency from ISO9660 /cd through direct GD-ROM, with pin/eviction/cancellation checks.
 - `examples/dreamcast/basic/sq-safety`
 
 These are entry points, not a request to run all tests or a claim of success.
