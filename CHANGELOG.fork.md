@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-21 — explicit overlay project tooling
+
+- Add a project manifest for game-selected slots and their fixed-linked members.
+  Generate P1 linker reservations, member base fragments, trusted resident
+  package metadata and per-member size/headroom reports using unchanged DCo@ v1.
+- Check final resident P1 NOBITS reservations, section overlap and explicit
+  heap/stack/RAM budgets; refuse unsupported resident address layouts.
+- Host regression tests and actual GCC16.2 SH-4 member/catalog links pass,
+  including deterministic output and invalid final-link bounds. No runtime,
+  provider, storage or default build changes. Overlay demand paging is deferred.
+
 ## 2026-10-21 — explicit translated overlay consumer
 
 - Add explicit DCo@ profile-2 packaging and `ovl_slot_create_vm`, using the

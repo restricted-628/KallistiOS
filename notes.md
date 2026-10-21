@@ -482,6 +482,33 @@ Component memory accounting is documented; full call-chain/heap high-water,
 physical cache/IIX/DMA/timing and real boot/shutdown remain unverified. OVL4 is
 not part of this acceptance.
 
+### D20 scope decision — overlay demand paging deferred
+
+**Owner decision, 2026-10-21:** Defer OVL4 demand paging for overlays. It is
+not a requirement for completing the accepted resident overlay functionality
+and is not the next automatic implementation task. Preserve fixed-P1/no-MMU
+overlays and fully resident translated overlays unchanged. Keep the paging
+proposal for later reconsideration; do not start its fault-continuation design,
+partner reviews or implementation without an explicit resumption. This deferral
+is specific to overlays, not a cancellation of other VM work. Existing hardware
+and memory high-water validation gaps remain open. No runtime change follows
+from this decision.
+
+### D20 milestone — explicit overlay project tooling
+
+**Accepted host/build slice, 2026-10-21:** Games explicitly choose named slots,
+member placement and replacement times. `utils/kos-overlay/project.py` generates
+P1 linker reservations, member base fragments and resident package catalogs from
+a versioned project manifest. It reuses DCo@ v1 unchanged. Final resident-link
+checking covers dedicated P1 NOBITS reservations, section overlap and explicit
+RAM/heap/stack bounds; VM backing and physical aliases remain runtime/application
+responsibilities. This is not generic module/ABI negotiation or scheduling.
+
+Host schema/generation/refusal tests and actual GCC16.2 SH-4 member/catalog links
+pass. No new runtime, emulator, hardware or installed-memory claim follows.
+Demand paging remains deferred; compact release packaging, debugger integration
+and asynchronous loading are not included in this slice.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

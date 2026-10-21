@@ -12,7 +12,9 @@ Build policy, exports/build aggregation, dependency pins, branch integration and
 - `utils/kos-chain`
 - `utils/Makefile.host-test`
 - `utils/kos-overlay` — SH ELF plans, DCo@ packaging and focused actual-code
-  runtime host tests.
+  runtime host tests. `project.py` generates explicit multi-member slot/linker
+  inputs and trusted catalogs; `check-resident` checks final P1 reservations.
+  Run `test_project.py` and `check_project_target.py` for changes to this tooling.
 - `addons/libkosoverlay`, `addons/include/kos/overlay.h` — optional fixed-P1 or
   explicitly translated resident overlay runtime; no default addon discovery.
   Integration owns it; Kernel/Fibers/Storage review shared lifetime interfaces.

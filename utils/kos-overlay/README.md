@@ -54,7 +54,8 @@ Layout semantics follow the [System V ELF program-header specification](https://
 
 `dco_pack.py` adds stricter build-time admission and a deterministic package for
 the P1 runtime profile and an explicit translated-VM profile. It leaves the
-layout-only planner unchanged. Packaging profile 2 is not a working VM loader.
+layout-only planner unchanged. Runtime loading is implemented separately in
+the optional `libkosoverlay` addon.
 
 ```sh
 python3 dco_pack.py pack member.elf member.dco member.json \
@@ -90,8 +91,8 @@ contiguous physical RAM; `p_paddr` still conveys no backing allocation policy.
 The intended consumer uses the separate `vm_exec` owner/writer API and keeps
 the caller-owned application context selected across all live uses. The fixed-P1
 creation path explicitly refuses profile 2 before old-image retirement. The VM
-consumer is implemented as a candidate, but its combined target execution and
-full lifetime tests are not complete yet.
+consumer is implemented and its combined emulator/lifetime tests pass; see the
+addon README for evidence and the remaining hardware validation limits.
 
 Profile selection is explicit, never inferred from a package's address. Unknown
 profiles and expected-manifest/profile mismatches are rejected. Profile 1's
@@ -161,3 +162,98 @@ package verification alone. `check_target.py` verifies real
 GCC-built P1 and translated packages with explicit profiles, rejects translated
 input under the default P1 profile and rejects existing output overwrite. These
 are target compile/link and host packaging checks, not translated execution.
+
+## Explicit game projects
+
+`project.py` coordinates multiple fixed-linked members without choosing when the
+game loads them. It reuses the existing DCo@ packer; neither package bytes nor
+runtime APIs change. No compiler driver, ABI negotiation, asynchronous loading,
+compression or demand paging is added.
+
+Create a project manifest next to the game's build inputs:
+
+```json
+{
+  "version": 1,
+  "slots": [
+    {"name": "game", "profile": "p1", "base": "0x8c100000", "bytes": 32768}
+  ],
+  "members": [
+    {"name": "menu", "slot": "game", "elf": "build/menu.elf"},
+    {"name": "play", "slot": "game", "elf": "build/play.elf"}
+  ]
+}
+```
+
+Addresses are examples, not a reservation in an existing game. Names are unique
+lowercase identifiers (up to 48 characters; `count` is reserved). Unknown fields,
+duplicate JSON keys, overlapping distinct slots and unused slots are errors.
+Members sharing the SAME named slot are intentional. ELF paths are relative to
+the manifest directory with no absolute paths or `..`; this is a trusted build
+tool, not a filesystem sandbox. Numeric fields accept integers or hex strings.
+
+1. `python3 project.py layout overlays.json build/layout`
+
+   Generates `member_menu.ld`, `member_play.ld`, and `slots.ld`. Include the
+   member's fragment before its normal member section script: it defines
+   `SLOT_BASE`, not relocations or a new entry ABI. Continue using the documented
+   restricted compilation profile and link-time section layout.
+
+   Include `slots.ld` **inside the resident linker's SECTIONS**, after ordinary
+   resident sections and before defining its heap-start symbol (normally `_end`).
+   It emits dedicated `.dco_<slot>` NOLOAD sections at the selected P1 addresses.
+   Do not also reserve a C array for those same slots. Fixed placement can create
+   a gap below the heap: choose addresses deliberately and review the final map.
+
+   An explicit `vm` slot emits no physical reservation. Its member still links
+   at the selected VMA; backing belongs to `ovl_slot_create_vm` at runtime.
+
+2. Compile/link the members, then run:
+
+   `python3 project.py package overlays.json build/packages`
+
+   Outputs `member_<name>.dco` plus each existing verification manifest,
+   `dco_project.h/.c`, and `project.json`. Compile the generated C into the
+   resident game. The catalog provides named slot/member IDs, slot options,
+   explicit profile numbers, package filenames and trusted length/digests.
+   Use the corresponding explicit P1 or VM constructor; copy slot options if
+   adding application observers. Prefix filenames with your chosen `/cd`
+   directory when loading. Retain existing token/ownership rules.
+
+   The report includes initialized bytes, BSS, occupied extent and tail headroom
+   per member. Tail headroom is not total allocator capacity or whole-system
+   memory use. Internal segment gaps remain part of the occupied extent.
+   IDs are sorted by name and can change when the project changes: recompile
+   consumers, do not persist the numbers in save files or external protocols.
+
+3. Check the **final resident ELF after linking the generated catalog**:
+
+   ```sh
+   python3 project.py check-resident overlays.json build/game.elf \
+       --ram-end 0x8d000000 --stack-bytes 65536
+   ```
+
+   Select the RAM/stack budgets for the target; they are not detected by this
+   host command. It checks exact dedicated writable NOBITS P1 reservations,
+   allocated-section overlap and heap/stack bounds. `--heap-symbol` overrides
+   `_end`. The initial checker supports resident allocated sections entirely
+   within canonical P1 RAM, not resident P0/P2 aliases, OCRAM or custom regions.
+   It intentionally refuses layouts outside that proof rather than certifying
+   them. A VM slot's backing/context/alias ownership is NOT checked here.
+
+Layout and package commands require fresh output directories and never overwrite
+old builds. All semantic validation precedes output creation; an I/O error can
+still leave a partial directory. Publish only after successful packaging AND
+final-link checking. Wire the manifest, member ELFs and generated catalog into
+the game's build dependencies; do not mix outputs from different project builds.
+Generation is byte-deterministic for the same inputs. Project reports/catalogs
+do not add host paths; the unchanged original ELF may still contain debug paths.
+
+The final-link report binds the resident ELF hash, not arbitrary raw pointers,
+installed RAM, actual stack high-water or malicious section/symbol metadata.
+Existing target admission and application lifetime requirements still apply.
+
+Validation: `python3 -B -m unittest test_project.py test_package.py test_plan.py`;
+`python3 -B check_project_target.py --tool-prefix sh-elf-` checks actual SH-4
+links and generated catalog compilation, including invalid final-link bounds.
+These are host and compile/link checks, not new emulator or hardware evidence.
