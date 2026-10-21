@@ -6,6 +6,25 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-20 — fixed-P1 overlay runtime
+
+- Add independent `DCo@` v1 packaging and restricted static-C SH4 ELF admission,
+  preserving the entire original ELF and binding trusted package length/SHA-256.
+- Add optional, explicitly built `libkosoverlay`: bounded single-pass direct
+  `/cd` loading, exact BSS, cache-before-admission ordering and separate primary/
+  close errors. Preparation failure preserves the old image; destructive-stage
+  failure leaves the slot empty rather than publishing incomplete code.
+- Retain images with stable generation tokens across fiber suspension and
+  escaped references. Reject replacement while users remain; keep source,
+  teardown and caller-context restrictions explicit. No shared Kernel, Fibers,
+  Storage or dependency change, implicit scheduler, or executable-MMU service.
+- Add an original two-member example with a real resident BSS slot, two-pass
+  linker reservation checks, and direct-disc replacement/corruption tests.
+- Eighteen host packaging tests, actual-C O0/O2 ASan/UBSan tests, 204 SHA
+  differential checks and GCC16.2 target builds pass. Core and SH4ZAM-backed
+  provider executables each pass Flycast interpreter and dynarec. Physical
+  cache/timing/boot/shutdown and peak-resource measurements remain unverified.
+
 ## 2026-10-20 — overlay build foundation
 
 - Integrate the previously prepared host-only SH ELF load-plan tool. Record

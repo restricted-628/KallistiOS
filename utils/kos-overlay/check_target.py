@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 from elf_plan import load_plan
+from dco_pack import pack, verify
 
 
 def main():
@@ -29,7 +30,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="kos-overlay-check-") as tmp:
         tmp = Path(tmp)
         obj, elf = tmp / "member.o", tmp / "member.elf"
-        run([args.tool_prefix + "gcc", "-ml", "-m4-single", "-std=gnu17", "-O2",
+        run([args.tool_prefix + "gcc", "-ml", "-m4-single", "-Wa,--isa=sh4", "-std=gnu17", "-O2",
              "-Wall", "-Wextra", "-Werror", "-ffreestanding", "-fno-common", "-fno-pic",
              "-fno-asynchronous-unwind-tables", "-fno-unwind-tables", "-c",
              source / "fixture.c", "-o", obj])
@@ -37,7 +38,7 @@ def main():
             run([args.tool_prefix + "ld", "-m", "shlelf", "--fatal-warnings",
                  f"--defsym=SLOT_BASE={base}", "-T", source / "fixture.ld",
                  "-o", elf, obj])
-            run([args.tool_prefix + "readelf", "-lW", elf])
+            run([args.tool_prefix + "readelf", "-hlSW", elf])
             symbols = run([args.tool_prefix + "nm", "-n", elf])
             addresses = {p[2]: int(p[0], 16) for line in symbols.splitlines()
                          if len(p := line.split()) == 3}
@@ -56,7 +57,30 @@ def main():
             bad = subprocess.run(command[:-1] + ["4096"], capture_output=True)
             assert bad.returncode == 1 and not bad.stdout
             assert b"outside execution slot" in bad.stderr
+            if base == 0x8c100000:
+                package, expected = pack(elf.read_bytes(), base, 8192)
+                assert verify(package, expected) == expected
+                paths = [str(tmp / "member.dco"), str(tmp / "member.json")]
+                packed = run([sys.executable, "-B", source / "dco_pack.py", "pack", elf,
+                              *paths, "--slot-base", str(base), "--slot-size", "8192"])
+                assert json.loads(packed) == expected
+                assert Path(paths[0]).read_bytes() == package
+                checked = run([sys.executable, "-B", source / "dco_pack.py", "verify", *paths])
+                assert json.loads(checked) == expected
+                duplicate = subprocess.run([sys.executable, "-B", source / "dco_pack.py",
+                    "pack", elf, *paths, "--slot-base", str(base), "--slot-size", "8192"],
+                    capture_output=True)
+                assert duplicate.returncode == 1
+                assert Path(paths[0]).read_bytes() == package
+            else:
+                try:
+                    pack(elf.read_bytes(), base, 8192)
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError("DCo@ v1 must reject translated execution")
     print("PASS: two SH links, exact BSS/symbol checks, deterministic CLI and overflow rejection.")
+    print("PASS: P1 DCo@ package/CLI verification, overwrite and translated-package refusal.")
     print("No target execution, mapping, DMA, cache or hardware validation.")
 
 

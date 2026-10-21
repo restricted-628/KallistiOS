@@ -384,7 +384,8 @@ access, provider defaults and the physical-drive scheduler remain unchanged.
 SH executable's execution slot, image identity, file ranges and exact zero tails.
 It keeps execution addresses separate from physical backing and supports plans
 for P1 and translated addresses without claiming either is reserved or executable.
-Host tests and SH-4 compile/link fixtures pass; no runtime loading is implemented.
+Host tests and SH-4 compile/link fixtures pass; this initial slice did not
+implement runtime loading.
 
 The reviewed first runtime direction uses explicitly reserved P1 RAM, synchronous
 staging and residency references covering suspended calls and escaped pointers.
@@ -392,6 +393,36 @@ Translated executable publication remains a separate Kernel contract; VM1–VM4
 are ordinary-data services, not permission to execute their mapped pages.
 The host plan is not a frozen runtime ABI, image-subset admission or a new archive
 format. Existing ELF libraries, fiber providers and storage defaults are unchanged.
+
+**Accepted fixed-P1 runtime slice, 2026-10-20:** The owner's continuation and
+the reconciled Kernel/Fibers/Storage reviews establish the independent `DCo@` v1
+package and optional `libkosoverlay`. This supersedes the initial host-only
+implementation status, not the executable-MMU boundary. Build the addon explicitly;
+no default discovery or dependency change. It is not `MWo@` binary/debugger
+compatibility and does not transplant a vendor implementation.
+
+Use trusted resident package identity, a restricted unstripped static-C SH4 ELF,
+and a caller-reserved 32-byte-aligned P1 slot of at most 1 MiB. Validate actual
+RAM/stack limits; application linker reservation and excluding physical aliases
+remain caller responsibilities. The synchronous loader consumes immutable direct
+ISO9660 `/cd` content once through 32 KiB staging, hashes every package/ELF byte,
+zeros exact BSS, closes its private descriptor, and synchronizes caches before
+notification/admission. It adds no physical-drive scheduler or DMA destination API.
+
+Stable caller tokens retain a generation across suspension and all return paths;
+escaped pointers/callbacks retain their own tokens until fully retired. Busy
+references refuse replacement. Preparation failure preserves the old image;
+failure after its unloaded notification leaves EMPTY. Destruction requires
+external joining of callers. No forced carrier/fiber teardown, foreign internal
+error wakes, source replacement, implicit cancellation or total deadline is
+supported. The source-lifetime exclusions are part of the private-close proof.
+
+Host packaging and actual-C sanitizer/failure tests, SHA differential checks,
+target builds/link-map reservation and direct-disc execution pass. Both complete
+fiber providers pass separate Flycast interpreter/dynarec runs. Physical cache,
+timing, boot/shutdown and peak-resource measurements remain unverified. This
+does not authorize translated execution, demand paging, dynamic imports,
+relocation, constructors, TLS or unwinding through overlays.
 
 ## Updating this register
 

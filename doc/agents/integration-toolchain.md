@@ -11,8 +11,15 @@ Build policy, exports/build aggregation, dependency pins, branch integration and
 - `environ_base.sh` — compatibility entry point for existing local configs
 - `utils/kos-chain`
 - `utils/Makefile.host-test`
-- `utils/kos-overlay` — host-only SH ELF overlay load plans; runtime lifecycle
-  changes require Kernel/Fibers/Storage interface review. This is not a loader.
+- `utils/kos-overlay` — SH ELF plans, DCo@ packaging and focused actual-code
+  runtime host tests.
+- `addons/libkosoverlay`, `addons/include/kos/overlay.h` — optional fixed-P1
+  overlay runtime; explicit build, no default addon discovery.
+  Integration owns it; Kernel/Fibers/Storage review shared lifetime interfaces.
+  See its README for supported scope and outstanding hardware gates.
+- `examples/dreamcast/basic/overlay` — original two-member direct-disc execution,
+  resident linker reservation and suspended-fiber token fixture. Validate each
+  complete provider separately; emulator results do not certify hardware.
 - `utils/run-host-tests.sh`
 - `.github/workflows/autobuild.yml`
 - `BRANCHES.md`

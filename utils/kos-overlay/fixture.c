@@ -2,6 +2,7 @@
 int overlay_state;
 int overlay_value = 7;
 
-int overlay_entry(void) {
+int overlay_entry(void *context) {
+    (void)context;
     return ++overlay_state + overlay_value;
 }
