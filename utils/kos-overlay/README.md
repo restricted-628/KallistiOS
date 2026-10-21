@@ -53,12 +53,15 @@ Layout semantics follow the [System V ELF program-header specification](https://
 ## DCo@ v1 packaging
 
 `dco_pack.py` adds stricter build-time admission and a deterministic package for
-the first P1 runtime profile. It leaves the layout-only planner unchanged.
+the P1 runtime profile and an explicit translated-VM profile. It leaves the
+layout-only planner unchanged. Packaging profile 2 is not a working VM loader.
 
 ```sh
 python3 dco_pack.py pack member.elf member.dco member.json \
     --slot-base 0x8c100000 --slot-size 0x2000
 python3 dco_pack.py verify member.dco member.json
+python3 dco_pack.py pack translated.elf translated.dco translated.json \
+    --profile vm --slot-base 0x101ff000 --slot-size 0x2000
 python3 -B -m unittest -v test_plan.py test_package.py
 ```
 
@@ -73,11 +76,26 @@ identity checking for trusted application code, not authentication or a sandbox.
 ### Restricted static-C profile
 
 Use unstripped ELF32 little-endian GNU SH4 ET_EXEC, ELF flags exactly 9,
-System V ABI/version 0, a fixed P1 address, and readable non-WX load segments.
+System V ABI/version 0, a fixed execution address, and readable non-WX load segments.
+Profile 1 (`--profile p1`, the default) uses a P1 address.
 Slots are 32-byte aligned in base and size, nonempty and at most 1 MiB. The
 host checks the possible P1 RAM window only; it does **not** prove installed RAM,
 reservation or absence of aliases. The target must check its actual memory limit
 and the application's linker reservation, heap, resident objects and stacks.
+
+Profile 2 (`--profile vm`) instead requires base and size aligned to 4096 bytes,
+a nonempty slot of at most 1 MiB wholly within `[0x1000, 0x7c000000)`, and one
+permission intent per covered 4 KiB page. Execution addresses need not be
+contiguous physical RAM; `p_paddr` still conveys no backing allocation policy.
+The intended consumer uses the separate `vm_exec` owner/writer API and keeps
+the caller-owned application context selected across all live uses. The fixed-P1
+creation path explicitly refuses profile 2 before old-image retirement. The VM
+consumer is implemented as a candidate, but its combined target execution and
+full lifetime tests are not complete yet.
+
+Profile selection is explicit, never inferred from a package's address. Unknown
+profiles and expected-manifest/profile mismatches are rejected. Profile 1's
+serialized bytes and its 32-byte coverage rule remain unchanged.
 
 Allowed allocated sections are `.text`, `.rodata`, `.data`, `.bss` and their
 dot-suffixed subsections with matching type/flags and PT_LOAD byte mapping.
@@ -112,7 +130,7 @@ the independent version field.
 | 16 | u32 execution base |
 | 20 | u32 slot bytes |
 | 24 | u32 entry offset relative to slot |
-| 28 | u32 ABI profile 1 |
+| 28 | u32 ABI profile: 1 = fixed P1, 2 = translated resident VM |
 | 32 | u32 original ELF offset, `64 + 32 * count` |
 | 36 | u32 original ELF length |
 | 40 | u32 total package length, at most INT32_MAX |
@@ -133,11 +151,13 @@ means the same input bytes and slot produce the same output; the packer does
 not normalize paths/debug metadata already present in the input ELF. Review
 input debug/file-symbol information before distributing it.
 
-The optional [runtime candidate](../../addons/libkosoverlay) consumes/hash-checks
+The optional [runtime](../../addons/libkosoverlay) consumes/hash-checks
 the whole package once via bounded staging, copies admitted file extents and
 initializes exact BSS tails. Its `check_runtime.py` tests compile the actual C
 with host OS/I/O shims under ASan/UBSan; they do not execute SH-4 code. Runtime
-target execution and hardware acceptance remain open. No direct-DMA or MMU
-execution claim follows from package verification. `check_target.py` verifies a real
-GCC-built P1 package, refuses translated packages and existing output overwrite,
-while retaining the independent layout-only P0 check.
+execution is checked separately by the P1 and explicit-VM examples; hardware
+acceptance remains open. No direct-DMA or MMU execution claim follows from
+package verification alone. `check_target.py` verifies real
+GCC-built P1 and translated packages with explicit profiles, rejects translated
+input under the default P1 profile and rejects existing output overwrite. These
+are target compile/link and host packaging checks, not translated execution.

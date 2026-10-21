@@ -142,6 +142,10 @@ static void busy_checks(ovl_slot_t *slot) {
     assert(!result.image_admitted && result.error == EBUSY);
 }
 
+/* Fault-injection boundary model, NOT the production VM/cache implementation.
+   Kernel's actual-code suite and the combined target fixture are separate gates. */
+#include "vm_boundary_test.inc"
+
 static void observer(ovl_slot_t *slot, bool loaded, void *context) {
     assert(!lock_depth && context == &trusted);
     if(loaded) {
@@ -265,6 +269,52 @@ static void package_tests(void) {
     puts("PASS: bounded package parsing, exact BSS/gaps and chunk scatter");
 }
 
+static void profile_tests(void) {
+    ovl_package_t plan;
+    const uint32_t base = 0x101ff000;
+    assert(!ovl_package_header_profile(image, base, 8192, image_bytes, OVL_PROFILE_VM, &plan));
+    assert(plan.profile == OVL_PROFILE_VM);
+    assert(!ovl_package_segments(image + 64, &plan));
+    /* Legacy/P1 callers cannot accidentally opt in to translated execution. */
+    assert(ovl_package_header(image, base, 8192, image_bytes, &plan) < 0);
+    assert(ovl_package_header_profile(image, base, 8192, image_bytes, 3, &plan) < 0);
+    assert(ovl_package_header_profile(image, base, 8192, image_bytes, 0, &plan) < 0);
+    write32(image + 28, OVL_PROFILE_P1);
+    assert(ovl_package_header_profile(image, base, 8192, image_bytes, OVL_PROFILE_VM, &plan) < 0);
+    write32(image + 28, OVL_PROFILE_VM);
+    const uint32_t bad_bases[] = {0, 0x1001, 0x7bfff000, 0x7c000000, 0x8c100000, 0xfffff000};
+    for(size_t i = 0; i < sizeof(bad_bases) / sizeof(*bad_bases); ++i) {
+        write32(image + 16, bad_bases[i]);
+        assert(ovl_package_header_profile(image, bad_bases[i], 8192, image_bytes,
+                                          OVL_PROFILE_VM, &plan) < 0);
+    }
+    const uint32_t good_bases[] = {0x1000, base, 0x1ffff000, 0x7bffe000};
+    for(size_t i = 0; i < sizeof(good_bases) / sizeof(*good_bases); ++i) {
+        write32(image + 16, good_bases[i]);
+        assert(!ovl_package_header_profile(image, good_bases[i], 8192, image_bytes,
+                                           OVL_PROFILE_VM, &plan));
+        assert(!ovl_package_segments(image + 64, &plan));
+    }
+    write32(image + 16, base);
+    const uint32_t bad_sizes[] = {0, 8193, 0x101000, UINT32_MAX};
+    for(size_t i = 0; i < sizeof(bad_sizes) / sizeof(*bad_sizes); ++i) {
+        write32(image + 20, bad_sizes[i]);
+        assert(ovl_package_header_profile(image, base, bad_sizes[i], image_bytes,
+                                          OVL_PROFILE_VM, &plan) < 0);
+    }
+    write32(image + 20, 8192);
+    assert(!ovl_package_header_profile(image, base, 8192, image_bytes, OVL_PROFILE_VM, &plan));
+    /* Distinct byte ranges sharing one 4 KiB page cannot disagree on permissions. */
+    write32(image + 96, 64);
+    assert(ovl_package_segments(image + 64, &plan) < 0);
+    write32(image + 112, 5);
+    assert(!ovl_package_segments(image + 64, &plan));
+    write32(image + 112, 6);
+    write32(image + 96, 4096);
+    assert(!ovl_package_segments(image + 64, &plan));
+    puts("PASS: explicit translated profile, bounds and 4 KiB permission admission (no execution)");
+}
+
 static ovl_slot_t *interleave_slot;
 static void *other_thread(void *unused) {
     (void)unused;
@@ -334,7 +384,7 @@ static void runtime_tests(void) {
     /* Every preparation failure preserves bytes, identity and old generation. */
     uint8_t before[8192];
     memcpy(before, ram, sizeof(before));
-    for(unsigned fault = 0; fault < 13; ++fault) {
+    for(unsigned fault = 0; fault < 14; ++fault) {
         reset_io();
         if(fault == 0) allocation_error = 1;
         if(fault == 1) open_error = EACCES;
@@ -349,6 +399,7 @@ static void runtime_tests(void) {
         if(fault == 10) oversized = true;
         if(fault == 11) backend = 0;
         if(fault == 12) { fail_at = 0; close_error = ENOSPC; }
+        if(fault == 13) write32(image + 28, OVL_PROFILE_VM);
         assert(ovl_load(slot, "/cd/member.dco", &trusted, &result) < 0);
         assert(result.error && !result.image_admitted && !live_fd);
         assert(!cache_calls && !loads && !unloads);
@@ -356,6 +407,7 @@ static void runtime_tests(void) {
         if(fault == 12) assert(result.error == EIO);
         if(fault == 8) image[0] ^= 1;
         if(fault == 9) image[88] ^= 1;
+        if(fault == 13) write32(image + 28, OVL_PROFILE_P1);
         assert(!memcmp(before, ram, sizeof(before)));
         expect_active(slot, 1);
     }
@@ -448,6 +500,13 @@ static uint8_t *read_file(const char *path, size_t *bytes) {
 
 int main(int argc, char **argv) {
     assert(argc == 3 || argc == 4);
+    if(!strcmp(argv[1], "--profile")) {
+        image = read_file(argv[2], &image_bytes);
+        assert(image_bytes >= 128);
+        profile_tests();
+        free(image);
+        return 0;
+    }
     if(!strcmp(argv[1], "--sha")) {
         size_t bytes;
         uint8_t *data = read_file(argv[2], &bytes);
@@ -470,17 +529,19 @@ int main(int argc, char **argv) {
         return 0;
     }
     bool large = !strcmp(argv[1], "--large");
-    assert(argc == (large ? 4 : 3));
-    image = read_file(argv[large ? 2 : 1], &image_bytes);
+    bool vm = !strcmp(argv[1], "--vm");
+    assert(argc == (large || vm ? 4 : 3));
+    image = read_file(argv[large || vm ? 2 : 1], &image_bytes);
     trusted.package_bytes = image_bytes;
-    const char *digest = argv[large ? 3 : 2];
+    const char *digest = argv[large || vm ? 3 : 2];
     assert(strlen(digest) == 64);
     for(unsigned i = 0; i < 32; ++i) {
         unsigned value;
         assert(sscanf(digest + 2 * i, "%2x", &value) == 1);
         trusted.sha256[i] = value;
     }
-    if(large) large_tests();
+    if(vm) vm_runtime_tests();
+    else if(large) large_tests();
     else {
         package_tests();
         runtime_tests();

@@ -25,10 +25,22 @@ static int invalid(void) {
 
 int ovl_package_header(const uint8_t h[OVL_HEADER_BYTES], uint32_t base, uint32_t slot_bytes,
                        uint32_t expected_bytes, ovl_package_t *p) {
+    return ovl_package_header_profile(h, base, slot_bytes, expected_bytes, OVL_PROFILE_P1, p);
+}
+
+int ovl_package_header_profile(const uint8_t h[OVL_HEADER_BYTES], uint32_t base,
+                               uint32_t slot_bytes, uint32_t expected_bytes,
+                               uint32_t expected_profile, ovl_package_t *p) {
+    if(expected_profile != OVL_PROFILE_P1 && expected_profile != OVL_PROFILE_VM)
+        return invalid();
+    uint32_t low = expected_profile == OVL_PROFILE_P1 ? 0x8c000000u : 0x1000u;
+    uint32_t high = expected_profile == OVL_PROFILE_P1 ? 0x8e000000u : 0x7c000000u;
+    uint32_t mask = expected_profile == OVL_PROFILE_P1 ? 31u : 4095u;
     if(memcmp(h, "DCo@", 4) || little_endian(h + 4) != 0x00400001 ||
-       little_endian(h + 8) || little_endian(h + 28) != 1 ||
+       little_endian(h + 8) || little_endian(h + 28) != expected_profile ||
        little_endian(h + 44) != OVL_DESCRIPTOR_BYTES || !zero_bytes(h + 48, 16))
         return invalid();
+    p->profile = expected_profile;
     p->count = little_endian(h + 12);
     p->base = little_endian(h + 16);
     p->slot_bytes = little_endian(h + 20);
@@ -37,9 +49,9 @@ int ovl_package_header(const uint8_t h[OVL_HEADER_BYTES], uint32_t base, uint32_
     p->elf_bytes = little_endian(h + 36);
     if(!p->count || p->count > OVL_MAX_SEGMENTS ||
        p->base != base || p->slot_bytes != slot_bytes ||
-       base < 0x8c000000u || base >= 0x8e000000u || (base & 31) ||
-       !slot_bytes || (slot_bytes & 31) || slot_bytes > OVL_MAX_SLOT_BYTES ||
-       slot_bytes > 0x8e000000u - base ||
+       base < low || base >= high || (base & mask) ||
+       !slot_bytes || (slot_bytes & mask) || slot_bytes > OVL_MAX_SLOT_BYTES ||
+       slot_bytes > high - base ||
        p->entry_offset >= slot_bytes || (p->entry_offset & 1) ||
        p->elf_offset != OVL_HEADER_BYTES + p->count * OVL_DESCRIPTOR_BYTES ||
        p->elf_bytes < 52 || expected_bytes > INT32_MAX ||
@@ -53,6 +65,7 @@ int ovl_package_header(const uint8_t h[OVL_HEADER_BYTES], uint32_t base, uint32_
 int ovl_package_segments(const uint8_t *descriptors, ovl_package_t *p) {
     uint32_t previous_end = 0, previous_page_end = 0, previous_flags = 0;
     bool entry_found = false;
+    uint32_t mask = p->profile == OVL_PROFILE_VM ? 4095u : 31u;
 
     for(uint32_t i = 0; i < p->count; ++i) {
         const uint8_t *d = descriptors + i * OVL_DESCRIPTOR_BYTES;
@@ -76,12 +89,12 @@ int ovl_package_segments(const uint8_t *descriptors, ovl_package_t *p) {
              (p->base + s->memory_offset) % s->alignment !=
              s->file_offset % s->alignment)))
             return invalid();
-        /* Same 32-byte coverage rule as the host plan, not MMU protection. */
-        if(i && (s->memory_offset & ~31u) < previous_page_end &&
+        /* Match host coverage without silently merging page permissions. */
+        if(i && (s->memory_offset & ~mask) < previous_page_end &&
            s->permissions != previous_flags)
             return invalid();
         previous_end = s->memory_offset + s->memory_bytes;
-        previous_page_end = (previous_end + 31) & ~31u;
+        previous_page_end = (previous_end + mask) & ~mask;
         previous_flags = s->permissions;
         if((s->permissions & 1) && p->entry_offset >= s->memory_offset &&
            p->entry_offset - s->memory_offset < s->file_bytes &&

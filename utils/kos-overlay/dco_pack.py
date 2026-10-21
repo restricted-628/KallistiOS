@@ -19,6 +19,8 @@ SYMBOL = struct.Struct("<IIIBBH")
 MAX_SLOT = 0x100000
 MAX_SEGMENTS = 16
 INT32_MAX = 0x7fffffff
+PROFILE_P1 = 1
+PROFILE_VM = 2
 
 
 def cstring(table, offset):
@@ -31,13 +33,15 @@ def cstring(table, offset):
         raise ValueError("non-ASCII ELF name in static-C profile") from error
 
 
-def static_c_plan(image, base, size):
+def static_c_plan(image, base, size, profile=PROFILE_P1):
     """Narrow unstripped GNU SH4 ELF profile; no runtime import/relocation action."""
-    require(0x8c000000 <= base < 0x8e000000 and
-            0 < size <= MAX_SLOT and size <= 0x8e000000 - base,
-            "expected bounded P1 system-RAM candidate slot")
-    # 32 is a host coverage granule, not an MMU page-size assertion.
-    plan = load_plan(image, base, size, 32)
+    require(profile in (PROFILE_P1, PROFILE_VM), "unsupported ABI profile")
+    low, high, granule = ((0x8c000000, 0x8e000000, 32) if profile == PROFILE_P1
+                          else (0x1000, 0x7c000000, 4096))
+    require(low <= base < high and 0 < size <= MAX_SLOT and size <= high - base,
+            "expected bounded slot in selected profile's address range")
+    # Profile 1 coverage is not MMU protection. Profile 2 uses VM's 4 KiB plan.
+    plan = load_plan(image, base, size, granule)
     require(plan["elf_flags"] == 9 and plan["elf_osabi"] == 0 and
             plan["elf_abi_version"] == 0, "expected plain GNU SH4 ELF flags/ABI")
     require(len(plan["segments"]) <= MAX_SEGMENTS, "too many load segments")
@@ -152,14 +156,14 @@ def static_c_plan(image, base, size):
     return plan
 
 
-def pack(image, base, size):
-    plan = static_c_plan(image, base, size)
+def pack(image, base, size, profile=PROFILE_P1):
+    plan = static_c_plan(image, base, size, profile)
     segments = plan["segments"]
     elf_offset = HEADER.size + len(segments) * DESCRIPTOR.size
     total = elf_offset + len(image)
     require(total <= INT32_MAX, "package exceeds supported source length")
     header = HEADER.pack(b"DCo@", 1, HEADER.size, 0, len(segments), base, size,
-                         plan["entry_offset"], 1, elf_offset, len(image), total,
+                         plan["entry_offset"], profile, elf_offset, len(image), total,
                          DESCRIPTOR.size, bytes(16))
     descriptors = b"".join(DESCRIPTOR.pack(s["memory_offset"], s["file_size"],
                            s["memory_size"], s["file_offset"], s["elf_permissions"],
@@ -169,7 +173,7 @@ def pack(image, base, size):
                 "package_bytes": total, "package_sha256": hashlib.sha256(package).hexdigest(),
                 "elf_bytes": len(image), "elf_sha256": plan["image_sha256"],
                 "execution_base": base, "slot_bytes": size,
-                "entry_offset": plan["entry_offset"], "abi_profile": 1}
+                "entry_offset": plan["entry_offset"], "abi_profile": profile}
     return package, manifest
 
 
@@ -181,11 +185,12 @@ def verify(package, expected):
             "package length/digest mismatch")
     h = HEADER.unpack_from(package)
     require(h[0:4] == (b"DCo@", 1, HEADER.size, 0) and
-            1 <= h[4] <= MAX_SEGMENTS and h[8] == 1 and
+            1 <= h[4] <= MAX_SEGMENTS and h[8] in (PROFILE_P1, PROFILE_VM) and
+            h[8] == expected.get("abi_profile") and
             h[9] == HEADER.size + h[4] * DESCRIPTOR.size and
             h[10] > 0 and h[9] + h[10] == h[11] == len(package) and
             h[12] == DESCRIPTOR.size and h[13] == bytes(16), "invalid package header")
-    rebuilt, manifest = pack(package[h[9]:], h[5], h[6])
+    rebuilt, manifest = pack(package[h[9]:], h[5], h[6], h[8])
     require(rebuilt == package, "package metadata disagrees with admitted ELF")
     require(manifest == expected, "expected manifest disagrees with package")
     return manifest
@@ -200,13 +205,16 @@ def main():
     make.add_argument("manifest", type=Path)
     make.add_argument("--slot-base", type=integer, required=True)
     make.add_argument("--slot-size", type=integer, required=True)
+    make.add_argument("--profile", choices=("p1", "vm"), default="p1",
+                      help="explicit execution profile; vm requires 4 KiB layout")
     check = commands.add_parser("verify")
     check.add_argument("package", type=Path)
     check.add_argument("manifest", type=Path)
     args = parser.parse_args()
     try:
         if args.command == "pack":
-            package, manifest = pack(args.image.read_bytes(), args.slot_base, args.slot_size)
+            package, manifest = pack(args.image.read_bytes(), args.slot_base, args.slot_size,
+                                     PROFILE_P1 if args.profile == "p1" else PROFILE_VM)
             verify(package, manifest)
             require(args.package.resolve() != args.manifest.resolve(), "outputs must differ")
             require(not args.package.exists() and not args.manifest.exists(),

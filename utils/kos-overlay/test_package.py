@@ -3,20 +3,20 @@ import hashlib
 import struct
 import unittest
 
-from dco_pack import HEADER, DESCRIPTOR, SECTION, SYMBOL, pack, verify
+from dco_pack import HEADER, DESCRIPTOR, SECTION, SYMBOL, PROFILE_VM, pack, verify
 from elf_plan import ELF_HEADER
 from test_plan import BASE, image
 
 
-def member():
-    data = bytearray(image([(1, 0x100, BASE, 0, 4, 4, 5, 4),
-                            (1, 0x104, BASE + 4096, 0, 4, 8, 6, 4)]))
+def member(base=BASE, data_offset=4096):
+    data = bytearray(image([(1, 0x100, base, 0, 4, 4, 5, 4),
+                            (1, 0x104, base + data_offset, 0, 4, 8, 6, 4)], entry=base))
     names = b"\0.text\0.data\0.bss\0.shstrtab\0.strtab\0.symtab\0"
     strings = b"\0member.c\0_overlay_entry\0_state\0SLOT_BASE\0"
     syms = bytes(16) + SYMBOL.pack(1, 0, 0, 4, 0, 0xfff1)
-    syms += SYMBOL.pack(strings.index(b"_overlay_entry"), BASE, 4, 0x12, 0, 1)
-    syms += SYMBOL.pack(strings.index(b"_state"), BASE + 4100, 4, 0x11, 0, 3)
-    syms += SYMBOL.pack(strings.index(b"SLOT_BASE"), BASE, 0, 0x10, 0, 0xfff1)
+    syms += SYMBOL.pack(strings.index(b"_overlay_entry"), base, 4, 0x12, 0, 1)
+    syms += SYMBOL.pack(strings.index(b"_state"), base + data_offset + 4, 4, 0x11, 0, 3)
+    syms += SYMBOL.pack(strings.index(b"SLOT_BASE"), base, 0, 0x10, 0, 0xfff1)
     nameoff = len(data)
     data.extend(names)
     stroff = len(data)
@@ -26,9 +26,9 @@ def member():
     data.extend(syms)
     shoff = len(data)
     sections = [(0,) * 10,
-                (names.index(b".text"), 1, 6, BASE, 0x100, 4, 0, 0, 4, 0),
-                (names.index(b".data"), 1, 3, BASE + 4096, 0x104, 4, 0, 0, 4, 0),
-                (names.index(b".bss"), 8, 3, BASE + 4100, 0x108, 4, 0, 0, 4, 0),
+                (names.index(b".text"), 1, 6, base, 0x100, 4, 0, 0, 4, 0),
+                (names.index(b".data"), 1, 3, base + data_offset, 0x104, 4, 0, 0, 4, 0),
+                (names.index(b".bss"), 8, 3, base + data_offset + 4, 0x108, 4, 0, 0, 4, 0),
                 (names.index(b".shstrtab"), 3, 0, 0, nameoff, len(names), 0, 0, 1, 0),
                 (names.index(b".strtab"), 3, 0, 0, stroff, len(strings), 0, 0, 1, 0),
                 (names.index(b".symtab"), 2, 0, 0, symoff, len(syms), 5, 2, 4, 16)]
@@ -60,6 +60,48 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(verify(package, manifest), manifest)
         self.assertEqual(pack(elf, BASE, 8192), (package, manifest))
         self.assertEqual(DESCRIPTOR.unpack_from(package, 96)[:4], (4096, 4, 8, 0x104))
+        # Frozen before profile 2: framing, descriptors, ELF and manifest stay compatible.
+        self.assertEqual(manifest["package_sha256"],
+                         "801aa8c328777e6a26ea65b98d2947dab1262297c270cbf5f7f98039cd20fba9")
+
+    def test_explicit_translated_profile(self):
+        base = 0x101ff000  # Cross a second-level table boundary.
+        elf = member(base)
+        package, manifest = pack(elf, base, 8192, PROFILE_VM)
+        self.assertEqual(manifest["abi_profile"], 2)
+        self.assertEqual(HEADER.unpack_from(package)[8], 2)
+        self.assertEqual(package[128:], elf)
+        self.assertEqual(verify(package, manifest), manifest)
+        self.assertEqual(pack(elf, base, 8192, PROFILE_VM), (package, manifest))
+        with self.assertRaises(ValueError):
+            pack(elf, base, 8192)  # No automatic backend selection by address.
+        with self.assertRaises(ValueError):
+            pack(member(), BASE, 8192, PROFILE_VM)
+        with self.assertRaises(ValueError):
+            verify(package, dict(manifest, abi_profile=1))
+        for profile in (0, 3, 0xffffffff):
+            bad = bytearray(package)
+            struct.pack_into("<I", bad, 28, profile)
+            trusted = dict(manifest, abi_profile=profile,
+                           package_sha256=hashlib.sha256(bad).hexdigest())
+            with self.subTest(profile=profile), self.assertRaises(ValueError):
+                verify(bad, trusted)
+
+    def test_translated_bounds_and_granularity(self):
+        for base, size in ((0, 8192), (0x1001, 8192), (0x1000, 8193),
+                           (0x1000, 0), (0x1000, 0x101000),
+                           (0x7bfff000, 8192), (0x7c000000, 8192),
+                           (0xfffff000, 8192)):
+            with self.subTest(base=base, size=size), self.assertRaises(ValueError):
+                pack(member(), base, size, PROFILE_VM)
+        for base in (0x1000, 0x7bffe000, 0x1ffff000):
+            package, manifest = pack(member(base), base, 8192, PROFILE_VM)
+            self.assertEqual(verify(package, manifest), manifest)
+        # Different permissions may occupy separate 32-byte P1 granules, but
+        # not the same translated 4 KiB page.
+        pack(member(data_offset=64), BASE, 8192)
+        with self.assertRaisesRegex(ValueError, "permissions share a page"):
+            pack(member(0x1000, 64), 0x1000, 8192, PROFILE_VM)
 
     def test_payload_and_nonloadable_identity(self):
         package, manifest = pack(member(), BASE, 8192)

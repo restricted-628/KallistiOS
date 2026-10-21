@@ -6,6 +6,22 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-21 — explicit translated overlay consumer
+
+- Add explicit DCo@ profile-2 packaging and `ovl_slot_create_vm`, using the
+  existing resident executable VM owner. Fixed-P1 packaging and execution stay
+  supported without requiring the MMU; no demand paging or implicit selection.
+- Copy and zero through the bounded VM writer, verify/close before publication,
+  and retain failed cleanup for retry. Preserve generation tokens, short locks,
+  notification ordering and application-owned context lifetime across carriers.
+- Add original direct-disc translated A/B/A fixtures, page/staging crossings,
+  independent-thread preemption, retained yielding callbacks, safe admission
+  negatives and actual-VM fault-injected cleanup retries. Document memory costs.
+- Twenty packaging tests, O0/O2 host ASan/UBSan and 204 SHA comparisons pass.
+  GCC16.2 builds and both exclusive fiber providers pass Flycast interpreter
+  and dynarec. Hardware cache/IIX/timing, real boot/shutdown and whole-system
+  memory high-water remain unverified; no Kernel/provider/driver edits.
+
 ## 2026-10-21 — resident executable VM foundation
 
 - Add opt-in `kos/vm_exec.h` ownership for fully resident translated code,

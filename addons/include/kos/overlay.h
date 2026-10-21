@@ -8,11 +8,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <kos/vm.h>
 
 __BEGIN_DECLS
 
-/** Optional, fixed-linked P1 overlays; link -lkosoverlay. No executable VM,
- * relocation, implicit fiber adapter or new physical-drive scheduler.
+/** Optional, fixed-linked resident overlays; link -lkosoverlay. Explicit P1 or
+ * executable-VM ownership; no relocation, implicit fiber adapter or scheduler.
  * All calls require a normal thread with interrupts enabled, outside blocking-
  * prohibited contexts. Objects, stacks, callbacks and arguments must be resident
  * and physically disjoint from the slot (including any translated aliases).
@@ -69,12 +70,29 @@ typedef struct ovl_view {
  */
 int ovl_slot_create(const ovl_slot_options_t *options, ovl_slot_t **out);
 
+/** Explicit translated profile. Reserve a fixed executable region in space;
+ * options base/bytes must satisfy vm_exec's 4 KiB layout and 1 MiB limit.
+ * The slot owns this reservation; space/context/ASID outlive slot destruction.
+ * All controls, arguments and callbacks remain resident/directly mapped and
+ * physically disjoint from managed backing; alias exclusion is caller-owned.
+ * Keep the application's coherent MMU context selected across ALL live uses,
+ * suspended returns and escaped callbacks, including those on other carriers.
+ * Observers must not change that selection. Admission checks do not enforce
+ * this interval or switch contexts. No demand paging or per-fiber ASIDs.
+ * Existing P1 options/calls are unchanged. Failure preserves *out.
+ */
+int ovl_slot_create_vm(vm_space_t *space, const ovl_slot_options_t *options,
+                        ovl_slot_t **out);
+
 /** Synchronous private read of immutable regular ISO9660 /cd content on the
  * direct backend. Keep mount/media/backend and all input objects stable through
  * return. No global VFS teardown or external descriptor operations. Expected
  * length/digest comes from trusted resident metadata, not the package itself.
  * Before old-image retirement, failure preserves it; after retirement, any
- * failure leaves EMPTY. Close runs once; its error is reported independently.
+ * failure closes execution admission. VM cleanup may retain backing/handles:
+ * call ovl_unload() to retry retirement before replacement or destruction.
+ * The original load error takes precedence over cleanup errors; unload reports
+ * its own retirement error. Close runs once; its error is reported independently.
  * Blocks the carrier; no cancellation or total deadline. Result is required.
  */
 int ovl_load(ovl_slot_t *slot, const char *path, const ovl_expected_t *expected,
@@ -89,12 +107,15 @@ int ovl_load(ovl_slot_t *slot, const char *path, const ovl_expected_t *expected,
 int ovl_acquire(ovl_slot_t *slot, ovl_token_t *token, ovl_view_t *view);
 int ovl_release(ovl_slot_t *slot, ovl_token_t *token);
 
-/** EBUSY while any token/operation remains. EMPTY is a successful no-op.
- * Does not erase bytes or reset the monotonically increasing generation. */
+/** EBUSY while any token/operation remains. Retry VM failure-held retirement;
+ * failure retains ownership and refuses loading/destruction until retry succeeds.
+ * No repeated unloaded notification on retry. A retired EMPTY slot is a no-op.
+ * Does not reset the monotonically increasing generation. */
 int ovl_unload(ovl_slot_t *slot);
 
 /** EMPTY/no tokens/no operation only. Externally join ALL API callers/waiters
- * before destroy. Frees metadata, not caller RAM. This is not a join primitive. */
+ * before destroy. Releases the VM reservation, or metadata only for P1 caller
+ * RAM. Retirement must succeed first. This is not a join primitive. */
 int ovl_slot_destroy(ovl_slot_t *slot);
 
 __END_DECLS

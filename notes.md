@@ -452,6 +452,36 @@ Flycast A/B/A fixtures pass. Full consumer token/notification, independent-carri
 preemption and retained-callback tests remain required. Physical cache-color,
 IIX, instruction reuse and timing validation remain separate unrun gates.
 
+### D20 milestone — explicit translated overlay consumer
+
+**Accepted software slice, 2026-10-21:** `ovl_slot_create_vm` binds the optional
+addon to the existing executable VM owner. Independent DCo@ v1 profile 2 uses
+4 KiB pages in the accepted translated arena; profile 1 and the P1 constructor
+remain unchanged and do not require enabling the MMU. There is no automatic
+backend choice, demand-paged execution, relocation or provider/scheduler change.
+
+Prepare the copied page plan before old-image notification; write/zero through
+the synchronous Kernel interface, verify the complete package, close the private
+source once and publish before admission. Acquisition checks the selected
+context before exposing a view. Applications still own the stable context
+interval across all live carriers, suspended returns and escaped callbacks;
+no per-resume check or ASID lease is introduced.
+
+After destructive replacement begins, failed abort/retire retains ownership and
+refuses loading/destruction. Unload retries cleanup without repeating notification.
+PREPARED abort preserving the old image does not reopen consumer admission:
+explicit retirement must still succeed. Primary load and source-close errors
+remain distinct. Final teardown requires joined users and released tokens.
+
+Kernel, Fibers and Storage accepted the source interfaces. Packaging and actual-C
+sanitizer tests, GCC16.2 links and four combined direct-disc emulator runs pass:
+both exclusive providers in interpreter/dynarec, including actual-VM fault-injected
+cleanup. The original fixture checks five instruction pages, staging crossings,
+physical replacement/reuse, carrier preemption and retained callback suspension.
+Component memory accounting is documented; full call-chain/heap high-water,
+physical cache/IIX/DMA/timing and real boot/shutdown remain unverified. OVL4 is
+not part of this acceptance.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

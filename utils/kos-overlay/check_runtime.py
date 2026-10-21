@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 
-from dco_pack import pack
+from dco_pack import PROFILE_VM, pack
 from test_package import member, section_change
 from elf_plan import ELF_HEADER, PROGRAM_HEADER
 from test_plan import BASE
@@ -60,6 +60,8 @@ def main():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('#include "test_os.h"\n')
         (temp / "kos/cdefs.h").write_text("#include <sys/cdefs.h>\n")
+        (temp / "kos/vm.h").write_text('#include "test_os.h"\ntypedef struct vm_space vm_space_t;\n')
+        (temp / "kos/vm_exec.h").symlink_to(root / "include/kos/vm_exec.h")
         (temp / "kos/overlay.h").symlink_to(root / "addons/include/kos/overlay.h")
         source = (addon / "overlay.c").read_text()
         instruction = '__asm__ volatile("stc sr, %0" : "=r"(sr));'
@@ -68,6 +70,9 @@ def main():
         package, manifest = pack(member(), BASE, 8192)
         fixture = temp / "fixture.dco"
         fixture.write_bytes(package)
+        vm_package, vm_manifest = pack(member(0x101ff000), 0x101ff000, 8192, PROFILE_VM)
+        vm_fixture = temp / "translated.dco"
+        vm_fixture.write_bytes(vm_package)
         # A host-admitted ELF with text spanning a 32 KiB stream boundary and
         # data occurring earlier in the file: no assumption of source ordering.
         large = bytearray(member())
@@ -96,6 +101,9 @@ def main():
             print("$", " ".join(command), flush=True)
             subprocess.run(command, check=True)
             subprocess.run([str(executable), str(fixture), manifest["package_sha256"]], check=True)
+            subprocess.run([str(executable), "--profile", str(vm_fixture)], check=True)
+            subprocess.run([str(executable), "--vm", str(vm_fixture),
+                            vm_manifest["package_sha256"]], check=True)
             subprocess.run([str(executable), "--large", str(large_fixture),
                             large_manifest["package_sha256"]], check=True)
             # Independent hashlib differential, padding/block/chunk boundaries,

@@ -2,6 +2,7 @@
    Copyright (C) 2026 Joseph Black
 */
 #include <kos/overlay.h>
+#include <kos/vm_exec.h>
 #include <kos/cache.h>
 #include <kos/fs.h>
 #include <kos/irq.h>
@@ -27,6 +28,9 @@ struct ovl_slot {
     uint64_t generation;
     uint32_t entry_offset;
     bool active, operation;
+    bool translated, cleanup_pending;
+    vm_exec_region_t *region;
+    vm_exec_load_t *load;
 };
 
 static int error(int code) {
@@ -43,6 +47,8 @@ static int eligible(void) {
 /* Direct P1/P2 aliases only. Excluding translated aliases, overlapping slots
    and unreserved heap/stack storage remains an explicit caller obligation. */
 static bool aliases(const ovl_slot_options_t *o, const void *pointer, size_t n) {
+    /* A translated execution address says nothing about physical backing. */
+    if((uintptr_t)o->base < 0x80000000u) return false;
     uintptr_t address = (uintptr_t)pointer;
     if(!n) return false;
     if(n - 1 > UINTPTR_MAX - address) return true;
@@ -104,6 +110,8 @@ int ovl_acquire(ovl_slot_t *slot, ovl_token_t *token, ovl_view_t *view) {
         code = EBUSY;
     else if(!slot->active)
         code = ENOENT;
+    else if(slot->translated && vm_exec_check_context(slot->region) < 0)
+        code = errno;
     else {
         *token = (ovl_token_t){ slot, slot->tokens, slot->generation };
         slot->tokens = token;
@@ -140,7 +148,7 @@ int ovl_release(ovl_slot_t *slot, ovl_token_t *token) {
 static int claim(ovl_slot_t *slot, bool load) {
     if(mutex_lock(&slot->mutex) < 0) return -1;
     int code = 0;
-    if(slot->operation || slot->tokens) code = EBUSY;
+    if(slot->operation || slot->tokens || (load && slot->cleanup_pending)) code = EBUSY;
     else if(load && slot->generation == UINT64_MAX) code = EOVERFLOW;
     else slot->operation = true;
     mutex_unlock(&slot->mutex);
@@ -152,25 +160,58 @@ static void notify(ovl_slot_t *slot, bool loaded) {
         slot->options.observer(slot, loaded, slot->options.context);
 }
 
+int ovl_slot_create_vm(vm_space_t *space, const ovl_slot_options_t *options,
+                        ovl_slot_t **out) {
+    if(eligible() < 0) return -1;
+    if(!space || !options || !out) return error(EINVAL);
+    ovl_slot_t *slot = calloc(1, sizeof(*slot));
+    if(!slot) return error(ENOMEM);
+    slot->options = *options;
+    slot->translated = true;
+    if(mutex_init(&slot->mutex, MUTEX_TYPE_NORMAL) < 0) {
+        int saved = errno;
+        free(slot);
+        return error(saved);
+    }
+    if(vm_exec_reserve(space, options->base, options->bytes, &slot->region) < 0) {
+        int saved = errno;
+        mutex_destroy(&slot->mutex);
+        free(slot);
+        return error(saved);
+    }
+    *out = slot;
+    return 0;
+}
+
+/* Operation remains owned across all fallible cleanup. Abort can preserve a
+   PREPARED old image, so retire explicitly even after a successful abort. */
+static int retire_vm(ovl_slot_t *slot) {
+    if(slot->load && vm_exec_abort(&slot->load) < 0) return -1;
+    return vm_exec_retire(slot->region);
+}
+
 int ovl_unload(ovl_slot_t *slot) {
     if(eligible() < 0) return -1;
     if(!slot) return error(EINVAL);
     if(claim(slot, false) < 0) return -1;
     if(slot->active) notify(slot, false);
+    int code = slot->translated && retire_vm(slot) < 0 ? errno : 0;
     finish_lock(slot);
     slot->active = false;
+    slot->cleanup_pending = code != 0;
     slot->operation = false;
     mutex_unlock(&slot->mutex);
-    return 0;
+    return code ? error(code) : 0;
 }
 
 int ovl_slot_destroy(ovl_slot_t *slot) {
     if(eligible() < 0) return -1;
     if(!slot) return error(EINVAL);
     if(mutex_lock(&slot->mutex) < 0) return -1;
-    bool busy = slot->operation || slot->active || slot->tokens;
+    bool busy = slot->operation || slot->active || slot->tokens || slot->cleanup_pending;
     mutex_unlock(&slot->mutex);
     if(busy) return error(EBUSY);
+    if(slot->region && vm_exec_destroy(&slot->region) < 0) return -1;
     if(mutex_destroy(&slot->mutex) < 0) return -1;
     free(slot);
     return 0;
@@ -198,6 +239,22 @@ static bool source_path(const char *path) {
         if(!end) return true;
         part = end + 1;
     }
+}
+
+static int scatter_vm(ovl_slot_t *slot, const ovl_package_t *package,
+                       uint32_t offset, const uint8_t *data, size_t bytes) {
+    uint32_t end = offset + (uint32_t)bytes;
+    for(uint32_t i = 0; i < package->count; ++i) {
+        const ovl_segment_t *s = &package->segments[i];
+        uint32_t first = offset > s->file_offset ? offset : s->file_offset;
+        uint32_t last = s->file_offset + s->file_bytes;
+        if(last > end) last = end;
+        if(first < last && vm_exec_write(slot->load,
+                s->memory_offset + first - s->file_offset,
+                data + first - offset, last - first) < 0)
+            return -1;
+    }
+    return 0;
 }
 
 int ovl_load(ovl_slot_t *slot, const char *path, const ovl_expected_t *expected,
@@ -253,8 +310,9 @@ int ovl_load(ovl_slot_t *slot, const char *path, const ovl_expected_t *expected,
         goto cleanup;
     }
     if(read_exact(fd, prefix, OVL_HEADER_BYTES) < 0 ||
-       ovl_package_header(prefix, (uint32_t)(uintptr_t)slot->options.base,
-                          slot->options.bytes, wanted.package_bytes, &package) < 0 ||
+       ovl_package_header_profile(prefix, (uint32_t)(uintptr_t)slot->options.base,
+                          slot->options.bytes, wanted.package_bytes,
+                          slot->translated ? OVL_PROFILE_VM : OVL_PROFILE_P1, &package) < 0 ||
        read_exact(fd, prefix + OVL_HEADER_BYTES,
                   package.count * OVL_DESCRIPTOR_BYTES) < 0 ||
        ovl_package_segments(prefix + OVL_HEADER_BYTES, &package) < 0) {
@@ -262,10 +320,26 @@ int ovl_load(ovl_slot_t *slot, const char *path, const ovl_expected_t *expected,
         goto cleanup;
     }
 
+    if(slot->translated) {
+        uint8_t pages[OVL_MAX_SLOT_BYTES / 4096] = {0};
+        for(uint32_t i = 0; i < package.count; ++i) {
+            const ovl_segment_t *s = &package.segments[i];
+            uint32_t first = s->memory_offset / 4096;
+            uint32_t end = (s->memory_offset + s->memory_bytes + 4095) / 4096;
+            memset(pages + first, s->permissions, end - first);
+        }
+        if(vm_exec_prepare(slot->region, pages, slot->options.bytes / 4096,
+                            &slot->load) < 0) { code = errno; goto cleanup; }
+    }
+
     /* No future failure may re-admit the retired generation, even if no bytes
        have been overwritten yet. Notifications still see operation owned. */
     destructive = true;
     if(slot->active) notify(slot, false);
+    if(slot->translated && vm_exec_begin(slot->load) < 0) {
+        code = errno;
+        goto cleanup;
+    }
     ovl_sha256_init(&hash);
     ovl_sha256_update(&hash, prefix, package.elf_offset);
     for(uint32_t offset = 0; offset < package.elf_bytes;) {
@@ -273,7 +347,13 @@ int ovl_load(ovl_slot_t *slot, const char *path, const ovl_expected_t *expected,
         if(bytes > OVL_STAGING_BYTES) bytes = OVL_STAGING_BYTES;
         if(read_exact(fd, staging, bytes) < 0) { code = errno; goto cleanup; }
         ovl_sha256_update(&hash, staging, bytes);
-        ovl_package_scatter(&package, slot->options.base, offset, staging, bytes);
+        if(slot->translated) {
+            if(scatter_vm(slot, &package, offset, staging, bytes) < 0) {
+                code = errno;
+                goto cleanup;
+            }
+        }
+        else ovl_package_scatter(&package, slot->options.base, offset, staging, bytes);
         offset += bytes;
     }
     ovl_sha256_final(&hash, digest);
@@ -281,7 +361,17 @@ int ovl_load(ovl_slot_t *slot, const char *path, const ovl_expected_t *expected,
         code = ENOEXEC;
         goto cleanup;
     }
-    ovl_package_zero(&package, slot->options.base);
+    if(slot->translated) {
+        for(uint32_t i = 0; i < package.count; ++i) {
+            const ovl_segment_t *s = &package.segments[i];
+            if(s->memory_bytes > s->file_bytes && vm_exec_zero(slot->load,
+                    s->memory_offset + s->file_bytes, s->memory_bytes - s->file_bytes) < 0) {
+                code = errno;
+                goto cleanup;
+            }
+        }
+    }
+    else ovl_package_zero(&package, slot->options.base);
 
 cleanup:
     if(fd != FILEHND_INVALID && fs_close(fd) < 0) {
@@ -289,8 +379,14 @@ cleanup:
         if(!code) code = result->source_close_error;
     }
     free(staging);
+    bool cleanup_pending = false;
+    if(slot->translated) {
+        if(!code && vm_exec_publish(&slot->load) < 0) code = errno;
+        if(code && destructive && retire_vm(slot) < 0) cleanup_pending = true;
+    }
     if(!code) {
-        icache_sync_range((uintptr_t)slot->options.base, slot->options.bytes);
+        if(!slot->translated)
+            icache_sync_range((uintptr_t)slot->options.base, slot->options.bytes);
         notify(slot, true);
     }
     finish_lock(slot);
@@ -303,6 +399,7 @@ cleanup:
     }
     else if(destructive)
         slot->active = false;
+    slot->cleanup_pending = cleanup_pending;
     slot->operation = false;
     mutex_unlock(&slot->mutex);
     result->error = code;

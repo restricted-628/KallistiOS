@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 from elf_plan import load_plan
-from dco_pack import pack, verify
+from dco_pack import PROFILE_P1, PROFILE_VM, pack, verify
 
 
 def main():
@@ -57,30 +57,31 @@ def main():
             bad = subprocess.run(command[:-1] + ["4096"], capture_output=True)
             assert bad.returncode == 1 and not bad.stdout
             assert b"outside execution slot" in bad.stderr
-            if base == 0x8c100000:
-                package, expected = pack(elf.read_bytes(), base, 8192)
-                assert verify(package, expected) == expected
-                paths = [str(tmp / "member.dco"), str(tmp / "member.json")]
-                packed = run([sys.executable, "-B", source / "dco_pack.py", "pack", elf,
-                              *paths, "--slot-base", str(base), "--slot-size", "8192"])
-                assert json.loads(packed) == expected
-                assert Path(paths[0]).read_bytes() == package
-                checked = run([sys.executable, "-B", source / "dco_pack.py", "verify", *paths])
-                assert json.loads(checked) == expected
-                duplicate = subprocess.run([sys.executable, "-B", source / "dco_pack.py",
-                    "pack", elf, *paths, "--slot-base", str(base), "--slot-size", "8192"],
-                    capture_output=True)
-                assert duplicate.returncode == 1
-                assert Path(paths[0]).read_bytes() == package
-            else:
+            profile = PROFILE_P1 if base == 0x8c100000 else PROFILE_VM
+            choice = "p1" if profile == PROFILE_P1 else "vm"
+            package, expected = pack(elf.read_bytes(), base, 8192, profile)
+            assert verify(package, expected) == expected
+            paths = [str(tmp / (choice + suffix)) for suffix in (".dco", ".json")]
+            pack_command = [sys.executable, "-B", str(source / "dco_pack.py"), "pack",
+                            str(elf), *paths, "--slot-base", str(base), "--slot-size",
+                            "8192", "--profile", choice]
+            packed = run(pack_command)
+            assert json.loads(packed) == expected
+            assert Path(paths[0]).read_bytes() == package
+            checked = run([sys.executable, "-B", source / "dco_pack.py", "verify", *paths])
+            assert json.loads(checked) == expected
+            duplicate = subprocess.run(pack_command, capture_output=True)
+            assert duplicate.returncode == 1
+            assert Path(paths[0]).read_bytes() == package
+            if profile == PROFILE_VM:
                 try:
                     pack(elf.read_bytes(), base, 8192)
                 except ValueError:
                     pass
                 else:
-                    raise AssertionError("DCo@ v1 must reject translated execution")
+                    raise AssertionError("default P1 profile must reject translated execution")
     print("PASS: two SH links, exact BSS/symbol checks, deterministic CLI and overflow rejection.")
-    print("PASS: P1 DCo@ package/CLI verification, overwrite and translated-package refusal.")
+    print("PASS: explicit P1/VM DCo@ packages, CLI verification, overwrite and profile refusal.")
     print("No target execution, mapping, DMA, cache or hardware validation.")
 
 

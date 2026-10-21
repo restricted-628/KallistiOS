@@ -13,13 +13,16 @@ Build policy, exports/build aggregation, dependency pins, branch integration and
 - `utils/Makefile.host-test`
 - `utils/kos-overlay` — SH ELF plans, DCo@ packaging and focused actual-code
   runtime host tests.
-- `addons/libkosoverlay`, `addons/include/kos/overlay.h` — optional fixed-P1
-  overlay runtime; explicit build, no default addon discovery.
+- `addons/libkosoverlay`, `addons/include/kos/overlay.h` — optional fixed-P1 or
+  explicitly translated resident overlay runtime; no default addon discovery.
   Integration owns it; Kernel/Fibers/Storage review shared lifetime interfaces.
   See its README for supported scope and outstanding hardware gates.
 - `examples/dreamcast/basic/overlay` — original two-member direct-disc execution,
   resident linker reservation and suspended-fiber token fixture. Validate each
   complete provider separately; emulator results do not certify hardware.
+- `examples/dreamcast/basic/overlay-vm` — explicit profile-2 consumer composition,
+  carrier/callback lifetime, context admission and failure-held cleanup fixture.
+  P1 remains independent of VM; no demand-paged execution is implied.
 - `utils/run-host-tests.sh`
 - `.github/workflows/autobuild.yml`
 - `BRANCHES.md`
