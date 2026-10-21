@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-21 — project-driven P1 overlay example
+
+- Convert the original direct-disc example to an explicit slot/member manifest,
+  generated linker reservation and trusted package catalog. Remove the bespoke
+  two-pass resident link and duplicate identity/ELF checking logic.
+- Check the final reservation with the shared project tool; preserve the normal
+  heap boundary and document the fixed layout's unused-gap cost. No runtime,
+  shared linker, provider, package-format or MMU-default change.
+- All 27 host tool tests and both GCC16.2 provider builds pass. Core and SH4ZAM
+  fiber variants each pass Flycast interpreter/dynarec with unchanged A/B/A,
+  suspended-return, escaped-reference and corruption results. Hardware remains
+  unverified; overlay demand paging remains deferred.
+
 ## 2026-10-21 — explicit overlay project tooling
 
 - Add a project manifest for game-selected slots and their fixed-linked members.

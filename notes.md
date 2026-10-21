@@ -509,6 +509,21 @@ pass. No new runtime, emulator, hardware or installed-memory claim follows.
 Demand paging remains deferred; compact release packaging, debugger integration
 and asynchronous loading are not included in this slice.
 
+### D20 milestone — project-driven P1 example
+
+**Accepted consumer slice, 2026-10-21:** The original direct-disc overlay example
+now consumes the project tool's layout and trusted catalog instead of a bespoke
+two-link identity pipeline. Its explicit 8 KiB P1 slot at `0x8c100000` is reserved
+by a dedicated NOBITS section before the normal heap boundary, using a private
+linker-script copy. The fixed layout reserves any intervening gap as well; game
+authors must choose placement deliberately. The shared linker script is unchanged.
+
+Host tests, both exclusive GCC16.2 fiber-provider links and all four Flycast
+provider/mode runs pass with the original guest test results. Runtime, DCo@
+format and provider behavior remain unchanged. No MMU dependency is introduced;
+hardware cache/timing/boot and memory high-water validation remain open. OVL4
+remains deferred.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

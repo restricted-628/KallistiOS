@@ -20,14 +20,24 @@ The optional overlay addon is built explicitly; default addon discovery remains
 unchanged. Select either the integrated core fiber provider or the complete
 SH4ZAM-backed provider at link time, never both and never a runtime toggle.
 
-`build.py` performs two resident links. The first finds the real `overlay_slot`
-object in resident `.bss`; both member ELFs are fixed-linked at that address.
-The second binds trusted package lengths and SHA-256 identities into the
-resident application. It rejects a moved slot, overlapping sized symbols, a
-slot outside resident NOBITS, or allocated RAM extending beyond the heap start.
-The normal linker `end` keeps the heap after this reservation. Maps, symbol
-lists, package identities and `build.json` are retained beside the binary.
-Changing the resident link requires rebuilding the packages and identities.
+`overlays.json` assigns A and B to one 8 KiB P1 slot at `0x8c100000`.
+`build.py` uses `utils/kos-overlay/project.py` to generate member linker bases,
+the resident NOBITS reservation and trusted package catalog. It inserts the
+reservation before `end` in a private copy of the default resident linker script,
+then links the resident once. The shared linker script is not modified.
+
+The final-link checker rejects missing/overlapping reservations and allocated
+sections beyond the heap boundary or outside canonical P1 RAM. It checks the
+explicit 16 MiB RAM budget with 64 KiB reserved for the kernel stack. The fixed
+slot also consumes any gap between resident BSS and that slot; this is a simple
+fixture layout, not a memory-optimal game layout. A larger resident must move the
+slot and rebuild rather than overlap it. No MMU is required or enabled here.
+
+Generated layouts, catalogs, size/headroom reports, maps, symbols and the final
+resident check are retained in the output directory. `A.DCO` and `B.DCO` are
+byte-identical aliases of `packages/member_a.dco` and `member_b.dco`, preserving
+the disc fixture's names. Their expected identities come from the generated
+catalog, not a second manual metadata path. Rebuild after project/member changes.
 
 ## Emulator disc fixture
 

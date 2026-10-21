@@ -12,15 +12,14 @@
 #include <stdalign.h>
 #include <stdio.h>
 #include "member-api.h"
+#include "dco_project.h"
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
-/* A real object in the resident .bss, before the normal linker heap boundary.
-   Build twice: derive its VMA, link members there, then bind their identities.
-   The build verifier rejects any final-link movement or overlapping symbol. */
-alignas(32) unsigned char overlay_slot[8192];
+/* The project-generated linker reservation owns this fixed P1 slot. */
+#define SLOT_BASE (dco_project_slots[DCO_SLOT_GAME].base)
+#define SLOT_BYTES (dco_project_slots[DCO_SLOT_GAME].bytes)
 static alignas(32) unsigned char child_stack[16384];
-extern const ovl_expected_t member_identity[2];
 static ovl_slot_t *slot;
 static ovl_token_t running_token;
 static ovl_token_t escaped_token;
@@ -64,7 +63,7 @@ static void resident_wrapper(void *unused) {
 static int load_member(const char *path, unsigned index) {
     ovl_load_result_t result;
     printf("OVL2 SOURCE %s\n", path);
-    int rc = ovl_load(slot, path, &member_identity[index], &result);
+    int rc = ovl_load(slot, path, &dco_project_members[index].expected, &result);
     if(rc || !result.image_admitted || result.source_close_error) {
         printf("OVL2 LOAD_ERROR primary=%d close=%d\n", result.error,
                result.source_close_error);
@@ -77,7 +76,7 @@ static int load_member(const char *path, unsigned index) {
 static void run_suspended(int expected, uint64_t generation) {
     ovl_view_t view;
     if(ovl_acquire(slot, &running_token, &running_view) < 0) { CHECK(false); return; }
-    CHECK(running_view.generation == generation && running_view.base == overlay_slot);
+    CHECK(running_view.generation == generation && running_view.base == SLOT_BASE);
     /* An independently escaped data reference survives the executing fiber. */
     if(ovl_acquire(slot, &escaped_token, &view) < 0) { CHECK(false); return; }
     finished = false;
@@ -85,7 +84,7 @@ static void run_suspended(int expected, uint64_t generation) {
     if(!child) { CHECK(child != NULL); return; }
     if(fiber_switch(child) < 0 || finished) { CHECK(false); return; }
     ovl_load_result_t result;
-    if(ovl_load(slot, "/cd/B.DCO", &member_identity[1], &result) == -1 && errno == EBUSY)
+    if(ovl_load(slot, "/cd/B.DCO", &dco_project_members[DCO_MEMBER_B].expected, &result) == -1 && errno == EBUSY)
         ++blocked;
     else CHECK(false);
     if(ovl_unload(slot) == -1 && errno == EBUSY) ++blocked;
@@ -101,24 +100,25 @@ static void run_suspended(int expected, uint64_t generation) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
-    printf("OVL2 START slot=%p bytes=%u heap=%p\n", overlay_slot,
-           (unsigned)sizeof(overlay_slot), end);
-    CHECK((uintptr_t)overlay_slot + sizeof(overlay_slot) <= (uintptr_t)end);
+    printf("OVL2 START slot=%p bytes=%u heap=%p\n", SLOT_BASE,
+           (unsigned)SLOT_BYTES, end);
+    CHECK((uintptr_t)SLOT_BASE + SLOT_BYTES <= (uintptr_t)end);
     CHECK((uintptr_t)end < _arch_mem_top - THD_KERNEL_STACK_SIZE);
     CHECK(fs_iso9660_set_backend(FS_ISO9660_BACKEND_DIRECT) == 0);
     int direct = fs_iso9660_get_backend() == FS_ISO9660_BACKEND_DIRECT;
     CHECK(direct);
     printf("OVL2 BACKEND direct=%d\n", direct);
-    ovl_slot_options_t options = {overlay_slot, sizeof(overlay_slot), observer, NULL};
+    ovl_slot_options_t options = dco_project_slots[DCO_SLOT_GAME];
+    options.observer = observer;
     if(ovl_slot_create(&options, &slot) < 0) { CHECK(false); goto done; }
     main_fiber = fiber_attach_ex(KFIBER_ATTACH_MATH_CONTEXT);
     if(!main_fiber) { CHECK(false); goto done; }
-    if(load_member("/cd/A.DCO", 0) < 0) goto done;
+    if(load_member("/cd/A.DCO", DCO_MEMBER_A) < 0) goto done;
     run_suspended(101, 1);
     if(failures) goto done;
 
     ovl_load_result_t result;
-    CHECK(ovl_load(slot, "/cd/BADHEAD.DCO", &member_identity[0], &result) == -1);
+    CHECK(ovl_load(slot, "/cd/BADHEAD.DCO", &dco_project_members[DCO_MEMBER_A].expected, &result) == -1);
     CHECK(!result.image_admitted && result.error == ENOEXEC && !result.source_close_error);
     ovl_token_t token = {0};
     ovl_view_t view;
@@ -128,13 +128,13 @@ int main(int argc, char **argv) {
     CHECK(view.entry(&context) == 102); /* Preparation failure retained A's BSS. */
     ++calls;
     CHECK(ovl_release(slot, &token) == 0);
-    if(load_member("/cd/B.DCO", 1) < 0) goto done;
+    if(load_member("/cd/B.DCO", DCO_MEMBER_B) < 0) goto done;
     run_suspended(201, 2);
     if(failures) goto done;
-    CHECK(ovl_load(slot, "/cd/BADHASH.DCO", &member_identity[0], &result) == -1);
+    CHECK(ovl_load(slot, "/cd/BADHASH.DCO", &dco_project_members[DCO_MEMBER_A].expected, &result) == -1);
     CHECK(!result.image_admitted && result.error == ENOEXEC && !result.source_close_error);
     CHECK(ovl_acquire(slot, &token, &view) == -1 && errno == ENOENT);
-    if(load_member("/cd/A.DCO", 0) < 0) goto done;
+    if(load_member("/cd/A.DCO", DCO_MEMBER_A) < 0) goto done;
     run_suspended(101, 3); /* Exact BSS reinitialized, new generation. */
     if(failures) goto done;
     CHECK(ovl_unload(slot) == 0);

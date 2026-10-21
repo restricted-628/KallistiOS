@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "slots": [
+    {"name": "game", "profile": "p1", "base": "0x8c100000", "bytes": 8192}
+  ],
+  "members": [
+    {"name": "a", "slot": "game", "elf": "a.elf"},
+    {"name": "b", "slot": "game", "elf": "b.elf"}
+  ]
+}
