@@ -85,6 +85,13 @@ still sets `KOS_CSTD="-std=gnu17"` at `ebfee67bccd1`. Do not describe the target
 as wholly migrated to C23 or change the standard merely to make this note true.
 Record actual compiler version and flags separately for host and SH-4 lanes.
 
+**Toolchain reconciliation, 2026-10-20:** Retain GCC; importing upstream's
+experimental LLVM configuration does not switch this fork to Clang. Environment
+setup now lives under `env/`, with root compatibility entry points and GCC
+selection when older configs omit `KOS_TOOLCHAIN`. Preserve architecture setup
+before final flag expansion and retain SH4ZAM linkage. GNU17/GNU++17 defaults
+remain unchanged; individual consumers may explicitly select newer standards.
+
 ## D09 — MMU and VBlank policy
 
 **Accepted:** MMU-on is the fork startup preference. Verified at `ebfee67bccd1`:

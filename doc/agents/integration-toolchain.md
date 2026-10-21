@@ -7,7 +7,8 @@ routing aid, not permission for broad changes. Owning lane: **Integration**.
 
 Build policy, exports/build aggregation, dependency pins, branch integration and publication.
 
-- `environ_base.sh`
+- `env/environ_base.sh`, `env/gcc` and optional `env/clang`
+- `environ_base.sh` — compatibility entry point for existing local configs
 - `utils/kos-chain`
 - `utils/Makefile.host-test`
 - `utils/run-host-tests.sh`

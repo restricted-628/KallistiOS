@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-20 — upstream reconciliation with GCC retained
+
+- Integrate upstream through `5f834c134`, including the merged VMU timestamp
+  and soft-gUSA PRs. Preserve the fork's existing timestamp implementation and
+  logical-stack/fiber bounds checking with debug-I/O reporting unchanged.
+- Adopt the upstream `env/` layout and optional experimental LLVM/LLD files,
+  while retaining GCC as the default and preserving old environment entry
+  points. Initialize architecture settings before composing final compiler
+  and linker flags; keep SH4ZAM in the link group.
+- Preserve GNU17/GNU++17 defaults. Environment-equivalence checks cover old/new
+  entry points, implicit/explicit GCC and Dreamcast/NAOMI selection; logical-SP
+  host regressions pass in GNU17 and C23. LLVM is not a validated fork toolchain.
+- Fresh GCC 16.2.0/ARM GCC 8.5.0 full build and C++ chrono, VM4 direct-disc and
+  IRQ-stack target links pass. No new emulator or hardware execution is claimed.
+
 ## 2026-10-20 — explicit read-only file residency
 
 - Add file-owned virtual reservations with synchronous page prefetch, bounded
