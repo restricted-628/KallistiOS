@@ -77,6 +77,13 @@ source verification. This does not authorize arbitrary vendor edits or moving
 pins. Native matrix alignment and raw-buffer contracts must agree without
 adding repeated runtime checks or broad memory clobbers.
 
+**Dependency reconciliation, 2026-10-20:** SH4ZAM advances from `c18faab` to
+`9a214a2` with the same explicit alignment patch. The new named quaternion
+constructors use their documented axis-product order. The deprecated
+`from_angles_xyz` now means XYZ rather than its previous YXZ behavior; no
+tracked fork consumer uses that deprecated entry. This does not switch graphics
+algorithms, fiber providers, language defaults or the compiler.
+
 ## D08 — Language intent is not build configuration
 
 **Accepted direction:** The owner prefers C23 for the fork; upstream patches

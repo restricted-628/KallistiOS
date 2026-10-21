@@ -9,7 +9,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 SUBMODULE = "addons/libsh4zam/upstream"
 UPSTREAM_URL = "https://github.com/gyrovorbis/sh4zam.git"
-PATCH_BASE = "c18faab269dd66fd9153536a1eda94e61b398aab"
+PATCH_BASE = "9a214a2c27c20ab2173f68c5337b100005329c99"
 PATCH = "addons/libsh4zam/patches/matrix-alignment.patch"
 
 

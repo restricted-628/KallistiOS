@@ -10,15 +10,24 @@ not an upstream SH4ZAM release or an independently authored library.
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`c18faab269dd66fd9153536a1eda94e61b398aab`, upstream **master after v0.9.1**, from
+`9a214a2c27c20ab2173f68c5337b100005329c99`, upstream **master after v0.9.1**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
 and license are retained; no build-time source patches are applied. The explicit
 setup step applies `patches/matrix-alignment.patch` to this exact base. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
-This advances `7747e5d`, adding weighted 3x4 XMTRX blending, software-backend
-inverse-trigonometry fixes, target/TLS fixes and the new upstream documentation
+This advances `c18faab`, adding XYZ/ZYX/ZXY/YXZ quaternion constructors in
+radians and 16-bit turns, and correcting XYZ Euler extraction. The deprecated
+`shz_quat_from_angles_xyz()` now forwards to `shz_quat_from_rotation_xyz()`;
+its composition changes from Qy*Qx*Qz to the documented Qx*Qy*Qz. No tracked
+KOS consumer calls the deprecated constructor. The sprite-cell consumer uses
+Z-only quaternions, for which the corrected Z extraction retains its meaning.
+External users of mixed-axis rotations must review their convention rather
+than treating this as a name-only deprecation. The alignment patch is unchanged.
+
+Previously, `c18faab` advanced `7747e5d`, adding weighted 3x4 XMTRX blending,
+software-backend inverse-trigonometry fixes, target/TLS fixes and the new upstream documentation
 site. The existing `shz_xmtrx_blend()` name remains a deprecated wrapper for
 `shz_xmtrx_blend_4x4()`. The 3x4 variant preserves the fourth row; callers must
 initialize the accumulator appropriately. No graphics consumer is switched to

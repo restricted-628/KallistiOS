@@ -6,6 +6,113 @@
 #ifndef SH4ZAM_RELEASE_FIXTURES_H
 #define SH4ZAM_RELEASE_FIXTURES_H
 
+/* Independent scalar Hamilton product, used only as a regression oracle. */
+static shz_quat_t release_quat_product(shz_quat_t a, shz_quat_t b) {
+    return shz_quat_init(a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z,
+                        a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+                        a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+                        a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w);
+}
+
+static shz_quat_t release_quat_oracle(unsigned order, float x, float y, float z) {
+    shz_quat_t q[] = {
+        shz_quat_init(cosf(x/2), sinf(x/2), 0, 0),
+        shz_quat_init(cosf(y/2), 0, sinf(y/2), 0),
+        shz_quat_init(cosf(z/2), 0, 0, sinf(z/2))
+    };
+    static const unsigned axes[][3] = {{0,1,2}, {2,1,0}, {2,0,1}, {1,0,2}};
+    return release_quat_product(release_quat_product(q[axes[order][0]],
+                                                    q[axes[order][1]]),
+                                q[axes[order][2]]);
+}
+
+/* q and -q describe the same orientation. */
+static bool release_quat_matches(shz_quat_t a, shz_quat_t b, float tolerance) {
+    float sign = a.w*b.w + a.x*b.x + a.y*b.y + a.z*b.z < 0 ? -1 : 1;
+    return fabsf(a.w - sign*b.w) <= tolerance &&
+           fabsf(a.x - sign*b.x) <= tolerance &&
+           fabsf(a.y - sign*b.y) <= tolerance &&
+           fabsf(a.z - sign*b.z) <= tolerance;
+}
+
+/* Keep runtime FSCA inputs and extraction live, including under optimization. */
+__attribute__((noinline)) static shz_quat_t
+release_quat_call(unsigned order, float x, float y, float z) {
+    switch(order) {
+        case 0: return shz_quat_from_rotation_xyz(x,y,z);
+        case 1: return shz_quat_from_rotation_zyx(z,y,x);
+        case 2: return shz_quat_from_rotation_zxy(z,x,y);
+        default: return shz_quat_from_rotation_yxz(y,x,z);
+    }
+}
+
+__attribute__((noinline)) static shz_quat_t
+release_quat_u16_call(unsigned order, uint16_t x, uint16_t y, uint16_t z) {
+    switch(order) {
+        case 0: return shz_quat_from_rotation_xyz_u16(x,y,z);
+        case 1: return shz_quat_from_rotation_zyx_u16(z,y,x);
+        case 2: return shz_quat_from_rotation_zxy_u16(z,x,y);
+        default: return shz_quat_from_rotation_yxz_u16(y,x,z);
+    }
+}
+
+__attribute__((noinline)) static shz_vec3_t release_quat_angles(shz_quat_t q) {
+    return shz_quat_to_angles_xyz(q);
+}
+
+static bool verify_release_quaternion(void) {
+    static const float inputs[][3] = {
+        {0,0,0}, {.3f,-.7f,1.1f}, {-2.4f,.9f,-1.8f},
+        {.4f,SHZ_F_PI/2,-.8f}, {.4f,-SHZ_F_PI/2,-.8f},
+        {.4f,SHZ_F_PI/2-.01f,-.8f}, {.4f,-SHZ_F_PI/2+.01f,-.8f},
+        {0,0,2.5f}, {0,0,-2.5f}
+    };
+    static const uint16_t binary[][3] = {
+        {0,0,0}, {16384,32768,49152}, {65535,1,32767}, {4321,54321,23456}
+    };
+    bool passed = true;
+    for(unsigned i = 0; i < sizeof(inputs)/sizeof(*inputs); ++i) {
+        float x = inputs[i][0], y = inputs[i][1], z = inputs[i][2];
+        for(unsigned order = 0; order < 4; ++order) {
+            shz_quat_t q = release_quat_call(order,x,y,z);
+            bool ok = release_quat_matches(q, release_quat_oracle(order,x,y,z), 0.002f);
+            if(order == 0) {
+                shz_vec3_t angles = release_quat_angles(q);
+                /* Extraction uses approximate asin/atan2 (upstream tests use
+                   0.03 radians). Keep constructor checks separately tighter. */
+                bool roundtrip = release_quat_matches(q, release_quat_oracle(0,angles.x,
+                                                                 angles.y,angles.z), 0.01f);
+                if(!roundtrip)
+                    printf("SH4ZAM Euler roundtrip: in=(%g,%g,%g) out=(%g,%g,%g)\n",
+                           (double)x,(double)y,(double)z,
+                           (double)angles.x,(double)angles.y,(double)angles.z);
+                ok &= roundtrip;
+                if(x == 0 && y == 0)
+                    ok &= fabsf(shz_quat_angle_z(q) - z) <= 0.03f;
+            }
+            if(!ok)
+                printf("SH4ZAM quaternion mismatch: input=%u order=%u\n", i, order);
+            passed &= ok;
+        }
+    }
+    for(unsigned i = 0; i < sizeof(binary)/sizeof(*binary); ++i) {
+        float radians[3];
+        /* Odd u16 inputs round their signed half-angle down by half a unit. */
+        for(unsigned axis = 0; axis < 3; ++axis)
+            radians[axis] = floorf((float)(int16_t)binary[i][axis]/2) *
+                            (SHZ_F_TAU/32768.0f);
+        for(unsigned order = 0; order < 4; ++order) {
+            bool ok = release_quat_matches(
+                release_quat_u16_call(order,binary[i][0],binary[i][1],binary[i][2]),
+                release_quat_oracle(order,radians[0],radians[1],radians[2]), 0.002f);
+            if(!ok)
+                printf("SH4ZAM u16 quaternion mismatch: input=%u order=%u\n", i, order);
+            passed &= ok;
+        }
+    }
+    return passed;
+}
+
 /* Raw float buffers must not inherit the native matrix's vector alignment.
    Exercise every offset modulo 16 that is valid for a float buffer. */
 static bool verify_release_alignment(void) {

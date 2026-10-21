@@ -6,6 +6,27 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-20 — SH4ZAM quaternion update
+
+- Advance the official SH4ZAM pin from `c18faab` to `9a214a2`, retaining the
+  exact existing matrix-alignment patch and unchanged licenses/provenance.
+- Add upstream's named XYZ/ZYX/ZXY/YXZ quaternion constructors, including
+  16-bit-angle variants, and corrected XYZ Euler extraction. Document the
+  deprecated constructor's YXZ-to-XYZ behavior change; no tracked fork caller
+  needs migration. No graphics algorithm or fiber-provider change is made.
+- Extend the shared host/target release fixture with independent quaternion
+  composition, signed/odd u16 angles, Euler round trips, gimbal-lock orientations
+  and Z-only extraction. Keep approximate extraction tolerances separate from
+  the tighter constructor checks.
+- GCC14 host release/cell tests and Clang16 ASan/UBSan release tests pass.
+  Fresh GCC16.2 full build, integration/cell/fiber probe links and new C++ API
+  compilation pass. Full integration passes Flycast interpreter and dynarec;
+  physical hardware and GCC17 experimental-LRA behavior remain unverified.
+- Standalone target cell test exposes an existing mixed-precision instruction
+  scheduling failure: FIPR/FSRRA execute before single precision is restored.
+  Both previous-pin and updated-pin consumers fail the same rotation assertion
+  in Flycast. Track separately; do not count that target test as passing.
+
 ## 2026-10-20 — upstream reconciliation with GCC retained
 
 - Integrate upstream through `5f834c134`, including the merged VMU timestamp
