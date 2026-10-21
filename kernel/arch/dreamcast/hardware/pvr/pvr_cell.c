@@ -455,11 +455,24 @@ int pvr_cell_stream_collect_events(
     return 0;
 }
 
+/* Keep double validation outside the SH4ZAM caller. GCC can otherwise schedule
+   its single-precision FIPR/FSRRA asm before restoring FPSCR.PR after doubles.
+   The call boundary must survive optimization, including LTO. */
+static __attribute__((noinline)) int rotation_magnitude_valid(
+    const anim_quaternion_t *rotation) {
+    double magnitude_squared =
+        (double)rotation->w * rotation->w +
+        (double)rotation->x * rotation->x +
+        (double)rotation->y * rotation->y +
+        (double)rotation->z * rotation->z;
+
+    return isfinite(magnitude_squared) && magnitude_squared > FLT_MIN;
+}
+
 int pvr_cell_sprite_apply_transform(const pvr_cell_sprite_t *sprite,
                                     const anim_transform_t *transform,
                                     pvr_cell_sprite_t *output) {
     pvr_cell_sprite_t composed;
-    double magnitude_squared;
     float x;
     float y;
     float z_angle;
@@ -478,12 +491,7 @@ int pvr_cell_sprite_apply_transform(const pvr_cell_sprite_t *sprite,
         return -1;
     }
 
-    magnitude_squared =
-        (double)transform->rotation.w * transform->rotation.w +
-        (double)transform->rotation.x * transform->rotation.x +
-        (double)transform->rotation.y * transform->rotation.y +
-        (double)transform->rotation.z * transform->rotation.z;
-    if(!isfinite(magnitude_squared) || magnitude_squared <= FLT_MIN) {
+    if(!rotation_magnitude_valid(&transform->rotation)) {
         errno = EINVAL;
         return -1;
     }

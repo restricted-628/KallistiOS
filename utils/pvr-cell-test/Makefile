@@ -25,7 +25,8 @@ test: $(TARGET)
 
 dreamcast: $(DREAMCAST_TARGET)
 
-$(DREAMCAST_TARGET): pvr-cell-test.c
+$(DREAMCAST_TARGET): pvr-cell-test.c $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a \
+                    $(KOS_BASE)/addons/lib/$(KOS_ARCH)/libsh4zam.a
 	kos-cc $(KOS_CSTD) -Wall -Wextra $< -lm -o $@
 
 clean:

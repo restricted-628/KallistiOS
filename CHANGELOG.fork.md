@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-20 — sprite transform precision boundary
+
+- Keep quaternion magnitude validation in a private non-inlined helper so
+  GCC restores single precision before the sprite transform's SH4ZAM
+  FIPR/FSRRA instructions. Preserve validation thresholds, error behavior and
+  failure-atomic output; no dependency, public API or compiler-default changes.
+- Extend cell regressions for scaled and signed planar rotations, small valid
+  magnitudes, zero/near-zero and nonfinite rejection. Relink the target fixture
+  when its KOS or SH4ZAM archive changes.
+- GCC14 host and Clang16 ASan/UBSan tests pass. GCC16.2 incremental kernel build
+  and affected target links pass; cell tests pass Flycast interpreter/dynarec,
+  with additional O3, Os and O2 LTO consumer builds passing dynarec. Instruction
+  inspection confirms the precision boundary; the broader SH4ZAM integration
+  also passes dynarec. Physical hardware and timing remain unverified.
+
 ## 2026-10-20 — SH4ZAM quaternion update
 
 - Advance the official SH4ZAM pin from `c18faab` to `9a214a2`, retaining the

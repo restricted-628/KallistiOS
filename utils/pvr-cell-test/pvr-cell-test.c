@@ -593,6 +593,38 @@ static void test_motion_and_events(void) {
     assert(close_enough(composed.scale_x, 1.0f));
     assert(close_enough(composed.scale_y, 6.0f));
 
+    /* Exercise double magnitude admission followed by runtime SH4ZAM math.
+       The SH-4 path must restore single precision before FIPR/FSRRA. */
+    const anim_quaternion_t planar[] = {
+        { 2.0f, 0.0f, 0.0f, 0.0f },
+        { 1.0f, 0.0f, 0.0f, 1.0f },
+        { 1.0f, 0.0f, 0.0f, -1.0f },
+        { 1.0e-18f, 0.0f, 0.0f, 0.0f }
+    };
+    const float angles[] = { 0.0f, 1.57079632679f, -1.57079632679f, 0.0f };
+    for(size_t i = 0; i < sizeof(planar) / sizeof(*planar); ++i) {
+        transform.rotation = planar[i];
+        assert(pvr_cell_sprite_apply_transform(&sprite, &transform,
+                                               &composed) == 0);
+        assert(close_enough(composed.rotation, sprite.rotation + angles[i]));
+    }
+
+    const anim_quaternion_t invalid[] = {
+        { 0.0f, 0.0f, 0.0f, 0.0f },
+        { 1.0e-30f, 0.0f, 0.0f, 0.0f },
+        { NAN, 0.0f, 0.0f, 0.0f },
+        { 1.0f, 0.0f, 0.0f, INFINITY }
+    };
+    unchanged = composed;
+    for(size_t i = 0; i < sizeof(invalid) / sizeof(*invalid); ++i) {
+        transform.rotation = invalid[i];
+        errno = 0;
+        assert(pvr_cell_sprite_apply_transform(&sprite, &transform,
+                                               &composed) == -1);
+        assert(errno == EINVAL);
+        assert(memcmp(&composed, &unchanged, sizeof(composed)) == 0);
+    }
+
     unchanged = composed;
     transform.rotation.w = 0.70710678118654752440f;
     transform.rotation.x = 0.70710678118654752440f;
