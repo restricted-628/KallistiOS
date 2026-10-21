@@ -6,6 +6,18 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-20 — overlay build foundation
+
+- Integrate the previously prepared host-only SH ELF load-plan tool. Record
+  image identity, execution slot, initialized ranges, exact zero tails and page
+  permission intent without treating linker physical addresses as backing.
+- Reject malformed, overlapping, out-of-slot and unsupported loading layouts;
+  keep metadata deterministic and free of host paths. This is not a runtime
+  loader, ABI certification, reservation or executable-MMU service.
+- Nine host tests and GCC 16.2.0/Binutils 2.47 compile/link checks at P1 and P0
+  addresses pass, including exact BSS, deterministic output and overflow
+  rejection. No target execution, cache, DMA or hardware result is claimed.
+
 ## 2026-10-20 — sprite transform precision boundary
 
 - Keep quaternion magnitude validation in a private non-inlined helper so

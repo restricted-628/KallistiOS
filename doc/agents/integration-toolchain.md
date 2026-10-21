@@ -11,6 +11,8 @@ Build policy, exports/build aggregation, dependency pins, branch integration and
 - `environ_base.sh` — compatibility entry point for existing local configs
 - `utils/kos-chain`
 - `utils/Makefile.host-test`
+- `utils/kos-overlay` — host-only SH ELF overlay load plans; runtime lifecycle
+  changes require Kernel/Fibers/Storage interface review. This is not a loader.
 - `utils/run-host-tests.sh`
 - `.github/workflows/autobuild.yml`
 - `BRANCHES.md`

@@ -378,6 +378,21 @@ This is explicit residency, not transparent page-fault I/O, compressed paging,
 writeback, managed stacks or executable overlays. Ordinary allocation, P1
 access, provider defaults and the physical-drive scheduler remain unchanged.
 
+## D20 — Overlay build foundation and runtime boundary
+
+**Accepted build-time slice, 2026-10-20:** `utils/kos-overlay` describes a linked
+SH executable's execution slot, image identity, file ranges and exact zero tails.
+It keeps execution addresses separate from physical backing and supports plans
+for P1 and translated addresses without claiming either is reserved or executable.
+Host tests and SH-4 compile/link fixtures pass; no runtime loading is implemented.
+
+The reviewed first runtime direction uses explicitly reserved P1 RAM, synchronous
+staging and residency references covering suspended calls and escaped pointers.
+Translated executable publication remains a separate Kernel contract; VM1–VM4
+are ordinary-data services, not permission to execute their mapped pages.
+The host plan is not a frozen runtime ABI, image-subset admission or a new archive
+format. Existing ELF libraries, fiber providers and storage defaults are unchanged.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,
