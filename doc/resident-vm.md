@@ -1,11 +1,11 @@
-# Resident data regions
+# Resident VM regions
 
 `<kos/vm.h>` adds explicit virtual reservations and owned backing above the
 Dreamcast checked MMU helpers. Ordinary malloc and P1 code/data are unchanged.
 This provides ordinary-data regions, explicit pin lifetimes, physical-run
-descriptions and explicit read-only file residency. Executable loading, managed
-stacks, transparent paging, DMA adapters, NX and process isolation are outside
-this API. The one-page resident fault tickets and synchronous file loading
+descriptions and explicit read-only file residency. The separate `<kos/vm_exec.h>` primitives described below own executable
+reservations. Package loading, managed stacks, transparent paging, DMA adapters,
+NX and process isolation remain outside these APIs. The one-page resident fault tickets and synchronous file loading
 described below remain separate operations.
 
 Create an MMU context with a caller-assigned unique live ASID, then create one
@@ -37,7 +37,7 @@ reservations cannot be combined. Invalid arguments/ranges use EINVAL; a start
 in free space uses ENOENT. Commit/protect accept only VM_READ and VM_READWRITE,
 otherwise ENOTSUP. These map to privileged read-only/read-write, copy-back,
 non-shared 4 KiB entries with D=1. Direct aliases bypass these protections.
-There is no retained-backing NOACCESS state or executable permission API.
+The data API has no retained-backing NOACCESS state or executable intent.
 Unarmed reserved pages and forbidden writes use the existing fatal fault policy.
 Only an explicitly armed, prepared ticket permits the recovery described below.
 
@@ -84,8 +84,8 @@ Atomicity is at API completion under caller quiescence, not an atomic hardware
 multi-page switch. Rollback preserves observable reservations, permissions and
 unrelated contents; internal empty page-table allocation shape may change.
 
-With SH-4 GCC 16.2.0 the structures use 12 bytes per reserved page, 12 bytes per
-reservation and 4140 bytes per space, before allocator overhead. The space
+With SH-4 GCC 16.2.0 the structures use 16 bytes per reserved page, 20 bytes per
+reservation and 4144 bytes per space, before allocator overhead. The space
 includes a fixed 1024-entry ticket-table root. A populated ticket table costs
 2052 bytes per 2 MiB span; each ticket costs 108 bytes. The ASID registry is
 1024 bytes system-wide. An armed zero-commit ticket also owns one staged page. Backing adds 4096
@@ -409,3 +409,106 @@ cancellation and external worker ownership. Synthetic read delays retain the
 same underlying `/cd` source. It performs no filesystem mount drain. Host tests execute VM/MMU and VFS descriptor paths
 with platform substitutes. Neither proves physical media/cache/DMA, device
 failure retirement, loader return or hardware timing.
+
+## Executable reservations
+
+`<kos/vm_exec.h>` provides trusted-code publication under the same space and
+reservation registry. It is a primitive for a resident loader, not an ELF or
+package parser. Reserve a fixed, whole-page nonzero interval of at most 1 MiB
+inside the arena. Data commit/protect/decommit/release/query, fault, pin and file
+paths reject executable ownership with `EINVAL`. Overlap on reservation gives
+`EEXIST`; the space cannot be destroyed until this reservation is destroyed.
+
+The loader supplies one copied intent byte per 4 KiB page: `VM_EXEC_PAGE_ABSENT`
+(0), `VM_EXEC_PAGE_READ` (4), `VM_EXEC_PAGE_RX` (5) or `VM_EXEC_PAGE_RW` (6), with
+at least one RX page. RX and READ use kernel read-only PTEs; SH-4 has no NX bit.
+RW is kernel writable. Entries are nonshared, cache-back, dirty and valid. Gaps
+remain unmapped. File-backed entry validation and same-page permission conflicts
+belong to the package producer/loader. Physical addresses are never selected by
+an ELF `p_paddr`. Every admitted backing page is zeroed before publication.
+
+### Context and lifetime
+
+All calls require ordinary threads with IRQs enabled; the earlier caller and
+resident-storage exclusions apply. Keep plans, sources, handles, outputs, stacks
+and callbacks resident/directly mapped and disjoint from managed backing.
+Externally serialize load operations. Join all callers and waiters before final
+destroy; consumed handle aliases are invalid.
+
+Before any translated use, select software table and hardware ASID together
+under a brief IRQ exclusion. Keep that global application context selected over
+the union of all live uses: every carrier, suspended return, escaped callback
+and data pointer. Close admission and quiesce those uses before replacement.
+Neither a fiber switch nor this API switches context. A finished fiber alone
+is not proof that all its escaped uses have retired.
+
+`vm_exec_check_context` checks the frozen context identity and ASID against the
+space, current software table, PTEH.ASID, MMUCR.AT=1/SV=0 and default resident
+refill function in one short IRQ exclusion. Prepare, begin and publish perform
+this check too. A mismatch gives `EBUSY`; it never selects a context. This is an
+admission snapshot, not an enforced lease. The application excludes later raw
+context/table/ASID/refill/cache-mode changes while dependent uses remain live.
+Query, abort, retire and destroy do not require selecting an inactive context.
+
+### Operation phases
+
+| Operation | Successful transition and failure ownership |
+| --- | --- |
+| reserve | Creates EMPTY with metadata only. Output is unchanged on failure. |
+| prepare | EMPTY or READY to PREPARED; copies/checks the plan and allocates bounded metadata/table capacity. Failure preserves the previous image, phase and output. The old image may remain published, but caller admission is already closed. |
+| begin | A valid PREPARED attempt by a permitted caller becomes irreversible **before** its context recheck. Retires old mappings/backing and allocates zeroed new backing; success is WRITING. Failure is FAILED/CLEANUP with the load retained, never rollback to PREPARED. Emit any old-unloaded notification immediately before this call. |
+| write / zero | WRITING only. Synchronous bounded copies into private P1 pages, with no retained source pointer, DMA, callbacks or P0 access. A range/source error in WRITING becomes FAILED. Zero length is allowed only at offset <= region size. Invalid-phase calls return EBUSY without changing phase. |
+| publish | WRITING to READY/published, consumes and NULLs the load. The loader has already completed content verification and successful source close. Context/partial-map failure retains the load in FAILED for abort. Kernel does no I/O, hashing or notification. |
+| abort | PREPARED discards preparation and restores the previous READY/EMPTY. After begin, retires all old/new/partial mappings and returns EMPTY. Success consumes and NULLs the load; checked cleanup failure retains it and all held backing in CLEANUP for retry. |
+| retire | With no load and all uses quiescent, READY to EMPTY; EMPTY is a no-op. Checked failure retains the region in CLEANUP, retryable through retire. |
+| destroy | EMPTY with no load or held backing only; removes the reservation, consumes and NULLs the region. This operation does not join users. |
+
+Query copies phase, publication and resource charges; it is permitted during an
+operation under short serialization and conveys no use reference. All int calls
+return 0 or -1/errno. Required null/invalid arguments use EINVAL, phase/context
+conflicts EBUSY, caller refusal EPERM and allocation failure ENOMEM. Checked
+lower-layer errors remain meaningful. Pointer-to-pointer arguments remain live
+on failure and become NULL only on success.
+
+### Publication, retirement and accounting
+
+The operation claim survives allocation/copy/free with no manager mutex held.
+Publication reconciles preallocated table shells under the existing space mutex;
+no allocation, I/O or hook runs under that mutex or the short IRQ fences. Data
+fault-ticket table pins remain authoritative and prevent empty-table reclamation.
+
+Each new private physical page is purged by physical OC tag before its final
+PTE is installed, and the instruction cache is invalidated by **execution VMA**.
+Retirement purges old physical aliases, invalidates instruction indices and
+VPN/ASID translations, removes descriptors, then frees backing. No translated
+OCBWB is used under BL. I-cache operations are per 4 KiB page, including old
+gaps, so a slot crossing a 512 MiB helper boundary is handled correctly. Inactive
+cleanup preserves current selection. A checked descriptor ownership mismatch
+returns EIO and retains backing. Void cache helpers are not treated as fallible.
+
+For N reserved pages and T covered 2 MiB table ranges (T <= 2):
+
+- `backing_bytes = 4096 * currently held physical pages`, including cleanup-held
+  pages. No permanent old/new two-image allocation is required.
+- `metadata_bytes = sizeof(exec region) + sizeof(reservation) + N*sizeof(page)`
+  plus `sizeof(load) + N` while preparation/writing/failed cleanup owns a load.
+- `table_budget_bytes = T*sizeof(mmusubcontext_t)` reserves fallback table
+  capacity. It is a conservative capacity envelope, not a count of uniquely
+  owned live tables. Existing live/shared tables can coexist with preparation's
+  fallback shells; report that temporary overlap separately in peak budgets.
+
+On SH-4 GCC 16.2.0 the executable region is 52 bytes and the load is 24 bytes,
+excluding copied plan bytes. A six-page reservation reports 168 bytes metadata
+when EMPTY/READY and 198 while holding its load; backing is at most 24576 bytes,
+and a two-table span reserves 12288 bytes table capacity. Allocator overhead,
+space/root, existing shared tables, source/staging, providers and consumer tokens
+are additional costs. Failed retirement conservatively retains all its backing
+until every page retires; queries expose the retained charge.
+
+`utils/vm-test` executes production owner/MMU code with modeled platform effects,
+including failure unwind, context mismatch, shared data ticket tables and area
+boundaries. `examples/dreamcast/basic/mmu/resident-exec` supplies original fixed
+P0 A/B/A bytes from direct `/cd`, five instruction pages, data/BSS and fiber/
+callback lifetime checks. Package/digest/token integration belongs to the later
+consumer. Host/link/emulator results do not establish physical cache coherence,
+IIX behavior, dirty-page reuse or timing; those require hardware validation.

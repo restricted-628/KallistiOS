@@ -51,6 +51,7 @@ with tempfile.TemporaryDirectory(prefix='kos-vm-test.') as td:
     tmp = Path(td)
     (tmp / 'kos').mkdir()
     (tmp / 'kos/vm.h').symlink_to(root / 'include/kos/vm.h')
+    (tmp / 'kos/vm_exec.h').symlink_to(root / 'include/kos/vm_exec.h')
     (tmp / 'kos/fs.h').write_text('''#pragma once
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -93,7 +94,7 @@ typedef struct irq_context { uint32_t r[16], pc, sr; } irq_context_t;
 static inline int irq_inside_int(void) { return test_irq; }
 ''')
     (tmp / 'vm-internal.h').symlink_to(root / 'kernel/mm/vm-internal.h')
-    (tmp / 'kos/cache.h').write_text('#pragma once\nvoid dcache_purge_range(uintptr_t, size_t);\n')
+    (tmp / 'kos/cache.h').write_text('#pragma once\nvoid dcache_purge_range(uintptr_t, size_t);\nvoid icache_inval_range(uintptr_t, size_t);\n')
     (tmp / 'kos/mutex.h').write_text('''#pragma once
 #include <pthread.h>
 typedef pthread_mutex_t mutex_t;

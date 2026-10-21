@@ -23,7 +23,7 @@ static void *watched_mutex;
 static atomic_uint mutex_waiters;
 typedef struct {
     void *p;
-    bool backing, prepared, mapped, retired_cache, retired_tlb;
+    bool backing, prepared, mapped, retired_cache, retired_tlb, executable, retired_ic;
 } allocation_t;
 static allocation_t allocations[128];
 /* Deterministic host backing geometry; never changes VM control flow. */
@@ -132,7 +132,21 @@ void mmu_invalidate_tlb(uint32_t v, uint32_t asid) {
 mmucontext_t *mmu_cxt_current;
 int mmu_shortcut_ok;
 static mmu_mapfunc_t map_func;
-static uint32_t pteh_value;
+static uint32_t pteh_value, mmucr_value = 1;
+static volatile uint32_t *const mmucr = &mmucr_value;
+void icache_inval_range(uintptr_t v, size_t n) {
+    CHECK(irq_depth && n == 4096 && !(v & 4095));
+    for(unsigned i = 0; i < 8; ++i) {
+        mmupage_t *p = contexts[i] ? map_virt(contexts[i], v >> 12) : NULL;
+        if(p) {
+            allocation_t *a = physical(p->physical);
+            if(a->executable) {
+                CHECK(a->retired_cache);
+                a->retired_ic = true;
+            }
+        }
+    }
+}
 static volatile uint32_t *const pteh = &pteh_value;
 #define PAGESIZE_BITS 12
 #include "vm-internal.h"
@@ -146,6 +160,7 @@ static volatile uint32_t *const pteh = &pteh_value;
 
 static void verify_free(allocation_t *a) {
     if(a->mapped) CHECK(a->retired_cache && a->retired_tlb);
+    if(a->mapped && a->executable) CHECK(a->retired_ic);
     unsigned phys = ((uintptr_t)a->p & 0x1fffffff) >> 12;
     for(unsigned k = 0; k < 8; ++k) {
         if(!contexts[k]) continue;
@@ -182,6 +197,26 @@ static int checked_map(mmucontext_t *c, int v, int p, int n, page_prot_t prot,
     }
     return rc;
 }
+static unsigned exec_maps, exec_unmaps, fail_exec_map, fail_exec_unmap;
+static int checked_exec_map(mmucontext_t *c, unsigned v, unsigned p,
+                            page_prot_t prot, mmusubcontext_t **spare) {
+    if(++exec_maps == fail_exec_map) { errno = EIO; return -1; }
+    allocation_t *a = physical(p);
+    a->executable = true;
+    int rc = mmu_exec_map(c, v, p, prot, spare);
+    if(!rc) {
+        CHECK(a->retired_cache && a->retired_ic);
+        a->mapped = true;
+        a->retired_cache = a->retired_tlb = a->retired_ic = false;
+    }
+    return rc;
+}
+static int checked_exec_unmap(mmucontext_t *c, unsigned v, int p, bool mapped) {
+    if(++exec_unmaps == fail_exec_unmap) { errno = EIO; return -1; }
+    return mmu_exec_unmap(c, v, p, mapped);
+}
+#define mmu_exec_map checked_exec_map
+#define mmu_exec_unmap checked_exec_unmap
 #define malloc test_malloc
 #define calloc test_calloc
 #define free test_free
@@ -196,6 +231,8 @@ static int checked_map(mmucontext_t *c, int v, int p, int n, page_prot_t prot,
 #undef free
 #undef aligned_alloc
 #undef mmu_page_map_ex
+#undef mmu_exec_map
+#undef mmu_exec_unmap
 
 #define P(x) ((void *)(uintptr_t)(x))
 #define BASE 0x101ff000u
@@ -733,6 +770,7 @@ static void fault_retirement(void) {
     expect(s, BASE, VM_COMMITTED, 4096, VM_READWRITE);
     CHECK(!vm_release(s, v) && !vm_space_destroy(s)); drop(0); CHECK(!live);
 }
+#include "exec-tests.inc"
 #include "pin-tests.inc"
 #include "file-tests.inc"
 
@@ -740,6 +778,7 @@ int main(void) {
     bounds(); lifetime(); failures(); callers(); ranges_and_runs();
     rollback_preserves_neighbor(); separation(); preexisting_mapping(); serialization();
     fault_lifetime(); fault_failures(); fault_admission(); fault_query_and_pins(); fault_callers(); fault_retirement();
+    exec_tests();
     pin_tests();
     file_tests();
     printf("VM production PASS: %u checks; cache purges=%u TLB retirements=%u\n",

@@ -18,6 +18,9 @@
     destroy, close admission and join all manager users, including lock waiters.
     Handles, arguments/results and metadata must remain directly mapped.
 
+    The distinct kos/vm_exec.h reservations share this owner. Data APIs reject
+    executable-owned regions; they never expose, protect or evict that backing.
+
     Ordinary data only: no managed stacks, executable code, device/SQ access
     or application-created aliases. Pins retain backing and describe physical
     bytes; they do not authorize DMA or change existing driver admission. Fault-driven commitment requires an

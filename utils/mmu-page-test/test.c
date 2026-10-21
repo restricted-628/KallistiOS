@@ -45,6 +45,9 @@ static void record(unsigned kind, uint32_t address, uint32_t asid) {
 }
 void mmu_purge_phys_page(uint32_t physical) { record(0, physical, 0); }
 void mmu_invalidate_tlb(uint32_t virt, uint32_t asid) { record(1, virt, asid); }
+void icache_inval_range(uintptr_t virt, size_t bytes) {
+    CHECK(bytes == 4096); record(2, virt, 0);
+}
 mmucontext_t *mmu_cxt_current;
 int mmu_shortcut_ok;
 static mmu_mapfunc_t map_func;

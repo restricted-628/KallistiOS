@@ -52,7 +52,7 @@ Host test directories with inspected Makefile targets:
 - `utils/icache-iix-test` — candidate `make -C utils/icache-iix-test test` in an assigned checkout.
 - `utils/itlb-reset-test` — candidate `make -C utils/itlb-reset-test test` in an assigned checkout.
 - `utils/mmu-page-test` — candidate `make -C utils/mmu-page-test test` in an assigned checkout.
-- `utils/vm-test` — actual VM/MMU production code with host platform substitutes.
+- `utils/vm-test` — actual VM/MMU production code with host platform substitutes, including executable ownership, publication, context and cleanup failures.
 - `utils/mmu-tlb-test` — candidate `make -C utils/mmu-tlb-test test` in an assigned checkout.
 - `utils/sq-test` — candidate `make -C utils/sq-test test` in an assigned checkout.
 
@@ -64,6 +64,7 @@ Target/example directories (source the assigned checkout's environment and inspe
 - `examples/dreamcast/basic/mmu/resident-fault` — prepared guard/zero-commit and full-state retry probe.
 - `examples/dreamcast/basic/mmu/resident-pin` — retained mappings, exact physical byte runs and caller-owned token lifetime.
 - `examples/dreamcast/basic/mmu/resident-file` — explicit read-only residency from ISO9660 /cd through direct GD-ROM, with pin/eviction/cancellation checks.
+- `examples/dreamcast/basic/mmu/resident-exec` — executable VM primitives with original direct-disc A/B/A members, translated returns across fiber yields and caller-owned quiescence.
 - `examples/dreamcast/basic/sq-safety`
 
 These are entry points, not a request to run all tests or a claim of success.

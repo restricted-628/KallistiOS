@@ -424,6 +424,34 @@ timing, boot/shutdown and peak-resource measurements remain unverified. This
 does not authorize translated execution, demand paging, dynamic imports,
 relocation, constructors, TLS or unwinding through overlays.
 
+### D20 milestone — resident executable VM foundation
+
+**Accepted, 2026-10-21:** `kos/vm_exec.h` supplies a separate executable-region
+owner in the existing VM space registry. Ordinary-data VM/file/pin APIs cannot
+operate on these regions. Slots are fully resident, 4 KiB-aligned, at most 1 MiB,
+and contained in the existing translated arena below OCRAM. A copied page plan
+admits absent, read-only, read/execute and read/write pages, not writable code.
+
+Preparation preserves a published image on failure. A valid begin attempt is
+irreversible; subsequent failure retains the load/backing until successful abort
+or cleanup. Synchronous write/zero operations consume resident sources without
+exposing private backing or using translated destinations. Publication and
+retirement use physical operand-cache maintenance, execution-VMA instruction
+invalidation and ASID TLB retirement; backing is freed only after retirement.
+
+The application owns one coherent selected context for the union of live
+translated uses, including suspended returns and escaped callbacks. Boundary
+checks verify table identity, frozen ASID, hardware selection and supported MMU
+mode; they are not an enforced lease or per-resume repair. No per-fiber ASIDs,
+automatic context switching, demand paging or Storage/DMA admission is added.
+
+This accepts the Kernel foundation, not a translated `libkosoverlay` consumer.
+The existing fixed-P1 DCo@ profile remains unchanged. Host/sanitizer and focused
+cache/TLB models, target build/link and both exclusive providers' direct-disc
+Flycast A/B/A fixtures pass. Full consumer token/notification, independent-carrier
+preemption and retained-callback tests remain required. Physical cache-color,
+IIX, instruction reuse and timing validation remain separate unrun gates.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

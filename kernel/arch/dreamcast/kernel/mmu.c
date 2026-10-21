@@ -139,6 +139,17 @@ void mmu_use_table(mmucontext_t *context) {
         mmu_shortcut_ok = 0;
 }
 
+/* A coherent admission snapshot, not a context-selection lease. */
+int mmu_vm_context_matches(mmucontext_t *c, unsigned asid) {
+    irq_disable_scoped();
+    if(!c || asid > 255 || c->asid != (int)asid || mmu_cxt_current != c ||
+       (*pteh & 255u) != asid || (*mmucr & 0x101u) != 1u || map_func != map_virt) {
+        errno = EBUSY;
+        return -1;
+    }
+    return 0;
+}
+
 /* Allocate a page table shell; no actual sub-contexts will be allocated
    until a mapping is performed. */
 mmucontext_t *mmu_context_create(int asid) {
@@ -442,6 +453,72 @@ static bool subcontext_empty(const mmusubcontext_t *sub) {
     }
 
     return true;
+}
+
+/* Install an executable owner's already-resident page. All fallible capacity
+   preparation precedes this call; no translated data operand is used. */
+int mmu_exec_map(mmucontext_t *c, unsigned vpn, unsigned physical,
+                 page_prot_t protection, mmusubcontext_t **spare) {
+    if(validate_page_range(c, vpn, physical, 1, protection, MMU_CACHE_BACK) < 0)
+        return -1;
+    unsigned top = vpn / MMU_SUB_PAGES, bot = vpn % MMU_SUB_PAGES;
+    mmusubcontext_t *sub = c->sub[top];
+    if(!spare || (!sub && !*spare)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(sub && (sub->page[bot].valid || sub->page[bot].blank)) {
+        errno = EEXIST;
+        return -1;
+    }
+    irq_disable_scoped();
+    mmu_purge_phys_page(physical << MMU_IND_BITS);
+    mmu_invalidate_tlb(vpn << MMU_IND_BITS, c->asid);
+    if(!sub) {
+        sub = *spare;
+        *spare = NULL;
+        c->sub[top] = sub;
+    }
+    mmupage_t *p = &sub->page[bot];
+    *p = (mmupage_t){.physical = physical, .prkey = protection,
+        .valid = 1, .cache = 1, .dirty = 1};
+    page_compile(p, vpn);
+    icache_inval_range((uintptr_t)vpn << MMU_IND_BITS, 4096);
+    return 0;
+}
+
+/* Physical=-1 denotes an owned absent page. Refuse conflicting descriptors;
+   retain backing rather than unmapping somebody else's page on corruption. */
+int mmu_exec_unmap(mmucontext_t *c, unsigned vpn, int physical, bool mapped) {
+    if(!c || vpn >= MMU_VIRTUAL_PAGES || physical < -1 ||
+       physical >= (int)MMU_PHYSICAL_PAGES || (mapped && physical < 0)) {
+        errno = EINVAL;
+        return -1;
+    }
+    mmusubcontext_t *sub = c->sub[vpn / MMU_SUB_PAGES];
+    mmupage_t *p = sub ? &sub->page[vpn % MMU_SUB_PAGES] : NULL;
+    if((mapped && (!p || !p->valid || p->physical != (unsigned)physical)) ||
+       (p && (p->blank || (!mapped && p->valid)))) {
+        errno = EIO;
+        return -1;
+    }
+    irq_disable_scoped();
+    if(physical >= 0)
+        mmu_purge_phys_page((unsigned)physical << MMU_IND_BITS);
+    icache_inval_range((uintptr_t)vpn << MMU_IND_BITS, 4096);
+    mmu_invalidate_tlb(vpn << MMU_IND_BITS, c->asid);
+    if(p) memset(p, 0, sizeof(*p));
+    return 0;
+}
+
+mmusubcontext_t *mmu_exec_detach_empty(mmucontext_t *c, unsigned top) {
+    irq_disable_scoped();
+    mmusubcontext_t *sub = c->sub[top];
+    if(sub && subcontext_empty(sub)) {
+        c->sub[top] = NULL;
+        return sub;
+    }
+    return NULL;
 }
 
 /* Allocate before admitting a fault, then pin the otherwise-empty software

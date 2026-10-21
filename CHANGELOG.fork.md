@@ -6,6 +6,24 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-21 — resident executable VM foundation
+
+- Add opt-in `kos/vm_exec.h` ownership for fully resident translated code,
+  separate from ordinary-data VM APIs. Reserve fixed 4 KiB-aligned slots,
+  prepare copied page permissions and write through bounded synchronous copies
+  into private backing before publication.
+- Preserve the old image on preparation failure. Once replacement begins,
+  retain failed-load ownership until cache/TLB retirement and cleanup succeed;
+  never release backing merely because publication or cleanup failed.
+- Check the caller-owned selected context/ASID at admission boundaries and
+  retire physical operand-cache, execution-address instruction-cache and TLB
+  state before reuse. No scheduler/provider, storage or default-MMU change.
+- Actual-code host/sanitizer and focused page/cache/TLB model tests pass.
+  GCC16.2 target builds and original direct-disc A/B/A execution pass with
+  core and SH4ZAM fiber providers separately in Flycast interpreter/dynarec.
+  Hardware coherence/IIX/timing remain unverified. DCo@ translated loading and
+  full cross-carrier/token/callback integration remain a subsequent slice.
+
 ## 2026-10-20 — fixed-P1 overlay runtime
 
 - Add independent `DCo@` v1 packaging and restricted static-C SH4 ELF admission,

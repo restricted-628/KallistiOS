@@ -1,6 +1,7 @@
 /* KallistiOS ##version##
    Copyright (C) 2026 Joseph Black */
 #include <kos/vm.h>
+#include <kos/vm_exec.h>
 #include <kos/fs.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -30,6 +31,7 @@ typedef struct vm_region {
     uintptr_t base;
     size_t bytes;
     vm_file_t *file;
+    vm_exec_region_t *exec;
     vm_page_t pages[];
 } vm_region_t;
 
@@ -227,7 +229,7 @@ static vm_region_t *vm_reserve_locked(vm_space_t *s, void *requested,
         while(*link && (*link)->base + (*link)->bytes <= base)
             link = &(*link)->next;
         if(*link && (*link)->base < base + bytes) {
-            vm_error(EEXIST);
+            vm_error(file && (*link)->exec ? EINVAL : EEXIST);
             return NULL;
         }
     }
@@ -305,6 +307,10 @@ static vm_region_t *vm_begin(vm_space_t *s, void *address, size_t bytes,
     if(mutex_lock(&s->mutex) < 0)
         return NULL;
     vm_region_t *r = vm_region_range(s, (uintptr_t)address, bytes);
+    if(r && r->exec) {
+        vm_error(EINVAL);
+        r = NULL;
+    }
     if(r && r->file) {
         vm_error(EBUSY);
         r = NULL;
@@ -419,6 +425,10 @@ int vm_release(vm_space_t *s, void *base) {
         mutex_unlock(&s->mutex);
         return vm_error(ENOENT);
     }
+    if(r->exec) {
+        mutex_unlock(&s->mutex);
+        return vm_error(EINVAL);
+    }
     if(r->file) {
         mutex_unlock(&s->mutex);
         return vm_error(EBUSY);
@@ -471,6 +481,10 @@ retry: ;
         info.run_size = (r ? r->base : s->base + s->bytes) - begin;
     }
     else {
+        if(r->exec) {
+            mutex_unlock(&s->mutex);
+            return vm_error(EINVAL);
+        }
         size_t first = (addr - r->base) / VM_PAGE_BYTES;
         size_t end = first + 1, count = r->bytes / VM_PAGE_BYTES;
         unsigned prot = r->pages[first].protection;
@@ -711,6 +725,10 @@ int vm_pin_acquire(vm_space_t *s, const void *address, size_t bytes,
         mutex_unlock(&s->mutex);
         return -1;
     }
+    if(r->exec) {
+        mutex_unlock(&s->mutex);
+        return vm_error(EINVAL);
+    }
     size_t first = (base - r->base) / VM_PAGE_BYTES;
     size_t last = (base - r->base + bytes - 1) / VM_PAGE_BYTES;
     size_t count = last - first + 1;
@@ -851,6 +869,19 @@ int vm_file_open(vm_space_t *s, const char *path,
     if((o.requested && !vm_range(s, (uintptr_t)o.requested, rounded)) ||
        o.resident_limit > pages)
         return vm_error(EINVAL);
+    if(o.requested) {
+        if(mutex_lock(&s->mutex) < 0)
+            return -1;
+        bool exec_overlap = false;
+        for(vm_region_t *r = s->regions; r; r = r->next) {
+            if(r->exec && (uintptr_t)o.requested < r->base + r->bytes &&
+               r->base < (uintptr_t)o.requested + rounded)
+                exec_overlap = true;
+        }
+        mutex_unlock(&s->mutex);
+        if(exec_overlap)
+            return vm_error(EINVAL);
+    }
     vm_file_t *f = calloc(1, sizeof(*f));
     if(!f)
         return vm_error(ENOMEM);
@@ -1094,5 +1125,450 @@ int vm_file_close(vm_file_t *f, int *source_close_error) {
     free(f->staging);
     free(f);
     *source_close_error = error;
+    return 0;
+}
+
+/* Executable regions share this registry, never the ordinary-data API. A
+   region operation claim spans unlocked allocation/copy/free. Short IRQ fences
+   publish status on this single CPU; the space mutex serializes page tables
+   with ordinary data owners. Query may inspect a claimed operation. */
+struct vm_exec_region {
+    vm_space_t *space;
+    vm_region_t *region;
+    mmucontext_t *context;
+    unsigned asid;
+    vm_exec_load_t *load;
+    vm_exec_info_t info;
+    bool busy;
+};
+
+struct vm_exec_load {
+    vm_exec_region_t *owner;
+    mmusubcontext_t *spare[2];
+    unsigned first_top, table_count;
+    bool begun;
+    uint8_t plan[];
+};
+
+#define EXEC_PHASE(p) (1u << (p))
+
+static int exec_claim(vm_exec_region_t *e, unsigned phases) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!e)
+        return vm_error(EINVAL);
+    irq_disable_scoped();
+    if(e->busy || !(phases & EXEC_PHASE(e->info.phase)))
+        return vm_error(EBUSY);
+    e->busy = true;
+    return 0;
+}
+
+static void exec_finish(vm_exec_region_t *e, vm_exec_phase_t phase) {
+    irq_disable_scoped();
+    e->info.phase = phase;
+    e->busy = false;
+}
+
+static int exec_context(vm_exec_region_t *e) {
+    if(e->space->context != e->context)
+        return vm_error(EBUSY);
+    return mmu_vm_context_matches(e->context, e->asid);
+}
+
+static void exec_charge(vm_exec_region_t *e, size_t bytes, bool add,
+                         bool backing) {
+    irq_disable_scoped();
+    size_t *charge = backing ? &e->info.backing_bytes : &e->info.metadata_bytes;
+    if(add) *charge += bytes;
+    else *charge -= bytes;
+}
+
+int vm_exec_reserve(vm_space_t *s, void *base, size_t bytes,
+                    vm_exec_region_t **out) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!s || !base || !out || bytes > 1024u * 1024u ||
+       !vm_range(s, (uintptr_t)base, bytes))
+        return vm_error(EINVAL);
+    size_t count = bytes / VM_PAGE_BYTES;
+    size_t region_bytes = sizeof(vm_region_t) + count * sizeof(vm_page_t);
+    vm_exec_region_t *e = calloc(1, sizeof(*e));
+    vm_region_t *r = calloc(1, region_bytes);
+    if(!e || !r) {
+        free(r);
+        free(e);
+        return vm_error(ENOMEM);
+    }
+    r->base = (uintptr_t)base;
+    r->bytes = bytes;
+    r->exec = e;
+    e->space = s;
+    e->region = r;
+    e->context = s->context;
+    e->asid = s->context->asid;
+    size_t table_span = VM_PAGE_BYTES * MMU_SUB_PAGES;
+    size_t tables = (r->base + bytes - 1) / table_span - r->base / table_span + 1;
+    e->info = (vm_exec_info_t){.base = base, .bytes = bytes,
+        .phase = VM_EXEC_EMPTY, .metadata_bytes = sizeof(*e) + region_bytes,
+        .table_budget_bytes = tables * sizeof(mmusubcontext_t)};
+    if(mutex_lock(&s->mutex) < 0) {
+        int error = errno;
+        free(r); free(e);
+        return vm_error(error);
+    }
+    vm_region_t **link = &s->regions;
+    while(*link && (*link)->base + (*link)->bytes <= r->base)
+        link = &(*link)->next;
+    if(*link && (*link)->base < r->base + bytes) {
+        mutex_unlock(&s->mutex);
+        free(r); free(e);
+        return vm_error(EEXIST);
+    }
+    r->next = *link;
+    *link = r;
+    *out = e;
+    mutex_unlock(&s->mutex);
+    return 0;
+}
+
+int vm_exec_query(vm_exec_region_t *e, vm_exec_info_t *out) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!e || !out)
+        return vm_error(EINVAL);
+    if(mutex_lock(&e->space->mutex) < 0)
+        return -1;
+    {
+        irq_disable_scoped();
+        *out = e->info;
+    }
+    mutex_unlock(&e->space->mutex);
+    return 0;
+}
+
+int vm_exec_check_context(vm_exec_region_t *e) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!e)
+        return vm_error(EINVAL);
+    return exec_context(e);
+}
+
+static void exec_free_load(vm_exec_load_t *l) {
+    vm_exec_region_t *e = l->owner;
+    for(unsigned i = 0; i < l->table_count; ++i)
+        free(l->spare[i]);
+    size_t bytes = sizeof(*l) + e->region->bytes / VM_PAGE_BYTES;
+    free(l);
+    exec_charge(e, bytes, false, false);
+}
+
+int vm_exec_prepare(vm_exec_region_t *e, const uint8_t *plan,
+                    size_t count, vm_exec_load_t **out) {
+    if(exec_claim(e, EXEC_PHASE(VM_EXEC_EMPTY) | EXEC_PHASE(VM_EXEC_READY)) < 0)
+        return -1;
+    vm_exec_phase_t before = e->info.phase;
+    int error = EINVAL;
+    vm_exec_load_t *l = NULL;
+    if(!plan || !out || count != e->region->bytes / VM_PAGE_BYTES)
+        goto fail;
+    if(exec_context(e) < 0) { error = errno; goto fail; }
+    l = calloc(1, sizeof(*l) + count);
+    if(!l) { error = ENOMEM; goto fail; }
+    l->owner = e;
+    exec_charge(e, sizeof(*l) + count, true, false);
+    memcpy(l->plan, plan, count);
+    bool executable = false;
+    for(size_t i = 0; i < count; ++i) {
+        unsigned p = l->plan[i];
+        if(p != VM_EXEC_PAGE_ABSENT && p != VM_EXEC_PAGE_READ &&
+           p != VM_EXEC_PAGE_RX && p != VM_EXEC_PAGE_RW)
+            goto fail;
+        executable |= p == VM_EXEC_PAGE_RX;
+    }
+    if(!executable)
+        goto fail;
+    unsigned span = VM_PAGE_BYTES * MMU_SUB_PAGES;
+    l->first_top = e->region->base / span;
+    l->table_count = (e->region->base + e->region->bytes - 1) / span - l->first_top + 1;
+    /* Allocate fallback capacity even when a shared table currently exists:
+       another data operation may reclaim that table before publication. */
+    for(unsigned i = 0; i < l->table_count; ++i) {
+        l->spare[i] = calloc(1, sizeof(*l->spare[i]));
+        if(!l->spare[i]) { error = ENOMEM; goto fail; }
+    }
+    {
+        irq_disable_scoped();
+        e->load = l;
+        *out = l;
+    }
+    exec_finish(e, VM_EXEC_PREPARED);
+    return 0;
+fail:
+    if(l) exec_free_load(l);
+    exec_finish(e, before);
+    return vm_error(error);
+}
+
+static int exec_load_claim(vm_exec_load_t *l, unsigned phases) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!l)
+        return vm_error(EINVAL);
+    if(exec_claim(l->owner, phases) < 0)
+        return -1;
+    if(l->owner->load != l) {
+        exec_finish(l->owner, l->owner->info.phase);
+        return vm_error(EINVAL);
+    }
+    return 0;
+}
+
+/* Called with an operation claim, never with a manager lock. On a checked
+   failure retain every backing allocation, including already-unmapped pages.
+   Retrying is safe; only after every page retires is anything freed. */
+static int exec_cleanup(vm_exec_region_t *e) {
+    vm_space_t *s = e->space;
+    vm_region_t *r = e->region;
+    mmusubcontext_t *dead[2] = {0};
+    if(s->context != e->context || e->context->asid != (int)e->asid)
+        return vm_error(EIO);
+    if(mutex_lock(&s->mutex) < 0)
+        return -1;
+    for(size_t i = 0; i < r->bytes / VM_PAGE_BYTES; ++i) {
+        vm_page_t *p = &r->pages[i];
+        int physical = p->backing
+            ? (int)(((uintptr_t)p->backing & MEM_AREA_CACHE_MASK) / VM_PAGE_BYTES) : -1;
+        if(mmu_exec_unmap(e->context, r->base / VM_PAGE_BYTES + i,
+                          physical, p->protection != 0) < 0) {
+            int error = errno;
+            mutex_unlock(&s->mutex);
+            return vm_error(error);
+        }
+        p->protection = 0;
+    }
+    unsigned span = VM_PAGE_BYTES * MMU_SUB_PAGES;
+    unsigned first = r->base / span;
+    unsigned count = (r->base + r->bytes - 1) / span - first + 1;
+    for(unsigned i = 0; i < count; ++i)
+        dead[i] = mmu_exec_detach_empty(e->context, first + i);
+    mutex_unlock(&s->mutex);
+    for(size_t i = 0; i < r->bytes / VM_PAGE_BYTES; ++i) {
+        vm_page_t *p = &r->pages[i];
+        if(p->backing) {
+            free(p->backing);
+            p->backing = NULL;
+            exec_charge(e, VM_PAGE_BYTES, false, true);
+        }
+    }
+    for(unsigned i = 0; i < count; ++i)
+        free(dead[i]);
+    return 0;
+}
+
+int vm_exec_begin(vm_exec_load_t *l) {
+    if(exec_load_claim(l, EXEC_PHASE(VM_EXEC_PREPARED)) < 0)
+        return -1;
+    vm_exec_region_t *e = l->owner;
+    {
+        irq_disable_scoped();
+        l->begun = true;
+        e->info.phase = VM_EXEC_FAILED;
+        e->info.published = 0;
+    }
+    if(exec_context(e) < 0) {
+        int error = errno;
+        exec_finish(e, VM_EXEC_FAILED);
+        return vm_error(error);
+    }
+    if(exec_cleanup(e) < 0) {
+        int error = errno;
+        exec_finish(e, VM_EXEC_CLEANUP);
+        return vm_error(error);
+    }
+    for(size_t i = 0; i < e->region->bytes / VM_PAGE_BYTES; ++i) {
+        if(l->plan[i] == VM_EXEC_PAGE_ABSENT)
+            continue;
+        void *p = aligned_alloc(VM_PAGE_BYTES, VM_PAGE_BYTES);
+        if(!p) {
+            exec_finish(e, VM_EXEC_FAILED);
+            return vm_error(ENOMEM);
+        }
+        e->region->pages[i].backing = p;
+        exec_charge(e, VM_PAGE_BYTES, true, true);
+        memset(p, 0, VM_PAGE_BYTES);
+    }
+    exec_finish(e, VM_EXEC_WRITING);
+    return 0;
+}
+
+static int exec_copy(vm_exec_load_t *l, size_t offset, const void *source,
+                      size_t bytes, bool zero) {
+    if(exec_load_claim(l, EXEC_PHASE(VM_EXEC_WRITING)) < 0)
+        return -1;
+    vm_exec_region_t *e = l->owner;
+    vm_region_t *r = e->region;
+    if(offset > r->bytes || bytes > r->bytes - offset || (!zero && bytes && !source))
+        goto bad_range;
+    if(bytes) {
+        size_t first = offset / VM_PAGE_BYTES;
+        size_t last = (offset + bytes - 1) / VM_PAGE_BYTES;
+        for(size_t i = first; i <= last; ++i) {
+            if(!l->plan[i] || !r->pages[i].backing)
+                goto bad_range;
+        }
+    }
+    const uint8_t *src = source;
+    while(bytes) {
+        size_t page = offset / VM_PAGE_BYTES, pos = offset % VM_PAGE_BYTES;
+        size_t n = VM_PAGE_BYTES - pos;
+        if(n > bytes) n = bytes;
+        uint8_t *dst = (uint8_t *)r->pages[page].backing + pos;
+        if(zero) memset(dst, 0, n);
+        else { memcpy(dst, src, n); src += n; }
+        bytes -= n;
+        offset += n;
+    }
+    exec_finish(e, VM_EXEC_WRITING);
+    return 0;
+bad_range:
+    exec_finish(e, VM_EXEC_FAILED);
+    return vm_error(EINVAL);
+}
+
+int vm_exec_write(vm_exec_load_t *l, size_t offset, const void *src, size_t bytes) {
+    return exec_copy(l, offset, src, bytes, false);
+}
+int vm_exec_zero(vm_exec_load_t *l, size_t offset, size_t bytes) {
+    return exec_copy(l, offset, NULL, bytes, true);
+}
+
+int vm_exec_publish(vm_exec_load_t **load) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!load || !*load)
+        return vm_error(EINVAL);
+    vm_exec_load_t *l = *load;
+    if(exec_load_claim(l, EXEC_PHASE(VM_EXEC_WRITING)) < 0)
+        return -1;
+    vm_exec_region_t *e = l->owner;
+    int error;
+    if(exec_context(e) < 0) { error = errno; goto fail; }
+    if(mutex_lock(&e->space->mutex) < 0) { error = errno; goto fail; }
+    for(size_t i = 0; i < e->region->bytes / VM_PAGE_BYTES; ++i) {
+        if(!l->plan[i]) continue;
+        vm_page_t *p = &e->region->pages[i];
+        unsigned vpn = e->region->base / VM_PAGE_BYTES + i;
+        if(!p->backing) { error = EIO; goto fail_locked; }
+        if(mmu_exec_map(e->context, vpn,
+                ((uintptr_t)p->backing & MEM_AREA_CACHE_MASK) / VM_PAGE_BYTES,
+                l->plan[i] == VM_EXEC_PAGE_RW ? MMU_KERNEL_RDWR : MMU_KERNEL_RDONLY,
+                &l->spare[vpn / MMU_SUB_PAGES - l->first_top]) < 0) {
+            error = errno;
+            goto fail_locked;
+        }
+        p->protection = l->plan[i];
+    }
+    mutex_unlock(&e->space->mutex);
+    exec_free_load(l);
+    {
+        irq_disable_scoped();
+        e->load = NULL;
+        e->info.published = 1;
+        *load = NULL;
+    }
+    exec_finish(e, VM_EXEC_READY);
+    return 0;
+fail_locked:
+    mutex_unlock(&e->space->mutex);
+fail:
+    exec_finish(e, VM_EXEC_FAILED);
+    return vm_error(error);
+}
+
+int vm_exec_abort(vm_exec_load_t **load) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!load || !*load)
+        return vm_error(EINVAL);
+    vm_exec_load_t *l = *load;
+    if(exec_load_claim(l, EXEC_PHASE(VM_EXEC_PREPARED) | EXEC_PHASE(VM_EXEC_WRITING) |
+                          EXEC_PHASE(VM_EXEC_FAILED) | EXEC_PHASE(VM_EXEC_CLEANUP)) < 0)
+        return -1;
+    vm_exec_region_t *e = l->owner;
+    bool begun = l->begun;
+    if(begun && exec_cleanup(e) < 0) {
+        int error = errno;
+        exec_finish(e, VM_EXEC_CLEANUP);
+        return vm_error(error);
+    }
+    exec_free_load(l);
+    {
+        irq_disable_scoped();
+        e->load = NULL;
+        *load = NULL;
+        if(begun) e->info.published = 0;
+    }
+    exec_finish(e, e->info.published ? VM_EXEC_READY : VM_EXEC_EMPTY);
+    return 0;
+}
+
+int vm_exec_retire(vm_exec_region_t *e) {
+    if(exec_claim(e, EXEC_PHASE(VM_EXEC_READY) | EXEC_PHASE(VM_EXEC_EMPTY) |
+                     EXEC_PHASE(VM_EXEC_CLEANUP)) < 0)
+        return -1;
+    if(e->load) {
+        exec_finish(e, e->info.phase);
+        return vm_error(EBUSY);
+    }
+    if(e->info.phase == VM_EXEC_EMPTY) {
+        exec_finish(e, VM_EXEC_EMPTY);
+        return 0;
+    }
+    {
+        irq_disable_scoped();
+        e->info.published = 0;
+        e->info.phase = VM_EXEC_CLEANUP;
+    }
+    if(exec_cleanup(e) < 0) {
+        int error = errno;
+        exec_finish(e, VM_EXEC_CLEANUP);
+        return vm_error(error);
+    }
+    exec_finish(e, VM_EXEC_EMPTY);
+    return 0;
+}
+
+int vm_exec_destroy(vm_exec_region_t **region) {
+    if(vm_caller() < 0)
+        return -1;
+    if(!region || !*region)
+        return vm_error(EINVAL);
+    vm_exec_region_t *e = *region;
+    if(exec_claim(e, EXEC_PHASE(VM_EXEC_EMPTY)) < 0)
+        return -1;
+    if(e->load || e->info.backing_bytes) {
+        exec_finish(e, VM_EXEC_EMPTY);
+        return vm_error(EBUSY);
+    }
+    if(mutex_lock(&e->space->mutex) < 0) {
+        int error = errno;
+        exec_finish(e, VM_EXEC_EMPTY);
+        return vm_error(error);
+    }
+    vm_region_t **link = &e->space->regions;
+    while(*link && *link != e->region)
+        link = &(*link)->next;
+    if(!*link) {
+        mutex_unlock(&e->space->mutex);
+        exec_finish(e, VM_EXEC_CLEANUP);
+        return vm_error(EIO);
+    }
+    *link = e->region->next;
+    mutex_unlock(&e->space->mutex);
+    free(e->region);
+    free(e);
+    *region = NULL;
     return 0;
 }
