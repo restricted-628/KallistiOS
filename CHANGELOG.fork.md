@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-21 — checked network software retirement
+
+- Close BBA admission before retiring TX, complete polled RX operations and
+  owned DMA/callback tails; prevent late link events from reopening a stopped
+  device and serialize worker lifetime, initialization and restart.
+- Propagate retirement refusal before protocol/platform destruction or exec
+  IRQ masking. Require exact typed checks for custom shutdown-pointer hooks;
+  preserve the original refusal reason in a terminal diagnostic wait.
+- Retain acquired/partial BBA hardware. Final NIC/SRAM/loader release remains
+  held, so BBA-using exit/exec may deliberately wait indefinitely. This is not
+  completion of the NetBSD port or physical-hardware validation.
+- Host ASan/UBSan and GCC16.2 SH-4 build pass. Five SH archive/link cases,
+  five real-library pointer probes and interpreter/dynarec scheduler probes
+  pass. Mach-O archive cases explicitly skip; no hardware result is claimed.
+
 ## 2026-10-21 — project-driven P1 overlay example
 
 - Convert the original direct-disc example to an explicit slot/member manifest,

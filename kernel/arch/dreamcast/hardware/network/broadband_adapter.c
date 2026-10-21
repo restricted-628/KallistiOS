@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include "../../../../net/net_shutdown_internal.h"
 #include <errno.h>
 #include <dc/net/broadband_adapter.h>
 #include <dc/asic.h>
@@ -116,6 +117,30 @@ static int next_len;
    inside TX retain the device until they leave, including semaphore waiters. */
 static atomic_bool bba_stopping = true;
 static unsigned int tx_users;
+/* Software retirement never grants final NIC/SRAM release. */
+static bool bba_hw_retained;
+static bool bba_global_closing;
+static bool bba_lifecycle_busy;
+static enum { BBA_STOPPED, BBA_STARTING, BBA_RUNNING, BBA_STOPPING } bba_stage;
+static unsigned rx_users;
+static kthread_t *input_owner;
+static bool dma_seen, dma_known;
+static uint64_t dma_sequence;
+extern bool net_shutdown_admission_closed(void) __weak_symbol;
+
+static bool bba_global_closed(void) {
+    return bba_global_closing || (net_shutdown_admission_closed
+                                 && net_shutdown_admission_closed());
+}
+
+/* Called with admission excluded, while this driver owns the channel. */
+static void bba_dma_record(void) {
+    g2_dma_status_t status;
+    dma_seen = true;
+    dma_known = g2_dma_get_status(G2_DMA_CHAN_BBA, &status) == 0;
+    if(dma_known)
+        dma_sequence = status.sequence;
+}
 
 /* Is the link stabilized? */
 static bool link_stable;
@@ -156,6 +181,10 @@ static int rtl_reset(void) {
 }
 
 static int bba_release_sram(void) {
+    if(bba_hw_retained) {
+        errno = EBUSY;
+        return -1;
+    }
     if(tx_lease != GAPS_SRAM_LEASE_INVALID) {
         if(gaps_sram_free(tx_lease) == 0)
             tx_lease = GAPS_SRAM_LEASE_INVALID;
@@ -205,6 +234,7 @@ static int bba_acquire_sram(void) {
     }
     if(gaps_acquire(GAPS_ROLE_NETWORK, &gaps_owner) < 0)
         return -1;
+    bba_hw_retained = true;
 
     /* Preserve the proven device layout. The middle 8 KiB is a wrap guard
        for the receive ring, not an independently usable hardware bank. */
@@ -368,7 +398,7 @@ static int bba_hw_init(void) {
     /* Enable receiving broadcast and physical match packets */
     g2_write_32(NIC(RT_RXCONFIG), g2_read_32(NIC(RT_RXCONFIG)) | RT_RXC_APM | RT_RXC_AB);
 
-    atomic_store(&bba_stopping, false);
+    /* RX admission opens only after start publishes a usable worker. */
     return 0;
 
 fail:
@@ -379,6 +409,9 @@ fail:
 }
 
 static void rx_reset(void) {
+    irq_disable_scoped();
+    if(atomic_load(&bba_stopping))
+        return;
     rtl.cur_rx = g2_read_16(NIC(RT_RXBUFHEAD));
     g2_write_16(NIC(RT_RXBUFTAIL), rtl.cur_rx - 16);
 
@@ -395,6 +428,10 @@ static void rx_reset(void) {
 }
 
 static int bba_hw_shutdown(void) {
+    if(bba_hw_retained || gaps_owner != GAPS_OWNER_INVALID) {
+        errno = EBUSY;
+        return -1;
+    }
     g2_dma_status_t dma_status;
 
     irq_mask_t state = irq_disable();
@@ -478,10 +515,14 @@ static void bba_rxbuf_free(void) {
 }
 
 static semaphore_t tx_sema;
+static bool tx_sema_initialized;
 
 static kthread_worker_t *rx_worker;
 
 static void rx_finish_enq(int room) {
+    irq_disable_scoped();
+    if(atomic_load(&bba_stopping))
+        return;
     /* Tell the chip where we are for overflow checking */
     rtl.cur_rx = (rtl.cur_rx + rx_size + 4 + 3) & ~3;
     g2_write_16(NIC(RT_RXBUFTAIL), (rtl.cur_rx - 16) & (RX_BUFFER_LEN - 1));
@@ -497,6 +538,13 @@ static void rx_finish_enq(int room) {
 
 static void bba_dma_cb(void *p) {
     (void)p;
+    irq_disable_scoped();
+    if(atomic_load(&bba_stopping)) {
+        /* Only the unsubmitted tail is dropped. G2 owns callback retirement. */
+        next_len = 0;
+        dma_used = 0;
+        return;
+    }
 
     if(next_len) {
         int length = next_len;
@@ -512,6 +560,8 @@ static void bba_dma_cb(void *p) {
             dma_used = 0;
             rx_reset();
         }
+        else
+            bba_dma_record();
     }
     else {
         rx_finish_enq(1);
@@ -534,8 +584,10 @@ static int bba_copy_packet(uint8_t *dst, uint32_t s, int len) {
         if(!__is_defined(USE_P2_AREA))
             dcache_inval_range((uint32_t) dst, len);
 
-        /* Prevent racing against the callback */
+        /* Close versus submit is one IRQ-excluded admission decision. */
         irq_disable_scoped();
+        if(atomic_load(&bba_stopping))
+            return -1;
 
         if(!dma_used) {
             dma_used = 1;
@@ -546,6 +598,7 @@ static int bba_copy_packet(uint8_t *dst, uint32_t s, int len) {
                 dma_used = 0;
                 return -1;
             }
+            bba_dma_record();
         }
         else if(next_len) {
             /* RX DMA is really busy - notify that we couldn't read the packet */
@@ -656,6 +709,7 @@ static bool bba_tx_dma(const uint8_t *pkt, int len) {
     }
 
     irq_disable_scoped();
+    bba_dma_record();
     dma_used = 0;
 
     /* Drain any queued RX packets received during TX transfer. */
@@ -749,25 +803,39 @@ int bba_tx(const uint8_t *pkt, int len, int wait) {
     return res;
 }
 
-static void bba_rx_process(void) {
-    /* Call the callback to process it */
+static bool bba_rx_process(void) {
+    irq_mask_t sr = irq_disable();
+    if(atomic_load(&bba_stopping) || input_owner || rxout == rxin) {
+        irq_restore(sr);
+        return false;
+    }
+    input_owner = thd_get_current();
+    irq_restore(sr);
+
     eth_rx_callback(rx_pkt[rxout].rxbuff + rx_pkt[rxout].offt, rx_pkt[rxout].pkt_size);
 
+    sr = irq_disable();
     rxout = (rxout + 1) % MAX_PKTS;
+    input_owner = NULL;
+    if(!atomic_load(&bba_stopping) && rxout != rxin && rx_worker
+            && thd_worker_get_thread(rx_worker) != thd_get_current())
+        thd_worker_wakeup(rx_worker);
+    irq_restore(sr);
+    return true;
 }
 
 static void bba_rx_worker(void *dummy) {
     (void)dummy;
-
-    while(rxout != rxin)
-        bba_rx_process();
+    while(bba_rx_process())
+        ;
 }
 
-static void bba_rx(void) {
+static void bba_rx_inner(void) {
     uint32_t rx_status;
     size_t pkt_size, ring_offset;
 
-    while(!(g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RX_BUF_EMPTY)) {
+    while(!atomic_load(&bba_stopping)
+            && !(g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RX_BUF_EMPTY)) {
         /* Get frame size and status */
         ring_offset = rtl.cur_rx % RX_BUFFER_LEN;
         rx_status = g2_read_32(rtl_mem + ring_offset);
@@ -800,7 +868,22 @@ static void bba_rx(void) {
     }
 }
 
+static void bba_rx(void) {
+    irq_disable_scoped();
+    if(atomic_load(&bba_stopping))
+        return;
+    ++rx_users;
+    bba_rx_inner();
+    --rx_users;
+}
+
 static void bba_link_change(void) {
+    irq_disable_scoped();
+    /* STARTING needs link negotiation while RX admission is still closed.
+       A stopped or globally closing device must not restart the PHY. */
+    if(bba_global_closed() || (bba_stage != BBA_STARTING
+            && (bba_stage != BBA_RUNNING || atomic_load(&bba_stopping))))
+        return;
     // This should really be a bit more complete, but this
     // should be sufficient.
 
@@ -914,26 +997,43 @@ static int bba_if_detect(netif_t *self) {
 
 static int bba_if_init(netif_t *self) {
     (void)self;
-
-    if(bba_if.flags & NETIF_INITIALIZED)
-        return 0;
-
-    if(bba_hw_init() < 0)
-        return -1;
-
-    if(bba_rxbuf_alloc() < 0) {
-        bba_hw_shutdown();
+    if(!arch_net_shutdown_can_wait()) {
+        errno = EPERM;
         return -1;
     }
-
+    irq_mask_t sr = irq_disable();
+    if(bba_global_closed() || bba_stage == BBA_STOPPING || bba_lifecycle_busy) {
+        irq_restore(sr);
+        errno = EBUSY;
+        return -1;
+    }
+    if(bba_if.flags & NETIF_INITIALIZED) {
+        irq_restore(sr);
+        return 0;
+    }
+    bba_lifecycle_busy = true;
+    irq_restore(sr);
+    if(bba_hw_init() < 0)
+        goto fail;
+    if(bba_rxbuf_alloc() < 0) {
+        /* A failed initialization may still own hardware; retain its handles. */
+        bba_hw_shutdown();
+        goto fail;
+    }
     memcpy(bba_if.mac_addr, rtl.mac, 6);
     set_ipv6_lladdr();
     bba_if.flags |= NETIF_INITIALIZED;
+    bba_lifecycle_busy = false;
     return 0;
+fail:
+    bba_lifecycle_busy = false;
+    return -1;
 }
 
 static int bba_if_shutdown(netif_t *self) {
     (void)self;
+    if(bba_shutdown_preflight() < 0)
+        return -1;
 
     if(!(bba_if.flags & NETIF_INITIALIZED))
         return 0;
@@ -951,62 +1051,154 @@ static const kthread_attr_t bba_rx_worker_attr = {
     .prio = 1,
 };
 
+static int bba_start_link_ready(void *unused) {
+    (void)unused;
+    return link_stable || bba_global_closed();
+}
+
+int bba_shutdown_context_check(void) {
+    irq_disable_scoped();
+    /* A worker frees its handle before destroy's join returns. Do not inspect
+       that handle while another lifecycle operation owns it. */
+    if(bba_lifecycle_busy) {
+        errno = EBUSY;
+        return -1;
+    }
+    if((rx_worker && thd_worker_get_thread(rx_worker) == thd_get_current())
+            || (input_owner && input_owner == thd_get_current())) {
+        errno = EDEADLK;
+        return -1;
+    }
+    return 0;
+}
+
 static int bba_if_start(netif_t *self) {
     (void)self;
-
-    if(!(bba_if.flags & NETIF_INITIALIZED))
-        return -1;
-
-    if(bba_if.flags & NETIF_RUNNING)
-        return 0;
-
-    if(bba_irq_claim == ASIC_EVT_CLAIM_INVALID) {
-        errno = EBUSY; /* Hardware shutdown failed part-way; finish it first. */
+    if(!arch_net_shutdown_can_wait()) {
+        errno = EPERM;
         return -1;
     }
-    atomic_store(&bba_stopping, false);
+    irq_mask_t sr = irq_disable();
+    if(bba_global_closed() || bba_lifecycle_busy || bba_stage == BBA_STOPPING) {
+        irq_restore(sr);
+        errno = EBUSY;
+        return -1;
+    }
+    if(!(bba_if.flags & NETIF_INITIALIZED) || bba_irq_claim == ASIC_EVT_CLAIM_INVALID) {
+        irq_restore(sr);
+        errno = ENETDOWN;
+        return -1;
+    }
+    if(bba_stage == BBA_RUNNING) {
+        irq_restore(sr);
+        return 0;
+    }
+    bba_lifecycle_busy = true;
+    bba_stage = BBA_STARTING;
+    irq_restore(sr);
 
-    // Start the BBA RX thread.
     assert(rx_worker == NULL);
     rx_worker = thd_worker_create_ex(&bba_rx_worker_attr, bba_rx_worker, NULL);
-    if(!rx_worker) {
-        atomic_store(&bba_stopping, true);
-        dbglog(DBG_ERROR, "bba: unable to create RX worker\n");
-        return -1;
-    }
+    if(!rx_worker)
+        goto fail;
 
-    /* We need something like this to get DHCP to work (since it doesn't
-       know anything about an activated and yet not-yet-receiving network
-       adapter =) */
-
-    /* Wait until the link is stabilized */
-    if(!thd_poll(bba_link_is_stable, &link_stable, 10000)) {
-        atomic_store(&bba_stopping, true);
-        dbglog(DBG_ERROR, "bba: timed out waiting for link to stabilize\n");
+    /* Events while stopped were intentionally ignored; sample the link anew. */
+    bba_link_change();
+    bool linked = thd_poll(bba_start_link_ready, NULL, 10000);
+    sr = irq_disable();
+    if(!linked || bba_global_closed()) {
+        irq_restore(sr);
         thd_worker_destroy(rx_worker);
         rx_worker = NULL;
-        return -1;
+        errno = bba_global_closed() ? EBUSY : ETIMEDOUT;
+        goto fail;
     }
-
+    bba_stage = BBA_RUNNING;
     bba_if.flags |= NETIF_RUNNING;
+    atomic_store(&bba_stopping, false);
+    bba_lifecycle_busy = false;
+    irq_restore(sr);
     return 0;
+fail:
+    bba_stage = BBA_STOPPED;
+    bba_lifecycle_busy = false;
+    return -1;
 }
 
 static int bba_if_stop(netif_t *self) {
     (void)self;
-
-    /* Wake TX link/buffer polls before joining a worker that may be in TX. */
+    g2_dma_status_t status;
+    if(!arch_net_shutdown_can_wait()) {
+        errno = EPERM;
+        return -1;
+    }
+    irq_mask_t sr = irq_disable();
+    if(bba_shutdown_context_check() < 0) {
+        irq_restore(sr);
+        return -1;
+    }
+    if(bba_lifecycle_busy) {
+        irq_restore(sr);
+        errno = EBUSY;
+        return -1;
+    }
+    bba_lifecycle_busy = true;
+    bba_stage = BBA_STOPPING;
     atomic_store(&bba_stopping, true);
-    if(!(bba_if.flags & NETIF_RUNNING))
-        return 0;
+    /* Stop never cancels DMA or treats a released lease as callback return. */
+    if(tx_users || rx_users || (input_owner && (!rx_worker
+            || input_owner != thd_worker_get_thread(rx_worker))) || dma_used || next_len) {
+        errno = EBUSY;
+        goto refuse;
+    }
+    if(bba_hw_retained) {
+        if(g2_dma_get_status(G2_DMA_CHAN_BBA, &status) < 0)
+            goto refuse;
+        if(status.callback_pending || (dma_seen
+                ? (!dma_known || status.sequence != dma_sequence
+                   || status.state != G2_DMA_STATE_COMPLETE || status.result != 0)
+                : status.state != G2_DMA_STATE_IDLE)) {
+            errno = EBUSY;
+            goto refuse;
+        }
+    }
+    irq_restore(sr);
 
-    /* VP : Shutdown rx thread */
-    assert(rx_worker != NULL);
-    thd_worker_destroy(rx_worker);
-
+    /* Exclusive live/joinable worker; self/double destroy excluded above. */
+    if(rx_worker)
+        thd_worker_destroy(rx_worker);
+    sr = irq_disable();
     rx_worker = NULL;
-
+    rxout = rxin;
     bba_if.flags &= ~NETIF_RUNNING;
+    bba_stage = BBA_STOPPED;
+    bba_lifecycle_busy = false;
+    irq_restore(sr);
+    return 0;
+refuse:
+    bba_lifecycle_busy = false;
+    irq_restore(sr);
+    return -1;
+}
+
+int bba_shutdown_preflight(void) {
+    if(!arch_net_shutdown_can_wait()) {
+        errno = EPERM;
+        return -1;
+    }
+    irq_mask_t sr = irq_disable();
+    if(bba_shutdown_context_check() < 0) {
+        irq_restore(sr);
+        return -1;
+    }
+    bba_global_closing = true;
+    irq_restore(sr);
+    if(bba_if_stop(&bba_if) < 0)
+        return -1;
+    if(bba_hw_retained || gaps_owner != GAPS_OWNER_INVALID) {
+        errno = EBUSY;
+        return -1;
+    }
     return 0;
 }
 
@@ -1029,22 +1221,26 @@ static int bba_if_tx_commit(netif_t *self) {
 }
 
 static int bba_if_rx_poll(netif_t *self) {
-    int intr;
-
     (void)self;
+    irq_mask_t sr = irq_disable();
+    if(atomic_load(&bba_stopping)) {
+        irq_restore(sr);
+        return 0;
+    }
+    /* Cover the whole poll, including status/ACK and borrowed input return. */
+    ++rx_users;
+    irq_restore(sr);
 
-    intr = g2_read_16(NIC(RT_INTRSTATUS));
-
+    int intr = g2_read_16(NIC(RT_INTRSTATUS));
     if(intr & RT_INT_RX_ACK) {
         bba_rx();
-
-        /* so that the irq is not called */
         g2_write_16(NIC(RT_INTRSTATUS), RT_INT_RX_ACK);
     }
 
-    if(rxout != rxin)
-        bba_rx_process();
-
+    bba_rx_process();
+    sr = irq_disable();
+    --rx_users;
+    irq_restore(sr);
     return 0;
 }
 
@@ -1133,12 +1329,31 @@ static void bba_set_ispcfg(void) {
 
 /* Initialize */
 int bba_init(void) {
+    /* Registration can run before threading, but must not reset live state. */
+    irq_mask_t sr = irq_disable();
+    if(bba_global_closed() || bba_lifecycle_busy || bba_hw_retained
+            || rx_worker || (bba_if.flags & NETIF_INITIALIZED)) {
+        irq_restore(sr);
+        errno = EBUSY;
+        return -1;
+    }
+    if(bba_if.flags & NETIF_REGISTERED) {
+        irq_restore(sr);
+        return 0;
+    }
+    bba_lifecycle_busy = true;
+    irq_restore(sr);
 
     /* Use the netcore callback */
     bba_set_rx_callback(bba_if_netinput);
 
-    if(__is_defined(TX_SEMA))
-        sem_init(&tx_sema, 1);
+    if(__is_defined(TX_SEMA) && !tx_sema_initialized) {
+        if(sem_init(&tx_sema, 1) < 0) {
+            bba_lifecycle_busy = false;
+            return -1;
+        }
+        tx_sema_initialized = true;
+    }
 
     /* VP : Initialize rx thread */
     // Note: The thread itself is not created here, but when we actually
@@ -1157,6 +1372,7 @@ int bba_init(void) {
     /* Short circuit if no bba is detected */
     if(bba_if.if_detect(&bba_if) < 0) {
         dbglog(DBG_KDEBUG, "bba: no device detected\n");
+        bba_lifecycle_busy = false;
         return -1;
     }
 
@@ -1202,19 +1418,25 @@ int bba_init(void) {
 #endif
 
     /* Append it to the chain */
-    return net_reg_device(&bba_if);
+    int rv = net_reg_device(&bba_if);
+    bba_lifecycle_busy = false;
+    return rv;
 }
 
 /* Shutdown */
 int bba_shutdown(void) {
+    if(bba_shutdown_preflight() < 0)
+        return -1;
     /* Shutdown hardware */
     if((bba_if.flags & NETIF_RUNNING) && bba_if.if_stop(&bba_if) < 0)
         return -1;
     if((bba_if.flags & NETIF_INITIALIZED) && bba_if.if_shutdown(&bba_if) < 0)
         return -1;
 
-    if(__is_defined(TX_SEMA))
+    if(__is_defined(TX_SEMA) && tx_sema_initialized) {
         sem_destroy(&tx_sema);
+        tx_sema_initialized = false;
+    }
 
     return 0;
 }

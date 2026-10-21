@@ -129,6 +129,22 @@ hardware details as gates, not new APIs. Configuration is a platform service;
 do not add automatic flash or NIC EEPROM writes. Private evidence and its
 location map remain in the external control folder, not public documentation.
 
+**Accepted bounded exception, 2026-10-21:** Checked network software retirement
+may close admission, retire admitted TX/polled RX and owned DMA callback tails,
+and join exclusively owned workers before consumer teardown. This does not
+authorize final NIC, GAPS SRAM/owner or resident-loader release. Acquired or
+partially acquired BBA hardware remains retained and final shutdown refuses.
+
+The owner selected a terminal diagnostic wait for legacy void/noreturn callers:
+preserve the original error and stage, keep the ordinary scheduler running when
+its context permits, and do not continue destruction, reset, retry automatically
+or force interrupts on. BBA-using exit/exec can therefore wait indefinitely.
+Custom init-pointer shutdown hooks need an exact typed checked partner; absent
+or mismatched bindings refuse rather than assuming a linked stock check covers
+custom behavior. Early invalid/self-stop refusal can precede admission closure.
+These are software guarantees; physical retirement and loader restoration remain
+separate unresolved gates. The wider driver/NetBSD-port hold is unchanged.
+
 ## D12 — Evidence, privacy and maintained context
 
 **Accepted:** Hardware tests may be deferred, but never reported as passed.

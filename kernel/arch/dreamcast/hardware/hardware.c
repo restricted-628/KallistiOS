@@ -6,6 +6,8 @@
 */
 
 #include <stdbool.h>
+#include <errno.h>
+#include "../../../net/net_shutdown_internal.h"
 #include <arch/arch.h>
 #include <kos/init.h>
 #include <kos/platform.h>
@@ -53,8 +55,11 @@ void eth_init(void) {
 }
 
 void eth_shutdown(void) {
+    if(arch_net_shutdown_preflight() < 0)
+        arch_net_shutdown_wait(errno, NET_SHUTDOWN_ETHERNET);
     la_shutdown();
-    bba_shutdown();
+    if(bba_shutdown() < 0)
+        arch_net_shutdown_wait(errno, NET_SHUTDOWN_ETHERNET);
     w5500_adapter_shutdown();
 }
 
@@ -91,6 +96,8 @@ int hardware_periph_init(void) {
 KOS_INIT_FLAG_WEAK(maple_shutdown, true);
 
 void hardware_shutdown(void) {
+    if(arch_net_shutdown_preflight() < 0)
+        arch_net_shutdown_wait(errno, NET_SHUTDOWN_HARDWARE);
     switch(initted) {
         case 2:
             if(!KOS_PLATFORM_IS_NAOMI)

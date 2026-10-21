@@ -7,6 +7,9 @@
 */
 
 #include <stdio.h>
+#include <errno.h>
+#include <kos/thread.h>
+#include "../../../net/net_shutdown_internal.h"
 #include <malloc.h>
 #include <string.h>
 #include <stdbool.h>
@@ -108,6 +111,91 @@ void fs_romdisk_mount_builtin_legacy(void) {
 
 KOS_INIT_FLAG_WEAK(arch_init_net, false);
 KOS_INIT_FLAG_WEAK(net_shutdown, false);
+
+/* Weak references do not pull optional network archive members into a link. */
+extern int net_quiesce_checked(void) __weak_symbol;
+extern int bba_shutdown_preflight(void) __weak_symbol;
+extern void net_shutdown(void) __weak_symbol;
+extern void eth_shutdown(void) __weak_symbol;
+extern const struct net_shutdown_binding arch_net_shutdown_custom __weak_symbol;
+extern const struct net_shutdown_binding arch_eth_shutdown_custom __weak_symbol;
+extern void (*eth_shutdown_weak)(void);
+static bool net_shutdown_runtime_live;
+volatile int arch_net_shutdown_error;
+volatile enum net_shutdown_stage arch_net_shutdown_stage;
+
+bool arch_net_shutdown_can_wait(void) {
+    irq_mask_t sr = irq_disable();
+    bool ready = net_shutdown_runtime_live && !irq_inside_int()
+        && !(sr & 0x100000f0u) && thd_get_current()
+        && thd_get_current()->state == STATE_RUNNING;
+    irq_restore(sr);
+    return ready;
+}
+
+void arch_net_shutdown_wait(int error, enum net_shutdown_stage stage) {
+    irq_mask_t sr = irq_disable();
+    arch_net_shutdown_error = error;
+    arch_net_shutdown_stage = stage;
+    irq_restore(sr);
+
+    if(arch_net_shutdown_can_wait()) {
+        static const char message[] = "KOS: network shutdown refused; resources retained.\r\n";
+        for(size_t i = 0; i < sizeof(message) - 1; ++i)
+            if(scif_try_write(message[i]) != 1)
+                break;
+        for(;;)
+            thd_sleep(1000);
+    }
+
+    /* Unsupported entry context: never force-enable IRQs or enter genwait. */
+    for(;;)
+        arch_sleep();
+}
+
+int arch_net_shutdown_preflight(void) {
+    int (*net_check)(void) = NULL, (*eth_check)(void) = NULL;
+
+    /* A stock checked provider does not establish a custom hook's contract. */
+    if(net_shutdown_weak) {
+        if(net_shutdown_weak == net_shutdown) {
+            if(!net_quiesce_checked)
+                goto unpaired;
+        }
+        else {
+            if(!&arch_net_shutdown_custom
+                    || arch_net_shutdown_custom.shutdown != net_shutdown_weak
+                    || !(net_check = arch_net_shutdown_custom.check))
+                goto unpaired;
+        }
+    }
+    if(eth_shutdown_weak) {
+        if(eth_shutdown_weak == eth_shutdown) {
+            if(!bba_shutdown_preflight)
+                goto unpaired;
+        }
+        else {
+            if(!&arch_eth_shutdown_custom
+                    || arch_eth_shutdown_custom.shutdown != eth_shutdown_weak
+                    || !(eth_check = arch_eth_shutdown_custom.check))
+                goto unpaired;
+        }
+    }
+    if(net_check && net_check() < 0)
+        return -1;
+    if(eth_check && eth_check() < 0)
+        return -1;
+    if(net_quiesce_checked && net_quiesce_checked() < 0)
+        return -1;
+    if(bba_shutdown_preflight && bba_shutdown_preflight() < 0)
+        return -1;
+    return 0;
+
+unpaired:
+    errno = ENOSYS;
+    return -1;
+}
+
 KOS_INIT_FLAG_WEAK(maple_wait_scan, true);
 KOS_INIT_FLAG_WEAK(fs_romdisk_init, true);
 KOS_INIT_FLAG_WEAK(fs_romdisk_shutdown, true);
@@ -213,6 +301,7 @@ int  __weak_symbol arch_auto_init(void) {
     rtc_init();
 
     thd_init();
+    net_shutdown_runtime_live = true;
 
     nmmgr_init();
 
@@ -252,6 +341,8 @@ int  __weak_symbol arch_auto_init(void) {
 }
 
 void  __weak_symbol arch_auto_shutdown(void) {
+    if(arch_net_shutdown_preflight() < 0)
+        arch_net_shutdown_wait(errno, NET_SHUTDOWN_PLATFORM);
     /* Restore the default transport before it is torn down below. */
     dcload_syscall_net_shutdown();
 
@@ -293,6 +384,7 @@ void  __weak_symbol arch_auto_shutdown(void) {
     pvr_shutdown();
     hardware_shutdown();
 
+    net_shutdown_runtime_live = false;
     thd_shutdown();
 
     /* Nothing below this point needs a thread, callback, or interrupt-driven
@@ -359,6 +451,8 @@ void arch_set_exit_path(int path) {
 
 /* Does the actual shutdown stuff for a proper shutdown */
 void arch_shutdown(void) {
+    if(arch_net_shutdown_preflight() < 0)
+        arch_net_shutdown_wait(errno, NET_SHUTDOWN_PLATFORM);
     /* Run dtors */
     _fini();
 
@@ -403,6 +497,8 @@ void arch_exit(void) {
 
 /* Return point from newlib's _exit() (configurable) */
 void arch_exit_handler(int ret_code) {
+    if(arch_net_shutdown_preflight() < 0)
+        arch_net_shutdown_wait(errno, NET_SHUTDOWN_PLATFORM);
     dbglog(DBG_INFO, "\narch: exit return code %d\n", ret_code);
 
     /* Shut down */

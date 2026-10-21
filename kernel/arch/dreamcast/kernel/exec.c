@@ -26,6 +26,8 @@ extern uint32_t _arch_old_sr, _arch_old_vbr, _arch_old_stack, _arch_old_fpscr;
 /* Replace the currently running image with whatever is at
    the pointer; note that this call will never return. */
 void arch_exec_at(const void *image, uint32_t length, uint32_t address) {
+    /* Complete fallible retirement while IRQs and progress services exist. */
+    arch_shutdown();
     /* Find the start/end of the trampoline template and make a stack
        buffer of that size */
     uintptr_t   tstart = (uintptr_t)_arch_exec_template,
@@ -57,9 +59,6 @@ void arch_exec_at(const void *image, uint32_t length, uint32_t address) {
     /* Flush both caches for the trampoline area */
     dcache_wback_range((uintptr_t)buffer, tcount * 4);
     icache_sync_range((uintptr_t)buffer, tcount * 4);
-
-    /* Shut us down */
-    arch_shutdown();
 
     /* Reset our old SR, VBR, and FPSCR */
     __asm__ __volatile__("ldc   %0,sr\n"

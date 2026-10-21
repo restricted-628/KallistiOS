@@ -23,7 +23,7 @@ Relevant existing documentation (dated claims must be rechecked):
 
 ## Preserve these boundaries
 
-- Implementation is on hold pending the bounded private driver/port reconciliation. The pool/mbuf subset is not a compiled network protocol stack.
+- The wider driver/port implementation remains on hold pending bounded reconciliation. The accepted checked software-retirement exception is recorded in notes.md D11; final acquired/partial BBA hardware and loader release remain held. The pool/mbuf subset is not a compiled network protocol stack.
 - Retain KOS scheduling/VFS/platform services. Translate socket constants, layouts, errors, options and readiness; never cast NetBSD ABI objects into KOS public objects.
 - Bound memory; specify mbuf references, exhaustion, WAIT semantics, timer draining, RX context and close/dup/cancel. Do not use success-shaped no-op compatibility stubs.
 - BBA first; LAN/PPP later; IPv6 is in scope. Router/workstation facilities are deferred. Platform configuration is not protocol code and networking must not require the Service Executor.
@@ -40,6 +40,9 @@ Relevant existing documentation (dated claims must be rechecked):
 Host test directories with inspected Makefile targets:
 
 - `utils/netbsd-pool-test` — candidate `make -C utils/netbsd-pool-test test` in an assigned checkout.
+- `utils/net-retirement-test` — actual-body host retirement/caller tests plus
+  separate SH ELF linkage, scheduler and custom-pointer probes; see its README.
+  Host shims and emulator execution do not prove physical NIC retirement.
 
 Choose an appropriate target probe for the assigned change; do not invent one as already passing.
 
