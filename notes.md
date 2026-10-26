@@ -84,6 +84,17 @@ constructors use their documented axis-product order. The deprecated
 tracked fork consumer uses that deprecated entry. This does not switch graphics
 algorithms, fiber providers, language defaults or the compiler.
 
+**Dependency reconciliation, 2026-10-26:** Adopt the reviewed v0.10 pin
+`ad2f890` from `9a214a2`. Build the separate SH-4/software matrix wrappers and
+retain only the residual raw-buffer/software-state alignment patch; the public
+matrix alignment fix is upstream. Rebuild all consumers: SH-4 mat4 alignment
+changes 16 to 8, and native prepared-joint stride changes 112 to 104 bytes.
+Packed asset formats are not native runtime palettes. Keep the FFT-specific
+`-O2` override, existing compiler policy and numerical contracts. This does not
+adopt optional graphics/media math substitutions or establish a speedup.
+Source-checker, host, target-link and selected Flycast checks passed; hardware
+behavior/performance and the separate normal-lane/FMAC questions remain open.
+
 ## D08 — Language intent is not build configuration
 
 **Accepted direction:** The owner prefers C23 for the fork; upstream patches

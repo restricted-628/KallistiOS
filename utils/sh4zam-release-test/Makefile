@@ -7,6 +7,8 @@ LDLIBS += -lm
 TARGET = sh4zam-release-test
 EXAMPLE = ../../examples/dreamcast/sh4zam/integration
 SW_SOURCE = ../../addons/libsh4zam/upstream/source/sw/shz_xmtrx_sw.c
+SW_MATRIX = ../../addons/libsh4zam/upstream/source/sw/shz_matrix_sw.c
+MATRIX_IMPL = ../../addons/libsh4zam/upstream/source/shz_matrix.inc.c
 SHZ_HEADERS = $(wildcard ../../addons/include/sh4zam/*.h \
               ../../addons/include/sh4zam/inline/*.h \
               ../../addons/include/sh4zam/inline/sw/*.h)
@@ -17,9 +19,11 @@ endif
 all: $(TARGET)
 shz_xmtrx_sw.o: $(SW_SOURCE) $(SHZ_HEADERS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SW_WARNINGS) -c $< -o $@
-$(TARGET): test.c $(EXAMPLE)/release-fixtures.h shz_xmtrx_sw.o $(SHZ_HEADERS)
-	$(CC) $(CFLAGS) $(CPPFLAGS) test.c shz_xmtrx_sw.o $(LDLIBS) -o $@
+shz_matrix_sw.o: $(SW_MATRIX) $(MATRIX_IMPL) $(SHZ_HEADERS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SW_WARNINGS) -c $< -o $@
+$(TARGET): test.c $(EXAMPLE)/release-fixtures.h shz_xmtrx_sw.o shz_matrix_sw.o $(SHZ_HEADERS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) test.c shz_xmtrx_sw.o shz_matrix_sw.o $(LDLIBS) -o $@
 test: $(TARGET)
 	./$(TARGET)
 clean:
-	rm -f $(TARGET) shz_xmtrx_sw.o
+	rm -f $(TARGET) shz_xmtrx_sw.o shz_matrix_sw.o

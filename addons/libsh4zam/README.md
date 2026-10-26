@@ -10,14 +10,23 @@ not an upstream SH4ZAM release or an independently authored library.
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`9a214a2c27c20ab2173f68c5337b100005329c99`, upstream **master after v0.9.1**, from
+`ad2f8909e8dc8f30489e6b74cd07536321f13d89`, upstream **v0.10 update**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
 and license are retained; no build-time source patches are applied. The explicit
 setup step applies `patches/matrix-alignment.patch` to this exact base. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
-This advances `c18faab`, adding XYZ/ZYX/ZXY/YXZ quaternion constructors in
+This advances `9a214a2`. The adapter now builds the separate SH-4 and software
+matrix translation units; their shared implementation fragment is not compiled
+independently. The public matrix alignment correction is now upstream, so the
+local patch retains only the raw-buffer operands and software-state alignment.
+On SH-4, matrix size remains 64 bytes but alignment changes from 16 to 8;
+`pvr_skin_prepared_joint_t` changes from 112 to 104 bytes. Cleanly rebuild all
+libraries and applications. Native prepared palettes are not serialized assets.
+This update does not opt consumers into new math algorithms or fast-math.
+
+Previously, `9a214a2` advanced `c18faab`, adding XYZ/ZYX/ZXY/YXZ quaternion constructors in
 radians and 16-bit turns, and correcting XYZ Euler extraction. The deprecated
 `shz_quat_from_angles_xyz()` now forwards to `shz_quat_from_rotation_xyz()`;
 its composition changes from Qy*Qx*Qz to the documented Qx*Qy*Qz. No tracked
@@ -75,11 +84,12 @@ addon build error rather than downloading code during compilation.
 
 ## Local matrix alignment correction
 
-The new vector storage increases the native matrix alignment. Applying an
-8-byte alignment attribute to its typedef caused Clang to disagree with the
-underlying struct alignment. The patch puts the minimum alignment on the
-matrix and software-state structs. Native matrix objects use their type's
-alignment; callers must not assume that an 8-byte buffer is a native matrix.
+The earlier patch corrected typedef-versus-struct alignment disagreement.
+The pinned release includes that correction for the public matrix struct;
+the residual patch puts the minimum alignment on the software-state struct.
+Native matrix objects use their type's alignment. Host SIMD layouts can differ
+from SH-4, so do not infer a portable native layout from the target's 8-byte
+matrix alignment.
 
 Raw-buffer XMTRX entry points retain their existing dispatch and SH-4 assembly.
 Their internal operands describe 16 floats without casting the buffer to the
@@ -101,8 +111,8 @@ change. The KOS recipe builds the upstream sources into `.build/` outside the
 submodule and produces `addons/lib/dreamcast/libsh4zam.a`.
 
 The target build defaults to the optimized SH-4 backend and implicit TLS. The
-archive also includes upstream's software XMTRX and FFT objects, allowing the
-software backend to be selected on SH-4 as supported by v0.9.1. Host tests
+archive also includes upstream's software matrix, XMTRX and FFT objects, allowing the
+software backend to be selected on SH-4. Host tests
 explicitly select pthread TLS for the portable backend. KOS's
 current default link group includes `-lsh4zam`; this migration does not make
 the graphics stack optional or move it into a separate port.
@@ -117,7 +127,7 @@ than being patched to fit KOS documentation groups.
 The former broad `memory`-clobber patch is removed. Upstream's explicit
 read/write memory operands are used without alteration.
 
-With the local SH-4 GCC 16.2.0 toolchain, the unchanged eight-point FFT fails
+With the local SH-4 GCC 16.2.0 toolchain, the historical eight-point FFT failed
 register allocation at `-O0` (`GENERAL_REGS`, impossible asm constraints).
 The same source compiles at `-O1`, `-O2`, `-O3`, `-Os`, and `-Og`, using the
 KOS GNU17, `-m4-single` environment. This establishes a configuration-specific
@@ -134,8 +144,9 @@ make -C addons/libsh4zam SHZ_FFT_CFLAGS=-Og
 ```
 
 The `-O0` failure and `-O2` success were reproduced with the original 0.8.1
-source. Version 0.9.0 does not change the FFT translation unit; retain the
-adapter workaround rather than modifying upstream memory operands.
+source. The v0.10 candidate compiles at `-O0` in the update review, but removing
+the override requires a separate optimization-level and numerical/state check.
+This compatibility update retains it rather than changing debug-build behavior.
 
 Reproduction, after sourcing `environ.sh` (substitute any tested optimization):
 

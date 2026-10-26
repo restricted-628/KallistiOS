@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-26 — SH4ZAM v0.10 compatibility integration
+
+- Advance the official submodule from `9a214a2` to `ad2f890`; build the new
+  SH-4/software matrix wrappers and retire obsolete archive members. Refresh
+  the exact-base patch, removing the public alignment correction now upstream.
+- Document the native matrix/prepared-joint layout change and mandatory clean
+  consumer rebuild. Preserve the FFT optimization override and math policy.
+- Update the example version check, exercise the out-of-line matrix dispatcher
+  on both backends, and restore explicit-patch checker regression coverage.
+- GCC16.2 full fork build, C/C++ layout checks, both exclusive fiber-provider
+  links, ADX-fiber link, focused host fixtures and selected Flycast checks pass.
+  Hardware validation, performance claims and separate numerical investigations
+  remain outside this compatibility acceptance.
+
 ## 2026-10-21 — checked network software retirement
 
 - Close BBA admission before retiring TX, complete polled RX operations and

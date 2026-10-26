@@ -687,25 +687,28 @@ int main(int argc, char **argv) {
     }
 
     shz_version_fields(shz_version_linked(), &major, &minor, &patch);
-    if(major != 0 || minor != 9 || patch != 1) {
+    if(major != 0 || minor != 10 || patch != 0) {
         FAIL("unexpected SH4ZAM version");
     }
 
     if(!verify_release_memory())
-        FAIL("SH4ZAM 0.9.1 memory regression");
-    puts("SH4ZAM 0.9.1 memory copies and guards: PASS");
+        FAIL("SH4ZAM memory regression");
+    puts("SH4ZAM memory copies and guards: PASS");
     if(!verify_release_math())
-        FAIL("SH4ZAM 0.9.1 math regression");
-    puts("SH4ZAM 0.9.1 scales, screen init, strict u16 trig: PASS");
+        FAIL("SH4ZAM math regression");
+    puts("SH4ZAM scales, screen init, strict u16 trig: PASS");
     if(!verify_release_3x4())
-        FAIL("SH4ZAM 0.9.1 XMTRX 3x4 regression");
-    puts("SH4ZAM 0.9.1 XMTRX 3x4 scalar oracle: PASS");
+        FAIL("SH4ZAM XMTRX 3x4 regression");
+    puts("SH4ZAM XMTRX 3x4 scalar oracle: PASS");
     if(!verify_release_alignment())
         FAIL("SH4ZAM native/raw matrix alignment regression");
     puts("SH4ZAM native/raw matrix alignment: PASS");
     if(!verify_release_quaternion())
         FAIL("SH4ZAM quaternion rotation/extraction regression");
     puts("SH4ZAM quaternion rotations and Euler extraction: PASS");
-    show_result(true, "SH4ZAM 0.9.1 camera, frustum, geometry, and fibers");
+    if(!verify_release_matrix_backend())
+        FAIL("SH4ZAM out-of-line matrix backend regression");
+    puts("SH4ZAM out-of-line matrix backend: PASS");
+    show_result(true, "SH4ZAM 0.10.0 camera, frustum, geometry, and fibers");
     return 0;
 }

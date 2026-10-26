@@ -385,4 +385,20 @@ static bool verify_release_3x4(void) {
     return passed;
 }
 
+/* Exercise the v0.10 out-of-line backend through its public dispatcher. */
+static bool verify_release_matrix_backend(void) {
+    const shz_mat4x4_t input = { .elem = {
+        2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 1, 0, 6, 8, 3, 1
+    } };
+    const float expected[16] = {
+        .5f, 0, 0, 0, 0, .25f, 0, 0, 0, 0, 1, 0, -3, -2, -3, 1
+    };
+    shz_mat4x4_t output;
+    shz_mat4x4_inverse(&input, &output);
+    for(unsigned i = 0; i < 16; ++i)
+        if(!close_enough(output.elem[i], expected[i]))
+            return false;
+    return true;
+}
+
 #endif

@@ -20,6 +20,7 @@ int main(void) {
     passed &= verify_release_3x4();
     passed &= verify_release_alignment();
     passed &= verify_release_quaternion();
+    passed &= verify_release_matrix_backend();
     puts(passed ? "SH4ZAM release fixtures: PASS" : "SH4ZAM release fixtures: FAIL");
     return !passed;
 }

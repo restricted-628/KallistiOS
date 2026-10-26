@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 sys.dont_write_bytecode = True
@@ -47,9 +48,43 @@ class SourceIdentityTests(unittest.TestCase):
         self.headers.symlink_to("../libsh4zam/upstream/include/sh4zam")
         (self.root / "addons/libsh4zam/LICENSE").write_text("Test license\n")
         git(self.root, "add", ".")
+        self.base_patch = patch.object(checker, "PATCH_BASE", self.revision)
+        self.base_patch.start()
+        self.addCleanup(self.base_patch.stop)
+        (self.upstream / "include/sh4zam/test.h").write_text("/* approved patch */\n")
+        self.delta = subprocess.check_output([
+            "git", "-C", str(self.upstream), "diff", "--binary", "--full-index",
+            "--no-renames", "--diff-algorithm=myers", "--unified=3",
+            "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "HEAD", "--", "."
+        ])
+        patch_path = self.root / checker.PATCH
+        patch_path.parent.mkdir(parents=True)
+        patch_path.write_bytes(self.delta)
 
-    def test_clean_pinned_source(self):
+    def test_approved_pinned_source(self):
         self.assertEqual(checker.verify(self.root), self.revision)
+
+    def test_missing_patch(self):
+        (self.upstream / "include/sh4zam/test.h").write_text("/* upstream */\n")
+        with self.assertRaisesRegex(ValueError, "alignment patch missing"):
+            checker.verify(self.root)
+
+    def test_apply_patch_and_idempotence(self):
+        (self.upstream / "include/sh4zam/test.h").write_text("/* upstream */\n")
+        self.assertEqual(checker.verify(self.root, True), self.revision)
+        self.assertEqual(checker.verify(self.root, True), self.revision)
+
+    def test_wrong_patch_base(self):
+        with patch.object(checker, "PATCH_BASE", "0" * 40):
+            with self.assertRaisesRegex(ValueError, "reviewed for this new pin"):
+                checker.verify(self.root, True)
+
+    def test_apply_refuses_unrelated_edit(self):
+        source = self.upstream / "include/sh4zam/test.h"
+        source.write_text("/* unrelated edit */\n")
+        with self.assertRaisesRegex(ValueError, "exact approved KOS patch"):
+            checker.verify(self.root, True)
+        self.assertEqual(source.read_text(), "/* unrelated edit */\n")
 
     def test_missing_checkout(self):
         (self.upstream / ".git").rename(self.upstream / ".git-disabled")
@@ -58,12 +93,12 @@ class SourceIdentityTests(unittest.TestCase):
 
     def test_tracked_source_edit(self):
         (self.upstream / "include/sh4zam/test.h").write_text("/* local patch */\n")
-        with self.assertRaisesRegex(ValueError, "local modifications"):
+        with self.assertRaisesRegex(ValueError, "exact approved KOS patch"):
             checker.verify(self.root)
 
     def test_untracked_source(self):
         (self.upstream / "extra.c").write_text("/* unreviewed */\n")
-        with self.assertRaisesRegex(ValueError, "local modifications"):
+        with self.assertRaisesRegex(ValueError, "untracked files"):
             checker.verify(self.root)
 
     def test_revision_mismatch(self):

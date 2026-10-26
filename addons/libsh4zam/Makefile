@@ -7,14 +7,13 @@
 TARGET = libsh4zam.a
 .DEFAULT_GOAL := defaultall
 
-OBJS = .build/shz_matrix.o \
-       .build/shz_quat.o \
-       .build/shz_version.o \
-       .build/shz_xmtrx.o \
+OBJS = .build/shz_version.o \
+       .build/sh4/shz_matrix_sh4.o \
        .build/sh4/shz_complex_sh4.o \
        .build/sh4/shz_xmtrx_sh4.o \
        .build/sh4/shz_mem_sh4.o \
        .build/sw/shz_complex_sw.o \
+       .build/sw/shz_matrix_sw.o \
        .build/sw/shz_xmtrx_sw.o
 
 ifeq ($(wildcard upstream/include/sh4zam/shz_sh4zam.h),)
@@ -30,9 +29,9 @@ SHZ_HEADERS = $(wildcard upstream/include/sh4zam/*.h \
 
 KOS_CFLAGS += $(KOS_CSTD) -Wextra -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT
 
-# GCC 16.2 cannot allocate the eight-point FFT's explicit memory operands at
-# -O0. Keep upstream constraints intact and optimize this one translation unit
-# even in a debug build. -g is retained; callers can select e.g. -Og explicitly.
+# Retain the historical GCC 16.2 FFT -O0 workaround until the separate v0.10
+# optimization-level/numerical gate is complete. Keep upstream constraints
+# intact. -g is retained; callers can select e.g. -Og explicitly.
 SHZ_FFT_CFLAGS ?= -O2
 .build/sh4/shz_complex_sh4.o: override CFLAGS += $(SHZ_FFT_CFLAGS)
 
