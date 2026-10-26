@@ -161,6 +161,20 @@ typedef struct pvr_lighting_extended_context {
     float depth_far_factor;
 } pvr_lighting_extended_context_t;
 
+/** \brief Admitted basic lighting snapshot. Initialize with pvr_lighting_prepare().
+
+    Members are implementation state, not fields to edit or initialize directly.
+    The snapshot borrows the caller's prepared light storage, not the source.
+*/
+typedef struct pvr_lighting_prepared {
+    pvr_lighting_context_t context;
+} pvr_lighting_prepared_t;
+
+/** \brief Admitted extended snapshot; initialize with pvr_lighting_prepare_extended(). */
+typedef struct pvr_lighting_extended_prepared {
+    pvr_lighting_extended_context_t context;
+} pvr_lighting_extended_prepared_t;
+
 /** \brief Packed colors produced for one ordinary PVR vertex. */
 typedef struct pvr_lighting_output {
     uint32_t argb;  /**< Saturated diffuse color and resulting alpha. */
@@ -245,6 +259,54 @@ int pvr_lighting_apply_extended(
     pvr_lighting_output_t *output, size_t output_capacity,
     const pvr_lighting_extended_stream_t *stream,
     const pvr_lighting_extended_context_t *context,
+    pvr_lighting_result_t *result);
+
+/** \brief Snapshot a basic context and normalize directional lights once.
+
+    Supply storage for at least context->light_count lights. Zero lights permits
+    NULL storage. The output, storage, context and source light array must not
+    overlap. All admission completes before either output or storage is changed;
+    failure preserves both. EINVAL denotes invalid input/overlap, ENOSPC short
+    storage, ERANGE an unrepresentable destination range.
+
+    Source values are copied and may change or expire after return. To adopt a
+    change, prepare again from an ordinary source context (not prepared storage).
+    Keep the snapshot and its storage immutable and alive through the last apply;
+    they must not overlap sample/output/progress storage. Reprepare only when no
+    apply is using them. No allocation, hidden cache or retained source pointer.
+    Preparation and use require the same floating-point mode, as ordinary calls
+    do for reproducible results. Native prepared storage is not an asset format.
+*/
+int pvr_lighting_prepare(pvr_lighting_prepared_t *output,
+    pvr_light_t *storage, size_t capacity,
+    const pvr_lighting_context_t *context);
+
+/** \brief Snapshot an extended context, preserving signed-light semantics.
+    Same ownership, admission and failure contract as pvr_lighting_prepare().
+*/
+int pvr_lighting_prepare_extended(pvr_lighting_extended_prepared_t *output,
+    pvr_light_t *storage, size_t capacity,
+    const pvr_lighting_extended_context_t *context);
+
+/** \brief Apply a successfully prepared basic snapshot without rescanning lights.
+
+    Sample/output admission, numerical behavior and valid-prefix reporting match
+    pvr_lighting_apply(). Point-light direction/attenuation remains per sample.
+    The prepared snapshot must satisfy the lifetime contract above; its contents
+    are not defensively revalidated on each call. No global or XMTRX state change.
+*/
+int pvr_lighting_apply_prepared(uint32_t *output, size_t output_capacity,
+    const pvr_lighting_stream_t *stream,
+    const pvr_lighting_prepared_t *prepared, pvr_lighting_result_t *result);
+
+/** \brief Apply a prepared extended snapshot with the existing sample checks.
+    Preserves pvr_lighting_apply_extended() ordering, specular approximation,
+    packed colors and error-prefix contract; no repeated light admission.
+*/
+int pvr_lighting_apply_extended_prepared(
+    pvr_lighting_output_t *output, size_t output_capacity,
+    const pvr_lighting_extended_stream_t *stream,
+    const pvr_lighting_extended_prepared_t *prepared,
     pvr_lighting_result_t *result);
 
 /** @} */

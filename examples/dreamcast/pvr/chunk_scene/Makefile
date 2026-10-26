@@ -84,6 +84,13 @@ chunk-workload.o: chunk-scene.c scene-workload.h
 chunk-workload.elf: chunk-workload.o chunk-scene-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $@ chunk-workload.o chunk-scene-asset.o
 
+# Opt-in scalar baseline for the same scene, counts and timing windows.
+chunk-workload-unprepared.o: chunk-scene.c scene-workload.h
+	kos-cc $(CFLAGS) $(CPPFLAGS) -DCHUNK_SCENE_WORKLOAD -DCHUNK_SCENE_UNPREPARED_LIGHTING -c $< -o $@
+
+chunk-workload-unprepared.elf: chunk-workload-unprepared.o chunk-scene-asset.o $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
+	kos-cc -o $@ chunk-workload-unprepared.o chunk-scene-asset.o
+
 $(TARGET): $(OBJS) $(KOS_BASE)/lib/$(KOS_ARCH)/libkallisti.a
 	kos-cc -o $@ $(OBJS)
 
@@ -91,6 +98,7 @@ run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
 
 clean:
+	-rm -f chunk-workload-unprepared.o chunk-workload-unprepared.elf
 	-rm -f animated-showcase.elf animated-showcase-smoke.elf animated-showcase.o animated-showcase-smoke.o animated-showcase-asset.o animated-showcase-asset.c animated-showcase.pcm animated-showcase.gltf
 	-rm -f chunk-skin-compact.elf chunk-skin-compact.o
 	-rm -f chunk-skin-clip.elf chunk-skin-clip.o

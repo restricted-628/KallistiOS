@@ -359,10 +359,10 @@ static float dot3(const vector_t *lhs, float x, float y, float z) {
                         shz_vec3_init(x, y, z));
 }
 
-int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
+static int lighting_apply(uint32_t *output, size_t output_capacity,
                        const pvr_lighting_stream_t *stream,
                        const pvr_lighting_context_t *context,
-                       pvr_lighting_result_t *result) {
+                       pvr_lighting_result_t *result, int prepared) {
     pvr_lighting_result_t progress = { 0 };
     uintptr_t input_start;
     uintptr_t output_start;
@@ -376,7 +376,8 @@ int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
     if(!output || !stream || !stream->samples ||
        ((uintptr_t)output & 3u) || ((uintptr_t)stream->samples & 3u) ||
        stream->stride < sizeof(pvr_lighting_sample_t) ||
-       (stream->stride & 3u) || !context_valid(context)) {
+       (stream->stride & 3u) || !context ||
+       (!prepared && !context_valid(context))) {
         errno = EINVAL;
         return -1;
     }
@@ -462,34 +463,36 @@ int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
                 direction_z = light->source.position.z - sample->position.z;
             }
 
-            length_squared = direction_x * direction_x +
-                             direction_y * direction_y +
-                             direction_z * direction_z;
-            if(!isfinite(length_squared)) {
-                errno = ERANGE;
-                goto fail;
-            }
-            if(length_squared <= FLT_MIN)
-                continue;
-
-            reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
-            if(light->kind == PVR_LIGHT_POINT) {
-                float distance = length_squared * reciprocal_length;
-                float denominator;
-
-                if(light->range > 0.0f && distance > light->range)
+            if(!prepared || light->kind != PVR_LIGHT_DIRECTIONAL) {
+                length_squared = direction_x * direction_x +
+                                 direction_y * direction_y +
+                                 direction_z * direction_z;
+                if(!isfinite(length_squared)) {
+                    errno = ERANGE;
+                    goto fail;
+                }
+                if(length_squared <= FLT_MIN)
                     continue;
-                denominator = light->attenuation_constant +
-                    light->attenuation_linear * distance +
-                    light->attenuation_quadratic * length_squared;
-                if(!isfinite(denominator) || denominator <= FLT_MIN)
-                    continue;
-                attenuation = 1.0f / denominator;
-            }
 
-            direction_x *= reciprocal_length;
-            direction_y *= reciprocal_length;
-            direction_z *= reciprocal_length;
+                reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
+                if(light->kind == PVR_LIGHT_POINT) {
+                    float distance = length_squared * reciprocal_length;
+                    float denominator;
+
+                    if(light->range > 0.0f && distance > light->range)
+                        continue;
+                    denominator = light->attenuation_constant +
+                        light->attenuation_linear * distance +
+                        light->attenuation_quadratic * length_squared;
+                    if(!isfinite(denominator) || denominator <= FLT_MIN)
+                        continue;
+                    attenuation = 1.0f / denominator;
+                }
+
+                direction_x *= reciprocal_length;
+                direction_y *= reciprocal_length;
+                direction_z *= reciprocal_length;
+            }
             diffuse = dot3(&sample->normal, direction_x, direction_y,
                            direction_z);
             if(diffuse <= 0.0f)
@@ -585,7 +588,7 @@ static int lighting_apply_extended(
         pvr_lighting_output_t *output, size_t output_capacity,
         const pvr_lighting_extended_stream_t *stream,
         const pvr_lighting_extended_context_t *context,
-        pvr_lighting_result_t *result, int admit_context) {
+        pvr_lighting_result_t *result, int admit_context, int prepared) {
     pvr_lighting_result_t progress = { 0 };
     uintptr_t input_start;
     uintptr_t output_start;
@@ -722,34 +725,36 @@ static int lighting_apply_extended(
                 direction_z = light->source.position.z - sample->position.z;
             }
 
-            length_squared = direction_x * direction_x +
-                             direction_y * direction_y +
-                             direction_z * direction_z;
-            if(!isfinite(length_squared)) {
-                errno = ERANGE;
-                goto fail;
-            }
-            if(length_squared <= FLT_MIN)
-                continue;
-            reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
-
-            if(light->kind == PVR_LIGHT_POINT) {
-                float distance = length_squared * reciprocal_length;
-                float denominator;
-
-                if(light->range > 0.0f && distance > light->range)
+            if(!prepared || light->kind != PVR_LIGHT_DIRECTIONAL) {
+                length_squared = direction_x * direction_x +
+                                 direction_y * direction_y +
+                                 direction_z * direction_z;
+                if(!isfinite(length_squared)) {
+                    errno = ERANGE;
+                    goto fail;
+                }
+                if(length_squared <= FLT_MIN)
                     continue;
-                denominator = light->attenuation_constant +
-                    light->attenuation_linear * distance +
-                    light->attenuation_quadratic * length_squared;
-                if(!isfinite(denominator) || denominator <= FLT_MIN)
-                    continue;
-                attenuation = 1.0f / denominator;
-            }
+                reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
 
-            direction_x *= reciprocal_length;
-            direction_y *= reciprocal_length;
-            direction_z *= reciprocal_length;
+                if(light->kind == PVR_LIGHT_POINT) {
+                    float distance = length_squared * reciprocal_length;
+                    float denominator;
+
+                    if(light->range > 0.0f && distance > light->range)
+                        continue;
+                    denominator = light->attenuation_constant +
+                        light->attenuation_linear * distance +
+                        light->attenuation_quadratic * length_squared;
+                    if(!isfinite(denominator) || denominator <= FLT_MIN)
+                        continue;
+                    attenuation = 1.0f / denominator;
+                }
+
+                direction_x *= reciprocal_length;
+                direction_y *= reciprocal_length;
+                direction_z *= reciprocal_length;
+            }
             lambert = dot3(&sample->normal, direction_x, direction_y,
                            direction_z);
             if(lambert <= 0.0f)
@@ -834,7 +839,7 @@ int pvr_lighting_apply_extended(
         const pvr_lighting_extended_context_t *context,
         pvr_lighting_result_t *result) {
     return lighting_apply_extended(output, output_capacity, stream, context,
-                                   result, 1);
+                                   result, 1, 0);
 }
 
 int pvr_lighting_apply_extended_admitted(
@@ -843,5 +848,110 @@ int pvr_lighting_apply_extended_admitted(
         const pvr_lighting_extended_context_t *context,
         pvr_lighting_result_t *result) {
     return lighting_apply_extended(output, output_capacity, stream, context,
-                                   result, 0);
+                                   result, 0, 0);
+}
+
+/* Preparation owns a snapshot, not a borrowed mutable context. Check all
+   ranges before writing so a failed reprepare retains the previous snapshot. */
+static int preparation_storage(void *output, size_t output_bytes,
+        pvr_light_t *storage, size_t capacity, const void *context,
+        size_t context_bytes, const pvr_light_t *lights, size_t count) {
+    size_t bytes = count * sizeof(*storage); /* context admission bounds count */
+    uintptr_t out = (uintptr_t)output, work = (uintptr_t)storage;
+    uintptr_t src = (uintptr_t)lights, ctx = (uintptr_t)context;
+
+    if(!output || (out & (_Alignof(pvr_lighting_prepared_t) - 1u)) ||
+       (count && (!storage || (work & 3u)))) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(capacity < count) {
+        errno = ENOSPC;
+        return -1;
+    }
+    if(output_bytes > UINTPTR_MAX - out || context_bytes > UINTPTR_MAX - ctx ||
+       bytes > UINTPTR_MAX - work) {
+        errno = ERANGE;
+        return -1;
+    }
+    if(ranges_overlap(out, output_bytes, ctx, context_bytes) ||
+       (bytes && (ranges_overlap(work, bytes, src, bytes) ||
+                  ranges_overlap(work, bytes, ctx, context_bytes) ||
+                  ranges_overlap(work, bytes, out, output_bytes) ||
+                  ranges_overlap(out, output_bytes, src, bytes)))) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+static void prepare_lights(pvr_light_t *storage, const pvr_light_t *lights,
+                           size_t count) {
+    for(size_t i = 0; i < count; ++i) {
+        storage[i] = lights[i];
+        if(storage[i].kind == PVR_LIGHT_DIRECTIONAL) {
+            vector_t *direction = &storage[i].source.direction;
+            float length_squared = direction->x * direction->x +
+                direction->y * direction->y + direction->z * direction->z;
+            float reciprocal_length = shz_inv_sqrtf_fsrra(length_squared);
+
+            direction->x *= reciprocal_length;
+            direction->y *= reciprocal_length;
+            direction->z *= reciprocal_length;
+        }
+    }
+}
+
+int pvr_lighting_prepare(pvr_lighting_prepared_t *output,
+        pvr_light_t *storage, size_t capacity,
+        const pvr_lighting_context_t *context) {
+    if(!context_valid(context)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(preparation_storage(output, sizeof(*output), storage, capacity,
+            context, sizeof(*context), context->lights, context->light_count) < 0)
+        return -1;
+    prepare_lights(storage, context->lights, context->light_count);
+    output->context = *context;
+    output->context.lights = storage;
+    return 0;
+}
+
+int pvr_lighting_prepare_extended(pvr_lighting_extended_prepared_t *output,
+        pvr_light_t *storage, size_t capacity,
+        const pvr_lighting_extended_context_t *context) {
+    if(!extended_context_valid(context)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(preparation_storage(output, sizeof(*output), storage, capacity,
+            context, sizeof(*context), context->lights, context->light_count) < 0)
+        return -1;
+    prepare_lights(storage, context->lights, context->light_count);
+    output->context = *context;
+    output->context.lights = storage;
+    return 0;
+}
+
+int pvr_lighting_apply(uint32_t *output, size_t output_capacity,
+        const pvr_lighting_stream_t *stream,
+        const pvr_lighting_context_t *context, pvr_lighting_result_t *result) {
+    return lighting_apply(output, output_capacity, stream, context, result, 0);
+}
+
+int pvr_lighting_apply_prepared(uint32_t *output, size_t output_capacity,
+        const pvr_lighting_stream_t *stream,
+        const pvr_lighting_prepared_t *prepared, pvr_lighting_result_t *result) {
+    return lighting_apply(output, output_capacity, stream,
+                          prepared ? &prepared->context : NULL, result, 1);
+}
+
+int pvr_lighting_apply_extended_prepared(
+        pvr_lighting_output_t *output, size_t output_capacity,
+        const pvr_lighting_extended_stream_t *stream,
+        const pvr_lighting_extended_prepared_t *prepared,
+        pvr_lighting_result_t *result) {
+    return lighting_apply_extended(output, output_capacity, stream,
+                          prepared ? &prepared->context : NULL, result, 0, 1);
 }

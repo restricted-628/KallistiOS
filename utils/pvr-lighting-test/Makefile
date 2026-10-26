@@ -19,4 +19,12 @@ test: $(TARGET)
 	./$(TARGET)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) prepared-bench
+
+# Opt-in complete-cost diagnostic; host timings are not Dreamcast timings.
+prepared-bench: prepared-bench.c ../../kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c
+	$(CC) $(CFLAGS) $(CPPFLAGS) $^ $(LDLIBS) -o $@
+
+.PHONY: bench
+bench: prepared-bench
+	./prepared-bench

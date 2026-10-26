@@ -374,6 +374,198 @@ static void test_extended_lighting(void) {
     assert(memcmp(output, unchanged, sizeof(output)) == 0);
 }
 
+
+/* The ordinary scalar entries remain the result/error oracle. Deliberately
+   include non-unit light directions so normalization cannot be a no-op. */
+static void compare_prepared(pvr_lighting_context_t *basic,
+        pvr_lighting_extended_context_t *extended,
+        pvr_lighting_sample_t *samples,
+        pvr_lighting_extended_sample_t *extended_samples, size_t count) {
+    pvr_light_t basic_storage[9], extended_storage[9];
+    pvr_lighting_prepared_t prepared;
+    pvr_lighting_extended_prepared_t prepared_extended;
+    pvr_lighting_stream_t stream = { samples, count, sizeof(*samples) };
+    pvr_lighting_extended_stream_t es = {
+        extended_samples, count, sizeof(*extended_samples)
+    };
+    uint32_t a[18], b[18];
+    pvr_lighting_output_t ea[18], eb[18];
+    pvr_lighting_result_t ra, rb;
+    int rc, error;
+
+    assert(pvr_lighting_prepare(&prepared, basic_storage, 9, basic) == 0);
+    assert(pvr_lighting_prepare_extended(&prepared_extended,
+                                         extended_storage, 9, extended) == 0);
+    memset(a, 0xa5, sizeof(a)); memset(b, 0xa5, sizeof(b));
+    errno = 0;
+    rc = pvr_lighting_apply(a, 17, &stream, basic, &ra); error = errno;
+    errno = 0;
+    assert(pvr_lighting_apply_prepared(b, 17, &stream, &prepared, &rb) == rc);
+    assert(errno == error && ra.shaded_samples == rb.shaded_samples);
+    assert(memcmp(a, b, sizeof(a)) == 0);
+    memset(ea, 0xa5, sizeof(ea)); memset(eb, 0xa5, sizeof(eb));
+    errno = 0;
+    rc = pvr_lighting_apply_extended(ea, 17, &es, extended, &ra); error = errno;
+    errno = 0;
+    assert(pvr_lighting_apply_extended_prepared(eb, 17, &es,
+                                      &prepared_extended, &rb) == rc);
+    assert(errno == error && ra.shaded_samples == rb.shaded_samples);
+    assert(memcmp(ea, eb, sizeof(ea)) == 0);
+}
+
+static void test_prepared_lighting(void) {
+    pvr_light_t lights[9], signed_lights[9];
+    pvr_lighting_sample_t samples[17];
+    pvr_lighting_extended_sample_t extended_samples[17];
+    pvr_lighting_context_t basic = { { 0.125f, 1.25f, 0 }, lights, 0 };
+    pvr_lighting_extended_context_t extended = {
+        .flags = PVR_LIGHTING_EXTENDED_SPECULAR | PVR_LIGHTING_EXTENDED_DEPTH_CUE_ALPHA,
+        .ambient = { 0.125f, 1.25f, 0 }, .lights = signed_lights,
+        .view_position = { .z = 11 }, .specular_exponent = 3.5f,
+        .depth_near = 1, .depth_far = 20,
+        .depth_near_factor = 1, .depth_far_factor = 0.2f
+    };
+    memset(lights, 0, sizeof(lights));
+    for(size_t i = 0; i < 9; ++i) {
+        lights[i].kind = PVR_LIGHT_DIRECTIONAL;
+        lights[i].source.direction = (vector_t){
+            .x = (float)i - 3.5f, .y = 0.25f, .z = 1.7f + (float)i
+        };
+        lights[i].color = (vector_t){ .x = 0.1f, .y = 0.8f, .z = 0.3f };
+        lights[i].intensity = 0.7f + (float)i;
+        lights[i].attenuation_constant = 1;
+        lights[i].attenuation_linear = 0.125f;
+        lights[i].attenuation_quadratic = 0.01f;
+        signed_lights[i] = lights[i];
+        if(i & 1u) signed_lights[i].intensity *= -1;
+    }
+    memset(samples, 0, sizeof(samples));
+    memset(extended_samples, 0, sizeof(extended_samples));
+    for(size_t i = 0; i < 17; ++i) {
+        samples[i].position.x = (float)i - 7;
+        samples[i].normal = (vector_t){ .x = (i % 3 == 0) ? 1 : 0,
+            .y = (i % 3 == 1) ? -1 : 0, .z = (i % 3 == 2) ? 1 : 0 };
+        if(i % 4 == 3)
+            samples[i].normal = (vector_t){ .x = 0.6f, .y = -0.8f };
+        samples[i].color[0] = (float)i / 16;
+        samples[i].color[1] = 0.51f;
+        samples[i].color[2] = 1.3f;
+        samples[i].color[3] = (float)i / 13;
+        extended_samples[i].position = samples[i].position;
+        extended_samples[i].normal = samples[i].normal;
+        memcpy(extended_samples[i].diffuse, samples[i].color, sizeof(samples[i].color));
+        extended_samples[i].specular[0] = 0.7f;
+        extended_samples[i].specular[1] = 0.1f;
+        extended_samples[i].specular[2] = 1;
+        extended_samples[i].specular_intensity = (i & 1u) ? 1 : 0;
+    }
+    /* 0..9 lights, all short batch/tail sizes, then mixed directional/point. */
+    for(unsigned mixed = 0; mixed < 2; ++mixed) {
+        for(size_t n = 0; n <= 9; ++n) {
+            basic.light_count = extended.light_count = n;
+            for(size_t count = 0; count <= 17; ++count)
+                compare_prepared(&basic, &extended, samples, extended_samples, count);
+        }
+        lights[1].kind = signed_lights[1].kind = PVR_LIGHT_POINT;
+        lights[1].range = signed_lights[1].range = 4;
+        lights[4].kind = signed_lights[4].kind = PVR_LIGHT_POINT;
+        lights[4].source.position = signed_lights[4].source.position = samples[4].position;
+    }
+    for(size_t bad = 0; bad < 17; ++bad) {
+        vector_t save = samples[bad].normal;
+        samples[bad].normal.z = extended_samples[bad].normal.z = NAN;
+        compare_prepared(&basic, &extended, samples, extended_samples, 17);
+        samples[bad].normal = extended_samples[bad].normal = save;
+    }
+    samples[2].position.x = extended_samples[2].position.x = FLT_MAX;
+    compare_prepared(&basic, &extended, samples, extended_samples, 17);
+    samples[2].position.x = extended_samples[2].position.x = -5;
+    signed_lights[0].intensity = FLT_MAX;
+    signed_lights[0].color.z = FLT_MAX;
+    compare_prepared(&basic, &extended, samples, extended_samples, 17);
+}
+
+static void test_prepared_lifetime(void) {
+    pvr_light_t light = { .kind = PVR_LIGHT_DIRECTIONAL,
+        .source.direction = { .z = 3 }, .color = { .x = 1 }, .intensity = 1 };
+    pvr_light_t storage, saved_storage;
+    pvr_lighting_context_t source = { { 0, 0, 0 }, &light, 1 };
+    pvr_lighting_prepared_t prepared, saved;
+    pvr_lighting_sample_t sample = {
+        .normal = { .z = 1 }, .color = { 1, 1, 1, 1 }
+    };
+    pvr_lighting_stream_t stream = { &sample, 1, sizeof(sample) };
+    pvr_lighting_result_t result;
+    uint32_t a, b;
+    assert(pvr_lighting_prepare(&prepared, &storage, 1, &source) == 0);
+    assert(pvr_lighting_apply(&a, 1, &stream, &source, NULL) == 0);
+    light.source.direction.z = -3;
+    source.ambient[1] = 1;
+    assert(pvr_lighting_apply_prepared(&b, 1, &stream, &prepared, NULL) == 0 && b == a);
+    assert(pvr_lighting_prepare(&prepared, &storage, 1, &source) == 0);
+    assert(pvr_lighting_apply_prepared(&b, 1, &stream, &prepared, NULL) == 0 && b != a);
+    assert(pvr_lighting_apply(&a, 1, &stream, &source, NULL) == 0 && b == a);
+    saved = prepared; saved_storage = storage;
+    const float invalid[] = { 0, FLT_MIN, INFINITY, NAN, FLT_MAX };
+    for(size_t i = 0; i < sizeof(invalid)/sizeof(*invalid); ++i) {
+        light.source.direction.z = invalid[i];
+        errno = 0;
+        assert(pvr_lighting_prepare(&prepared, &storage, 1, &source) == -1 && errno == EINVAL);
+        assert(memcmp(&prepared, &saved, sizeof(saved)) == 0);
+        assert(memcmp(&storage, &saved_storage, sizeof(storage)) == 0);
+        assert(pvr_lighting_apply_prepared(&b, 1, &stream, &prepared, NULL) == 0 && b == a);
+    }
+    light.source.direction.z = 3;
+    assert(pvr_lighting_prepare(&prepared, &storage, 0, &source) == -1 && errno == ENOSPC);
+    assert(pvr_lighting_prepare(&prepared, &light, 1, &source) == -1 && errno == EINVAL);
+    assert(pvr_lighting_prepare(&prepared, &storage, 1, &prepared.context) == -1 && errno == EINVAL);
+    light.intensity = -1;
+    assert(pvr_lighting_prepare(&prepared, &storage, 1, &source) == -1 && errno == EINVAL);
+    light.intensity = 1;
+    assert(pvr_lighting_apply_prepared(&b, 0, &stream, &prepared, &result) == -1 && errno == ENOSPC && result.shaded_samples == 0);
+    assert(pvr_lighting_apply_prepared(&b, 1, &stream, NULL, &result) == -1 && errno == EINVAL && result.shaded_samples == 0);
+    stream.stride--;
+    assert(pvr_lighting_apply_prepared(&b, 1, &stream, &prepared, NULL) == -1 && errno == EINVAL);
+    source.lights = NULL; source.light_count = 0;
+    assert(pvr_lighting_prepare(&prepared, NULL, 0, &source) == 0);
+    assert(prepared.context.light_count == 0);
+}
+
+static void test_prepared_extended_lifetime(void) {
+    pvr_light_t light = { .kind = PVR_LIGHT_DIRECTIONAL,
+        .source.direction = { .z = 3 }, .color = { .x = 1 }, .intensity = -0.25f };
+    pvr_light_t storage, saved_storage;
+    pvr_lighting_extended_context_t source = {
+        .ambient = { 0.5f, 0, 0 }, .lights = &light, .light_count = 1
+    };
+    pvr_lighting_extended_prepared_t prepared, saved;
+    pvr_lighting_extended_sample_t sample = {
+        .normal = { .z = 1 }, .diffuse = { 1, 1, 1, 1 }
+    };
+    pvr_lighting_extended_stream_t stream = { &sample, 1, sizeof(sample) };
+    pvr_lighting_output_t a, b;
+    assert(pvr_lighting_prepare_extended(&prepared, &storage, 1, &source) == 0);
+    assert(pvr_lighting_apply_extended(&a, 1, &stream, &source, NULL) == 0);
+    light.intensity = 0.5f;
+    source.ambient[1] = 0.5f;
+    assert(pvr_lighting_apply_extended_prepared(&b, 1, &stream, &prepared, NULL) == 0);
+    assert(memcmp(&a, &b, sizeof(a)) == 0);
+    assert(pvr_lighting_prepare_extended(&prepared, &storage, 1, &source) == 0);
+    assert(pvr_lighting_apply_extended_prepared(&b, 1, &stream, &prepared, NULL) == 0);
+    assert(memcmp(&a, &b, sizeof(a)) != 0);
+    assert(pvr_lighting_apply_extended(&a, 1, &stream, &source, NULL) == 0);
+    assert(memcmp(&a, &b, sizeof(a)) == 0);
+    saved = prepared;
+    saved_storage = storage;
+    source.flags = PVR_LIGHTING_EXTENDED_SPECULAR;
+    source.specular_exponent = 0;
+    errno = 0;
+    assert(pvr_lighting_prepare_extended(&prepared, &storage, 1, &source) == -1);
+    assert(errno == EINVAL);
+    assert(memcmp(&prepared, &saved, sizeof(saved)) == 0);
+    assert(memcmp(&storage, &saved_storage, sizeof(storage)) == 0);
+}
+
 int main(void) {
     test_normal_matrix();
     test_normal_transform();
@@ -381,6 +573,9 @@ int main(void) {
     test_color_pack();
     test_lighting();
     test_extended_lighting();
+    test_prepared_lighting();
+    test_prepared_lifetime();
+    test_prepared_extended_lifetime();
     puts("pvr lighting tests: PASS");
     return 0;
 }

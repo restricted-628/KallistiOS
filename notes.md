@@ -95,6 +95,17 @@ adopt optional graphics/media math substitutions or establish a speedup.
 Source-checker, host, target-link and selected Flycast checks passed; hardware
 behavior/performance and the separate normal-lane/FMAC questions remain open.
 
+**Accepted lighting slice, 2026-10-26:** Caller-owned prepared basic/extended
+lighting snapshots move invariant light admission and directional normalization
+to an explicit update/batch boundary. Existing checked APIs remain available
+for one-off calls. Sources may change or expire after preparation; snapshots
+and backing storage remain immutable/alive through synchronous applies, and
+repreparation adopts changes. Sample checks, point-light work, ordered arithmetic,
+packed output and valid-prefix failures retain their contracts. This is native
+runtime state, not a host-cooked asset format. The scene workload demonstrates
+per-frame reuse; FTRV batching and hardware-performance claims are not included.
+Anchor: `doc/pvr-lighting.md`, `dc/pvr_lighting.h` prepared API family.
+
 ## D08 — Language intent is not build configuration
 
 **Accepted direction:** The owner prefers C23 for the fork; upstream patches

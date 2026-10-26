@@ -131,7 +131,7 @@ Each grid runs two cases. Shared-pose mode samples the hierarchy, morphs, and
 skinning once per frame and reuses those two completed meshes for every pair.
 Independent-pose mode samples each pair at its own deterministic clip phase;
 scratch is reused only after that pair has been submitted. Both run the same
-prepared-cache path, a checked ambient-plus-directional lighting callback, and
+prepared-cache path, an ambient-plus-directional lighting callback, and
 direct PVR list submission. Screen placement is applied after world-space
 skinning. No per-frame allocation, asset reload, texture binding, or new
 renderer API is introduced. This exercises draw-call/pose scaling; it does not
@@ -179,6 +179,29 @@ python3 utils/pvr-chunk-scene-integration-test/check-workload-log.py run.log
 The checker rejects missing/duplicate cases, missing stages, wrong counts,
 unsorted summary statistics, and a missing final PASS. It cannot establish
 that a log came from physical hardware or validate the timer's accuracy.
+
+### Directional-light preparation comparison
+
+The workload prepares one caller-owned lighting snapshot per frame and shares
+it across every cached-reference callback. It retains sample checks and packed
+color semantics, while moving unchanged light validation and normalization out
+of the callback. Preparation and its snapshot copy are inside `cpu-frame`;
+`draw` measures emission using the prepared snapshot. The constant fixture could
+reuse a snapshot across frames, but preparing each frame also measures the cost
+of adopting changing scene lights.
+
+Build `chunk-workload-unprepared.elf` for the same workload using the original
+checked lighting entry on every reference, with no unused preparation step:
+
+```sh
+make -C examples/dreamcast/pvr/chunk_scene chunk-workload.elf chunk-workload-unprepared.elf
+```
+
+Both variants retain the same 18 packet/color checks, six rendered cases, and
+serial-log format. Run each on the same device and compare complete CPU-frame
+cost as well as draw time. A single ordered emulator run provides execution
+evidence, not a physical-console performance claim. Other scene conformance
+fixtures retain their existing checked lighting paths.
 
 ## Animated textured grid integration
 

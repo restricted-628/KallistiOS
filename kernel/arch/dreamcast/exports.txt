@@ -907,6 +907,10 @@ pvr_environment_map_uv
 pvr_color_pack_argb
 pvr_lighting_apply
 pvr_lighting_apply_extended
+pvr_lighting_prepare
+pvr_lighting_prepare_extended
+pvr_lighting_apply_prepared
+pvr_lighting_apply_extended_prepared
 pvr_material_compile_polygon
 pvr_material_compile_sprite
 pvr_material_compile_two_volume

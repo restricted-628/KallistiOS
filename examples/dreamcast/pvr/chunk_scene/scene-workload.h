@@ -19,18 +19,38 @@ static uint64_t workload_clock(void) {
 #endif
 }
 
+static const pvr_light_t workload_light = {
+    .kind = PVR_LIGHT_DIRECTIONAL,
+    .source.direction = { .z = 1.0f },
+    .color = { .x = 1, .y = 1, .z = 1 },
+    .intensity = 0.5f
+};
+static const pvr_lighting_context_t workload_lighting = {
+    { 0.25f, 0.25f, 0.25f }, &workload_light, 1
+};
+
+typedef struct workload_context {
+    model_state_t *model;
+    const pvr_lighting_prepared_t *lighting;
+} workload_context_t;
+
+static int workload_resolve(uint16_t index, pvr_deform_vertex_t *output,
+                            void *data) {
+    workload_context_t *context = data;
+    return resolve(index, output, context->model);
+}
+
+#ifndef CHUNK_SCENE_HOST
+static int workload_begin(const pvr_chunk_cached_strip_t *strip, void *data) {
+    workload_context_t *context = data;
+    return begin_strip(strip, context->model);
+}
+#endif
+
 static int workload_shade(const pvr_chunk_render_state_t *state,
                           uint16_t index, const pvr_deform_vertex_t *vertex,
                           pvr_vertex_t *output, void *data) {
-    static const pvr_light_t light = {
-        .kind = PVR_LIGHT_DIRECTIONAL,
-        .source.direction = { .z = 1.0f },
-        .color = { .x = 1, .y = 1, .z = 1 },
-        .intensity = 0.5f
-    };
-    static const pvr_lighting_context_t lighting = {
-        { 0.25f, 0.25f, 0.25f }, &light, 1
-    };
+    const workload_context_t *context = data;
     const uint32_t color = output->argb;
     const pvr_lighting_sample_t input = {
         vertex->position, vertex->normal,
@@ -42,8 +62,13 @@ static int workload_shade(const pvr_chunk_render_state_t *state,
     pvr_lighting_result_t result;
     (void)state;
     (void)index;
-    (void)data;
-    if(pvr_lighting_apply(&output->argb, 1, &stream, &lighting, &result) < 0)
+#ifdef CHUNK_SCENE_UNPREPARED_LIGHTING
+    (void)context;
+    if(pvr_lighting_apply(&output->argb, 1, &stream, &workload_lighting, &result) < 0)
+#else
+    if(pvr_lighting_apply_prepared(&output->argb, 1, &stream,
+                                  context->lighting, &result) < 0)
+#endif
         return -1;
     return require(result.shaded_samples == 1);
 }
@@ -68,6 +93,17 @@ static int workload_frame(unsigned pairs, int independent, unsigned frame,
     const float scale = 80.0f / (float)columns;
     uint64_t start;
     size_t draws = 0;
+    pvr_light_t light_storage[1];
+    pvr_lighting_prepared_t lighting;
+
+    /* One snapshot for every cached reference in this frame. Reprepare here
+       also accounts for changing scene lights; never prepare in the callback. */
+#ifndef CHUNK_SCENE_UNPREPARED_LIGHTING
+    if(pvr_lighting_prepare(&lighting, light_storage, 1, &workload_lighting) < 0)
+        return failure("workload-light-prepare");
+#else
+    (void)light_storage;
+#endif
 
     if(require(pairs == 1 || pairs == 16 || pairs == 256) < 0)
         return -1;
@@ -94,6 +130,7 @@ static int workload_frame(unsigned pairs, int independent, unsigned frame,
             pvr_chunk_cache_result_t emitted;
             pvr_chunk_cache_begin_strip_t begin = NULL;
             model_state_t *m = &app.model[i];
+            workload_context_t callback = { m, &lighting };
             if(verify) {
                 memset(output, 0xa5, sizeof(output));
                 if(pvr_geometry_sink_init_memory(&memory, output, VERTICES) < 0)
@@ -102,12 +139,12 @@ static int workload_frame(unsigned pairs, int independent, unsigned frame,
             }
 #ifndef CHUNK_SCENE_HOST
             else
-                begin = begin_strip;
+                begin = workload_begin;
 #endif
             start = workload_clock();
             if(pvr_chunk_model_cache_draw_emit(&m->draw, &screen, target,
-                   workspace, VERTICES, NULL, begin, resolve, workload_shade,
-                   m, &emitted) < 0)
+                   workspace, VERTICES, NULL, begin, workload_resolve, workload_shade,
+                   &callback, &emitted) < 0)
                 return failure("workload-draw");
             times->draw += workload_clock() - start;
             if(require(emitted.emitted_strips == 1 &&

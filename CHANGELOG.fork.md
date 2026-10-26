@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-10-26 — prepared directional lighting
+
+- Add caller-owned basic/extended lighting snapshots that validate and normalize
+  directional lights once for reuse across a batch. Preserve existing checked
+  APIs, packed-color/error semantics and dynamic point/sample checks.
+- Reuse one snapshot per frame in the scene workload, with an opt-in checked
+  comparison. No heap allocation, hidden cache, FTRV batching or math-policy
+  change. Reprepare when source values change; keep snapshots immutable in use.
+- Host parity/sanitizer and scene tests, GCC16.2 builds/links and retained
+  Flycast parity/state/complete-scene checks pass. Fixture light admission and
+  normalization counts fall from 9,828 to 18. Preparation adds storage/copy cost
+  and loses for single-reference host batches; hardware speed is unmeasured.
+
 ## 2026-10-26 — SH4ZAM v0.10 compatibility integration
 
 - Advance the official submodule from `9a214a2` to `ad2f890`; build the new
