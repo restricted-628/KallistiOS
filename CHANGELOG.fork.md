@@ -6,6 +6,15 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-05 — upstream reconciliation
+
+- Merge official KOS through d81aa3fda: Maple receive-buffer cache preparation,
+  MIE center-first wheel calibration, elf2bin destination/error handling, and
+  kos-chain GDB Python/static-build and Windows-host maintenance.
+- Preserve the fork's equivalent architecture-before-final-flags environment
+  ordering, GCC fallback and SH4ZAM linkage when resolving upstream conflicts.
+  No compiler-profile, language-default or dependency-pin change.
+
 ## 2026-10-26 — prepared directional lighting
 
 - Add caller-owned basic/extended lighting snapshots that validate and normalize
