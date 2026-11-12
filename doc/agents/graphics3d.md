@@ -16,6 +16,9 @@ Compact models/scenes, transforms, culling, collision, deformation, skeleton/ski
 - `kernel/arch/dreamcast/hardware/pvr/pvr_lighting.c`
 - `kernel/arch/dreamcast/hardware/pvr/pvr_material.c`
 - `kernel/arch/dreamcast/hardware/pvr/pvr_toon.c`
+- `addons/libsh4der` — pinned CPU effects; see its README for linked/held APIs,
+  custom licenses and renderer ownership. No standalone vendor GPU backend.
+- `examples/dreamcast/pvr/sh4der_compact`
 
 Relevant existing documentation (dated claims must be rechecked):
 
@@ -59,6 +62,8 @@ Host test directories with inspected Makefile targets:
 - `utils/pvr-lighting-test` — candidate `make -C utils/pvr-lighting-test test` in an assigned checkout.
 - `utils/pvr-material-test` — candidate `make -C utils/pvr-material-test test` in an assigned checkout.
 - `utils/pvr-toon-test` — candidate `make -C utils/pvr-toon-test test` in an assigned checkout.
+- `utils/sh4der-compact-test` — Compact callback/index and bloom projection checks;
+  `python3 utils/check-sh4der-source.py` checks the dependency pin and provenance.
 
 Target/example directories (source the assigned checkout's environment and inspect its Makefile before building):
 

@@ -1,0 +1,2 @@
+# Optional link-time addon: callers explicitly link -lsh4der.
+# Uses the pinned SH4ZAM backend without changing global math flags.

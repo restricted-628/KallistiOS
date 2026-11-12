@@ -1,3 +1,6 @@
 [submodule "addons/libsh4zam/upstream"]
     path = addons/libsh4zam/upstream
     url = https://github.com/gyrovorbis/sh4zam.git
+[submodule "addons/libsh4der/upstream"]
+	path = addons/libsh4der/upstream
+	url = https://github.com/JiltedValkyrie/SH4DER-PVR.git

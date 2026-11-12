@@ -106,6 +106,15 @@ runtime state, not a host-cooked asset format. The scene workload demonstrates
 per-frame reuse; FTRV batching and hardware-performance claims are not included.
 Anchor: `doc/pvr-lighting.md`, `dc/pvr_lighting.h` prepared API family.
 
+**SH4DER-PVR integration, 2026-11-11:** The owner requests a pinned dependency
+feeding the fork renderer, not a competing standalone renderer. The first slice
+links only CPU core/blade/holo/bloom and bundled SH4DOW computations, with
+caller-owned Compact callbacks and geometry output. Keep upstream unmodified,
+preserve both custom licenses/credits, and do not inherit global fast-math.
+Framebuffer feedback, RTT/history ownership and native vendor emitters are held
+for separate caller-owned adaptation. Header availability is not proof that all
+declared GPU functions are linked or integrated. See `addons/libsh4der/README.md`.
+
 ## D08 — Language intent is not build configuration
 
 **Accepted direction:** The owner prefers C23 for the fork; upstream patches

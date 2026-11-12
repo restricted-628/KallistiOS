@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-11 — caller-owned SH4DER-PVR foundation
+
+- Pin SH4DER-PVR at 17a1f0623 as an unmodified submodule. Build an optional
+  six-source CPU addon with SH4ZAM, retaining both custom dependency licenses.
+- Add a Compact blade/hologram callback and caller-owned geometric-bloom example,
+  plus host regression for repeated/reversed vertex indices, sidecar rebind,
+  preserved vertex fields, output capacity and bloom projection.
+- No vendor scene, framebuffer, RTT, fog, allocation or history-buffer owner is
+  enabled. Those GPU backends remain separate integration work; no hardware
+  performance or visual-parity claim is made.
+
 ## 2026-11-11 — upstream VMU size reconciliation
 
 - Merge official KOS through 38aeee7e9, covering the two VMU payload-size fixes.

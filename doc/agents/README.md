@@ -32,7 +32,7 @@ without claiming a new per-path recount.
 | [RTC, timers and VBlank dispatch](clocks-vblank.md) | Kernel/platform + fibers | 69 |
 | [Video modes and the low-level PVR pipeline](video-pvr.md) | Graphics | 81 |
 | [2D cells, sprites, tilemaps and particles](graphics2d.md) | Graphics | 40 |
-| [3D geometry, animation and rendering styles](graphics3d.md) | Graphics | 233 |
+| [3D geometry, animation, rendering styles and SH4DER effects](graphics3d.md) | Graphics | 233 |
 | [Assets, textures, compression and host converters](assets-compression.md) | Graphics + storage | 168 |
 | [LZ4 Dreamcast addon and decode adapters](lz4-addon.md) | LZ4 addon | Subset of assets above |
 | [Nindows2 parity through Kosh and Conio](nindows-kosh.md) | Nindows2/Kosh addon | New scope; not recounted |
