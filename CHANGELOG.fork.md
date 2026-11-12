@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-11 — libADX validated metadata and prefix queries
+
+- Add a read-only validated metadata snapshot and header/endcode prefix probes
+  using the existing decoder parser. Preserve outputs on incomplete/error input,
+  bound scans to one record and distinguish record validity from file/playback
+  completion. adxcheck consumes the snapshot without changing its JSON contract.
+- Document deliberate strict native recognition versus SDK permissive recognition
+  and supplied-span sizing. Decoder admission, PCM math and Audio are unchanged.
+- Add 39 query cases, passing in host and sanitizer suites, and validate staged
+  SH-4 C/C++ consumers. Full historical-format and middleware parity remain open.
+
 ## 2026-11-11 — KOSdec libADX music foundation
 
 - Add the original, explicitly built libADX addon: incremental mono/stereo ADX

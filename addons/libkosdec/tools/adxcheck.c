@@ -87,20 +87,22 @@ static int check(const char *path) {
     }
     else printf("null");
     printf(",\"validated_header\":");
-    if(decoder.header_ready) {
+    struct kosdec_adx_info info;
+    bool header_ready = kosdec_adx_get_info(&decoder, &info) == KOSDEC_ADX_DONE;
+    if(header_ready) {
         printf("{\"sample_rate\":%" PRIu32 ",\"channels\":%u,\"frames\":%" PRIu32
-               ",\"loop\":", decoder.sample_rate, decoder.channels, decoder.total_frames);
-        if(decoder.loop.present)
+               ",\"loop\":", info.sample_rate, info.channels, info.total_frames);
+        if(info.loop.present)
             printf("{\"start_frame\":%" PRIu32 ",\"end_frame\":%" PRIu32
                    ",\"start_byte\":%" PRIu32 ",\"end_byte\":%" PRIu32 "}",
-                   decoder.loop.start_frame, decoder.loop.end_frame,
-                   decoder.loop.start_byte, decoder.loop.end_byte);
+                   info.loop.start_frame, info.loop.end_frame,
+                   info.loop.start_byte, info.loop.end_byte);
         else printf("null");
         printf("}");
     }
     else printf("null");
-    printf(",\"default_player_rate_supported\":%s", !decoder.header_ready ? "null" :
-           decoder.sample_rate >= 8000 && decoder.sample_rate <= 48000 ? "true" : "false");
+    printf(",\"default_player_rate_supported\":%s", !header_ready ? "null" :
+           info.sample_rate >= 8000 && info.sample_rate <= 48000 ? "true" : "false");
     printf(",\"io_error\":");
     if(io_error) quoted(strerror(io_error)); else printf("null");
     puts("}");

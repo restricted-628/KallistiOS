@@ -25,7 +25,7 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 | --- | --- | --- | --- |
 | H1 | Lifecycle and multi-handle management | player_init/start/stop; caller-owned state | Global handle/reset/close semantics and multi-handle conformance; Audio-qualified device retirement/reuse; InitWce needs Dreamcast applicability disposition. |
 | H2 | Playback sources | file/stream/memory, ACX/AFS views, sequence | Unified source admission/control equivalents, memory-index semantics and SJ source behavior; direct filename BGM composition supplied, not CRI ABI compatibility. |
-| H3 | Metadata and framing queries | Validated decoder metadata and full-file adxcheck | Independent header/endcode query contracts, return units and partial-header behavior need conformance mapping. |
+| H3 | Metadata and framing queries | Validated metadata snapshot, strict header/endcode prefix probes and full-file adxcheck; truncation/malformed/unaligned/suffix tests | Admitted-format native queries implemented. CRI recognizer permissiveness and supplied-span endcode sizing are documented differences; complete baseline format conformance remains C1. |
 | H4 | Embedded loop controls | v3 loop repeat/release and counters | Baseline loop on/off/count semantics and every baseline-accepted metadata/history layout; current release-only source control is narrower. |
 | H5 | Volume and pan | Checked KOS linear 0..255 controls | CRI attenuation/pan units, defaults, getters and edge cases; current KOS control units differ. |
 | H6 | Playback clock and completion | Software source/copy counters and source-end state | Qualified output/source clock, audible end, offsets and time modes; source EOF is not PLAYEND. Audio dependency. |
@@ -72,20 +72,20 @@ V4. Integrate the exact reviewed source/dependencies into master, rebuild instal
 headers/archive and dependent consumers, and record the commit. A private worker,
 staged archive or review handoff is not completion of this requirement.
 
-## BGM use and overall project boundary
+## Overall project boundary
 
 The existing native path already supplies standard ADX decoding, buffered file
 input, loop metadata, whole-file sequence repeat and fixed-rate output. The
-file_audio consumer and file_player tests exercise that composition. They neither
-implement Konami's custom driver nor depend on matching it. Source-end counters
-are not an audible clock. Runtime live stereo rate changes and sound retirement
+file_audio consumer and file_player tests exercise that composition. Application
+integration is separate from middleware completion. Source-end counters are not
+an audible clock. Runtime live stereo rate changes and sound retirement
 remain Audio/Integration work; no alternate firmware behavior is hidden here.
 
 The separate host-tool/authoring milestone remains open: compatibility checking
 exists, while encoding/conversion and archive authoring do not. Sega's ADX record
 facade is not a decoder operation; assess it under authoring rather than silently
-expanding playback work. SFD, AHX, newer CRI codecs, and the port's Konami driver
-are outside this libADX runtime completion boundary.
+expanding playback work. SFD, AHX and newer CRI codecs are outside this libADX
+runtime completion boundary.
 
 The definitive finish condition is closure of C1/C2, each applicable runtime row,
 and V1/V2/V4 with recorded evidence and no hidden unimplemented paths. V3 and host

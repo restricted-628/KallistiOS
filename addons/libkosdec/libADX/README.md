@@ -4,7 +4,8 @@ This is an independently written, incremental float ADX decoder. It accepts
 encoding 3, versions 3 and 5, 18-byte channel blocks, 4-bit residuals, mono/stereo
 at integer rates 1..48000 Hz with integer cutoff 0..floor(rate/2), a 26..65539-byte header,
 and an 18..65539-byte zero-padded end record. Declared length is limited to INT32_MAX
-PCM frames. Metadata becomes valid when `header_ready` is true.
+PCM frames. Metadata becomes valid when `header_ready` is true; use
+`kosdec_adx_get_info` for a validated snapshot.
 
 Headers may have zero extensions or a validated version-3 loop record:
 zero insertion samples, one type-1 loop, block-aligned start, ordered sample
@@ -40,6 +41,32 @@ it does not indicate truncation. `NEED_END` waits for an explicit end of input.
 `DONE` validates both declared sample completion and the end record. Terminal
 errors/cancellation remain sticky until reinitialization. Cancellation is between
 calls. No calls allocate, block, yield, invoke callbacks or access hardware.
+
+## Metadata and record inspection
+
+`kosdec_adx_get_info(&decoder, &info)` returns `DONE` with a
+`struct kosdec_adx_info` snapshot of header bytes, total PCM frames, sample rate,
+cutoff, encoding, block bytes, sample bits, channels, version and loop metadata.
+Before the header is complete it returns `NEED_INPUT` or the decoder's terminal
+error. Once admitted, metadata remains available after a later body error or
+cancellation. This is not a live playback-position query. Serialize access with
+decoding, and keep the output disjoint from the decoder.
+
+`kosdec_adx_probe_header(input, bytes, &info)` validates a contiguous header prefix
+using the same parser. `kosdec_adx_probe_endcode(input, bytes, &record_bytes)`
+validates an end-record prefix, including its declared length and zero padding.
+Both return `DONE` for a complete supported record, `NEED_INPUT` for a prefix
+that needs more bytes, or the normal malformed/unsupported status. Outputs stay
+unchanged unless `DONE`; bytes after the validated record are ignored. A successful
+probe does not validate the compressed body or actual file EOF. Use incremental
+decoding or `adxcheck` for full-file admission.
+
+Probes accept byte-aligned input and allocate no memory. They inspect at most
+65539 bytes in parser steps of at most 512 bytes; choose the incremental decoder
+when a caller needs a single-step work bound. These are intentionally strict
+native queries, not CRI ABI recognizers: the shipped end-code recognizer checks
+the marker and reports the supplied span, whereas our query reports the validated
+declared record size. Format support and PCM arithmetic are unchanged.
 
 ## Resident-input PCM reader
 

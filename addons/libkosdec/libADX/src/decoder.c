@@ -164,3 +164,57 @@ fail:
     d->terminal = r.status;
     return r;
 }
+
+enum kosdec_adx_status kosdec_adx_get_info(const struct kosdec_adx_decoder *d,
+                                        struct kosdec_adx_info *info) {
+    if(!d || d->magic != ADX_MAGIC || !info) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(!d->header_ready) return d->terminal ? d->terminal : KOSDEC_ADX_NEED_INPUT;
+    *info = (struct kosdec_adx_info){
+        .header_bytes = d->header_bytes, .total_frames = d->total_frames,
+        .sample_rate = d->sample_rate, .cutoff = d->cutoff,
+        .encoding = d->header[4], .block_bytes = d->header[5],
+        .sample_bits = d->header[6], .channels = d->channels,
+        .version = d->version, .loop = d->loop
+    };
+    return KOSDEC_ADX_DONE;
+}
+
+enum kosdec_adx_status kosdec_adx_probe_header(const uint8_t *input, size_t bytes,
+                                            struct kosdec_adx_info *info) {
+    if((!input && bytes) || !info) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_decoder d;
+    kosdec_adx_init(&d);
+    size_t used = 0;
+    for(;;) {
+        struct kosdec_adx_result r = kosdec_adx_decode(&d,
+            input ? input + used : NULL, bytes - used, NULL, 0, false);
+        used += r.consumed;
+        if(d.header_ready) return kosdec_adx_get_info(&d, info);
+        if(r.status != KOSDEC_ADX_MORE) return r.status;
+    }
+}
+
+enum kosdec_adx_status kosdec_adx_probe_endcode(const uint8_t *input, size_t bytes,
+                                             uint32_t *endcode_bytes) {
+    if((!input && bytes) || !endcode_bytes) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_decoder d;
+    kosdec_adx_init(&d);
+    /* This local parser has no header/body: only its existing footer state is
+       exercised. The public decoder instance and its admission are untouched. */
+    d.header_ready = true;
+    size_t used = 0;
+    for(;;) {
+        size_t take = d.footer_bytes - d.footer_used;
+        if(take > bytes - used) take = bytes - used;
+        struct kosdec_adx_result r = kosdec_adx_decode(&d,
+            input ? input + used : NULL, take, NULL, 0, false);
+        used += r.consumed;
+        if(r.status == KOSDEC_ADX_NEED_END) {
+            *endcode_bytes = d.footer_bytes;
+            return KOSDEC_ADX_DONE;
+        }
+        if(r.status != KOSDEC_ADX_MORE && r.status != KOSDEC_ADX_NEED_INPUT)
+            return r.status;
+        if(used == bytes) return KOSDEC_ADX_NEED_INPUT;
+    }
+}

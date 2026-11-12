@@ -588,6 +588,12 @@ Source EOF is not audible completion. Use the published completion matrix for
 remaining format, middleware, clock and output-control gates; host tests and
 target links do not establish physical-hardware behavior.
 
+**Scope clarification, 2026-11-11:** Finish the complete applicable Sega Library
+2.00J libADX middleware baseline; application adaptation is separate. The
+validated metadata/prefix-query slice is accepted with deliberately stricter
+native recognition and declared-record sizing, not CRI recognizer equivalence.
+Full historical-format and lifecycle/control conformance remain explicitly open.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

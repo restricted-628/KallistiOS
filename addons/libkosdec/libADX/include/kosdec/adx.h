@@ -41,6 +41,36 @@ struct kosdec_adx_result {
     enum kosdec_adx_status status;
     size_t consumed, frames;
 };
+/* Immutable metadata snapshot, independent of the decoder's mutable counters.
+   Counts are PCM frames (samples per channel); all byte offsets are absolute. */
+struct kosdec_adx_info {
+    uint32_t header_bytes, total_frames, sample_rate;
+    uint16_t cutoff;
+    uint8_t encoding, block_bytes, sample_bits, channels, version;
+    struct kosdec_adx_loop loop;
+};
+/* DONE publishes validated header metadata, even after a later body error or
+   cancellation. Before header validation: NEED_INPUT, or the terminal error.
+   BAD_ARGUMENT for invalid state/output. Never mutates decoder; output remains
+   unchanged unless DONE. Output must be disjoint from decoder storage.
+   Serialize against decoding, including producer use. */
+enum kosdec_adx_status kosdec_adx_get_info(const struct kosdec_adx_decoder *,
+                                        struct kosdec_adx_info *);
+/* Inspect a contiguous prefix without changing a live decoder or emitting PCM.
+   DONE means the complete supported header/end record was validated, NOT that
+   its body, file EOF or playback is valid. Bytes after that record are ignored.
+   NEED_INPUT means supply a longer prefix; malformed/unsupported records use
+   the same status/policy as decode. Output is unchanged unless DONE. NULL input
+   is valid only with zero bytes; output must be non-NULL and disjoint from input.
+   Input may be byte-aligned. No allocation/I/O/scheduler/FPU-state changes.
+   Work is bounded by one record (at most65539 bytes), using512-byte parser steps;
+   these whole-record probes are not the incremental real-time decode API.
+   Endcode size is its declared validated extent, not the supplied buffer size.
+   These strict admission queries differ from CRI's permissive recognizers. */
+enum kosdec_adx_status kosdec_adx_probe_header(const uint8_t *, size_t,
+                                            struct kosdec_adx_info *);
+enum kosdec_adx_status kosdec_adx_probe_endcode(const uint8_t *, size_t,
+                                             uint32_t *endcode_bytes);
 /* Initialize/reinitialize caller-owned state. No allocation or implicit I/O.
    Profiles: v3/v5, encoding3/block18/4-bit, mono/stereo; integer rate1..48000Hz,
    cutoff0..floor(rate/2) (above44.1k is an extension),
