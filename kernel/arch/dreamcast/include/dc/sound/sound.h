@@ -497,6 +497,13 @@ typedef struct snd_channel_status_ex {
     updates the selected channel during the read and returns EAGAIN if a stable
     snapshot cannot be obtained within a bounded number of attempts.
 
+    Between failed attempts, an ordinary thread with interrupts fully enabled
+    may be rescheduled after restoring its G2/IRQ state. IRQ, masked and
+    inactive-threading callers do not reschedule. There are at most eight read
+    attempts; this is not a wall-time bound or a guarantee of writer progress.
+    As with other sound operations, callers must exclude concurrent or partial
+    threading initialization/shutdown and retain their output storage.
+
     \param ch              Channel number, 0 through 63.
     \param status          Receives the coherent snapshot.
     \retval 0              On success.

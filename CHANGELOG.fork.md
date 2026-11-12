@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-11 — bounded sound-status retry
+
+- Release and restore G2/IRQ state between channel-status snapshot attempts.
+  Permit rescheduling only for an ordinary, fully interrupt-enabled thread with
+  active preemptive threading; preserve caller exclusion and errno otherwise.
+- Keep the eight-attempt limit and EAGAIN result. This is not a wall-time bound,
+  writer-progress guarantee, consumed-source clock or hardware-retirement proof.
+- Exact-body host regression covers 1,307 checks, including masked/IRQ/inactive
+  contexts and failure paths; current-fork SH-4 compilation passes.
+
 ## 2026-11-11 — caller-owned SH4DER-PVR foundation
 
 - Pin SH4DER-PVR at 17a1f0623 as an unmodified submodule. Build an optional

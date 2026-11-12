@@ -655,14 +655,56 @@ int snd_channel_stop(unsigned int channel) {
     return channel_control_submit(channel, AICA_CHANNEL_OP_STOP, 0, 0, NULL);
 }
 
+/* Only the caller's original, fully restored context may reschedule. */
+static bool channel_status_thread_ready(void) {
+    bool ready;
+
+    if(irq_inside_int() || !thd_get_current())
+        return false;
+
+    /* This existing query still reports NONE after thread shutdown on this
+       KOS version. Its mode-selection API is deprecated, but a non-null
+       current thread alone does not establish an active scheduler. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+    ready = thd_get_mode() == THD_MODE_PREEMPT;
+#pragma GCC diagnostic pop
+    return ready;
+}
+
+/* One read-only coherence attempt; all exits restore the exact bus context. */
+static bool channel_status_read_once(uint32_t address,
+                                     aica_channel_status_ext_t *snapshot,
+                                     irq_mask_t *entry_state) {
+    g2_ctx_t context = g2_lock();
+    uint32_t *words = (uint32_t *)snapshot;
+    uint32_t first, last;
+    size_t word;
+    bool coherent = false;
+
+    *entry_state = context.irq_state;
+    g2_fifo_wait();
+    first = g2_read_32_raw(address);
+    if(!(first & 1)) {
+        words[0] = first;
+        for(word = 1; word < sizeof(*snapshot) / sizeof(words[0]); ++word) {
+            if((word & 7) == 0)
+                g2_fifo_wait();
+            words[word] = g2_read_32_raw(address + word * sizeof(words[0]));
+        }
+        g2_fifo_wait();
+        last = g2_read_32_raw(address);
+        coherent = first == last && !(last & 1);
+    }
+    g2_unlock(context);
+    return coherent;
+}
+
 int snd_channel_get_status_ex(unsigned int channel,
                               snd_channel_status_ex_t *status) {
     aica_channel_status_ext_t snapshot;
-    uint32_t *words = (uint32_t *)&snapshot;
     uint32_t address;
-    uint32_t first_sequence;
-    uint32_t last_sequence;
-    size_t word;
+    irq_mask_t entry_state = 0, attempt_state;
     unsigned int attempt;
 
     if(channel >= 64 || !status) {
@@ -681,30 +723,25 @@ int snd_channel_get_status_ex(unsigned int channel,
     }
 
     address = SPU_RAM_UNCACHED_BASE + AICA_CHANNEL_STATUS(channel);
-    g2_lock_scoped();
-
     for(attempt = 0; attempt < 8; ++attempt) {
-        g2_fifo_wait();
-        first_sequence = g2_read_32_raw(address);
-        if(first_sequence & 1)
-            continue;
-
-        words[0] = first_sequence;
-        for(word = 1; word < sizeof(snapshot) / sizeof(words[0]); ++word) {
-            if((word & 7) == 0)
-                g2_fifo_wait();
-            words[word] = g2_read_32_raw(address + word * sizeof(words[0]));
-        }
-        g2_fifo_wait();
-        last_sequence = g2_read_32_raw(address);
-
-        if(first_sequence == last_sequence && !(last_sequence & 1)) {
-            status->sequence = last_sequence;
+        if(channel_status_read_once(address, &snapshot, &attempt_state)) {
+            status->sequence = snapshot.sequence;
             status->configured = snapshot.configured != 0;
             status->playing = snapshot.playing != 0;
             status->position = snapshot.position & 0xffff;
             channel_config_unpack(&status->config, &snapshot.config);
             return 0;
+        }
+        if(attempt == 0)
+            entry_state = attempt_state;
+
+        /* BL or any IMASK bit forbids replacing caller exclusion state.
+           No yield after the last attempt, and no promise of ARM progress. */
+        if(attempt < 7 && !(entry_state & 0x100000f0u) &&
+           channel_status_thread_ready()) {
+            int saved_errno = errno;
+            thd_pass();
+            errno = saved_errno;
         }
     }
 
