@@ -571,6 +571,23 @@ format and provider behavior remain unchanged. No MMU dependency is introduced;
 hardware cache/timing/boot and memory high-water validation remain open. OVL4
 remains deferred.
 
+## D21 — KOSdec libADX delivery boundary
+
+**Accepted, 2026-11-11:** Publish KOSdec's reviewed native ADX music foundation
+for port integration, independently of unfinished full middleware parity.
+The original implementation lives in `addons/libkosdec/libADX`; installed APIs
+are namespaced `kosdec_adx_*`, not a CRI ABI replacement. Its explicit build
+retains the pinned SH4ZAM definitions and exact scalar FMAC policy.
+
+The SH-4 producer decodes ADX into PCM supplied to the existing sound path.
+The optional player uses an ordinary owning thread for sound control and a
+private fiber executor for production. It does not initialize global sound.
+Successful software stop does not authorize sound-allocation reuse: retain the
+sound allocation until Audio establishes the required device-retirement proof.
+Source EOF is not audible completion. Use the published completion matrix for
+remaining format, middleware, clock and output-control gates; host tests and
+target links do not establish physical-hardware behavior.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

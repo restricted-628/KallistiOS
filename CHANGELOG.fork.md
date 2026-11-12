@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-11 — KOSdec libADX music foundation
+
+- Add the original, explicitly built libADX addon: incremental mono/stereo ADX
+  decoding, coefficient setup, memory/file/direct-disc sources, bounded ACX/AFS
+  lookup, loop/sequence controls, seek, PCM pipe and fiber-backed producer.
+- Add a fork-native player and filename BGM example with bounded compressed-input
+  caching, embedded-loop release and same-format source transitions. Include the
+  host adxcheck compatibility tool, synthetic regressions and install targets.
+- Preserve explicit SH-4 FMAC arithmetic and pinned SH4ZAM definitions; no codec
+  dependency repin, global sound initialization or aggregate-build change.
+- Host and sanitizer suites pass; current-fork SH-4 archive/examples and staged
+  consumer link pass. Full SDK middleware parity, qualified audible completion,
+  reusable sound retirement and retail-hardware validation remain open. libSFD
+  and libAHX directories are placeholders, not delivered playback libraries.
+
 ## 2026-11-11 — bounded sound-status retry
 
 - Release and restore G2/IRQ state between channel-status snapshot attempts.

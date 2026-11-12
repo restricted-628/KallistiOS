@@ -2,7 +2,7 @@
 
 Read root `AGENTS.md` first. Choose the smallest relevant guide below, then
 read related guides only when the assigned change crosses an interface.
-Do not load all 23 guides into every chat or treat a guide as permission to
+Do not load the entire guide collection into every chat or treat a guide as permission to
 implement a broad roadmap.
 
 ## Choose a component
@@ -10,7 +10,7 @@ implement a broad roadmap.
 Counts are unique inventoried paths assigned to a primary area, including
 headers, examples, tests and documentation; they are not lines of code or
 a correctness score. Cross-area review is still required. Counts retain the
-original setup inventory; the two addon lanes added later refine ownership
+original setup inventory; the addon lanes added later refine ownership
 without claiming a new per-path recount.
 
 | Guide | Coordinating lane | Paths in setup inventory |
@@ -28,6 +28,7 @@ without claiming a new per-path recount.
 | [VMU storage, packages and display](vmu-storage.md) | Kernel/platform + storage | 49 |
 | [Maple bus and input/capture devices](maple-devices.md) | Kernel/platform | 51 |
 | [AICA, SPU transfers, DSP and audio streams](audio.md) | AICA/Manatee audio | 90 |
+| [KOSdec media decoder and middleware addon](kosdec.md) | KOSdec | New scope; not recounted |
 | [Flash configuration and persistent settings](flash-settings.md) | Kernel/platform + networking | 18 |
 | [RTC, timers and VBlank dispatch](clocks-vblank.md) | Kernel/platform + fibers | 69 |
 | [Video modes and the low-level PVR pipeline](video-pvr.md) | Graphics | 81 |
