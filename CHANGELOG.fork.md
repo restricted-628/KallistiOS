@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-11 — upstream VMU size reconciliation
+
+- Merge official KOS through 38aeee7e9, covering the two VMU payload-size fixes.
+  Preserve the fork's existing logical-size/capacity/package-offset separation:
+  reads, writes, SEEK_END, total, fstat and package writeback already operate on
+  logical payload size rather than header-inclusive card allocation.
+- No VMU implementation change is needed; retain the fork's exact payload EOF,
+  overflow checks, gap filling and metadata handling. Package/chain host tests
+  pass; physical VMU validation remains separate.
+
 ## 2026-11-05 — upstream reconciliation
 
 - Merge official KOS through d81aa3fda: Maple receive-buffer cache preparation,
