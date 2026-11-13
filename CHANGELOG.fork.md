@@ -6,6 +6,22 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — retained SH4DER frame sampling
+
+- Bind checked RGB565 linear/stride render surfaces once, precompute sparse
+  sampling offsets and read only after the identified producer completes.
+  Caller ownership covers writes, reads, replacement and shutdown; borrowing
+  does not pin storage or retire later GPU readers.
+- Add generation/render-tagged metadata history with explicit reset and stale
+  slot rejection, plus host regressions and an original bounded RTT fixture.
+  No scanout inference, full-frame copy or competing renderer is introduced.
+- Host/sanitizer tests and GCC16.2 addon/native links pass. The unchanged native
+  RTT fixture passes both Flycast execution modes with explicit RTT readback;
+  the default GPU-cache-only path failed CPU pixel checks. Strip-header and
+  grade tests, and checked Compact render completion/shutdown, also pass both
+  modes. Hardware visibility/performance, pixel-exact blending and remaining
+  effect coverage are not established by these emulator results.
+
 ## 2026-11-13 — managed audio ports, observation and finite completion
 
 - Add cooperative generation-tagged channel reservations, managed mono playback

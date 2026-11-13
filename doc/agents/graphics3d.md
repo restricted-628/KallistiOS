@@ -26,6 +26,9 @@ Compact models/scenes, transforms, culling, collision, deformation, skeleton/ski
 - `addons/include/sh4der_kos_screen.h`, `addons/libsh4der/kos/screen.c` —
   caller-owned ordered grade packets; `utils/sh4der-screen-test` checks their
   contexts, order, capacity and failures (host context mocks; native link separate).
+- `addons/include/sh4der_kos_frame.h`, `addons/libsh4der/kos/frame.c` —
+  retained RGB565 sampling and generation-tagged metadata;
+  `utils/sh4der-frame-test` provides host and native RTT regressions.
 - `examples/dreamcast/pvr/sh4der_compact`
 
 Relevant existing documentation (dated claims must be rechecked):

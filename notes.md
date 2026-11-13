@@ -625,8 +625,18 @@ strip partition length of six, encoded as three in bits19:18. This applies to
 ordinary and two-volume polygon compilation, including Compact. It does not cap
 submitted strip vertex counts or change sprite/modifier-volume commands. The
 legacy `auto_strip_len` field name remains, with corrected Group_En semantics.
-Source/SDK evidence, host tests and SH-4 links support this bounded change;
-native packet execution, rendering and hardware performance remain unverified.
+Source/SDK evidence, host tests and SH-4 links support this bounded change.
+Follow-up Flycast interpreter/dynarec tests pass the native packet regression
+and Compact example through checked render completion/shutdown. Physical
+hardware behavior and performance remain unverified.
+
+**Accepted retained-frame slice:** `sh4der_kos_frame_bind` admits a stable
+RGB565 surface once. The caller supplies its latest writer and a generation
+changed on rebind/resize/PVR restart. Synchronous sampling requires producer
+completion, not DISPLAYED scanout; return retires only the CPU read. Metadata
+history neither pins textures nor retires GPU readers. Existing KOS surface
+and render-ticket ownership remain authoritative. The native RTT fixture passes
+both Flycast modes with explicit RTT readback; hardware visibility remains open.
 
 ## Updating this register
 

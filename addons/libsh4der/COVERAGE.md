@@ -11,7 +11,7 @@ the full integration request; available math headers alone do not close a row.
 | SH4DOW limbs | Prepared columns consumed in Compact callback; bone exclusion; same-space contract | Posed skeleton consumer and native visuals |
 | SH4DOW feet | Caller-owned receiver quad and alpha-mask bake via `sh4der_kos_geometry.h` | Textured native consumer, upload/lifetime and visual validation |
 | Look/grade | Ordered caller-owned header/quad builder; Compact consumer | Native blend/quantization visuals; exposure capture integration |
-| Frame sampling | Math only | Explicit retained surface, stride/format and capture admission |
+| Frame sampling | Admitted RGB565 linear/stride surface; sparse grid read, exact generation/ticket metadata history; native RTT regression passes both Flycast modes with explicit readback | Hardware visibility; downstream exposure/glow consumers |
 | Glow | Math only | Caller-owned stage/upload/mesh path, reader retirement |
 | Warp | Math only | Caller mesh/sink adapter and scratch |
 | Trail/TAA | Math only | Explicit history surfaces, identity/reset/resize, lifetime |
@@ -83,3 +83,23 @@ increasing reciprocal depths in front of scene content; with manual sorting,
 submit in array order. The builder rejects indistinguishable float depths.
 Constant authored grades can be built once, as in the Compact example. Adaptive
 exposure still requires an explicitly retained frame sample and matching history.
+
+## Retained frame sampling
+
+`sh4der_kos_frame.h` admits a caller-retained RGB565 linear/stride surface and
+precomputes sample offsets once. It reads 4800 texels (9600 with dark neighbors),
+without staging a full frame, querying scanout registers or repeating descriptor
+validation per pixel. CPU reads require the current producer COMPLETE and return
+EAGAIN otherwise; ordinary ordered GPU passes do not need this CPU wait.
+
+The binding borrows storage; it does not pin an allocation or track its readers.
+The owner serializes it against writes/release/shutdown and supplies the latest
+writer ticket. Change the nonzero generation and rebind on replacement, resize
+or PVR restart, even at the same address. A completed producer cannot retire
+later GPU sampling readers. The optional eight-slot metadata history uses exact
+generation/render IDs and rejects evicted IDs; it does not retain GPU textures.
+No three-bit stamp is used as a resource identity.
+
+`utils/sh4der-frame-test` has host failure/arithmetic coverage and an original
+RGB565 RTT fixture. Real scene execution, cache visibility and cost remain
+separate validation levels; frame sampling alone does not complete screen effects.
