@@ -1,0 +1,4 @@
+test-native
+test-native-sanitize
+*.dSYM/
+__pycache__/
