@@ -5,7 +5,7 @@ TARGET = libsh4der.a
 
 OBJS = .build/sh4der_core.o .build/sh4der_blade.o \
        .build/sh4der_holo.o .build/sh4der_bloom.o \
-       .build/sh4dow_dc.o .build/sh4dow_foot.o
+       .build/sh4dow_dc.o .build/sh4dow_foot.o .build/compact.o
 
 ifeq ($(wildcard upstream/include/sh4der_core.h),)
 ifneq ($(MAKECMDGOALS),clean)
@@ -17,6 +17,10 @@ KOS_CFLAGS += -Iupstream/include -Iupstream/sh4dow-dc/include
 KOS_CFLAGS += -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT
 
 $(OBJS): $(wildcard upstream/include/*.h upstream/sh4dow-dc/include/*.h)
+
+.build/compact.o: kos/compact.c ../include/sh4der_kos.h
+	@mkdir -p $(@D)
+	kos-cc $(CFLAGS) $(CPPFLAGS) -MMD -MP -c $< -o $@
 
 .build/%.o: upstream/src/%.c
 	mkdir -p $(@D)

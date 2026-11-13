@@ -75,6 +75,17 @@ int main(int argc, char **argv) {
     /* This fixed model's admitted references are exactly 0..3. For cooked
        assets validate sidecar coverage/order at bind, and repeat on rebind. */
     sh4der_holo_weights(&holo, &positions[0][0], sizeof(positions[0]), weights, 4);
+    sh4der_kos_binding_t binding;
+    const sh4der_kos_sidecars_t sidecars = {.holo_weights = weights, .count = 4};
+    CHECK(sh4der_kos_bind(&binding, &view, &sidecars) == 0);
+    sh4der_kos_effect_t blade_effect = {
+        .binding = &binding, .blade = &effect.blade,
+        .blade_rgb = {0.15f, 0.65f, 1.0f}, .blade_alpha = 255,
+        .mode = SH4DER_KOS_REPLACE
+    };
+    sh4der_kos_effect_t holo_effect = {
+        .binding = &binding, .holo = &effect.holo, .mode = SH4DER_KOS_REPLACE
+    };
     CHECK(pvr_init_defaults() == 0);
     pvr_set_bg_color(0.01f, 0.01f, 0.025f);
     pvr_poly_cxt_col(&context, PVR_LIST_TR_POLY);
@@ -99,12 +110,12 @@ int main(int argc, char **argv) {
         pvr_scene_begin();
         CHECK(pvr_list_begin(PVR_LIST_TR_POLY) == 0);
         CHECK(pvr_chunk_model_emit_prepared(&plan, &projection, &sink,
-            workspace, 4, begin_strip, blade_vertex, &effect, NULL) == 0);
+            workspace, 4, begin_strip, sh4der_kos_vertex, &blade_effect, NULL) == 0);
         CHECK(pvr_prim(&header, sizeof(header)) == 0);
         CHECK(pvr_geometry_sink_emit(&sink, projected, BLOOM_VERTEX_COUNT) == 0);
         projection[3][1] = 320;
         CHECK(pvr_chunk_model_emit_prepared(&plan, &projection, &sink,
-            workspace, 4, begin_strip, holo_vertex, &effect, NULL) == 0);
+            workspace, 4, begin_strip, sh4der_kos_vertex, &holo_effect, NULL) == 0);
         CHECK(pvr_list_finish() == 0);
         CHECK(pvr_scene_finish() == 0);
     }

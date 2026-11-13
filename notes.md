@@ -603,6 +603,14 @@ the vendor's competing renderer or changing dependency pins. Reusable adapters
 and complete capability coverage are required, not only example callbacks.
 Full integration is in progress, not established by the earlier CPU-only addon.
 
+**Accepted Compact slice:** `sh4der_kos_bind` admits indexed sidecar extent once;
+`sh4der_kos_vertex` composes blade/holo, AO and prepared limb shadows with an
+optional existing lighting callback. The caller retains model/frame/storage
+lifetimes and same-space shadow inputs. This adds no global renderer ownership,
+allocation or XMTRX mutation. Host/sanitizer and SH-4 link evidence apply; native
+visuals, foot geometry and the screen-effect backend remain separate coverage
+items, not implicit features of this first adapter.
+
 **Implemented default, 2026-11-13:** Polygon commands select the maximum internal
 strip partition length of six, encoded as three in bits19:18. This applies to
 ordinary and two-volume polygon compilation, including Compact. It does not cap

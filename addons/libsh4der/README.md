@@ -10,6 +10,11 @@ allocate VRAM, sample the scanout buffer, change fog or manage render targets.
 Applications explicitly link `-lsh4der`; KOS already supplies SH4ZAM.
 There is no new global fast-math policy.
 
+The reusable `<sh4der_kos.h>` adapter binds model-indexed sidecars once and
+composes blade/holo, AO and posed limb shadows through Compact's existing
+callback. See [coverage and contracts](COVERAGE.md) for exact available features
+and the remaining full-integration work; screen backends are still incomplete.
+
 The accepted build profile is the fork's ordinary `-O2` without fast-math.
 Inline helpers also inherit their application's flags. The bundled foot-shadow
 host test fails its exact fade-height endpoint under upstream-style fast-math;

@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — reusable Compact SH4DER/SH4DOW composition
+
+- Add caller-owned model-indexed sidecar binding and a reusable Compact callback
+  for blade/hologram colors, AO and prepared limb shadows, composed with existing
+  lighting through explicit replacement, modulation or saturating addition.
+- Preserve actual model indices, UV/offset fields, caller ownership and XMTRX.
+  Bind immutable data once; do not revalidate model streams per vertex or frame.
+  Migrate the existing Compact example to the addon instead of private callbacks.
+- Exact candidate host/sanitizer tests and SH-4 builds/links pass; integration
+  host tests and the example link also pass with the six-strip default. Native
+  visuals/hardware remain unverified. Full screen-effect integration is still
+  in progress, tracked explicitly in the addon's capability coverage document.
+
 ## 2026-11-13 — six-strip polygon partition default
 
 - Set the polygon command's internal strip partition length to six (encoded as
