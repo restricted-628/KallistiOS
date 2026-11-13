@@ -218,7 +218,7 @@ typedef struct aica_driver_info {
 #define AICA_DRIVER_PROTOCOL_VERSION 0x00000001
 
 /** \brief Firmware implementation version encoded as major.minor.patch. */
-#define AICA_DRIVER_FIRMWARE_VERSION 0x00010100
+#define AICA_DRIVER_FIRMWARE_VERSION 0x00010300
 
 /** \defgroup audio_aica_features Firmware Features
     \brief                               Negotiated firmware feature flags

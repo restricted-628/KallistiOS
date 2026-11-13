@@ -27,6 +27,7 @@
 #include <dc/sound/sfxmgr.h>
 
 #include "arm/aica_cmd_iface.h"
+#include "snd_channel.h"
 
 struct snd_effect;
 LIST_HEAD(selist, snd_effect);
@@ -46,9 +47,6 @@ struct selist snd_effects;
 
 /* The next channel we'll use to play sound effects. */
 static int sfx_nextchan = 0;
-
-/* Our channel-in-use mask. */
-static uint64_t sfx_inuse = 0;
 
 static snd_effect_t *find_snd_effect(sfxhnd_t handle) {
     snd_effect_t *effect;
@@ -840,13 +838,15 @@ int snd_sfx_play_chn(int chn, sfxhnd_t idx, int vol, int pan) {
 
 static int find_free_channel(bool stereo) {
     int chn, checked, old;
+    uint64_t reserved;
 
     old = irq_disable();
     chn = sfx_nextchan;
+    reserved = snd_channel_reserved();
 
     for(checked = 0; checked < 64; ++checked) {
-        if(!(sfx_inuse & (1ULL << chn)) &&
-           (!stereo || (chn < 63 && !(sfx_inuse & (1ULL << (chn + 1))))))
+        if(!(reserved & (1ULL << chn)) &&
+           (!stereo || (chn < 63 && !(reserved & (1ULL << (chn + 1))))))
             break;
 
         chn = (chn + 1) % 64;
@@ -970,44 +970,9 @@ void snd_sfx_stop_all(void) {
     int i;
 
     for(i = 0; i < 64; i++) {
-        if(sfx_inuse & (1ULL << i))
+        if(snd_channel_reserved() & (1ULL << i))
             continue;
 
         snd_sfx_stop(i);
     }
-}
-
-int snd_sfx_chn_alloc(void) {
-    int old, chn;
-
-    old = irq_disable();
-
-    for(chn = 0; chn < 64; chn++)
-        if(!(sfx_inuse & (1ULL << chn)))
-            break;
-
-    if(chn >= 64) {
-        chn = -1;
-        errno = ENOSPC;
-    }
-    else {
-        sfx_inuse |= 1ULL << chn;
-    }
-
-    irq_restore(old);
-
-    return chn;
-}
-
-void snd_sfx_chn_free(int chn) {
-    int old;
-
-    if(chn < 0 || chn >= 64) {
-        errno = EINVAL;
-        return;
-    }
-
-    old = irq_disable();
-    sfx_inuse &= ~(1ULL << chn);
-    irq_restore(old);
 }

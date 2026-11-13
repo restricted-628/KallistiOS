@@ -6,6 +6,25 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — managed audio ports, observation and finite completion
+
+- Add cooperative generation-tagged channel reservations, managed mono playback
+  and command receipts. Preserve existing legacy channel allocation and the
+  cooperative status getter; capabilities negotiate against the loaded firmware.
+- Add bounded ARM observation and finite PCM16 end records, with matching host
+  readers and priority refresh. Completion does not free retained sample memory,
+  prove final hardware fetch or recover LOST attachments automatically.
+- Keep playback linkage optional for non-users, and regenerate the embedded
+  firmware after its source build in the same root invocation. Original examples
+  exercise reservation, observation, playback and completion.
+- Current-base normal and ASan/UBSan model suites, the GCC16.2/ARM7DI full build
+  and seven affected consumer links pass. The ARM image matches the object,
+  archive member and firmware-using ELFs; repeat builds preserve the firmware
+  and embedding without regenerating them. Earlier scoped emulator
+  evidence used the separately validated ARM-interpreter build; it is not proof
+  for every emulator backend or physical hardware. Full Manatee parity, bank
+  publication, audible quality and safe sample reclamation remain open.
+
 ## 2026-11-13 — caller-owned SH4DER grading packets
 
 - Build ordered, aligned header/quad packets for SH4DER look grading through

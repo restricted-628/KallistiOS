@@ -55,6 +55,7 @@ Host test directories with inspected Makefile targets:
 
 - `utils/aica-command-test` — candidate `make -C utils/aica-command-test test` in an assigned checkout.
 - `utils/snd-dsp-test` — candidate `make -C utils/snd-dsp-test test` in an assigned checkout.
+- `utils/sound-port-test` — actual software allocator/port admission tests (`make test`).
 - `utils/sound-stream-test` — candidate `make -C utils/sound-stream-test test` in an assigned checkout.
 - `utils/stereo-sq-test` — candidate `make -C utils/stereo-sq-test test` in an assigned checkout.
 - `utils/adx-test` — candidate `make -C utils/adx-test test` in an assigned checkout.
@@ -63,6 +64,7 @@ Host test directories with inspected Makefile targets:
 Target/example directories (source the assigned checkout's environment and inspect its Makefile before building):
 
 - `examples/dreamcast/sound/spu-lifetime`
+- `examples/dreamcast/sound/port-reservation` — software ownership only; no playback.
 - `examples/dreamcast/sound/channel-sync`
 - `examples/dreamcast/sound/stream-service`
 - `examples/dreamcast/sound/dsp-control`

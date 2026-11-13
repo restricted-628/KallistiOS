@@ -162,6 +162,12 @@ void aica_channel_start(int ch, const aica_channel_config_t *config,
     uint32 play_control;
 
     aica_stop(ch);
+    if(!delayed && !config->loop && config->type == AICA_SM_16BIT) {
+        /* Experimental LP boundary: discard old evidence before new keyon.
+           Existing selector delay is not a physical retirement fence. */
+        aica_get_pos(ch);
+        (void)aica_get_loop_end();
+    }
 
     CHNREG32(ch, 0x08) = config->loopstart;
     CHNREG32(ch, 0x0c) = config->loopend;
@@ -350,4 +356,8 @@ int aica_get_pos(int ch) {
 
 int aica_is_playing(int ch) {
     return (CHNREG32(ch, 0) & AICA_CHANNEL_KEYONB) != 0;
+}
+
+uint32 aica_get_loop_end(void) {
+    return (SNDREG32(0x2810) >> 15) & 1;
 }

@@ -196,6 +196,15 @@ IRQ/cache mechanisms and global lifecycle; integration co-reviews toolchains.
 This is an ownership split, not permission to import proprietary firmware or
 change shared interfaces without coordination. Anchor: `doc/agents/audio.md`.
 
+**Accepted managed-playback boundary, 2026-11-13:** Cooperative ports, command
+observation and managed mono playback retain separate channel, receipt and sample
+ownership. Optional finite PCM16 end records may refresh software priority for a
+matching START identity; they do not free samples, establish physical final-fetch
+retirement or turn LOST state into safe reuse. Existing firmware capability
+negotiation and legacy channel APIs remain. Anchors: `dc/sound/port.h`,
+`dc/sound/observation.h`, `dc/sound/playback.h` and their original examples.
+This is a bounded implementation, not complete Manatee parity.
+
 ## D14 — Dedicated LZ4 addon ownership
 
 **Accepted:** Give the Dreamcast LZ4 addon a dedicated subsystem chat. It owns

@@ -369,6 +369,7 @@ int snd_init(void) {
 
     /* Finish loading the stream driver */
     if(!initted) {
+        snd_observation_load_begin();
         spu_disable();
         spu_memset_sq(0, 0, AICA_RAM_START);
         amt = snd_stream_drv_size;
@@ -424,6 +425,7 @@ int snd_init(void) {
 
 /* Shut everything down and free mem */
 void snd_shutdown(void) {
+    snd_observation_reset();
     if(initted) {
         spu_disable();
         snd_dsp_system_shutdown();
@@ -653,6 +655,97 @@ int snd_channel_stop(unsigned int channel) {
     }
 
     return channel_control_submit(channel, AICA_CHANNEL_OP_STOP, 0, 0, NULL);
+}
+
+uint32_t snd_iface_observation_features(void) {
+    return initted ? driver_features : 0;
+}
+
+int snd_iface_observation_validate(uint32_t operation,
+    const snd_channel_config_t *config, uint32_t fields, uint32_t flags) {
+    if(operation == AICA_CHANNEL_OP_START) {
+        if(!fields && !(flags & ~SND_CHANNEL_START_DELAYED))
+            return snd_channel_config_validate(config);
+    }
+    else if(operation == AICA_CHANNEL_OP_UPDATE) {
+        if(config && !flags && fields && !(fields & ~SND_CHANNEL_UPDATE_ALL) &&
+           channel_fields_valid(config, fields))
+            return 0;
+    }
+    else if(operation == AICA_CHANNEL_OP_STOP && !config && !fields && !flags)
+        return 0;
+    errno = EINVAL;
+    return -1;
+}
+
+void snd_iface_observation_pack(void *destination,
+    const snd_channel_config_t *config) {
+    channel_config_pack(destination, config);
+}
+
+int snd_iface_observation_submit(void *packet, uint32_t words, uint64_t deadline) {
+    uint32_t remaining = remaining_timeout(deadline);
+    int result;
+    if(!remaining) {
+        errno = ETIMEDOUT;
+        return -1;
+    }
+    if(mutex_lock_timed(&queue_proc_mutex, remaining) < 0)
+        return -1;
+    if(!initted) {
+        errno = ENODEV;
+        result = -1;
+    }
+    else if(!remaining_timeout(deadline)) {
+        errno = ETIMEDOUT;
+        result = -1;
+    }
+    else {
+        /* The recursive inner acquisition cannot block behind another owner.
+           Once published, success must not be changed to a timeout/rollback. */
+        result = snd_sh4_to_aica(packet, words);
+    }
+    mutex_unlock(&queue_proc_mutex);
+    return result;
+}
+
+int snd_iface_observation_read(uint32_t offset, void *record, uint32_t bytes) {
+    uint32_t *words = record;
+    uint32_t address = SPU_RAM_UNCACHED_BASE + offset;
+    unsigned attempt, i;
+    bool valid = (offset == AICA_MEM_OBSERVATION_HEADER && bytes == 64) ||
+        (offset >= AICA_MEM_OBSERVATION_RESULTS && offset < AICA_MEM_OBSERVATION_CHANNELS &&
+         (offset - AICA_MEM_OBSERVATION_RESULTS) % 64 == 0 && bytes == 64) ||
+        (offset >= AICA_MEM_OBSERVATION_CHANNELS && offset < AICA_MEM_OBSERVATION_END &&
+         (offset - AICA_MEM_OBSERVATION_CHANNELS) % 32 == 0 && bytes == 32) ||
+        (offset == AICA_MEM_COMPLETION_HEADER && bytes == 64) ||
+        (offset >= AICA_MEM_COMPLETION_CHANNELS && offset < AICA_MEM_COMPLETION_END &&
+         (offset - AICA_MEM_COMPLETION_CHANNELS) % 64 == 0 && bytes == 64);
+    if(!record || !valid) { errno = EINVAL; return -1; }
+    g2_lock_scoped();
+    for(attempt = 0; attempt < 8; ++attempt) {
+        uint32_t first, last;
+        g2_fifo_wait();
+        first = g2_read_32_raw(address);
+        if(first == UINT32_MAX) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if(first & 1)
+            continue;
+        words[0] = first;
+        for(i = 1; i < bytes / 4; ++i) {
+            if((i & 7) == 0)
+                g2_fifo_wait();
+            words[i] = g2_read_32_raw(address + i * 4);
+        }
+        g2_fifo_wait();
+        last = g2_read_32_raw(address);
+        if(first == last && !(last & 1))
+            return 0;
+    }
+    errno = EAGAIN;
+    return -1;
 }
 
 /* Only the caller's original, fully restored context may reschedule. */

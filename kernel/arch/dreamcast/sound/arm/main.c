@@ -13,6 +13,7 @@
 
 #include "aica_cmd_iface.h"
 #include "aica.h"
+#include "aica_observer.h"
 
 /****************** Timer *******************************************/
 
@@ -76,6 +77,24 @@ static uint32 commands_processed;
 static uint32 commands_rejected;
 static uint32 malformed_packets;
 static uint32 responses_dropped;
+
+static uint32_t observer_apply(uint32_t channel,
+                                const aica_channel_control_t *control);
+static void observer_read(uint32_t channel, uint32_t *position, uint32_t *key_on);
+static aica_observer_t observer = {
+    (volatile aica_observation_header_t *)AICA_MEM_OBSERVATION_HEADER,
+    (volatile aica_observation_result_t *)AICA_MEM_OBSERVATION_RESULTS,
+    (volatile aica_observation_channel_t *)AICA_MEM_OBSERVATION_CHANNELS,
+    observer_apply, observer_read,
+    (volatile aica_completion_header_t *)AICA_MEM_COMPLETION_HEADER,
+    (volatile aica_completion_channel_t *)AICA_MEM_COMPLETION_CHANNELS,
+    aica_get_loop_end
+};
+_Static_assert(AICA_MEM_CHANNEL_STATUS + 64 * sizeof(aica_channel_status_ext_t)
+               <= AICA_MEM_OBSERVATION_HEADER, "observation after legacy status");
+_Static_assert(AICA_MEM_OBSERVATION_END <= AICA_RAM_START,
+               "observation below sample RAM");
+
 
 static void config_clear(aica_channel_config_t *config) {
     uint32 *word = (uint32 *)config;
@@ -208,7 +227,8 @@ static void respond_with_driver_info(uint32 command_id) {
     info->features = AICA_DRIVER_FEATURE_SYNC_CHANNELS |
                      AICA_DRIVER_FEATURE_VALIDATION |
                      AICA_DRIVER_FEATURE_POSITION |
-                     AICA_DRIVER_FEATURE_CHANNEL_CONTROL;
+                     AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
+                     AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
     info->commands_rejected = commands_rejected;
@@ -380,45 +400,56 @@ static void channel_status_apply_update(uint32 channel,
     status_end(channel);
 }
 
-static int process_channel_control(uint32 channel,
-                                   const aica_channel_control_t *control) {
+/* One classified validation/apply pass for both protocol entry points. */
+static uint32_t observer_apply(uint32_t channel,
+                               const aica_channel_control_t *control) {
     if(channel >= 64)
-        return 0;
+        return AICA_OBSERVATION_BAD_CONFIG;
 
     switch(control->operation) {
         case AICA_CHANNEL_OP_START:
-            if((control->start_flags & ~AICA_CHANNEL_START_DELAYED) ||
-               control->fields || !channel_config_valid(&control->config))
-                return 0;
-
+            if((control->start_flags & ~AICA_CHANNEL_START_DELAYED) || control->fields)
+                return AICA_OBSERVATION_BAD_FLAGS;
+            if(!channel_config_valid(&control->config))
+                return AICA_OBSERVATION_BAD_CONFIG;
             channel_state_from_config(channel, &control->config);
             aica_channel_start(channel, &control->config,
                 control->start_flags & AICA_CHANNEL_START_DELAYED);
             status_publish_config(channel, &control->config);
-            return 1;
+            return AICA_OBSERVATION_APPLIED;
 
         case AICA_CHANNEL_OP_STOP:
             if(control->start_flags || control->fields)
-                return 0;
+                return AICA_OBSERVATION_BAD_FLAGS;
             aica_stop(channel);
             status_refresh(channel);
-            return 1;
+            return AICA_OBSERVATION_APPLIED;
 
         case AICA_CHANNEL_OP_UPDATE:
             if(control->start_flags || !control->fields ||
-               (control->fields & ~AICA_CHANNEL_UPDATE_ALL) ||
-               !channel_statuses[channel].configured ||
-               !config_fields_valid(&control->config, control->fields))
-                return 0;
-
+               (control->fields & ~AICA_CHANNEL_UPDATE_ALL))
+                return AICA_OBSERVATION_BAD_FLAGS;
+            if(!channel_statuses[channel].configured)
+                return AICA_OBSERVATION_UNCONFIGURED;
+            if(!config_fields_valid(&control->config, control->fields))
+                return AICA_OBSERVATION_BAD_CONFIG;
             aica_channel_update(channel, &control->config, control->fields);
-            channel_status_apply_update(channel, &control->config,
-                                        control->fields);
-            return 1;
+            channel_status_apply_update(channel, &control->config, control->fields);
+            return AICA_OBSERVATION_APPLIED;
 
         default:
-            return 0;
+            return AICA_OBSERVATION_BAD_OPERATION;
     }
+}
+
+static int process_channel_control(uint32 channel,
+                                   const aica_channel_control_t *control) {
+    return observer_apply(channel, control) == AICA_OBSERVATION_APPLIED;
+}
+
+static void observer_read(uint32_t channel, uint32_t *position, uint32_t *key_on) {
+    *position = aica_get_pos(channel);
+    *key_on = aica_is_playing(channel);
 }
 
 /* Process a CHAN command */
@@ -499,6 +530,111 @@ int process_chn(uint32 chn, aica_channel_t *chndat) {
     }
 }
 
+/* Dispatch a copied, size-bounded packet. */
+static void process_packet(aica_cmd_t *pkt, uint32 size) {
+    ++commands_processed;
+
+    /* Figure out what type of packet it is */
+    switch(pkt->cmd) {
+        case AICA_CMD_NONE:
+            if(size != sizeof(aica_cmd_t) / sizeof(uint32))
+                ++commands_rejected;
+            break;
+        case AICA_CMD_PING:
+            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
+                respond_to_ping(pkt->cmd_id);
+            else
+                ++commands_rejected;
+            break;
+        case AICA_CMD_CHAN:
+            if(size == AICA_CMDSTR_CHANNEL_SIZE) {
+                aica_channel_t *channel =
+                    (aica_channel_t *)pkt->cmd_data;
+
+                uint32 operation = channel->cmd & AICA_CH_CMD_MASK;
+                int group = operation == AICA_CH_CMD_START &&
+                            (channel->cmd & AICA_CH_START_SYNC);
+                if((!group && pkt->cmd_id >= 64) ||
+                   !process_chn(pkt->cmd_id, channel))
+                    ++commands_rejected;
+                else if(group) {
+                    uint32 selected;
+                    for(selected = 0; selected < 32; ++selected)
+                        if(pkt->cmd_id & ((uint32)1 << selected))
+                            aica_observer_legacy(&observer, selected);
+                }
+                else if(operation == AICA_CH_CMD_START ||
+                        operation == AICA_CH_CMD_STOP ||
+                        (operation == AICA_CH_CMD_UPDATE &&
+                         (channel->cmd & (AICA_CH_UPDATE_SET_FREQ |
+                          AICA_CH_UPDATE_SET_VOL | AICA_CH_UPDATE_SET_PAN))))
+                    aica_observer_legacy(&observer, pkt->cmd_id);
+            }
+            else
+                ++commands_rejected;
+            break;
+        case AICA_CMD_SYNC_CLOCK:
+            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
+                timer = 0;
+            else
+                ++commands_rejected;
+            break;
+        case AICA_CMD_SYNC_CHANNELS:
+            if(size == AICA_CMDSTR_CHANNEL_MASK_SIZE) {
+                aica_channel_mask_t *mask =
+                    (aica_channel_mask_t *)pkt->cmd_data;
+                if(mask->low || mask->high) {
+                    uint32 channel;
+
+                    aica_sync_play(mask->low, mask->high);
+                    for(channel = 0; channel < 64; ++channel) {
+                        uint32 selected = channel < 32 ?
+                            (mask->low & ((uint32)1 << channel)) :
+                            (mask->high & ((uint32)1 << (channel - 32)));
+                        if(selected) {
+                            status_refresh(channel);
+                            aica_observer_legacy(&observer, channel);
+                        }
+                    }
+                }
+                else
+                    ++commands_rejected;
+            }
+            else
+                ++commands_rejected;
+            break;
+        case AICA_CMD_QUERY_DRIVER:
+            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
+                respond_with_driver_info(pkt->cmd_id);
+            else
+                ++commands_rejected;
+            break;
+        case AICA_CMD_CHANNEL_CONTROL:
+            if(size == AICA_CMDSTR_CHANNEL_CONTROL_SIZE && pkt->cmd_id < 64) {
+                aica_channel_control_t *control =
+                    (aica_channel_control_t *)pkt->cmd_data;
+                if(!process_channel_control(pkt->cmd_id, control))
+                    ++commands_rejected;
+                else
+                    aica_observer_legacy(&observer, pkt->cmd_id);
+            }
+            else
+                ++commands_rejected;
+            break;
+        case AICA_CMD_OBSERVATION_BIND:
+        case AICA_CMD_OBSERVATION_CONTROL:
+        case AICA_CMD_OBSERVATION_SAMPLE:
+        case AICA_CMD_OBSERVATION_CONSUME:
+            if(!aica_observer_command(&observer, pkt, timer))
+                ++commands_rejected;
+            break;
+        default:
+            ++commands_rejected;
+            break;
+    }
+
+}
+
 /* Process one packet of queue data */
 uint32 process_one(uint32 tail) {
     uint32      pktdata[AICA_CMD_MAX_SIZE], *pdptr, size, i;
@@ -529,81 +665,7 @@ uint32 process_one(uint32 tail) {
             src = (volatile uint32 *)q_cmd->data;
     }
 
-    ++commands_processed;
-
-    /* Figure out what type of packet it is */
-    switch(pkt->cmd) {
-        case AICA_CMD_NONE:
-            if(size != sizeof(aica_cmd_t) / sizeof(uint32))
-                ++commands_rejected;
-            break;
-        case AICA_CMD_PING:
-            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
-                respond_to_ping(pkt->cmd_id);
-            else
-                ++commands_rejected;
-            break;
-        case AICA_CMD_CHAN:
-            if(size == AICA_CMDSTR_CHANNEL_SIZE) {
-                aica_channel_t *channel =
-                    (aica_channel_t *)pkt->cmd_data;
-
-                if(!((channel->cmd & AICA_CH_START_SYNC) ||
-                     pkt->cmd_id < 64) ||
-                   !process_chn(pkt->cmd_id, channel))
-                    ++commands_rejected;
-            }
-            else
-                ++commands_rejected;
-            break;
-        case AICA_CMD_SYNC_CLOCK:
-            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
-                timer = 0;
-            else
-                ++commands_rejected;
-            break;
-        case AICA_CMD_SYNC_CHANNELS:
-            if(size == AICA_CMDSTR_CHANNEL_MASK_SIZE) {
-                aica_channel_mask_t *mask =
-                    (aica_channel_mask_t *)pkt->cmd_data;
-                if(mask->low || mask->high) {
-                    uint32 channel;
-
-                    aica_sync_play(mask->low, mask->high);
-                    for(channel = 0; channel < 64; ++channel) {
-                        uint32 selected = channel < 32 ?
-                            (mask->low & ((uint32)1 << channel)) :
-                            (mask->high & ((uint32)1 << (channel - 32)));
-                        if(selected)
-                            status_refresh(channel);
-                    }
-                }
-                else
-                    ++commands_rejected;
-            }
-            else
-                ++commands_rejected;
-            break;
-        case AICA_CMD_QUERY_DRIVER:
-            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
-                respond_with_driver_info(pkt->cmd_id);
-            else
-                ++commands_rejected;
-            break;
-        case AICA_CMD_CHANNEL_CONTROL:
-            if(size == AICA_CMDSTR_CHANNEL_CONTROL_SIZE && pkt->cmd_id < 64) {
-                aica_channel_control_t *control =
-                    (aica_channel_control_t *)pkt->cmd_data;
-                if(!process_channel_control(pkt->cmd_id, control))
-                    ++commands_rejected;
-            }
-            else
-                ++commands_rejected;
-            break;
-        default:
-            ++commands_rejected;
-            break;
-    }
+    process_packet(pkt, size);
 
     return size;
 }
@@ -651,10 +713,23 @@ void process_cmd_queue(void) {
     }
 }
 
+/* Reuse the position/key pair collected in this pass. Eligible finite shots
+   additionally consume LP until their first end has been latched. */
+static void refresh_channel(uint32 channel) {
+    aica_get_pos(channel);
+    status_refresh(channel);
+    aica_observer_refresh(&observer, channel,
+                          channel_statuses[channel].position,
+                          channel_statuses[channel].playing, timer,
+                          aica_observer_needs_lp(&observer, channel) ?
+                              aica_get_loop_end() : 0);
+}
+
 int arm_main(void) {
     int i;
     uint32 j;
 
+    aica_observer_init(&observer);
     commands_processed = 0;
     commands_rejected = 0;
     malformed_packets = 0;
@@ -687,14 +762,13 @@ int arm_main(void) {
 
     /* Initialize the AICA part of the SPU */
     aica_init();
+    aica_observer_ready(&observer);
 
     /* Wait for a command */
     for(; ;) {
         /* Update channel position counters and coherent public status. */
-        for(i = 0; i < 64; i++) {
-            aica_get_pos(i);
-            status_refresh(i);
-        }
+        for(i = 0; i < 64; i++)
+            refresh_channel(i);
 
         /* Check for a command */
         if(q_cmd->process_ok)

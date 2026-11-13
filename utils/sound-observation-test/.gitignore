@@ -1,0 +1,5 @@
+/arm-test
+/host-test
+/bridges.inc
+/*.dSYM/
+register-test

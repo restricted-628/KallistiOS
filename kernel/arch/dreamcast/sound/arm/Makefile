@@ -24,14 +24,19 @@ stream.drv: stream.drv.prebuilt
 	cp $< $@
 endif
 
-prog.elf: crt0.o main.o aica.o
-	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o main.o aica.o -lgcc
+prog.elf: crt0.o main.o aica.o aica_observer.o
+	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o main.o aica.o aica_observer.o -lgcc
 
 %.o: %.c
-	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound -c $< -o $@
+	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I $(KOS_BASE)/kernel/arch/dreamcast/include -I $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound -c $< -o $@
 
 %.o: %.s
 	$(DC_ARM_AS) $(DC_ARM_AFLAGS) $< -o $@
 
 clean:
 	-rm -f *.o *.srec *.elf 1ST_READ.BIN prog.bin *.bck prog.map stream.drv
+
+main.o aica_observer.o: aica_observer.h $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_observation.h
+
+main.o aica_observer.o: $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_completion.h
+aica.o main.o: aica.h
