@@ -6,10 +6,10 @@ the full integration request; available math headers alone do not close a row.
 | Capability | Native integration | Remaining work |
 | --- | --- | --- |
 | Core, blade, holo | CPU archive; reusable `sh4der_kos_vertex`; Compact example | Native visual validation |
-| Bloom | CPU archive; caller geometry in example | Reusable geometry builder and native visuals |
+| Bloom | Reusable caller geometry builder; migrated example | Native visuals |
 | Static AO | Indexed retained-light sidecar layered by Compact adapter | Host authoring fixture for crease bake |
 | SH4DOW limbs | Prepared columns consumed in Compact callback; bone exclusion; same-space contract | Posed skeleton consumer and native visuals |
-| SH4DOW feet | CPU library only | Caller-owned placement/receiver geometry and texture adapter |
+| SH4DOW feet | Caller-owned receiver quad and alpha-mask bake via `sh4der_kos_geometry.h` | Textured native consumer, upload/lifetime and visual validation |
 | Look/grade | Math only | Ordered caller-owned header/quad builder |
 | Frame sampling | Math only | Explicit retained surface, stride/format and capture admission |
 | Glow | Math only | Caller-owned stage/upload/mesh path, reader retirement |
@@ -57,3 +57,18 @@ Host-cook static holo weights/AO and bind once. Dynamic effect frames and posed
 shadows update when their inputs change. Bindings and frames are immutable while
 callbacks use them. These are admitted callback preconditions, not repeated
 per-vertex asset validators. Output capacity stays with existing KOS sinks.
+
+## Geometry builders
+
+`sh4der_kos_geometry.h` expands prepared bloom into independent triangle strips
+and projects a posed foot onto a current receiver plane using SH4DOW's cone
+math. Output remains in object/world coordinates for existing KOS projection
+and clipping. Capacity failure or a rejected foot leaves the destination intact.
+Supply aligned arrays when passing the results to KOS geometry sinks.
+
+`sh4der_kos_foot_alpha4444` bakes a linear black alpha mask on the host or at
+load. The caller admits texture dimensions/layout and owns upload/retirement.
+Use MODULATEALPHA and SRCALPHA/INVSRCALPHA with depth writes disabled, retaining
+depth testing against the scene. Receiver data must be refreshed when its
+surface changes. The constructor does not authorize a stale collision hit,
+override list policy or solve transparent receiver ordering.

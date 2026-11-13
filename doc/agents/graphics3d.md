@@ -21,6 +21,8 @@ Compact models/scenes, transforms, culling, collision, deformation, skeleton/ski
 - `addons/include/sh4der_kos.h`, `addons/libsh4der/kos/compact.c` — reusable
   admitted sidecars and Compact effect/AO/limb-shadow composition; full capability
   status and remaining screen adapters are in `addons/libsh4der/COVERAGE.md`.
+- `addons/include/sh4der_kos_geometry.h`, `addons/libsh4der/kos/geometry.c` —
+  caller-owned bloom, foot receiver quads and host/load alpha-mask baking.
 - `examples/dreamcast/pvr/sh4der_compact`
 
 Relevant existing documentation (dated claims must be rechecked):

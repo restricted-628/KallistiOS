@@ -171,7 +171,13 @@ int main(void) {
     const float eye[] = {0.2f, 0, 1};
     assert(sh4der_bloom_blade(&mesh, &gp, &bp, &state.blade, eye));
     alignas(32) pvr_vertex_t bloom[BLOOM_VERTEX_COUNT], projected[BLOOM_VERTEX_COUNT];
-    bloom_vertices(&mesh, bloom);
+    assert(bloom_vertices(&mesh, bloom) == BLOOM_VERTEX_COUNT);
+    pvr_vertex_t bloom_saved[BLOOM_VERTEX_COUNT];
+    memcpy(bloom_saved, bloom, sizeof(bloom));
+    const float white[3] = {1, 1, 1};
+    assert(sh4der_kos_bloom_vertices(&mesh, white, white, 255,
+        bloom, BLOOM_VERTEX_COUNT - 1) == -1);
+    assert(errno == ENOSPC && !memcmp(bloom_saved, bloom, sizeof(bloom)));
     pvr_geometry_stream_t stream = {bloom, BLOOM_VERTEX_COUNT, sizeof(bloom[0])};
     assert(pvr_geometry_project(projected, BLOOM_VERTEX_COUNT, &stream, &identity, NULL) == 0);
     for(unsigned i = 0; i < BLOOM_VERTEX_COUNT; ++i) {
@@ -179,5 +185,41 @@ int main(void) {
         assert(isfinite(projected[i].x) && isfinite(projected[i].y));
         assert(projected[i].argb == bloom[i].argb);
     }
+    sh4dow_foot_params_t fp;
+    sh4dow_foot_params_default(&fp);
+    sh4dow_foot_t foot = {.heel = {0, 0, 0}, .away = {0, -1, 0}, .radius = 0.1f};
+    const float plane[3] = {0, 0, 0}, up[3] = {0, 1, 0}, forward[3] = {0, 0, 1};
+    pvr_vertex_t quad[4], unchanged[4];
+    assert(sh4der_kos_foot_vertices(&foot, &fp, plane, up, up, forward, 200, quad, 4) == 4);
+    for(unsigned i = 0; i < 4; ++i) {
+        assert(fabsf(quad[i].y - fp.lift) < 0.00001f);
+        assert(quad[i].argb == 0xc8000000);
+        assert(quad[i].u == (i & 1) && quad[i].v == (i >> 1));
+        assert(quad[i].flags == (i == 3 ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX));
+    }
+    memcpy(unchanged, quad, sizeof(quad));
+    assert(sh4der_kos_foot_vertices(&foot, &fp, plane, up, up, forward, 200, quad, 3) == -1);
+    assert(errno == ENOSPC && !memcmp(unchanged, quad, sizeof(quad)));
+    assert(sh4der_kos_foot_vertices(&foot, &fp, plane, forward, up, forward, 200, quad, 4) == 0);
+    assert(!memcmp(unchanged, quad, sizeof(quad)));
+    foot.heel[1] = 2 * fp.fade_height;
+    assert(sh4der_kos_foot_vertices(&foot, &fp, plane, up, up, forward, 200, quad, 4) == 0);
+    assert(!memcmp(unchanged, quad, sizeof(quad)));
+    foot.heel[1] = 0;
+    const float slope[3] = {0, 1, 0.25f};
+    assert(sh4der_kos_foot_vertices(&foot, &fp, plane, slope, up, forward, 200, quad, 4) == 4);
+    for(unsigned i = 0; i < 4; ++i)
+        assert(fabsf((quad[i].y + 0.25f * quad[i].z) / sqrtf(1.0625f) - fp.lift) < 0.00001f);
+    uint16_t texture[64], texture_saved[64];
+    memset(texture, 0x5a, sizeof(texture)); memcpy(texture_saved, texture, sizeof(texture));
+    assert(sh4der_kos_foot_alpha4444(texture, 63, 8) == -1);
+    assert(!memcmp(texture, texture_saved, sizeof(texture)));
+    assert(sh4der_kos_foot_alpha4444(texture, 64, 8) == 0);
+    unsigned maximum = 0;
+    for(unsigned i = 0; i < 64; ++i) {
+        assert(!(texture[i] & 0xfff));
+        if(texture[i] > maximum) maximum = texture[i];
+    }
+    assert(maximum > 0 && texture[0] < maximum);
     puts("PASS: Compact indexed effects, rebind, preserved fields, capacity, bloom projection");
 }

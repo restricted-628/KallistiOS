@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — reusable bloom and foot-shadow geometry
+
+- Add caller-buffer bloom triangles and SH4DOW foot receiver-plane quads, plus
+  a host/load-time ARGB4444 foot alpha-mask bake. Keep projection, clipping,
+  materials, texture upload and retirement with the existing KOS renderer.
+- Preserve output on insufficient capacity and rejected foot receivers; migrate
+  the Compact example to the reusable bloom builder.
+- Host and matching sanitizer cases pass; GCC16.2 addon/example links pass.
+  Textured foot-shadow rendering, visual/hardware validation and the remaining
+  screen-effect integration are not claimed complete.
+
 ## 2026-11-13 — reusable Compact SH4DER/SH4DOW composition
 
 - Add caller-owned model-indexed sidecar binding and a reusable Compact callback

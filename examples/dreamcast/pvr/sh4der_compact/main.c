@@ -102,7 +102,7 @@ int main(int argc, char **argv) {
         CHECK(sh4der_blade_prepare(&effect.blade, &blade, tick, 1.0f));
         CHECK(sh4der_holo_prepare(&effect.holo, &holo, effect.blade.pulse, 1.0f));
         CHECK(sh4der_bloom_blade(&mesh, &bloom, &blade, &effect.blade, eye));
-        bloom_vertices(&mesh, glow);
+        CHECK(bloom_vertices(&mesh, glow) == BLOOM_VERTEX_COUNT);
         projection[3][1] = 180;
         CHECK(pvr_geometry_project(projected, BLOOM_VERTEX_COUNT, &stream,
                                      &projection, NULL) == 0);

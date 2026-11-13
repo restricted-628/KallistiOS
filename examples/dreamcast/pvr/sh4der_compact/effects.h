@@ -6,6 +6,7 @@
 #define EXAMPLE_SH4DER_EFFECTS_H
 
 #include <sh4der_kos.h>
+#include <sh4der_kos_geometry.h>
 #include <sh4der/sh4der_blade.h>
 #include <sh4der/sh4der_bloom.h>
 #include <sh4der/sh4der_holo.h>
@@ -16,24 +17,12 @@ typedef struct effect_state {
     const uint8_t *weights; /* Admitted sidecar indexed by MODEL vertex index. */
 } effect_state_t;
 
-#define BLOOM_VERTEX_COUNT (SH4DER_BLOOM_TRIS * 3)
+#define BLOOM_VERTEX_COUNT SH4DER_KOS_BLOOM_VERTICES
 
-/* Fixed topology, caller-owned storage. No submission or allocation. */
-static inline void bloom_vertices(const sh4der_bloom_mesh_t *mesh,
-                                  pvr_vertex_t out[BLOOM_VERTEX_COUNT]) {
-    const float edge[3] = { 0.05f, 0.3f, 1.0f };
-    const float core[3] = { 0.7f, 0.9f, 1.0f };
-    uint32_t colors[SH4DER_BLOOM_VERTS];
-    sh4der_bloom_argb(mesh, edge, core, 160, colors, sizeof(colors[0]));
-    for(unsigned t = 0; t < SH4DER_BLOOM_TRIS; ++t) {
-        for(unsigned c = 0; c < 3; ++c) {
-            const unsigned i = sh4der_bloom_tris[t][c];
-            out[t * 3 + c] = (pvr_vertex_t) {
-                .flags = c == 2 ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX,
-                .x = mesh->xyz[i][0], .y = mesh->xyz[i][1],
-                .z = mesh->xyz[i][2], .argb = colors[i]
-            };
-        }
-    }
+static inline int bloom_vertices(const sh4der_bloom_mesh_t *mesh,
+                                 pvr_vertex_t out[BLOOM_VERTEX_COUNT]) {
+    const float edge[3] = {0.05f, 0.3f, 1.0f};
+    const float core[3] = {0.7f, 0.9f, 1.0f};
+    return sh4der_kos_bloom_vertices(mesh, edge, core, 160, out, BLOOM_VERTEX_COUNT);
 }
 #endif
