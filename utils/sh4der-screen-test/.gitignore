@@ -1,0 +1,4 @@
+sh4der-screen-test
+sh4der-screen-sanitized
+*.elf
+*.dSYM/

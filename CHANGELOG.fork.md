@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — caller-owned SH4DER grading packets
+
+- Build ordered, aligned header/quad packets for SH4DER look grading through
+  the existing PVR context compiler. Admit changing inputs/capacity before output
+  writes; leave list routing, sorting and resource ownership with the caller.
+- The Compact example retains a constant authored grade and submits complete
+  packets through one route. No direct-SQ bypass or scanout sampling is added.
+- Host/matching sanitizer tests and SH-4 addon/test/example links pass. Host
+  context mocks do not establish native packet encoding or visual blending;
+  framebuffer exposure, remaining effects and native visual tests remain open.
+
 ## 2026-11-13 — reusable bloom and foot-shadow geometry
 
 - Add caller-buffer bloom triangles and SH4DOW foot receiver-plane quads, plus

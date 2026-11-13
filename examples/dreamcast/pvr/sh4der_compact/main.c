@@ -7,6 +7,7 @@
 #include <stdalign.h>
 #include <string.h>
 #include "effects.h"
+#include <sh4der_kos_screen.h>
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
@@ -95,6 +96,15 @@ int main(int argc, char **argv) {
     context.blend.dst = PVR_BLEND_ONE;
     pvr_poly_compile(&header, &context);
     CHECK(pvr_geometry_sink_init_current(&sink) == 0);
+    /* Authored constant grade: build once, retain packets for each frame. */
+    static alignas(32) sh4der_kos_screen_packet_t grade_packets[SH4DER_LOOK_LAYERS];
+    const sh4der_look_grade_t grade = {
+        .gain = {1.0f, 0.96f, 0.92f}, .contrast = 1, .exposure = 1
+    };
+    const float screen_rect[4] = {0, 0, 640, 480};
+    int grade_count = sh4der_kos_grade_packets(&grade, screen_rect, 100, 1,
+        grade_packets, SH4DER_LOOK_LAYERS);
+    CHECK(grade_count >= 0);
     const uint64_t start = timer_ms_gettime64();
 
     while(timer_ms_gettime64() - start < 10000) {
@@ -116,6 +126,8 @@ int main(int argc, char **argv) {
         projection[3][1] = 320;
         CHECK(pvr_chunk_model_emit_prepared(&plan, &projection, &sink,
             workspace, 4, begin_strip, sh4der_kos_vertex, &holo_effect, NULL) == 0);
+        for(int i = 0; i < grade_count; ++i)
+            CHECK(pvr_prim(&grade_packets[i], sizeof(grade_packets[i])) == 0);
         CHECK(pvr_list_finish() == 0);
         CHECK(pvr_scene_finish() == 0);
     }

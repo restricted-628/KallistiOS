@@ -23,6 +23,9 @@ Compact models/scenes, transforms, culling, collision, deformation, skeleton/ski
   status and remaining screen adapters are in `addons/libsh4der/COVERAGE.md`.
 - `addons/include/sh4der_kos_geometry.h`, `addons/libsh4der/kos/geometry.c` —
   caller-owned bloom, foot receiver quads and host/load alpha-mask baking.
+- `addons/include/sh4der_kos_screen.h`, `addons/libsh4der/kos/screen.c` —
+  caller-owned ordered grade packets; `utils/sh4der-screen-test` checks their
+  contexts, order, capacity and failures (host context mocks; native link separate).
 - `examples/dreamcast/pvr/sh4der_compact`
 
 Relevant existing documentation (dated claims must be rechecked):

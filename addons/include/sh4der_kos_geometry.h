@@ -8,7 +8,9 @@
 extern "C" {
 #endif
 #define SH4DER_KOS_BLOOM_VERTICES (SH4DER_BLOOM_TRIS * 3u)
-/* Output is unprojected, caller-owned. Use KOS projection/clipping and one
+/* All geometry builders require input objects/vectors and output storage to
+   be disjoint. No overlap scan is performed on admitted caller buffers.
+   Output is unprojected, caller-owned. Use KOS projection/clipping and one
    geometry sink; no headers, submissions, allocations or matrix mutations.
    Return vertex count, or -1/errno without changing output. Mesh is prepared
    by sh4der_bloom_blade; edge/core are finite [0,1] colors. */

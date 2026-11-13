@@ -10,7 +10,7 @@ the full integration request; available math headers alone do not close a row.
 | Static AO | Indexed retained-light sidecar layered by Compact adapter | Host authoring fixture for crease bake |
 | SH4DOW limbs | Prepared columns consumed in Compact callback; bone exclusion; same-space contract | Posed skeleton consumer and native visuals |
 | SH4DOW feet | Caller-owned receiver quad and alpha-mask bake via `sh4der_kos_geometry.h` | Textured native consumer, upload/lifetime and visual validation |
-| Look/grade | Math only | Ordered caller-owned header/quad builder |
+| Look/grade | Ordered caller-owned header/quad builder; Compact consumer | Native blend/quantization visuals; exposure capture integration |
 | Frame sampling | Math only | Explicit retained surface, stride/format and capture admission |
 | Glow | Math only | Caller-owned stage/upload/mesh path, reader retirement |
 | Warp | Math only | Caller mesh/sink adapter and scratch |
@@ -22,7 +22,7 @@ the full integration request; available math headers alone do not close a row.
 | CA | Math only | Explicit RTT surfaces and channel passes |
 | Shafts | Math only | Caller map/upload/mesh and lifetime |
 
-No screen backend is claimed integrated yet. KOS owns scene/list routing,
+Grade packet generation is integrated; other screen backends remain open. KOS owns scene/list routing,
 allocation, fog, stride and render tickets. New adapters must use one sink for
 headers and vertices, retain producers and readers before resource reuse, and
 avoid hidden state. Ordinary ordered GPU passes do not imply CPU waits between
@@ -72,3 +72,14 @@ Use MODULATEALPHA and SRCALPHA/INVSRCALPHA with depth writes disabled, retaining
 depth testing against the scene. Receiver data must be refreshed when its
 surface changes. The constructor does not authorize a stale collision hit,
 override list policy or solve transparent receiver ordering.
+
+## Grade packets
+
+`sh4der_kos_screen.h` builds up to six aligned header/quad packets in solver
+order. Dynamic values and output capacity are admitted before writing anything.
+All packets disable fog/depth writes and use depth ALWAYS. Submit complete
+packets through one current or explicit buffered TR route. With autosort, reserve
+increasing reciprocal depths in front of scene content; with manual sorting,
+submit in array order. The builder rejects indistinguishable float depths.
+Constant authored grades can be built once, as in the Compact example. Adaptive
+exposure still requires an explicitly retained frame sample and matching history.
