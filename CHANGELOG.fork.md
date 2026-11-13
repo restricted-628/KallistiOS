@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — experimental bank authoring, validation and upload
+
+- Add an original private ABK authoring tool, byte-safe native validator and
+  caller-owned PCM load plan. Validate once at admission, with bounded extents,
+  explicit source/output alias rules and unchanged outputs on rejection.
+- Add a private SH-4 uploader using existing sound allocation and SPU requests.
+  READY requires exact completed bytes and destruction of the final request;
+  cancellation and uncertain retirement retain ownership. No bank is published
+  to ARM, and no voice is started by this utility.
+- Current-base authoring, validator and uploader host tests pass, including
+  ASan/UBSan for actual native C. Matching SH-4 builds and both scoped Flycast
+  modes pass aligned AUTO-DMA/unaligned AUTO-PIO byte readback and allocation
+  restoration. These checks do not establish physical DMA/cache behavior,
+  audible playback, final sample-fetch retirement or a stable public bank ABI.
+
 ## 2026-11-13 — retained SH4DER frame sampling
 
 - Bind checked RGB565 linear/stride render surfaces once, precompute sparse

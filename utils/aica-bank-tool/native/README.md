@@ -41,3 +41,39 @@ input/output aliasing, output preservation and reserved-span placement.
 
 Target links and disassembly are separate from host tests; no ARM firmware,
 emulator, hardware, bank playback or upload claim follows from this component.
+# Private upload transaction
+
+`abk_upload.h` adds a caller-owned SH-4 transaction using the existing sound-RAM
+allocator and asynchronous SPU service. It is private, and does not publish a
+bank to ARM or start voices. Initialize `abk_upload_t` with `{0}`, call
+`abk_upload_begin`, then pump from one serialized ordinary thread. Inspect
+`state`, `committed`, `first_error` and `last_error`. Keep the source bytes,
+descriptor arrays and transaction alive and unchanged until close succeeds.
+
+The sound runtime must already be initialized and remain live, without concurrent
+reset/shutdown. This transaction exclusively owns its allocation; no channel or
+other consumer may reference it. `READY` means all PCM bytes were copied and the
+final request was successfully destroyed. It does not mean playable bank or
+safe unloading after playback.
+
+Each request uses AUTO with an exact extent of at most 32 KiB. An unaligned source
+uses the native PIO path; the loader adds no DMA/cache policy. The nonzero
+per-request lifetime includes time in the queue. Pump neither blocks nor spins.
+`EBUSY` from request destruction retains the request and is retryable; no next
+chunk or READY is permitted until destruction succeeds. Other service errors
+latch `first_error`, stop admission permanently and retain uncertain resources.
+`last_error` describes a later retry/close error without erasing the first cause.
+
+Cancel is latched even if the active transfer wins its completion race. Pump until
+it retires, then close. Close refuses a live request and never implicitly cancels.
+Partial uploads remain unpublished and owned until close. The allocator's free
+function is void: the loader clears/checks errno under the live/exclusive/no-reset
+preconditions and retains the address on any reported error. This is not a new
+checked allocator API or a hardware fetch-retirement guarantee.
+
+`make upload-test upload-sanitize` compiles the actual parser and loader against
+declarations extracted from the current native SPU header. Narrow fake services
+inject allocation, submission, status, terminal, cancellation, destruction and
+release failures. They also exercise real byte copies, chunk coverage, four source
+alignments and final COMPLETE plus destroy-EBUSY with late cancellation. These are
+host tests of the transaction, not execution of KOS workers, DMA or AICA hardware.

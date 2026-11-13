@@ -205,6 +205,15 @@ negotiation and legacy channel APIs remain. Anchors: `dc/sound/port.h`,
 `dc/sound/observation.h`, `dc/sound/playback.h` and their original examples.
 This is a bounded implementation, not complete Manatee parity.
 
+**Accepted private bank foundation, 2026-11-13:** `utils/aica-bank-tool` owns
+an original draft format, native validation/planning and a serialized PCM upload
+transaction. Its sound allocation remains exclusive and unpublished; READY
+requires final transfer-request destruction, not merely a completion flag.
+Close is allowed only after request retirement under a live, exclusive sound
+runtime. This private utility does not publish banks to ARM, start voices or
+authorize unloading memory after playback. Bank registration and ownership are
+the next separate interface milestone; full parity remains open.
+
 ## D14 — Dedicated LZ4 addon ownership
 
 **Accepted:** Give the Dreamcast LZ4 addon a dedicated subsystem chat. It owns

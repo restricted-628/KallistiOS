@@ -15,6 +15,9 @@ ARM command firmware, SH-4 transport, sound RAM, playback/DSP, PCM streams and b
 - `kernel/arch/dreamcast/sound/arm` — firmware source, startup and image build
 - `environ_dreamcast.sh` — ARM compiler/assembler settings (integration co-review)
 - `utils/kos-chain/Makefile.aica.cfg` — AICA toolchain configuration (integration co-review)
+- `utils/aica-bank-tool` — private original bank authoring; `native/` contains
+  byte-safe validation/planning and a caller-owned unpublished PCM uploader.
+  This is not an installed bank API or ARM bank playback implementation.
 
 Relevant existing documentation (dated claims must be rechecked):
 
@@ -56,6 +59,9 @@ Host test directories with inspected Makefile targets:
 - `utils/aica-command-test` — candidate `make -C utils/aica-command-test test` in an assigned checkout.
 - `utils/snd-dsp-test` — candidate `make -C utils/snd-dsp-test test` in an assigned checkout.
 - `utils/sound-port-test` — actual software allocator/port admission tests (`make test`).
+- `utils/aica-bank-tool` — host authoring (`make test`); `native/` provides
+  `make test sanitize upload-test upload-sanitize`. Mocked host services are not
+  hardware transfers; native links and exact emulator readback are separate gates.
 - `utils/sound-stream-test` — candidate `make -C utils/sound-stream-test test` in an assigned checkout.
 - `utils/stereo-sq-test` — candidate `make -C utils/stereo-sq-test test` in an assigned checkout.
 - `utils/adx-test` — candidate `make -C utils/adx-test test` in an assigned checkout.
