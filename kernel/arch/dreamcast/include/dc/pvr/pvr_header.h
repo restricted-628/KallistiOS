@@ -179,10 +179,11 @@ typedef enum pvr_pixel_mode {
     PVR_PIXEL_MODE_PAL_8BPP,    /**< 8BPP paletted format */
 } pvr_pixel_mode_t;
 
-/** \brief   Triangle strip length
+/** \brief   Internal triangle strip partition length
 
-    This sets the maximum length of a triangle strip, if not
-    configured in auto mode.
+    These are encoded field values, not literal lengths. Group control must
+    be enabled to replace the previous partition length. This does not limit
+    the number of vertices in a submitted strip.
 */
 typedef enum pvr_strip_len {
     PVR_STRIP_LEN_1,
@@ -242,9 +243,9 @@ typedef struct pvr_poly_hdr_cmd {
     bool modifier_en             :1; /* 7 */     /**< Enable modifier effects */
     uint32_t                     :8; /* 15-8 */
     pvr_clip_mode_t clip_mode    :2; /* 17-16 */ /**< Clipping mode */
-    pvr_strip_len_t strip_len    :2; /* 19-18 */ /**< Triangle strips length (if non-auto) */
+    pvr_strip_len_t strip_len    :2; /* 19-18 */ /**< Internal strip partition length */
     uint32_t                     :3; /* 22-20 */
-    bool auto_strip_len          :1; /* 23 */    /**< Auto select triangle strips length */
+    bool auto_strip_len          :1; /* 23 */    /**< Legacy name for Group_En: true updates strip_len; false retains it. */
     pvr_list_t list_type         :3; /* 26-24 */ /**< Render list to use */
     uint32_t                     :1; /* 27 */
     bool strip_end               :1; /* 28 */    /**< Mark an end-of-strip */

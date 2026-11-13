@@ -585,8 +585,9 @@ typedef struct pvr_modifier_vol {
 
     @{
 */
-#define PVR_CMD_POLYHDR     0x80840000  /**< \brief PVR polygon header.
-Striplength set to 2 */
+#define PVR_CMD_POLYHDR     0x808c0000  /**< \brief PVR polygon header.
+Group control enabled; internal strip partition length set to 6 (encoding 3).
+This does not limit the number of vertices in a submitted strip. */
 #define PVR_CMD_VERTEX      0xe0000000  /**< \brief PVR vertex data */
 #define PVR_CMD_VERTEX_EOL  0xf0000000  /**< \brief PVR vertex, end of strip */
 #define PVR_CMD_USERCLIP    0x20000000  /**< \brief PVR user clipping area */

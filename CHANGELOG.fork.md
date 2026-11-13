@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — six-strip polygon partition default
+
+- Set the polygon command's internal strip partition length to six (encoded as
+  three), inherited by ordinary and two-volume material/Compact compilation.
+  Submitted strip vertex counts, sprite and modifier-volume commands are unchanged.
+- Correct the legacy `auto_strip_len` field documentation: it enables updating
+  the partition setting, not automatic length selection. Preserve its API name.
+- Material, Compact binding and cache host suites pass. GCC16.2 KOS rebuild and
+  Compact SH4DER example/native packet-regression links pass. The native regression
+  has not been run; rendering, retail-hardware behavior and speedup are unverified.
+
 ## 2026-11-11 — libADX validated metadata and prefix queries
 
 - Add a read-only validated metadata snapshot and header/endcode prefix probes

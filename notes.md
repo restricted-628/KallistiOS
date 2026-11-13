@@ -594,6 +594,23 @@ validated metadata/prefix-query slice is accepted with deliberately stricter
 native recognition and declared-record sizing, not CRI recognizer equivalence.
 Full historical-format and lifecycle/control conformance remain explicitly open.
 
+## D22 — SH4DER/SH4DOW integration and strip partition default
+
+**Owner direction, 2026-11-13:** Fully integrate the pinned SH4DER and bundled
+SH4DOW capabilities with the fork and Compact chunk models. KOS remains the sole
+PVR scene/submission/resource owner; adapting effects does not authorize linking
+the vendor's competing renderer or changing dependency pins. Reusable adapters
+and complete capability coverage are required, not only example callbacks.
+Full integration is in progress, not established by the earlier CPU-only addon.
+
+**Implemented default, 2026-11-13:** Polygon commands select the maximum internal
+strip partition length of six, encoded as three in bits19:18. This applies to
+ordinary and two-volume polygon compilation, including Compact. It does not cap
+submitted strip vertex counts or change sprite/modifier-volume commands. The
+legacy `auto_strip_len` field name remains, with corrected Group_En semantics.
+Source/SDK evidence, host tests and SH-4 links support this bounded change;
+native packet execution, rendering and hardware performance remain unverified.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,
