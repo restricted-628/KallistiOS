@@ -19,7 +19,8 @@ HEADERS = include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/
 
 .PHONY: sh4 test sanitize install clean
 sh4: $(BUILD)/sh4/libADX.a
-test: $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+test: $(BUILD)/host-test/joint_queue $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+	$(BUILD)/host-test/joint_queue
 	$(BUILD)/host-test/joint
 	$(BUILD)/host-test/filter
 	$(BUILD)/host-test/initialization
@@ -41,7 +42,8 @@ test: $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/init
 	$(BUILD)/host-test/framing
 	$(BUILD)/host-test/profiles
 	$(BUILD)/host-test/loop_metadata
-sanitize: $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+sanitize: $(BUILD)/sanitize/joint_queue $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+	$(BUILD)/sanitize/joint_queue
 	$(BUILD)/sanitize/joint
 	$(BUILD)/sanitize/filter
 	$(BUILD)/sanitize/initialization
@@ -105,6 +107,7 @@ install: sh4
 	install -m 644 $(BUILD)/sh4/libADX.a "$(DESTDIR)$(PREFIX)/lib/dreamcast/libADX.a"
 
 clean:
+	rm -f $(BUILD)/host-test/joint_queue $(BUILD)/sanitize/joint_queue
 	rm -f $(BUILD)/host-test/joint $(BUILD)/sanitize/joint
 	rm -f $(BUILD)/host-test/filter $(BUILD)/sanitize/filter
 	rm -f $(BUILD)/host-test/initialization $(BUILD)/sanitize/initialization
@@ -270,4 +273,10 @@ $(BUILD)/host-test/joint: tests/joint.c $(BUILD)/host-test/libADX-test.a $(HEADE
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
 
 $(BUILD)/sanitize/joint: tests/joint.c $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+$(BUILD)/host-test/joint_queue: tests/joint_queue.c $(BUILD)/host-test/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
+
+$(BUILD)/sanitize/joint_queue: tests/joint_queue.c $(BUILD)/sanitize/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@

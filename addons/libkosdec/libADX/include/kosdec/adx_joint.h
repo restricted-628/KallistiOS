@@ -8,10 +8,11 @@ extern "C" {
 #endif
 
 enum kosdec_adx_joint_kind {
-    KOSDEC_ADX_JOINT_MEMORY = 1, KOSDEC_ADX_JOINT_RING
+    KOSDEC_ADX_JOINT_MEMORY = 1, KOSDEC_ADX_JOINT_RING, KOSDEC_ADX_JOINT_QUEUE
 };
 enum kosdec_adx_joint_line {
-    KOSDEC_ADX_JOINT_FREE, KOSDEC_ADX_JOINT_DATA
+    KOSDEC_ADX_JOINT_FREE, KOSDEC_ADX_JOINT_DATA,
+    KOSDEC_ADX_JOINT_AUX2, KOSDEC_ADX_JOINT_AUX3
 };
 enum kosdec_adx_joint_status {
     KOSDEC_ADX_JOINT_OK, KOSDEC_ADX_JOINT_BAD_ARGUMENT,
@@ -20,7 +21,8 @@ enum kosdec_adx_joint_status {
 };
 struct kosdec_adx_joint;
 /* A borrowed span, including its origin. Use split to create partial returns.
-   DATA is read-only; only FREE may be written. No access after return to joint. */
+   DATA is read-only; FREE may be written. Queue auxiliary line access roles
+   are caller-defined. No access after return to joint. */
 struct kosdec_adx_chunk {
     uint8_t *data;
     size_t bytes;
@@ -30,22 +32,37 @@ struct kosdec_adx_chunk {
 };
 typedef void (*kosdec_adx_joint_error)(void *context,
                                       enum kosdec_adx_joint_status status);
+enum kosdec_adx_joint_mode {
+    KOSDEC_ADX_JOINT_SEPARATE, KOSDEC_ADX_JOINT_JOIN
+};
+/* Caller-provided typed workspace; contents are private while joint is live. */
+struct kosdec_adx_joint_node {
+    struct kosdec_adx_joint_node *next;
+    uint8_t *data;
+    size_t bytes;
+};
 struct kosdec_adx_joint {
     uint32_t magic;
     enum kosdec_adx_joint_kind kind;
     uint8_t *buffer;
-    size_t capacity, extra, position[2], available[2];
-    struct kosdec_adx_chunk borrowed[2];
+    size_t capacity, extra, position[4], available[4];
+    struct kosdec_adx_chunk borrowed[4];
     uint64_t next_token;
     kosdec_adx_joint_error error;
     void *error_context;
+    enum kosdec_adx_joint_mode mode;
+    struct kosdec_adx_joint_node *nodes, *spare, *head[4], *tail[4], *reserved[4];
+    size_t node_count, spare_count, chunks[4];
 };
 struct kosdec_adx_joint_info {
     enum kosdec_adx_joint_kind kind;
     size_t capacity, extra;
-    size_t available[2], contiguous[2], borrowed[2];
+    size_t available[4], contiguous[4], borrowed[4];
+    size_t chunks[4], spare_nodes, total_nodes;
+    enum kosdec_adx_joint_mode mode;
 };
-/* State and backing storage are caller-owned, disjoint, and remain alive until
+/* State, workspace, backing storage and output descriptors are disjoint,
+   caller-owned, and remain alive until
    successful close. Every call and buffer access is serialized by one owner;
    this is not a concurrent SPSC queue. At most one outstanding borrow per line.
    No device/DMA/IRQ ownership, allocation, global init, or scheduler dependency.
@@ -63,6 +80,30 @@ enum kosdec_adx_joint_status kosdec_adx_joint_memory_init(
     struct kosdec_adx_joint *, void *data, size_t bytes);
 enum kosdec_adx_joint_status kosdec_adx_joint_ring_init(
     struct kosdec_adx_joint *, void *buffer, size_t capacity, size_t extra);
+/* Queue starts empty, with four independent FIFO lines and caller-owned nodes.
+   SEPARATE get returns a whole head chunk only when request>=head bytes; JOIN
+   permits partial gets and merges adjacent spans on Put/Unget/seed. Adjacent
+   spans in JOIN mode MUST belong to the same original backing allocation.
+   No copy occurs. All ranges remain caller-owned through reset/close. Query
+   capacity is total seeded bytes, contiguous is head length, and node counts
+   exclude borrowed reserved nodes. A partial get/return can require a spare
+   node: LIMIT leaves ownership/state unchanged. Each borrow reserves a node,
+   guaranteeing its full unget even after other admissions exhaust the pool.
+   Reset empties all lines, forgets seeded ranges and restores the node pool.
+   Rebuild consumers when the public state structure changes. */
+enum kosdec_adx_joint_status kosdec_adx_joint_queue_init(
+    struct kosdec_adx_joint *, struct kosdec_adx_joint_node *, size_t node_count,
+    enum kosdec_adx_joint_mode);
+/* Seed appends a new, disjoint byte range to a queue line. Overlap with any
+   queued/borrowed range, state or node workspace is rejected. Total seeded
+   bytes<=INT32_MAX. Zero bytes is a no-op. Cannot seed memory/ring joints. */
+enum kosdec_adx_joint_status kosdec_adx_joint_seed(
+    struct kosdec_adx_joint *, enum kosdec_adx_joint_line, void *, size_t bytes);
+/* Queue-only Put with an explicit destination line (may equal source line).
+   Ordinary put maps FREE<->DATA and AUX2<->AUX3. */
+enum kosdec_adx_joint_status kosdec_adx_joint_move(
+    struct kosdec_adx_joint *, enum kosdec_adx_joint_line destination,
+    const struct kosdec_adx_chunk *);
 /* Reset restores initial availability, preserves error hook and token sequence.
    Reset/close return BUSY unchanged while any nonempty borrow exists. Close
    retires only software borrows; callers must join any external provider first. */
@@ -75,8 +116,8 @@ enum kosdec_adx_joint_status kosdec_adx_joint_set_error(
     struct kosdec_adx_joint *, kosdec_adx_joint_error, void *context);
 enum kosdec_adx_joint_status kosdec_adx_joint_query(
     struct kosdec_adx_joint *, struct kosdec_adx_joint_info *);
-/* Get borrows min(request, available contiguous bytes). Empty is OK, with a
-   zeroed chunk. Another nonzero get on that line while borrowed returns BUSY.
+/* Get on memory/ring borrows min(request, available contiguous bytes).
+   Empty is OK, with a zeroed chunk. Another nonzero get on that line while borrowed returns BUSY.
    Empty DATA is temporary starvation, never an implicit EOF. Output unchanged
    on errors. Query contiguous is zero for a line with an outstanding borrow. */
 enum kosdec_adx_joint_status kosdec_adx_joint_get(

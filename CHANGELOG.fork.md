@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX caller-owned chunk queues
+
+- Extend byte joints with four FIFO lines, caller-owned nodes, whole-chunk
+  Separate mode and partial/adjacent-span Join mode. Payload is not copied;
+  potentially joined spans must share their original backing allocation.
+- Reserve a node per borrow so full rollback remains possible under pool
+  pressure. Seed rejects overlapping ranges; partial operations can report
+  LIMIT without mutation. Reset forgets references without freeing payload.
+  Rebuild consumers for enlarged joint and query structures.
+- Full host/ASan/UBSan suites pass, including173,087 queue assertions and
+  1,555,979 existing memory/ring assertions per lane. Strict staged SH-4 C/C++
+  links pass. Live decoder adaptation and audible/hardware validation remain
+  separate; native pool accounting is not CRI ABI compatibility.
+
 ## 2026-11-13 — libADX compressed-byte joints
 
 - Add caller-owned memory and ring transports with split/Get/Put/Unget,

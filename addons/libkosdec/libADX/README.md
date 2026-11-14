@@ -770,7 +770,7 @@ rate overrides; codec validity alone is not a physical output guarantee.
 
 ## Byte stream joints
 
-`kosdec/adx_joint.h` supplies caller-owned memory and ring chunk transports.
+`kosdec/adx_joint.h` supplies caller-owned memory, ring and queue chunk transports.
 Memory begins readable, offers no writable space, and reset replays the same
 bytes. Ring begins writable and optionally mirrors its prefix after the ring
 allocation so chunks can cross the wrap boundary without a consumer copy.
@@ -794,5 +794,23 @@ by the existing producer fiber, with yields outside borrowed-buffer operations.
 
 The native contract deliberately uses typed status/kind instead of CRI error
 numbers/UUIDs and does not support arbitrary concurrent or multiple same-line
-borrows. UNI queues, live decoder input and full SJ conformance remain open;
+borrows. Live decoder input and full SJ conformance remain open;
 this facility alone does not close the middleware milestone.
+
+The generic queue uses caller-supplied typed nodes and four FIFO lines. Seed
+admits nonoverlapping ranges; explicit move selects a destination line. Separate
+mode preserves chunk boundaries and returns the entire head only when the request
+can hold it. Join mode combines adjacent spans and admits partial head reads.
+Every pair of adjacent ranges that may join must belong to the same original
+backing allocation. It never copies payload bytes. Query exposes queued chunk
+counts, head lengths and spare-node counts. Seed overlap checks scan the nodes;
+normal queue operations use constant-time list endpoints.
+
+Each outstanding borrow reserves a node, so its full rollback remains possible
+when the pool fills. Partial reads or returns may need another node and return
+LIMIT unchanged if none is available. Reserved nodes are excluded from spare
+counts; this deliberately differs from the SDK's unchecked pool accounting.
+Reset forgets all seeded ranges and restores the node pool, only with no borrows.
+Neither reset nor close frees caller buffers. Auxiliary lines have caller-defined
+read/write roles; FREE/DATA retain the usual producer/consumer roles. Joint state
+and query structures grew with queue support: rebuild all users of this interface.

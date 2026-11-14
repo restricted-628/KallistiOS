@@ -112,3 +112,10 @@ only committed bytes; do not replace it with whole-prefix copies. Keep one borro
 per line, token/bounds checks, prefix Put/suffix Unget, and reset/close BUSY gates.
 External providers must be joined separately. Native kind/status and ownership
 restrictions do not imply CRI ABI or full SJ equivalence; see the completion map.
+
+Generic byte queues have four lines and caller-owned node workspace. Separate
+mode returns whole heads; Join permits splitting/adjacent merging within one
+backing allocation. Reserve one node per borrow; full rollback must remain
+possible despite pool exhaustion. Partial operations can return LIMIT unchanged.
+Seed rejects overlap; reset drops queued references without freeing buffers.
+Do not treat an empty queue as EOF or native node counts as proprietary ABI.
