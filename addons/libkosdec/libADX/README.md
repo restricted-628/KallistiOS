@@ -860,3 +860,22 @@ pause/resume and cancel work; sequence enqueue/repeat and embedded-loop release
 are UNSUPPORTED for a forward-only joint source. Sound RAM remains retained under
 the existing player contract. These are source/host/link facilities, not new
 qualification of audible completion, final sample fetch or physical performance.
+
+## Loop control and count
+
+Select embedded looping when initializing a memory/stream reader. While playing,
+only release is supported; re-enabling belongs before a new start. This follows
+the baseline middleware manual's restriction and is not a missing live-enable
+feature. Release preserves the remainder of the current traversal and plays out
+to the file's validated end. Full format/history coverage remains separately tracked.
+
+`kosdec_adx_pipe_get_loop_count` provides an atomic source-rewind count modulo
+2^32, also exposed as `player_info.decoded_loops`. It is zero initially and for
+sequence/joint sources; playlist repeats are a separate quantity. The producer
+publishes after each step, including a rewind followed by provider WAIT/error.
+Release, pause, cancel and terminal status preserve the count; init/rebind clears
+it. The snapshot is independent of other PCM/status fields. Decode read-ahead can
+lead sound output: this is not an audible-loop clock or sample-fetch certificate.
+The baseline SDK likewise increments its loop count from a decoder trap, though
+exact service/prefetch timing is not asserted identical. Rebuild callers for the
+new pipe and player-info fields.

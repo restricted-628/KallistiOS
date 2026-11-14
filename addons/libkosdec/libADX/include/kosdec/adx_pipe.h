@@ -8,7 +8,7 @@ extern "C" {
 #endif
 struct kosdec_adx_pipe {
     uint32_t magic, capacity, write_cursor, read_cursor;
-    uint32_t ready, terminal, cancel_requested, sample_rate, channels;
+    uint32_t ready, terminal, cancel_requested, sample_rate, channels, decoded_loops;
     int16_t *pcm;
     struct kosdec_adx_stream *stream;
     struct kosdec_adx_sequence *sequence;
@@ -61,6 +61,14 @@ struct kosdec_adx_pipe_result kosdec_adx_pipe_read(
 /* Any thread; false until format published, leaves outputs unchanged on false. */
 bool kosdec_adx_pipe_get_format(const struct kosdec_adx_pipe *,
                               uint32_t *sample_rate, unsigned *channels);
+/* Any thread: completed source rewinds, modulo2^32. Zero before decoding and
+   for sequence/joint sources (playlist repeats are not embedded ADX loops).
+   Published after each producer step, including a rewind followed by input
+   WAIT/error. Decode read-ahead may lead playback: not an audible-loop clock.
+   Release/pause/cancel/terminal retain the last count; init/rebind resets it.
+   Independent atomic snapshot, not a transaction with PCM position/status.
+   False on invalid arguments leaves output unchanged. */
+bool kosdec_adx_pipe_get_loop_count(const struct kosdec_adx_pipe *, uint32_t *loops);
 /* Any thread; caller must wake a parked producer. Next pump acknowledges even
    when full/paused. Does not interrupt an in-progress provider/read, stop a
    consumer, join a worker or retire I/O. Terminal is NOT a producer-return/join

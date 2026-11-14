@@ -280,6 +280,7 @@ bool kosdec_adx_player_take(struct kosdec_adx_player *p, enum kosdec_adx_status 
 int kosdec_adx_player_get_info(struct kosdec_adx_player *p, struct kosdec_adx_player_info *info) {
     if(!valid(p) || !info) return bad();
     *info = p->info;
+    (void)kosdec_adx_pipe_get_loop_count(&p->producer.pipe,&info->decoded_loops);
     if(p->source_bound) {
         struct kosdec_adx_service_state state = kosdec_adx_service_get_state(&p->producer);
         info->decoder = state.status; info->production_paused = state.paused;

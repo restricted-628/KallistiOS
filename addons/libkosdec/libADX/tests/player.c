@@ -419,7 +419,32 @@ static void low_rate_admission(void) {
         CHECK(!kosdec_adx_player_stop(&f.player,1000));free(f.data);
     }
 }
+static void loop_snapshot(void) {
+    struct fixture f;init(&f,2,false);
+    CHECK(info(&f).decoded_loops==0);
+    CHECK(!kosdec_adx_player_cancel_source(&f.player));
+    free(f.data);f.data=stream(50,18,2,32,63,&f.bytes);
+    kosdec_adx_stream_init(&f.stream,input,&f,(uint32_t)f.bytes,true);
+    CHECK(!kosdec_adx_player_bind_source(&f.player,&f.stream,NULL));
+    for(unsigned i=0;i<2000 && info(&f).decoded_loops<2;++i) {
+        CHECK(!kosdec_adx_player_poll(&f.player));mock_pause();
+    }
+    CHECK(info(&f).decoded_loops>=2);
+    struct kosdec_adx_command release={.kind=KOSDEC_ADX_RELEASE_LOOP};
+    CHECK(kosdec_adx_player_post(&f.player,&release)==KOSDEC_ADX_MORE);
+    enum kosdec_adx_status receipt;unsigned tries=0;
+    while(!kosdec_adx_player_take(&f.player,&receipt)) {CHECK(tries++<2000);mock_pause();}
+    CHECK(receipt==KOSDEC_ADX_MORE);
+    for(unsigned i=0;i<2000 && info(&f).state!=KOSDEC_ADX_PLAYER_SOURCE_END;++i) {
+        CHECK(!kosdec_adx_player_poll(&f.player));mock_pause();
+    }
+    CHECK(info(&f).state==KOSDEC_ADX_PLAYER_SOURCE_END);
+    CHECK(!kosdec_adx_player_stop(&f.player,1000));
+    CHECK(info(&f).decoded_loops==(uint32_t)f.stream.wraps && info(&f).decoded_loops>=2);
+    free(f.data);
+}
 int main(void) {
+    loop_snapshot();
     low_rate_admission();expanded_start_rates();complete();failures();controls();admission();late_errors();reusable_sources();discard_receipt();rebind_failures();cancel_seek_rate();short_sequence_prefill();
     puts("PLAYER_PASS PCM, controls, 48 successive sources, cancel/seek/rate, rebind failures, retained output and joined producers");
     return 0;

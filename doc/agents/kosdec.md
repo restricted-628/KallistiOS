@@ -135,3 +135,10 @@ permits buffered DATA, ERROR closes source production. Existing player fiber own
 reader/joint until release/cancel/stop joins; reader close and provider retirement
 remain separate. Keep same-format rebind checks and retained Audio allocation.
 Forward-only joint sources reject loop/repeat/enqueue controls; no hidden seek.
+
+The baseline loop flag is selected before start and can only be released during
+playback. Do not invent live re-enable to close H4. Embedded-loop counts are
+source rewinds, not audible time; SDK updates its count in a decoder trap. Publish
+low32 bits from the producer with the existing lock-free atomic discipline;
+controller queries must not read the producer-owned64-bit wraps directly.
+Sequence cycles and forward-only joint input are not embedded-loop counts.

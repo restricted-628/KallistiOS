@@ -45,6 +45,11 @@ bool kosdec_adx_pipe_get_format(const struct kosdec_adx_pipe *p,
 void kosdec_adx_pipe_request_cancel(struct kosdec_adx_pipe *p) {
     if(valid(p)) __atomic_store_n(&p->cancel_requested, 1, __ATOMIC_RELEASE);
 }
+bool kosdec_adx_pipe_get_loop_count(const struct kosdec_adx_pipe *p, uint32_t *loops) {
+    if(!valid(p) || !loops) return false;
+    *loops = __atomic_load_n(&p->decoded_loops, __ATOMIC_ACQUIRE);
+    return true;
+}
 struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) {
     struct kosdec_adx_stream_result r = {KOSDEC_ADX_BAD_ARGUMENT, 0};
     if(!valid(p)) return r;
@@ -102,6 +107,8 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
             __atomic_store_n(&p->write_cursor, head + (uint32_t)r.frames, __ATOMIC_RELEASE);
         }
     }
+    __atomic_store_n(&p->decoded_loops, p->stream ? (uint32_t)p->stream->wraps : 0,
+                     __ATOMIC_RELEASE);
     if(r.status >= KOSDEC_ADX_DONE)
         __atomic_store_n(&p->terminal, r.status, __ATOMIC_RELEASE);
     return r;

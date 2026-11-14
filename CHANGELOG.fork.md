@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX decoded loop-count queries
+
+- Publish a lock-free decode-side loop count through the PCM pipe and native
+  player status. The count records stream rewinds modulo 2^32, not audible
+  playback progress; sequences and forward-only joint sources report zero.
+- Preserve the count across pause/cancel/terminal states and clear it on source
+  rebinding. Rebuild consumers for the enlarged pipe and player-info structures.
+- Full host/ASan/UBSan suites and strict staged SH-4 C/C++ links pass. No live
+  loop-enable control, audible-clock or physical-hardware qualification is added.
+
 ## 2026-11-13 — libADX joint sources in the native player
 
 - Add explicit joint-source constructors for the PCM pipe, control service and

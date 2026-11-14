@@ -30,6 +30,7 @@ struct kosdec_adx_player_info {
     enum kosdec_adx_status decoder;
     int first_error, stop_error;
     uint32_t sample_rate, output_rate; /* Source Hz and requested playback Hz. */
+    uint32_t decoded_loops; /* Source rewinds modulo2^32, not audible loops. */
     unsigned channels;
     uint64_t copied_frames, requested_frames, callbacks, starvations;
     uint64_t source_frames, sources_started;
