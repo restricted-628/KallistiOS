@@ -105,3 +105,10 @@ Sequence filters persist across entries; standalone decoder initialization clear
 configuration, while stream seek preserves it. Consumer/audio callbacks never run
 these filters. Include callback cost in the producer budget. This facility does
 not establish playback-time amplitude metering or a qualified audible clock.
+
+Byte joints are serialized compressed-input storage, not a concurrent PCM pipe
+or DMA transport. Memory never offers FREE bytes. Ring mirror publication covers
+only committed bytes; do not replace it with whole-prefix copies. Keep one borrow
+per line, token/bounds checks, prefix Put/suffix Unget, and reset/close BUSY gates.
+External providers must be joined separately. Native kind/status and ownership
+restrictions do not imply CRI ABI or full SJ equivalence; see the completion map.

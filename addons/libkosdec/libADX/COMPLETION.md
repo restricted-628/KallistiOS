@@ -36,7 +36,7 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 | H11 | Seamless queue and linked controls | Bounded same-format PCM sequence and repeat/release | Baseline queue timing, linked controls and qualified audible seamless transitions; PCM concatenation alone does not establish this. |
 | H12 | Special processing | Unbound decode-from-start seek; caller-buffer SFA header; producer-side PCM filter | Sample-discard contract, amplitude analysis/work sizing, live SJ/SFD header insertion and silence injection. |
 | F1 | File/partition services | VFS/direct-disc sources, bounded AFS member views | Partition registration/loading/status, directory/name/range services, sector-read/seek/count/reload/error contracts and lifecycle equivalence. |
-| J1 | Stream joint | Memory/provider/PCM-pipe alternatives | SJ chunk ownership, Get/Unget/Put/Reset/query/error semantics and RBF/MEM/UNI variants; native alternatives are not yet full behavioral equivalents. |
+| J1 | Stream joint | Caller-owned memory/ring byte joints: split, Get/Put/Unget, query/error/reset/close, contiguous wrap region | UNI queues/pool metrics, live input integration and multi-borrow baseline conformance. Native one-borrow-per-line admission and typed identity/status are deliberate differences; no CRI ABI claim. |
 | L1 | Load/sequence controller | Bounded same-format PCM sequence | Filename/range queue, per-stream IDs/names/status/read sectors, flow-limit and service/error/pause/stop equivalence. |
 | M1 | Sega middleware facade | Native KOSdec API | Decide and document native equivalent versus MWPLY-facing integration; no facade supplied. |
 

@@ -767,3 +767,32 @@ zero/Nyquist endpoints and domain rejection at every integer rate through 48000.
 Regenerate tables and special inputs with `python3 tests/generate_setup.py`.
 The player model additionally verifies low-rate output admission and explicit
 rate overrides; codec validity alone is not a physical output guarantee.
+
+## Byte stream joints
+
+`kosdec/adx_joint.h` supplies caller-owned memory and ring chunk transports.
+Memory begins readable, offers no writable space, and reset replays the same
+bytes. Ring begins writable and optionally mirrors its prefix after the ring
+allocation so chunks can cross the wrap boundary without a consumer copy.
+This is compressed-byte storage; it is separate from the interleaved PCM pipe.
+
+The serialized owner gets a FREE chunk, fills it, splits off the used prefix,
+puts that prefix, and ungets the unused suffix. A consumer does the same on
+DATA, reading rather than writing. Put publishes to the opposite line; memory
+consumption discards bytes. Each line permits one outstanding borrow. Tokens and
+span bounds reject stale, duplicate, foreign and out-of-order returns. Reset and
+close reject outstanding borrows. Caller joins external users before close;
+software retirement does not retire DMA or a transport provider.
+
+Query exposes total/contiguous/borrowed byte counts and native transport kind.
+An empty DATA chunk means starvation, not EOF. Error callbacks are synchronous,
+non-reentrant notifications; ordinary errors do not mutate state. All backing
+storage, state and output descriptors must be disjoint (split alone permits its
+input to alias either distinct output). The API performs no allocation, IRQ
+masking, cache maintenance, FPU work or scheduler operations. It can be driven
+by the existing producer fiber, with yields outside borrowed-buffer operations.
+
+The native contract deliberately uses typed status/kind instead of CRI error
+numbers/UUIDs and does not support arbitrary concurrent or multiple same-line
+borrows. UNI queues, live decoder input and full SJ conformance remain open;
+this facility alone does not close the middleware milestone.

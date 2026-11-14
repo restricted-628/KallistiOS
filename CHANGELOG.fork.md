@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX compressed-byte joints
+
+- Add caller-owned memory and ring transports with split/Get/Put/Unget,
+  availability queries, synchronous error hooks and checked reset/close.
+  Ring wrap storage mirrors only committed bytes; outstanding borrows prevent
+  reset or close. These are serialized compressed-input buffers, not concurrent
+  PCM pipes or DMA ownership mechanisms.
+- Preserve explicit one-borrow-per-line and disjoint-storage contracts, with
+  stale/foreign/out-of-order return rejection. Empty input means starvation,
+  not EOF. Native status and identity are not CRI ABI compatibility.
+- Full host and sanitizer suites pass, including1,555,979 joint assertions per
+  lane. Strict SH-4 archive and staged C/C++ consumer links pass. UNI queues,
+  live decoder adaptation and audible/hardware qualification remain separate.
+
 ## 2026-11-13 — libADX producer-side PCM filters
 
 - Add optional caller-owned filters for decoded PCM and persistent sequence
