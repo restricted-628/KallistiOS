@@ -112,6 +112,13 @@ revision and result. Separate host, target-link, emulator and hardware evidence.
 
 ## Known gate and task handoff
 
+Resident music and sequence services continue independently of command-queue
+processing. Do not replace/clear DSP programs while those producers can run:
+the current exclusive command-queue operation is not an acknowledged ARM
+service-boundary pause. Acknowledged exclusion/resume and physical DSP-work
+retirement remain separate unresolved contracts. Current live fixtures use no
+DSP sends; their success does not qualify this composition.
+
 No imported proprietary banks/firmware. Host decoding and command models are not listening tests or physical sound-RAM DMA proof.
 
 Before editing, state the bounded bug/feature, file scope, owning checkout,

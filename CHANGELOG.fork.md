@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-14 — Resident AICA music, sequences and layered banks
+
+- Activate explicit managed music ownership, bounded sequence resource/control
+  services, fair port admission and opt-in four-layer native banks. Preserve
+  v1 bank data and reject v2 staging without the layered-bank capability.
+- Retain played sound memory and channel leases after logical stop; sequence
+  CPU-resource reclamation is separate. Add an explicit ARM image/layout/helper
+  validation target and rebuild firmware embeddings and private consumers.
+- Focused host/sanitizer suites, strict ARM/SH-4 builds and bounded Flycast
+  interpreter/dynarec fixtures pass. No audible-fidelity, atomic layer onset,
+  physical final-fetch, latency or whole middleware-parity claim.
+- Known composition restriction: do not replace or clear DSP programs while
+  resident music/sequence producers can run. Command-queue exclusion does not
+  acknowledge an ARM service-boundary pause; that integration remains unresolved.
+
 ## 2026-11-13 — Retire the SH4ZAM alignment overlay
 
 - Use pristine upstream source at the unchanged `5b7dfc22` pin. Remove the

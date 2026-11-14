@@ -369,6 +369,13 @@ single private queue; integrate accepted changes individually when authorized.
 The acceptance loop in the implementation plan operationalizes this policy;
 source/hardware gates and publication authority are unchanged.
 
+### D17 backlog priority — finish delivered work
+
+**Owner direction, 2026-11-14:** Close the delivered commit backlog before
+restarting parked workers or opening new feature slices. Reuse frozen reviews
+and validation; preserve explicit blockers instead of treating publication as
+whole-subsystem completion.
+
 ## D18 — Routine Integration publication authority
 
 **Accepted, 2026-10-12:** The owner explicitly authorized committing the reviewed
