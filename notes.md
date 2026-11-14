@@ -670,6 +670,16 @@ history neither pins textures nor retires GPU readers. Existing KOS surface
 and render-ticket ownership remain authoritative. The native RTT fixture passes
 both Flycast modes with explicit RTT readback; hardware visibility remains open.
 
+**Accepted adapter completion, 2026-11-13:** The pinned capability inventory now
+has KOS-native adapters and Compact/posed-skin/textured-foot consumers. Prepared
+headers, masks, meshes and immutable bindings keep admission outside hot loops.
+Retained-frame effects use caller-owned surfaces and exact generation/render
+identities; history metadata does not pin resources or retire GPU readers.
+All readers must retire before replacement. Fog plans do not own global fog;
+halo feedback correction remains an estimate when filtering/clipping loses data.
+Fresh host/sanitizer, GCC16.2 build/link and fourteen fixtures in both Flycast
+modes pass. This accepts source integration, not hardware/performance parity.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

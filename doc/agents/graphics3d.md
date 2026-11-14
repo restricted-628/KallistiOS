@@ -29,6 +29,30 @@ Compact models/scenes, transforms, culling, collision, deformation, skeleton/ski
 - `addons/include/sh4der_kos_frame.h`, `addons/libsh4der/kos/frame.c` —
   retained RGB565 sampling and generation-tagged metadata;
   `utils/sh4der-frame-test` provides host and native RTT regressions.
+- `addons/include/sh4der_kos_glow.h`, `addons/libsh4der/kos/glow.c` —
+  caller-owned glow maps, uploads and halo/ray/shaft packets;
+  `utils/sh4der-glow-test` covers CPU failure paths and a native RTT consumer.
+- `addons/include/sh4der_kos_image.h`, `addons/libsh4der/kos/image.c` —
+  admitted borrowed images, cached headers/quads and caller-retired uploads.
+- `addons/include/sh4der_kos_focus.h`, `addons/libsh4der/kos/focus.c` —
+  prepared focus masks, caller blur/mesh; `utils/sh4der-image-test` supplies
+  host arithmetic/failure checks and native RTT consumers.
+- `addons/include/sh4der_kos_warp.h`, `addons/libsh4der/kos/warp.c` —
+  prepared grids and caller scratch for warps, radial blur, pixelation and dither;
+  `utils/sh4der-image-test` includes the native stride/twiddled regression.
+- `addons/include/sh4der_kos_ca.h`, `addons/libsh4der/kos/ca.c` — prepared
+  viewport and complete chromatic channel packets over admitted images.
+- `addons/include/sh4der_kos_shafts.h`, `addons/libsh4der/kos/shafts.c` —
+  prepared light attenuation and caller shade maps/history/multiply mesh;
+  `utils/sh4der-image-test` includes both native consumers.
+- `addons/include/sh4der_kos_overlay.h`, `addons/libsh4der/kos/overlay.c` —
+  cached untextured overlay headers and complete quads.
+- `addons/include/sh4der_kos_lens.h`, `addons/libsh4der/kos/lens.c` —
+  host/load vignette and grain, caller-owned grain/hit/flash packets;
+  `utils/sh4der-lens-test` provides host and native coverage.
+- `addons/include/sh4der_kos_visor.h`, `addons/libsh4der/kos/visor.c` —
+  prepared mode resources, thermal mapping and cached-header layers/vignette;
+  `utils/sh4der-lens-test` includes host and native visor mode tests.
 - `examples/dreamcast/pvr/sh4der_compact`
 
 Relevant existing documentation (dated claims must be rechecked):
@@ -96,3 +120,31 @@ related decision IDs in `notes.md`, and interface partners. On completion or
 interruption, update the assigned private handoff with evidence, remaining dirty
 work and one next action. Propose central decision/changelog updates to
 integration; do not silently rewrite another subsystem's contract.
+
+SH4DER torch uses prepared caller geometry and fog curves via
+`sh4der_kos_torch.h`. The renderer alone applies the129-entry black-fog table
+at a safe scene boundary. Cone output uses cached overlay MULTIPLY/BOOST
+headers and one existing sink. Native fixture: `utils/sh4der-lens-test`.
+
+SH4DER trail/TAA uses `sh4der_kos_trail.h` retained-image history with exact
+producer IDs; no raw scanout parity route. Invalidate before write/failure/cut,
+rebind with new generation on resize/replacement and reset public camera state.
+Caller owns subsequent readers. Native consumer: `utils/sh4der-temporal-test`.
+
+SH4DER exposure (`sh4der_kos_look.h`) consumes exact retained-frame metadata,
+not the last eye output. Dynamic grades reuse overlay headers. Glow feedback
+records retain CPU maps by both rendered-frame and map-source identity; unfeed
+is a nearest-map estimate, not inversion of clipping or arbitrary screen effects.
+Use pre-effect grids for unsupported compositions. Native test: temporal suite.
+
+SH4DER AO includes both host crease bake and screen cavity. The latter uses
+`sh4der_kos_ao.h` with retained pre-effect grid, caller luma scratch/map and
+existing image MULTIPLY route; it is not depth/normal SSAO. Reproducible host
+sidecar bake and native consumer live in `utils/sh4der-ao-test`.
+
+SH4DER full capability mapping is in `addons/libsh4der/COVERAGE.md`. Native
+Compact consumer covers sparse/reversed/repeated indices, prepared skin poses,
+AO/torch/effect composition and bone-excluded limb shadows. Textured feet use
+host-cooked masks and receiver depth testing. Preserve producer/reader retirement
+and rebuild all context users together after PVR ABI changes. Physical hardware
+and performance remain separate evidence; helper delivery is not publication.

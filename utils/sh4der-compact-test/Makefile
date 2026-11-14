@@ -20,6 +20,11 @@ $(TARGET): $(SOURCES) ../../addons/include/sh4der_kos.h ../../addons/include/sh4
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 test: $(TARGET)
 	./$(TARGET)
+	./$(TARGET) --cook-foot > cooked-foot.actual.h
+	cmp cooked-foot.h cooked-foot.actual.h
+dreamcast:
+	kos-cc native.c -lsh4der -o sh4der-compact-test.elf
+	kos-cc foot-native.c -lsh4der -o sh4der-foot-test.elf
 clean:
-	$(RM) $(TARGET)
+	$(RM) $(TARGET) cooked-foot.actual.h sh4der-compact-test.elf sh4der-foot-test.elf
 include ../Makefile.sh4zam-state

@@ -13,7 +13,8 @@ There is no new global fast-math policy.
 The reusable `<sh4der_kos.h>` adapter binds model-indexed sidecars once and
 composes blade/holo, AO and posed limb shadows through Compact's existing
 callback. See [coverage and contracts](COVERAGE.md) for exact available features
-and the remaining full-integration work; screen backends are still incomplete.
+and validation limits. All pinned effect families now have caller-owned KOS
+adapters and native consumers, including retained-frame screen effects.
 
 The accepted build profile is the fork's ordinary `-O2` without fast-math.
 Inline helpers also inherit their application's flags. The bundled foot-shadow
@@ -24,7 +25,7 @@ numerical parity at those boundaries.
 ## Included computations
 
 The archive builds upstream `sh4der_core`, `sh4der_blade`, `sh4der_holo`,
-`sh4der_bloom`, and the bundled `sh4dow_dc` and `sh4dow_foot` CPU sources.
+`sh4der_bloom`, the CPU mesh portion of `sh4der_torch`, and the bundled `sh4dow_dc` and `sh4dow_foot` CPU sources.
 Use headers such as `<sh4der/sh4der_blade.h>` and `<sh4dow_dc.h>`.
 
 - Blade/beam energy and hologram vertex colors: prepare once per instance/frame,
@@ -41,19 +42,27 @@ Static bind-pose hologram weights and applicable static AO should be prepared
 on the host or at asset load, not rebuilt for every frame. Timed effects use
 their documented tick/time units, not an assumed display frame rate.
 
-## Deliberately not linked yet
+## Native effect integration
 
-The upstream native framebuffer, glow, warp, trail, lens, focus, visor, torch,
+The upstream native framebuffer, glow, warp, trail, lens, focus, visor, torch GPU,
 chromatic-aberration and shafts source files are **not** in this archive.
 Headers can declare their GPU functions, but those functions are not provided
 by this adapter. Do not separately link the upstream all-in-one archive to
 fill them in: it would reintroduce competing state and resource ownership.
 
-Full-screen effects need caller-owned render-target/scanout descriptors,
-format and stride validation, a single submission path, and explicit render
-completion/retirement before reuse or free. History effects additionally need
-frame identity and resize/reset handling. Fog remains renderer-owned. These
-are separate integration work, not capabilities claimed complete here.
+Use the `sh4der_kos_*` headers for retained-frame sampling, glow, warp, trail/TAA,
+lens, focus, visor, torch, chromatic aberration, shafts, exposure and screen
+cavity. They prepare caller storage and complete packets/meshes for existing KOS
+sinks. Images/history are explicitly borrowed; producer completion does not
+retire later readers. Bind/rebind at resource boundaries and reset history on
+cuts, resize and PVR restart. Fog and global texture stride remain caller-owned.
+
+Host-bake static weights, crease AO, masks, LUTs and fixed geometry. Native
+checks under `utils/sh4der-*-test` cover original retained RTT fixtures and
+Compact poses; normal/sanitizer host checks, SH-4 links and emulator readback
+are separate from physical-hardware visibility and performance qualification.
+Glow feedback is an estimate after bilinear filtering/quantization/clipping;
+use pre-effect capture for exact source data. See COVERAGE.md for contracts.
 
 ## Licensing and attribution
 

@@ -1,13 +1,13 @@
 /* KallistiOS ##version##
    Copyright (C) 2026 Joseph Black. */
-#include <sh4der_kos_screen.h>
+#include <sh4der_kos_overlay.h>
 #include <errno.h>
 #include <math.h>
 #include <string.h>
 
 _Static_assert(sizeof(sh4der_kos_screen_packet_t) == 160, "packet layout");
 
-int sh4der_kos_grade_packets(const sh4der_look_grade_t *g,
+static int grade_packets(const pvr_poly_hdr_t *cached, const sh4der_look_grade_t *g,
     const float rect[4], float z0, float z_step,
     sh4der_kos_screen_packet_t *out, size_t capacity) {
     if(!g || !rect || !out || ((uintptr_t)out & 31u)) {
@@ -44,6 +44,8 @@ int sh4der_kos_grade_packets(const sh4der_look_grade_t *g,
         PVR_BLEND_DESTCOLOR, PVR_BLEND_ONE, PVR_BLEND_ONE, PVR_BLEND_ZERO
     };
     for(int i = 0; i < n; ++i) {
+        if(cached) out[i].header=cached[layers[i].kind];
+        else {
         pvr_poly_cxt_t c;
         pvr_poly_cxt_col(&c, PVR_LIST_TR_POLY);
         c.gen.culling = PVR_CULLING_NONE;
@@ -53,6 +55,7 @@ int sh4der_kos_grade_packets(const sh4der_look_grade_t *g,
         c.blend.src = source[layers[i].kind];
         c.blend.dst = destination[layers[i].kind];
         pvr_poly_compile(&out[i].header, &c);
+        }
         uint32_t argb = sh4der_look_argb(&layers[i]);
         for(unsigned k = 0; k < 4; ++k)
             out[i].vertices[k] = (pvr_vertex_t){
@@ -63,4 +66,15 @@ int sh4der_kos_grade_packets(const sh4der_look_grade_t *g,
             };
     }
     return n;
+}
+
+int sh4der_kos_grade_packets(const sh4der_look_grade_t *g,
+    const float rect[4],float z,float dz,sh4der_kos_screen_packet_t *out,size_t capacity) {
+    return grade_packets(NULL,g,rect,z,dz,out,capacity);
+}
+int sh4der_kos_grade_packets_cached(const sh4der_kos_overlay_t *overlay,
+    const sh4der_look_grade_t *g,const float rect[4],float z,float dz,
+    sh4der_kos_screen_packet_t *out,size_t capacity) {
+    if(!overlay){errno=EINVAL;return -1;}
+    return grade_packets(overlay->headers,g,rect,z,dz,out,capacity);
 }

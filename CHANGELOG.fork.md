@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — SH4DER and SH4DOW adapter completion
+
+- Complete caller-owned glow, focus, warp, chromatic aberration, shadow shafts,
+  lens, visor, torch/fog, retained trail/TAA, exposure/feedback and cavity-AO
+  adapters. Reuse admitted surfaces, cached headers and prepared geometry;
+  KOS remains the sole renderer and resource owner.
+- Add native Compact posed-skin, limb-shadow, cooked AO and textured-foot
+  consumers. No dependency repin or competing vendor renderer is introduced.
+- Fresh normal/sanitizer host suites, clean GCC16.2 build and consumer links
+  pass. Fourteen fixtures pass in both Flycast modes with explicit RTT readback.
+  Physical hardware, performance and exact inversion of clipped/bilinear effects
+  remain unqualified; callers retain producer/reader and surface lifetimes.
+
 ## 2026-11-13 — SH4ZAM rotation and scalar update
 
 - Advance the pinned upstream dependency from `ad2f8909` to `5b7dfc22`, including
