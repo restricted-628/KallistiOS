@@ -26,6 +26,20 @@ void kosdec_adx_stream_release_loop(struct kosdec_adx_stream *s) {
 void kosdec_adx_stream_cancel(struct kosdec_adx_stream *s) {
     if(valid(s) && !s->terminal) s->terminal = KOSDEC_ADX_CANCELLED;
 }
+enum kosdec_adx_status kosdec_adx_stream_set_linked(struct kosdec_adx_stream *s,bool enabled) {
+    if(!valid(s) || s->terminal || s->byte_position || s->input_count || s->seeking)
+        return KOSDEC_ADX_BAD_ARGUMENT;
+    if(enabled && s->repeat) return KOSDEC_ADX_UNSUPPORTED;
+    s->linked=s->follow_links=enabled;
+    return KOSDEC_ADX_DONE;
+}
+enum kosdec_adx_status kosdec_adx_stream_release_link(struct kosdec_adx_stream *s) {
+    if(!valid(s)) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(!s->linked) return KOSDEC_ADX_UNSUPPORTED;
+    if(s->terminal) return s->terminal;
+    s->follow_links=false;
+    return KOSDEC_ADX_MORE;
+}
 static void consume(struct kosdec_adx_stream *s, size_t bytes) {
     s->input_used += (unsigned)bytes;
     s->byte_position += (uint32_t)bytes;
@@ -39,6 +53,9 @@ static struct kosdec_adx_stream_result read_step(
     result.status = KOSDEC_ADX_MORE;
     if(s->paused) return result;
     if(!capacity) { result.status = KOSDEC_ADX_NEED_OUTPUT; return result; }
+    if(s->linked && s->linked_entries && !s->follow_links && !s->prepared) {
+        result.status=KOSDEC_ADX_DONE;goto terminal;
+    }
     struct kosdec_adx_decoder *d = &s->decoder;
     if(s->prepared && s->repeat && s->source_frame == d->loop.end_frame) {
         s->byte_position = d->loop.start_byte;
@@ -72,22 +89,55 @@ static struct kosdec_adx_stream_result read_step(
     bool final = available == s->input_bytes - s->byte_position;
     if(!s->prepared || s->source_frame == d->total_frames) {
         if(s->prepared) d->frames_done = d->total_frames;
-        struct kosdec_adx_result parsed = kosdec_adx_decode(d, input, available,
-            NULL, 0, final);
+        size_t take=available;
+        if(s->linked) {
+            size_t remaining=s->prepared?d->footer_bytes-d->footer_used:d->header_bytes-d->header_used;
+            if(take>remaining) take=remaining;
+        }
+        struct kosdec_adx_result parsed = kosdec_adx_decode(d, input, take,
+            NULL, 0, final && take==available);
         consume(s, parsed.consumed);
         result.status = parsed.status;
+        if(s->linked && s->prepared &&
+           (result.status==KOSDEC_ADX_NEED_END || result.status==KOSDEC_ADX_DONE)) {
+            ++s->linked_entries;
+            if(!s->follow_links || s->byte_position==s->input_bytes) {
+                result.status=KOSDEC_ADX_DONE;goto terminal;
+            }
+            kosdec_adx_pcm_filter filter=d->filter;
+            void *filter_context=d->filter_context;
+            kosdec_adx_init(d);
+            (void)kosdec_adx_set_filter(d,filter,filter_context);
+            s->segment_start=s->byte_position;
+            s->source_frame=0;
+            s->prepared=false;
+            s->cache_position=s->cache_frames=0;
+            result.status=KOSDEC_ADX_MORE;
+            return result;
+        }
         if(result.status >= KOSDEC_ADX_DONE) goto terminal;
         if(!s->prepared && d->header_ready) {
             uint64_t body_end = d->header_bytes +
                 ((uint64_t)d->total_frames + 31u) / 32u * 18u * d->channels;
-            if(body_end + 18u > s->input_bytes) {
+            if(body_end + s->segment_start + 18u > s->input_bytes) {
                 result.status = KOSDEC_ADX_TRUNCATED; goto terminal;
             }
             if(s->repeat && !d->loop.present) {
                 result.status = KOSDEC_ADX_UNSUPPORTED; goto terminal;
             }
+            if(s->linked) {
+                if(d->loop.present || (s->linked_entries &&
+                   (s->linked_rate!=d->sample_rate || s->linked_channels!=d->channels))) {
+                    result.status=KOSDEC_ADX_UNSUPPORTED;goto terminal;
+                }
+                s->linked_rate=d->sample_rate;s->linked_channels=d->channels;
+            }
             s->prepared = true;
         }
+        /* A bounded linked prefix step may leave locally staged bytes. Do not
+           report external starvation to the producer scheduler in that case. */
+        if(s->linked && result.status==KOSDEC_ADX_NEED_INPUT && s->input_used<s->input_count)
+            result.status=KOSDEC_ADX_MORE;
         return result;
     }
     size_t bytes = 18u * d->channels - d->block_used;
@@ -134,7 +184,7 @@ struct kosdec_adx_stream_result kosdec_adx_stream_read(
 enum kosdec_adx_status kosdec_adx_stream_seek_begin(struct kosdec_adx_stream *s, uint32_t frame) {
     if(!valid(s) || !s->read_at || frame > KOSDEC_ADX_MAX_FRAMES ||
        (s->prepared && frame > s->decoder.total_frames)) return KOSDEC_ADX_BAD_ARGUMENT;
-    if(s->repeat) return KOSDEC_ADX_UNSUPPORTED;
+    if(s->repeat || s->linked) return KOSDEC_ADX_UNSUPPORTED;
     kosdec_adx_pcm_filter filter = s->decoder.filter;
     void *context = s->decoder.filter_context;
     kosdec_adx_stream_init(s,s->read_at,s->context,s->input_bytes,false);

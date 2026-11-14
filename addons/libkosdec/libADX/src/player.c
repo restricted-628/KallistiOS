@@ -391,6 +391,9 @@ int kosdec_adx_player_get_info(struct kosdec_adx_player *p, struct kosdec_adx_pl
     if(!valid(p) || !info) return bad();
     *info = p->info;
     (void)kosdec_adx_pipe_get_loop_count(&p->producer.pipe,&info->decoded_loops);
+    (void)kosdec_adx_service_get_queue_count(&p->producer,&info->queued_sources);
+    info->linked=false;
+    (void)kosdec_adx_service_get_linked(&p->producer,&info->linked);
     if(p->source_bound) {
         struct kosdec_adx_service_state state = kosdec_adx_service_get_state(&p->producer);
         info->decoder = state.status; info->production_paused = state.paused;

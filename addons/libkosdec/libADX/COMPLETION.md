@@ -6,7 +6,7 @@ or adding a success-returning wrapper does not establish parity. The frozen
 source inventory is [BASELINE_API.csv](BASELINE_API.csv). No percentage complete
 is assigned: declarations differ greatly in complexity and share implementation.
 
-The inventory contains 75 ADXT declarations (header version 5.93), 27 ADXF,
+The inventory contains 75 ADXT declarations (header version 5.93), 27 ADXF declarations (26 active and one disabled),
 19 LSC, 12 active standalone SJ functions plus three disabled declarations,
 and 12 SJ interface slots (three reserved, nine operations). It also records
 three Sega MWPLY ADX facade functions and three ancillary file-selector helpers.
@@ -24,22 +24,22 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 
 | ID | Capability | Existing native support | Remaining for baseline parity |
 | --- | --- | --- | --- |
-| H1 | Lifecycle and multi-handle management | player_init/start/stop; caller-owned state | Global handle/reset/close semantics and multi-handle conformance; Audio-qualified device retirement/reuse; WinCE initialization is not applicable to KOS. |
-| H2 | Playback sources | file/stream/memory, WAV/AU/AIFF/SPSD monoPCM16 pipe/service/player, ACX/AFS views, sequence, joint PCM/feed and native player/service binding | Unified source admission/control equivalents and memory-index semantics; direct filename BGM composition supplied, not CRI ABI compatibility. |
+| H1 | Lifecycle and multi-handle management | player_init/start/stop plus explicit checked player/file collections, fair bounded polling, nonreused IDs and empty-only finish | Native global-reset replacement disposition; actual multi-player output and Audio-qualified device retirement/reuse. No unsafe implicit reset; WinCE initialization is not applicable. |
+| H2 | Playback sources | Common immutable source/range/index loan; ACX/AFS memory/provider selection; owned filename source; existing ADX/container/sequence/joint bindings | Native admission/control composition supplied; complete format conformance remains C1. CRI ABI is not implemented. |
 | H3 | Metadata and framing queries | Validated metadata snapshot, strict header/endcode prefix probes and full-file adxcheck; truncation/malformed/unaligned/suffix tests | Admitted-format native queries implemented. CRI recognizer permissiveness and supplied-span endcode sizing are documented differences; complete baseline format conformance remains C1. |
 | H4 | Embedded loop controls | Init-selected v3 repeat, playback-time release, source wraps and atomic decoded-loop query/player snapshot | Release-only while playing matches the baseline manual. Full metadata/history coverage remains C1; exact SDK prefetch/trap batching timing is unqualified. Counter is decode-side, not audible-time. |
 | H5 | Volume and pan | Checked KOS linear 0..255 controls; signed per-channel pan/AUTO and getter, persistent across bindings | Exact attenuation units/defaults/getters and downstream quantization; linear8 cannot represent the full logarithmic range. Pan uses strict argument rejection and immediate AUTO resolution; native/hardware qualification remains. |
 | H6 | Playback clock and completion | Software source/copy counters and source-end state | Qualified output/source clock, audible end, offsets and time modes; source EOF is not PLAYEND. Audio dependency. |
-| H7 | Service and input-buffer policy | Bounded producer service/private fiber, cache/PCM pipe; loader-backed ADX sector/time/default refill policy, queued-sector/time/safety snapshot and input-joint identity | Per-handle/global service and call-frequency budget semantics; unified source/player exposure beyond the serialized loader producer. Buffer estimates are queued compressed bytes, not audible time. |
-| H8 | Error reporting and recovery | Sticky codec status, I/O errno, preserved player/stop errors; independent query/clear diagnostic latch and per-player typed notification with explicit owner dispatch | Automatic recovery, baseline detection thresholds/numeric mapping and broader failure-transition conformance. Native notification is per-player typed data, not the global text callback. |
+| H7 | Service and input-buffer policy | Bounded producer service/private fiber, fair group polling, loader sector/time/default refill and safety queries | Integration acceptance of event-driven native equivalence instead of SDK global server/frequency semantics; target scheduling/performance qualification. Input estimates are compressed bytes, not audible time. |
+| H8 | Error reporting and recovery | Independent diagnostic query/clear/owner notification; NOACT/STOP/bounded REPLAY controller with monotonic delay, checked stop retries and explicit replay preparation | Running-stall detection, exact SDK threshold/numeric disposition and Audio-qualified resource reuse. Replay only on terminal input IO_ERROR; no implicit sound reclamation. |
 | H9 | Start gate, pause and stop | Prefill, explicit prepared-start gate/readiness, producer pause and checked software stop | Audible pause/resume and reusable checked stop. Audio dependency; gate is software source admission, not audible pause. |
 | H10 | Native output controls | Requested output Hz only; checked update | Direct/effect levels and routing, filter, transpose/detune units/getters; stereo-coherent live updates. Audio dependency. |
-| H11 | Seamless queue and linked controls | Bounded same-format PCM sequence and repeat/release | Baseline queue timing, linked controls and qualified audible seamless transitions; PCM concatenation alone does not establish this. |
-| H12 | Special processing | Unbound decode-from-start seek; caller-buffer SFA header; producer-side PCM filter, bounded peak-window analyzer/work sizing and ring input zero-group insertion | Audio-qualified sample discard, playback-clock integration for amplitude, live SJ/SFD header/length coordination. Zero-group insertion preserves predictor history. |
-| F1 | File/partition services | VFS/direct-disc sources, bounded AFS views, resident directory loader/info, checked256-slot registry, sparse overlays and bounded linear/ring/queue sector requests with seek/stop/progress/error; private owned filename source with exclusive loan and consumed-close reporting | Directory composition, service/reload policy and global file-handle lifecycle. Native byte-range directory and explicit provider binding differ from SDK sector work tables. |
+| H11 | Seamless queue and linked controls | Same-format PCM sequence and repeat/release; atomic queued-entry query; opt-in adjacent compressed-record playback and producer link release | Qualified audible transitions, SDK prefetch/queue timing and linked-format conformance. ReleaseSeamless is empty in the selected archive; native repeat release is explicit. |
+| H12 | Special processing | Unbound seek, SFA prefix, finite live ring framing with shared body/zero-group length budget; producer PCM filter and peak analyzer | Unknown-length SFD and live length-revision contract; Audio-qualified sample discard and playback-clock integration for amplitude. Zero groups preserve history. |
+| F1 | File/partition services | Owned filename collections/loans and close-all; AFS directories/registries/overlays with exact provider-bound resolution; bounded sector requests and explicit flow policy | Native filename/directory/global-lifecycle equivalence disposition and transport/backend qualification. No hidden current-directory/reset; disabled GetFileRange is not a runtime obligation. |
 | J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts | Forward-only live decoding, sealed EOF and producer-owned player binding supplied; broader multi-borrow baseline conformance remains. Native one-borrow-per-line/reserved-node admission and typed identity/status are deliberate differences; no CRI ABI claim. |
-| L1 | Load/sequence controller | Bounded16-entry borrowed source/range loader with IDs/copied names/status/read sectors, pause, low-water flow policy, checked stop and error hook; separate same-format PCM sequence | Filename resolution/provider retirement and global service/handle lifecycle; exact SDK refill batching and broader conformance. Byte concatenation is not seamless PCM playback. |
-| M1 | Sega middleware facade | Native KOSdec API | Decide and document native equivalent versus MWPLY-facing integration; no facade supplied. |
+| L1 | Load/sequence controller | Bounded16-entry loader with source IDs/copied labels/status/read sectors/pause/refill and checked stop; filename/source-loan composition; PCM sequence | Exact SDK refill/service disposition and backend retirement qualification; labels are not paths and byte concatenation is not seamless PCM playback. |
+| M1 | Sega middleware facade | Native namespaced lifecycle, source, service, recovery and collection APIs; explicit mapping in NATIVE_MIDDLEWARE.md | Integration disposition of native equivalents versus MWPLY ABI. No facade internals inferred from declarations; no MWPLY vtable supplied. |
 
 ## Codec and validation closure
 
@@ -123,3 +123,8 @@ the ADX ELF archives do not reference them. Applications supply selected filenam
 or byte ranges to libADX. Rebuilding the file-picker UI is outside runtime parity.
 These dispositions do not close H1 lifecycle, M1 facade, host authoring, or any
 other remaining runtime behavior.
+
+The native middleware batch is described in [NATIVE_MIDDLEWARE.md](NATIVE_MIDDLEWARE.md).
+It materially supplies the source/control/lifecycle/recovery/link/framing paths;
+it does not by itself close the remaining Audio, conformance, applicability or
+integration gates. Native-equivalence proposals must be accepted explicitly.

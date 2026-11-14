@@ -2,6 +2,7 @@
 #ifndef KOSDEC_ADX_NAMED_FILE_H
 #define KOSDEC_ADX_NAMED_FILE_H
 #include <kosdec/adx_stream.h>
+#include <kosdec/adx_sequence.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -43,6 +44,18 @@ int kosdec_adx_named_file_borrow(struct kosdec_adx_named_file *,
    The returned stream's state is preserved for a subsequent borrow. */
 int kosdec_adx_named_file_return(struct kosdec_adx_named_file *,
     struct kosdec_adx_stream **stream);
+/* Alternative exclusive loan of immutable file bytes for source selection,
+   ACX/AFS lookup, PCM containers, sequence/loader or sector requests. out must
+   have read_at==NULL and retain its address through return. The private fd is
+   never exposed. Do not inspect the opaque callback context or modify the
+   descriptor. Copies may be consumed serially, but ALL users must join before
+   returning the exact original descriptor. Mutually exclusive with stream loan.
+   File/cache/creating-thread and synchronous backend contracts above apply.
+   This operation does not decode or reset the existing ADX stream. */
+int kosdec_adx_named_file_borrow_source(struct kosdec_adx_named_file *,
+    struct kosdec_adx_source *out, uint32_t tag);
+int kosdec_adx_named_file_return_source(struct kosdec_adx_named_file *,
+    struct kosdec_adx_source *loan);
 /* Reject a live loan with EBUSY before side effects. Other precondition failures
    also retain ownership and outputs. An admitted close consumes the source
    exactly once, clears *file, returns 0 and sets *cleanup_error (0 on success).

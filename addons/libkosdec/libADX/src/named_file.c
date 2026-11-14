@@ -11,6 +11,7 @@ struct kosdec_adx_named_file {
     struct kosdec_adx_file input;
     kthread_t *owner;
     bool loaned, closing;
+    struct kosdec_adx_source *source_loan;
 };
 static int error(int value) { errno = value; return -1; }
 static int caller(void) {
@@ -74,10 +75,43 @@ int kosdec_adx_named_file_borrow(struct kosdec_adx_named_file *f,
 int kosdec_adx_named_file_return(struct kosdec_adx_named_file *f,
     struct kosdec_adx_stream **stream) {
     if(owner(f) < 0) return -1;
-    if(!stream || !f->loaned || *stream != &f->input.stream)
+    if(!stream || !f->loaned || f->source_loan || *stream != &f->input.stream)
         return error(EINVAL);
     f->loaned = false;
     *stream = NULL;
+    return 0;
+}
+static struct kosdec_adx_input_result source_read(void *context,uint32_t offset,
+                                                uint8_t *dst,size_t capacity) {
+    struct kosdec_adx_named_file *f=context;
+    if(!f->source_loan || offset>f->input.stream.input_bytes || (!dst && capacity))
+        return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_ERROR,0};
+    if(offset==f->input.stream.input_bytes)
+        return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_END,0};
+    if(capacity>f->input.stream.input_bytes-offset) capacity=f->input.stream.input_bytes-offset;
+    if(capacity>512) capacity=512;
+    if(!capacity) return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_ERROR,0};
+    return f->input.stream.read_at(f->input.stream.context,offset,dst,capacity);
+}
+int kosdec_adx_named_file_borrow_source(struct kosdec_adx_named_file *f,
+    struct kosdec_adx_source *out,uint32_t tag) {
+    if(owner(f)<0) return -1;
+    if(!out || out->read_at) return error(EINVAL);
+    if(f->loaned) return error(EBUSY);
+    *out=(struct kosdec_adx_source){.read_at=source_read,.context=f,
+        .bytes=f->input.stream.input_bytes,.tag=tag};
+    f->source_loan=out;
+    f->loaned=true;
+    return 0;
+}
+int kosdec_adx_named_file_return_source(struct kosdec_adx_named_file *f,
+    struct kosdec_adx_source *loan) {
+    if(owner(f)<0) return -1;
+    if(!loan || f->source_loan!=loan || !f->loaned || loan->read_at!=source_read ||
+       loan->context!=f || loan->bytes!=f->input.stream.input_bytes) return error(EINVAL);
+    f->source_loan=NULL;
+    f->loaned=false;
+    *loan=(struct kosdec_adx_source){0};
     return 0;
 }
 int kosdec_adx_named_file_close(struct kosdec_adx_named_file **file,

@@ -54,6 +54,9 @@ static void command(struct fixture *f,struct kosdec_adx_command c,enum kosdec_ad
     CHECK(r.status==KOSDEC_ADX_MORE && !r.frames && calls==f->in.calls);
     CHECK(kosdec_adx_service_take(&f->service,&result) && result==expected);
     CHECK(!kosdec_adx_service_take(&f->service,&result));
+    uint32_t count=99;
+    CHECK(kosdec_adx_service_get_queue_count(&f->service,&count));
+    CHECK(count==(f->service.pipe.sequence?f->sequence.count:0));
 }
 static void pause(struct fixture *f,bool enabled) {
     command(f,(struct kosdec_adx_command){.kind=KOSDEC_ADX_PRODUCTION_PAUSE,.enabled=enabled},KOSDEC_ADX_MORE);
@@ -77,6 +80,9 @@ static void combinations(void) {
                 pause(&f,false);
             }
             kosdec_adx_service_step(&f.service);
+            uint32_t count=99;
+            CHECK(kosdec_adx_service_get_queue_count(&f.service,&count));
+            CHECK(count==(seq?f.sequence.count:0));
             int16_t pcm[14];struct kosdec_adx_pipe_result r=kosdec_adx_pipe_read(&f.service.pipe,pcm,7);
             for(size_t j=0;j<r.frames;++j)for(unsigned k=0;k<ch;++k)
                 CHECK(pcm[j*ch+k]==golden[k][(total+j)%65]);

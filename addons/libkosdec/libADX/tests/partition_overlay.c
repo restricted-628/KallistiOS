@@ -48,6 +48,10 @@ static void verify(struct kosdec_adx_partition_registry *r,struct fixture *f,
         CHECK(kosdec_adx_partition_resolve(r,7,id,&out)==(found?OK:NF));
         if(found)CHECK(out.partition==&f[selected].p && out.range.offset==f[selected].ranges[id].offset && out.range.bytes==f[selected].ranges[id].bytes);
         else CHECK(!out.partition && out.range.offset==123 && out.range.bytes==456);
+        struct kosdec_adx_view view={.bytes=123};
+        CHECK(kosdec_adx_partition_resolve_view(r,7,id,&view)==(found?OK:NF));
+        if(found) CHECK(view.context==&f[selected] && view.offset==f[selected].ranges[id].offset && view.bytes==f[selected].ranges[id].bytes);
+        else CHECK(view.bytes==123);
     }
 }
 static void semantics(void) {
@@ -69,7 +73,7 @@ static void semantics(void) {
     struct kosdec_adx_partition_resolution res;
     CHECK(kosdec_adx_partition_resolve(&r,7,0,&res)==OK && res.partition==&f[2].p);
     struct kosdec_adx_view view;
-    CHECK(kosdec_adx_partition_open_view(res.partition,0,read_at,&f[2],&view)==OK);
+    CHECK(kosdec_adx_partition_resolve_view(&r,7,0,&view)==OK);
     struct kosdec_adx_partition_overlay *removed=NULL;
     CHECK(kosdec_adx_partition_pop(&r,7,&removed)==OK && removed==&c && !c.owner);
     verify(&r,f,0,layers,2);

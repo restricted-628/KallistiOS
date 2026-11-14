@@ -135,6 +135,33 @@ int main(void) {
         CHECK(kosdec_adx_named_file_close(&f,&cleanup)<0 && errno==EINVAL && closes==before+1);
         reused=false;
     }
+    for(unsigned mode=0;mode<2;++mode) {
+        struct kosdec_adx_named_file *f=NULL;
+        struct kosdec_adx_source loan={0},other={0};
+        struct kosdec_adx_stream *stream_loan=NULL;
+        int cleanup=0;
+        close_error=0;reused=false;
+        uint8_t cache[512];
+        CHECK(!kosdec_adx_named_file_open(&f,"/cd/music.adx",false,
+                                        mode?cache:NULL,mode?sizeof(cache):0,&cleanup));
+        CHECK(!kosdec_adx_named_file_borrow_source(f,&loan,42));
+        CHECK(loan.bytes==length && loan.tag==42);
+        CHECK(kosdec_adx_named_file_borrow(f,&stream_loan)<0 && errno==EBUSY);
+        CHECK(kosdec_adx_named_file_borrow_source(f,&other,0)<0 && errno==EBUSY);
+        CHECK(kosdec_adx_named_file_close(&f,&cleanup)<0 && errno==EBUSY && f);
+        other=loan;
+        CHECK(kosdec_adx_named_file_return_source(f,&other)<0 && errno==EINVAL);
+        uint8_t bytes[1024];
+        struct kosdec_adx_input_result got=loan.read_at(loan.context,0,bytes,sizeof(bytes));
+        CHECK(got.status==KOSDEC_ADX_INPUT_DATA && got.bytes<=512 && !memcmp(bytes,asset,got.bytes));
+        CHECK(loan.read_at(loan.context,loan.bytes,bytes,1).status==KOSDEC_ADX_INPUT_END);
+        CHECK(!kosdec_adx_named_file_return_source(f,&loan) && !loan.read_at);
+        CHECK(other.read_at(other.context,0,bytes,1).status==KOSDEC_ADX_INPUT_ERROR);
+        CHECK(!kosdec_adx_named_file_borrow(f,&stream_loan));
+        CHECK(kosdec_adx_named_file_borrow_source(f,&loan,0)<0 && errno==EBUSY);
+        CHECK(!kosdec_adx_named_file_return(f,&stream_loan));
+        CHECK(!kosdec_adx_named_file_close(&f,&cleanup) && !f && !cleanup);
+    }
     free(asset);
     printf("ADX_NAMED_FILE checks=%u failures=0\n",checks);
     return 0;

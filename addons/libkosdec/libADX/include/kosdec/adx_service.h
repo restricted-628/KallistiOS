@@ -9,7 +9,8 @@ enum kosdec_adx_command_kind {
     KOSDEC_ADX_PRODUCTION_PAUSE, /* enabled=false starts/resumes production. */
     KOSDEC_ADX_SEQUENCE_REPEAT,
     KOSDEC_ADX_RELEASE_LOOP,
-    KOSDEC_ADX_ENQUEUE
+    KOSDEC_ADX_ENQUEUE,
+    KOSDEC_ADX_RELEASE_LINK /* Finish current adjacent ADX record. */
 };
 struct kosdec_adx_command {
     enum kosdec_adx_command_kind kind;
@@ -17,6 +18,7 @@ struct kosdec_adx_command {
     struct kosdec_adx_source source; /* ENQUEUE only; context borrowed. */
 };
 struct kosdec_adx_service {
+    uint32_t queued_sources, link_enabled; /* Atomic producer publication; not directly writable. */
     uint32_t magic, mailbox, cancel_requested, state;
     struct kosdec_adx_command command;
     enum kosdec_adx_status reply;
@@ -57,6 +59,20 @@ enum kosdec_adx_status kosdec_adx_service_init_aiff(struct kosdec_adx_service *,
 /* SPSD mono PCM16; same source lifetime and output rules. */
 enum kosdec_adx_status kosdec_adx_service_init_spsd(struct kosdec_adx_service *,
     struct kosdec_adx_spsd *, int16_t *pcm, size_t samples, size_t capacity);
+
+/* Any thread: sequence entries still queued, including the active decode entry.
+   Updated at initialization and after producer commands/steps. Zero for other
+   source kinds. Independent snapshot, not a transaction with PCM or mailbox;
+   a collected ENQUEUE receipt includes its count publication. Cancel retains
+   source count until users join; it is not an audible pending-file count.
+   False for invalid arguments leaves output unchanged. */
+bool kosdec_adx_service_get_queue_count(const struct kosdec_adx_service *, uint32_t *);
+
+/* Any thread: last producer-published adjacent-record follow setting. False
+   for invalid/non-stream services leaves output unchanged. Remains the requested
+   setting at EOF; release publishes false before its receipt. Not an audible
+   transition indicator or a coherent snapshot with queue/PCM counters. */
+bool kosdec_adx_service_get_linked(const struct kosdec_adx_service *, bool *enabled);
 
 /* One controller, serialized post/take calls. Exactly one outstanding command.
    MORE means copied/accepted, not applied: wake producer, then take its receipt.

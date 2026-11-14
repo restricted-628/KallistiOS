@@ -247,3 +247,14 @@ separately. Never retry/probe a consumed fd. Preserve constructor primary errno.
 No global drain, forced wait interruption or hidden asynchronous provider is
 admitted. These restrictions reuse the existing VFS contract; they do not change
 borrowed file adapters or certify sound-memory/device retirement.
+
+Native middleware collections/source/recovery/SFA composition is documented in
+addons/libkosdec/libADX/NATIVE_MIDDLEWARE.md. Keep source loans outstanding through
+all copied consumers, including views that outlive directory metadata. Group/file
+close-all must continue independent slots while preserving failures and consumed
+close reporting. Recovery preparation is after checked software join and retains
+old sound allocations; it is not a device reuse certificate. SFA framing has a
+known finite length and one serialized ring producer; do not reinterpret it as
+unknown-length demux completion. Atomic queue counts and linked-entry counts are
+decode-side observations, not audible clocks. Native scheduling/facade differences
+still need explicit integration disposition, not automatic parity claims.

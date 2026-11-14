@@ -14,7 +14,11 @@ enum kosdec_adx_status kosdec_adx_service_init(struct kosdec_adx_service *s,
     struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
     enum kosdec_adx_status result = kosdec_adx_pipe_init(&initial.pipe,
         stream, sequence, pcm, samples, capacity);
-    if(result == KOSDEC_ADX_MORE) *s = initial;
+    if(result == KOSDEC_ADX_MORE) {
+        initial.queued_sources=sequence?sequence->count:0;
+        initial.link_enabled=stream && stream->linked && stream->follow_links;
+        *s = initial;
+    }
     return result;
 }
 enum kosdec_adx_status kosdec_adx_service_init_joint(struct kosdec_adx_service *s,
@@ -72,10 +76,25 @@ struct kosdec_adx_service_state kosdec_adx_service_get_state(
     r.paused = state == PAUSED;
     return r;
 }
+bool kosdec_adx_service_get_queue_count(const struct kosdec_adx_service *s,uint32_t *count) {
+    if(!valid(s) || !count) return false;
+    *count=__atomic_load_n(&s->queued_sources,__ATOMIC_ACQUIRE);
+    return true;
+}
+bool kosdec_adx_service_get_linked(const struct kosdec_adx_service *s,bool *enabled) {
+    if(!valid(s) || !enabled || !s->pipe.stream) return false;
+    *enabled=__atomic_load_n(&s->link_enabled,__ATOMIC_ACQUIRE)!=0;
+    return true;
+}
+static void publish_controls(struct kosdec_adx_service *s) {
+    __atomic_store_n(&s->queued_sources,s->pipe.sequence?s->pipe.sequence->count:0,__ATOMIC_RELEASE);
+    __atomic_store_n(&s->link_enabled,s->pipe.stream && s->pipe.stream->linked &&
+        s->pipe.stream->follow_links,__ATOMIC_RELEASE);
+}
 enum kosdec_adx_status kosdec_adx_service_post(struct kosdec_adx_service *s,
     const struct kosdec_adx_command *c) {
     if(!valid(s) || !c || c->kind < KOSDEC_ADX_PRODUCTION_PAUSE ||
-       c->kind > KOSDEC_ADX_ENQUEUE || (c->kind == KOSDEC_ADX_ENQUEUE &&
+       c->kind > KOSDEC_ADX_RELEASE_LINK || (c->kind == KOSDEC_ADX_ENQUEUE &&
        (!c->source.read_at || !c->source.bytes))) return KOSDEC_ADX_BAD_ARGUMENT;
     uint32_t expected = EMPTY;
     if(!__atomic_compare_exchange_n(&s->mailbox, &expected, WRITING, false,
@@ -120,6 +139,9 @@ static enum kosdec_adx_status apply(struct kosdec_adx_service *s) {
     case KOSDEC_ADX_ENQUEUE:
         if(!s->pipe.sequence) return KOSDEC_ADX_UNSUPPORTED;
         return kosdec_adx_sequence_enqueue(s->pipe.sequence, &c->source);
+    case KOSDEC_ADX_RELEASE_LINK:
+        if(!s->pipe.stream) return KOSDEC_ADX_UNSUPPORTED;
+        return kosdec_adx_stream_release_link(s->pipe.stream);
     }
     return KOSDEC_ADX_BAD_ARGUMENT;
 }
@@ -135,11 +157,13 @@ struct kosdec_adx_stream_result kosdec_adx_service_step(struct kosdec_adx_servic
     }
     else if(__atomic_load_n(&s->mailbox, __ATOMIC_ACQUIRE) == PENDING) {
         s->reply = apply(s);
+        publish_controls(s);
         __atomic_store_n(&s->mailbox, COMPLETE, __ATOMIC_RELEASE);
         return r;
     }
     else if(state.paused) return r;
     else r = kosdec_adx_pipe_pump(&s->pipe);
+    publish_controls(s);
     if(r.status >= KOSDEC_ADX_DONE) {
         __atomic_store_n(&s->state, TERMINAL_BASE + r.status, __ATOMIC_RELEASE);
         __atomic_fetch_or(&s->mailbox, CLOSED, __ATOMIC_RELEASE);

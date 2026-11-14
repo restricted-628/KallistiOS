@@ -32,11 +32,13 @@ struct kosdec_adx_player_info {
     enum kosdec_adx_status decoder;
     int first_error, stop_error;
     uint32_t sample_rate, output_rate; /* Source Hz and requested playback Hz. */
+    uint32_t queued_sources; /* Sequence decode entries, including active; not audible. */
     uint32_t decoded_loops; /* Source rewinds modulo2^32, not audible loops. */
     unsigned channels;
     uint64_t copied_frames, requested_frames, callbacks, starvations;
     uint64_t source_frames, sources_started;
     bool production_paused;
+    bool linked; /* Requested adjacent-record follow mode, not audible state. */
     bool wait_start, ready_start; /* Owner-thread gate and preparation snapshot. */
     /* On successful stop only, caller owns this retained sound allocation.
        It remains allocated; no sample-fetch retirement/reuse is certified. */

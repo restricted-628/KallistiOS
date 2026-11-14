@@ -1318,3 +1318,10 @@ also runs through named sources, including PCM comparisons, loop/sequence/seek,
 I/O failure, cancellation and a failed producer join. Host models establish
 adapter sequencing; actual VFS wrapper tests and target links remain distinct
 from emulator playback or hardware/device-retirement qualification.
+
+The native middleware batch adds common source/index loans, explicit filename
+and player collections, bounded recovery policy, adjacent compressed-record
+playback, atomic sequence-count queries, exact partition/provider resolution and
+finite live SFA framing. See [NATIVE_MIDDLEWARE.md](NATIVE_MIDDLEWARE.md) for
+composition, lifetime rules, baseline differences and unresolved qualifications.
+These are independent native implementations; no CRI/MWPLY ABI is supplied.

@@ -29,6 +29,10 @@ struct kosdec_adx_stream {
     uint64_t returned_frames, wraps;
     unsigned input_used, input_count, cache_position, cache_frames;
     bool repeat, paused, prepared, seeking;
+    bool linked, follow_links;
+    uint32_t segment_start, linked_rate;
+    unsigned linked_channels;
+    uint64_t linked_entries;
     enum kosdec_adx_status terminal;
     uint8_t input[512];
     int16_t pcm[64];
@@ -47,6 +51,18 @@ void kosdec_adx_stream_init(struct kosdec_adx_stream *, kosdec_adx_read_at,
 void kosdec_adx_stream_pause(struct kosdec_adx_stream *, bool paused);
 void kosdec_adx_stream_release_loop(struct kosdec_adx_stream *);
 void kosdec_adx_stream_cancel(struct kosdec_adx_stream *);
+/* Opt-in adjacent complete ADX records. Configure before ANY read/seek/binding;
+   repeating embedded loops are incompatible. Fixed channels/rate across records;
+   histories reset per record, filters and returned_frames persist. Ordinary
+   streams retain strict single-file EOF. No junk resync or mixed-format restart.
+   DONE sets mode; BAD_ARGUMENT/UNSUPPORTED unchanged. Source_frame/decoder info
+   describe the current record; linked_entries counts validated record footers,
+   not audible transitions. All are producer-owned; no concurrent controller read. */
+enum kosdec_adx_status kosdec_adx_stream_set_linked(struct kosdec_adx_stream *, bool);
+/* Producer-only release: finish current record then DONE, ignoring later
+   records. Irreversible after reads begin; does not cancel provider work.
+   Use service RELEASE_LINK for a source already owned by a producer. */
+enum kosdec_adx_status kosdec_adx_stream_release_link(struct kosdec_adx_stream *);
 /* Serialized, unbound-source seek. begin resets decoding to the start with the
    same borrowed provider/extent and optional PCM filter, and unpauses; no I/O.
    Discarded seek frames do not invoke the filter. Repeating readers
@@ -75,7 +91,8 @@ enum kosdec_adx_status kosdec_adx_stream_seek_step(struct kosdec_adx_stream *);
    it continues the new iteration to EOF. Cached tail survives earlier release.
    source_frame is consumed PCM source position before any pending rewind.
    returned_frames/wraps are modulo-2^64 counters, not a hardware playback clock.
-   DONE validates footer through the declared immutable extent. Early EOF is
+   DONE validates the single/all-followed records through the immutable extent;
+   linked release validates only the current record. Early EOF is
    TRUNCATED, provider errors/contract violations IO_ERROR. Terminals are sticky;
    BAD_ARGUMENT on read does not mutate initialized state. */
 struct kosdec_adx_stream_result kosdec_adx_stream_read(

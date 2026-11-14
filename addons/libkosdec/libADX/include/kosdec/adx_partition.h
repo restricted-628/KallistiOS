@@ -137,6 +137,15 @@ enum kosdec_adx_partition_status kosdec_adx_partition_pop(
 enum kosdec_adx_partition_status kosdec_adx_partition_resolve(
     const struct kosdec_adx_partition_registry *, unsigned id, uint32_t file_id,
     struct kosdec_adx_partition_resolution *);
+/* Resolve sparse overlays and copy a view bound to the SAME immutable provider
+   used to load the selected directory. No filename reopen or I/O. The copied
+   view survives registry/partition close, but its provider/context must survive
+   ALL view consumers; a named-file source loan must stay outstanding through
+   that use. It is not permission to return a source loan when metadata closes.
+   Output unchanged on failure. Same serialized ownership as resolve. */
+enum kosdec_adx_partition_status kosdec_adx_partition_resolve_view(
+    const struct kosdec_adx_partition_registry *, unsigned id, uint32_t file_id,
+    struct kosdec_adx_view *);
 /* Release every registration and invalidate registry; does not close directories
    or any payload source. Other registries may still keep directories BUSY. */
 enum kosdec_adx_partition_status kosdec_adx_partition_registry_close(

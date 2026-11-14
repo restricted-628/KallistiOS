@@ -201,3 +201,16 @@ enum kosdec_adx_partition_status kosdec_adx_partition_registry_close(struct kosd
     memset(r, 0, sizeof(*r));
     return KOSDEC_ADX_PARTITION_OK;
 }
+
+enum kosdec_adx_partition_status kosdec_adx_partition_resolve_view(
+    const struct kosdec_adx_partition_registry *registry,unsigned id,uint32_t file_id,
+    struct kosdec_adx_view *out) {
+    if(!out) return KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
+    struct kosdec_adx_partition_resolution resolution;
+    enum kosdec_adx_partition_status status=kosdec_adx_partition_resolve(registry,id,file_id,&resolution);
+    if(status!=KOSDEC_ADX_PARTITION_OK) return status;
+    const struct kosdec_adx_partition *p=resolution.partition;
+    return kosdec_adx_view_init(out,p->read_at,p->context,p->input_bytes,
+        resolution.range.offset,resolution.range.bytes)==KOSDEC_ADX_DONE?
+        KOSDEC_ADX_PARTITION_OK:KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
+}
