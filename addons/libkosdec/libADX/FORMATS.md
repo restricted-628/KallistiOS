@@ -24,6 +24,23 @@ Private asset hashes and source identities are retained outside the repository.
 The player manual explicitly supports WAV16-bit PCM and4-bit ADPCM at runtime.
 Its WAV/AIFF authoring-input description alone does not establish runtime AIFF;
 the binary additionally contains distinct WAV/AIFF/AU/SPSD header/decoder paths.
-These are open middleware container obligations. They must be classified and
-implemented separately instead of treating them as new ADX encoding modes or
-silently removing them from the full-parity goal.
+The native WAV reader admits tag1 unsigned8/signed16 PCM and CRI packed4-bit
+ADPCM, mono/stereo, with strict RIFF/chunk bounds and pipe/service/player bindings.
+The binary establishes unsigned8 conversion in addition to the manual's PCM16
+promise. The SDK repacks4-bit input for hardware ADPCM; the native reader instead
+reconstructs signed16 PCM using the AICA predictor/quantizer model. Stereo channel
+bytes interleave and nibbles decode low first. Whole four-frame groups are required;
+nonzero seeks rebuild histories in bounded steps. Hardware equivalence remains
+unqualified; this is not generic Yamaha WAVE tag0x20 support.
+A separate AU reader admits signedPCM8, big-endian signedPCM16 and mu-law8
+mono/stereo, with bounded reads, metadata, seek, filters and pipe/service/player bindings.
+AIFF signed8/BE16 mono/stereo reading, seek and filters are implemented with
+strict chunk bounds and integral80-bit-rate admission. AIFF pipe/service/player bindings are included.
+A separate SPSD reader/player admits the confirmed monoPCM16 contiguous subset:
+64-byte versions01010004/00010004, codec0 and interleave index0. The baseline ADX
+path unconditionally forces16-bit copying despite parsing other widths; its
+stereo copy also differs from common block-interleaved SPSD. Other SPSD
+codecs/channels/layouts remain unsupported pending that contract/corpus gap.
+The native parser does not reinterpret unsupported packed audio as PCM. SPSD
+loop/config fields are ignored. Complete container/player conformance remains open. These are
+middleware container obligations, not new ADX encoding modes.

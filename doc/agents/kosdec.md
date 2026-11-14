@@ -166,3 +166,62 @@ IDs and zero offsets fall back through older layers. Preserve selected archive
 identity, reference counts and same-base idempotence; replacement/unbind/close
 detach all associated links. Native byte-range work sizing is not CRI's compact
 sector ABI. Rebuild consumers after registry layout changes.
+
+Sector request state owns only its callback/output borrows, not backend staging.
+Each step performs one <=512-byte read or zero fill; WAIT must be rescheduled.
+Cursor commits completed sectors on end/error, remains at request start on stop.
+Final-sector padding must never read beyond the selected extent. Keep exact byte,
+output and sector progress separate. Close/seek/stop do not retire the provider's
+independent DMA/request state. No VSync/audio IRQ callbacks or global handle shim.
+
+Joint-destination requests can retain FREE across partial reads/WAIT. DATA consumers
+may run serially; no second producer/reset/close/seal while active. SEPARATE heads
+publish only after filling; final tail splits may need spare nodes. NEED_OUTPUT
+retains ownership and must not spin. Stop returns unpublished storage but never
+removes prior DATA. Exact final byte ranges avoid injecting decoder suffix bytes.
+Check successful stop/close before recycling held storage; rebuild request state.
+
+PCM WAV uses a distinct bounded reader, not widened ADX encoding admission.
+Preserve RIFF chunk/padding bounds and byte-safe PCM16 loads; U8 conversion is
+exact integer format conversion. PCM8/16 and CRI tag1 packed4 use existing
+pipe/service/player bindings. Packed4 reconstructs AICA-model PCM16, preserving
+per-channel history and low-first nibbles from channel-interleaved bytes. Do not
+substitute generic Yamaha rounding or add a high-pass. Preserve whole four-frame
+groups, checked frame counts and bounded32-frame seek rescans without filters.
+This does not establish hardware equivalence or broader SPSD support.
+Seek/filter mutation/reinit only after users are unbound and joined. Preserve
+producer-only I/O, source format publication and existing retained Audio resources.
+
+AU is a separate bounded PCM/mu-law reader. Preserve signed8-bit versus WAV
+unsigned8-bit semantics, big-endian byte-safe16-bit loads, and exact G.711
+expansion. Source extent bounds unknown-size payloads; skip annotations by offset.
+Seek/filter changes are unbound producer operations; no provider retirement or
+Audio claim. AU uses the same pipe/service/player producer binding and retained-output rules
+as WAV. Rebuild pipe/service/player consumers for added source state.
+
+AIFF reading validates FORM/COMM/SSND bounds, either chunk order, frame products
+and full80-bit integral sample rates. Signed8/BE16 conversion is exact and
+byte-safe; no FPU-mode changes. Ignore alignment padding after declared frames,
+not missing frame bytes. INST/MARK loops and AIFF-C are unsupported. The reader
+uses the same producer/filter/seek ownership and pipe/service/player bindings.
+Rebuild consumers after source-state layout changes; Audio lifetime is unchanged.
+
+SPSD currently admits only the verified contiguous monoPCM16 intersection. Keep
+strict64-byte version, codec/channel/index, rate and extent checks. The SDK's
+unconditional width override and stereo-layout contradiction do not establish
+compressed or common block-interleaved support. Do not widen admission without
+closing the named source/corpus gap. Standard producer/filter/seek and retained
+output contracts apply; loop/config fields are ignored, not implemented.
+
+Prepared-start gating belongs to the player owner: producer buffering continues,
+source PCM admission waits, and retained output still polls silence. Readiness
+requires validated format/prefill, resets at source boundaries and is not audible
+completion. Keep prefill timeout separate from intentional ready waiting. Gate
+changes after admission apply to future sources; audible pause remains Audio.
+
+The loading controller owns one bounded request and pending borrowed providers,
+not file descriptors. Keep16-entry/name/ID bounds, exact last-sector bytes and
+explicit final joint sealing. Active-sector completion is separate from new
+low-water admission. Pause retains a partial borrow; failed stop cannot release
+storage. Published DATA survives stop and source metadata completion is not DMA
+retirement. Byte loading is not PCM sequence joining or audible seam proof.

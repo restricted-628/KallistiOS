@@ -35,6 +35,7 @@ struct kosdec_adx_player_info {
     uint64_t copied_frames, requested_frames, callbacks, starvations;
     uint64_t source_frames, sources_started;
     bool production_paused;
+    bool wait_start, ready_start; /* Owner-thread gate and preparation snapshot. */
     /* On successful stop only, caller owns this retained sound allocation.
        It remains allocated; no sample-fetch retirement/reuse is certified. */
     snd_stream_hnd_t retained_sound;
@@ -81,11 +82,45 @@ int kosdec_adx_player_init(struct kosdec_adx_player *,
    No looping/seek or automatic joint reset; production pause is supported. */
 int kosdec_adx_player_init_joint(struct kosdec_adx_player *,
     struct kosdec_adx_joint_reader *, const struct kosdec_adx_player_config *);
+/* PCM WAV source; provider/reader owned by the private producer until join.
+   Same output/retained-resource rules as ordinary init. No source seek or reinit
+   while bound; source completion remains distinct from audible completion. */
+int kosdec_adx_player_init_wave(struct kosdec_adx_player *, struct kosdec_adx_wave *,
+                              const struct kosdec_adx_player_config *);
+
+/* AU PCM/mu-law source; provider/reader owned by the private producer until join.
+   Same output/retained-resource rules as ordinary init. No source seek or reinit
+   while bound; source completion remains distinct from audible completion. */
+int kosdec_adx_player_init_au(struct kosdec_adx_player *, struct kosdec_adx_au *,
+                              const struct kosdec_adx_player_config *);
+
+/* AIFF PCM source; provider/reader owned by the private producer until join.
+   Same output/retained-resource rules as ordinary init. No source seek or reinit
+   while bound; source completion remains distinct from audible completion. */
+int kosdec_adx_player_init_aiff(struct kosdec_adx_player *, struct kosdec_adx_aiff *,
+                              const struct kosdec_adx_player_config *);
+/* SPSD mono PCM16; same source lifetime and output rules. */
+int kosdec_adx_player_init_spsd(struct kosdec_adx_player *, struct kosdec_adx_spsd *,
+                              const struct kosdec_adx_player_config *);
+
 /* Create/start the private fiber executor and begin prefill. No sound start yet.
    Poll rejects effective output below8000Hz with ENOTSUP before sound allocation;
    low-rate sources need an explicit in-range output override.
    On failure call stop to retire any partially acquired resources. */
 int kosdec_adx_player_start(struct kosdec_adx_player *);
+/* Set before start or during prefill to hold source PCM admission. Producer
+   keeps filling the bounded ring; poll reports readiness without allocating or
+   starting fresh output. Existing retained output continues polling silence.
+   Clearing the gate admits prepared PCM on the next poll. Changing it after
+   playback starts only affects later sources, never pauses current sound.
+   Persists across source binds. READY/PREFILL/PLAYING/SOURCE_END/IDLE only;
+   no provider/device work in this setter. This is not an audible pause API. */
+int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
+/* Owner-thread snapshot, updated by poll. True after format-validated prefill
+   or sourceDONE, whether waiting or already started. False initially and after
+   source release/cancel, a new source start, failure or stop. No I/O; invalid
+   arguments leave output unchanged. Waiting after ready has no prefill timeout. */
+int kosdec_adx_player_is_ready_start(const struct kosdec_adx_player *, bool *ready);
 /* Only at SOURCE_END: disable PCM admission and join the producer, entering
    IDLE while output continues. Discards outstanding command receipts. Failure
    retains source/storage for retry or stop; PCM stays disabled. A successful
@@ -115,6 +150,18 @@ int kosdec_adx_player_bind_source(struct kosdec_adx_player *,
 /* Same-format joint rebind after prior source release/join. Same ownership and
    lifetime as init_joint; does not close the old reader/provider for caller. */
 int kosdec_adx_player_bind_joint(struct kosdec_adx_player *, struct kosdec_adx_joint_reader *);
+/* Rebind after source release/cancel; same-format output rules as bind_source.
+   Old provider remains caller-owned; successful join precedes reader reuse. */
+int kosdec_adx_player_bind_wave(struct kosdec_adx_player *, struct kosdec_adx_wave *);
+
+/* Rebind after source release/cancel; same-format output rules as bind_source.
+   Old provider remains caller-owned; successful join precedes reader reuse. */
+int kosdec_adx_player_bind_au(struct kosdec_adx_player *, struct kosdec_adx_au *);
+/* AIFF rebind uses the same source-release and same-format output contract. */
+int kosdec_adx_player_bind_aiff(struct kosdec_adx_player *, struct kosdec_adx_aiff *);
+/* SPSD mono PCM16; same source lifetime and output rules. */
+int kosdec_adx_player_bind_spsd(struct kosdec_adx_player *, struct kosdec_adx_spsd *);
+
 /* Progress prefill/start or poll output; call regularly, more often than a sound
    ring duration. May block inside checked sound operations (transfer timeout).
    Short live input is silence-padded and counted as starvation. SOURCE_END keeps

@@ -626,6 +626,16 @@ validated metadata/prefix-query slice is accepted with deliberately stricter
 native recognition and declared-record sizing, not CRI recognizer equivalence.
 Full historical-format and lifecycle/control conformance remain explicitly open.
 
+**Accepted continuation, 2026-11-13:** Requests, joint destinations and the
+bounded range loader borrow immutable providers; stop/close does not retire
+external descriptors or DMA. PCM container readers and prepared-start control
+reuse the existing producer/retained-output contract. Start readiness is not
+audible readiness, production pause or permission to free sound memory. Packed
+WAV4 follows the documented AICA reconstruction model, not a hardware-qualified
+equivalence claim; SPSD remains the verified mono-PCM16 subset. Rebuild consumers
+for public state growth. Full host/sanitizer and current SH-4 C/C++ links pass;
+the completion matrix remains authoritative for unimplemented obligations.
+
 ## D22 — SH4DER/SH4DOW integration and strip partition default
 
 **Owner direction, 2026-11-13:** Fully integrate the pinned SH4DER and bundled

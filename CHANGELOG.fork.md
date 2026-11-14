@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX request, format and loader backlog
+
+- Add bounded sector requests with linear or native-joint destinations and a
+  caller-owned 16-entry range loader with flow control, pause and checked stop.
+  Providers remain borrowed; software completion never retires their DMA or
+  closes their descriptors.
+- Add bounded PCM WAV, AU and AIFF readers and playback bindings, packed CRI
+  WAV4 software conversion and the verified mono-PCM16 SPSD subset. Add prepared
+  start gating independently of production pause. Reject unsupported layouts.
+- Record platform/UI applicability without success stubs. Rebuild consumers
+  for expanded request and playback state. Fresh full host/ASan/UBSan suites,
+  strict SH-4 archive build and 24 staged C/C++ consumer links pass.
+- Audible output, physical retirement, broader format conformance and complete
+  middleware parity remain open; this publishes the frozen parts 12 through 24.
+
 ## 2026-11-13 — SH4DER and SH4DOW adapter completion
 
 - Complete caller-owned glow, focus, warp, chromatic aberration, shadow shafts,

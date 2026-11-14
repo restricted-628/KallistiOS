@@ -11,8 +11,9 @@ The inventory contains 75 ADXT declarations (header version 5.93), 27 ADXF,
 and 12 SJ interface slots (three reserved, nine operations). It also records
 three Sega MWPLY ADX facade functions and three ancillary file-selector helpers.
 The ADX player manual is revision 5.78; header/manual version differences must
-be reconciled, not silently treated as one identical specification. InitWce and
-ancillary helpers require explicit applicability disposition. The CSV is an
+be reconciled, not silently treated as one identical specification. InitWce is a
+Windows CE/DirectSound entry, not applicable to KOS; the three FSEL functions are
+optional application file-picker UI from a separate library, outside runtime parity. The CSV is an
 exhaustive declaration inventory of these named headers, not an assertion that
 all SDK behavior or format combinations have already been reverse engineered.
 
@@ -23,21 +24,21 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 
 | ID | Capability | Existing native support | Remaining for baseline parity |
 | --- | --- | --- | --- |
-| H1 | Lifecycle and multi-handle management | player_init/start/stop; caller-owned state | Global handle/reset/close semantics and multi-handle conformance; Audio-qualified device retirement/reuse; InitWce needs Dreamcast applicability disposition. |
-| H2 | Playback sources | file/stream/memory, ACX/AFS views, sequence, joint PCM/feed and native player/service binding | Unified source admission/control equivalents and memory-index semantics; direct filename BGM composition supplied, not CRI ABI compatibility. |
+| H1 | Lifecycle and multi-handle management | player_init/start/stop; caller-owned state | Global handle/reset/close semantics and multi-handle conformance; Audio-qualified device retirement/reuse; WinCE initialization is not applicable to KOS. |
+| H2 | Playback sources | file/stream/memory, WAV/AU/AIFF/SPSD monoPCM16 pipe/service/player, ACX/AFS views, sequence, joint PCM/feed and native player/service binding | Unified source admission/control equivalents and memory-index semantics; direct filename BGM composition supplied, not CRI ABI compatibility. |
 | H3 | Metadata and framing queries | Validated metadata snapshot, strict header/endcode prefix probes and full-file adxcheck; truncation/malformed/unaligned/suffix tests | Admitted-format native queries implemented. CRI recognizer permissiveness and supplied-span endcode sizing are documented differences; complete baseline format conformance remains C1. |
 | H4 | Embedded loop controls | Init-selected v3 repeat, playback-time release, source wraps and atomic decoded-loop query/player snapshot | Release-only while playing matches the baseline manual. Full metadata/history coverage remains C1; exact SDK prefetch/trap batching timing is unqualified. Counter is decode-side, not audible-time. |
 | H5 | Volume and pan | Checked KOS linear 0..255 controls | CRI attenuation/pan units, defaults, getters and edge cases; current KOS control units differ. |
 | H6 | Playback clock and completion | Software source/copy counters and source-end state | Qualified output/source clock, audible end, offsets and time modes; source EOF is not PLAYEND. Audio dependency. |
 | H7 | Service and input-buffer policy | Bounded producer service, private fiber, input cache and PCM pipe | Per-handle/global service and reload/safety units/policy; buffer-time queries and input-SJ equivalence. |
 | H8 | Error reporting and recovery | Sticky codec status, I/O errno, preserved player/stop errors | Baseline recovery modes, callbacks, error-code mapping/reset and failure-transition conformance. |
-| H9 | Start gate, pause and stop | Prefill plus producer pause and checked software stop | Explicit prepared-but-not-playing gate; audible pause/resume and reusable checked stop. Audio dependency. |
+| H9 | Start gate, pause and stop | Prefill, explicit prepared-start gate/readiness, producer pause and checked software stop | Audible pause/resume and reusable checked stop. Audio dependency; gate is software source admission, not audible pause. |
 | H10 | Native output controls | Requested output Hz only; checked update | Direct/effect levels and routing, filter, transpose/detune units/getters; stereo-coherent live updates. Audio dependency. |
 | H11 | Seamless queue and linked controls | Bounded same-format PCM sequence and repeat/release | Baseline queue timing, linked controls and qualified audible seamless transitions; PCM concatenation alone does not establish this. |
 | H12 | Special processing | Unbound decode-from-start seek; caller-buffer SFA header; producer-side PCM filter, bounded peak-window analyzer/work sizing and ring input zero-group insertion | Audio-qualified sample discard, playback-clock integration for amplitude, live SJ/SFD header/length coordination. Zero-group insertion preserves predictor history. |
-| F1 | File/partition services | VFS/direct-disc sources, bounded AFS views, resident directory loader/info, checked256-slot registry and sparse overlay resolution | Filename/directory composition, sector-read/seek/count/reload/error contracts and full file-handle lifecycle. Native byte-range directory and explicit provider binding differ from SDK sector work tables. |
+| F1 | File/partition services | VFS/direct-disc sources, bounded AFS views, resident directory loader/info, checked256-slot registry, sparse overlays and bounded linear/ring/queue sector requests with seek/stop/progress/error | Filename/directory composition, service/reload policy and full file-handle lifecycle. Native byte-range directory and explicit provider binding differ from SDK sector work tables. |
 | J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts | Forward-only live decoding, sealed EOF and producer-owned player binding supplied; broader multi-borrow baseline conformance remains. Native one-borrow-per-line/reserved-node admission and typed identity/status are deliberate differences; no CRI ABI claim. |
-| L1 | Load/sequence controller | Bounded same-format PCM sequence | Filename/range queue, per-stream IDs/names/status/read sectors, flow-limit and service/error/pause/stop equivalence. |
+| L1 | Load/sequence controller | Bounded16-entry borrowed source/range loader with IDs/copied names/status/read sectors, pause, low-water flow policy, checked stop and error hook; separate same-format PCM sequence | Filename resolution/provider retirement and global service/handle lifecycle; exact SDK refill batching and broader conformance. Byte concatenation is not seamless PCM playback. |
 | M1 | Sega middleware facade | Native KOSdec API | Decide and document native equivalent versus MWPLY-facing integration; no facade supplied. |
 
 ## Codec and validation closure
@@ -52,8 +53,18 @@ remain unsupported, pending a distinct baseline runtime contract.
 Do not assume later ADX variants must be added simply because they exist.
 See [FORMATS.md](FORMATS.md) for the distinction between active decoder behavior,
 shipped corpus coverage and permissive parsing. Runtime WAV PCM16/ADPCM4 is a
-documented middleware obligation; binary WAV/AIFF/AU/SPSD paths require separate
-container/subtype conformance and remain unimplemented.
+documented middleware obligation. Native bounded PCM WAV8/16 mono/stereo reading
+and seek plus native pipe/service/player bindings are implemented. CRI tag1 packed
+WAV4 now uses software AICA reconstruction through those bindings, with bounded
+history-rebuilding seek. Hardware PCM equivalence remains open. SPSD monoPCM16 contiguous payloads now
+have reader/pipe/service/player support. Other SPSD layouts and encodings remain
+unsupported: the baseline forces16-bit copying and has a stereo-layout contradiction
+with common SPSD. Close that named contract/corpus gap before expanding admission.
+AIFF signed8/BE16 mono/stereo has a bounded reader, metadata, seek and filters;
+AIFF pipe/service/player composition is implemented.
+The AU reader now handles mono/stereo signedPCM8/signedPCM16/mu-law8 with exact
+conversion, bounded input, seek, filters and native pipe/service/player bindings.
+Remaining container conformance is open.
 
 C2. Close native arithmetic conformance: predictor operation order, rounding,
 clipping, initial/carried histories and coefficient setup against the baseline.
@@ -98,3 +109,17 @@ The definitive finish condition is closure of C1/C2, each applicable runtime row
 and V1/V2/V4 with recorded evidence and no hidden unimplemented paths. V3 and host
 authoring are separately visible project milestones. This is a finite backlog,
 not a claim that all remaining entries are small or already specified completely.
+
+## Resolved applicability
+
+`ADXT_InitWce` takes a DirectSound object and is explicitly documented for Windows
+CE in the shared header. Neither a definition nor a reference appears in the two
+Dreamcast ADX ELF archives; ordinary `ADXT_Init` is present. KOS requires its native
+lifecycle and playback services, not a Windows CE initializer or success stub.
+
+The three `FSEL_*` declarations belong to a separate file-selector library. Their
+interface includes drawing, color/font metrics, VBlank and peripheral selection;
+the ADX ELF archives do not reference them. Applications supply selected filenames
+or byte ranges to libADX. Rebuilding the file-picker UI is outside runtime parity.
+These dispositions do not close H1 lifecycle, M1 facade, host authoring, or any
+other remaining runtime behavior.

@@ -986,3 +986,213 @@ Operations are externally serialized, allocate nothing and perform no I/O.
 Resolution costs O(number of layers); the caller controls chain depth. Rebuild
 consumers because registry state now includes overlay heads. Filename composition,
 sector read/seek/reload services and full file-handle lifecycle remain open.
+
+## Bounded sector requests
+
+`adx_request.h` supplies caller-owned, caller-serviced reads over the existing
+immutable `read_at` provider contract. Initialize with a byte extent; sector size
+is2048 and file sector count rounds up. Start accepts a sector count and output
+capacity, clips admission to EOF, checks the full capacity before any mutation,
+and returns READING or immediate READEND for zero/EOF. There is no hidden worker,
+allocation or global handle pool. Multiple independent requests are supported;
+serialize access when their providers share a descriptor or staging object.
+
+Each step makes one provider call of at most512 bytes, or writes at most512 bytes
+of final-sector zero padding. WAIT preserves state for later scheduling. The
+provider must release the destination before returning, including on WAIT/error;
+any asynchronous staging and backend retirement remain its responsibility.
+Use an appropriate owner thread/fiber for callbacks that can block. This API is
+a copied byte destination and permits byte alignment; it is not a DMA endpoint.
+
+Info distinguishes admitted sectors, completed sectors, actual source bytes and
+written output bytes. Cursor stays at request start while reading; completion or
+error advances it once by whole completed sectors. Stop releases the output borrow
+and leaves that cursor unchanged, so restarting a stopped read rereads from its
+starting sector. A valid SET/CUR/END seek stops then clamps to the file extent,
+including extreme signed offsets. Invalid controls preserve an active request.
+Close invalidates the request but does not close a descriptor, cancel backend
+staging or establish DMA retirement. Preserve/retire the provider separately.
+
+The final partial sector is zero-padded instead of exposing bytes after the
+selected extent. On partial stop/error only complete sectors are committed;
+remaining written bytes are diagnostic progress. The buffer is borrowed until
+completion/error/stop/seek/close. No consumer may race with partial writes.
+The new request layer supplies sector read/seek/progress equivalents; filename
+opening, global service policy and reload limits remain open.
+
+### Request destinations in stream joints
+
+`request_start_joint` uses a ring or queue as its output. It publishes exact source
+bytes, omitting final-sector padding so strict ADX footer validation sees the real
+end of the selected file. A completed short final sector still counts toward the
+requested sector range. Ring/JOIN chunks hold at most512 bytes; SEPARATE queues
+retain and fill a whole head through multiple bounded steps before publishing it.
+A final partially filled head returns its unused suffix before publishing its
+prefix. Queue node pressure returns NEED_OUTPUT without abandoning ownership;
+provision spare nodes for partial SEPARATE tails, drain/recycle DATA, or stop.
+
+The request can retain one FREE borrow across WAIT/partial reads. Serialize all
+joint access; a DATA consumer may run between steps, while another FREE producer,
+reset, close or seal must wait until request retirement. Stop/seek/close return
+unpublished storage. Already published DATA stays queued; replay requires the
+caller to drain/reset it as appropriate. No implicit seal is performed, allowing
+several requests to append before an explicit final `joint_finish`.
+
+`source_bytes` can include data fetched into an unpublished span; `output_bytes`
+counts only published data. Normal terminal reads release the held span. A caller
+violation that prevents returning a borrow leaves the request active and reports
+IO_ERROR; successful stop/close is required before storage reuse. Provider-side
+staging/DMA remains independently owned and must still be retired by its owner.
+The request structure grows; rebuild consumers. Readonly memory joints cannot be
+destinations, and native byte-sized buffers replace the SDK sector-size restriction.
+
+## PCM WAV reader
+
+`adx_wave.h` implements a separate bounded RIFF/WAVE PCM reader: tag1, unsigned
+8-bit, signed little-endian16-bit or CRI packed4-bit ADPCM, mono/stereo. Each read makes at most one
+provider call of512 bytes and emits at most32 interleaved signed16 frames. U8 is
+converted exactly as `(x - 128) * 256`; PCM16 loads are byte-safe. These are exact
+format conversions, with no FPU transform or SH4ZAM substitution needed.
+
+Header processing walks RIFF chunk boundaries and word padding, skips unknown
+chunks, requires one valid fmt before data, and checks rate/block alignment,
+byte rate, whole-frame data length and extent bounds. Partial reads and WAIT
+retain progress. The strict structure rejects unsupported variants instead of
+copying the SDK's permissive bytewise string scan. Completion covers the selected
+data chunk; trailing chunks/source bytes are ignored, not validated. No loop
+metadata, floating PCM, extensible WAVE, RIFX or standard Yamaha tag0x20
+admission is implied. Packed4 ignores byte-rate/block-alignment hints but requires
+whole four-frame groups (two bytes per channel). Channel bytes interleave and
+nibbles decode low first. An original integer AICA predictor/quantizer converts
+these groups to PCM16, with separate channel histories, intermediate magnitude
+saturation and final signed16 clipping. This differs from generic Yamaha ADPCM;
+physical AICA equivalence remains unqualified. Encoded metadata reports4 bits;
+the player still receives16-bit PCM.
+
+Metadata remains available after a payload error. An unbound serialized seek
+within the admitted frame range clears buffered input and terminal state. PCM8/16
+seek is constant-time. Packed4 seeks reset histories and return MORE for nonzero,
+non-EOF positions; call `kosdec_adx_wave_seek_step` until DONE or bind the reader
+and let read advance the seek. Each step discards at most32 frames without filters
+or PCM publication. Zero/EOF seek completes immediately. Cancellation remains
+sticky until seek/reinit. Provider lifetime
+and asynchronous staging stay with the caller, as for other byte sources. This
+reader feeds native pipe/service/player WAV bindings described below.
+
+### WAV playback bindings
+
+Use `pipe_init_wave`, `service_init_wave`, `player_init_wave` or `player_bind_wave`
+for the admitted PCM WAV reader. The existing private producer fiber performs all
+provider reads and PCM conversion. Consumer callbacks only drain the PCM ring.
+Production pause, full output and cancellation prevent further source work; source
+release/cancel joins the producer before the reader/provider can be reused.
+
+A reader-level PCM filter uses the existing per-channel interleaved stride contract,
+after exact conversion and before pipe publication. Configure it only while unbound.
+Seek/reinit likewise requires unbinding/join. Metadata publication, output-rate
+limits and same-format rebind rules remain unchanged. WAV has no embedded ADX loop
+counter, repeat/enqueue or loop-release support through these bindings; unsupported
+commands return UNSUPPORTED. Software source completion is not audible completion,
+and the existing retained sound allocation/Audio retirement limits still apply.
+Wave/pipe/service/player state grows; rebuild consumers with matching headers.
+
+## AU PCM and mu-law reader
+
+`adx_au.h` provides a separate bounded AU reader for mono/stereo signed8-bit PCM,
+big-endian signed16-bit PCM and G.711 mu-law. Use `kosdec_adx_au_init`, repeated
+`kosdec_adx_au_read` on a producer, and `kosdec_adx_au_get_info` after admission.
+The output is interleaved signed16. Each call makes at most one512-byte provider
+request and emits at most32 frames; WAIT needs rescheduling. Input is byte-safe.
+Unbound seek is constant-time and clears terminal state; filters run only on
+emitted PCM. The caller supplies an immutable fixed extent and retires providers
+independently. Both .snd and the baseline legacy .sd-NUL magic are recognized;
+unknown-size payloads use the remaining extent. Selected-payload completion does
+not validate trailing bytes. Other AU encodings remain unsupported. AU pipe, service and native player
+constructors use the same producer and retained-output contracts as WAV.
+`kosdec_adx_player_init_au` and `kosdec_adx_player_bind_au` keep input and
+conversion on the private producer fiber. Release/join before seeking, changing
+filters or reinitializing the reader. Rebind requires matching rate/channels;
+container/encoding may change. Source drain is not audible completion.
+
+## AIFF PCM reader
+
+`adx_aiff.h` provides bounded mono/stereo signed8/BE16 PCM reads, metadata,
+unbound seek and filters. COMM and SSND may occur in either order; chunk padding,
+SSND offset and declared frame bounds are checked. Unknown chunks are skipped,
+including INST/MARK; their loops are not interpreted. Empty audio may omit SSND.
+Rates must be positive normalized integral80-bit values within1..UINT32_MAX;
+fractional or larger rates are unsupported. No host floating-point conversion is
+used. Each read makes at most one512-byte input request and emits at most32
+frames. The caller owns source/provider retirement. Completion covers selected
+frames, not trailing chunks/source bytes or alignment padding. AIFF-C and other
+sample widths are unsupported; pipe, service and native player constructors follow the same producer-only
+contracts as WAV/AU. Use `kosdec_adx_player_init_aiff` or, after release/join,
+`kosdec_adx_player_bind_aiff`. Same-format output is retained; mismatched rate or
+channels fail before new PCM admission. Rebuild consumers for added source state.
+
+## SPSD mono PCM16 reader and playback
+
+`adx_spsd.h` admits the established contiguous mono signed16 little-endian subset:
+64-byte SPSD versions01010004/00010004, codec0, channel flags0 or0x80 and index0.
+Whole samples, nonzero sample rate and payload bounds are checked. Other codecs,
+channels and layouts return UNSUPPORTED; the baseline's unconditional16-bit copy
+is not a license to reinterpret compressed SPSD as PCM. Loop/config fields and
+trailing bytes are ignored, with no automatic repeat.
+
+Read makes at most one512-byte provider call and emits at most32 frames. Partial
+input/WAIT retains state; unbound seek is constant-time, and filters run only on
+emitted PCM. Provider retirement remains caller-owned. Metadata survives payload
+errors; seek/reinit clears terminal state. Use `kosdec_adx_player_init_spsd` or
+`kosdec_adx_player_bind_spsd` after releasing/joining the previous source, or the
+corresponding pipe/service constructors. Existing producer-only I/O, initial
+production pause, format publication, retained-output and same-format rebind
+rules apply. Sequence/embedded-loop controls remain unsupported. Source EOF is
+not audible completion. Rebuild matching source and player headers/archive.
+
+## Prepared playback start
+
+Call `kosdec_adx_player_set_wait_start(player, true)` before starting or while
+prefilling to prepare a source without admitting its PCM to output. The private
+producer still runs and fills its bounded ring. Keep polling, and query
+`kosdec_adx_player_is_ready_start` or the `ready_start` info field. Readiness means
+normal prefill (or short/empty source completion) and validated output format;
+it does not mean audible playback or provider/device retirement.
+
+A held prepared source has no prefill timeout. Setting the gate false admits it
+on the next poll. Fresh output allocation/start is deferred; already-retained
+output continues polling silence until admission. The gate persists across
+rebinds. Closing it after a source starts affects later sources only, and never
+pauses currently playing sound. Readiness clears on source release/cancel, new
+source start, failure and stop. Setter/query do no I/O and require the serialized
+owner thread. Cancellation and checked stop still retire producer users through
+the existing join path. Rebuild player/info consumers after the layout addition.
+
+## Loading-controller queue
+
+`adx_loader.h` queues up to16 already-open immutable providers and sector ranges
+into a ring/queue joint. It copies labels up to39 bytes, returns stable64-bit IDs,
+and exposes pending order, source status and published byte/sector progress.
+Labels do not implicitly open files. Resolve filename/AFS/disc sources separately;
+providers stay borrowed until that entry reaches END or checked stop succeeds,
+with independent backend retirement still required.
+
+Start enters EXEC or empty WAIT; enqueue revives WAIT. Each owner-thread step
+makes at most one512-byte provider call and services one sector. The default byte
+low-water threshold is80% of initial joint capacity; new sector admission waits
+while queued/borrowed DATA meets that threshold. An active sector finishes under
+normal joint backpressure. A zero threshold disables this admission limit.
+Pause preserves partial requests and prevents source work. Empty ranges finish
+without I/O. Partial final sectors publish exact source bytes, without zero gaps.
+
+Completed metadata remains queryable until its slot is reused. Stop cancels the
+pending queue only after returning any held FREE span, preserves published DATA,
+and never closes a descriptor. Close invalidates the controller after successful
+stop; the caller may then explicitly seal the joint when no more input will be
+supplied. Failure retains ownership until checked stop; the optional error hook
+runs once and must not reenter. No hidden worker/global registry or automatic EOF.
+
+This is a compressed-byte loading service, separate from PCM sequence playback.
+Two complete ADX files cannot simply be concatenated and treated as one ADX file;
+use the sequence/source-transition layer for those. Range entries can split one
+logical ADX file at sector boundaries and feed its existing joint reader. Native
+flow admission is explicitly bounded, without claiming SDK prefetch-batch timing.

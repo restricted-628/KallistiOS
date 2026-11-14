@@ -26,6 +26,42 @@ enum kosdec_adx_status kosdec_adx_service_init_joint(struct kosdec_adx_service *
     if(result == KOSDEC_ADX_MORE) *s = initial;
     return result;
 }
+enum kosdec_adx_status kosdec_adx_service_init_wave(struct kosdec_adx_service *s,
+    struct kosdec_adx_wave *wave, int16_t *pcm, size_t samples, size_t capacity) {
+    if(!s) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
+    enum kosdec_adx_status result = kosdec_adx_pipe_init_wave(&initial.pipe,
+        wave, pcm, samples, capacity);
+    if(result == KOSDEC_ADX_MORE) *s = initial;
+    return result;
+}
+enum kosdec_adx_status kosdec_adx_service_init_au(struct kosdec_adx_service *s,
+    struct kosdec_adx_au *au, int16_t *pcm, size_t samples, size_t capacity) {
+    if(!s) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
+    enum kosdec_adx_status result = kosdec_adx_pipe_init_au(&initial.pipe,
+        au, pcm, samples, capacity);
+    if(result == KOSDEC_ADX_MORE) *s = initial;
+    return result;
+}
+enum kosdec_adx_status kosdec_adx_service_init_aiff(struct kosdec_adx_service *s,
+    struct kosdec_adx_aiff *aiff, int16_t *pcm, size_t samples, size_t capacity) {
+    if(!s) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
+    enum kosdec_adx_status result = kosdec_adx_pipe_init_aiff(&initial.pipe,
+        aiff, pcm, samples, capacity);
+    if(result == KOSDEC_ADX_MORE) *s = initial;
+    return result;
+}
+enum kosdec_adx_status kosdec_adx_service_init_spsd(struct kosdec_adx_service *s,
+    struct kosdec_adx_spsd *spsd, int16_t *pcm, size_t samples, size_t capacity) {
+    if(!s) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
+    enum kosdec_adx_status result = kosdec_adx_pipe_init_spsd(&initial.pipe,
+        spsd, pcm, samples, capacity);
+    if(result == KOSDEC_ADX_MORE) *s = initial;
+    return result;
+}
 struct kosdec_adx_service_state kosdec_adx_service_get_state(
     const struct kosdec_adx_service *s) {
     struct kosdec_adx_service_state r = {KOSDEC_ADX_BAD_ARGUMENT, false};

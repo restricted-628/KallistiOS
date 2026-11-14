@@ -3,6 +3,10 @@
 #define KOSDEC_ADX_PIPE_H
 #include <kosdec/adx_sequence.h>
 #include <kosdec/adx_joint_reader.h>
+#include <kosdec/adx_wave.h>
+#include <kosdec/adx_au.h>
+#include <kosdec/adx_aiff.h>
+#include <kosdec/adx_spsd.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -13,6 +17,10 @@ struct kosdec_adx_pipe {
     struct kosdec_adx_stream *stream;
     struct kosdec_adx_sequence *sequence;
     struct kosdec_adx_joint_reader *joint;
+    struct kosdec_adx_wave *wave;
+    struct kosdec_adx_au *au;
+    struct kosdec_adx_aiff *aiff;
+    struct kosdec_adx_spsd *spsd;
 };
 struct kosdec_adx_pipe_result {
     enum kosdec_adx_status producer; /* MORE until terminal, not last pump status. */
@@ -37,6 +45,21 @@ enum kosdec_adx_status kosdec_adx_pipe_init(struct kosdec_adx_pipe *,
    reader close, then separately retire external feed providers. */
 enum kosdec_adx_status kosdec_adx_pipe_init_joint(struct kosdec_adx_pipe *,
     struct kosdec_adx_joint_reader *, int16_t *pcm, size_t samples, size_t capacity);
+/* PCM WAV alternative, same producer-only lifetime and SPSC rules. Seek,
+   reinit and filter changes require unbinding/join first. No embedded loops. */
+enum kosdec_adx_status kosdec_adx_pipe_init_wave(struct kosdec_adx_pipe *,
+    struct kosdec_adx_wave *, int16_t *pcm, size_t samples, size_t capacity);
+/* AU PCM/mu-law alternative, same producer-only lifetime and SPSC rules. Seek,
+   reinit and filter changes require unbinding/join first. No embedded loops. */
+enum kosdec_adx_status kosdec_adx_pipe_init_au(struct kosdec_adx_pipe *,
+    struct kosdec_adx_au *, int16_t *pcm, size_t samples, size_t capacity);
+/* AIFF PCM alternative, same producer-only lifetime and SPSC rules. Seek,
+   reinit and filter changes require unbinding/join first. No embedded loops. */
+enum kosdec_adx_status kosdec_adx_pipe_init_aiff(struct kosdec_adx_pipe *,
+    struct kosdec_adx_aiff *, int16_t *pcm, size_t samples, size_t capacity);
+/* SPSD mono PCM16; same source lifetime and output rules. */
+enum kosdec_adx_status kosdec_adx_pipe_init_spsd(struct kosdec_adx_pipe *,
+    struct kosdec_adx_spsd *, int16_t *pcm, size_t samples, size_t capacity);
 /* One producer, one consumer may run concurrently. Pump is producer-only:
    at most one bounded source read, one32-frame decode and two PCM copies.
    Any configured source PCM filter runs on this producer before publication;
@@ -62,7 +85,7 @@ struct kosdec_adx_pipe_result kosdec_adx_pipe_read(
 bool kosdec_adx_pipe_get_format(const struct kosdec_adx_pipe *,
                               uint32_t *sample_rate, unsigned *channels);
 /* Any thread: completed source rewinds, modulo2^32. Zero before decoding and
-   for sequence/joint sources (playlist repeats are not embedded ADX loops).
+   for sequence/joint/WAV sources (playlist repeats are not embedded ADX loops).
    Published after each producer step, including a rewind followed by input
    WAIT/error. Decode read-ahead may lead playback: not an audible-loop clock.
    Release/pause/cancel/terminal retain the last count; init/rebind resets it.

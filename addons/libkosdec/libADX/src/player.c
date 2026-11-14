@@ -10,6 +10,7 @@ static int bad(void) { errno = EINVAL; return -1; }
 static int failed(struct kosdec_adx_player *p, int error) {
     if(!p->info.first_error) p->info.first_error = error ? error : EIO;
     p->info.state = KOSDEC_ADX_PLAYER_FAILED;
+    p->info.ready_start = false;
     errno = error ? error : EIO;
     return -1;
 }
@@ -22,7 +23,7 @@ static int wake_producer(struct kosdec_adx_player *p) {
 }
 static int init(struct kosdec_adx_player *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
-    struct kosdec_adx_joint_reader *joint,
+    struct kosdec_adx_joint_reader *joint, struct kosdec_adx_wave *wave, struct kosdec_adx_au *au, struct kosdec_adx_aiff *aiff, struct kosdec_adx_spsd *spsd,
     const struct kosdec_adx_player_config *c) {
     if(!p || !c || !c->scratch || (uintptr_t)c->scratch % _Alignof(int16_t) ||
        c->sound_bytes < 64 || c->sound_bytes > SND_STREAM_BUFFER_MAX_PCM16 ||
@@ -34,7 +35,11 @@ static int init(struct kosdec_adx_player *p,
     struct kosdec_adx_player initial = {.magic = PLAYER_MAGIC, .memory = *c,
         .source_bound = true,
         .sound = SND_STREAM_INVALID, .info = {.retained_sound = SND_STREAM_INVALID}};
-    enum kosdec_adx_status status = joint ?
+    enum kosdec_adx_status status = spsd ?
+        kosdec_adx_service_init_spsd(&initial.producer,spsd,c->pcm,c->pcm_samples,c->capacity) : aiff ?
+        kosdec_adx_service_init_aiff(&initial.producer,aiff,c->pcm,c->pcm_samples,c->capacity) : au ?
+        kosdec_adx_service_init_au(&initial.producer,au,c->pcm,c->pcm_samples,c->capacity) : wave ?
+        kosdec_adx_service_init_wave(&initial.producer,wave,c->pcm,c->pcm_samples,c->capacity) : joint ?
         kosdec_adx_service_init_joint(&initial.producer,joint,c->pcm,c->pcm_samples,c->capacity) :
         kosdec_adx_service_init(&initial.producer,stream,sequence,c->pcm,c->pcm_samples,c->capacity);
     if(status != KOSDEC_ADX_MORE) return bad();
@@ -49,12 +54,32 @@ static int init(struct kosdec_adx_player *p,
 int kosdec_adx_player_init(struct kosdec_adx_player *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
     const struct kosdec_adx_player_config *c) {
-    return init(p,stream,sequence,NULL,c);
+    return init(p,stream,sequence,NULL,NULL,NULL,NULL,NULL,c);
 }
 int kosdec_adx_player_init_joint(struct kosdec_adx_player *p,
     struct kosdec_adx_joint_reader *joint, const struct kosdec_adx_player_config *c) {
     if(!joint) return bad();
-    return init(p,NULL,NULL,joint,c);
+    return init(p,NULL,NULL,joint,NULL,NULL,NULL,NULL,c);
+}
+int kosdec_adx_player_init_wave(struct kosdec_adx_player *p,
+    struct kosdec_adx_wave *wave, const struct kosdec_adx_player_config *c) {
+    if(!wave) return bad();
+    return init(p,NULL,NULL,NULL,wave,NULL,NULL,NULL,c);
+}
+int kosdec_adx_player_init_au(struct kosdec_adx_player *p,
+    struct kosdec_adx_au *au, const struct kosdec_adx_player_config *c) {
+    if(!au) return bad();
+    return init(p,NULL,NULL,NULL,NULL,au,NULL,NULL,c);
+}
+int kosdec_adx_player_init_aiff(struct kosdec_adx_player *p,
+    struct kosdec_adx_aiff *aiff, const struct kosdec_adx_player_config *c) {
+    if(!aiff) return bad();
+    return init(p,NULL,NULL,NULL,NULL,NULL,aiff,NULL,c);
+}
+int kosdec_adx_player_init_spsd(struct kosdec_adx_player *p,
+    struct kosdec_adx_spsd *spsd, const struct kosdec_adx_player_config *c) {
+    if(!spsd) return bad();
+    return init(p,NULL,NULL,NULL,NULL,NULL,NULL,spsd,c);
 }
 static void decode(fiber_service_t *self, void *data) {
     struct kosdec_adx_player *p = data;
@@ -73,6 +98,7 @@ static void decode(fiber_service_t *self, void *data) {
     }
 }
 static int start_source(struct kosdec_adx_player *p) {
+    p->info.ready_start = false;
     /* No concurrent producer yet; apply/collect the initial resume without I/O. */
     struct kosdec_adx_command resume = {.kind = KOSDEC_ADX_PRODUCTION_PAUSE};
     enum kosdec_adx_status receipt;
@@ -95,11 +121,22 @@ int kosdec_adx_player_start(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound) return bad();
     return start_source(p);
 }
+int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *p, bool wait) {
+    if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_RELEASING) return bad();
+    p->info.wait_start = wait;
+    return 0;
+}
+int kosdec_adx_player_is_ready_start(const struct kosdec_adx_player *p, bool *ready) {
+    if(!valid(p) || !ready) return bad();
+    *ready = p->info.ready_start;
+    return 0;
+}
 int kosdec_adx_player_release_source(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END) return bad();
     /* No poll/callback can race this serialized owner call. Future callbacks
        cannot touch the retired producer, even if join needs a retry. */
     p->pcm_enabled = false;
+    p->info.ready_start = false;
     if(fiber_service_executor_destroy(p->executor) < 0) return -1;
     p->executor = NULL; p->worker = NULL;
     p->source_bound = false;
@@ -111,6 +148,7 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
     if(!p->source_bound) return 0;
     p->pcm_enabled = false;
+    p->info.ready_start = false;
     p->info.state = KOSDEC_ADX_PLAYER_RELEASING;
     kosdec_adx_service_request_cancel(&p->producer);
     /* Executor destruction requests stop/wakes and joins its carrier. A failed
@@ -126,11 +164,15 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
 }
 static int bind_source(struct kosdec_adx_player *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
-    struct kosdec_adx_joint_reader *joint) {
+    struct kosdec_adx_joint_reader *joint, struct kosdec_adx_wave *wave, struct kosdec_adx_au *au, struct kosdec_adx_aiff *aiff, struct kosdec_adx_spsd *spsd) {
     if(!valid(p) || p->source_bound ||
        (p->info.state != KOSDEC_ADX_PLAYER_IDLE && p->info.state != KOSDEC_ADX_PLAYER_READY)) return bad();
     struct kosdec_adx_service producer;
-    enum kosdec_adx_status status = joint ?
+    enum kosdec_adx_status status = spsd ?
+        kosdec_adx_service_init_spsd(&producer,spsd,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) : aiff ?
+        kosdec_adx_service_init_aiff(&producer,aiff,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) : au ?
+        kosdec_adx_service_init_au(&producer,au,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) : wave ?
+        kosdec_adx_service_init_wave(&producer,wave,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) : joint ?
         kosdec_adx_service_init_joint(&producer,joint,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) :
         kosdec_adx_service_init(&producer,stream,sequence,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity);
     if(status != KOSDEC_ADX_MORE) return bad();
@@ -141,12 +183,28 @@ static int bind_source(struct kosdec_adx_player *p,
 }
 int kosdec_adx_player_bind_source(struct kosdec_adx_player *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence) {
-    return bind_source(p,stream,sequence,NULL);
+    return bind_source(p,stream,sequence,NULL,NULL,NULL,NULL,NULL);
 }
 int kosdec_adx_player_bind_joint(struct kosdec_adx_player *p,
     struct kosdec_adx_joint_reader *joint) {
     if(!joint) return bad();
-    return bind_source(p,NULL,NULL,joint);
+    return bind_source(p,NULL,NULL,joint,NULL,NULL,NULL,NULL);
+}
+int kosdec_adx_player_bind_wave(struct kosdec_adx_player *p, struct kosdec_adx_wave *wave) {
+    if(!wave) return bad();
+    return bind_source(p,NULL,NULL,NULL,wave,NULL,NULL,NULL);
+}
+int kosdec_adx_player_bind_au(struct kosdec_adx_player *p, struct kosdec_adx_au *au) {
+    if(!au) return bad();
+    return bind_source(p,NULL,NULL,NULL,NULL,au,NULL,NULL);
+}
+int kosdec_adx_player_bind_aiff(struct kosdec_adx_player *p, struct kosdec_adx_aiff *aiff) {
+    if(!aiff) return bad();
+    return bind_source(p,NULL,NULL,NULL,NULL,NULL,aiff,NULL);
+}
+int kosdec_adx_player_bind_spsd(struct kosdec_adx_player *p, struct kosdec_adx_spsd *spsd) {
+    if(!spsd) return bad();
+    return bind_source(p,NULL,NULL,NULL,NULL,NULL,NULL,spsd);
 }
 static void *refill(snd_stream_hnd_t handle, int requested, int *received) {
     struct kosdec_adx_player *p = snd_stream_get_userdata(handle);
@@ -214,6 +272,12 @@ int kosdec_adx_player_poll(struct kosdec_adx_player *p) {
         if(!p->custom_pan) {
             p->output.channel[0].pan = channels == 1 ? 128 : 0;
             p->output.channel[1].pan = 255;
+        }
+        p->info.ready_start = true;
+        if(p->info.wait_start) {
+            if(p->sound != SND_STREAM_INVALID &&
+               snd_stream_poll_ex(p->sound) < 0 && errno != ENODATA) return failed(p,errno);
+            return p->callback_failed ? failed(p,p->info.first_error) : 0;
         }
         p->pcm_enabled = true;
         if(p->sound == SND_STREAM_INVALID) {
@@ -308,6 +372,7 @@ int kosdec_adx_player_stop(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     }
     p->info.state = KOSDEC_ADX_PLAYER_STOPPING;
     p->pcm_enabled = false;
+    p->info.ready_start = false;
     if(p->source_bound) kosdec_adx_service_request_cancel(&p->producer);
     if(p->worker) fiber_service_request_stop(p->worker);
     if(p->sound != SND_STREAM_INVALID) {

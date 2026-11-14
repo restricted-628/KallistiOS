@@ -40,6 +40,24 @@ enum kosdec_adx_status kosdec_adx_service_init(struct kosdec_adx_service *,
    Feed and joint remain producer-only until all service users have joined. */
 enum kosdec_adx_status kosdec_adx_service_init_joint(struct kosdec_adx_service *,
     struct kosdec_adx_joint_reader *, int16_t *pcm, size_t samples, size_t capacity);
+/* WAV source; same producer mailbox and initial-paused policy. Sequence and
+   embedded ADX loop commands are unsupported; seek/reinit requires unbinding. */
+enum kosdec_adx_status kosdec_adx_service_init_wave(struct kosdec_adx_service *,
+    struct kosdec_adx_wave *, int16_t *pcm, size_t samples, size_t capacity);
+
+/* AU PCM/mu-law source; same producer mailbox and initial-paused policy. Sequence and
+   embedded ADX loop commands are unsupported; seek/reinit requires unbinding. */
+enum kosdec_adx_status kosdec_adx_service_init_au(struct kosdec_adx_service *,
+    struct kosdec_adx_au *, int16_t *pcm, size_t samples, size_t capacity);
+
+/* AIFF PCM source; same producer mailbox and initial-paused policy. Sequence and
+   embedded ADX loop commands are unsupported; seek/reinit requires unbinding. */
+enum kosdec_adx_status kosdec_adx_service_init_aiff(struct kosdec_adx_service *,
+    struct kosdec_adx_aiff *, int16_t *pcm, size_t samples, size_t capacity);
+/* SPSD mono PCM16; same source lifetime and output rules. */
+enum kosdec_adx_status kosdec_adx_service_init_spsd(struct kosdec_adx_service *,
+    struct kosdec_adx_spsd *, int16_t *pcm, size_t samples, size_t capacity);
+
 /* One controller, serialized post/take calls. Exactly one outstanding command.
    MORE means copied/accepted, not applied: wake producer, then take its receipt.
    NEED_OUTPUT means previous receipt not collected; no mutation. Invalid command
