@@ -134,6 +134,7 @@ static bool close_enough(float actual, float expected) {
 }
 
 #include "release-fixtures.h"
+#include "rotation-fixtures.h"
 
 static int invalid_cached_position(const pvr_chunk_render_state_t *state,
                                    uint16_t index,
@@ -709,6 +710,9 @@ int main(int argc, char **argv) {
     if(!verify_release_matrix_backend())
         FAIL("SH4ZAM out-of-line matrix backend regression");
     puts("SH4ZAM out-of-line matrix backend: PASS");
+    if(!verify_release_rotations() || !verify_release_permutations())
+        FAIL("SH4ZAM combined rotations/permutations regression");
+    puts("SH4ZAM combined rotations and bitwise permutations: PASS");
     show_result(true, "SH4ZAM 0.10.0 camera, frustum, geometry, and fibers");
     return 0;
 }

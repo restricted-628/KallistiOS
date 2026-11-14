@@ -10,14 +10,32 @@ not an upstream SH4ZAM release or an independently authored library.
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`ad2f8909e8dc8f30489e6b74cd07536321f13d89`, upstream **v0.10 update**, from
+`5b7dfc22a91f7a21756f1e8f86b1ed3d99dd33bf`, upstream **v0.10 update**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
 and license are retained; no build-time source patches are applied. The explicit
 setup step applies `patches/matrix-alignment.patch` to this exact base. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
-This advances `9a214a2`. The adapter now builds the separate SH-4 and software
+This advances `ad2f8909`. It adds combined Euler and 16-bit-turn
+XMTRX rotations, quaternion initializer/apply optimizations, register permutations,
+scalar fixes and section-level assembly organization. The existing alignment
+overlay is refreshed without semantic changes. This update does not enable
+new consumer algorithms or claim hardware speedups. Clean GCC16.2 builds, host
+regressions/sanitizers, consumer/provider links and selected Flycast tests pass.
+Combined rotations, quaternion init/apply, control-mode preservation and native
+bitwise permutations pass at O0 and O2 in interpreter and dynarec modes.
+Physical hardware and performance qualification remain separate.
+
+Callers must retain explicit angle types in C++ because float and uint16_t
+overloads make an untyped integer literal ambiguous. Rotation extraction is not
+a general scaled-TRS decomposition. Matrix negation now uses multiplication in
+some lanes; do not assume sign-bit-only behavior for special floating values or
+unchanged FPSCR status. No production consumer is switched to these operations.
+The fork retains this upstream negation implementation by explicit decision;
+the local patch remains limited to the existing alignment correction.
+
+Previously, `ad2f8909` advanced `9a214a2`. The adapter builds separate SH-4 and software
 matrix translation units; their shared implementation fragment is not compiled
 independently. The public matrix alignment correction is now upstream, so the
 local patch retains only the raw-buffer operands and software-state alignment.

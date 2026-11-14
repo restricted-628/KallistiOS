@@ -13,6 +13,7 @@ static bool close_enough(float a, float b) {
 }
 
 #include "../../examples/dreamcast/sh4zam/integration/release-fixtures.h"
+#include "../../examples/dreamcast/sh4zam/integration/rotation-fixtures.h"
 
 int main(void) {
     bool passed = verify_release_memory();
@@ -21,6 +22,8 @@ int main(void) {
     passed &= verify_release_alignment();
     passed &= verify_release_quaternion();
     passed &= verify_release_matrix_backend();
+    passed &= verify_release_rotations();
+    passed &= verify_release_permutations();
     puts(passed ? "SH4ZAM release fixtures: PASS" : "SH4ZAM release fixtures: FAIL");
     return !passed;
 }

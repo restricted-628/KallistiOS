@@ -95,6 +95,20 @@ adopt optional graphics/media math substitutions or establish a speedup.
 Source-checker, host, target-link and selected Flycast checks passed; hardware
 behavior/performance and the separate normal-lane/FMAC questions remain open.
 
+**Matrix-negation decision, 2026-11-13:** Retain upstream's implementation for
+the SH4ZAM update; do not add a sign-bit-only negation patch. Document
+special-value and FPSCR-status differences rather than claiming all-domain
+equivalence to FNEG. No current production caller requires the old semantics.
+This decision does not waive candidate validation or imply a measured speedup;
+the existing alignment patch remains separate.
+
+**Dependency reconciliation, 2026-11-13:** Advance `ad2f8909` to `5b7dfc22`
+with the same residual alignment correction and unchanged compiler/FFT policy.
+Rebuild consumers; typed C++ angle arguments avoid new overload ambiguity.
+Rotation extraction is not scaled-TRS decomposition. Host/sanitizer, clean
+target build/link and selected Flycast numerical/state/provider checks pass;
+this does not authorize optional renderer substitutions or claim hardware gains.
+
 **Accepted lighting slice, 2026-10-26:** Caller-owned prepared basic/extended
 lighting snapshots move invariant light admission and directional normalization
 to an explicit update/batch boundary. Existing checked APIs remain available

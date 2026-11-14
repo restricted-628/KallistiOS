@@ -21,7 +21,7 @@ shz_xmtrx_sw.o: $(SW_SOURCE) $(SHZ_HEADERS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SW_WARNINGS) -c $< -o $@
 shz_matrix_sw.o: $(SW_MATRIX) $(MATRIX_IMPL) $(SHZ_HEADERS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SW_WARNINGS) -c $< -o $@
-$(TARGET): test.c $(EXAMPLE)/release-fixtures.h shz_xmtrx_sw.o shz_matrix_sw.o $(SHZ_HEADERS)
+$(TARGET): test.c $(EXAMPLE)/release-fixtures.h $(EXAMPLE)/rotation-fixtures.h shz_xmtrx_sw.o shz_matrix_sw.o $(SHZ_HEADERS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) test.c shz_xmtrx_sw.o shz_matrix_sw.o $(LDLIBS) -o $@
 test: $(TARGET)
 	./$(TARGET)

@@ -22,6 +22,7 @@ $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/toon-draw-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/wire-draw-fixtures.h
 $(OBJS): $(KOS_BASE)/utils/pvr-chunk-cache-test/two-volume-toon-fixtures.h
 $(OBJS): release-fixtures.h
+$(OBJS): rotation-fixtures.h
 
 # Synthetic skinning measurements call the real library with strict oracle
 # checks and no cross-translation-unit folding.

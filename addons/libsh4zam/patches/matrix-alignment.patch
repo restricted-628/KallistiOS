@@ -1,5 +1,5 @@
 diff --git a/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h b/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
-index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a85bb9ede 100644
+index 3ec69cf666a74c24a96bf740608b1ba606dafbb0..46b524fa3c5785fa306e6fb993d59112f44ee2d5 100644
 --- a/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
 +++ b/include/sh4zam/inline/sh4/shz_xmtrx_sh4.inl.h
 @@ -276,7 +276,11 @@ SHZ_FORCE_INLINE void shz_xmtrx_swap_rows_sh4(unsigned idx1, unsigned idx2) SHZ_
@@ -78,7 +78,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
  }
  
  SHZ_INLINE void shz_xmtrx_store_3x4_sh4(shz_mat3x4_t* mat) SHZ_NOEXCEPT {
-@@ -1727,7 +1731,7 @@ SHZ_INLINE void shz_xmtrx_skew_symmetric_sh4(float x, float y, float z) SHZ_NOEX
+@@ -2444,7 +2448,7 @@ SHZ_INLINE void shz_xmtrx_skew_symmetric_sh4(float x, float y, float z) SHZ_NOEX
        "m" (x), "m" (y), "m" (z));
  }
  
@@ -87,7 +87,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
      uintptr_t scratch;
  
      asm volatile(R"(
-@@ -1758,12 +1762,12 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NO
+@@ -2475,12 +2479,12 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_NO
          frchg
      )"
      : [mtx] "+&r" (matrix), [scr] "=r" (scratch)
@@ -102,7 +102,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
      asm volatile(R"(
          fmov.s  @%[mtx]+, fr0
          add     #28, %[mtx]
-@@ -1797,7 +1801,7 @@ SHZ_INLINE void shz_xmtrx_apply_transpose_4x4_sh4(const shz_mat4x4_t* matrix) SH
+@@ -2514,7 +2518,7 @@ SHZ_INLINE void shz_xmtrx_apply_transpose_4x4_sh4(const shz_mat4x4_t* matrix) SH
          frchg
      )"
      : [mtx] "+r" (matrix)
@@ -111,7 +111,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
      : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7",
        "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
  }
-@@ -1872,7 +1876,7 @@ SHZ_INLINE void shz_xmtrx_scale_reverse_sh4(float x, float y, float z) SHZ_NOEXC
+@@ -2589,7 +2593,7 @@ SHZ_INLINE void shz_xmtrx_scale_reverse_sh4(float x, float y, float z) SHZ_NOEXC
        "fr8", "fr9", "fr11", "fr12", "fr13", "fr14", "fr15", "fpul");
  }
  
@@ -120,7 +120,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
      uintptr_t scratch;
  
      asm volatile(R"(
-@@ -1903,7 +1907,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_
+@@ -2620,7 +2624,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_4x4_sh4(const shz_mat4x4_t* matrix) SHZ_
          frchg
      )"
      : [mtx] "+&r" (matrix), [scr] "=r" (scratch)
@@ -129,7 +129,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
      : "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7",
        "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
  }
-@@ -1943,7 +1947,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_aligned4_4x4_sh4(const float matrix[16])
+@@ -2660,7 +2664,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_aligned4_4x4_sh4(const float matrix[16])
        "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
  }
  
@@ -138,7 +138,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
      asm volatile(R"(
          fmov.s  @%[mtx]+, fr0
          add     #28, %[mtx]
-@@ -1973,7 +1977,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_transpose_4x4_sh4(const shz_mat4x4_t* ma
+@@ -2690,7 +2694,7 @@ SHZ_INLINE void shz_xmtrx_apply_reverse_transpose_4x4_sh4(const shz_mat4x4_t* ma
          frchg
      )"
      : [mtx] "+r" (matrix)
@@ -148,7 +148,7 @@ index 38b80a7ee7aa022e3b55db078499086b4511b78e..f4a8f38d4dfa53d48b17685e62a03e8a
        "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", "fr14", "fr15");
  }
 diff --git a/include/sh4zam/inline/shz_xmtrx.inl.h b/include/sh4zam/inline/shz_xmtrx.inl.h
-index 34a3920a946dc39e564bff3ffe27d5196b427d65..3cbb4374bd0995eb6713fc6b24413d9cc5839ca1 100644
+index 9135365bbc27dbaf68d698a659b1f1334885eab3..8984ab1b7e3c98c44de3de134994d4e232b3c724 100644
 --- a/include/sh4zam/inline/shz_xmtrx.inl.h
 +++ b/include/sh4zam/inline/shz_xmtrx.inl.h
 @@ -114,7 +114,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_load_aligned4_4x4(const float matrix[16]) SHZ_NO
@@ -187,7 +187,7 @@ index 34a3920a946dc39e564bff3ffe27d5196b427d65..3cbb4374bd0995eb6713fc6b24413d9c
  #else
      shz_xmtrx_store_transpose_unaligned_4x4_sw(matrix);
  #endif
-@@ -528,7 +528,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_aligned4_4x4(const float matrix[16]) SHZ_N
+@@ -554,7 +554,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_aligned4_4x4(const float matrix[16]) SHZ_N
  SHZ_INLINE void shz_xmtrx_apply_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
  #if SHZ_BACKEND == SHZ_SH4
      if(!((uintptr_t)matrix & 0x7))
@@ -196,7 +196,7 @@ index 34a3920a946dc39e564bff3ffe27d5196b427d65..3cbb4374bd0995eb6713fc6b24413d9c
      else
          shz_xmtrx_apply_aligned4_4x4(matrix);
  #else
-@@ -546,7 +546,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_transpose_4x4(const shz_mat4x4_t* matrix)
+@@ -572,7 +572,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_transpose_4x4(const shz_mat4x4_t* matrix)
  
  SHZ_FORCE_INLINE void shz_xmtrx_apply_transpose_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
  #if SHZ_BACKEND == SHZ_SH4
@@ -205,7 +205,7 @@ index 34a3920a946dc39e564bff3ffe27d5196b427d65..3cbb4374bd0995eb6713fc6b24413d9c
  #else
      shz_xmtrx_apply_transpose_unaligned_4x4_sw(matrix);
  #endif
-@@ -571,7 +571,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_aligned4_4x4(const float matrix[16
+@@ -597,7 +597,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_aligned4_4x4(const float matrix[16
  SHZ_INLINE void shz_xmtrx_apply_reverse_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
  #if SHZ_BACKEND == SHZ_SH4
      if(!((uintptr_t)matrix & 0x7))
@@ -214,7 +214,7 @@ index 34a3920a946dc39e564bff3ffe27d5196b427d65..3cbb4374bd0995eb6713fc6b24413d9c
      else
          shz_xmtrx_apply_reverse_aligned4_4x4(matrix);
  #else
-@@ -589,7 +589,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_transpose_4x4(const shz_mat4x4_t*
+@@ -615,7 +615,7 @@ SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_transpose_4x4(const shz_mat4x4_t*
  
  SHZ_FORCE_INLINE void shz_xmtrx_apply_reverse_transpose_unaligned_4x4(const float matrix[16]) SHZ_NOEXCEPT {
  #if SHZ_BACKEND == SHZ_SH4
@@ -224,7 +224,7 @@ index 34a3920a946dc39e564bff3ffe27d5196b427d65..3cbb4374bd0995eb6713fc6b24413d9c
      shz_xmtrx_apply_reverse_transpose_aligned4_4x4_sw(matrix);
  #endif
 diff --git a/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h b/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
-index 84ac02684dd70d17ab47f84e1bd5adb85be2cf60..90f93f2c10d100c902e5bf8dc799fe2c099b87fa 100644
+index b4da4028c6d7d9156ad7b73e5bd420d268cdee94..a998467ab75b18130971733b0281c4bce4d55700 100644
 --- a/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
 +++ b/include/sh4zam/inline/sw/shz_xmtrx_sw.inl.h
 @@ -33,7 +33,7 @@

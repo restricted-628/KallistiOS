@@ -6,6 +6,22 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — SH4ZAM rotation and scalar update
+
+- Advance the pinned upstream dependency from `ad2f8909` to `5b7dfc22`, including
+  combined Euler/u16 rotations, optimized quaternion XMTRX init/apply, register
+  permutations, scalar fixes and assembly function sections. Refresh the exact
+  alignment overlay without changing its edits; preserve upstream negation.
+- Document special-value/FPSCR negation differences, typed C++ angle overloads
+  and rotation-only extraction. No renderer algorithm, decoder arithmetic,
+  fiber-provider selection or global compiler/FFT policy changes.
+- Add shared host/native rotation regressions with independent scalar oracles,
+  nonidentity inputs, control-mode checks and native bit-pattern permutations.
+  Clean GCC16.2 build, focused host/sanitizer suites and consumer/provider links
+  pass. Integration and O0 release tests pass in both Flycast execution modes;
+  selected exclusive-provider math/service checks pass. Hardware performance
+  and unrelated outstanding media/numerical questions remain unqualified.
+
 ## 2026-11-13 — Upstream polygon strip configuration
 
 - Merge upstream through `6b1248c4d`, adding per-context strip partition
