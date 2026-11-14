@@ -4,6 +4,10 @@
 #include <string.h>
 #include "types.h"
 #include "aica_cmd_iface.h"
+#include "aica_music_live.h"
+static aica_music_live_t test_music;
+#undef AICA_MEM_MUSIC_STATE
+#define AICA_MEM_MUSIC_STATE ((uintptr_t)&test_music)
 static uint32_t test_clock;
 #undef AICA_MEM_CLOCK
 #define AICA_MEM_CLOCK ((uintptr_t)&test_clock)
@@ -76,6 +80,7 @@ static void ack(uint32_t token, uint32_t slot, uint32_t cookie) {
     data[8] = 7; data[9] = slot; data[10] = token; dispatch();
 }
 static void reset(void) {
+    memset(&test_music,0,sizeof(test_music));
     memset(legacy, 0, sizeof(legacy)); memset(statuses, 0, sizeof(statuses));
     chans = legacy; channel_statuses = statuses;
     observer.header = &header; observer.results = results;

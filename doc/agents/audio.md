@@ -15,6 +15,8 @@ ARM command firmware, SH-4 transport, sound RAM, playback/DSP, PCM streams and b
 - `kernel/arch/dreamcast/sound/arm` — firmware source, startup and image build
 - `environ_dreamcast.sh` — ARM compiler/assembler settings (integration co-review)
 - `utils/kos-chain/Makefile.aica.cfg` — AICA toolchain configuration (integration co-review)
+- `utils/aica-music-client` — explicit private live owner/client; retained physical
+  pool and bank ownership, no automatic reset/shutdown or natural completion.
 - `utils/aica-bank-tool` — private original bank authoring; `native/` contains
   byte-safe validation/planning and a caller-owned unpublished PCM uploader.
   This is not an installed bank API or ARM bank playback implementation.
@@ -58,7 +60,12 @@ Host test directories with inspected Makefile targets:
 
 - `utils/aica-command-test` — candidate `make -C utils/aica-command-test test` in an assigned checkout.
 - `utils/snd-dsp-test` — candidate `make -C utils/snd-dsp-test test` in an assigned checkout.
+- `utils/sound-music-live-test` — actual firmware backend/guards/clock and explicit
+  host owner; `make test sanitize host-test host-sanitize`. Fake MMIO/transport
+  is distinct from target execution; retained leases are not physical retirement.
 - `utils/sound-port-test` — actual software allocator/port admission tests (`make test`).
+- `utils/aica-music-client` — explicit private live owner/client; retained physical
+  pool and bank ownership, no automatic reset/shutdown or natural completion.
 - `utils/aica-bank-tool` — host authoring (`make test`); `native/` provides
   `make test sanitize upload-test upload-sanitize`. Mocked host services are not
   hardware transfers; native links and exact emulator readback are separate gates.
@@ -71,6 +78,8 @@ Target/example directories (source the assigned checkout's environment and inspe
 
 - `examples/dreamcast/sound/spu-lifetime`
 - `examples/dreamcast/sound/port-reservation` — software ownership only; no playback.
+- `examples/dreamcast/sound/music-live` — original explicit MIDI fixture; retains
+  played bank and pool after logical quiesce, then remains alive.
 - `examples/dreamcast/sound/channel-sync`
 - `examples/dreamcast/sound/stream-service`
 - `examples/dreamcast/sound/dsp-control`

@@ -1,4 +1,4 @@
-/* Private candidate protocol. Not installed, selected, or a stable public ABI. */
+/* Original private protocol; selected by the explicit live adapter, not a stable ABI. */
 #ifndef AICA_MUSIC_WIRE_H
 #define AICA_MUSIC_WIRE_H
 #include "aica_music.h"

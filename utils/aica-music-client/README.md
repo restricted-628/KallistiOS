@@ -54,3 +54,17 @@ and nonadmitted submissions, identical retries, all read-failure stages, torn
 receipts, malformed receipt retention, queued controls, urgent cancellation,
 unobserved OPEN completion, all eight port generations, fades/mailboxes and cookie
 exhaustion. No live firmware, emulator, audible output or hardware proof is claimed.
+
+The optional `music_live.c` adapter explicitly reserves a mono-channel pool and
+binds this client to existing KOS transport/registry services. Link it with the
+native bank helpers in a fresh exclusively owned sound runtime, as illustrated
+by `examples/dreamcast/sound/music-live`. It never initializes/resets sound itself
+or creates a service thread. All owner calls and object lifetime are serialized
+by the application; no concurrent sound reset or raw playback may use the pool.
+
+Feature0x80 and the actual ARM observation session are checked before receipt
+access/admission. OPEN holds a host bank pending reference until an exact receipt
+establishes ARM protection or terminal rejection. Uncertain/LOST ownership stays
+retained. There is deliberately no destroy or pool-release API after attempted
+CLAIM, and no natural-completion claim in this first live backend. Quiesced played
+banks and channels remain retained pending separate physical retirement work.

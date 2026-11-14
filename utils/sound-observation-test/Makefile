@@ -15,8 +15,9 @@ test: arm-test host-test register-test
 	./register-test
 register-test: registers.c $(ARM)/aica.c $(ARM)/aica.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) registers.c -o $@
-arm-test: arm.c $(ARM)/main.c $(ARM)/aica_observer.c $(ARM)/aica_bank_registry.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -finstrument-functions arm.c $(ARM)/aica_observer.c $(ARM)/aica_bank_registry.c -o $@
+MUSIC = $(ARM)/aica_music.c $(ARM)/aica_music_bank.c $(ARM)/aica_music_wire.c $(ARM)/aica_music_live.c
+arm-test: $(MUSIC) arm.c $(ARM)/main.c $(ARM)/aica_observer.c $(ARM)/aica_bank_registry.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) -finstrument-functions arm.c $(ARM)/aica_observer.c $(ARM)/aica_bank_registry.c $(MUSIC) -o $@
 clean:
 	rm -f arm-test host-test register-test bridges.inc
 

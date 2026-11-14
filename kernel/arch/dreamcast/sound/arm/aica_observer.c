@@ -188,6 +188,23 @@ void aica_observer_legacy(aica_observer_t *o, uint32_t channel) {
     }
 }
 
+int aica_observer_external(aica_observer_t *o, uint32_t low, uint32_t high) {
+    unsigned i;
+    for(i=0;i<64;i++) {
+        uint32_t sequence;
+        if(!((i<32?low:high)&(1u<<(i%32)))) continue;
+        sequence=o->channels[i].sequence;
+        if((sequence&1u) || sequence>=UINT32_MAX-1u) return 0;
+        if(o->completions) {
+            sequence=o->completions[i].sequence;
+            if((sequence&1u) || sequence>=UINT32_MAX-1u) return 0;
+        }
+    }
+    for(i=0;i<64;i++)
+        if((i<32?low:high)&(1u<<(i%32))) aica_observer_legacy(o,i);
+    return 1;
+}
+
 static int control(aica_observer_t *o, const aica_observation_control_t *p,
                     uint32_t tick) {
     volatile aica_observation_result_t *r;

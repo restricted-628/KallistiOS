@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <dc/sound/aica_bank_registry.h>
+#include <dc/sound/aica_music_live.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -367,6 +368,9 @@ int snd_init(void) {
     size_t amt;
     snd_driver_status_t status;
     int status_result;
+    uint64_t deadline;
+    uint32_t remaining;
+    bool empty;
 
     /* Finish loading the stream driver */
     if(!initted) {
@@ -394,7 +398,39 @@ int snd_init(void) {
 
         initted = 1;
         driver_features = 0;
-        status_result = snd_driver_get_status(&status, 100);
+        /* Firmware initialization can outlast the initial scheduling delay.
+           Wait for both queues before admitting one status request, sharing
+           the existing budget with that request. ENODEV after admission is
+           not a safe retry signal, so the general query is never retried. */
+        deadline = timer_ms_gettime64() + 100;
+        for(;;) {
+            remaining = remaining_timeout(deadline);
+            if(!remaining) {
+                errno = ETIMEDOUT;
+                status_result = -1;
+                break;
+            }
+            status_result = shared_queue_state(
+                SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE,
+                AICA_MEM_RESP_QUEUE, &empty, NULL);
+            if(status_result == 0)
+                status_result = shared_queue_state(
+                    SPU_RAM_UNCACHED_BASE + AICA_MEM_RESP_QUEUE,
+                    AICA_MEM_CHANNELS, &empty, NULL);
+            if(status_result == 0) {
+                remaining = remaining_timeout(deadline);
+                if(remaining)
+                    status_result = snd_driver_get_status(&status, remaining);
+                else {
+                    errno = ETIMEDOUT;
+                    status_result = -1;
+                }
+                break;
+            }
+            if(errno != ENODEV)
+                break;
+            thd_pass();
+        }
         if(status_result < 0 ||
            !(status.features & SND_DRIVER_FEATURE_SYNC_CHANNELS)) {
             int saved_errno = status_result < 0 ? errno : EPROTO;
@@ -723,6 +759,8 @@ int snd_iface_observation_read(uint32_t offset, void *record, uint32_t bytes) {
         (offset >= AICA_MEM_COMPLETION_CHANNELS && offset < AICA_MEM_COMPLETION_END &&
          (offset - AICA_MEM_COMPLETION_CHANNELS) % 64 == 0 && bytes == 64) ||
         (offset == AICA_MEM_BANK_HEADER && bytes == 64) ||
+        (offset == AICA_MEM_MUSIC_RECEIPT && (bytes == 4 || bytes == 256) &&
+         (driver_features & AICA_DRIVER_FEATURE_MUSIC)) ||
         (offset >= AICA_MEM_BANK_RECORDS && offset < AICA_MEM_BANK_END &&
          (offset - AICA_MEM_BANK_RECORDS) % 64 == 0 && bytes == 64);
     if(!record || !valid) { errno = EINVAL; return -1; }

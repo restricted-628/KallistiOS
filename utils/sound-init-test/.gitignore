@@ -1,0 +1,4 @@
+startup.inc
+startup-test
+startup-sanitize
+*.dSYM/

@@ -15,15 +15,16 @@
 #include "aica.h"
 #include "aica_observer.h"
 #include "aica_bank_registry.h"
+#include "aica_music_live.h"
 
 /****************** Timer *******************************************/
 
 #define timer (*((volatile uint32 *)AICA_MEM_CLOCK))
 
 void timer_wait(uint32 jiffies) {
-    uint32 fin = timer + jiffies;
+    uint32 start = timer;
 
-    while(timer <= fin)
+    while(aica_timer_waiting(start, timer, jiffies))
         ;
 }
 
@@ -73,6 +74,8 @@ volatile aica_channel_status_ext_t *channel_statuses =
 typedef char aica_channel_status_region_must_fit[
     AICA_MEM_CHANNEL_STATUS + 64 * sizeof(aica_channel_status_ext_t) <=
     AICA_RAM_START ? 1 : -1];
+
+static aica_music_live_t *const music = (aica_music_live_t *)AICA_MEM_MUSIC_STATE;
 
 static uint32 commands_processed;
 static uint32 commands_rejected;
@@ -238,7 +241,7 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_VALIDATION |
                      AICA_DRIVER_FEATURE_POSITION |
                      AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
-                     AICA_DRIVER_FEATURE_BANK_REGISTRY |
+                     AICA_DRIVER_FEATURE_BANK_REGISTRY | AICA_DRIVER_FEATURE_MUSIC |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
@@ -411,46 +414,64 @@ static void channel_status_apply_update(uint32 channel,
     status_end(channel);
 }
 
-/* One classified validation/apply pass for both protocol entry points. */
+/* Shared side-effect-free admission, then a privileged admitted apply path. */
+int aica_music_hw_validate(unsigned channel, unsigned operation,
+                          const aica_channel_config_t *config, uint32_t fields) {
+    if(channel>=64) return 0;
+    switch(operation) {
+        case AICA_CHANNEL_OP_START: return !fields && config && channel_config_valid(config);
+        case AICA_CHANNEL_OP_STOP: return !fields;
+        case AICA_CHANNEL_OP_UPDATE:
+            return config && fields && !(fields&~AICA_CHANNEL_UPDATE_ALL) &&
+                channel_statuses[channel].configured && config_fields_valid(config,fields);
+        default: return 0;
+    }
+}
+static void channel_apply(unsigned channel, unsigned operation,
+    const aica_channel_config_t *config, uint32_t fields, uint32_t flags) {
+    if(operation==AICA_CHANNEL_OP_START) {
+        channel_state_from_config(channel,config);
+        aica_channel_start(channel,config,flags&AICA_CHANNEL_START_DELAYED);
+        status_publish_config(channel,config);
+    }
+    else if(operation==AICA_CHANNEL_OP_STOP) {
+        aica_stop(channel);status_refresh(channel);
+    }
+    else {
+        aica_channel_update(channel,config,fields);
+        channel_status_apply_update(channel,config,fields);
+    }
+}
+void aica_music_hw_apply(unsigned channel, unsigned operation,
+    const aica_channel_config_t *config, uint32_t fields) {
+    channel_apply(channel,operation,config,fields,0);
+}
+int aica_music_hw_invalidate(uint32_t low, uint32_t high) {
+    return aica_observer_external(&observer,low,high);
+}
 static uint32_t observer_apply(uint32_t channel,
                                const aica_channel_control_t *control) {
-    if(channel >= 64)
+    if(channel>=64 || aica_music_live_owned(music,channel))
         return AICA_OBSERVATION_BAD_CONFIG;
-
     switch(control->operation) {
         case AICA_CHANNEL_OP_START:
-            if((control->start_flags & ~AICA_CHANNEL_START_DELAYED) || control->fields)
+            if((control->start_flags&~AICA_CHANNEL_START_DELAYED) || control->fields)
                 return AICA_OBSERVATION_BAD_FLAGS;
-            if(!channel_config_valid(&control->config))
-                return AICA_OBSERVATION_BAD_CONFIG;
-            channel_state_from_config(channel, &control->config);
-            aica_channel_start(channel, &control->config,
-                control->start_flags & AICA_CHANNEL_START_DELAYED);
-            status_publish_config(channel, &control->config);
-            return AICA_OBSERVATION_APPLIED;
-
+            break;
         case AICA_CHANNEL_OP_STOP:
-            if(control->start_flags || control->fields)
-                return AICA_OBSERVATION_BAD_FLAGS;
-            aica_stop(channel);
-            status_refresh(channel);
-            return AICA_OBSERVATION_APPLIED;
-
+            if(control->start_flags || control->fields) return AICA_OBSERVATION_BAD_FLAGS;
+            break;
         case AICA_CHANNEL_OP_UPDATE:
-            if(control->start_flags || !control->fields ||
-               (control->fields & ~AICA_CHANNEL_UPDATE_ALL))
+            if(control->start_flags || !control->fields || (control->fields&~AICA_CHANNEL_UPDATE_ALL))
                 return AICA_OBSERVATION_BAD_FLAGS;
-            if(!channel_statuses[channel].configured)
-                return AICA_OBSERVATION_UNCONFIGURED;
-            if(!config_fields_valid(&control->config, control->fields))
-                return AICA_OBSERVATION_BAD_CONFIG;
-            aica_channel_update(channel, &control->config, control->fields);
-            channel_status_apply_update(channel, &control->config, control->fields);
-            return AICA_OBSERVATION_APPLIED;
-
-        default:
-            return AICA_OBSERVATION_BAD_OPERATION;
+            if(!channel_statuses[channel].configured) return AICA_OBSERVATION_UNCONFIGURED;
+            break;
+        default:return AICA_OBSERVATION_BAD_OPERATION;
     }
+    if(!aica_music_hw_validate(channel,control->operation,&control->config,control->fields))
+        return AICA_OBSERVATION_BAD_CONFIG;
+    channel_apply(channel,control->operation,&control->config,control->fields,control->start_flags);
+    return AICA_OBSERVATION_APPLIED;
 }
 
 static int process_channel_control(uint32 channel,
@@ -565,7 +586,8 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
                 uint32 operation = channel->cmd & AICA_CH_CMD_MASK;
                 int group = operation == AICA_CH_CMD_START &&
                             (channel->cmd & AICA_CH_START_SYNC);
-                if((!group && pkt->cmd_id >= 64) ||
+                if((!group && (pkt->cmd_id >= 64 || aica_music_live_owned(music,pkt->cmd_id))) ||
+                   (group && aica_music_live_intersects(music,pkt->cmd_id,0)) ||
                    !process_chn(pkt->cmd_id, channel))
                     ++commands_rejected;
                 else if(group) {
@@ -585,8 +607,10 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
                 ++commands_rejected;
             break;
         case AICA_CMD_SYNC_CLOCK:
-            if(size == sizeof(aica_cmd_t) / sizeof(uint32))
+            if(size == sizeof(aica_cmd_t) / sizeof(uint32)) {
                 timer = 0;
+                aica_music_clock_rebase(&music->backend);
+            }
             else
                 ++commands_rejected;
             break;
@@ -594,7 +618,8 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
             if(size == AICA_CMDSTR_CHANNEL_MASK_SIZE) {
                 aica_channel_mask_t *mask =
                     (aica_channel_mask_t *)pkt->cmd_data;
-                if(mask->low || mask->high) {
+                if((mask->low || mask->high) &&
+                   !aica_music_live_intersects(music,mask->low,mask->high)) {
                     uint32 channel;
 
                     aica_sync_play(mask->low, mask->high);
@@ -621,7 +646,8 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
                 ++commands_rejected;
             break;
         case AICA_CMD_CHANNEL_CONTROL:
-            if(size == AICA_CMDSTR_CHANNEL_CONTROL_SIZE && pkt->cmd_id < 64) {
+            if(size == AICA_CMDSTR_CHANNEL_CONTROL_SIZE && pkt->cmd_id < 64 &&
+               !aica_music_live_owned(music,pkt->cmd_id)) {
                 aica_channel_control_t *control =
                     (aica_channel_control_t *)pkt->cmd_data;
                 if(!process_channel_control(pkt->cmd_id, control))
@@ -637,6 +663,11 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
         case AICA_CMD_OBSERVATION_SAMPLE:
         case AICA_CMD_OBSERVATION_CONSUME:
             if(!aica_observer_command(&observer, pkt, timer))
+                ++commands_rejected;
+            break;
+        case AICA_MUSIC_WIRE_COMMAND:
+            if(!observer.header->ready || observer.header->sequence==UINT32_MAX ||
+               !aica_music_live_command(music,pkt,observer.header->active_session))
                 ++commands_rejected;
             break;
         case AICA_CMD_BANK_REGISTER:
@@ -747,6 +778,8 @@ int arm_main(void) {
 
     aica_observer_init(&observer);
     aica_bank_registry_init(&banks);
+    aica_music_live_init(music,&banks,
+        (volatile aica_music_receipt_t *)AICA_MEM_MUSIC_RECEIPT);
     commands_processed = 0;
     commands_rejected = 0;
     malformed_packets = 0;
@@ -793,6 +826,7 @@ int arm_main(void) {
 
         /* One aggregate, fair budget; registration never scans all banks here. */
         aica_bank_registry_service(&banks);
+        aica_music_live_service(music,timer);
 
         /* Little delay to prevent memory lock */
         timer_wait(10);
