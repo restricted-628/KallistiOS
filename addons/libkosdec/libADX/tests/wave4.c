@@ -7,8 +7,11 @@ static unsigned checks;
 #define CHECK(x) do {++checks;if(!(x)){fprintf(stderr,"wave4:%d: %s\n",__LINE__,#x);exit(1);}}while(0)
 struct input {uint8_t *base,*data;uint32_t bytes;unsigned ch,frames,calls,fail,mode,filtered;size_t fragment;};
 static unsigned code(unsigned f,unsigned ch) {
-    if(f<10)return ch?15:7;if(f==10)return ch?7:15;
-    if(f<27)return ch?26-f:f-11;if(f<37)return ch?15:7;return ch?8:0;
+    if(f<10)return ch?15:7;
+    if(f==10)return ch?7:15;
+    if(f<27)return ch?26-f:f-11;
+    if(f<37)return ch?15:7;
+    return ch?8:0;
 }
 static int expected(unsigned f,unsigned ch) {return wave4_pcm[f<128?f:127][ch];}
 static void put(uint8_t *p,uint32_t v,unsigned n){for(unsigned i=0;i<n;++i)p[i]=(uint8_t)(v>>(8*i));}
@@ -32,7 +35,8 @@ static struct kosdec_adx_input_result source(void *ctx,uint32_t off,uint8_t *out
         return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,cap+1};
     }
     if(in->calls%5==0)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
-    if(cap>in->fragment)cap=in->fragment;memcpy(out,in->data+off,cap);
+    if(cap>in->fragment)cap=in->fragment;
+    memcpy(out,in->data+off,cap);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,cap};
 }
 static void filter(void *ctx,unsigned ch,int16_t *pcm,size_t frames,unsigned stride) {

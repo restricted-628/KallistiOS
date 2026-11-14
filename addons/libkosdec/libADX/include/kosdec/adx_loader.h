@@ -38,7 +38,7 @@ struct kosdec_adx_loader {
     unsigned head, tail, count;
     enum kosdec_adx_loader_state state;
     enum kosdec_adx_request_status error;
-    bool paused, active;
+    bool paused, active, sector_policy;
     kosdec_adx_loader_error error_fn;
     void *error_context;
 };
@@ -82,6 +82,51 @@ enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *)
 enum kosdec_adx_loader_status kosdec_adx_loader_pause(struct kosdec_adx_loader *, bool);
 /* Bytes0..initial joint capacity; no I/O. Changes affect new sector admission. */
 enum kosdec_adx_loader_status kosdec_adx_loader_set_flow(struct kosdec_adx_loader *, size_t);
+/* ADX input-buffer policy, opt-in instead of the generic byte-flow policy.
+   Same serialized producer owner as step/read/joint operations; configure before
+   binding to a player, or from its producer feed. Never query/mutate concurrently
+   from the player controller. No allocation, I/O, timer or device operation.
+   Capacity must contain 1..32767 whole 2048-byte sectors. Sector threshold is
+   0..floor(capacity/2048). Zero blocks NEW sector requests; an active request
+   finishes. set_flow restores its legacy policy (zero disables that gate).
+   The ADX policy compares QUEUED DATA only, excluding outstanding DATA borrows.
+   These setters affect next sector admission, not cancellation or initial
+   preloading. Rebuild consumers for the extended implementation-owned state. */
+enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_sectors(
+    struct kosdec_adx_loader *, uint32_t sectors);
+/* Default is trunc(binary32(whole_capacity_sectors)*0.85f). */
+enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_default(
+    struct kosdec_adx_loader *);
+/* seconds finite and >=0, channels1/2, rate1..48000. First round rate*seconds
+   to binary32, truncate samples, take whole32-sample groups, multiply by18 bytes
+   per channel, then take whole2048-byte sectors and clamp to capacity. Huge
+   finite times saturate safely. Sub-sector times can produce a zero threshold.
+   Invalid arguments leave state unchanged; exact supplied-format units, not
+   automatic metadata selection or an estimate based on output pitch. */
+enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_time(
+    struct kosdec_adx_loader *, float seconds, unsigned channels, unsigned rate);
+struct kosdec_adx_loader_buffer_info {
+    size_t queued_bytes, held_bytes, reload_bytes;
+    uint32_t sectors;
+    float seconds;
+    bool sector_policy, safe;
+};
+/* Queued bytes/2048 rounded down; seconds = float(floor(queued/(18*channels))*32)
+   /float(rate). channels1/2 and rate1..48000 must describe the ADX source.
+   Counts all queued bytes, including any header/footer: this is a nominal
+   compressed-data estimate, not promised playable PCM or an audible clock.
+   Held input, decoded PCM and sound RAM are excluded. safe means queued bytes
+   >=reload_bytes (including equality and zero). It matches the ADX admission
+   threshold; generic byte-flow additionally counts held DATA, and zero disables
+   its gate. This snapshot is not permission to monopolize the disc/DMA engine.
+   Output remains unchanged on invalid/stale joint or format arguments. */
+bool kosdec_adx_loader_get_buffer_info(const struct kosdec_adx_loader *,
+    unsigned channels, unsigned rate, struct kosdec_adx_loader_buffer_info *);
+/* Input-joint identity; NULL for invalid/closed loader. No ownership transfer or
+   additional concurrency rights: loader still owns FREE production, and the
+   serialized reader owns DATA. Keep both users joined before reset/close. */
+struct kosdec_adx_joint *kosdec_adx_loader_get_input_joint(
+    const struct kosdec_adx_loader *);
 /* Snapshot helpers leave output unchanged on failure. Entry metadata persists
    after END/CANCELLED until its slot is reused. ordinal addresses pending order. */
 bool kosdec_adx_loader_get_info(const struct kosdec_adx_loader *, struct kosdec_adx_loader_info *);

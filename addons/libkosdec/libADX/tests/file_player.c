@@ -3,6 +3,11 @@
 #include <kosdec/adx_memory.h>
 #include <kosdec/adx_player.h>
 #include "player_mock.h"
+#ifdef TEST_NAMED_FILE
+#include <kosdec/adx_named_file.h>
+#include <kos/thread.h>
+#include <fcntl.h>
+#endif
 #include <errno.h>
 #include <pthread.h>
 #include <stdalign.h>
@@ -17,7 +22,21 @@ static size_t extent, fragment;
 static unsigned reads;
 static bool retry, fail;
 static uint8_t *asset;
+#ifdef TEST_NAMED_FILE
+static struct kosdec_adx_named_file *named;
+static struct kosdec_adx_stream *source_stream;
+static kthread_t owner_thread;
+kthread_t *thd_get_current(void) { return pthread_equal(pthread_self(),owner)?&owner_thread:NULL; }
+int irq_inside_int(void) { return 0; }
+uint32_t kosdec_adx_named_test_sr(void) { return 0; }
+file_t fs_open(const char *path,int mode) {
+    CHECK(!strcmp(path,"/music.adx") && mode==O_RDONLY && handle); return 7;
+}
+int fs_close(file_t fd) { CHECK(fd==7 && handle); int r=fclose(handle); handle=NULL; return r; }
+#else
 static struct kosdec_adx_file file;
+static struct kosdec_adx_stream *source_stream=&file.stream;
+#endif
 static struct kosdec_adx_player player;
 static struct kosdec_adx_sequence sequence;
 static alignas(32) uint8_t cache[4096], stack[16384];
@@ -51,9 +70,15 @@ static void init(unsigned ch, unsigned rate, unsigned mode, size_t short_read, b
     for(size_t g=0;g<groups;++g) memcpy(asset+50+g*18*ch,small+50+(g%3)*18*ch,18*ch);
     memcpy(asset+extent-18,small+small_bytes-18,18); free(small);
     handle=tmpfile(); CHECK(handle && fwrite(asset,1,extent,handle)==extent); fflush(handle);
+#ifdef TEST_NAMED_FILE
+    int close_error=0;
+    CHECK(!kosdec_adx_named_file_open(&named,"/music.adx",mode==1,cache,sizeof(cache),&close_error));
+    CHECK(!close_error && !kosdec_adx_named_file_borrow(named,&source_stream));
+#else
     CHECK(kosdec_adx_file_init_buffered(&file,7,mode==1,cache,sizeof(cache))==KOSDEC_ADX_MORE);
+#endif
     kosdec_adx_sequence_init(&sequence,mode==2);
-    struct kosdec_adx_source source={file.stream.read_at,file.stream.context,file.stream.input_bytes,1};
+    struct kosdec_adx_source source={source_stream->read_at,source_stream->context,source_stream->input_bytes,1};
     CHECK(kosdec_adx_sequence_enqueue(&sequence,&source)==KOSDEC_ADX_MORE);
     CHECK(kosdec_adx_sequence_start(&sequence)==KOSDEC_ADX_MORE);
     struct kosdec_adx_player_config config={
@@ -61,8 +86,13 @@ static void init(unsigned ch, unsigned rate, unsigned mode, size_t short_read, b
         .stack=stack,.stack_bytes=sizeof(stack),.sound_bytes=512,
         .transfer_timeout_ms=1000,.prefill_timeout_ms=10000
     };
-    CHECK(!kosdec_adx_player_init(&player,mode==2?NULL:&file.stream,mode==2?&sequence:NULL,&config));
+    CHECK(!kosdec_adx_player_init(&player,mode==2?NULL:source_stream,mode==2?&sequence:NULL,&config));
     CHECK(!kosdec_adx_player_start(&player));
+#ifdef TEST_NAMED_FILE
+    close_error=123;
+    CHECK(kosdec_adx_named_file_close(&named,&close_error)<0 && errno==EBUSY);
+    CHECK(named && close_error==123);
+#endif
 }
 static struct kosdec_adx_player_info info(void) {
     struct kosdec_adx_player_info i; CHECK(!kosdec_adx_player_get_info(&player,&i)); return i;
@@ -118,7 +148,16 @@ static void compare(unsigned ch, unsigned mode) {
 static void cleanup(void) {
     CHECK(!kosdec_adx_player_stop(&player,1000));
     CHECK(!mock_callback && !mock_userdata);
-    unsigned before=reads; fclose(handle); handle=NULL; free(asset);
+    unsigned before=reads;
+#ifdef TEST_NAMED_FILE
+    int close_error=123;
+    CHECK(kosdec_adx_named_file_close(&named,&close_error)<0 && errno==EBUSY);
+    CHECK(!kosdec_adx_named_file_return(named,&source_stream) && !source_stream);
+    CHECK(!kosdec_adx_named_file_close(&named,&close_error) && !named && !close_error);
+#else
+    fclose(handle); handle=NULL;
+#endif
+    free(asset);
     CHECK(!kosdec_adx_player_stop(&player,1000) && reads==before);
 }
 int main(void) {
@@ -131,8 +170,8 @@ int main(void) {
         /* A released file can be sought/rebound without reopening sound. */
         if(!mode) {
             size_t before=mock_frames;
-            CHECK(kosdec_adx_stream_seek_begin(&file.stream,33)==KOSDEC_ADX_MORE);
-            CHECK(!kosdec_adx_player_bind_source(&player,&file.stream,NULL)); finish(0);
+            CHECK(kosdec_adx_stream_seek_begin(source_stream,33)==KOSDEC_ADX_MORE);
+            CHECK(!kosdec_adx_player_bind_source(&player,source_stream,NULL)); finish(0);
             CHECK(mock_frames-before==TOTAL-33);
             CHECK(!memcmp(mock_pcm+before*ch,mock_pcm+33*ch,(TOTAL-33)*ch*sizeof(int16_t)));
             CHECK(mock_allocs==1 && mock_starts==1 && mock_updates==0 && info().sources_started==2);
@@ -146,7 +185,11 @@ int main(void) {
         if(kosdec_adx_player_poll(&player)<0) { failed=true; break; }
         mock_pause();
     }
-    CHECK(failed && info().first_error==EIO && file.io_errno==EIO); cleanup(); ++cases;
+    CHECK(failed && info().first_error==EIO);
+#ifndef TEST_NAMED_FILE
+    CHECK(file.io_errno==EIO);
+#endif
+    cleanup(); ++cases;
     /* Cancel during steady looping, then prove no VFS access after join. */
     init(2,44100,1,97,false);
     for(unsigned n=0;info().source_frames<1024 && n<10000;++n) {
@@ -157,6 +200,19 @@ int main(void) {
     unsigned before=reads;
     for(unsigned n=0;n<4;++n) CHECK(!kosdec_adx_player_poll(&player));
     CHECK(reads==before && info().state==KOSDEC_ADX_PLAYER_IDLE); cleanup(); ++cases;
+#ifdef TEST_NAMED_FILE
+    /* Failed join retains the loan, even after cancellation was requested. */
+    init(2,44100,1,97,false);
+    mock_failure=MOCK_JOIN;
+    CHECK(kosdec_adx_player_cancel_source(&player)<0);
+    int close_error=123;
+    CHECK(kosdec_adx_named_file_close(&named,&close_error)<0 && errno==EBUSY);
+    CHECK(named && source_stream && close_error==123 && handle);
+    mock_failure=MOCK_OK;
+    cleanup(); ++cases;
+    printf("ADX_NAMED_PLAYER cases=%u failures=0\n",cases);
+#else
     printf("ADX_FILE_PLAYER cases=%u failures=0\n",cases);
+#endif
     return 0;
 }

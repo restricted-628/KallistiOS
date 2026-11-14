@@ -11,7 +11,8 @@ static struct kosdec_adx_input_result read_at(void *ctx,uint32_t off,uint8_t *ds
     struct source *s=ctx;++s->calls;CHECK(n && n<=512 && off<s->bytes && n<=s->bytes-off);
     if(s->calls==s->fail)return (struct kosdec_adx_input_result){s->mode==0?KOSDEC_ADX_INPUT_END:s->mode==1?KOSDEC_ADX_INPUT_ERROR:KOSDEC_ADX_INPUT_DATA,s->mode==2?n+1:0};
     if(s->wait && s->calls%s->wait==0)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
-    if(n>s->fragment)n=s->fragment;for(size_t i=0;i<n;++i)dst[i]=sample(s,off+(unsigned)i);
+    if(n>s->fragment)n=s->fragment;
+    for(size_t i=0;i<n;++i)dst[i]=sample(s,off+(unsigned)i);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,n};
 }
 struct fixture {struct kosdec_adx_loader loader;struct kosdec_adx_joint joint;struct kosdec_adx_joint_node nodes[8];uint8_t buffer[8192];};
@@ -138,7 +139,9 @@ struct adx_source {uint8_t bytes[3654];unsigned calls;};
 static struct kosdec_adx_input_result adx_read(void *ctx,uint32_t off,uint8_t *dst,size_t n) {
     struct adx_source *s=ctx;++s->calls;CHECK(n && n<=512 && off<sizeof(s->bytes) && n<=sizeof(s->bytes)-off);
     if(s->calls%7==0)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
-    if(n>7)n=7;memcpy(dst,s->bytes+off,n);return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,n};
+    if(n>7)n=7;
+    memcpy(dst,s->bytes+off,n);
+    return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,n};
 }
 static void live_decoder(void) {
     struct fixture f;init(&f,0,41);struct adx_source src={0};uint8_t *p=src.bytes;

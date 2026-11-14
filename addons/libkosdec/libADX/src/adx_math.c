@@ -81,6 +81,9 @@ int media_adx_channel_group(const uint8_t block[18], unsigned frames,
         value = multiply_add(scale, residual, value);
         pcm[i * stride] = pcm16(value, &clips);
         h2 = h1;
+        /* Float-path feedback retains the predictor, even when PCM clips.
+           Quantizing/clamping here changes following samples. Stored history
+           is converted only at the logical group boundary below. */
         h1 = value;
     }
     unsigned ignored = 0;

@@ -130,7 +130,8 @@ int main(void) {
         fault=i;CHECK(kosdec_adx_file_init(&f,7,false)==KOSDEC_ADX_MORE);
         enum kosdec_adx_status expected=i==4||i==5?KOSDEC_ADX_DONE:i==6?KOSDEC_ADX_TRUNCATED:KOSDEC_ADX_IO_ERROR;
         CHECK(drain(&f)==expected);
-        if(i==1)CHECK(f.io_errno==ESPIPE);if(i==2||i==3)CHECK(f.io_errno==EIO);
+        if(i==1)CHECK(f.io_errno==ESPIPE);
+        if(i==2||i==3)CHECK(f.io_errno==EIO);
     }
     fault=0;CHECK(kosdec_adx_file_init(&f,8,false)==KOSDEC_ADX_IO_ERROR && f.io_errno==EBADF);
     length=(int64_t)UINT32_MAX+1;CHECK(kosdec_adx_file_init(&f,7,false)==KOSDEC_ADX_IO_ERROR && f.io_errno==EOVERFLOW);

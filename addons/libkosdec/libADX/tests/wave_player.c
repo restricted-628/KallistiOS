@@ -30,7 +30,8 @@ static struct kosdec_adx_input_result source(void *ctx,uint32_t off,uint8_t *out
     if(__atomic_load_n(&f->fail,__ATOMIC_ACQUIRE))return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_ERROR,0};
     if(__atomic_load_n(&f->wait,__ATOMIC_ACQUIRE))return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
     CHECK(cap && cap<=512 && off<f->bytes && cap<=f->bytes-off);
-    if(cap>7)cap=7;memcpy(out,f->data+off,cap);
+    if(cap>7)cap=7;
+    memcpy(out,f->data+off,cap);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,cap};
 }
 static void filter(void *ctx,unsigned channel,int16_t *pcm,size_t frames,unsigned stride) {
@@ -89,7 +90,8 @@ static void failures(void) {
         if(fail){CHECK(finish(&f)<0 && info(&f).first_error==EIO);}
         else {for(unsigned i=0;i<2000 && !calls(&f);++i)mock_pause();CHECK(calls(&f)>0);CHECK(!kosdec_adx_player_cancel_source(&f.player));}
         CHECK(!kosdec_adx_player_stop(&f.player,1000));unsigned before=calls(&f);
-        for(unsigned i=0;i<4;++i)mock_pause();CHECK(calls(&f)==before && mock_joins==1 && !mock_allocs);
+        for(unsigned i=0;i<4;++i)mock_pause();
+        CHECK(calls(&f)==before && mock_joins==1 && !mock_allocs);
     }
     struct fixture f;init(&f,16,1,true);CHECK(!kosdec_adx_player_start(&f.player));CHECK(!finish(&f));
     CHECK(!kosdec_adx_player_release_source(&f.player));

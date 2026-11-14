@@ -10,7 +10,8 @@ static struct kosdec_adx_input_result source(void *ctx,uint32_t off,uint8_t *out
     struct fixture *f=ctx;++f->calls;CHECK(n && n<=512 && off<f->bytes && n<=f->bytes-off);
     if(f->calls==f->fail) return (struct kosdec_adx_input_result){f->mode==0?KOSDEC_ADX_INPUT_END:f->mode==1?KOSDEC_ADX_INPUT_ERROR:KOSDEC_ADX_INPUT_DATA,f->mode==2?n+1:0};
     if(f->wait && !(f->calls%f->wait))return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
-    if(n>f->fragment)n=f->fragment;memcpy(out,f->raw+1+off,n);
+    if(n>f->fragment)n=f->fragment;
+    memcpy(out,f->raw+1+off,n);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,n};
 }
 static void init(struct fixture *f,unsigned frames,unsigned fragment,unsigned version,unsigned flags) {

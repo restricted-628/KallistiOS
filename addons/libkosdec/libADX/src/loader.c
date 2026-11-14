@@ -1,5 +1,6 @@
 #include <kosdec/adx_loader.h>
 #include <string.h>
+#include <math.h>
 #define LOADER_MAGIC UINT32_C(0x4144584c)
 #define SECTOR KOSDEC_ADX_REQUEST_SECTOR_BYTES
 static bool valid(const struct kosdec_adx_loader *l){return l && l->magic==LOADER_MAGIC;}
@@ -62,7 +63,9 @@ enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *l
         if(kosdec_adx_joint_query(l->joint,&joint)!=KOSDEC_ADX_JOINT_OK || joint.sealed || joint.capacity!=l->capacity)
             return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
         if(joint.borrowed[KOSDEC_ADX_JOINT_FREE])return KOSDEC_ADX_LOADER_BUSY;
-        if(l->flow_limit && joint.available[KOSDEC_ADX_JOINT_DATA]+joint.borrowed[KOSDEC_ADX_JOINT_DATA]>=l->flow_limit)
+        size_t buffered=joint.available[KOSDEC_ADX_JOINT_DATA];
+        if(!l->sector_policy) buffered+=joint.borrowed[KOSDEC_ADX_JOINT_DATA];
+        if((l->flow_limit || l->sector_policy) && buffered>=l->flow_limit)
             return KOSDEC_ADX_LOADER_NEED_OUTPUT;
         (void)kosdec_adx_request_init(&l->request,e->read_at,e->context,e->input_bytes);
         l->active=true;
@@ -94,7 +97,59 @@ enum kosdec_adx_loader_status kosdec_adx_loader_pause(struct kosdec_adx_loader *
 }
 enum kosdec_adx_loader_status kosdec_adx_loader_set_flow(struct kosdec_adx_loader *l,size_t bytes) {
     if(!valid(l) || bytes>l->capacity)return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
-    l->flow_limit=bytes;return KOSDEC_ADX_LOADER_OK;
+    l->flow_limit=bytes;l->sector_policy=false;return KOSDEC_ADX_LOADER_OK;
+}
+static bool sector_capacity(const struct kosdec_adx_loader *l) {
+    return valid(l) && l->capacity/SECTOR && l->capacity/SECTOR<=INT16_MAX;
+}
+static bool adx_format(unsigned channels,unsigned rate) {
+    return (channels==1 || channels==2) && rate && rate<=48000;
+}
+enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_sectors(
+    struct kosdec_adx_loader *l,uint32_t sectors) {
+    if(!sector_capacity(l) || sectors>l->capacity/SECTOR)
+        return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    l->flow_limit=(size_t)sectors*SECTOR;l->sector_policy=true;
+    return KOSDEC_ADX_LOADER_OK;
+}
+enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_default(
+    struct kosdec_adx_loader *l) {
+    if(!sector_capacity(l)) return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    float threshold=(float)(l->capacity/SECTOR)*0.85f;
+    return kosdec_adx_loader_set_reload_sectors(l,(uint32_t)(int32_t)threshold);
+}
+enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_time(
+    struct kosdec_adx_loader *l,float seconds,unsigned channels,unsigned rate) {
+    if(!sector_capacity(l) || !adx_format(channels,rate) ||
+       !isfinite(seconds) || seconds<0.0f) return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    float samples=(float)rate*seconds;
+    uint32_t sectors=(uint32_t)(l->capacity/SECTOR);
+    if(samples<0x1p31f) {
+        uint32_t frames=(uint32_t)(int32_t)samples;
+        uint64_t requested=(uint64_t)(frames/32)*18*channels/SECTOR;
+        if(requested<sectors) sectors=(uint32_t)requested;
+    }
+    return kosdec_adx_loader_set_reload_sectors(l,sectors);
+}
+bool kosdec_adx_loader_get_buffer_info(const struct kosdec_adx_loader *l,
+    unsigned channels,unsigned rate,struct kosdec_adx_loader_buffer_info *out) {
+    struct kosdec_adx_joint_info info;
+    if(!valid(l) || !out || !adx_format(channels,rate) ||
+       kosdec_adx_joint_query(l->joint,&info)!=KOSDEC_ADX_JOINT_OK ||
+       info.capacity!=l->capacity) return false;
+    size_t bytes=info.available[KOSDEC_ADX_JOINT_DATA];
+    uint32_t frames=(uint32_t)(bytes/(18*channels))*32;
+    *out=(struct kosdec_adx_loader_buffer_info){
+        .queued_bytes=bytes,.held_bytes=info.borrowed[KOSDEC_ADX_JOINT_DATA],
+        .reload_bytes=l->flow_limit,.sectors=(uint32_t)(bytes/SECTOR),
+        .seconds=(float)frames/(float)rate,.sector_policy=l->sector_policy,
+        .safe=bytes>=l->flow_limit
+    };
+    return true;
+}
+struct kosdec_adx_joint *kosdec_adx_loader_get_input_joint(
+    const struct kosdec_adx_loader *l) {
+    return valid(l)?l->joint:NULL;
 }
 bool kosdec_adx_loader_get_info(const struct kosdec_adx_loader *l,struct kosdec_adx_loader_info *out) {
     if(!valid(l) || !out)return false;

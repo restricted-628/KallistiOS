@@ -129,7 +129,8 @@ static void huge_and_independent(void) {
     CHECK(kosdec_adx_request_start(r+1,1,out[1],2048)==READ);
     for(unsigned i=0;i<1000;++i) {
         enum kosdec_adx_request_status a=kosdec_adx_request_step(r),b=kosdec_adx_request_step(r+1);
-        if(a==END && b==END)break;CHECK(i<999);
+        if(a==END && b==END)break;
+        CHECK(i<999);
     }
     CHECK(info(r).source_bytes==2047 && out[0][2047]==0 && info(r).cursor==2097152);
     for(unsigned i=0;i<2047;++i)CHECK(out[0][i]==value(UINT32_MAX-2047+i));

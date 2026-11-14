@@ -42,6 +42,13 @@ struct kosdec_adx_player_info {
        It remains allocated; no sample-fetch retirement/reuse is certified. */
     snd_stream_hnd_t retained_sound;
 };
+struct kosdec_adx_player_error {
+    int code; /* Native errno, zero when no diagnostic is latched. */
+    enum kosdec_adx_status decoder;
+    enum kosdec_adx_player_state state; /* State when the failure was observed. */
+};
+typedef void (*kosdec_adx_player_error_callback)(void *context,
+    const struct kosdec_adx_player_error *error);
 /* Fields are implementation-owned; inspect through get_info, not direct edits. */
 struct kosdec_adx_player {
     uint32_t magic;
@@ -57,6 +64,10 @@ struct kosdec_adx_player {
     int16_t *scratch;
     int16_t requested_pan[2]; /* Signed -15..15 or KOSDEC_ADX_PAN_AUTO. */
     bool callback_failed, pcm_enabled, source_bound;
+    struct kosdec_adx_player_error diagnostic;
+    kosdec_adx_player_error_callback error_callback;
+    void *error_context;
+    bool error_pending;
 };
 /* All player APIs are serialized on one ordinary owner thread, not an IRQ,
    callback or shared fiber carrier. Only the private producer uses the source.
@@ -210,6 +221,32 @@ bool kosdec_adx_player_take(struct kosdec_adx_player *, enum kosdec_adx_status *
    source_frames counts the current (or last released) source; sources_started
    counts admitted sources. Neither is a hardware playback position. */
 int kosdec_adx_player_get_info(struct kosdec_adx_player *, struct kosdec_adx_player_info *);
+/* First operational failure observed since init/clear. Decoder/state are captured
+   at observation, not live queries. Bad API arguments, WAIT, normal starvation,
+   EOF and requested cancellation do not latch diagnostics. Query leaves output
+   unchanged on invalid arguments. Native errno/status, not CRI numeric codes.
+   Init failure has no initialized player to query: inspect its return/errno. */
+int kosdec_adx_player_get_error(const struct kosdec_adx_player *,
+    struct kosdec_adx_player_error *);
+/* Acknowledge the diagnostic and discard pending notification only. Does NOT
+   clear first_error/stop_error, resume playback, close/join users or retire any
+   resources. A new observation (including stop's error check) can latch again.
+   Repeated poll of an already FAILED player does not create a new observation. */
+int kosdec_adx_player_clear_error(struct kosdec_adx_player *);
+/* Register a per-player typed hook; NULL unregisters without clearing the latch.
+   Registration does not notify or rearm an already delivered record. Context
+   remains borrowed until replacement/unregister or player destruction after all
+   users join. No process-global hook or SDK text-message ABI is supplied. */
+int kosdec_adx_player_set_error_callback(struct kosdec_adx_player *,
+    kosdec_adx_player_error_callback, void *context);
+/* Explicit serialized owner-thread dispatch, e.g. after poll/stop. 1 delivered,
+   0 no pending record or no callback, -1 invalid player. Once per latched record;
+   get/clear are independent of delivery. Never implicitly called by sound or
+   producer callbacks. Callback receives a temporary const snapshot, may copy it,
+   must not retain its pointer, reenter player APIs, block/yield or change FPU
+   modes. Successful dispatch preserves errno even if the callback changes it.
+   Available through STOPPED; it neither frees nor reactivates the player. */
+int kosdec_adx_player_dispatch_error(struct kosdec_adx_player *);
 /* Close admission, cancel/wake producer, checked sound stop, detach callback and
    join executor. 0 certifies CPU users stopped; providers still retire separately.
    Retained sound handle/allocation is returned in get_info; NEVER destroyed here.

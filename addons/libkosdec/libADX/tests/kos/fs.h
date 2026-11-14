@@ -6,6 +6,9 @@
 #include <sys/types.h>
 #include <stdio.h>
 typedef int file_t;
+#define FILEHND_INVALID (-1)
+file_t fs_open(const char *, int);
+int fs_close(file_t);
 typedef int64_t _off64_t;
 _off64_t fs_seek64(file_t, _off64_t, int);
 ssize_t fs_read(file_t, void *, size_t);

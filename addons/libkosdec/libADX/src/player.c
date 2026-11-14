@@ -7,7 +7,17 @@ static bool valid(const struct kosdec_adx_player *p) {
     return p && p->magic == PLAYER_MAGIC;
 }
 static int bad(void) { errno = EINVAL; return -1; }
+static void report_error(struct kosdec_adx_player *p, int error) {
+    if(p->diagnostic.code) return;
+    p->diagnostic = (struct kosdec_adx_player_error){
+        .code = error ? error : EIO,
+        .decoder = p->source_bound ? kosdec_adx_service_get_state(&p->producer).status : p->info.decoder,
+        .state = p->info.state
+    };
+    p->error_pending = true;
+}
 static int failed(struct kosdec_adx_player *p, int error) {
+    report_error(p,error);
     if(!p->info.first_error) p->info.first_error = error ? error : EIO;
     p->info.state = KOSDEC_ADX_PLAYER_FAILED;
     p->info.ready_start = false;
@@ -146,7 +156,10 @@ int kosdec_adx_player_release_source(struct kosdec_adx_player *p) {
        cannot touch the retired producer, even if join needs a retry. */
     p->pcm_enabled = false;
     p->info.ready_start = false;
-    if(fiber_service_executor_destroy(p->executor) < 0) return -1;
+    if(fiber_service_executor_destroy(p->executor) < 0) {
+        report_error(p,errno);
+        return -1;
+    }
     p->executor = NULL; p->worker = NULL;
     p->source_bound = false;
     p->info.decoder = KOSDEC_ADX_DONE;
@@ -162,7 +175,10 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     kosdec_adx_service_request_cancel(&p->producer);
     /* Executor destruction requests stop/wakes and joins its carrier. A failed
        join retains all source users and may be retried while output polls zero. */
-    if(p->executor && fiber_service_executor_destroy(p->executor) < 0) return -1;
+    if(p->executor && fiber_service_executor_destroy(p->executor) < 0) {
+        report_error(p,errno);
+        return -1;
+    }
     p->executor = NULL; p->worker = NULL;
     enum kosdec_adx_status status = kosdec_adx_service_get_state(&p->producer).status;
     p->source_bound = false;
@@ -224,6 +240,7 @@ static void *refill(snd_stream_hnd_t handle, int requested, int *received) {
        (unsigned)requested % (channels * 2)) {
         p->callback_failed = true;
         if(!p->info.first_error) p->info.first_error = EOVERFLOW;
+        report_error(p,EOVERFLOW);
         return NULL;
     }
     ++p->info.callbacks;
@@ -237,11 +254,13 @@ static void *refill(snd_stream_hnd_t handle, int requested, int *received) {
     if(r.producer >= KOSDEC_ADX_INVALID) {
         p->callback_failed = true;
         if(!p->info.first_error) p->info.first_error = EIO;
+        report_error(p,EIO);
     }
     *received = (int)(r.frames * channels * 2);
     if(r.frames && wake_producer(p) < 0) {
         p->callback_failed = true;
         if(!p->info.first_error) p->info.first_error = errno;
+        report_error(p,errno);
     }
     return r.frames ? p->scratch : NULL;
 }
@@ -379,6 +398,35 @@ int kosdec_adx_player_get_info(struct kosdec_adx_player *p, struct kosdec_adx_pl
     else info->production_paused = false;
     return 0;
 }
+int kosdec_adx_player_get_error(const struct kosdec_adx_player *p,
+    struct kosdec_adx_player_error *error) {
+    if(!valid(p) || !error) return bad();
+    *error = p->diagnostic;
+    return 0;
+}
+int kosdec_adx_player_clear_error(struct kosdec_adx_player *p) {
+    if(!valid(p)) return bad();
+    p->diagnostic = (struct kosdec_adx_player_error){0};
+    p->error_pending = false;
+    return 0;
+}
+int kosdec_adx_player_set_error_callback(struct kosdec_adx_player *p,
+    kosdec_adx_player_error_callback callback, void *context) {
+    if(!valid(p)) return bad();
+    p->error_callback = callback;
+    p->error_context = context;
+    return 0;
+}
+int kosdec_adx_player_dispatch_error(struct kosdec_adx_player *p) {
+    if(!valid(p)) return bad();
+    if(!p->error_pending || !p->error_callback) return 0;
+    struct kosdec_adx_player_error error = p->diagnostic;
+    p->error_pending = false;
+    int saved_errno = errno;
+    p->error_callback(p->error_context,&error);
+    errno = saved_errno;
+    return 1;
+}
 int kosdec_adx_player_stop(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     if(!valid(p) || !timeout_ms) return bad();
     if(p->info.state == KOSDEC_ADX_PLAYER_STOPPED) return 0;
@@ -389,12 +437,17 @@ int kosdec_adx_player_stop(struct kosdec_adx_player *p, uint32_t timeout_ms) {
         enum kosdec_adx_status source_status = p->source_bound ?
             kosdec_adx_service_get_state(&p->producer).status : p->info.decoder;
         if(p->source_bound && source_status >= KOSDEC_ADX_INVALID &&
-           !(p->info.state == KOSDEC_ADX_PLAYER_RELEASING && source_status == KOSDEC_ADX_CANCELLED) &&
-           !p->info.first_error) p->info.first_error = EIO;
+           !(p->info.state == KOSDEC_ADX_PLAYER_RELEASING && source_status == KOSDEC_ADX_CANCELLED)) {
+            if(!p->info.first_error) p->info.first_error = EIO;
+            report_error(p,EIO);
+        }
         if(p->sound != SND_STREAM_INVALID) {
             snd_stream_status_t status;
             int error = snd_stream_get_status(p->sound,&status) < 0 ? errno : status.last_error;
-            if(error && error != ENODATA && !p->info.first_error) p->info.first_error = error;
+            if(error && error != ENODATA) {
+                if(!p->info.first_error) p->info.first_error = error;
+                report_error(p,error);
+            }
         }
     }
     p->info.state = KOSDEC_ADX_PLAYER_STOPPING;
@@ -415,6 +468,7 @@ int kosdec_adx_player_stop(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     return 0;
 retain:
     p->info.stop_error = errno ? errno : EIO;
+    report_error(p,p->info.stop_error);
     if(!p->info.first_error) p->info.first_error = p->info.stop_error;
     errno = p->info.stop_error;
     return -1;

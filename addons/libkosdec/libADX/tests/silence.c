@@ -29,7 +29,8 @@ static void matrix(void) {
             CHECK(kosdec_adx_joint_ring_init(&j,data,cap,extra)==KOSDEC_ADX_JOINT_OK);
             advance_empty(&j,at);memcpy(old,data,sizeof(data));
             size_t group=18*ch,groups=requests[q]/32;
-            if(groups>cap/group)groups=cap/group;if(groups>512/group)groups=512/group;
+            if(groups>cap/group)groups=cap/group;
+            if(groups>512/group)groups=512/group;
             size_t bytes=groups*group;uint32_t inserted=123;
             CHECK(kosdec_adx_joint_insert_silence(&j,ch,requests[q],&inserted)==KOSDEC_ADX_JOINT_OK);
             CHECK(inserted==groups*32);
@@ -44,7 +45,8 @@ static void matrix(void) {
             while(read<bytes) {
                 struct kosdec_adx_chunk c;
                 CHECK(kosdec_adx_joint_get(&j,KOSDEC_ADX_JOINT_DATA,bytes-read,&c)==KOSDEC_ADX_JOINT_OK && c.bytes);
-                for(size_t i=0;i<c.bytes;++i)CHECK(!c.data[i]);read+=c.bytes;
+                for(size_t i=0;i<c.bytes;++i)CHECK(!c.data[i]);
+                read+=c.bytes;
                 CHECK(kosdec_adx_joint_put(&j,&c)==KOSDEC_ADX_JOINT_OK);
             }
             CHECK(kosdec_adx_joint_close(&j)==KOSDEC_ADX_JOINT_OK);

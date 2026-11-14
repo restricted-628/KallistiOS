@@ -22,7 +22,8 @@ static struct kosdec_adx_input_result input(void *ctx,uint32_t off,uint8_t *dst,
     if(f->fail)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_ERROR,0};
     if(__atomic_load_n(&f->wait,__ATOMIC_ACQUIRE))return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
     CHECK(off<f->bytes && cap<=f->bytes-off);
-    if(cap>17)cap=17;memcpy(dst,f->data+off,cap);
+    if(cap>17)cap=17;
+    memcpy(dst,f->data+off,cap);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,cap};
 }
 static void init(struct fixture *f,unsigned channels,bool sequence) {

@@ -43,7 +43,8 @@ static void poll_ready(struct fixture *f) {
     for(unsigned i=0;i<3000;++i) {
         bool ready;CHECK(!kosdec_adx_player_poll(&f->player));
         CHECK(!kosdec_adx_player_is_ready_start(&f->player,&ready));
-        if(ready)return;mock_pause();
+        if(ready)return;
+        mock_pause();
     }
     CHECK(0);
 }

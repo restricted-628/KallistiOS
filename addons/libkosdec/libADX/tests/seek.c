@@ -12,7 +12,8 @@ static struct kosdec_adx_input_result input(void *ctx,uint32_t off,uint8_t *dst,
     struct input *p=ctx;++p->calls;CHECK(cap<=512 && off<p->bytes && cap<=p->bytes-off);
     if(p->fail)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_ERROR,0};
     if(p->wait && p->calls%2==0)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
-    if(cap>p->fragment)cap=p->fragment;memcpy(dst,p->data+off,cap);
+    if(cap>p->fragment)cap=p->fragment;
+    memcpy(dst,p->data+off,cap);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,cap};
 }
 static void seek_to(struct kosdec_adx_stream *s,struct input *p,unsigned target) {

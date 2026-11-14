@@ -237,3 +237,13 @@ legacy call. Checked update failure retains the previous requested snapshot but
 may partially affect hardware, so FAILED/stop is mandatory. Discrete pan encoding
 needs no FPU transform. Full-range logarithmic volume requires a separate reviewed
 Audio interface; linear8 approximation does not close attenuation parity.
+
+Owned filename input is opt-in through `adx_named_file.h`. Its opaque private fd
+is restricted to synchronous stable sources and the creating ordinary owner
+thread. Borrow/return is one explicit source loan: require actual user join
+before return; EOF/cancel does not prove it. Precondition rejection retains
+ownership, while admitted close clears the handle and reports cleanup errno
+separately. Never retry/probe a consumed fd. Preserve constructor primary errno.
+No global drain, forced wait interruption or hidden asynchronous provider is
+admitted. These restrictions reuse the existing VFS contract; they do not change
+borrowed file adapters or certify sound-memory/device retirement.

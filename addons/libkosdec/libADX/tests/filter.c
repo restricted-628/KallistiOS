@@ -33,7 +33,9 @@ static struct kosdec_adx_input_result read_at(void *ctx,uint32_t off,uint8_t *ds
     struct input *in=ctx;
     if(++in->calls%3==0)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
     CHECK(off<in->bytes);size_t n=in->bytes-off;
-    if(n>cap)n=cap;if(n>in->fragment)n=in->fragment;memcpy(dst,in->p+off,n);
+    if(n>cap)n=cap;
+    if(n>in->fragment)n=in->fragment;
+    memcpy(dst,in->p+off,n);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,n};
 }
 static void output(struct context *c,const int16_t *pcm,size_t at,size_t frames) {

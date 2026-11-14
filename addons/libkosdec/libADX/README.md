@@ -1039,8 +1039,8 @@ The final partial sector is zero-padded instead of exposing bytes after the
 selected extent. On partial stop/error only complete sectors are committed;
 remaining written bytes are diagnostic progress. The buffer is borrowed until
 completion/error/stop/seek/close. No consumer may race with partial writes.
-The new request layer supplies sector read/seek/progress equivalents; filename
-opening, global service policy and reload limits remain open.
+The new request layer supplies sector read/seek/progress equivalents; global service policy, directory resolution and reload limits remain open.
+Owned filename sources are described below.
 
 ### Request destinations in stream joints
 
@@ -1218,3 +1218,103 @@ Two complete ADX files cannot simply be concatenated and treated as one ADX file
 use the sequence/source-transition layer for those. Range entries can split one
 logical ADX file at sector boundaries and feed its existing joint reader. Native
 flow admission is explicitly bounded, without claiming SDK prefetch-batch timing.
+
+### ADX compressed-input policy
+
+The loader now has an opt-in ADX input policy alongside its existing byte-flow
+control. `loader_set_reload_sectors` sets a threshold in2048-byte sectors;
+`loader_set_reload_time` derives that threshold from seconds, source channels and
+sample rate; `loader_set_reload_default` selects the baseline85%of whole input
+capacity sectors. Existing initialization retains its generic80%byte-flow default.
+The ADX policy needs capacity of1..32767whole sectors and rejects out-of-range
+sector arguments. Time settings clamp to capacity; invalid formats/NaN/Inf/negative
+times leave state unchanged.
+
+Time conversion follows binary32 rate*seconds, truncation to samples, whole32-frame
+ADX blocks,18bytes/channel, then whole sectors. Thus one second of44100Hz stereo
+selects24sectors, not the25sector approximation in the old manual's example.
+Sub-sector settings can produce zero. In ADX mode, zero blocks new sector requests;
+`loader_set_flow(0)` explicitly restores the legacy unlimited byte-flow mode.
+Changing the threshold never cancels an active sector request.
+
+`loader_get_buffer_info` reports queued/borrowed DATA separately, whole queued
+sectors, nominal queued ADX seconds and safety at or above the current threshold.
+ADX refill admission compares queued DATA only; generic byte-flow still includes
+DATA borrowed by the decoder. Whole ADX groups determine time, so a partial group
+adds no time. Queued headers/footers are counted as bytes: this is an input reserve
+estimate, not proof that those bytes decode successfully, not buffered PCM duration
+and not an audible clock. Supply the admitted ADX source rate/channels, independent
+of output pitch. `loader_get_input_joint` returns identity without transferring
+ownership or relaxing the existing loader/reader serialization requirements.
+
+These controls and snapshots run on the serialized producer owner, before binding
+or within its feed callback. Calling them concurrently from the player controller
+is unsupported. No global server, implicit timer, transport cancellation or Audio
+retirement claim is introduced. Per-handle/global servicing and source-independent
+player exposure remain separately tracked H7 work.
+### Player diagnostic reporting
+
+`player_get_error` returns the first operational failure observed since init or
+`player_clear_error`, with native errno, decoder status and player state captured
+at observation. A zero code means no diagnostic is latched. Query and clear are
+independent of the safety records in `player_get_info`: clearing a diagnostic
+preserves `first_error`, `stop_error`, failed/stopping state and all resource
+ownership. A failed player still needs checked stop. Bad arguments, normal input
+waiting, short output supplied as silence and requested cancellation are not
+reported as new operational faults. An unsuccessful initial constructor still
+reports through its return value and errno; it has no initialized handle to query.
+
+A per-player typed hook can be installed with `player_set_error_callback`.
+Call `player_dispatch_error` from the serialized owner after polling or cleanup;
+it returns one after delivery and zero when no callback or pending record exists.
+No application error hook runs inside sound callbacks or the producer fiber.
+Delivery preserves errno, occurs once per latched record and leaves the record
+queryable. Installing a hook after a fault permits pending delivery; replacing
+it after delivery does not rearm the record. Unregistering preserves the pending
+record, while clearing discards it. The hook may copy its temporary snapshot but
+must not retain the pointer, reenter player calls, block/yield or change FPU modes.
+A later failure observation can latch again, including a failed stop retry.
+
+These are native per-handle diagnostics with explicit dispatch, not CRI's global
+text callback or numeric error-code ABI. Automatic stop/replay, SDK detection
+thresholds and qualified output recovery remain tracked separately. Rebuild all
+consumers for the extended implementation-owned player state.
+### Owned filename sources
+
+`<kosdec/adx_named_file.h>` adds a private `O_RDONLY` filename source over the
+existing synchronous VFS reader. Open does not validate codec content; the first
+decode does. It optionally uses the same caller-supplied 512..32768-byte compressed
+cache. No extra PCM predecode, global file table or asynchronous I/O is introduced.
+
+Initialize a handle and stream pointer to NULL, then call `named_file_open` and
+`named_file_borrow`. Pass the borrowed stream to the existing decoder, service or
+player. The single loan prevents `named_file_close` while that source is owned.
+After successful player release/cancel/stop has **joined the producer**, call
+`named_file_return`, then `named_file_close`. Return records the caller's completed
+join; it cannot discover unreported users. EOF, decoder cancellation and drained
+PCM do not return the loan. A failed join leaves the loan and file alive for retry.
+The source can be borrowed again after return with its decoder state preserved.
+
+Control calls belong to the creating ordinary IRQ-enabled KOS thread, outside
+shared fiber carriers, hooks and incompatible locks. The serialized source reader
+may run on the player's producer. The descriptor stays private and is never
+exported, duplicated or retried. Keep the source/mount/media stable; no filesystem
+shutdown, descriptor-table drain or forced wait interruption is permitted during
+its lifetime. Only synchronous backends that retire their state on close failure
+are supported. See the public header for the complete restricted contract.
+
+Close returns -1 on a precondition/busy rejection, retaining ownership and outputs.
+An admitted close returns 0, clears the handle, and reports any backend cleanup
+errno separately. A cleanup error cannot be retried: the descriptor slot was
+consumed and may already be reused. Constructor failure preserves its primary
+errno and separately reports cleanup failure, leaving the output handle NULL.
+This is native file ownership, not CRI ABI compatibility or completion of F1:
+global close/reset, directory resolution and full service/reload policy remain.
+
+The fault suite covers allocation/open/extent failures, constructor unwind,
+wrong owner/IRQ state, outstanding loans, EOF, reborrow, close callback reentry,
+backend errors and immediate descriptor reuse. The existing file-player matrix
+also runs through named sources, including PCM comparisons, loop/sequence/seek,
+I/O failure, cancellation and a failed producer join. Host models establish
+adapter sequencing; actual VFS wrapper tests and target links remain distinct
+from emulator playback or hardware/device-retirement qualification.

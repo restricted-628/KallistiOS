@@ -137,7 +137,11 @@ int snd_stream_update(snd_stream_hnd_t h,const snd_stream_config_t *c,uint32_t f
 }
 int snd_stream_stop_ex(snd_stream_hnd_t h,uint32_t timeout) {
     (void)h;assert(timeout);++mock_stops;
-    if(mock_failure==MOCK_STOP)return error();stopped=true;mock_async_error=0;return 0;
+    if(mock_failure==MOCK_STOP)
+        return error();
+    stopped=true;
+    mock_async_error=0;
+    return 0;
 }
 int snd_stream_get_status(snd_stream_hnd_t h,snd_stream_status_t *status) {
     (void)h;if(mock_status_failure){errno=EPIPE;return -1;}
