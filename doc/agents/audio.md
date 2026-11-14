@@ -73,6 +73,9 @@ Host test directories with inspected Makefile targets:
 
 - `utils/aica-command-test` — candidate `make -C utils/aica-command-test test` in an assigned checkout.
 - `utils/snd-dsp-test` — candidate `make -C utils/snd-dsp-test test` in an assigned checkout.
+- `utils/sound-music-test` — resident engine/bank and explicit four-layer cases;
+  `make test sanitize layer-test layer-sanitize`. Shared lookup budget, no-self-steal
+  and partial cancellation/failure are host evidence, not physical retirement.
 - `utils/sound-music-live-test` — actual firmware backend/guards/clock and explicit
   host owner; `make test sanitize host-test host-sanitize`. Fake MMIO/transport
   is distinct from target execution; retained leases are not physical retirement.
@@ -91,6 +94,8 @@ Target/example directories (source the assigned checkout's environment and inspe
 
 - `examples/dreamcast/sound/spu-lifetime`
 - `examples/dreamcast/sound/port-reservation` — software ownership only; no playback.
+- `examples/dreamcast/sound/music-layers` — original four-layer fixture with
+  coherent sample-address snapshots, sustain/release and retained ownership.
 - `examples/dreamcast/sound/music-live` — original explicit MIDI fixture; retains
   played bank and pool after logical quiesce, then remains alive.
 - `examples/dreamcast/sound/sequence-resources` — original ASQ publication, query,

@@ -37,7 +37,7 @@ static void stop(void *ctx,unsigned voice,int release) {
 static void init(unsigned zones) {
     /* Fresh simulated device, not a live adapter reset. The actual registry's
        ACTIVE record is supplied here; registration validation has its own suite. */
-    CHECK(!program_refs);starts=stops=0;memset(image,0,sizeof(image));
+    CHECK(!program_refs);starts=stops=0;memset(image,0,sizeof(image));image[8]=1;
     registry=(aica_bank_registry_t){.header=&header,.records=records,.map=map};
     aica_bank_registry_init(&registry);header.session=1;
     records[0]=(aica_bank_record_t){.session=1,.generation=1,.state=AICA_BANK_ACTIVE,

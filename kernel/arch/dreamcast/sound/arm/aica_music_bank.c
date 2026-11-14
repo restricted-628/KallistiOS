@@ -24,10 +24,10 @@ static int same(const aica_music_event_t *a,const aica_music_event_t *b) {
 }
 int aica_music_bank_resolve(void *context,const aica_music_event_t *e,
                             unsigned bank,unsigned program,unsigned drum,
-                            aica_music_tone_t *out) {
+                            aica_music_tone_t *out,unsigned *zone_budget) {
     aica_music_bank_t *b=context;volatile aica_bank_record_t *r;
-    const uint8_t *image;unsigned budget;
-    if(!b || !b->registry || !b->registry->map || !e || !out ||
+    const uint8_t *image,*selected=NULL;unsigned budget,version;int result=0;
+    if(!b || !b->registry || !b->registry->map || !e || !out || !zone_budget ||
        e->bank>=AICA_BANK_SLOTS || !e->bank_generation || bank>127 ||
        program>127 || drum>1 || e->a>127 || !e->b || e->b>127)
         return AICA_MUSIC_INVALID;
@@ -36,7 +36,8 @@ int aica_music_bank_resolve(void *context,const aica_music_event_t *e,
     if(!b->pinned) {
         if(!aica_bank_registry_pin(b->registry,b->session,e->bank,e->bank_generation,2))
             return AICA_MUSIC_MISSING;
-        b->pinned=1;b->pending=*e;b->cursor=0;
+        b->pinned=1;b->pending=*e;b->cursor=0;b->next_layer=0;
+        clear(b->layers,sizeof(b->layers));
         b->bank=(uint8_t)bank;b->program=(uint8_t)program;b->drum=(uint8_t)drum;
     }
     r=&b->registry->records[e->bank];
@@ -45,11 +46,35 @@ int aica_music_bank_resolve(void *context,const aica_music_event_t *e,
         return AICA_MUSIC_FAULT;
     image=b->registry->map(r->image_base,r->image_bytes);
     if(!image) return AICA_MUSIC_MISSING;
-    for(budget=0;budget<AICA_MUSIC_ZONE_BUDGET && b->cursor<r->zone_count;budget++) {
-        const uint8_t *z=image+64+(r->sample_count+b->cursor++)*32,*s;
-        aica_channel_config_t *c;int fine;
+    version=le16(image+8);
+    if(version!=1 && version!=2) return AICA_MUSIC_INVALID;
+    for(budget=0;budget<AICA_MUSIC_ZONE_BUDGET && *zone_budget &&
+        b->cursor<r->zone_count;budget++) {
+        const uint8_t *z=image+64+(r->sample_count+b->cursor++)*32;
+        --*zone_budget;
         if(z[4]!=bank || z[5]!=program || z[6]!=drum || e->a<z[7] ||
            e->a>z[8] || e->b<z[9] || e->b>z[10]) continue;
+        if(version==1) { selected=z;break; }
+        /* The admission contract already rejects same-layer ambiguity. */
+        if(z[25]>3) return AICA_MUSIC_INVALID;
+        if(!b->layers[z[25]]) b->layers[z[25]]=(uint16_t)b->cursor;
+    }
+    if(!selected) {
+        if(b->cursor<r->zone_count) return AICA_MUSIC_RETRY;
+        if(version==1) return AICA_MUSIC_MISSING;
+        while(b->next_layer<4 && !b->layers[b->next_layer]) ++b->next_layer;
+        if(b->next_layer==4) return AICA_MUSIC_MISSING;
+        /* Decoding a cached selection is another zone-record visit. Do not
+           exceed the shared budget when the scan consumed its final unit. */
+        if(!*zone_budget) return AICA_MUSIC_RETRY;
+        --*zone_budget;
+        selected=image+64+(r->sample_count+b->layers[b->next_layer++]-1u)*32;
+        while(b->next_layer<4 && !b->layers[b->next_layer]) ++b->next_layer;
+        result=b->next_layer<4?AICA_MUSIC_MORE:AICA_MUSIC_FINAL;
+    }
+    {
+        const uint8_t *z=selected,*s;
+        aica_channel_config_t *c;int fine;
         /* Registry validated all offsets/counts. Its producer pin keeps this
            generation immutable until a voice lease exists or lookup cancels. */
         s=image+64+le32(z)*32;
@@ -62,10 +87,10 @@ int aica_music_bank_resolve(void *context,const aica_music_event_t *e,
         c->vol=z[14];c->pan=z[15];c->attack_rate=z[16];c->decay1_rate=z[17];
         c->decay2_rate=z[18];c->release_rate=z[19];c->decay_level=z[20];
         c->key_rate_scaling=z[21];c->direct_level=z[22];
-        c->effect_channel=z[23];c->effect_send=z[24];return 0;
+        c->effect_channel=z[23];c->effect_send=z[24];return result;
     }
-    return b->cursor<r->zone_count?AICA_MUSIC_RETRY:AICA_MUSIC_MISSING;
 }
+
 int aica_music_bank_retain(void *context,unsigned voice,const aica_music_tone_t *tone) {
     aica_music_bank_t *b=context;uint32_t mask;
     if(!b || !tone || voice>=AICA_MUSIC_VOICES || tone->bank>=AICA_BANK_SLOTS ||

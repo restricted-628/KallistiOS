@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <dc/sound/aica_completion.h>
 #define AICA_DRIVER_FEATURE_BANK_REGISTRY 0x40u
+#define AICA_DRIVER_FEATURE_BANK_LAYERS 0x400u
 #define AICA_BANK_LAYOUT_VERSION 1u
 #define AICA_CMD_BANK_REGISTER 0x0bu
 #define AICA_CMD_BANK_UNREGISTER 0x0cu

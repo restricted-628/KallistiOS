@@ -55,7 +55,7 @@ static int command(unsigned op,unsigned p,uint32_t g,uint32_t a,uint32_t b,uint3
 }
 static void init_zones(unsigned zone_count) {
     /* A fresh simulated device per case; real registration is tested separately. */
-    starts=stops=cookie=mcookie=tick=0;memset(image,0,sizeof(image));
+    starts=stops=cookie=mcookie=tick=0;memset(image,0,sizeof(image));image[8]=1;
     registry=(aica_bank_registry_t){.header=&header,.records=records,.map=map};
     aica_bank_registry_init(&registry);header.session=1;
     records[0]=(aica_bank_record_t){.session=1,.generation=1,.state=AICA_BANK_ACTIVE,

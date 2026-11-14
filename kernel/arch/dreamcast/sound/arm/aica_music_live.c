@@ -43,9 +43,9 @@ static int unpin(void *context, uint32_t session, uint32_t bank, uint32_t genera
     return aica_bank_registry_unpin(s->bank.registry,session,bank,generation,AICA_BANK_PIN_PRODUCER);
 }
 static int resolve(void *context, const aica_music_event_t *e, unsigned bank,
-    unsigned program, unsigned drum, aica_music_tone_t *tone) {
+    unsigned program, unsigned drum, aica_music_tone_t *tone,unsigned *zone_budget) {
     aica_music_live_t *s=context;
-    return aica_music_bank_resolve(&s->bank,e,bank,program,drum,tone);
+    return aica_music_bank_resolve(&s->bank,e,bank,program,drum,tone,zone_budget);
 }
 static void cancel(void *context) {
     aica_music_live_t *s=context;aica_music_bank_cancel(&s->bank);

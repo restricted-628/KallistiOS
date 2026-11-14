@@ -41,6 +41,20 @@ static void dirty(aica_music_t *m,unsigned p,int ch) {
         if(m->voices[i].state && m->voices[i].port==p &&
            (ch<0 || m->voices[i].channel==(unsigned)ch)) m->voices[i].dirty=1;
 }
+static void cancel_lookup(aica_music_t *m) {
+    if(m->ops.cancel_resolve) m->ops.cancel_resolve(m->ops.context);
+    m->layer_count=m->layer_bank=m->layer_program=m->layer_drum=m->resolving=0;
+    m->layer_voices[0]=m->layer_voices[1]=0;
+}
+static void cancel_head(aica_music_t *m,unsigned p,uint32_t g,unsigned mask) {
+    if(m->count && m->resolving) {
+        aica_music_event_t *e=&m->queue[m->head];
+        if(e->port==p && e->generation==g && (mask&(1u<<e->channel))) {
+            cancel_lookup(m);m->head=(uint16_t)((m->head+1)%AICA_MUSIC_QUEUE);
+            --m->count;increment(&m->rejected);m->last_result=AICA_MUSIC_INVALID;
+        }
+    }
+}
 static void stop_voice(aica_music_t *m,unsigned i,int release) {
     aica_music_voice_t *v=&m->voices[i];
     if(!v->state) return;
@@ -76,6 +90,7 @@ int aica_music_open(aica_music_t *m,unsigned p,uint32_t bank,uint32_t generation
 int aica_music_close(aica_music_t *m,unsigned p,uint32_t g) {
     aica_music_port_t *v=port(m,p,g);
     if(!v) return AICA_MUSIC_INVALID;
+    if(m->layer_count) cancel_head(m,p,g,65535);
     stop_channel(m,p,-1,0,0);v->open=0;return 0;
 }
 int aica_music_message(aica_music_t *m,unsigned p,uint32_t g,unsigned status,
@@ -97,7 +112,7 @@ int aica_music_silence(aica_music_t *m,unsigned p,uint32_t g,unsigned release) {
     for(read=0;read<m->count;read++) {
         aica_music_event_t *e=&m->queue[(m->head+read)%AICA_MUSIC_QUEUE];
         if(e->port==p && e->generation==g && (e->status==0x80 || e->status==0x90)) {
-            if(!read && m->ops.cancel_resolve) m->ops.cancel_resolve(m->ops.context);
+            if(!read) cancel_lookup(m);
         }
         else m->queue[(m->head+kept++)%AICA_MUSIC_QUEUE]=*e;
     }
@@ -106,6 +121,7 @@ int aica_music_silence(aica_music_t *m,unsigned p,uint32_t g,unsigned release) {
 int aica_music_mute(aica_music_t *m,unsigned p,uint32_t g,unsigned mask) {
     aica_music_port_t *v=port(m,p,g);unsigned ch;
     if(!v || mask>65535) return AICA_MUSIC_INVALID;
+    if(m->layer_count) cancel_head(m,p,g,mask);
     v->mute=(uint16_t)mask;
     for(ch=0;ch<16;ch++) if(mask&(1u<<ch)) stop_channel(m,p,(int)ch,0,0);
     return 0;
@@ -163,6 +179,7 @@ static int choose(aica_music_t *m,unsigned incoming) {
     unsigned i;int selected=-1;
     for(i=0;i<m->voice_count;i++) {
         aica_music_voice_t *v=&m->voices[i],*best;
+        if(m->layer_voices[i/32]&(1u<<(i%32))) continue;
         if(!v->state) return (int)i;
         if(incoming && v->priority>incoming) continue;
         if(selected<0) { selected=(int)i;continue; }
@@ -225,9 +242,14 @@ static void controller(aica_music_t *m,const aica_music_event_t *e) {
     }
     dirty(m,e->port,e->channel);
 }
-static int event(aica_music_t *m,const aica_music_event_t *e) {
+static int layer_failure(aica_music_t *m,int layered,int result) {
+    if(layered) { m->faulted=1;
+        if(result==AICA_MUSIC_RETRY) result=AICA_MUSIC_FAULT; }
+    return result;
+}
+static int event(aica_music_t *m,const aica_music_event_t *e,unsigned *zone_budget) {
     aica_music_port_t *p=port(m,e->port,e->generation);
-    aica_music_channel_t *c;unsigned i;int rc,index;
+    aica_music_channel_t *c;unsigned i,bank,program,drum;int rc,index,layered,more;
     aica_music_tone_t tone;aica_music_voice_t next;aica_channel_config_t output;
     if(!p || p->bank!=e->bank || p->bank_generation!=e->bank_generation) return AICA_MUSIC_INVALID;
     c=&p->channels[e->channel];
@@ -236,27 +258,47 @@ static int event(aica_music_t *m,const aica_music_event_t *e) {
         case 0x90:
             if(!e->b) { note_off(m,e);return 0; }
             if(p->mute&(1u<<e->channel)) return 0;
-            rc=m->ops.resolve(m->ops.context,e,c->bank,c->program,p->gm && e->channel==9,&tone);
-            if(rc) return rc;
+            if(!*zone_budget) return AICA_MUSIC_RETRY;
+            bank=m->layer_count?m->layer_bank:c->bank;
+            program=m->layer_count?m->layer_program:c->program;
+            drum=m->layer_count?m->layer_drum:(unsigned)(p->gm && e->channel==9);
+            m->resolving=1;
+            rc=m->ops.resolve(m->ops.context,e,bank,program,drum,&tone,zone_budget);
+            if(rc==AICA_MUSIC_RETRY) return rc;
+            layered=m->layer_count || rc==AICA_MUSIC_MORE || rc==AICA_MUSIC_FINAL;
+            if(rc!=0 && rc!=AICA_MUSIC_MORE && rc!=AICA_MUSIC_FINAL)
+                return layer_failure(m,layered,rc<0?rc:AICA_MUSIC_INVALID);
+            if((m->layer_count && !rc) || (m->layer_count>=3 && rc==AICA_MUSIC_MORE))
+                return layer_failure(m,1,AICA_MUSIC_INVALID);
+            more=rc==AICA_MUSIC_MORE;
             if(tone.bank!=e->bank || tone.generation!=e->bank_generation ||
                tone.root_key>127 || tone.fine_cents < -100 || tone.fine_cents>100 ||
                tone.reserved || !tone.config.freq || tone.config.freq>192000)
-                return AICA_MUSIC_INVALID;
+                return layer_failure(m,layered,AICA_MUSIC_INVALID);
+            if(more) {
+                if(!m->layer_count) { m->layer_bank=(uint8_t)bank;
+                    m->layer_program=(uint8_t)program;m->layer_drum=(uint8_t)drum; }
+                ++m->layer_count;
+            }
             index=choose(m,e->priority);
-            if(index<0) { increment(&m->declined);return 0; }
-            if(m->token==UINT32_MAX) return AICA_MUSIC_EXHAUSTED;
+            if(index<0) { increment(&m->declined);
+                return more?AICA_MUSIC_RETRY:layered?AICA_MUSIC_FINAL:0; }
+            if(m->token==UINT32_MAX) return layer_failure(m,layered,AICA_MUSIC_EXHAUSTED);
             i=(unsigned)index;
             clear(&next,sizeof(next));next.tone=tone;next.token=m->token+1;
             next.port_generation=e->generation;next.state=AICA_MUSIC_HELD;
             next.port=e->port;next.channel=e->channel;next.key=e->a;
             next.velocity=e->b;next.priority=e->priority;config(m,&next,&output);
-            rc=m->ops.retain(m->ops.context,i,&tone);if(rc) return rc;
+            rc=m->ops.retain(m->ops.context,i,&tone);
+            if(rc) return layer_failure(m,layered,rc<0?rc:AICA_MUSIC_INVALID);
             /* A failing start still owns its physical lease. No logical success
                or release follows from an uncertain hardware callback. */
             ++m->token;rc=m->ops.start(m->ops.context,i,next.token,&output);
             if(rc) { m->faulted=1;m->fault_voice=(uint8_t)(i+1);return AICA_MUSIC_FAULT; }
             if(m->voices[i].state) increment(&m->stolen);
-            m->voices[i]=next;return 0;
+            m->voices[i]=next;
+            if(more) m->layer_voices[i/32]|=1u<<(i%32);
+            return more?AICA_MUSIC_RETRY:layered?AICA_MUSIC_FINAL:0;
         case 0xb0:controller(m,e);return 0;
         case 0xc0:c->program=e->a;return 0;
         case 0xe0:c->bend=(int16_t)(((int)e->b<<7)+(int)e->a-8192);dirty(m,e->port,e->channel);return 0;
@@ -265,7 +307,7 @@ static int event(aica_music_t *m,const aica_music_event_t *e) {
     }
 }
 unsigned aica_music_service(aica_music_t *m,uint32_t elapsed) {
-    unsigned p,f,i,processed=0,changed=0;
+    unsigned p,f,i,processed=0,changed=0,zone_budget=32;
     if(!m || m->faulted) return 0;
     m->tick+=elapsed; /* Informational modulo clock, never an identity. */
     for(p=0;p<8;p++) if(m->ports[p].open) for(f=0;f<3;f++) {
@@ -281,13 +323,14 @@ unsigned aica_music_service(aica_music_t *m,uint32_t elapsed) {
         v->age=elapsed>UINT32_MAX-v->age?UINT32_MAX:v->age+elapsed;
     }
     while(processed<AICA_MUSIC_EVENTS_PER_PASS && m->count) {
-        int rc=event(m,&m->queue[m->head]);
+        int rc=event(m,&m->queue[m->head],&zone_budget),final=rc==AICA_MUSIC_FINAL;
         if(rc==AICA_MUSIC_RETRY) break;
+        if(final) rc=0;
         m->last_result=rc;
-        if(m->ops.cancel_resolve) m->ops.cancel_resolve(m->ops.context);
+        cancel_lookup(m);
         if(rc) increment(&m->rejected);else increment(&m->applied);
         m->head=(uint16_t)((m->head+1)%AICA_MUSIC_QUEUE);--m->count;++processed;
-        if(m->faulted) break;
+        if(m->faulted || final) break;
     }
     if(m->faulted) return processed;
     for(i=0;i<AICA_MUSIC_VOICE_BUDGET && i<m->voice_count;i++) {
@@ -315,5 +358,5 @@ void aica_music_quiesce(aica_music_t *m) {
     if(m->fault_voice) {
         m->ops.stop(m->ops.context,(unsigned)m->fault_voice-1,0);m->fault_voice=0;
     }
-    if(m->ops.cancel_resolve) m->ops.cancel_resolve(m->ops.context);
+    cancel_lookup(m);
 }

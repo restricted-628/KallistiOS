@@ -115,8 +115,9 @@ bank/program/drum and key/velocity combination. Layers may use different samples
 tuning, envelope and routing fields. The authoring tool and native parser retain
 all four identities. This does not establish simultaneous hardware onset.
 
-Current ARM bank registration accepts version 1 only. It rejects a version 2
-image without publishing an active generation; the host must observe the exact
-rejection before releasing its provisional allocation. A successful host parse
-or PCM upload is not playable layered-bank support. Live layered resolver/voice
-integration and capability negotiation are a separate implementation checkpoint.
+Layered registration requires firmware capability `AICA_DRIVER_FEATURE_BANK_LAYERS`
+(0x400) as well as the resident registry. The host owner rejects version 2 before
+allocation when this feature is absent. Older firmware still rejects version 2;
+there is no single-layer fallback. The current resolver admits at most one matching
+zone per layer in ascending layer order; layer starts can span service passes.
+Authoring/registration alone does not establish audio quality or physical retirement.

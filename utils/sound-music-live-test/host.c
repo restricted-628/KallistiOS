@@ -62,7 +62,7 @@ static void setup(void) {
     br[0].image_base=0x30000;br[0].image_bytes=sizeof(image);br[0].sample_count=br[0].zone_count=1;
     /* Original tiny immutable PCM16 zone. Registry admission is tested elsewhere;
        these records represent an already admitted bank for the resolver path. */
-    image[64]=128;image[72]=16;image[76]=0x22;image[77]=0x56;image[88]=2;
+    image[8]=1;image[64]=128;image[72]=16;image[76]=0x22;image[77]=0x56;image[88]=2;
     image[96+8]=127;image[96+9]=1;image[96+10]=127;image[96+11]=60;
     image[96+14]=255;image[96+15]=128;image[96+22]=15;
 }

@@ -20,3 +20,14 @@ bank-test: $(BANK_SOURCES) $(BANK_HEADERS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(BANK_SOURCES) -o $@
 bank-sanitize: $(BANK_SOURCES) $(BANK_HEADERS)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(BANK_SOURCES) -o $@
+
+LAYER_SOURCES = layers.c $(ARM)/aica_music.c $(ARM)/aica_music_bank.c $(ARM)/aica_bank_registry.c
+.PHONY: layer-test layer-sanitize
+layer-test: layers-test
+	./layers-test
+layer-sanitize: layers-sanitize
+	./layers-sanitize
+layers-test: $(LAYER_SOURCES) $(BANK_HEADERS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LAYER_SOURCES) -o $@
+layers-sanitize: $(LAYER_SOURCES) $(BANK_HEADERS)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(LAYER_SOURCES) -o $@

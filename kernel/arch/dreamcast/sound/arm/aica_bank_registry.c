@@ -44,7 +44,7 @@ static int header(const uint8_t *p,uint32_t size,uint32_t *ns,uint32_t *nz) {
     static const uint8_t magic[8]={'K','O','S','A','B','K',0,0};
     uint32_t i,po;
     for(i=0;i<8;++i) if(p[i]!=magic[i]) return 0;
-    if(u16(p+8)!=1 || u16(p+10)!=64 || u32(p+12)!=size ||
+    if((u16(p+8)!=1 && u16(p+8)!=2) || u16(p+10)!=64 || u32(p+12)!=size ||
        u32(p+44) || !zero(p+48,16)) return 0;
     *ns=u32(p+16);*nz=u32(p+20);
     if(!*ns || *ns>256 || !*nz || *nz>1024) return 0;
@@ -106,10 +106,10 @@ static int sample(aica_bank_registry_t *b,unsigned slot,const uint8_t *image) {
     if(next>b->bytes[slot] || !zero(image+off+bytes,(unsigned)(next-off-bytes))) return 0;
     b->end[slot]=next;return 1;
 }
-static int zone(const uint8_t *p,uint32_t ns) {
+static int zone(const uint8_t *p,uint32_t ns,unsigned version) {
     uint32_t i;int fine=(int)u16(p+12);
     if(fine>=32768) fine-=65536;
-    if(u32(p)>=ns || !zero(p+25,7) || p[4]>127 || p[5]>127 || p[6]>1 ||
+    if(u32(p)>=ns || (version==1 ? !zero(p+25,7) : p[25]>3 || !zero(p+26,6)) || p[4]>127 || p[5]>127 || p[6]>1 ||
        p[7]>p[8] || p[8]>127 || !p[9] || p[9]>p[10] || p[10]>127 ||
        p[11]>127 || fine < -100 || fine > 100) return 0;
     for(i=16;i<=20;++i) if(p[i]>31) return 0;
@@ -137,7 +137,7 @@ unsigned aica_bank_registry_service(aica_bank_registry_t *b) {
             }
         }
         else valid=image && (b->cursor[slot]<=b->samples[slot] ? sample(b,slot,image) :
-            zone(image+64+(b->cursor[slot]-1)*32,b->samples[slot]));
+            zone(image+64+(b->cursor[slot]-1)*32,b->samples[slot],u16(image+8)));
         ++b->cursor[slot];
         if(valid && b->cursor[slot]==b->samples[slot]+1)
             valid=b->end[slot]==b->bytes[slot];

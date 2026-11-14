@@ -10,7 +10,9 @@ static aica_music_wire_t wire;
 static aica_music_receipt_t receipt;
 static aica_music_client_t client;
 #define CHECK(x) do { ++checks;if(!(x)) { fprintf(stderr,"line%d: %s\n",__LINE__,#x);abort(); } } while(0)
-static int resolve(void *ctx,const aica_music_event_t *e,unsigned bank,unsigned program,unsigned drum,aica_music_tone_t *tone) {
+static int resolve(void *ctx,const aica_music_event_t *e,unsigned bank,unsigned program,unsigned drum,aica_music_tone_t *tone,unsigned *zone_budget) {
+    if(!*zone_budget) return AICA_MUSIC_RETRY;
+    --*zone_budget;
     (void)ctx;(void)bank;(void)program;(void)drum;
     *tone=(aica_music_tone_t){.bank=e->bank,.generation=e->bank_generation,.root_key=60,
         .config={.base=0x31000,.length=16,.loopend=16,.freq=22050,.vol=255,.pan=128,.direct_level=15}};return 0;

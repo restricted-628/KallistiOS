@@ -180,6 +180,11 @@ int abk_bank_stage(abk_bank_t *b,unsigned slot,const void *data,uint32_t size,
     if(b->state!=ABKB_EMPTY) return leave(fail(b,EALREADY));
     if(quiescing || owners[slot]) return leave(fail(b,EBUSY));
     if(available(b)<0) return leave(-1);
+    /* Only inspect the version after its byte span is known readable. Full
+       magic/CRC/semantic validation still precedes allocation in the uploader. */
+    if(size>=10 && ((const uint8_t *)data)[8]==2 && !((const uint8_t *)data)[9] &&
+       !(snd_iface_observation_features()&AICA_DRIVER_FEATURE_BANK_LAYERS))
+        return leave(fail(b,ENOTSUP));
     owners[slot]=b;b->slot=slot;b->state=ABKB_STAGING;
     rc=abk_upload_begin_image(&b->staging,data,size,samples,sample_capacity,
                               zones,zone_capacity,chunk_limit,lifetime_ms);

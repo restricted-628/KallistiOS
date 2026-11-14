@@ -46,9 +46,14 @@ static void init(void) {
     CHECK(records[0].state==AICA_BANK_ACTIVE);
     aica_music_bank_init(&adapter,&registry,1);maps=0;
 }
+static int bounded_resolve(void *ctx,const aica_music_event_t *e,unsigned bank,
+                           unsigned program,unsigned drum,aica_music_tone_t *out) {
+    unsigned budget=32;
+    return aica_music_bank_resolve(ctx,e,bank,program,drum,out,&budget);
+}
 static void lookup(unsigned bank,unsigned program) {
     int result;unsigned calls=0;
-    do { result=aica_music_bank_resolve(&adapter,&event,bank,program,0,&tone);++calls;
+    do { result=bounded_resolve(&adapter,&event,bank,program,0,&tone);++calls;
         CHECK(calls<=32 && records[0].producer_refs==1);
     } while(result==AICA_MUSIC_RETRY);
     CHECK(result==0);
@@ -89,11 +94,11 @@ static void integration(void) {
 int main(void) {
     init();
     for(unsigned i=0;i<31;i++) {
-        CHECK(aica_music_bank_resolve(&adapter,&event,7,127,0,&tone)==AICA_MUSIC_RETRY);
+        CHECK(bounded_resolve(&adapter,&event,7,127,0,&tone)==AICA_MUSIC_RETRY);
         CHECK(adapter.cursor==(i+1)*32 && records[0].producer_refs==1);
     }
     command(AICA_CMD_BANK_UNREGISTER,2);CHECK(records[0].result==AICA_BANK_BUSY);
-    CHECK(aica_music_bank_resolve(&adapter,&event,7,127,0,&tone)==0 && maps==32);
+    CHECK(bounded_resolve(&adapter,&event,7,127,0,&tone)==0 && maps==32);
     CHECK(tone.config.base==0x30000+sizeof(image)-32 && tone.config.type==AICA_SM_16BIT);
     CHECK(tone.config.length==16 && tone.config.loopend==16 && !tone.config.loop);
     CHECK(tone.config.attack_rate==31 && tone.config.release_rate==31 && tone.config.direct_level==15);
@@ -104,17 +109,17 @@ int main(void) {
     lookup(7,127);CHECK(aica_music_bank_retain(&adapter,0,&tone)==0 && records[0].voice_refs==2);
     aica_music_bank_cancel(&adapter);
     CHECK(aica_music_bank_retain(&adapter,0,&tone)==AICA_MUSIC_INVALID);
-    CHECK(aica_music_bank_resolve(&adapter,&event,7,127,0,&tone)==AICA_MUSIC_RETRY);
+    CHECK(bounded_resolve(&adapter,&event,7,127,0,&tone)==AICA_MUSIC_RETRY);
     /* Changed GM/program/bank selector restarts under a fresh producer pin. */
-    CHECK(aica_music_bank_resolve(&adapter,&event,0,0,0,&tone)==0 && adapter.cursor==1);
+    CHECK(bounded_resolve(&adapter,&event,0,0,0,&tone)==0 && adapter.cursor==1);
     CHECK(records[0].producer_refs==1);aica_music_bank_cancel(&adapter);
     for(unsigned i=0;i<32;i++) {
-        int r=aica_music_bank_resolve(&adapter,&event,127,127,0,&tone);
+        int r=bounded_resolve(&adapter,&event,127,127,0,&tone);
         CHECK(r==(i<31?AICA_MUSIC_RETRY:AICA_MUSIC_MISSING));
     }
     aica_music_bank_cancel(&adapter);CHECK(!records[0].producer_refs);
     event.bank_generation=2;maps=0;
-    CHECK(aica_music_bank_resolve(&adapter,&event,0,0,0,&tone)==AICA_MUSIC_MISSING && !maps);
+    CHECK(bounded_resolve(&adapter,&event,0,0,0,&tone)==AICA_MUSIC_MISSING && !maps);
     event.bank_generation=1;
     for(unsigned voice=0;voice<64;voice++) {
         lookup(0,0);CHECK(aica_music_bank_retain(&adapter,voice,&tone)==0);
@@ -124,7 +129,7 @@ int main(void) {
     lookup(0,0);records[0].sequence=UINT32_MAX-1;
     aica_music_bank_cancel(&adapter);
     CHECK(records[0].sequence==UINT32_MAX && records[0].producer_refs==1);
-    CHECK(aica_music_bank_resolve(&adapter,&event,0,0,0,&tone)==AICA_MUSIC_MISSING);
+    CHECK(bounded_resolve(&adapter,&event,0,0,0,&tone)==AICA_MUSIC_MISSING);
     integration();
     printf("resident bank: %u checks PASS; adapter bytes=%zu\n",checks,sizeof(adapter));return 0;
 }

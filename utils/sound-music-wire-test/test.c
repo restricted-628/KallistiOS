@@ -11,7 +11,9 @@ static aica_music_receipt_t receipt;
 static uint32_t cookie,g;
 #define CHECK(x) do { ++checks;assert(x); } while(0)
 static int resolve(void *ctx,const aica_music_event_t *e,unsigned bank,unsigned program,
-                   unsigned drum,aica_music_tone_t *t) {
+                   unsigned drum,aica_music_tone_t *t,unsigned *zone_budget) {
+    if(!*zone_budget) return AICA_MUSIC_RETRY;
+    --*zone_budget;
     (void)ctx;(void)bank;(void)program;(void)drum;CHECK(producer_refs);
     *t=(aica_music_tone_t){.bank=e->bank,.generation=e->bank_generation,.root_key=60,
         .config={.base=0x31000,.length=16,.loopend=16,.freq=22050,.vol=255,.pan=128,.direct_level=15}};return 0;

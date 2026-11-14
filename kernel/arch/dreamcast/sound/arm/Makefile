@@ -71,3 +71,6 @@ asq_wire.o: $(ASQ_DIR)/wire.c $(ASQ_DIR)/wire.h $(ASQ_DIR)/catalog.h
 	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@
 asq_live.o: $(ASQ_DIR)/live.c $(ASQ_DIR)/live.h $(ASQ_DIR)/catalog.h $(ASQ_DIR)/asq.h aica_music_sequence.h aica_music_wire.h
 	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@
+
+# Every aggregate user must rebuild when private music state/callbacks change.
+$(FIRMWARE_C_OBJS): aica_music.h aica_music_bank.h aica_music_live.h

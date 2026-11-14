@@ -39,3 +39,22 @@ retirement operation exists. Reinitializing live state to erase references is
 invalid. No delay, key-off bit or logical completion is a sample-memory fence.
 A failed START consumes its token, stops event processing and retains the lease;
 quiesce also requests a stop for that possibly touched physical channel.
+
+## Four-layer native instruments
+
+`make layer-test layer-sanitize` exercises the actual core, ABKv2 resolver and
+registry with original samples. Each music service shares32 zone-record reads
+across all FIFO events. Version2 scans the bank incrementally, then yields up to
+four tones in ascending layer order, at most one layer attempt per service pass.
+The final layer also ends that pass's event processing. Periodic voice visits
+continue during pending lookup/admission. These are work bounds, not deadlines.
+
+After the first tone yield, bank/program/drum selectors remain fixed for that
+note, including declined layers. A note cannot steal its own earlier layers.
+No eligible voice skips one layer and counts a decline; it is not retried.
+Retain failure, invalid callback/tone, token exhaustion or START failure faults
+the layered transaction without replaying a prefix. A token is consumed BEFORE
+START, including a failed START; all uncertain physical leases remain owned.
+Urgent mute/silence/close cancels partial admission; unmute/reopen cannot revive
+that note. Logical note-off/sustain visits all matching voices. No all-or-nothing
+onset, physical retirement or vendor-exact gain/allocation policy is promised.

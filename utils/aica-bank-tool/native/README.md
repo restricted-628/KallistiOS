@@ -134,8 +134,8 @@ references, failed submission/free, lost-session retention, replay after retirem
 metadata corruption and sequence/cookie/generation limits. These tests do not
 execute KOS scheduling, G2, DMA or physical AICA fetches.
 
-The registry harness also feeds an original four-layer version 2 image through
-the actual SH4 parser/uploader/owner and unchanged ARM registry. It requires
-rejection before ACTIVE, no published generation or bank references, and release
-of the provisional allocation only after the exact rejection receipt. That is a
-host simulation of actual code, not target execution or physical retirement.
+Version 2 staging additionally requires capability0x400 before allocation. The
+registry harness verifies missing-capability rejection with no allocation, valid
+v2 publication/retirement without playback, and ARM rejection of invalid layer or
+reserved metadata without publishing a new generation. It executes actual code
+against host model services, not target devices or physical sample retirement.

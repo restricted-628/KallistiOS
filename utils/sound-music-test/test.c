@@ -10,7 +10,9 @@ static aica_channel_config_t outputs[64];
 static aica_music_t m;
 #define CHECK(x) do { ++checks;assert(x); } while(0)
 static int resolve(void *ctx,const aica_music_event_t *e,unsigned bank,unsigned program,
-                   unsigned drum,aica_music_tone_t *out) {
+                   unsigned drum,aica_music_tone_t *out,unsigned *zone_budget) {
+    if(!*zone_budget) return AICA_MUSIC_RETRY;
+    --*zone_budget;
     (void)ctx;++lookups;CHECK(bank<128 && program<128 && drum<=1);
     if(resolving) return AICA_MUSIC_RETRY;
     *out=(aica_music_tone_t){.config={.base=0x31000,.type=0,.length=1000,.freq=22050,.vol=255,.pan=128,.direct_level=15},

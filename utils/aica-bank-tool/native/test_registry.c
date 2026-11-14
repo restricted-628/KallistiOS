@@ -245,19 +245,27 @@ int main(int argc,char **argv) {
     CHECK(argc==3 || argc==4 || argc==5);data=load(argv[1],&n);maximum=load(argv[2],&m);
     if(argc==4 && !strcmp(argv[3],"layers")) {
         abk_bank_t b={0};unsigned before;
-        aica_bank_registry_init(&arm);before=frees;
-        stage(&b,data,n); /* Host accepts v2; unchanged ARM must reject it. */
-        CHECK(zones[0].layer==0 && zones[3].layer==3);
-        CHECK(abk_bank_publish(&b,10)==0);dispatch();
-        CHECK(br[0].state==AICA_BANK_VALIDATING && !br[0].image_base);
-        while(arm.head!=128) CHECK(aica_bank_registry_service(&arm)<=32);
-        CHECK(br[0].state==AICA_BANK_EMPTY && br[0].result==AICA_BANK_BAD_IMAGE);
-        CHECK(!br[0].image_base && !br[0].queued_refs && !br[0].voice_refs && !br[0].producer_refs);
-        CHECK(abk_bank_poll(&b,10)==-1 && b.state==ABKB_FAILED && allocation);
-        CHECK(abk_bank_close(&b,10)==0 && b.state==ABKB_CLOSED);
-        CHECK(!allocation && !request.live && frees==before+1 && allocs==1);
-        CHECK(!br[0].generation); /* Never published a usable bank generation. */
-        printf("ABKv2 unchanged ARM rejection: %u checks PASS; no playback\n",checks);
+        aica_bank_registry_init(&arm);before=allocs;
+        CHECK(abk_bank_stage(&b,0,data,n,samples,256,zones,1024,32,17)==-1 && errno==ENOTSUP);
+        CHECK(b.state==ABKB_EMPTY && allocs==before && !allocation && !request.live && !submits);
+        feature|=AICA_DRIVER_FEATURE_BANK_LAYERS;b=(abk_bank_t){0};
+        stage(&b,data,n);CHECK(zones[0].layer==0 && zones[3].layer==3);publish(&b);
+        CHECK(!br[0].queued_refs && !br[0].voice_refs && !br[0].producer_refs);
+        CHECK(abk_bank_close(&b,10)==0);dispatch();CHECK(abk_bank_poll(&b,10)==0);
+        CHECK(b.state==ABKB_CLOSED && !allocation && !request.live && br[0].generation==1);
+        for(unsigned field=25;field<=26;field++) {
+            b=(abk_bank_t){0};before=frees;stage(&b,data,n);
+            /* Host validation was valid; exercise the ARM's own metadata gate. */
+            ram[0x30000+192+field]=field==25?4:1;
+            CHECK(abk_bank_publish(&b,10)==0);dispatch();
+            while(arm.head!=128) CHECK(aica_bank_registry_service(&arm)<=32);
+            CHECK(br[0].state==AICA_BANK_EMPTY && br[0].result==AICA_BANK_BAD_IMAGE);
+            CHECK(!br[0].image_base && !br[0].queued_refs && !br[0].voice_refs && !br[0].producer_refs);
+            CHECK(abk_bank_poll(&b,10)==-1 && b.state==ABKB_FAILED && allocation);
+            CHECK(abk_bank_close(&b,10)==0 && b.state==ABKB_CLOSED);
+            CHECK(!allocation && !request.live && frees==before+1 && br[0].generation==1);
+        }
+        printf("ABKv2 capability/admission: %u checks PASS; no playback\n",checks);
         free(data);free(maximum);return 0;
     }
     if(argc==5) {

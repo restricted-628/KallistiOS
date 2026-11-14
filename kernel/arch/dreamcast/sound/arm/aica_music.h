@@ -10,6 +10,8 @@
 #define AICA_MUSIC_EVENTS_PER_PASS 4u
 #define AICA_MUSIC_VOICE_BUDGET 16u
 #define AICA_MUSIC_OK 0
+#define AICA_MUSIC_MORE 1
+#define AICA_MUSIC_FINAL 2
 #define AICA_MUSIC_INVALID -1
 #define AICA_MUSIC_BUSY -2
 #define AICA_MUSIC_MISSING -3
@@ -63,9 +65,13 @@ typedef struct {
     /* One call may do bounded incremental lookup and return RETRY. The event
        stays at the queue head until it finishes or is invalidated. Immediate
        controls may change selectors; the resolver must restart that lookup.
+       zone_budget starts at32 once per service pass; each examined zone consumes
+       one unit across ALL callbacks in that pass. RETRY has no tone. Return0
+       yields a final v1 tone; MORE/FINAL yield continued/final v2 tones. Cursor
+       advances once on yield; retain/START failure never retries that tone.
        No returned pointer may outlive an immutable registered bank. */
     int (*resolve)(void *,const aica_music_event_t *,unsigned bank,unsigned program,
-                   unsigned drum,aica_music_tone_t *);
+                   unsigned drum,aica_music_tone_t *,unsigned *zone_budget);
     /* Establish an idempotent retained channel/bank lease before any hardware
        START. Logical retirement never releases that physical-lifetime lease. */
     void (*cancel_resolve)(void *);
@@ -86,7 +92,9 @@ typedef struct {
     int32_t last_result;
     uint16_t head, count;
     uint8_t voice_count, voice_cursor, quiescing, faulted;
-    uint8_t fault_voice, reserved[3];
+    uint8_t fault_voice, layer_count, layer_bank, layer_program;
+    uint8_t layer_drum, resolving, reserved[2];
+    uint32_t layer_voices[2];
 } aica_music_t;
 /* All operations are serialized by the single ARM owner. No allocation/MMIO
    outside the supplied callbacks. Pool entries are already exclusively owned.
@@ -108,7 +116,9 @@ int aica_music_release_mode(aica_music_t *,unsigned port,uint32_t generation,uns
 int aica_music_parameter(aica_music_t *,unsigned port,uint32_t generation,
                          unsigned parameter,int value,uint32_t fade_ms);
 int aica_music_reset(aica_music_t *,unsigned port,uint32_t generation);
-/* Up to4 events and16 periodic hardware visits; controls scan at most64 voices. Resolver must itself bound each lookup step.
+/* Up to4 terminal events,32 zone-record reads shared across all lookups, and16
+   periodic hardware visits; controls scan at most64 voices. V2 yields attempt
+   at mostone layer per pass, including the final layer. Resolver obeys budget.
    elapsed_ms is real elapsed time, not a request to replay every missed tick. */
 unsigned aica_music_service(aica_music_t *,uint32_t elapsed_ms);
 void aica_music_quiesce(aica_music_t *);
