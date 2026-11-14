@@ -1,6 +1,7 @@
 /* Independent framing and lifetime policy for incremental ADX decoding. */
 #include <kosdec/adx.h>
 #include "adx_math.h"
+#include "adx_filter.h"
 #include <string.h>
 #define ADX_MAGIC UINT32_C(0x41445846)
 static uint32_t be16(const uint8_t *p) { return (uint32_t)p[0] * 256u + p[1]; }
@@ -16,6 +17,15 @@ void kosdec_adx_init(struct kosdec_adx_decoder *d) {
 void kosdec_adx_cancel(struct kosdec_adx_decoder *d) {
     if(d && d->magic == ADX_MAGIC && !d->terminal)
         d->terminal = KOSDEC_ADX_CANCELLED;
+}
+enum kosdec_adx_status kosdec_adx_set_filter(struct kosdec_adx_decoder *d,
+                                          kosdec_adx_pcm_filter filter, void *context) {
+    if(!d || d->magic != ADX_MAGIC) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(d->terminal) return d->terminal == KOSDEC_ADX_DONE ?
+        KOSDEC_ADX_BAD_ARGUMENT : d->terminal;
+    d->filter = filter;
+    d->filter_context = filter ? context : NULL;
+    return KOSDEC_ADX_DONE;
 }
 static enum kosdec_adx_status header(struct kosdec_adx_decoder *d) {
     const uint8_t *h = d->header;
@@ -133,6 +143,7 @@ struct kosdec_adx_result kosdec_adx_decode(struct kosdec_adx_decoder *d,
         d->frames_done += (uint32_t)frames;
         d->block_used = 0;
         r.frames = frames;
+        media_adx_filter_pcm(d->filter, d->filter_context, d->channels, output, frames);
         r.status = KOSDEC_ADX_MORE;
         return r;
     }

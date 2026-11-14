@@ -31,6 +31,8 @@ enum kosdec_adx_status kosdec_adx_pipe_init(struct kosdec_adx_pipe *,
     int16_t *pcm, size_t samples, size_t capacity);
 /* One producer, one consumer may run concurrently. Pump is producer-only:
    at most one bounded source read, one32-frame decode and two PCM copies.
+   Any configured source PCM filter runs on this producer before publication;
+   its work contributes to the pump budget. Consumer reads never invoke it.
    Requires at least1 free frame; source output is capped to min(free,32). A
    pending stream seek advances without publishing discarded PCM. NEED_OUTPUT
    means no source advance; NEED_INPUT means retry later. No waiting/spinning.

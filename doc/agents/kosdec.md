@@ -95,3 +95,13 @@ predictor and regenerate/check setup certificates and independent PCM oracles wh
 changing this domain. Native player effective output remains8000..48000Hz; lower
 codec rates need an explicit in-range override. Admission is not playback or
 hardware certification. See libADX/COEFFICIENTS.md for the proof and table cost.
+
+An optional post-decode PCM filter belongs to the serialized source producer.
+Configure before binding or after join; keep callback/context alive through all
+producer calls. It may modify only its channel's emitted interleaved PCM span,
+never retain it, reenter the source, block/yield or change FPU control modes.
+History remains unfiltered; loop padding and seek-discarded PCM do not invoke it.
+Sequence filters persist across entries; standalone decoder initialization clears
+configuration, while stream seek preserves it. Consumer/audio callbacks never run
+these filters. Include callback cost in the producer budget. This facility does
+not establish playback-time amplitude metering or a qualified audible clock.

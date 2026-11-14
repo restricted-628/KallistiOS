@@ -5,7 +5,7 @@ BUILD ?= .build
 SHZ_INCLUDE ?= ../../libsh4zam/upstream/include
 STRICT = -std=gnu17 -Wall -Wextra -Werror -fno-fast-math -ffp-contract=off -fno-lto
 SOURCES = adxcheck.c ../libADX/src/decoder.c ../libADX/src/adx_math.c ../libADX/src/adx_setup.c
-HEADERS = ../libADX/include/kosdec/adx.h ../libADX/src/adx_math.h ../libADX/src/adx_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
+HEADERS = ../libADX/include/kosdec/adx.h ../libADX/src/adx_math.h ../libADX/src/adx_filter.h ../libADX/src/adx_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
 FLAGS = $(STRICT) -I../libADX/include -isystem $(SHZ_INCLUDE) -DMEDIA_ADX_MATH_HOST_TEST
 
 .PHONY: all test sanitize clean

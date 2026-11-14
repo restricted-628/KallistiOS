@@ -15,11 +15,12 @@ NAMES = decoder adx_math adx_setup memory stream index sequence pipe service
 SH_OBJS = $(BUILD)/sh4/player.o $(BUILD)/sh4/disc.o $(BUILD)/sh4/file.o $(addprefix $(BUILD)/sh4/,$(addsuffix .o,$(NAMES)))
 HOST_OBJS = $(addprefix $(BUILD)/host-test/,$(addsuffix .o,$(NAMES)))
 SAN_OBJS = $(addprefix $(BUILD)/sanitize/,$(addsuffix .o,$(NAMES)))
-HEADERS = include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
+HEADERS = include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_filter.h src/adx_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
 
 .PHONY: sh4 test sanitize install clean
 sh4: $(BUILD)/sh4/libADX.a
-test: $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+test: $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+	$(BUILD)/host-test/filter
 	$(BUILD)/host-test/initialization
 	$(BUILD)/host-test/query
 	$(BUILD)/host-test/file_player
@@ -39,7 +40,8 @@ test: $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-t
 	$(BUILD)/host-test/framing
 	$(BUILD)/host-test/profiles
 	$(BUILD)/host-test/loop_metadata
-sanitize: $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+sanitize: $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+	$(BUILD)/sanitize/filter
 	$(BUILD)/sanitize/initialization
 	$(BUILD)/sanitize/query
 	$(BUILD)/sanitize/file_player
@@ -101,6 +103,7 @@ install: sh4
 	install -m 644 $(BUILD)/sh4/libADX.a "$(DESTDIR)$(PREFIX)/lib/dreamcast/libADX.a"
 
 clean:
+	rm -f $(BUILD)/host-test/filter $(BUILD)/sanitize/filter
 	rm -f $(BUILD)/host-test/initialization $(BUILD)/sanitize/initialization
 	rm -f $(BUILD)/host-test/query $(BUILD)/sanitize/query
 	rm -f $(BUILD)/host-test/file_player $(BUILD)/sanitize/file_player $(BUILD)/sh4/file_audio.o $(BUILD)/sh4/file_audio.su $(BUILD)/sh4/file_audio.elf
@@ -252,4 +255,10 @@ $(BUILD)/host-test/initialization: tests/initialization.c tests/stream_fixture.h
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
 
 $(BUILD)/sanitize/initialization: tests/initialization.c tests/stream_fixture.h tests/profile_vectors.h tests/memory_vectors.h $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+$(BUILD)/host-test/filter: tests/filter.c tests/stream_fixture.h tests/profile_vectors.h tests/memory_vectors.h $(BUILD)/host-test/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
+
+$(BUILD)/sanitize/filter: tests/filter.c tests/stream_fixture.h tests/profile_vectors.h tests/memory_vectors.h $(BUILD)/sanitize/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@

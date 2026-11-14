@@ -1,5 +1,6 @@
 /* Original bounded descriptor queue and independent-file PCM transitions. */
 #include <kosdec/adx_sequence.h>
+#include "adx_filter.h"
 #include <string.h>
 #define SEQUENCE_MAGIC UINT32_C(0x41445851)
 static bool valid(const struct kosdec_adx_sequence *s) {
@@ -10,6 +11,15 @@ void kosdec_adx_sequence_init(struct kosdec_adx_sequence *s, bool repeat) {
     memset(s, 0, sizeof(*s));
     s->magic = SEQUENCE_MAGIC;
     s->repeat = repeat;
+}
+enum kosdec_adx_status kosdec_adx_sequence_set_filter(struct kosdec_adx_sequence *s,
+    kosdec_adx_pcm_filter filter, void *context) {
+    if(!valid(s)) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(s->terminal) return s->terminal == KOSDEC_ADX_DONE ?
+        KOSDEC_ADX_BAD_ARGUMENT : s->terminal;
+    s->filter = filter;
+    s->filter_context = filter ? context : NULL;
+    return KOSDEC_ADX_DONE;
 }
 enum kosdec_adx_status kosdec_adx_sequence_enqueue(
     struct kosdec_adx_sequence *s, const struct kosdec_adx_source *source) {
@@ -78,6 +88,7 @@ struct kosdec_adx_sequence_result kosdec_adx_sequence_read(
         }
     }
     s->returned_frames += r.frames;
+    media_adx_filter_pcm(s->filter, s->filter_context, s->channels, output, r.frames);
     if(r.status == KOSDEC_ADX_DONE) {
         struct kosdec_adx_source completed = s->queue[s->head];
         s->head = (s->head + 1) % KOSDEC_ADX_SEQUENCE_CAPACITY;

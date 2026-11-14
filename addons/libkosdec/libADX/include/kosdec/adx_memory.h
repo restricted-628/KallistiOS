@@ -40,7 +40,8 @@ void kosdec_adx_memory_cancel(struct kosdec_adx_memory *reader);
    Releasing before that read retains the cached tail and continues to file end.
    Full groups, including padding, advance private predictor history; padding is
    never returned. DONE follows footer validation, possibly after the last PCM
-   call. Terminal statuses are sticky. No callbacks, I/O, yields or device work. */
+   call. Terminal statuses are sticky. The optional decoder PCM filter runs only
+   for returned frames; no I/O, yields or device work. */
 struct kosdec_adx_memory_result kosdec_adx_memory_read(
     struct kosdec_adx_memory *reader, int16_t *output, size_t output_frames);
 #ifdef __cplusplus

@@ -40,7 +40,8 @@ while draining the last span. `NEED_OUTPUT` means more capacity is required;
 it does not indicate truncation. `NEED_END` waits for an explicit end of input.
 `DONE` validates both declared sample completion and the end record. Terminal
 errors/cancellation remain sticky until reinitialization. Cancellation is between
-calls. No calls allocate, block, yield, invoke callbacks or access hardware.
+calls. No calls allocate, block, yield or access hardware. An explicitly
+configured PCM filter runs synchronously when output is returned.
 
 ## Metadata and record inspection
 
@@ -89,8 +90,37 @@ untouched. Feed the generated prefix before the matching headerless ADX body.
 A complete bounded file still needs its end record. This function does not encode
 PCM, alter an active stream, or implement an SFD demuxer/SJ insertion facade.
 
-Consumers must rebuild for the expanded metadata snapshot structure. Existing
-decoder, reader and player state layouts and PCM arithmetic are unchanged.
+Consumers must rebuild for the expanded metadata snapshot structure. PCM arithmetic is unchanged; optional filter configuration also enlarges decoder
+and embedding reader/sequence state.
+
+## Decoded PCM filter
+
+Call `kosdec_adx_set_filter(&decoder, callback, context)` after initialization;
+for a memory/stream/file source, pass its embedded decoder. For a sequence, use
+`kosdec_adx_sequence_set_filter` so the setting survives every entry transition.
+`NULL` detaches the filter. Initialization clears it; stream seeking preserves it.
+Configuration returns `DONE`, or `BAD_ARGUMENT` for invalid/completed state, or
+the decoder's sticky error. Source ownership and lifecycle rules still apply.
+
+The callback receives `(context, channel, pcm, frames, stride)`. It may read/write
+only `pcm[i * stride]` for `i < frames`; `stride` is the interleaved channel count.
+There are 1..32 frames per invocation, one invocation per channel of a nonempty
+output span. Caller read sizes can change batching. Predictor history is already
+updated from unfiltered decoding, so an effect cannot feed back into the codec.
+Loop padding and seek-discarded samples are excluded. Headers, footers, input
+waits, pause and zero-output calls do not invoke it.
+
+Configure on the serialized owner before binding a producer or after joining it.
+Callback/context must outlive all producer calls. The callback must return
+synchronously, preserve FPU control modes, and must not block, yield, reenter or
+mutate its source, or retain the borrowed PCM pointer. In a pipe/service/player,
+it runs on the producer before publication; the audio consumer never calls it.
+Its execution time is part of the producer's budget.
+
+The native signature uses PCM frames and interleaved stride; CRI's callback uses
+per-channel byte lengths. This is a native behavior equivalent, not a CRI ABI
+wrapper. Audible-time amplitude extraction remains a separate unfinished feature.
+Rebuild consumers for the enlarged decoder and embedding reader/sequence state.
 
 ## Resident-input PCM reader
 
@@ -117,7 +147,8 @@ completion/cancellation/reinitialization. The entire compressed body and minimum
 footer extent must be resident before PCM is returned; block contents and footer
 are validated when reached. Repetition does not imply that an unvisited tail or
 footer has been validated. A final PCM return is followed by footer work before
-`DONE`. There are no allocations, callbacks, scheduling or device operations.
+`DONE`. There are no allocations, scheduling or device operations. An optional
+PCM filter runs for returned frames.
 
 ## Streaming and KOS files
 

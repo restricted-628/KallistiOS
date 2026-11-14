@@ -25,6 +25,13 @@ struct kosdec_adx_loop {
     bool present;
     uint32_t start_frame, end_frame, start_byte, end_byte;
 };
+/* Writable emitted PCM for one channel: pcm[i * stride], i < frames <=32.
+   Channel is 0/1; stride is the interleaved channel count. Borrowed storage is
+   valid only until return; modify only this channel. Called synchronously on the decoding/producing owner,
+   after predictor updates, before output publication. Never retain the pointer,
+   block/yield, reenter/mutate the source or change FPU control modes. */
+typedef void (*kosdec_adx_pcm_filter)(void *context, unsigned channel,
+                                    int16_t *pcm, size_t frames, unsigned stride);
 struct kosdec_adx_decoder {
     uint32_t magic, total_frames, frames_done, clips;
     uint32_t header_used, header_bytes, sample_rate;
@@ -36,6 +43,8 @@ struct kosdec_adx_decoder {
     int16_t coefficient[2], history[2][2];
     struct kosdec_adx_loop loop;
     uint8_t header[20], extension[24], footer_length[2], block[36];
+    kosdec_adx_pcm_filter filter;
+    void *filter_context;
 };
 struct kosdec_adx_result {
     enum kosdec_adx_status status;
@@ -93,6 +102,17 @@ enum kosdec_adx_status kosdec_adx_make_sfa_header(uint8_t *, size_t,
    Metadata (total_frames/header_bytes/sample_rate/cutoff/channels/version/loop)
    is valid only after header_ready. Fields remain implementation-owned. */
 void kosdec_adx_init(struct kosdec_adx_decoder *decoder);
+/* Optional filter for standalone decoding or this decoder's memory/stream
+   reader. NULL detaches; init clears it. DONE on success, otherwise invalid
+   state/terminal status with no mutation (completed decoder: BAD_ARGUMENT).
+   Configure under serialized ownership,
+   before producer binding or after join; keep callback/context alive until join.
+   Runs once/channel only for nonempty returned PCM. Chunk sizes may vary.
+   Memory/stream loop padding and stream-seek discarded frames are excluded;
+   stream seek preserves configuration. Never changes predictor history.
+   For a sequence use sequence_set_filter, not its private embedded reader. */
+enum kosdec_adx_status kosdec_adx_set_filter(struct kosdec_adx_decoder *,
+                                          kosdec_adx_pcm_filter, void *context);
 void kosdec_adx_cancel(struct kosdec_adx_decoder *decoder);
 /* At most one logical group (32 PCM16 frames), or 512 header/footer bytes
    per call. Input can be arbitrarily fragmented. MORE may mean metadata budget
@@ -106,7 +126,7 @@ void kosdec_adx_cancel(struct kosdec_adx_decoder *decoder);
    Caller owns disjoint state/input/output lifetimes and output capacity
    (output_frames*channels int16_t), alignment, immutable input and serialized access.
    Decoder fields are inspectable but must not be changed between API calls.
-   No callback, allocation, yield or hardware access occurs. */
+   Only the optional PCM filter is called; no allocation, yield or hardware access. */
 struct kosdec_adx_result kosdec_adx_decode(struct kosdec_adx_decoder *decoder,
     const uint8_t *input, size_t input_bytes, int16_t *output,
     size_t output_frames, bool final_input);

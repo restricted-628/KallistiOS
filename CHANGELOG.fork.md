@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX producer-side PCM filters
+
+- Add optional caller-owned filters for decoded PCM and persistent sequence
+  filtering. Callbacks run once per channel on nonempty returned spans before
+  pipe publication, without feeding filtered samples back into predictor history.
+- Preserve filters across stream seeks while excluding discarded samples;
+  initialization clears them. Configuration and callback lifetime belong to the
+  serialized producer. Callbacks must not block, yield, reenter the source,
+  retain PCM storage or change FPU control modes. Rebuild all consumers for
+  enlarged decoder and embedding reader/sequence state.
+- Fresh full host/sanitizer suites,106 filter cases and794 checker cases per
+  lane pass; strict staged SH-4 C/C++ links retain both new setters. No Audio
+  interface changed. Audible-time metering, performance and hardware validation
+  remain separate from this native PCM hook.
+
 ## 2026-11-13 — libADX encoder padding and SFA prefixes
 
 - Admit 0..31 inserted leading frames in supported v3 single-loop headers and

@@ -19,6 +19,8 @@ struct kosdec_adx_sequence {
     uint64_t returned_frames, completed_entries, requeues;
     struct kosdec_adx_source queue[KOSDEC_ADX_SEQUENCE_CAPACITY];
     struct kosdec_adx_stream reader;
+    kosdec_adx_pcm_filter filter;
+    void *filter_context;
 };
 struct kosdec_adx_sequence_result {
     enum kosdec_adx_status status;
@@ -32,6 +34,12 @@ struct kosdec_adx_sequence_result {
    transport close/cancel or audio-device calls. Reinit drops descriptions only;
    it does not retire any outstanding I/O owned by their providers. */
 void kosdec_adx_sequence_init(struct kosdec_adx_sequence *, bool repeat);
+/* Same callback/lifetime contract as decoder set_filter; applies to every
+   emitted span across all entries/repeats. NULL detaches; init clears it.
+   DONE on success, BAD_ARGUMENT for invalid/completed state, sticky error otherwise.
+   Configure under serialized ownership before binding or after producer join. */
+enum kosdec_adx_status kosdec_adx_sequence_set_filter(struct kosdec_adx_sequence *,
+    kosdec_adx_pcm_filter, void *context);
 /* MORE: queued. NEED_OUTPUT: all16 slots occupied, no mutation. A duplicate
    descriptor is legal. Enqueue during playback is allowed until a terminal.
    Descriptors require non-null read_at and nonzero bytes. */

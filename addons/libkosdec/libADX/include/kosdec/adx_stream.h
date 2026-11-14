@@ -48,7 +48,8 @@ void kosdec_adx_stream_pause(struct kosdec_adx_stream *, bool paused);
 void kosdec_adx_stream_release_loop(struct kosdec_adx_stream *);
 void kosdec_adx_stream_cancel(struct kosdec_adx_stream *);
 /* Serialized, unbound-source seek. begin resets decoding to the start with the
-   same borrowed provider/extent and unpauses; it does no I/O. Repeating readers
+   same borrowed provider/extent and optional PCM filter, and unpauses; no I/O.
+   Discarded seek frames do not invoke the filter. Repeating readers
    return UNSUPPORTED unchanged: release the loop before seeking. Known out-of-
    range targets return BAD_ARGUMENT unchanged; unknown bounds are checked when
    the header is parsed. Terminal/cancelled readers may begin again. Never call

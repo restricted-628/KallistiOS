@@ -1,6 +1,7 @@
 /* Independent short-read staging and PCM cursor; no device ownership. */
 #include <kosdec/adx_stream.h>
 #include "adx_math.h"
+#include "adx_filter.h"
 #include <string.h>
 #define STREAM_MAGIC UINT32_C(0x41445853)
 static bool valid(const struct kosdec_adx_stream *s) {
@@ -117,6 +118,8 @@ emit:;
     s->cache_position += (unsigned)frames;
     s->source_frame += (uint32_t)frames; s->returned_frames += frames;
     result.frames = frames;
+    if(!s->seeking)
+        media_adx_filter_pcm(d->filter, d->filter_context, d->channels, output, frames);
     return result;
 terminal:
     s->terminal = result.status;
@@ -132,7 +135,10 @@ enum kosdec_adx_status kosdec_adx_stream_seek_begin(struct kosdec_adx_stream *s,
     if(!valid(s) || !s->read_at || frame > KOSDEC_ADX_MAX_FRAMES ||
        (s->prepared && frame > s->decoder.total_frames)) return KOSDEC_ADX_BAD_ARGUMENT;
     if(s->repeat) return KOSDEC_ADX_UNSUPPORTED;
+    kosdec_adx_pcm_filter filter = s->decoder.filter;
+    void *context = s->decoder.filter_context;
     kosdec_adx_stream_init(s,s->read_at,s->context,s->input_bytes,false);
+    kosdec_adx_set_filter(&s->decoder,filter,context);
     s->seek_frame = frame; s->seeking = true;
     return KOSDEC_ADX_MORE;
 }

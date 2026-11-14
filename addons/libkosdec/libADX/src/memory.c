@@ -1,6 +1,7 @@
 /* Independently written resident PCM cursor and carried-history repeat policy. */
 #include <kosdec/adx_memory.h>
 #include "adx_math.h"
+#include "adx_filter.h"
 #include <string.h>
 #define MEMORY_MAGIC UINT32_C(0x4144584d)
 static bool valid(const struct kosdec_adx_memory *r) {
@@ -99,6 +100,7 @@ struct kosdec_adx_memory_result kosdec_adx_memory_read(
     r->source_frame += (uint32_t)frames;
     r->returned_frames += frames;
     result.frames = frames;
+    media_adx_filter_pcm(d->filter, d->filter_context, d->channels, output, frames);
     return result;
 terminal:
     r->terminal = result.status;
