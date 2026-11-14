@@ -20,6 +20,7 @@ static int busy(const struct kosdec_adx_joint *j) {
     return 0;
 }
 static void reset(struct kosdec_adx_joint *j) {
+    j->sealed = false;
     if(j->kind == KOSDEC_ADX_JOINT_QUEUE) {
         for(size_t i = 0; i < j->node_count; ++i)
             j->nodes[i] = (struct kosdec_adx_joint_node){
@@ -103,6 +104,7 @@ enum kosdec_adx_joint_status kosdec_adx_joint_seed(struct kosdec_adx_joint *j,
     if(!valid(j) || j->kind != KOSDEC_ADX_JOINT_QUEUE || !line_valid(j, line) ||
        (bytes && !data)) return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
     if(!bytes) return KOSDEC_ADX_JOINT_OK;
+    if(j->sealed) return fail(j, KOSDEC_ADX_JOINT_SEALED);
     uintptr_t address = (uintptr_t)data;
     if(bytes > (size_t)INT32_MAX - j->capacity || bytes > UINTPTR_MAX - address)
         return fail(j, KOSDEC_ADX_JOINT_LIMIT);
@@ -125,6 +127,14 @@ enum kosdec_adx_joint_status kosdec_adx_joint_reset(struct kosdec_adx_joint *j) 
     if(!valid(j)) return KOSDEC_ADX_JOINT_BAD_ARGUMENT;
     if(busy(j)) return fail(j, KOSDEC_ADX_JOINT_BUSY);
     reset(j);
+    return KOSDEC_ADX_JOINT_OK;
+}
+enum kosdec_adx_joint_status kosdec_adx_joint_finish(struct kosdec_adx_joint *j) {
+    if(!valid(j)) return KOSDEC_ADX_JOINT_BAD_ARGUMENT;
+    for(unsigned line = 0; line < 4; ++line)
+        if(line != KOSDEC_ADX_JOINT_DATA && j->borrowed[line].bytes)
+            return fail(j, KOSDEC_ADX_JOINT_BUSY);
+    j->sealed = true;
     return KOSDEC_ADX_JOINT_OK;
 }
 enum kosdec_adx_joint_status kosdec_adx_joint_close(struct kosdec_adx_joint *j) {
@@ -150,7 +160,7 @@ enum kosdec_adx_joint_status kosdec_adx_joint_query(
     if(!valid(j) || !info) return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
     *info = (struct kosdec_adx_joint_info){.kind=j->kind,
         .capacity=j->capacity, .extra=j->extra, .mode=j->mode,
-        .spare_nodes=j->spare_count, .total_nodes=j->node_count};
+        .spare_nodes=j->spare_count, .total_nodes=j->node_count, .sealed=j->sealed};
     for(unsigned line = 0; line < 4; ++line) {
         info->available[line] = j->available[line];
         info->contiguous[line] = contiguous(j, line);
@@ -163,6 +173,8 @@ enum kosdec_adx_joint_status kosdec_adx_joint_get(struct kosdec_adx_joint *j,
     enum kosdec_adx_joint_line line, size_t request, struct kosdec_adx_chunk *out) {
     if(!valid(j) || !line_valid(j, line) || !out)
         return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    if(request && j->sealed && line != KOSDEC_ADX_JOINT_DATA)
+        return fail(j, KOSDEC_ADX_JOINT_SEALED);
     if(request && j->borrowed[line].bytes) return fail(j, KOSDEC_ADX_JOINT_BUSY);
     size_t n = minimum(request, contiguous(j, line));
     if(j->kind == KOSDEC_ADX_JOINT_QUEUE && j->mode == KOSDEC_ADX_JOINT_SEPARATE &&
@@ -211,6 +223,8 @@ static enum kosdec_adx_joint_status check(struct kosdec_adx_joint *j,
 }
 static enum kosdec_adx_joint_status return_queue(struct kosdec_adx_joint *j,
     unsigned destination, const struct kosdec_adx_chunk *c, int prepend) {
+    if(j->sealed && !prepend && destination == KOSDEC_ADX_JOINT_DATA)
+        return fail(j, KOSDEC_ADX_JOINT_SEALED);
     struct kosdec_adx_chunk *b = &j->borrowed[c->line];
     int whole = c->bytes == b->bytes;
     int used = enqueue(j, destination, c->data, c->bytes, prepend,
@@ -233,6 +247,20 @@ enum kosdec_adx_joint_status kosdec_adx_joint_move(struct kosdec_adx_joint *j,
     enum kosdec_adx_joint_status status = check(j, c, 0);
     if(status != KOSDEC_ADX_JOINT_OK || !c->bytes) return status;
     return return_queue(j, destination, c, 0);
+}
+enum kosdec_adx_joint_status kosdec_adx_joint_detach(
+    struct kosdec_adx_joint *j, const struct kosdec_adx_chunk *c) {
+    if(!valid(j) || j->kind != KOSDEC_ADX_JOINT_QUEUE)
+        return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    enum kosdec_adx_joint_status status = check(j, c, 0);
+    if(status != KOSDEC_ADX_JOINT_OK || !c->bytes) return status;
+    struct kosdec_adx_chunk *b = &j->borrowed[c->line];
+    b->data += c->bytes; b->bytes -= c->bytes; j->capacity -= c->bytes;
+    if(!b->bytes) {
+        free_node(j, j->reserved[c->line]); j->reserved[c->line] = NULL;
+        *b = (struct kosdec_adx_chunk){0};
+    }
+    return KOSDEC_ADX_JOINT_OK;
 }
 /* Only the committed written span participates in mirror maintenance. Copying
    the entire prefix could overwrite a simultaneous outstanding FREE borrow. */

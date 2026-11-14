@@ -3,6 +3,7 @@
 #define KOSDEC_ADX_JOINT_H
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -17,7 +18,7 @@ enum kosdec_adx_joint_line {
 enum kosdec_adx_joint_status {
     KOSDEC_ADX_JOINT_OK, KOSDEC_ADX_JOINT_BAD_ARGUMENT,
     KOSDEC_ADX_JOINT_BUSY, KOSDEC_ADX_JOINT_STALE,
-    KOSDEC_ADX_JOINT_LIMIT
+    KOSDEC_ADX_JOINT_LIMIT, KOSDEC_ADX_JOINT_SEALED
 };
 struct kosdec_adx_joint;
 /* A borrowed span, including its origin. Use split to create partial returns.
@@ -53,6 +54,7 @@ struct kosdec_adx_joint {
     enum kosdec_adx_joint_mode mode;
     struct kosdec_adx_joint_node *nodes, *spare, *head[4], *tail[4], *reserved[4];
     size_t node_count, spare_count, chunks[4];
+    bool sealed;
 };
 struct kosdec_adx_joint_info {
     enum kosdec_adx_joint_kind kind;
@@ -60,6 +62,7 @@ struct kosdec_adx_joint_info {
     size_t available[4], contiguous[4], borrowed[4];
     size_t chunks[4], spare_nodes, total_nodes;
     enum kosdec_adx_joint_mode mode;
+    bool sealed;
 };
 /* State, workspace, backing storage and output descriptors are disjoint,
    caller-owned, and remain alive until
@@ -104,6 +107,18 @@ enum kosdec_adx_joint_status kosdec_adx_joint_seed(
 enum kosdec_adx_joint_status kosdec_adx_joint_move(
     struct kosdec_adx_joint *, enum kosdec_adx_joint_line destination,
     const struct kosdec_adx_chunk *);
+/* Queue-only: return a borrowed prefix to caller ownership, without enqueueing.
+   It no longer contributes to capacity or overlap checks. No payload is freed;
+   caller may reuse/reseed it or move it to another joint. */
+enum kosdec_adx_joint_status kosdec_adx_joint_detach(
+    struct kosdec_adx_joint *, const struct kosdec_adx_chunk *);
+/* Mark DATA input final. Caller must first join external writers. BUSY while
+   any FREE/auxiliary borrow remains; a DATA borrow may remain with its reader.
+   Until reset, new seeds, nonempty DATA publication and non-DATA gets fail
+   SEALED. DATA consumption/unget and queue detach still work. Idempotent;
+   no waiting/transport action. Sealed plus no queued/borrowed DATA means EOF,
+   not successful codec validation or audible completion. */
+enum kosdec_adx_joint_status kosdec_adx_joint_finish(struct kosdec_adx_joint *);
 /* Reset restores initial availability, preserves error hook and token sequence.
    Reset/close return BUSY unchanged while any nonempty borrow exists. Close
    retires only software borrows; callers must join any external provider first. */

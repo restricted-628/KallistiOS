@@ -794,7 +794,7 @@ by the existing producer fiber, with yields outside borrowed-buffer operations.
 
 The native contract deliberately uses typed status/kind instead of CRI error
 numbers/UUIDs and does not support arbitrary concurrent or multiple same-line
-borrows. Live decoder input and full SJ conformance remain open;
+borrows. Player binding and full SJ conformance remain open;
 this facility alone does not close the middleware milestone.
 
 The generic queue uses caller-supplied typed nodes and four FIFO lines. Seed
@@ -814,3 +814,27 @@ Reset forgets all seeded ranges and restores the node pool, only with no borrows
 Neither reset nor close frees caller buffers. Auxiliary lines have caller-defined
 read/write roles; FREE/DATA retain the usual producer/consumer roles. Joint state
 and query structures grew with queue support: rebuild all users of this interface.
+
+`kosdec/adx_joint_reader.h` connects DATA chunks to the existing incremental float
+decoder. It supports forward-only PCM output from memory, ring and either queue
+mode, including optional PCM filters. Each read performs at most one decoder
+step (32 PCM frames or 512 metadata bytes). No new codec arithmetic or transport
+worker is introduced. Queue reads borrow a whole head, requiring no spare node;
+a large head stays borrowed across multiple bounded decode calls. Memory/ring
+admission is capped at 512 bytes. Returned PCM is interleaved and needs a full
+logical group of output space, as documented by the underlying decoder.
+
+A producer calls `kosdec_adx_joint_finish` after joining writers and completing
+all input publication. This seals admission until reset. An empty unsealed joint
+means starvation; DONE requires the actual validated footer and sealed EOF.
+Cancel stops decoding but retains its input borrow until successful reader close.
+Close abandons any unread tail of the held chunk, returns it to FREE (or discards
+it for a memory joint), and never resets/frees the joint or joins an external
+provider. Restarting a file needs a fresh header, not the abandoned cursor.
+
+Queue `detach` returns a borrowed prefix to caller ownership without enqueuing it.
+This lets a producer reclaim FREE chunks for reuse elsewhere, or explicitly pass
+storage between joints. It never frees payload; detached bytes leave capacity
+and overlap accounting. Fixed memory/ring storage cannot be detached. All joint
+and reader operations share the serialized owner; fiber scheduling belongs outside
+these operations. This reader is not yet a native player/service source variant.

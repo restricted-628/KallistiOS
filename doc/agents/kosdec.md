@@ -119,3 +119,11 @@ backing allocation. Reserve one node per borrow; full rollback must remain
 possible despite pool exhaustion. Partial operations can return LIMIT unchanged.
 Seed rejects overlap; reset drops queued references without freeing buffers.
 Do not treat an empty queue as EOF or native node counts as proprietary ABI.
+
+Joint readers use the existing strict incremental float decoder; empty input is
+not EOF until explicit joint_finish seals DATA admission. Hold whole chunks until
+consumed so decode progress cannot precede a failed partial-return allocation.
+Read work stays one decoder step; queue whole-head retention can add backpressure.
+Cancel retains input until close; close discards unread admitted bytes and never
+joins/reset/frees the producer or joint. Queue detach explicitly removes a prefix
+from ownership accounting without freeing bytes. No implicit player binding.

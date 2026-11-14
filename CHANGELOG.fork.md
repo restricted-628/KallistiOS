@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX live joint PCM reader
+
+- Connect compressed-byte joints to the existing strict incremental decoder,
+  with one bounded decode step per read and optional producer-side PCM filters.
+  Retain whole input chunks until consumed to avoid partial-return allocation
+  failures after decoder progress; large queue heads can add backpressure.
+- Add explicit input sealing and queue-prefix detach. Empty unsealed input is
+  starvation, not EOF; DONE still requires valid framing and sealed exhaustion.
+  Cancellation retains borrowed input until checked close. Close discards unread
+  admitted tail but never joins providers or frees/resets their storage.
+- Fresh full host/ASan/UBSan suites and staged SH-4 C/C++ links pass, including
+  97 reader cases/142,328 assertions per lane. Rebuild joint-state consumers.
+  Native player binding, seeking/looping and audible/hardware validation remain
+  separate from this forward-only reader.
+
 ## 2026-11-13 — libADX caller-owned chunk queues
 
 - Extend byte joints with four FIFO lines, caller-owned nodes, whole-chunk
