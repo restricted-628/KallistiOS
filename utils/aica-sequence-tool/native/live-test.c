@@ -262,7 +262,18 @@ static void clients(void) {
     C(asql_client_poll(&client)<0 && client.state==ASQC_LOST);
     client_init();client.cookie=UINT32_MAX;C(asql_client_begin(&client,ASQL_BIND,0,1,zero)<0 && client.state==ASQC_LOST);
 }
+static void fairness(void) {
+    init();uint32_t before[8];
+    for(unsigned p=0;p<8;p++) C(command(ASQL_BIND,p,1,0,0,0,0)==0);
+    for(unsigned p=0;p<8;p++) C(command(ASQL_PLAY,p,1,0,1,4,10)==0);
+    for(unsigned i=0;i<16;i++) step(11);
+    for(unsigned p=0;p<8;p++) before[p]=adapter.sequences[p].processed;
+    for(unsigned i=0;i<256;i++) step(11);
+    C(music.count==64); /* Continuously overloaded; all ports still progress. */
+    for(unsigned p=0;p<8;p++) C(adapter.sequences[p].processed-before[p]>=64);
+    C(command(ASQL_STOP_ALL,0,0,0,0,0,0)==0 && !catalog.slots[0].playing);
+}
 int main(void) {
-    binding();playback();cancel_resume();chain_and_clock();bounded_and_global();identity();clients();
+    binding();playback();cancel_resume();chain_and_clock();bounded_and_global();identity();clients();fairness();
     printf("ASQ live controls: %u checks PASS\n",checks);return 0;
 }

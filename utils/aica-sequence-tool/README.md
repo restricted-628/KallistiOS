@@ -178,6 +178,10 @@ Rejected/declined PLAY preserves the old clock apart from normal scheduled work.
 Each main pass services MIDI and publication first, then urgent sequence stops,
 one bounded advance per bound port, and one ordinary control/resume step. Each
 port dispatches at most 32 sequence events per pass; overdue debt is retained.
+The first serviced port rotates through all eight indexes, so every port gets
+first admission at least once per eight passes even with a saturated MIDI queue.
+This bounds producer starvation; it does not promise equal event counts or that
+overloaded scores meet their musical deadlines.
 Successful PLAY starts a new clock epoch; successful CONTINUE excludes paused
 time while retaining pre-pause debt/fraction. The 4410 Hz timer conversion carries
 integer remainder. A gap too large for the core's elapsed-us input faults without

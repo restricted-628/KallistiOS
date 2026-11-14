@@ -52,7 +52,7 @@ typedef struct {
     asql_program_t current[8],chained[8];
     uint32_t session,cookie,request[8],cancelled_cookie,cancelled_request[8];
     int32_t result,cancelled_result;
-    uint8_t initialized,pending,faulted,reserved;
+    uint8_t initialized,pending,faulted,next_port;
 } asql_t;
 /* Before first use only; adapter storage is already reserved but uninitialized.
    No caller may directly change bound ports, sequences, clocks or catalog refs. */

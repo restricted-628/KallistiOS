@@ -14,5 +14,8 @@ short = [{'delta': 0, 'kind': 'midi', 'status': 0x90, 'a': 72, 'b': 100},
 crowded = [{'delta': 0, 'kind': 'midi', 'status': 0xb0, 'a': 7, 'b': i} for i in range(96)]
 crowded.append({'delta': 96, 'kind': 'end'})
 programs = [{'tpqn': 96, 'tempo_us': 500000, 'events': e} for e in (hold, loop, short, crowded)]
+programs.append({'tpqn': 9600, 'tempo_us': 500000, 'events':
+    [{'delta': 0, 'kind': 'loop', 'count': 0}] + crowded[:-1] +
+    [{'delta': 1, 'kind': 'loop_end'}, {'delta': 0, 'kind': 'end'}]})
 blob = asq.build({'programs': programs})
 Path('live-fixture.h').write_text('static const unsigned char score[] = {' + ','.join(map(str, blob)) + '};\n')

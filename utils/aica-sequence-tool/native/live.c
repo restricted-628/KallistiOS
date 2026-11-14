@@ -189,8 +189,16 @@ void asql_service(asql_t *s,uint32_t tick) {
     if(s->pending && (op==ASQL_STOP || op==ASQL_STOP_ALL || op==ASQL_UNBIND)) {
         result=apply(s,tick);s->pending=0;publish(s,result);
     }
-    if(s->initialized && !faulted(s)) for(unsigned p=0;p<8 && !s->faulted;p++)
-        if(s->adapter->bindings[p].bound) advance(s,p,tick);
+    if(s->initialized && !faulted(s)) {
+        unsigned first=s->next_port;
+        /* Every port gets first admission once per eight passes. A saturated
+           earlier producer cannot consume every newly available MIDI slot. */
+        s->next_port=(uint8_t)((first+1u)&7u);
+        for(unsigned i=0;i<8 && !s->faulted;i++) {
+            unsigned p=(first+i)&7u;
+            if(s->adapter->bindings[p].bound) advance(s,p,tick);
+        }
+    }
     if(s->pending) {
         result=apply(s,tick);
         if(result!=ASQL_PENDING) { s->pending=0;publish(s,result); }
