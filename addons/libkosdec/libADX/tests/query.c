@@ -10,7 +10,7 @@ static void be32(uint8_t *p, uint32_t x) {
 }
 static bool same(const struct kosdec_adx_info *a, const struct kosdec_adx_info *b) {
     return a->header_bytes==b->header_bytes && a->total_frames==b->total_frames &&
-        a->sample_rate==b->sample_rate && a->cutoff==b->cutoff &&
+        a->sample_rate==b->sample_rate && a->cutoff==b->cutoff && a->inserted_frames==b->inserted_frames &&
         a->encoding==b->encoding && a->block_bytes==b->block_bytes &&
         a->sample_bits==b->sample_bits && a->channels==b->channels && a->version==b->version &&
         a->loop.present==b->loop.present && a->loop.start_frame==b->loop.start_frame &&

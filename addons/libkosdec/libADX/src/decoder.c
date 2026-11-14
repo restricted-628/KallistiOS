@@ -42,11 +42,12 @@ static enum kosdec_adx_status extension(struct kosdec_adx_decoder *d) {
     unsigned nonzero = 0;
     for(unsigned i = 0; i < sizeof(d->extension); ++i) nonzero |= e[i];
     if(!nonzero) return KOSDEC_ADX_MORE;
-    if(d->version != 3 || d->header_bytes < 50 || be16(e) != 0 ||
+    if(d->version != 3 || d->header_bytes < 50 || be16(e) >= 32 ||
        be16(e + 2) != 1 || be32(e + 4) != 1)
         return KOSDEC_ADX_UNSUPPORTED;
     uint32_t start = be32(e + 8), end = be32(e + 16);
     if(start >= end || end > d->total_frames) return KOSDEC_ADX_INVALID;
+    if(be16(e) > start) return KOSDEC_ADX_INVALID;
     if(start % 32u) return KOSDEC_ADX_UNSUPPORTED;
     uint32_t group_bytes = 18u * d->channels;
     uint32_t start_byte = d->header_bytes + (start / 32u) * group_bytes;
@@ -172,6 +173,7 @@ enum kosdec_adx_status kosdec_adx_get_info(const struct kosdec_adx_decoder *d,
     *info = (struct kosdec_adx_info){
         .header_bytes = d->header_bytes, .total_frames = d->total_frames,
         .sample_rate = d->sample_rate, .cutoff = d->cutoff,
+        .inserted_frames = (uint16_t)be16(d->extension),
         .encoding = d->header[4], .block_bytes = d->header[5],
         .sample_bits = d->header[6], .channels = d->channels,
         .version = d->version, .loop = d->loop
@@ -217,4 +219,28 @@ enum kosdec_adx_status kosdec_adx_probe_endcode(const uint8_t *input, size_t byt
             return r.status;
         if(used == bytes) return KOSDEC_ADX_NEED_INPUT;
     }
+}
+
+enum kosdec_adx_status kosdec_adx_make_sfa_header(uint8_t *output, size_t capacity,
+    unsigned channels, uint32_t sample_rate, uint32_t total_frames) {
+    if(!output && capacity) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(channels != 1 && channels != 2) return KOSDEC_ADX_UNSUPPORTED;
+    uint8_t header[KOSDEC_ADX_SFA_HEADER_BYTES] = {0};
+    header[0] = 0x80;
+    header[2] = (KOSDEC_ADX_SFA_HEADER_BYTES - 4) >> 8;
+    header[3] = (uint8_t)(KOSDEC_ADX_SFA_HEADER_BYTES - 4);
+    header[4] = 3; header[5] = 18; header[6] = 4;
+    header[7] = (uint8_t)channels;
+    for(unsigned i = 0; i < 4; ++i) {
+        header[8 + i] = (uint8_t)(sample_rate >> (24 - i * 8));
+        header[12 + i] = (uint8_t)(total_frames >> (24 - i * 8));
+    }
+    header[16] = 1; header[17] = 0xf4; header[18] = 3;
+    memcpy(header + sizeof(header) - 6, "(c)CRI", 6);
+    struct kosdec_adx_info info;
+    enum kosdec_adx_status status = kosdec_adx_probe_header(header, sizeof(header), &info);
+    if(status != KOSDEC_ADX_DONE) return status;
+    if(capacity < sizeof(header)) return KOSDEC_ADX_NEED_OUTPUT;
+    memcpy(output, header, sizeof(header));
+    return KOSDEC_ADX_DONE;
 }

@@ -34,7 +34,7 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 | H9 | Start gate, pause and stop | Prefill plus producer pause and checked software stop | Explicit prepared-but-not-playing gate; audible pause/resume and reusable checked stop. Audio dependency. |
 | H10 | Native output controls | Requested output Hz only; checked update | Direct/effect levels and routing, filter, transpose/detune units/getters; stereo-coherent live updates. Audio dependency. |
 | H11 | Seamless queue and linked controls | Bounded same-format PCM sequence and repeat/release | Baseline queue timing, linked controls and qualified audible seamless transitions; PCM concatenation alone does not establish this. |
-| H12 | Special processing | Unbound decode-from-start seek only | Sample-discard contract, PCM filter callback, amplitude analysis/work sizing, SFA header insertion and silence injection. |
+| H12 | Special processing | Unbound decode-from-start seek; validated caller-buffer SFA header construction | Sample-discard contract, PCM filter callback, amplitude analysis/work sizing, live SJ/SFD header insertion and silence injection. |
 | F1 | File/partition services | VFS/direct-disc sources, bounded AFS member views | Partition registration/loading/status, directory/name/range services, sector-read/seek/count/reload/error contracts and lifecycle equivalence. |
 | J1 | Stream joint | Memory/provider/PCM-pipe alternatives | SJ chunk ownership, Get/Unget/Put/Reset/query/error semantics and RBF/MEM/UNI variants; native alternatives are not yet full behavioral equivalents. |
 | L1 | Load/sequence controller | Bounded same-format PCM sequence | Filename/range queue, per-stream IDs/names/status/read sectors, flow-limit and service/error/pause/stop equivalence. |
@@ -45,7 +45,10 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 C1. Freeze the exact encoding/block/channel/version/header/history/loop/endcode
 combinations accepted by the 2.00J decoder, then implement or document each
 baseline rejection with tests. Current admission is encoding 3, 18-byte/4-bit,
-mono/stereo v3/v5, zero extensions or the documented supported v3 loop layout.
+mono/stereo v3/v5, zero extensions or the documented supported v3 loop layout
+with 0..31 inserted leading frames and a block-aligned encoded start. Arbitrary
+requested loop starts are aligned by the encoder; raw nonaligned encoded starts
+remain unsupported, pending a distinct baseline runtime contract.
 Do not assume later ADX variants must be added simply because they exist.
 
 C2. Close native arithmetic conformance: predictor operation order, rounding,

@@ -42,10 +42,12 @@ struct kosdec_adx_result {
     size_t consumed, frames;
 };
 /* Immutable metadata snapshot, independent of the decoder's mutable counters.
-   Counts are PCM frames (samples per channel); all byte offsets are absolute. */
+   Counts are PCM frames (samples per channel); all byte offsets are absolute.
+   inserted_frames describes leading PCM already encoded to align a loop. It is
+   included in the encoded timeline, not a command to skip or synthesize samples. */
 struct kosdec_adx_info {
     uint32_t header_bytes, total_frames, sample_rate;
-    uint16_t cutoff;
+    uint16_t cutoff, inserted_frames;
     uint8_t encoding, block_bytes, sample_bits, channels, version;
     struct kosdec_adx_loop loop;
 };
@@ -71,11 +73,22 @@ enum kosdec_adx_status kosdec_adx_probe_header(const uint8_t *, size_t,
                                             struct kosdec_adx_info *);
 enum kosdec_adx_status kosdec_adx_probe_endcode(const uint8_t *, size_t,
                                              uint32_t *endcode_bytes);
+/* Construct the v3 SFA prefix for headerless encoding3/block18/4-bit ADX.
+   Fixed500Hz cutoff, no loop, zero extensions. Feed it before the body; this
+   does not encode PCM, append an endcode or mutate an existing stream/player.
+   DONE writes exactly KOSDEC_ADX_SFA_HEADER_BYTES; remaining storage is untouched.
+   Invalid format parameters return UNSUPPORTED; short capacity returns
+   NEED_OUTPUT. On either, destination is unchanged. NULL with zero capacity is
+   a valid size check; NULL with nonzero capacity returns BAD_ARGUMENT.
+   Destination may be byte-aligned. No allocation/I/O/scheduler/hardware access. */
+#define KOSDEC_ADX_SFA_HEADER_BYTES 288u
+enum kosdec_adx_status kosdec_adx_make_sfa_header(uint8_t *, size_t,
+    unsigned channels, uint32_t sample_rate, uint32_t total_frames);
 /* Initialize/reinitialize caller-owned state. No allocation or implicit I/O.
    Profiles: v3/v5, encoding3/block18/4-bit, mono/stereo; integer rate1..48000Hz,
    cutoff0..floor(rate/2) (above44.1k is an extension),
    26..65539-byte header and 18..65539-byte zero-padded end record.
-   Extensions: zero padding, or v3 insertion0/count1/type1 loop with block-aligned
+   Extensions: zero padding, or v3 insertion0..31/count1/type1 loop with block-aligned
    start and consistent offsets. Other extensions/coefficient domains unsupported.
    Metadata (total_frames/header_bytes/sample_rate/cutoff/channels/version/loop)
    is valid only after header_ready. Fields remain implementation-owned. */

@@ -8,7 +8,7 @@ PCM frames. Metadata becomes valid when `header_ready` is true; use
 `kosdec_adx_get_info` for a validated snapshot.
 
 Headers may have zero extensions or a validated version-3 loop record:
-zero insertion samples, one type-1 loop, block-aligned start, ordered sample
+0..31 inserted leading samples, one type-1 loop, block-aligned start, ordered sample
 bounds and matching absolute byte offsets. Other extensions remain unsupported.
 48 kHz is our extension beyond the baseline ADX Talk header's 44.1 kHz maximum.
 Out-of-domain rates/cutoffs, other versions/encodings and nonzero footer payloads
@@ -46,7 +46,8 @@ calls. No calls allocate, block, yield, invoke callbacks or access hardware.
 
 `kosdec_adx_get_info(&decoder, &info)` returns `DONE` with a
 `struct kosdec_adx_info` snapshot of header bytes, total PCM frames, sample rate,
-cutoff, encoding, block bytes, sample bits, channels, version and loop metadata.
+cutoff, inserted leading frames, encoding, block bytes, sample bits, channels,
+version and loop metadata.
 Before the header is complete it returns `NEED_INPUT` or the decoder's terminal
 error. Once admitted, metadata remains available after a later body error or
 cancellation. This is not a live playback-position query. Serialize access with
@@ -67,6 +68,29 @@ when a caller needs a single-step work bound. These are intentionally strict
 native queries, not CRI ABI recognizers: the shipped end-code recognizer checks
 the marker and reports the supplied span, whereas our query reports the validated
 declared record size. Format support and PCM arithmetic are unchanged.
+
+## Encoder padding and SFA prefixes
+
+The encoder can align a requested loop start by inserting up to 31 leading PCM
+frames and adjusting the encoded loop positions. `info.inserted_frames` exposes
+that metadata. The decoder returns the declared encoded timeline as stored;
+it neither removes those frames nor synthesizes extra silence. A padding count
+larger than the loop start is invalid. Truly non-block-aligned encoded starts
+remain unsupported: a requested source-sample start and its adjusted encoded
+position are different coordinates. This does not change carried loop history.
+
+`kosdec_adx_make_sfa_header(output, capacity, channels, rate, frames)` constructs
+a 288-byte SFA ADX prefix: encoding 3, version 3, 18-byte blocks, 4-bit residuals,
+500 Hz cutoff and no loop. It returns `DONE` after writing the prefix, `NEED_OUTPUT`
+for insufficient capacity, or `UNSUPPORTED` for parameters outside the decoder's
+admission domain. With the fixed cutoff, admitted rates are 1000..48000 Hz and
+channels are mono/stereo. Output is unchanged on failure; surplus capacity stays
+untouched. Feed the generated prefix before the matching headerless ADX body.
+A complete bounded file still needs its end record. This function does not encode
+PCM, alter an active stream, or implement an SFD demuxer/SJ insertion facade.
+
+Consumers must rebuild for the expanded metadata snapshot structure. Existing
+decoder, reader and player state layouts and PCM arithmetic are unchanged.
 
 ## Resident-input PCM reader
 

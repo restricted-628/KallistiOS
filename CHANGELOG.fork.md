@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX encoder padding and SFA prefixes
+
+- Admit 0..31 inserted leading frames in supported v3 single-loop headers and
+  expose the count in validated metadata. The encoded timeline, predictor
+  history and PCM math remain unchanged; nonaligned encoded loop starts remain
+  unsupported. Consumers must rebuild for the metadata structure change.
+- Add caller-buffer construction of validated 288-byte SFA ADX prefixes, without
+  an encoder, allocation, I/O or active-stream mutation. This is not an SFD
+  demuxer or live stream-joint insertion implementation.
+- Fresh full host/sanitizer suites, including512 initialization cases and794
+  checker cases per lane, pass. Strict GCC16.2 SH-4 archive and staged C/C++
+  links pass. These are not emulator playback, audible output, physical hardware
+  or complete historical format/middleware parity claims.
+
 ## 2026-11-13 — experimental bank authoring, validation and upload
 
 - Add an original private ABK authoring tool, byte-safe native validator and

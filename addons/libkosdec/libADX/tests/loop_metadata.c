@@ -61,7 +61,7 @@ int main(void) {
     /* Every truncated prefix, including all loop fields. */
     for(size_t end=0;end<n;++end)CHECK(run(p,end,7,&d)==KOSDEC_ADX_TRUNCATED);
     const struct {unsigned offset;uint32_t value;enum kosdec_adx_status status;} bad[]={
-        {20,2,KOSDEC_ADX_UNSUPPORTED},{20,0x10001,KOSDEC_ADX_UNSUPPORTED},
+        {20,2,KOSDEC_ADX_UNSUPPORTED},{20,0x200001,KOSDEC_ADX_UNSUPPORTED},
         {24,2,KOSDEC_ADX_UNSUPPORTED},{28,61,KOSDEC_ADX_INVALID},
         {28,31,KOSDEC_ADX_UNSUPPORTED},{36,66,KOSDEC_ADX_INVALID},
         {32,51,KOSDEC_ADX_INVALID},{40,51,KOSDEC_ADX_INVALID}};
