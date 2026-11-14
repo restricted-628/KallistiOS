@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify the SH4ZAM pin and its exact, explicitly applied KOS patch."""
+"""Verify the reviewed SH4ZAM pin and pristine upstream source."""
 
 import argparse
 from pathlib import Path
@@ -9,8 +9,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 SUBMODULE = "addons/libsh4zam/upstream"
 UPSTREAM_URL = "https://github.com/gyrovorbis/sh4zam.git"
-PATCH_BASE = "5b7dfc22a91f7a21756f1e8f86b1ed3d99dd33bf"
-PATCH = "addons/libsh4zam/patches/matrix-alignment.patch"
+REVIEWED_REVISION = "5b7dfc22a91f7a21756f1e8f86b1ed3d99dd33bf"
 
 
 def git(root, *args):
@@ -19,8 +18,8 @@ def git(root, *args):
     ).decode().strip()
 
 
-def verify(root, apply_local_patch=False):
-    """Reject every source delta except the reviewed patch on its exact base."""
+def verify(root):
+    """Reject source deltas and pins not yet reviewed by Integration."""
     root = Path(root).resolve()
     upstream = root / SUBMODULE
     if not (upstream / ".git").exists():
@@ -45,45 +44,28 @@ def verify(root, apply_local_patch=False):
     for stale in ("source", "source-lock.json", "local-changes.patch"):
         if (root / "addons/libsh4zam" / stale).exists():
             raise ValueError(f"Obsolete vendored SH4ZAM path remains: {stale}")
-    if revision != PATCH_BASE:
-        raise ValueError("Local SH4ZAM patch must be reviewed for this new pin")
+    if revision != REVIEWED_REVISION:
+        raise ValueError("SH4ZAM source must be reviewed for this new pin")
     if git(upstream, "ls-files", "--others", "--exclude-standard"):
         raise ValueError("SH4ZAM upstream checkout has untracked files")
-    patch = (root / PATCH).read_bytes()
-
-    def source_diff():
-        return subprocess.check_output([
-            "git", "-C", str(upstream), "-c", "core.quotePath=false", "diff",
-            "--no-ext-diff", "--no-textconv", "--binary", "--full-index",
-            "--no-renames", "--diff-algorithm=myers", "--unified=3",
-            "--src-prefix=a/", "--dst-prefix=b/", "--no-color", "HEAD", "--", "."
-        ])
-
-    delta = source_diff()
-    if not delta and apply_local_patch:
-        subprocess.run(["git", "-C", str(upstream), "apply", "--check", "-"],
-                       input=patch, check=True)
-        subprocess.run(["git", "-C", str(upstream), "apply", "-"],
-                       input=patch, check=True)
-        delta = source_diff()
-    if not delta:
-        raise ValueError("KOS alignment patch missing: run "
-                         "python3 utils/check-sh4zam-source.py --apply-local-patch")
-    if delta != patch:
-        raise ValueError("SH4ZAM source differs from the exact approved KOS patch")
+    if git(upstream, "diff", "--no-ext-diff", "--no-textconv",
+           "--ignore-submodules=none", "HEAD", "--", "."):
+        raise ValueError("SH4ZAM source must be pristine; reconcile local edits "
+                         "using addons/libsh4zam/README.md")
+    if git(upstream, "diff", "--cached", "--no-ext-diff", "--no-textconv",
+           "--ignore-submodules=none", "HEAD", "--", "."):
+        raise ValueError("SH4ZAM index must be pristine; preserve and reconcile staged edits")
     return revision
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply-local-patch", action="store_true",
-                        help="apply the reviewed patch to a clean exact-base checkout")
-    args = parser.parse_args()
+    parser.parse_args()
     try:
-        revision = verify(ROOT, args.apply_local_patch)
+        revision = verify(ROOT)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         raise SystemExit(f"SH4ZAM verification failed: {error}") from error
-    print(f"SH4ZAM submodule: approved KOS alignment patch on {revision}")
+    print(f"SH4ZAM submodule: pristine reviewed upstream {revision}")
 
 
 if __name__ == "__main__":

@@ -4,24 +4,22 @@ SH4ZAM is developed by Falco Girgis and the SH4ZAM contributors at
 https://github.com/gyrovorbis/sh4zam. Its upstream MIT license and author
 notices are preserved unchanged. This directory supplies the KOS build
 adapter and integration documentation; separate KOS helpers live under
-`addons/include/kos/`. The local compatibility patch below is a KOS change,
-not an upstream SH4ZAM release or an independently authored library.
+`addons/include/kos/`. The dependency uses pristine upstream source.
 
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
 `5b7dfc22a91f7a21756f1e8f86b1ed3d99dd33bf`, upstream **v0.10 update**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
-and license are retained; no build-time source patches are applied. The explicit
-setup step applies `patches/matrix-alignment.patch` to this exact base. Updating
+and license are retained; no local source patches are applied. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
 This advances `ad2f8909`. It adds combined Euler and 16-bit-turn
 XMTRX rotations, quaternion initializer/apply optimizations, register permutations,
-scalar fixes and section-level assembly organization. The existing alignment
-overlay is refreshed without semantic changes. This update does not enable
-new consumer algorithms or claim hardware speedups. Clean GCC16.2 builds, host
+scalar fixes and section-level assembly organization. The initial update retained
+the alignment overlay; its later retirement is described below. This update does
+not enable new consumer algorithms or claim hardware speedups. Clean GCC16.2 builds, host
 regressions/sanitizers, consumer/provider links and selected Flycast tests pass.
 Combined rotations, quaternion init/apply, control-mode preservation and native
 bitwise permutations pass at O0 and O2 in interpreter and dynarec modes.
@@ -32,13 +30,12 @@ overloads make an untyped integer literal ambiguous. Rotation extraction is not
 a general scaled-TRS decomposition. Matrix negation now uses multiplication in
 some lanes; do not assume sign-bit-only behavior for special floating values or
 unchanged FPSCR status. No production consumer is switched to these operations.
-The fork retains this upstream negation implementation by explicit decision;
-the local patch remains limited to the existing alignment correction.
+The fork retains this upstream negation implementation by explicit decision.
 
 Previously, `ad2f8909` advanced `9a214a2`. The adapter builds separate SH-4 and software
 matrix translation units; their shared implementation fragment is not compiled
-independently. The public matrix alignment correction is now upstream, so the
-local patch retains only the raw-buffer operands and software-state alignment.
+independently. The public matrix alignment correction is now upstream; the
+residual raw-buffer/software-state patch has since been retired.
 On SH-4, matrix size remains 64 bytes but alignment changes from 16 to 8;
 `pvr_skin_prepared_joint_t` changes from 112 to 104 bytes. Cleanly rebuild all
 libraries and applications. Native prepared palettes are not serialized assets.
@@ -51,7 +48,7 @@ its composition changes from Qy*Qx*Qz to the documented Qx*Qy*Qz. No tracked
 KOS consumer calls the deprecated constructor. The sprite-cell consumer uses
 Z-only quaternions, for which the corrected Z extraction retains its meaning.
 External users of mixed-axis rotations must review their convention rather
-than treating this as a name-only deprecation. The alignment patch is unchanged.
+than treating this as a name-only deprecation.
 
 Previously, `c18faab` advanced `7747e5d`, adding weighted 3x4 XMTRX blending,
 software-backend inverse-trigonometry fixes, target/TLS fixes and the new upstream documentation
@@ -61,9 +58,8 @@ initialize the accumulator appropriately. No graphics consumer is switched to
 the new blending algorithm by this dependency update.
 
 Use <https://sh4zam.com/for-agents/> and its symbol index for API contracts;
-check the site's source revision against this pin. Fork-specific alignment,
-fiber context and lifetime rules below still apply. The local alignment patch
-is retained with unchanged semantics and refreshed for this exact base.
+check the site's source revision against this pin. Alignment, fiber context
+and lifetime rules below still apply.
 
 Earlier, `7747e5d` advanced the official pin `ae8d4c1`. That pin replaced PR #70
 `0c1ccb5f5614314e36e2fec3179c8ca3ae844770`. The official release uses inline
@@ -82,39 +78,42 @@ KOS revisions, run from the KOS root:
 ```sh
 git submodule sync -- addons/libsh4zam/upstream
 git submodule update --init --recursive
-python3 utils/check-sh4zam-source.py --apply-local-patch
 python3 utils/check-sh4zam-source.py
 ```
 
-The checker verifies the Git index's pinned revision, the exact local patch,
+The checker verifies the Git index's reviewed pinned revision, pristine source,
 official repository URL, public header symlink, and unchanged license copy.
 Fork URLs, unexpected tracked changes and untracked source files are rejected.
-The apply option is idempotent; it refuses to apply over unrelated edits or a
-different base. Normal verification and builds never apply the patch themselves.
-Git will show the submodule as modified because the reviewed patch is applied;
-the parent repository tracks both its upstream base and the explicit delta.
-Before a future repin, reconcile or retire the patch rather than resetting the
-submodule or applying it blindly. No upstream history is rewritten.
+Verification and builds never modify the dependency. The former
+`--apply-local-patch` option is removed. For a checkout with the old overlay,
+preserve its diff and recover `addons/libsh4zam/patches/matrix-alignment.patch`
+from the KOS commit that installed it. Only reverse that exact patch after
+confirming it is the entire local delta and that a reverse-apply check passes.
+If other edits are present, reconcile them separately; do not reset or clean
+the submodule. Rebuild libraries and applications after retirement. No upstream
+history is rewritten and the dependency pin is unchanged.
 Ordinary GitHub source ZIPs and `git archive` do not embed submodule contents;
 use a recursive clone, or explicitly include the pinned dependency when making
 a complete source distribution. A missing checkout produces an actionable
 addon build error rather than downloading code during compilation.
 
-## Local matrix alignment correction
+## Alignment policy and retired patch
 
-The earlier patch corrected typedef-versus-struct alignment disagreement.
-The pinned release includes that correction for the public matrix struct;
-the residual patch puts the minimum alignment on the software-state struct.
+The original public typedef-versus-struct alignment bug was fixed upstream.
+On 2026-11-13 the owner approved retiring the residual raw-buffer/software-state
+patch after clean-upstream compiler and host regression checks. No current
+execution failure requiring it was reproduced; retirement is not a speedup claim.
 Native matrix objects use their type's alignment. Host SIMD layouts can differ
 from SH-4, so do not infer a portable native layout from the target's 8-byte
 matrix alignment.
 
-Raw-buffer XMTRX entry points retain their existing dispatch and SH-4 assembly.
-Their internal operands describe 16 floats without casting the buffer to the
-more-aligned matrix type. No extra runtime checks, copies, or broad memory
-clobbers are added. Matrix storage remains 64 bytes; containing structures can
-have different padding/stride than with the earlier pin. Rebuild all consumers
-and do not serialize native prepared structures or mix old/new archives.
+Upstream raw-buffer dispatch and assembly are used unchanged. Two source-level
+concerns remain recorded: raw transpose wrappers cast float buffers to a stricter
+matrix pointer type, and software-state typedef/tag alignment differs on the
+tested host. Current tests do not establish safety for every compiler or future
+optimization. Keep the regressions and reopen a specific reproducer if one arises,
+not a blanket vendor patch. Matrix storage remains 64 bytes; do not serialize
+native prepared structures or mix old/new archives.
 
 The release fixture covers float-buffer offsets 0, 4, 8 and 12 modulo 16 for
 load/store, transpose and forward/reverse multiplication against a scalar

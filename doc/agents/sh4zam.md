@@ -17,7 +17,9 @@ Pinned library integration, portable/SH-4 backends, direct math consumers and co
 Upstream API reference: <https://sh4zam.com/for-agents/> routes to Markdown
 pages, signatures and a machine-readable symbol index. Check its recorded
 upstream commit against the pinned headers before adopting a call. These docs
-do not supersede this fork's explicit alignment patch or fiber/DMA contracts.
+do not supersede the reviewed dependency pin or this fork's fiber/DMA contracts.
+The local alignment patch was retired on 2026-11-13; require pristine upstream
+source and retain the alignment regressions. Do not reapply historical overlays.
 
 Relevant existing documentation (dated claims must be rechecked):
 

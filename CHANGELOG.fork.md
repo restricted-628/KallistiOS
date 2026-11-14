@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — Retire the SH4ZAM alignment overlay
+
+- Use pristine upstream source at the unchanged `5b7dfc22` pin. Remove the
+  residual matrix-alignment patch and its apply option; retain exact pin,
+  license/header identity and clean-source verification, including staged edits.
+- Preserve raw-buffer alignment regressions and document the remaining transpose
+  pointer-typing and software-state alignment concerns. Reconcile older patched
+  checkouts without discarding unrelated edits and rebuild consumers.
+- Fifteen checker tests, six host suites in normal/sanitizer modes, a forced
+  GCC 16.2 KOS rebuild and graphics/media/core/addon-fiber consumer links pass.
+  Native O2 integration and O0 release fixtures pass both Flycast modes.
+  No hardware/performance claim or FFT, provider, renderer or pin change.
+
 ## 2026-11-13 — libADX signed pan and AUTO controls
 
 - Add per-channel signed pan (-15 through +15), independent AUTO selection and

@@ -109,6 +109,16 @@ Rotation extraction is not scaled-TRS decomposition. Host/sanitizer, clean
 target build/link and selected Flycast numerical/state/provider checks pass;
 this does not authorize optional renderer substitutions or claim hardware gains.
 
+**Alignment patch retirement, 2026-11-13:** The owner approved pristine upstream
+at the unchanged `5b7dfc22` pin. The original public matrix alignment fix is
+upstream; clean source passed compiler/host regressions without demonstrating
+a current failure requiring the residual patch. Retire the explicit patch and
+its apply option; keep exact pin/source verification and raw-buffer regressions.
+This supersedes the earlier overlay requirement, not fiber/FPU/ABI contracts.
+Raw transpose pointer typing and software-state typedef/tag alignment remain
+documented source concerns, not established runtime failures. No universal
+compiler-safety, performance or physical-hardware claim follows from retirement.
+
 **Accepted lighting slice, 2026-10-26:** Caller-owned prepared basic/extended
 lighting snapshots move invariant light admission and directional normalization
 to an explicit update/batch boundary. Existing checked APIs remain available
