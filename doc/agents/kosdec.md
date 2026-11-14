@@ -2,7 +2,11 @@
 
 KOSdec owns `addons/libkosdec`: independent `libADX`, `libSFD`, `libAHX`
 components and host tools. Full Dreamcast-era ADX middleware parity is the first
-milestone, targeting KOS Experimental before stock KOS. SFD and AHX are deferred.
+milestone, targeting KOS Experimental before stock KOS. Full SFD and AHX development follows ADX. The original bounded SFD video-only
+prototype is preserved under `addons/libkosdec/libSFD`; its explicit archive,
+standalone OIX/AMX example and host fixture tests are opt-in. The example owns
+startup cache/MMU state; the archive does not. Preserve the documented profile,
+float math, dependency provenance and separate hardware/runtime gates.
 The owner's full-scope requirement is tracked in `addons/libkosdec/libADX/PARITY.md`;
 asset-specific priorities do not narrow that objective. Keep unknown and incomplete
 capabilities explicit, including the outstanding function-by-function baseline map.

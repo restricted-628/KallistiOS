@@ -56,3 +56,8 @@ reports whether the source rate falls within the native player's 8000..48000 Hz
 default-output range. It is independent of full-file `compatible` and is not an
 audibility or hardware certification. Lower-rate sources require an explicit
 in-range output override, which changes pitch and duration.
+
+The separate opt-in `prepare-sfd-test.py` prepares a caller-supplied 360-frame
+movie and FFmpeg references for the preserved [libSFD prototype](../libSFD/README.md).
+It writes generated media/header files only to the explicit output directory;
+keep that directory outside published source. It does not encode SFD or ADX.

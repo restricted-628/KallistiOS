@@ -3,7 +3,7 @@
 KOSdec groups independently linkable Dreamcast media components:
 
 - `libADX`: active ADX codec and middleware development.
-- `libSFD`: reserved for Sofdec video/container playback.
+- `libSFD`: preserved bounded video-only prototype and standalone OIX/AMX player.
 - `libAHX`: reserved for AHX audio.
 - `tools`: host asset compatibility checker; authoring tools remain pending.
 
@@ -53,3 +53,6 @@ No aggregate addon build defaults are changed.
 
 See [libADX's contract](libADX/README.md) before using it. The public API is
 experimental, namespaced `kosdec_adx_*`, and is not a CRI ABI replacement.
+
+The opt-in [libSFD prototype](libSFD/README.md) builds independently with
+`make -C libSFD sh4`; it does not change the ADX-first default targets.

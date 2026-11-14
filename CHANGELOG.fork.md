@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — Opt-in libSFD video prototype
+
+- Preserve the bounded video-only Sofdec prototype as an independently linkable
+  `libSFD.a`, with namespaced C/C++ headers and a standalone OIX/AMX example.
+  Retain the modified MIT PL_MPEG provenance and existing float/SH4ZAM math.
+- Keep ADX-first addon defaults, shared drivers and dependency pins unchanged.
+  No SDK/game assets are bundled. The example owns its cache/MMU lifecycle;
+  the library does not change global platform state.
+- Host and sanitizer checks reproduce the 360-frame reference hash, all-color
+  conversion and address-profile selectors. Strict SH-4 archive and example
+  builds pass; staged C/C++ consumer links are checked separately.
+- This is a fixed-profile resident prototype, not complete middleware. Audio,
+  streaming, general format admission, native performance and hardware validation
+  remain open; historical player execution does not qualify this migrated build.
+
 ## 2026-11-13 — AICA bank registry and private music foundations
 
 - Publish the bounded resident bank registry and host ownership/adoption path,
