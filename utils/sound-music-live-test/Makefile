@@ -1,8 +1,10 @@
 CC = cc
 ARM = ../../kernel/arch/dreamcast/sound/arm
-CPPFLAGS = -I../sound-observation-test/stubs -I$(ARM) -I../../kernel/arch/dreamcast/include -I../../kernel/arch/dreamcast/include/dc/sound -include ../sound-observation-test/stubs/types.h
+ASQ = ../aica-sequence-tool/native
+SEQUENCE = $(ASQ)/asq.c $(ASQ)/catalog.c $(ASQ)/wire.c $(ARM)/aica_sequence.c $(ARM)/aica_sequence_resource.c
+CPPFLAGS = -I$(ASQ) -I../sound-observation-test/stubs -I$(ARM) -I../../kernel/arch/dreamcast/include -I../../kernel/arch/dreamcast/include/dc/sound -include ../sound-observation-test/stubs/types.h
 CFLAGS = -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
-SOURCES = test.c $(ARM)/aica_observer.c $(ARM)/aica_bank_registry.c $(ARM)/aica_music.c $(ARM)/aica_music_bank.c $(ARM)/aica_music_wire.c $(ARM)/aica_music_live.c
+SOURCES = $(SEQUENCE) test.c $(ARM)/aica_observer.c $(ARM)/aica_bank_registry.c $(ARM)/aica_music.c $(ARM)/aica_music_bank.c $(ARM)/aica_music_wire.c $(ARM)/aica_music_live.c
 .PHONY: test sanitize
 test: live-test
 	./live-test
@@ -17,3 +19,7 @@ host-test:
 	python3 host.py
 host-sanitize:
 	python3 host.py --sanitize
+
+$(ASQ)/wire-fixture.h:
+	$(MAKE) -C $(ASQ) wire-fixture.h
+live-test live-sanitize: $(ASQ)/wire-fixture.h

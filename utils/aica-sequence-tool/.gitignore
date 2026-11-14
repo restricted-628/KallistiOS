@@ -4,3 +4,8 @@ native/asq-sanitize
 native/catalog-check
 native/catalog-asan
 *.dSYM/
+native/wire-check
+native/wire-asan
+native/wire-fixture.h
+native/client-check
+native/client-asan

@@ -24,13 +24,16 @@ stream.drv: stream.drv.prebuilt
 	cp $< $@
 endif
 
+ASQ_DIR = $(KOS_BASE)/utils/aica-sequence-tool/native
+ASQ_OBJS = aica_sequence_resource.o aica_sequence.o asq_native.o asq_catalog.o asq_wire.o
+
 MUSIC_OBJS = aica_music.o aica_music_bank.o aica_music_wire.o aica_music_live.o
 
-prog.elf: crt0.o main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS)
-	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS) -lgcc
+prog.elf: crt0.o main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS) $(ASQ_OBJS)
+	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS) $(ASQ_OBJS) -lgcc
 
 %.o: %.c
-	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I $(KOS_BASE)/kernel/arch/dreamcast/include -I $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound -c $< -o $@
+	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(ASQ_DIR) -I $(KOS_BASE)/kernel/arch/dreamcast/include -I $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound -c $< -o $@
 
 %.o: %.s
 	$(DC_ARM_AS) $(DC_ARM_AFLAGS) $< -o $@
@@ -45,3 +48,14 @@ aica.o main.o: aica.h
 main.o aica_bank_registry.o: aica_bank_registry.h $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_bank_registry.h
 
 main.o $(MUSIC_OBJS): aica_music_live.h aica_music.h aica_music_bank.h aica_music_wire.h aica_music_sequence.h
+
+main.o aica_sequence_resource.o: aica_sequence_resource.h $(ASQ_DIR)/wire.h $(ASQ_DIR)/catalog.h $(ASQ_DIR)/asq.h
+main.o $(ASQ_OBJS): aica_sequence.h $(ASQ_DIR)/asq.h
+main.o aica_sequence_resource.o: $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_sequence_resource.h $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_music_live.h
+asq_wire.o: $(ASQ_DIR)/asq.h aica_cmd_iface.h
+asq_native.o: $(ASQ_DIR)/asq.c $(ASQ_DIR)/asq.h aica_sequence.h
+	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@
+asq_catalog.o: $(ASQ_DIR)/catalog.c $(ASQ_DIR)/catalog.h $(ASQ_DIR)/asq.h
+	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@
+asq_wire.o: $(ASQ_DIR)/wire.c $(ASQ_DIR)/wire.h $(ASQ_DIR)/catalog.h
+	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@

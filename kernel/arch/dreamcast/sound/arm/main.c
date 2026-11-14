@@ -16,6 +16,7 @@
 #include "aica_observer.h"
 #include "aica_bank_registry.h"
 #include "aica_music_live.h"
+#include "aica_sequence_resource.h"
 
 /****************** Timer *******************************************/
 
@@ -76,6 +77,8 @@ typedef char aica_channel_status_region_must_fit[
     AICA_RAM_START ? 1 : -1];
 
 static aica_music_live_t *const music = (aica_music_live_t *)AICA_MEM_MUSIC_STATE;
+static asq_resource_runtime_t *const sequence_resources =
+    (asq_resource_runtime_t *)AICA_MEM_SEQUENCE_STATE;
 
 static uint32 commands_processed;
 static uint32 commands_rejected;
@@ -242,6 +245,7 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_POSITION |
                      AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
                      AICA_DRIVER_FEATURE_BANK_REGISTRY | AICA_DRIVER_FEATURE_MUSIC |
+                     AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
@@ -665,6 +669,11 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
             if(!aica_observer_command(&observer, pkt, timer))
                 ++commands_rejected;
             break;
+        case ASQ_WIRE_COMMAND:
+            if(!observer.header->ready || observer.header->sequence==UINT32_MAX ||
+               !asq_wire_command(&sequence_resources->wire,pkt,observer.header->active_session))
+                ++commands_rejected;
+            break;
         case AICA_MUSIC_WIRE_COMMAND:
             if(!observer.header->ready || observer.header->sequence==UINT32_MAX ||
                !aica_music_live_command(music,pkt,observer.header->active_session))
@@ -780,6 +789,8 @@ int arm_main(void) {
     aica_bank_registry_init(&banks);
     aica_music_live_init(music,&banks,
         (volatile aica_music_receipt_t *)AICA_MEM_MUSIC_RECEIPT);
+    asq_resource_runtime_init(sequence_resources,
+        (volatile asq_receipt_t *)AICA_MEM_SEQUENCE_RECEIPT);
     commands_processed = 0;
     commands_rejected = 0;
     malformed_packets = 0;
@@ -827,6 +838,7 @@ int arm_main(void) {
         /* One aggregate, fair budget; registration never scans all banks here. */
         aica_bank_registry_service(&banks);
         aica_music_live_service(music,timer);
+        asq_wire_service(&sequence_resources->wire);
 
         /* Little delay to prevent memory lock */
         timer_wait(10);

@@ -2,8 +2,8 @@
 
 ASQ is an original draft container for the private AICA sequence engine. It
 contains no samples and has no Sega bank/ABI compatibility. This utility prepares
-native programs; it does not upload them, publish an ARM bank, reserve voices,
-start hardware or change the default firmware.
+native programs. The optional private native owner below uploads and publishes
+them with matching firmware; the authoring CLI reserves no voices or hardware.
 
 ```
 python3 asq.py build example.json example.asq
@@ -105,9 +105,48 @@ cancel preparation or discard failed admission; it never replaces an occupied
 slot. Generation/counter exhaustion refuses work. A callback ownership violation
 latches a fault and prevents reclamation. There is no forced reset/unload API.
 This retires only CPU references to sequence data, not samples, voices or DSP
-resources. No firmware transport, absolute address or device upload is supplied.
+resources. The catalog itself supplies no transport or device upload.
 Release lookup visits at most eight slots and 128 directory entries in the one
 matching resource; admission retains the existing ASQ per-step work bounds.
 
 Run `make -C native catalog-test catalog-sanitize` for actual parser/core lifetime
 coverage. Target code-link probes still do not establish live ARM execution.
+
+## Private resident publication
+
+`native/owner.h` composes the existing SPU transfer API with the private ARM
+catalog. Rebuild the ARM firmware and KOS before using it; initialization requires
+the sequence-resource feature. The unchanged prebuilt fallback does not supply
+this feature. This is an opt-in private interface, not a Sega binary ABI.
+
+Use one zeroed, exclusive, serialized ordinary-thread owner for the live sound
+runtime. Initialize with a 32-byte-multiple transfer chunk (32..32768) and a
+nonzero timeout. Begin an EMPTY/CLOSED slot and pump until READY or an error.
+The caller's source remains immutable and alive until the last transfer request
+is destroyed. An error can leave allocations or admission pending: preserve the
+owner and call close/pump; never discard the context after a failed begin.
+
+READY means that the entire ASQ resource passed ARM validation. Query returns
+its generation, program/event counts and CPU references. Close cancels uploads
+or drops the exact resident generation, then frees both source and decoded
+allocations only after the corresponding transfer/catalog ownership retires.
+Only one transaction may be active. Exact retry resolves uncertain submission;
+query cannot overtake it. A rejected PREPARE licenses release only of its own
+exclusive provisional allocations, never storage described by an occupied slot.
+
+Session loss, contradictory receipts or counter exhaustion retain uncertain
+storage. There is no force-reset, force-close or runtime restart path. Do not
+race sound reset/shutdown, raw catalog commands or another owner. Catalog drop
+tracks CPU sequence references only; it proves nothing about physical sample,
+voice or DSP retirement. This publication layer starts no sequence playback.
+
+The private version-1 command is 0x0e; its 256-byte coherent receipt occupies
+0x29c00..0x29d00, with resident state reserved at 0x2f000..0x30000. Each firmware
+pass services at most one bounded ASQ validation step. PREPARE/QUERY/DROP use
+session, cookie, slot and generation identity; superseding DROP preserves a
+PREPARE tombstone so replay cannot restart cancelled admission.
+
+Run `make -C native wire-test wire-sanitize client-test client-sanitize
+owner-test owner-sanitize` for protocol and mocked host lifetime coverage.
+`examples/dreamcast/sound/sequence-resources` supplies the native publication
+fixture; its result is separate from host tests, playback and hardware evidence.

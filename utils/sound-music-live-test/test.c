@@ -130,8 +130,35 @@ static void backend_and_guards(void) {
     CHECK(music->music.ops.start(music,0,1,&cfg)==AICA_MUSIC_FAULT);
     CHECK(writes==before && !memcmp(&saved,&observations[0],sizeof(saved)));
 }
+#include "../aica-sequence-tool/native/wire-fixture.h"
+static _Alignas(32) uint8_t sequence_ram[0x200000];
+static asq_receipt_t sequence_receipt;
+static void *sequence_map(void *context,uint32_t address,uint32_t bytes,int write) {
+    (void)context;(void)write;
+    CHECK(address>=0x30000 && bytes<=0x200000-address);
+    return sequence_ram+address;
+}
+static void sequence_publication(void) {
+    fresh();asq_resource_runtime_init(sequence_resources,&sequence_receipt);
+    sequence_resources->wire.map=sequence_map;
+    memcpy(sequence_ram+0x30000,fixture,sizeof(fixture));
+    init_packet(ASQ_WIRE_COMMAND,16,1);data[8]=7;data[9]=ASQ_WIRE_PREPARE;
+    data[11]=1;data[12]=0x30000;data[13]=sizeof(fixture);data[14]=0x40000;data[15]=7;
+    uint32_t rejected=commands_rejected;
+    header.ready=0;dispatch();CHECK(commands_rejected==rejected+1 && !sequence_receipt.cookie);
+    header.ready=1;data[8]=8;dispatch();CHECK(commands_rejected==rejected+2 && !sequence_receipt.cookie);
+    data[8]=7;dispatch();CHECK(sequence_receipt.result==ASQ_WIRE_PENDING);
+    unsigned passes=0;
+    while(sequence_resources->wire.pending) { asq_wire_service(&sequence_resources->wire);CHECK(++passes<40); }
+    CHECK(sequence_receipt.result==0 && sequence_receipt.state==ASQ_CATALOG_READY);
+    init_packet(ASQ_WIRE_COMMAND,16,2);data[8]=7;data[9]=ASQ_WIRE_QUERY;data[11]=1;dispatch();
+    CHECK(sequence_receipt.result==0 && sequence_receipt.programs==1 && sequence_receipt.event_count==7);
+    init_packet(ASQ_WIRE_COMMAND,16,3);data[8]=7;data[9]=ASQ_WIRE_DROP;data[11]=1;dispatch();
+    CHECK(sequence_receipt.result==0 && !sequence_receipt.state && !sequence_receipt.source);
+    CHECK(writes==0 && lp_reads==0);
+}
 int main(void) {
-    observation_regression();clocks();claims();backend_and_guards();
+    observation_regression();clocks();claims();backend_and_guards();sequence_publication();
     printf("LIVE music: %u actual-C checks passed; no hardware/retirement proof\n",checks);
     return 0;
 }

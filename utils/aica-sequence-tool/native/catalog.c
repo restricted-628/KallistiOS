@@ -1,5 +1,5 @@
 #include "catalog.h"
-#include <string.h>
+static void clear(void *p,unsigned n) { uint8_t *b=p;while(n--) *b++=0; }
 static int span(const void *p,size_t n) {
     return p && n && n<=UINTPTR_MAX-(uintptr_t)p;
 }
@@ -27,7 +27,7 @@ static int available(const asq_catalog_t *c,const void *p,size_t n) {
 }
 int asq_catalog_init(asq_catalog_t *c) {
     if(!c) return ASQ_CATALOG_INVALID;
-    memset(c,0,sizeof(*c));return 0;
+    clear(c,sizeof(*c));return 0;
 }
 int asq_catalog_begin(asq_catalog_t *c,unsigned slot,uint32_t g,
     const void *source,size_t bytes,aica_seq_event_t *storage,size_t capacity) {
@@ -58,7 +58,7 @@ int asq_catalog_drop(asq_catalog_t *c,unsigned slot,uint32_t g) {
     if(!r) return ASQ_CATALOG_INVALID;
     if(c->faulted) return ASQ_CATALOG_FAULT;
     if(r->borrowed || r->playing) return ASQ_CATALOG_BUSY;
-    memset(r,0,sizeof(*r));r->generation=g;return 0;
+    clear(r,sizeof(*r));r->generation=g;return 0;
 }
 int asq_catalog_acquire(asq_catalog_t *c,unsigned slot,uint32_t g,
     unsigned program,asq_lease_t *lease) {
@@ -79,7 +79,7 @@ int asq_catalog_return(asq_catalog_t *c,asq_lease_t *lease) {
     if(i==ASQ_CATALOG_BORROWS) return ASQ_CATALOG_INVALID;
     r=resource(c,lease->slot,lease->generation);
     if(!r || !r->borrowed) { c->faulted=1;return ASQ_CATALOG_FAULT; }
-    --r->borrowed;c->borrowers[i]=NULL;memset(lease,0,sizeof(*lease));return 0;
+    --r->borrowed;c->borrowers[i]=NULL;clear(lease,sizeof(*lease));return 0;
 }
 static int same(const aica_seq_program_t *a,const aica_seq_program_t *b) {
     return a->events==b->events && a->count==b->count &&

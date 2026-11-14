@@ -17,6 +17,10 @@ ARM command firmware, SH-4 transport, sound RAM, playback/DSP, PCM streams and b
 - `utils/kos-chain/Makefile.aica.cfg` — AICA toolchain configuration (integration co-review)
 - `utils/aica-music-client` — explicit private live owner/client; retained physical
   pool and bank ownership, no automatic reset/shutdown or natural completion.
+- `utils/aica-sequence-tool/native` — private catalog, publication protocol and
+  upload owner; `make catalog-test catalog-sanitize wire-test wire-sanitize
+  client-test client-sanitize owner-test owner-sanitize`. Mocked transfer results
+  establish host ownership behavior, not device execution or sample retirement.
 - `utils/aica-bank-tool` — private original bank authoring; `native/` contains
   byte-safe validation/planning and a caller-owned unpublished PCM uploader.
   This is not an installed bank API or ARM bank playback implementation.
@@ -83,6 +87,8 @@ Target/example directories (source the assigned checkout's environment and inspe
 - `examples/dreamcast/sound/port-reservation` — software ownership only; no playback.
 - `examples/dreamcast/sound/music-live` — original explicit MIDI fixture; retains
   played bank and pool after logical quiesce, then remains alive.
+- `examples/dreamcast/sound/sequence-resources` — original ASQ publication, query,
+  drop and cancelled-upload fixture; no sequence playback or physical samples.
 - `examples/dreamcast/sound/channel-sync`
 - `examples/dreamcast/sound/stream-service`
 - `examples/dreamcast/sound/dsp-control`

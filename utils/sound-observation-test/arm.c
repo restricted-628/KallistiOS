@@ -5,6 +5,10 @@
 #include "types.h"
 #include "aica_cmd_iface.h"
 #include "aica_music_live.h"
+#include "aica_sequence_resource.h"
+static asq_resource_runtime_t test_sequence_resources;
+#undef AICA_MEM_SEQUENCE_STATE
+#define AICA_MEM_SEQUENCE_STATE ((uintptr_t)&test_sequence_resources)
 static aica_music_live_t test_music;
 #undef AICA_MEM_MUSIC_STATE
 #define AICA_MEM_MUSIC_STATE ((uintptr_t)&test_music)

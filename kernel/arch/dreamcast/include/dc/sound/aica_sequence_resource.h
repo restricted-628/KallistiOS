@@ -1,0 +1,9 @@
+/* Experimental original sequence resource transport; not a stable public ABI. */
+#ifndef DC_SOUND_AICA_SEQUENCE_RESOURCE_H
+#define DC_SOUND_AICA_SEQUENCE_RESOURCE_H
+#define AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE 0x100u
+#define AICA_MEM_SEQUENCE_RECEIPT 0x29c00u
+#define AICA_MEM_SEQUENCE_RECEIPT_END 0x29d00u
+#define AICA_MEM_SEQUENCE_STATE 0x2f000u
+#define AICA_MEM_SEQUENCE_LIMIT 0x30000u
+#endif

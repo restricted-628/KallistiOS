@@ -1,5 +1,5 @@
 #include "asq.h"
-#include <string.h>
+static void clear(void *p,unsigned n) { uint8_t *b=p;while(n--) *b++=0; }
 #include <limits.h>
 _Static_assert(sizeof(aica_seq_event_t)==16,"native event size");
 _Static_assert(offsetof(aica_seq_event_t,kind)==12,"native event fields");
@@ -24,7 +24,8 @@ int asq_measure(const void *source,size_t bytes,asq_layout_t *result) {
     if(!span(source,bytes) || bytes<64 || bytes>UINT32_MAX ||
        !span(result,sizeof(*result)) || (uintptr_t)result%_Alignof(asq_layout_t) ||
        overlap(source,bytes,result,sizeof(*result))) return -1;
-    if(memcmp(p,"KOSASQ\0\0",8) || p[8]!=1 || p[9] || p[10]!=64 || p[11]) return -1;
+    for(unsigned i=0;i<8;i++) if(p[i]!=(uint8_t)"KOSASQ\0\0"[i]) return -1;
+    if(p[8]!=1 || p[9] || p[10]!=64 || p[11]) return -1;
     out.size=u32(p+12);out.programs=u32(p+16);out.events=u32(p+20);
     out.event_offset=u32(p+28);
     if(out.size!=bytes || !out.programs || out.programs>ASQ_MAX_PROGRAMS ||
@@ -46,7 +47,7 @@ int asq_begin(asq_bank_t *b,const void *source,size_t bytes,
        !span(storage,used) || (uintptr_t)storage%_Alignof(aica_seq_event_t) ||
        overlap(b,sizeof(*b),source,bytes) || overlap(b,sizeof(*b),storage,used) ||
        overlap(source,bytes,storage,used)) return -1;
-    memset(b,0,sizeof(*b));b->source=source;b->events=storage;b->layout=layout;
+    clear(b,sizeof(*b));b->source=source;b->events=storage;b->layout=layout;
     b->crc=UINT32_MAX;b->crc_offset=64;b->phase=1;return 0;
 }
 int asq_step(asq_bank_t *b) {

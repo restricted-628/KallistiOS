@@ -116,8 +116,9 @@ arm_fiq_enable:
 	mov	pc, lr
 
 start:
-	# Setup a basic stack, disable IRQ
-	mov	sp,#0xb000
+	# Descending stack ends at the exclusive program-region boundary.
+	# The first push is below the command queue at0x10000.
+	mov	sp,#0x10000
 
 	# Call the main for the SPU
 	bl	arm_main
