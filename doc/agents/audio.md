@@ -20,6 +20,9 @@ ARM command firmware, SH-4 transport, sound RAM, playback/DSP, PCM streams and b
 - `utils/aica-bank-tool` — private original bank authoring; `native/` contains
   byte-safe validation/planning and a caller-owned unpublished PCM uploader.
   This is not an installed bank API or ARM bank playback implementation.
+- `utils/aica-sequence-tool` — original ASQ authoring and native admission;
+  `native/catalog.h` owns caller-backed sequence resources through validation,
+  play, pause and chaining. CPU data leases do not retire physical voices.
 
 Relevant existing documentation (dated claims must be rechecked):
 

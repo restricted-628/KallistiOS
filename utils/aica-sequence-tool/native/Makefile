@@ -7,3 +7,15 @@ asq-check: $(SOURCES) $(HEADERS)
 	$(CC) $(CFLAGS) -I$(ARM) $(SOURCES) -o $@
 asq-sanitize: $(SOURCES) $(HEADERS)
 	$(CC) $(CFLAGS) -I$(ARM) -fsanitize=address,undefined -fno-omit-frame-pointer $(SOURCES) -o $@
+
+CATALOG_SOURCES = catalog-test.c catalog.c asq.c $(ARM)/aica_sequence.c
+CATALOG_HEADERS = catalog.h $(HEADERS)
+.PHONY: catalog-test catalog-sanitize
+catalog-test: catalog-check
+	./catalog-check
+catalog-sanitize: catalog-asan
+	./catalog-asan
+catalog-check: $(CATALOG_SOURCES) $(CATALOG_HEADERS)
+	$(CC) $(CFLAGS) -I$(ARM) $(CATALOG_SOURCES) -o $@
+catalog-asan: $(CATALOG_SOURCES) $(CATALOG_HEADERS)
+	$(CC) $(CFLAGS) -I$(ARM) -fsanitize=address,undefined -fno-omit-frame-pointer $(CATALOG_SOURCES) -o $@

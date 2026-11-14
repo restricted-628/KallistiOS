@@ -1,3 +1,6 @@
 __pycache__/
 native/asq-check
 native/asq-sanitize
+native/catalog-check
+native/catalog-asan
+*.dSYM/

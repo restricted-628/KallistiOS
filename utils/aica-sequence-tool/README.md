@@ -86,3 +86,28 @@ truncations, nested loops and maximum counts against Python and actual C. They
 exercise bounded validation, aliases, capacity failure, unaligned sources and
 native sequence retain/play/pause/continue/stop. Host success is not ARM playback,
 DSP execution, audio quality or physical retirement evidence.
+
+The private `native/catalog.h` owner composes ASQ admission with sequence-core
+retain/release callbacks. It has eight caller-backed slots and sixteen concurrent
+validation leases. Initialize once before use. Admit a source and disjoint native
+event storage using the slot's previous generation plus one; service incrementally
+until the entire bank is ready. Failed or preparing slots expose no programs.
+
+Acquire a lease, pass its validation to the synchronous sequence play/chain call,
+then return that lease at the same address. Use `asq_catalog_retain/release` as the
+core's program callbacks (or the corresponding timed-MIDI adapter hooks). A core
+reference is independent of the temporary lease, so pause and pending chains keep
+storage alive. All operations and callbacks share one serialized, nonreentrant
+owner. Lease objects and held source/event arrays must remain unchanged and live.
+
+Drop refuses occupied references and preserves generation on success. It can
+cancel preparation or discard failed admission; it never replaces an occupied
+slot. Generation/counter exhaustion refuses work. A callback ownership violation
+latches a fault and prevents reclamation. There is no forced reset/unload API.
+This retires only CPU references to sequence data, not samples, voices or DSP
+resources. No firmware transport, absolute address or device upload is supplied.
+Release lookup visits at most eight slots and 128 directory entries in the one
+matching resource; admission retains the existing ASQ per-step work bounds.
+
+Run `make -C native catalog-test catalog-sanitize` for actual parser/core lifetime
+coverage. Target code-link probes still do not establish live ARM execution.
