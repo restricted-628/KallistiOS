@@ -6,6 +6,18 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX bounded amplitude analysis
+
+- Add caller-owned mono/stereo peak-window analysis with bounded strided PCM
+  input, typed work sizing and forward-only source-frame record selection.
+  Manual input backpressures; the optional decoder-filter adapter leaves PCM
+  unchanged and reports a sticky fault if analysis storage cannot keep up.
+- Separate record timestamps from a qualified audible clock and document the
+  baseline format/corpus boundary without claiming full middleware parity.
+- Full host/ASan/UBSan suites pass, including peak/window and concurrent queue
+  checks. Strict staged SH-4 C/C++ links retain the eight new APIs. No physical
+  playback, hardware timing or shared Audio interface change is claimed.
+
 ## 2026-11-13 — libADX decoded loop-count queries
 
 - Publish a lock-free decode-side loop count through the PCM pipe and native

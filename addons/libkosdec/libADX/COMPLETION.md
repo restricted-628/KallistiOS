@@ -34,7 +34,7 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 | H9 | Start gate, pause and stop | Prefill plus producer pause and checked software stop | Explicit prepared-but-not-playing gate; audible pause/resume and reusable checked stop. Audio dependency. |
 | H10 | Native output controls | Requested output Hz only; checked update | Direct/effect levels and routing, filter, transpose/detune units/getters; stereo-coherent live updates. Audio dependency. |
 | H11 | Seamless queue and linked controls | Bounded same-format PCM sequence and repeat/release | Baseline queue timing, linked controls and qualified audible seamless transitions; PCM concatenation alone does not establish this. |
-| H12 | Special processing | Unbound decode-from-start seek; caller-buffer SFA header; producer-side PCM filter | Sample-discard contract, amplitude analysis/work sizing, live SJ/SFD header insertion and silence injection. |
+| H12 | Special processing | Unbound decode-from-start seek; caller-buffer SFA header; producer-side PCM filter and bounded peak-window analyzer/work sizing | Sample-discard contract, playback-clock integration for amplitude, live SJ/SFD header insertion and silence injection. |
 | F1 | File/partition services | VFS/direct-disc sources, bounded AFS member views | Partition registration/loading/status, directory/name/range services, sector-read/seek/count/reload/error contracts and lifecycle equivalence. |
 | J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts | Forward-only live decoding, sealed EOF and producer-owned player binding supplied; broader multi-borrow baseline conformance remains. Native one-borrow-per-line/reserved-node admission and typed identity/status are deliberate differences; no CRI ABI claim. |
 | L1 | Load/sequence controller | Bounded same-format PCM sequence | Filename/range queue, per-stream IDs/names/status/read sectors, flow-limit and service/error/pause/stop equivalence. |
@@ -50,6 +50,10 @@ with 0..31 inserted leading frames and a block-aligned encoded start. Arbitrary
 requested loop starts are aligned by the encoder; raw nonaligned encoded starts
 remain unsupported, pending a distinct baseline runtime contract.
 Do not assume later ADX variants must be added simply because they exist.
+See [FORMATS.md](FORMATS.md) for the distinction between active decoder behavior,
+shipped corpus coverage and permissive parsing. Runtime WAV PCM16/ADPCM4 is a
+documented middleware obligation; binary WAV/AIFF/AU/SPSD paths require separate
+container/subtype conformance and remain unimplemented.
 
 C2. Close native arithmetic conformance: predictor operation order, rounding,
 clipping, initial/carried histories and coefficient setup against the baseline.

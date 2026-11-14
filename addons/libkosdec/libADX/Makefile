@@ -11,15 +11,16 @@ HOST_CFLAGS ?= -O2
 SAN_CFLAGS ?= -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 STRICT = -std=gnu17 -Wall -Wextra -Werror -fno-fast-math -ffp-contract=off -fno-lto
 INCLUDES = -Iinclude -isystem $(SHZ_INCLUDE)
-NAMES = joint joint_reader decoder adx_math adx_setup memory stream index sequence pipe service
+NAMES = amplitude joint joint_reader decoder adx_math adx_setup memory stream index sequence pipe service
 SH_OBJS = $(BUILD)/sh4/player.o $(BUILD)/sh4/disc.o $(BUILD)/sh4/file.o $(addprefix $(BUILD)/sh4/,$(addsuffix .o,$(NAMES)))
 HOST_OBJS = $(addprefix $(BUILD)/host-test/,$(addsuffix .o,$(NAMES)))
 SAN_OBJS = $(addprefix $(BUILD)/sanitize/,$(addsuffix .o,$(NAMES)))
-HEADERS = include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_filter.h src/adx_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
+HEADERS = include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_filter.h src/adx_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
 
 .PHONY: sh4 test sanitize install clean
 sh4: $(BUILD)/sh4/libADX.a
-test: $(BUILD)/host-test/loop_count $(BUILD)/host-test/joint_player $(BUILD)/host-test/joint_reader $(BUILD)/host-test/joint_queue $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+test: $(BUILD)/host-test/amplitude $(BUILD)/host-test/loop_count $(BUILD)/host-test/joint_player $(BUILD)/host-test/joint_reader $(BUILD)/host-test/joint_queue $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+	$(BUILD)/host-test/amplitude
 	$(BUILD)/host-test/loop_count
 	$(BUILD)/host-test/joint_player
 	$(BUILD)/host-test/joint_reader
@@ -45,7 +46,8 @@ test: $(BUILD)/host-test/loop_count $(BUILD)/host-test/joint_player $(BUILD)/hos
 	$(BUILD)/host-test/framing
 	$(BUILD)/host-test/profiles
 	$(BUILD)/host-test/loop_metadata
-sanitize: $(BUILD)/sanitize/loop_count $(BUILD)/sanitize/joint_player $(BUILD)/sanitize/joint_reader $(BUILD)/sanitize/joint_queue $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+sanitize: $(BUILD)/sanitize/amplitude $(BUILD)/sanitize/loop_count $(BUILD)/sanitize/joint_player $(BUILD)/sanitize/joint_reader $(BUILD)/sanitize/joint_queue $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+	$(BUILD)/sanitize/amplitude
 	$(BUILD)/sanitize/loop_count
 	$(BUILD)/sanitize/joint_player
 	$(BUILD)/sanitize/joint_reader
@@ -109,10 +111,11 @@ $(BUILD)/sanitize/loop_metadata: tests/loop_metadata.c tests/profile_vectors.h $
 install: sh4
 	@test -n "$(PREFIX)" || { echo 'Set PREFIX to the destination addon directory'; exit 1; }
 	install -d "$(DESTDIR)$(PREFIX)/include/kosdec" "$(DESTDIR)$(PREFIX)/lib/dreamcast"
-	install -m 644 include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_disc.h include/kosdec/adx.h include/kosdec/adx_memory.h include/kosdec/adx_stream.h include/kosdec/adx_file.h include/kosdec/adx_index.h "$(DESTDIR)$(PREFIX)/include/kosdec/"
+	install -m 644 include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_disc.h include/kosdec/adx.h include/kosdec/adx_memory.h include/kosdec/adx_stream.h include/kosdec/adx_file.h include/kosdec/adx_index.h "$(DESTDIR)$(PREFIX)/include/kosdec/"
 	install -m 644 $(BUILD)/sh4/libADX.a "$(DESTDIR)$(PREFIX)/lib/dreamcast/libADX.a"
 
 clean:
+	rm -f $(BUILD)/host-test/amplitude $(BUILD)/sanitize/amplitude
 	rm -f $(BUILD)/host-test/loop_count $(BUILD)/sanitize/loop_count
 	rm -f $(BUILD)/host-test/joint_player $(BUILD)/sanitize/joint_player
 	rm -f $(BUILD)/host-test/joint_reader $(BUILD)/sanitize/joint_reader
@@ -306,4 +309,10 @@ $(BUILD)/host-test/loop_count: tests/loop_count.c tests/stream_fixture.h $(BUILD
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -pthread -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
 
 $(BUILD)/sanitize/loop_count: tests/loop_count.c tests/stream_fixture.h $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -pthread -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+$(BUILD)/host-test/amplitude: tests/amplitude.c tests/stream_fixture.h $(BUILD)/host-test/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -pthread -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
+
+$(BUILD)/sanitize/amplitude: tests/amplitude.c tests/stream_fixture.h $(BUILD)/sanitize/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -pthread -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@

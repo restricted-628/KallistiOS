@@ -142,3 +142,11 @@ source rewinds, not audible time; SDK updates its count in a decoder trap. Publi
 low32 bits from the producer with the existing lock-free atomic discipline;
 controller queries must not read the producer-owned64-bit wraps directly.
 Sequence cycles and forward-only joint input are not embedded-loop counts.
+
+Amplitude records measure complete PCM windows; peak32768 is valid for INT16_MIN.
+Manual feed backpressures; the optional filter adapter latches overflow instead
+of silently dropping records or altering playback PCM. Keep one producer and one
+consumer per channel, release/acquire publication, explicit source-frame selection,
+and storage lifetime through producer join. Do not call analysis timestamps an
+Audio-qualified clock or replace the user's existing filter without composition.
+Native typed work sizing differs from the SDK; no peak-loop FPU/SH4ZAM claim.

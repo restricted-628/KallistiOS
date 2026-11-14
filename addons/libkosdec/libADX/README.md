@@ -879,3 +879,32 @@ lead sound output: this is not an audible-loop clock or sample-fetch certificate
 The baseline SDK likewise increments its loop count from a decoder trap, though
 exact service/prefetch timing is not asserted identical. Rebuild callers for the
 new pipe and player-info fields.
+
+## PCM amplitude analysis
+
+`adx_amplitude.h` provides caller-owned peak records for complete, nonoverlapping
+PCM windows. Each record contains absolute peak0..32768, source-frame start,
+window length and sample rate. Configure window size in frames;4410 frames gives
+100ms at44100Hz. This is a peak detector, not RMS or a spectral transform.
+
+Allocate typed records using `kosdec_adx_amplitude_work_size`, initialize one or
+two channels, then either feed strided PCM or attach `kosdec_adx_amplitude_filter`
+to the existing source filter slot before producer binding. Manual feed consumes
+at most512 frames and backpressures when its queue fills. The filter adapter
+cannot stall decoding: overflow latches a queryable fault and stops analysis,
+while playback PCM remains unchanged. Drain/provision the record queues to avoid
+that condition; reinitialize only after producer join and consumer quiescence.
+A custom filter can call the adapter before or after its own PCM modifications.
+
+One producer owns feed/filter/finish, and one consumer per channel owns read/select.
+Records use the same lock-free32-bit cursor discipline as the PCM pipe. `finish`
+discards incomplete windows and seals input; it does not detach/join a source.
+`status` reports adapter faults even when older records are still available.
+`read` consumes a record; `select` retains the first available start at/after a
+caller-supplied source-frame position, or the latest available record. Selection
+is forward-only as older records are discarded. The caller must supply a qualified
+playback clock for audible synchronization; decoded/copied frames are not one.
+The native record/storage API differs from CRI's raw work-buffer and global pool.
+
+The exact baseline format boundary and remaining container work are recorded in
+[FORMATS.md](FORMATS.md); passing the SDK sample corpus is not full parity.
