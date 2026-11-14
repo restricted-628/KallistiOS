@@ -14,6 +14,7 @@
 #include "aica_cmd_iface.h"
 #include "aica.h"
 #include "aica_observer.h"
+#include "aica_bank_registry.h"
 
 /****************** Timer *******************************************/
 
@@ -89,6 +90,15 @@ static aica_observer_t observer = {
     (volatile aica_completion_header_t *)AICA_MEM_COMPLETION_HEADER,
     (volatile aica_completion_channel_t *)AICA_MEM_COMPLETION_CHANNELS,
     aica_get_loop_end
+};
+static const uint8_t *bank_map(uint32_t address, uint32_t bytes) {
+    (void)bytes; /* Registry validates the complete retail extent first. */
+    return (const uint8_t *)(uintptr_t)address;
+}
+static aica_bank_registry_t banks = {
+    .header = (volatile aica_bank_header_t *)AICA_MEM_BANK_HEADER,
+    .records = (volatile aica_bank_record_t *)AICA_MEM_BANK_RECORDS,
+    .map = bank_map
 };
 _Static_assert(AICA_MEM_CHANNEL_STATUS + 64 * sizeof(aica_channel_status_ext_t)
                <= AICA_MEM_OBSERVATION_HEADER, "observation after legacy status");
@@ -228,6 +238,7 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_VALIDATION |
                      AICA_DRIVER_FEATURE_POSITION |
                      AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
+                     AICA_DRIVER_FEATURE_BANK_REGISTRY |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
@@ -628,6 +639,11 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
             if(!aica_observer_command(&observer, pkt, timer))
                 ++commands_rejected;
             break;
+        case AICA_CMD_BANK_REGISTER:
+        case AICA_CMD_BANK_UNREGISTER:
+            if(!aica_bank_registry_command(&banks, pkt, observer.header->active_session))
+                ++commands_rejected;
+            break;
         default:
             ++commands_rejected;
             break;
@@ -730,6 +746,7 @@ int arm_main(void) {
     uint32 j;
 
     aica_observer_init(&observer);
+    aica_bank_registry_init(&banks);
     commands_processed = 0;
     commands_rejected = 0;
     malformed_packets = 0;
@@ -773,6 +790,9 @@ int arm_main(void) {
         /* Check for a command */
         if(q_cmd->process_ok)
             process_cmd_queue();
+
+        /* One aggregate, fair budget; registration never scans all banks here. */
+        aica_bank_registry_service(&banks);
 
         /* Little delay to prevent memory lock */
         timer_wait(10);

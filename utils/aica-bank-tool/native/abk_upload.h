@@ -6,7 +6,7 @@
 
 typedef enum {
     ABKU_EMPTY = 0, ABKU_UPLOADING, ABKU_RETIRING, ABKU_READY,
-    ABKU_FAILED, ABKU_CANCELLED, ABKU_CLOSED
+    ABKU_FAILED, ABKU_CANCELLED, ABKU_CLOSED, ABKU_IMAGE_READY, ABKU_MOVED
 } abk_upload_state_t;
 
 /* Initialize with {0}. Read fields to observe; never modify while live.
@@ -23,7 +23,7 @@ typedef struct {
     abk_placement_t placement;
     spu_transfer_request_t *request;
     uint32_t address, committed, chunk_bytes, chunk_limit, lifetime_ms;
-    int cancelled;
+    int cancelled, image;
 } abk_upload_t;
 
 /* No service calls on invalid input. Descriptor capacities <= format maxima.
@@ -35,6 +35,14 @@ int abk_upload_begin(abk_upload_t *t, const void *data, uint32_t size,
                      abk_sample_t *samples, uint32_t sample_capacity,
                      abk_zone_t *zones, uint32_t zone_capacity,
                      uint32_t chunk_limit, uint32_t lifetime_ms);
+
+/* Explicit resident-image path: stages the complete immutable original ABK,
+   including metadata. Allocation must fit actual RAM. IMAGE_READY is distinct
+   from PCM READY. Only the serialized bank owner may move ownership afterward. */
+int abk_upload_begin_image(abk_upload_t *t, const void *data, uint32_t size,
+                           abk_sample_t *samples, uint32_t sample_capacity,
+                           abk_zone_t *zones, uint32_t zone_capacity,
+                           uint32_t chunk_limit, uint32_t lifetime_ms);
 
 /* At most one status observation, then retire or submit at most one request.
    Returns0 on progress/settled success; -1 sets errno and last_error. EBUSY from

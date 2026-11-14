@@ -11,6 +11,7 @@ CPPFLAGS += -I../../kernel/arch/dreamcast/sound
 TARGET = sound-stream-test
 
 .PHONY: all clean test
+PYTHON ?= python3
 
 all: test
 
@@ -19,6 +20,8 @@ $(TARGET): sound-stream-test.c
 
 test: $(TARGET)
 	./$(TARGET)
+	$(PYTHON) run-lifetime.py
 
 clean:
 	$(RM) -r $(TARGET) $(TARGET).dSYM
+	$(RM) -r .lifetime-build

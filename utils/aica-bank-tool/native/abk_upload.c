@@ -48,7 +48,7 @@ static int settled(abk_upload_t *t) {
         errno = t->last_error = t->first_error;
         return -1;
     }
-    t->state = ABKU_READY;
+    t->state = t->image ? ABKU_IMAGE_READY : ABKU_READY;
     t->last_error = 0;
     return 0;
 }
@@ -69,10 +69,10 @@ static int submit(abk_upload_t *t) {
     return 0;
 }
 
-int abk_upload_begin(abk_upload_t *t, const void *data, uint32_t size,
+static int upload_begin(abk_upload_t *t, const void *data, uint32_t size,
                      abk_sample_t *samples, uint32_t sample_capacity,
                      abk_zone_t *zones, uint32_t zone_capacity,
-                     uint32_t chunk_limit, uint32_t lifetime_ms) {
+                     uint32_t chunk_limit, uint32_t lifetime_ms, int image) {
     abk_plan_t plan;
     abk_result_t result;
     if(context(t) < 0)
@@ -98,12 +98,15 @@ int abk_upload_begin(abk_upload_t *t, const void *data, uint32_t size,
     t->plan = plan;
     t->chunk_limit = chunk_limit;
     t->lifetime_ms = lifetime_ms;
+    t->image = image;
     errno = 0;
-    t->address = snd_mem_malloc(plan.payload_bytes);
+    t->address = snd_mem_malloc(image ? size : plan.payload_bytes);
     if(!t->address)
         return error(t, errno ? errno : ENOMEM, 1);
-    if(abk_plan_place(&plan, t->address, plan.payload_bytes,
-                      &t->placement) != ABK_OK) {
+    if((image && (t->address < 0x30000u || t->address >= 0x200000u ||
+                  (t->address & 31u) || size > 0x200000u-t->address)) ||
+       (!image && abk_plan_place(&plan, t->address, plan.payload_bytes,
+                                 &t->placement) != ABK_OK)) {
         error(t, ERANGE, 1);
         /* No submission occurred. Preserve ownership if release reports error. */
         errno = 0;
@@ -113,8 +116,25 @@ int abk_upload_begin(abk_upload_t *t, const void *data, uint32_t size,
         t->address = 0;
         return error(t, ERANGE, 1);
     }
+    if(image)
+        t->placement = (abk_placement_t){0, t->address, size};
     t->state = ABKU_UPLOADING;
     return submit(t);
+}
+
+int abk_upload_begin(abk_upload_t *t, const void *data, uint32_t size,
+                     abk_sample_t *samples, uint32_t sample_capacity,
+                     abk_zone_t *zones, uint32_t zone_capacity,
+                     uint32_t chunk_limit, uint32_t lifetime_ms) {
+    return upload_begin(t,data,size,samples,sample_capacity,zones,zone_capacity,
+                         chunk_limit,lifetime_ms,0);
+}
+int abk_upload_begin_image(abk_upload_t *t, const void *data, uint32_t size,
+                           abk_sample_t *samples, uint32_t sample_capacity,
+                           abk_zone_t *zones, uint32_t zone_capacity,
+                           uint32_t chunk_limit, uint32_t lifetime_ms) {
+    return upload_begin(t,data,size,samples,sample_capacity,zones,zone_capacity,
+                         chunk_limit,lifetime_ms,1);
 }
 
 int abk_upload_pump(abk_upload_t *t) {
@@ -123,7 +143,7 @@ int abk_upload_pump(abk_upload_t *t) {
     if(context(t) < 0)
         return -1;
     if(t->state == ABKU_CLOSED || t->state == ABKU_EMPTY ||
-       t->state == ABKU_READY)
+       t->state == ABKU_READY || t->state == ABKU_IMAGE_READY || t->state == ABKU_MOVED)
         return 0;
     if(!t->request)
         return settled(t);
@@ -174,7 +194,7 @@ int abk_upload_pump(abk_upload_t *t) {
 int abk_upload_cancel(abk_upload_t *t) {
     if(context(t) < 0)
         return -1;
-    if(t->state == ABKU_CLOSED)
+    if(t->state == ABKU_CLOSED || t->state == ABKU_MOVED)
         return 0;
     t->cancelled = 1;
     t->state = t->request ? ABKU_RETIRING : ABKU_CANCELLED;

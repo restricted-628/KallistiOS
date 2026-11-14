@@ -175,8 +175,14 @@ static void completion_tests(void) {
     CHECK(snd_port_playback_get_state(p, PROTOCOL_WAIT_MS, &state) == -1 && errno == EOVERFLOW);
     CHECK(ports[idx].priority == 9);
     uint32_t buf[16];
+    bank_header.slot_count = AICA_BANK_SLOTS;
+    CHECK(snd_iface_observation_read(AICA_MEM_BANK_HEADER, buf, 64) == 0 && buf[4] == AICA_BANK_SLOTS);
+    bank_records[127].generation = 123;
+    CHECK(snd_iface_observation_read(AICA_MEM_BANK_RECORDS + 127 * 64, buf, 64) == 0 && buf[2] == 123);
+    CHECK(snd_iface_observation_read(AICA_MEM_BANK_END, buf, 64) == -1 && errno == EINVAL);
+    CHECK(snd_iface_observation_read(AICA_MEM_BANK_RECORDS + 4, buf, 64) == -1 && errno == EINVAL);
     CHECK(snd_iface_observation_read(AICA_MEM_COMPLETION_HEADER + 64, buf, 64) == -1 && errno == EINVAL);
-    CHECK(snd_iface_observation_read(AICA_MEM_COMPLETION_END, buf, 64) == -1 && errno == EINVAL);
+    CHECK(snd_iface_observation_read(AICA_MEM_BANK_HEADER + 64, buf, 64) == -1 && errno == EINVAL);
     CHECK(snd_iface_observation_read(AICA_MEM_COMPLETION_CHANNELS, buf, 32) == -1 && errno == EINVAL);
     CHECK(timed_zero == 0);
 }

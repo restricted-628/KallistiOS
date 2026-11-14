@@ -204,6 +204,14 @@ done:
     return unlock_result(&bind_mutex, result);
 }
 
+int snd_observation_bind_until(uint64_t deadline, uint32_t *value) {
+    if(!value) { errno = EINVAL; return -1; }
+    if(ensure_bound(deadline) < 0 || check_session() < 0)
+        return -1;
+    *value = session;
+    return 0;
+}
+
 int snd_observation_submit_validated_until(unsigned channel, uint32_t operation,
     const snd_channel_config_t *config, uint32_t fields, uint32_t flags,
     snd_channel_receipt_t *receipt, uint64_t deadline) {

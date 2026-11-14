@@ -228,6 +228,22 @@ runtime. This private utility does not publish banks to ARM, start voices or
 authorize unloading memory after playback. Bank registration and ownership are
 the next separate interface milestone; full parity remains open.
 
+**Accepted registry and private cores, 2026-11-13:** Bank registration now has
+bounded ARM validation and checked host adoption/receipts. Pending producers,
+physical voice references and software state remain separate; malformed or lost
+receipts retain allocations. Unplayed register/unregister probes pass both
+Flycast modes, with current firmware embedding verified. They do not establish
+safe unloading after playback or global shutdown retirement.
+
+Private MIDI/sequence, timed-note, command/receipt and host-client cores plus
+ASQ/DSP authoring are accepted as source components, not live activation. The
+proposed music command, receipt/state addresses and exclusive channel pool are
+still subject to a separate integration decision. No pointer-bearing state is
+shared across CPUs. Existing live firmware selects only the accepted registry,
+not these music cores. DSP linear-memory effects remain unqualified on the
+retained emulator because its interpreter ignores NOFL; host models are not
+audio execution. Full Manatee parity and physical retirement remain open.
+
 ## D14 — Dedicated LZ4 addon ownership
 
 **Accepted:** Give the Dreamcast LZ4 addon a dedicated subsystem chat. It owns

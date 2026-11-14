@@ -9,6 +9,7 @@
 */
 
 #include <string.h>
+#include <dc/sound/aica_bank_registry.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -720,7 +721,10 @@ int snd_iface_observation_read(uint32_t offset, void *record, uint32_t bytes) {
          (offset - AICA_MEM_OBSERVATION_CHANNELS) % 32 == 0 && bytes == 32) ||
         (offset == AICA_MEM_COMPLETION_HEADER && bytes == 64) ||
         (offset >= AICA_MEM_COMPLETION_CHANNELS && offset < AICA_MEM_COMPLETION_END &&
-         (offset - AICA_MEM_COMPLETION_CHANNELS) % 64 == 0 && bytes == 64);
+         (offset - AICA_MEM_COMPLETION_CHANNELS) % 64 == 0 && bytes == 64) ||
+        (offset == AICA_MEM_BANK_HEADER && bytes == 64) ||
+        (offset >= AICA_MEM_BANK_RECORDS && offset < AICA_MEM_BANK_END &&
+         (offset - AICA_MEM_BANK_RECORDS) % 64 == 0 && bytes == 64);
     if(!record || !valid) { errno = EINVAL; return -1; }
     g2_lock_scoped();
     for(attempt = 0; attempt < 8; ++attempt) {

@@ -13,6 +13,7 @@
 #include <kos/mutex.h>
 #include <dc/sound/observation.h>
 #include "aica_observer.h"
+#include <dc/sound/aica_bank_registry.h>
 #include "aica_cmd_iface.h"
 static atomic_uint timed_zero;
 uint64_t timer_ms_gettime64(void) {
@@ -57,6 +58,8 @@ static mutex_t queue_proc_mutex = MUTEX_INITIALIZER_RECURSIVE;
 static pthread_mutex_t bus = PTHREAD_MUTEX_INITIALIZER;
 static aica_observation_header_t header;
 static aica_completion_header_t completion_header;
+static aica_bank_header_t bank_header;
+static aica_bank_record_t bank_records[AICA_BANK_SLOTS];
 static aica_completion_channel_t completions[64];
 static uint32_t lp_bits[64], selected_channel, lp_on_start;
 static void (*after_sample)(unsigned);
@@ -127,6 +130,10 @@ static uint32_t g2_read_32_raw(uint32_t address) {
         return ((uint32_t *)&completion_header)[(off - AICA_MEM_COMPLETION_HEADER) / 4];
     if(off >= AICA_MEM_COMPLETION_CHANNELS && off < AICA_MEM_COMPLETION_END)
         return ((uint32_t *)completions)[(off - AICA_MEM_COMPLETION_CHANNELS) / 4];
+    if(off >= AICA_MEM_BANK_HEADER && off < AICA_MEM_BANK_HEADER + 64)
+        return ((uint32_t *)&bank_header)[(off - AICA_MEM_BANK_HEADER) / 4];
+    if(off >= AICA_MEM_BANK_RECORDS && off < AICA_MEM_BANK_END)
+        return ((uint32_t *)bank_records)[(off - AICA_MEM_BANK_RECORDS) / 4];
     assert(off >= AICA_MEM_OBSERVATION_CHANNELS && off < AICA_MEM_OBSERVATION_END);
     return ((uint32_t *)channels)[(off - AICA_MEM_OBSERVATION_CHANNELS) / 4];
 }

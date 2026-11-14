@@ -1,0 +1,49 @@
+{
+  "programs": [
+    {
+      "tpqn": 96,
+      "tempo_us": 500000,
+      "events": [
+        {
+          "delta": 0,
+          "kind": "midi",
+          "status": 192,
+          "a": 1,
+          "b": 0
+        },
+        {
+          "delta": 0,
+          "kind": "loop",
+          "count": 2
+        },
+        {
+          "delta": 0,
+          "kind": "midi",
+          "status": 144,
+          "a": 60,
+          "b": 100
+        },
+        {
+          "delta": 96,
+          "kind": "midi",
+          "status": 128,
+          "a": 60,
+          "b": 0
+        },
+        {
+          "delta": 0,
+          "kind": "loop_end"
+        },
+        {
+          "delta": 0,
+          "kind": "tempo",
+          "us": 400000
+        },
+        {
+          "delta": 96,
+          "kind": "end"
+        }
+      ]
+    }
+  ]
+}

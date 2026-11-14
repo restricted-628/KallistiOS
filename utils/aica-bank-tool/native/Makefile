@@ -16,3 +16,9 @@ upload-test:
 	$(PYTHON) test_upload.py
 upload-sanitize:
 	$(PYTHON) test_upload.py --sanitize
+
+.PHONY: registry-test registry-sanitize
+registry-test:
+	$(PYTHON) test_registry.py
+registry-sanitize:
+	$(PYTHON) test_registry.py --sanitize

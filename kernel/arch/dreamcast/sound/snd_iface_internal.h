@@ -34,6 +34,7 @@ void snd_iface_observation_pack(void *destination,
 
 /* Private wrapper entry points share one caller-owned absolute deadline. */
 int snd_observation_session(uint32_t *session);
+int snd_observation_bind_until(uint64_t deadline, uint32_t *session);
 int snd_observation_submit_until(unsigned channel, uint32_t operation,
     const snd_channel_config_t *config, uint32_t fields, uint32_t flags,
     snd_channel_receipt_t *receipt, uint64_t deadline);

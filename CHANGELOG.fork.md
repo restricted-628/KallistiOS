@@ -6,6 +6,22 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — AICA bank registry and private music foundations
+
+- Publish the bounded resident bank registry and host ownership/adoption path,
+  including malformed-receipt retention, aggregate service budget and quiesce
+  admission. Rebuild ARM firmware and its SH-4 embedding together.
+- Add private sequence/MIDI cores, bank resolution, timed-note integration and
+  callback command/receipt client. These are not selected by live firmware;
+  command registration, physical channel pool and memory placement remain held.
+- Add original ASQ sequence authoring/admission and DSP instruction, gain,
+  delay/reverb/modulation builders. Include the retained SPU/stream lifetime
+  regression delivery. No proprietary implementation or resources are imported.
+- Current-base host/sanitizer checks, ARM/KOS build, firmware embedding and
+  consumer links pass. Sealed and fresh unplayed-bank probes pass both Flycast
+  modes. No played-sample retirement, audible DSP, timing or hardware claim;
+  the emulator's missing NOFL behavior leaves linear-delay execution unqualified.
+
 ## 2026-11-13 — libADX request, format and loader backlog
 
 - Add bounded sector requests with linear or native-joint destinations and a

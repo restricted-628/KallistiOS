@@ -24,8 +24,8 @@ stream.drv: stream.drv.prebuilt
 	cp $< $@
 endif
 
-prog.elf: crt0.o main.o aica.o aica_observer.o
-	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o main.o aica.o aica_observer.o -lgcc
+prog.elf: crt0.o main.o aica.o aica_observer.o aica_bank_registry.o
+	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o main.o aica.o aica_observer.o aica_bank_registry.o -lgcc
 
 %.o: %.c
 	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I $(KOS_BASE)/kernel/arch/dreamcast/include -I $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound -c $< -o $@
@@ -40,3 +40,4 @@ main.o aica_observer.o: aica_observer.h $(KOS_BASE)/kernel/arch/dreamcast/includ
 
 main.o aica_observer.o: $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_completion.h
 aica.o main.o: aica.h
+main.o aica_bank_registry.o: aica_bank_registry.h $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_bank_registry.h

@@ -1,7 +1,8 @@
 # Native ABK draft validator and load plan
 
 Private implementation of the accepted host draft in the parent directory.
-No installed/public header, firmware wire format or default build change.
+The validator itself has no installed/public header or default build change.
+The optional private registry below defines an original versioned wire format.
 
 `abk_plan_build` validates an immutable complete file and writes caller-owned
 sample/zone arrays plus a plan only on success. Sample metadata separates absolute
@@ -77,3 +78,54 @@ inject allocation, submission, status, terminal, cancellation, destruction and
 release failures. They also exercise real byte copies, chunk coverage, four source
 alignments and final COMPLETE plus destroy-EBUSY with late cancellation. These are
 host tests of the transaction, not execution of KOS workers, DMA or AICA hardware.
+
+# Private resident registry
+
+`abk_registry.h` adds a serialized owner of a complete immutable ABK image in
+sound RAM. This is experimental protocol layout 1 and firmware feature 0x40,
+not a stable installed bank API. Compile `abk_registry.c`, `abk_upload.c` and
+`abk.c` with the Audio internal include directory. The existing PCM-only upload
+path is unchanged. `abk_upload_begin_image` is an explicit whole-file path whose
+terminal state is `ABKU_IMAGE_READY`, never ordinary PCM `READY`.
+
+Initialize a bank owner with `{0}`, stage into an unused slot, poll to STAGED,
+then explicitly publish and poll to ACTIVE. A module-wide mutex serializes stage,
+poll, publish, close and future pending-command pins. The slot/owner bookkeeping
+is reserved before allocation and REGISTER admission. Adoption after an exact
+ARM receipt only moves the address; it performs no allocation. Never operate on
+an owner's embedded staging transaction directly. Caller bytes and metadata
+arrays remain immutable until adoption or successful close. The sound-RAM image
+remains immutable for its entire registered lifetime.
+
+There are 128 slots. ARM services at most 32 metadata records total per ordinary
+firmware pass, counting the header as one record. Round-robin continuation gives
+each of N validating banks one step within ceil(N/32) passes. Maximum metadata is
+1+256+1024=1281 steps per bank; 128 such registrations take 5124 service passes.
+That is a scheduling bound, not a measured duration or a claim that 128 distinct
+maximum images fit sound RAM. Each step validates bounded fields/references and
+at most 31 PCM padding bytes. ARM trusts the host's whole-file CRC and zone
+ambiguity checks; this is a protocol precondition, not an arbitrary-file parser.
+
+REGISTER publishes no image pointer until validation completes. Generation,
+monotonic cookie, session and coherent sequence identify a receipt. Duplicate or
+older commands are handled before mapping image memory, including after unload.
+Sequence exhaustion leaves UINT32_MAX as an observable permanent fault marker;
+generation/cookie exhaustion stops admission. Uncertain receipts, session loss
+or malformed successful receipts retain ownership. There is no reset recovery.
+
+Close latches further admission off. During publication it waits for adoption or
+an exact rejection; after adoption it unregisters before freeing. Pending host
+commands and ARM queued/voice/producer references prevent unregister. The future
+queued-to-voice helper moves a reference atomically. No voices are started here,
+and these helpers do not establish physical final-fetch retirement. A played
+voice may only be unpinned at a separately qualified endpoint. This slice only
+supports releasing unplayed banks. No concurrent sound reset/shutdown or raw
+address consumers are permitted. Local quiesce closes admission and reports busy
+until every owner closes; it does not change global shutdown order.
+
+`make registry-test registry-sanitize` compiles the actual ARM registry, SH4
+owner, parser and uploader together against model services. Tests cover aggregate
+budget/fairness, full-image copies, 64 real pthread adoption/close races, busy
+references, failed submission/free, lost-session retention, replay after retirement,
+metadata corruption and sequence/cookie/generation limits. These tests do not
+execute KOS scheduling, G2, DMA or physical AICA fetches.
