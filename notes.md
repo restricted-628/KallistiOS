@@ -639,6 +639,15 @@ Follow-up Flycast interpreter/dynarec tests pass the native packet regression
 and Compact example through checked render completion/shutdown. Physical
 hardware behavior and performance remain unverified.
 
+**Upstream reconciliation, 2026-11-13:** Merge KOS through `6b1248c4d` and retain
+six as the fork default. `pvr_poly_cxt_t.gen.strip_len` now permits explicit
+one/two/four/six choices; all four standard context initializers select six.
+Manual context construction must assign this field (zero encodes one).
+The raw polygon command constant retains six, while compilers clear that field
+before inserting the context selection. Rebuild all context-using libraries
+and applications together; this changes native context layout, not on-wire
+polygon header size. No per-vertex checks or dependency repins are introduced.
+
 **Accepted retained-frame slice:** `sh4der_kos_frame_bind` admits a stable
 RGB565 surface once. The caller supplies its latest writer and a generation
 changed on rebind/resize/PVR restart. Synchronous sampling requires producer

@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — Upstream polygon strip configuration
+
+- Merge upstream through `6b1248c4d`, adding per-context strip partition
+  selection and the updated SH4ZAM balls example.
+- Preserve the fork's six-triangle default in all four polygon context
+  initializers and raw polygon command headers. Explicit choices of one, two,
+  four or six are encoded by ordinary and two-volume polygon compilers.
+- Rebuild libraries and applications together: `pvr_poly_cxt_t` gains a field.
+  Compact material copies retain the caller's selection; sprite and modifier
+  commands are unchanged. SH4ZAM and SH4DER dependency pins are unchanged.
+- Clean GCC16.2.0 build, focused host suites and native consumer links pass.
+  Packet encoding and checked Compact scene completion pass in Flycast's
+  interpreter and dynarec; these are not hardware or performance results.
+
 ## 2026-11-13 — libADX sparse AFS partition overlays
 
 - Add caller-owned overlay links with newest-first sparse range resolution.

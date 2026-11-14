@@ -181,9 +181,14 @@ typedef enum pvr_pixel_mode {
 
 /** \brief   Internal triangle strip partition length
 
+    This sets the maximum number of triangles the TA stores per strip piece.
     These are encoded field values, not literal lengths. Group control must
     be enabled to replace the previous partition length. This does not limit
     the number of vertices in a submitted strip.
+    Longer strips are split into pieces of at most this many triangles, each
+    with its own copy of the header in the vertex buffer and its own entry in
+    the object lists. Longer pieces use less vertex buffer memory for long
+    triangle strips.
 */
 typedef enum pvr_strip_len {
     PVR_STRIP_LEN_1,
