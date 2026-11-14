@@ -28,9 +28,18 @@ ASQ_DIR = $(KOS_BASE)/utils/aica-sequence-tool/native
 ASQ_OBJS = aica_sequence_resource.o aica_sequence.o asq_native.o asq_catalog.o asq_wire.o
 
 MUSIC_OBJS = aica_music.o aica_music_bank.o aica_music_wire.o aica_music_live.o
+FIRMWARE_C_OBJS = main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS) $(ASQ_OBJS)
 
-prog.elf: crt0.o main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS) $(ASQ_OBJS)
-	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS) $(ASQ_OBJS) -lgcc
+prog.elf: crt0.o $(FIRMWARE_C_OBJS)
+	$(DC_ARM_CC) -Wl,-Ttext,0x00000000,-Map,prog.map,-N -nostartfiles -nostdlib -e reset -o prog.elf crt0.o $(FIRMWARE_C_OBJS) -lgcc
+
+.PHONY: check-layout
+check-layout: prog.elf stream.drv
+	python3 $(KOS_BASE)/utils/aica-firmware-check/check.py --cc="$(DC_ARM_CC)" --flags="$(DC_ARM_CFLAGS)" --includes="$(DC_ARM_INCS)" $(FIRMWARE_C_OBJS)
+
+.PHONY: check-layout-test
+check-layout-test:
+	python3 $(KOS_BASE)/utils/aica-firmware-check/test.py --cc="$(DC_ARM_CC)"
 
 %.o: %.c
 	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(ASQ_DIR) -I $(KOS_BASE)/kernel/arch/dreamcast/include -I $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound -c $< -o $@

@@ -65,6 +65,10 @@ Relevant existing documentation (dated claims must be rechecked):
 
 Host test directories with inspected Makefile targets:
 
+- `utils/aica-firmware-check` — required integration validation for ARM firmware
+  changes: `make -C kernel/arch/dreamcast/sound/arm check-layout`. Explicit Python 3
+  static image/stack/helper/state check; ordinary builds do not run it automatically.
+
 - `utils/aica-command-test` — candidate `make -C utils/aica-command-test test` in an assigned checkout.
 - `utils/snd-dsp-test` — candidate `make -C utils/snd-dsp-test test` in an assigned checkout.
 - `utils/sound-music-live-test` — actual firmware backend/guards/clock and explicit
