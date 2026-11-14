@@ -669,6 +669,21 @@ equivalence claim; SPSD remains the verified mono-PCM16 subset. Rebuild consumer
 for public state growth. Full host/sanitizer and current SH-4 C/C++ links pass;
 the completion matrix remains authoritative for unimplemented obligations.
 
+**Accepted continuation, 2026-11-14:** Explicit caller-owned player/file
+collections and native paths replace process-global reset/directory behavior.
+The bounded, event-driven producer/private-fiber service is the native service
+contract, not an emulation of SDK server-call frequency. Namespaced source,
+lifecycle and recovery APIs satisfy the native facade design; no MWPLY ABI or
+vtable is promised. This accepts those interface dispositions, not complete
+middleware, scheduling, format or physical-output conformance.
+
+Owned filenames remain restricted to synchronous immutable VFS backends, with
+checked loans and exactly-once consumed close. Recovery retains old sound memory
+and admits bounded replay only after checked software stop and explicit owner
+preparation. Adjacent-record playback and finite SFA publication preserve strict
+framing and fixed-format admission. Audible seams, running-stall policy,
+unknown-length SFD framing and device-retirement/reuse gates remain open.
+
 ## D22 — SH4DER/SH4DOW integration and strip partition default
 
 **Owner direction, 2026-11-13:** Fully integrate the pinned SH4DER and bundled

@@ -6,6 +6,24 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-14 — libADX source and middleware backlog
+
+- Add owned synchronous filenames and checked source loans, immutable memory/
+  range/ACX/AFS selection, provider-bound partition views, explicit file/player
+  collections and bounded fair polling. Preserve separate transport retirement.
+- Add input-buffer policy, independent diagnostic reporting and bounded native
+  recovery. Checked software stop retains sound allocations; replay preparation
+  does not authorize device-memory reuse or global sound reset.
+- Add strict opt-in adjacent ADX records, atomic queue/link snapshots and finite
+  SFA ring publication. Preserve fixed formats, predictor resets at record
+  boundaries, strict standalone EOF and whole-group backpressure.
+- Accept explicit contexts, native event-driven service and namespaced facade
+  interfaces instead of SDK globals/ABI. Rebuild consumers for state growth.
+  All 55 host and 55 sanitizer executables, strict GCC 16.2 SH-4 archive/install
+  and staged C/C++ consumer links pass on the integrated Audio base.
+- Audible seams, output clocks, device retirement/reuse, broader conformance
+  and unknown-length SFD framing remain open. No full middleware-parity claim.
+
 ## 2026-11-14 — Resident AICA music, sequences and layered banks
 
 - Activate explicit managed music ownership, bounded sequence resource/control

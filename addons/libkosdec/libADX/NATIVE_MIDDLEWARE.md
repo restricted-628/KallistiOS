@@ -3,7 +3,8 @@
 These interfaces implement original KOS behavior against the fixed Dreamcast
 baseline. They are not CRI/MWPLY ABI replacements. Rebuild consumers: source,
 service and player state layouts have changed. Runtime completion remains tracked
-in COMPLETION.md; native equivalence decisions below require integration review.
+in COMPLETION.md. Integration accepted the explicit-context, native scheduling
+and facade dispositions below on 2026-11-14; this is not full runtime parity.
 
 ## Sources and filenames
 
@@ -118,10 +119,10 @@ repeat release is explicit useful behavior, not an inferred SDK implementation.
 The header and archive disagree about whether CloseAllHandles also closes files;
 separate checked player/file collections make both operations explicit.
 
-Native namespaced lifecycle/service/recovery is the proposed equivalent for the
+Native namespaced lifecycle/service/recovery is the accepted native interface for the
 three MWPLY ADX facade declarations. No MWPLY vtable or ABI facade is implemented.
-Integration must accept this disposition or identify the missing required native
-behavior. API declarations alone do not prove a matching facade implementation.
+This accepts the interface design, not unimplemented runtime behavior or timing.
+API declarations alone do not prove a matching SDK facade implementation.
 
 Host tests distinguish control models, actual codec/player composition and Audio
 mocks. SH-4 compile/link proves target consumption, not physical sound retirement,

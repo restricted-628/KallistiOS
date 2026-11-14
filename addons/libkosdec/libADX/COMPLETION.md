@@ -126,5 +126,9 @@ other remaining runtime behavior.
 
 The native middleware batch is described in [NATIVE_MIDDLEWARE.md](NATIVE_MIDDLEWARE.md).
 It materially supplies the source/control/lifecycle/recovery/link/framing paths;
-it does not by itself close the remaining Audio, conformance, applicability or
-integration gates. Native-equivalence proposals must be accepted explicitly.
+it does not by itself close the remaining Audio, conformance or applicability
+gates. Integration accepted its explicit contexts/native paths, event-driven
+service and namespaced facade design on 2026-11-14. The design-disposition items
+in H1/H7/F1/L1/M1 are resolved by that acceptance; their runtime, timing, backend
+and physical-output qualifications remain open. This is not full MWPLY ABI or
+SDK scheduling equivalence.
