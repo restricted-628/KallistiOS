@@ -25,3 +25,6 @@ clean:
 	-rm -f $(TARGET) $(OBJS) bank.h music-live.map
 run: $(TARGET)
 	$(KOS_LOADER) $(TARGET)
+
+# Private decoded bank records change size with the parser header.
+$(OBJS): $(BANK)/abk.h

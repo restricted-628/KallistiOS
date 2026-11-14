@@ -127,6 +127,7 @@ int main(void) {
             for(i=0;i<plan.zone_count;++i) {
                 printf(" %u",zones[i].sample);
                 for(j=0;j<20;++j) printf(" %d",zones[i].values[j]);
+                printf(" %u",zones[i].layer);
             }
         }
         puts(""); free(original);

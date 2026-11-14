@@ -26,8 +26,12 @@ software plan only; actual completion must come from the existing SPU request.
 Main RAM must remain immutable and alive until all its consumers retire. Do not
 call validation from interrupt/refill/voice processing: CRC is linear in at most
 2 MiB, and zone intersection validation is bounded by 1024*1023/2 comparisons.
-Arrays use 36 bytes/sample and 84 bytes/zone (maximum 95,232 bytes in caller RAM),
-plus a 20-byte plan. Parser working storage is constant; no heap, I/O or MMIO.
+Arrays use 36 bytes/sample and 88 bytes/zone (maximum 99,328 bytes in caller RAM),
+plus a 20-byte plan. Zone records include an explicit `layer` member: zero for
+version 1, 0–3 for version 2. Rebuild all private callers for this structure change.
+Version 1 wire bytes and decoded values are unchanged; version 2 allows overlap
+only between different layers. This parser does not enable layered playback.
+Parser working storage is constant; no heap, I/O or MMIO.
 
 ```sh
 make test
@@ -129,3 +133,9 @@ budget/fairness, full-image copies, 64 real pthread adoption/close races, busy
 references, failed submission/free, lost-session retention, replay after retirement,
 metadata corruption and sequence/cookie/generation limits. These tests do not
 execute KOS scheduling, G2, DMA or physical AICA fetches.
+
+The registry harness also feeds an original four-layer version 2 image through
+the actual SH4 parser/uploader/owner and unchanged ARM registry. It requires
+rejection before ACTIVE, no published generation or bank references, and release
+of the provisional allocation only after the exact rejection receipt. That is a
+host simulation of actual code, not target execution or physical retirement.

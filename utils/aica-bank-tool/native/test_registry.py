@@ -3,6 +3,7 @@
 from pathlib import Path
 import os, subprocess, sys, tempfile
 from differential import records
+from test_bank import layered_golden
 r=Path(__file__).resolve().parent
 root=r.parents[2]
 header=(root/'kernel/arch/dreamcast/include/dc/spu.h').read_text()
@@ -20,6 +21,7 @@ with tempfile.TemporaryDirectory(prefix='abk-registry-') as temp:
     (t/'snd_iface_internal.h').write_text('#include <stdint.h>\nuint32_t snd_iface_observation_features(void);\nint snd_observation_session(uint32_t *);\nint snd_observation_bind_until(uint64_t,uint32_t *);\nint snd_iface_observation_read(uint32_t,void *,uint32_t);\nint snd_iface_observation_submit(void *,uint32_t,uint64_t);\n')
     (t/'bank.abk').write_bytes(records(3,3,100))
     (t/'max.abk').write_bytes(records(256,1024,1))
+    (t/'layers.abk').write_bytes(layered_golden())
     cmd=[os.environ.get('CC','cc'),'-std=c11','-O1','-g','-Wall','-Wextra','-Werror','-Wconversion','-pedantic','-pthread',
          '-I'+str(t),'-I'+str(root/'kernel/arch/dreamcast/include'),'-I'+str(root/'kernel/arch/dreamcast/sound/arm'),
          '-include',str(root/'utils/sound-observation-test/stubs/types.h'),
@@ -30,5 +32,6 @@ with tempfile.TemporaryDirectory(prefix='abk-registry-') as temp:
     subprocess.run(cmd,check=True)
     subprocess.run([str(t/'test'),str(t/'bank.abk'),str(t/'max.abk')],check=True)
     subprocess.run([str(t/'test'),str(t/'bank.abk'),str(t/'max.abk'),'quiesce'],check=True)
+    subprocess.run([str(t/'test'),str(t/'layers.abk'),str(t/'max.abk'),'layers'],check=True)
     for fault in range(17):
         subprocess.run([str(t/'test'),str(t/'bank.abk'),str(t/'max.abk'),'fault',str(fault)],check=True)

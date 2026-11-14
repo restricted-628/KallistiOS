@@ -39,6 +39,29 @@ def golden():
     return seal(b)
 
 
+def layered_golden():
+    # Written wire offsets independently of the builder. Four layered
+    # instrument entries, each with its own original four-frame PCM sample.
+    b = bytearray(448)
+    b[:8] = b'KOSABK\0\0'
+    b[8:12] = bytes.fromhex('02004000')
+    for off, value in {12:448, 16:4, 20:4, 24:64, 28:192, 32:320, 36:128}.items():
+        struct.pack_into('<I', b, off, value)
+    for i in range(4):
+        s, z, pcm = 64+i*32, 192+i*32, 320+i*32
+        for off, value in {0:pcm, 4:8, 8:4, 12:22050}.items():
+            struct.pack_into('<I', b, s+off, value)
+        b[s+24] = 2
+        struct.pack_into('<I', b, z, i)
+        b[z+8:z+12] = bytes((127, 1, 127, 60))
+        b[z+14:z+16] = bytes((255, 128))
+        b[z+16] = b[z+19] = 31
+        b[z+22] = 15
+        b[z+25] = i
+        b[pcm:pcm+8] = bytes.fromhex('0080ffff0000ff7f')
+    return seal(b)
+
+
 def write_wav(path, width=2, channels=1, rate=22050, pcm=None):
     if pcm is None:
         pcm = bytes.fromhex('0080ffff0000ff7f') if width == 2 else bytes((0, 127, 128, 255))
@@ -69,6 +92,45 @@ class BankTests(unittest.TestCase):
         data = bank.build(self.manifest, self.directory)
         self.assertEqual(data[128:132], bytes((128, 255, 0, 127)))
         self.assertEqual(bank.validate(data)['samples'][0]['encoding'], 1)
+
+    def test_explicit_four_layers(self):
+        self.manifest.update(version=2,
+            samples=[{'name':str(i), 'wav':'tone.wav'} for i in range(4)],
+            zones=[{'sample':str(i), 'layer':i} for i in range(4)])
+        data = bank.build(self.manifest, self.directory)
+        self.assertEqual(data, layered_golden())
+        self.assertEqual([z['layer'] for z in bank.validate(data)['zones']], [0,1,2,3])
+        self.manifest['zones'][1]['layer'] = 0
+        with self.assertRaisesRegex(bank.BankError, 'overlapping'):
+            bank.build(self.manifest, self.directory)
+        # Splits within a layer remain legal, including adjacent boundaries.
+        self.manifest['zones'][0]['velocity_high'] = 63
+        self.manifest['zones'][1]['velocity_low'] = 64
+        bank.validate(bank.build(self.manifest, self.directory))
+
+    def test_layer_version_and_reserved_rejections(self):
+        for version in (0, 3, 65535, True):
+            self.manifest['version'] = version
+            with self.assertRaises(bank.BankError):
+                bank.build(self.manifest, self.directory)
+        self.manifest['version'] = 1
+        self.manifest['zones'][0]['layer'] = 0
+        with self.assertRaises(bank.BankError):
+            bank.build(self.manifest, self.directory)
+        self.manifest['version'] = 2
+        for layer in (-1, 4, 255, True, 1.5):
+            self.manifest['zones'][0]['layer'] = layer
+            with self.assertRaises(bank.BankError):
+                bank.build(self.manifest, self.directory)
+        del self.manifest['zones'][0]['layer']
+        self.assertEqual(bank.validate(bank.build(self.manifest, self.directory))['zones'][0]['layer'], 0)
+        for off in range(26,32):
+            b = bytearray(layered_golden()); b[192+off] = 1
+            with self.assertRaises(bank.BankError):
+                bank.validate(seal(b))
+        b = bytearray(layered_golden()); b[8] = 1
+        with self.assertRaises(bank.BankError):
+            bank.validate(seal(b))
 
     def test_loop_key_velocity_and_drum(self):
         self.manifest['samples'][0].update(loop_start=1, loop_end=4)

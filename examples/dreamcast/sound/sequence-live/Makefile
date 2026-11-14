@@ -47,3 +47,6 @@ asq.o: $(ASQ)/asq.c $(ASQ)/asq.h
 
 aica_sequence.o: $(ARM)/aica_sequence.c $(ARM)/aica_sequence.h
 	kos-cc $(KOS_CFLAGS) -c $< -o $@
+
+# Private decoded bank records change size with the parser header.
+$(OBJS): $(BANK)/abk.h

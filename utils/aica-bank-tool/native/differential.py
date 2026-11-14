@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import aica_bank as abk
-from test_bank import golden, seal
+from test_bank import golden, layered_golden, seal
 
 
 def records(ns, nz, frames=4, enc=2):
@@ -65,6 +65,26 @@ def corpus():
             if off in (zo+36,zo+37): b[off]=value
             else: struct.pack_into('<I',b,off,value)
             result.append(seal(b))
+    # Independent four-layer fixture plus every layer/reserved byte value.
+    layered = layered_golden()
+    result.append(layered)
+    for version in (0, 1, 2, 3, 255, 65535):
+        b=bytearray(layered);struct.pack_into('<H',b,8,version);result.append(seal(b))
+    for zone in range(4):
+        for field in range(25,32):
+            for value in (0,1,2,3,4,127,255):
+                b=bytearray(layered);b[192+zone*32+field]=value;result.append(seal(b))
+    for i in range(len(layered)):
+        result.append(layered[:i])
+    for _ in range(1000):
+        b=bytearray(layered)
+        for _ in range(rng.randrange(1,5)):
+            b[rng.randrange(len(b))]=rng.randrange(256)
+        result.append(seal(b))
+    # Maximum zones split across all four layer IDs, retaining disjoint maps.
+    b=bytearray(records(256,1024));struct.pack_into('<H',b,8,2)
+    for i in range(1024): b[64+256*32+i*32+25]=i%4
+    result.append(seal(b))
     return result
 
 
@@ -77,7 +97,7 @@ def expected(data):
         values += [s['offset'],s['offset']-po,s['bytes'],s['frames'],s['rate'],
                    s['loop_start'],s['loop_end'],s['encoding'],struct.unpack_from('<H',data,64+i*32+26)[0]]
     for z in meta['zones']:
-        values += [z['sample']]+[z[k] for k in abk.ZONE_FIELDS]
+        values += [z['sample']]+[z[k] for k in abk.ZONE_FIELDS]+[z.get('layer', 0)]
     return values
 
 

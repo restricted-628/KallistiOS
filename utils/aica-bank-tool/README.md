@@ -1,6 +1,6 @@
 # Experimental AICA bank authoring
 
-Private format proposal, version 1. This tool builds and validates original
+Private format proposal, versions 1 and 2. This tool builds and validates original
 sample/instrument banks. It does not load sound RAM, play music, implement MIDI,
 interpret a Konami format, or import Manatee banks. No public format commitment
 is implied. Python 3 standard library only; no target compiler is used here.
@@ -35,7 +35,7 @@ flags, reserved bytes, noncanonical offsets and trailing data are rejected.
 | Header offset | Type | Meaning |
 | --- | --- | --- |
 | 0 | 8 bytes | `KOSABK` followed by two zero bytes |
-| 8, 10 | u16 each | version 1, header size 64 |
+| 8, 10 | u16 each | version 1 or 2, header size 64 |
 | 12 | u32 | exact whole-file size |
 | 16, 20 | u32 each | sample count, zone count |
 | 24, 28 | u32 each | sample table offset, zone table offset |
@@ -74,12 +74,17 @@ Each zone record is 32 bytes:
 | 14, 15 | u8 each | linear volume, pan; 0 through 255 |
 | 16–20 | u8 each | attack, decay1, decay2, release, decay level; 0 through 31 |
 | 21–24 | u8 each | key-rate scaling, direct level, effect bus, effect send; 0 through 15 |
-| 25 | 7 bytes | reserved, zero |
+| 25 | u8 | v1: zero; v2: layer index 0–3 |
+| 26 | 6 bytes | reserved, zero |
 
 Bank/program/key/root values are 0–127; velocity is 1–127. Velocity zero remains
-a future note-off concern. A `(bank, program, drum)` map may contain disjoint
-key/velocity zones; intersecting rectangles are rejected. This draft does not
-support layered zones or velocity-to-gain curves. Drum selects a distinct map;
+a note-off concern. Version 1 permits disjoint key/velocity zones per
+`(bank, program, drum)` map and rejects intersecting rectangles. Version 2 adds
+an explicit `layer` field (0–3, default 0) to each zone. Rectangles in different
+layers may overlap; rectangles within the same layer must remain disjoint.
+Authoring requires `"version": 2`; version 1 rejects the `layer` field even when
+zero. Existing version 1 output and defaults are unchanged. Neither version
+authors velocity-to-gain curves. Drum selects a distinct map;
 actual MIDI channel policy remains a firmware decision.
 
 Limits are 256 samples, 1024 zones, 65534 frames per sample, base rate 1–192000
@@ -102,3 +107,16 @@ references and final device fetches retire; software stop is insufficient.
 This draft omits ADPCM, stereo groups, LFO/filter/extended envelopes, sequence
 events, DSP programs and a MIDI engine. Those remain native parity work. No
 retail hardware, audible fidelity or Konami-driver compatibility is claimed.
+
+## Layered-bank admission boundary
+
+Version 2 describes up to four independently selected instrument layers per
+bank/program/drum and key/velocity combination. Layers may use different samples,
+tuning, envelope and routing fields. The authoring tool and native parser retain
+all four identities. This does not establish simultaneous hardware onset.
+
+Current ARM bank registration accepts version 1 only. It rejects a version 2
+image without publishing an active generation; the host must observe the exact
+rejection before releasing its provisional allocation. A successful host parse
+or PCM upload is not playable layered-bank support. Live layered resolver/voice
+integration and capability negotiation are a separate implementation checkpoint.

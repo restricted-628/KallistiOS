@@ -56,7 +56,7 @@ def validate(data):
     require(HEADER.size <= len(data) <= MAX_FILE, "bank size out of range")
     (magic, version, hsize, total, ns, nz, so, zo, po, pb, crc,
      flags, reserved) = HEADER.unpack_from(data)
-    require(magic == MAGIC and version == 1 and hsize == 64,
+    require(magic == MAGIC and version in (1, 2) and hsize == 64,
             "unsupported magic/version/header")
     require(total == len(data), "declared size differs from file")
     require(flags == 0 and not any(reserved), "unknown header flags/reserved")
@@ -97,7 +97,12 @@ def validate(data):
         record = ZONE.unpack_from(data, zo + i * ZONE.size)
         sample, *values, reserved = record
         z = dict(zip(ZONE_FIELDS, values))
-        require(sample < ns and not any(reserved), f"zone {i}: reference/reserved")
+        layer = reserved[0] if version == 2 else 0
+        require(sample < ns and layer <= 3 and
+                not any(reserved[1:] if version == 2 else reserved),
+                f"zone {i}: reference/layer/reserved")
+        if version == 2:
+            z['layer'] = layer
         require(z['bank'] <= 127 and z['program'] <= 127 and z['drum'] <= 1,
                 f"zone {i}: program identity")
         require(0 <= z['key_low'] <= z['key_high'] <= 127 and
@@ -108,7 +113,7 @@ def validate(data):
                     ('attack', 'decay1', 'decay2', 'release', 'decay_level')) and
                 all(z[k] <= 15 for k in ('key_rate', 'direct', 'effect_bus', 'effect_send')),
                 f"zone {i}: envelope/routing")
-        key = (z['bank'], z['program'], z['drum'])
+        key = (z['bank'], z['program'], z['drum'], layer)
         for old in groups.get(key, ()):
             require(z['key_high'] < old['key_low'] or old['key_high'] < z['key_low'] or
                     z['velocity_high'] < old['velocity_low'] or
@@ -148,8 +153,9 @@ def integer(value, lo, hi, name):
 def build(manifest, directory):
     """Build from mono PCM WAVs; output is validated before it is returned."""
     keys(manifest, ('version', 'samples', 'zones'), ('version', 'samples', 'zones'))
-    require(type(manifest['version']) is int and manifest['version'] == 1,
+    require(type(manifest['version']) is int and manifest['version'] in (1, 2),
             "unsupported manifest version")
+    version = manifest['version']
     ss, zz = manifest['samples'], manifest['zones']
     require(isinstance(ss, list) and 1 <= len(ss) <= MAX_SAMPLES and
             isinstance(zz, list) and 1 <= len(zz) <= MAX_ZONES, "manifest counts")
@@ -187,14 +193,15 @@ def build(manifest, directory):
         names[name] = i
     zones = []
     for z in zz:
-        keys(z, ('sample',) + ZONE_FIELDS, ('sample',))
+        keys(z, ('sample',) + ZONE_FIELDS + (('layer',) if version == 2 else ()), ('sample',))
         require(isinstance(z['sample'], str) and z['sample'] in names,
                 "unknown instrument sample")
         values = [integer(z.get(k, default), -100 if k == 'fine_cents' else 0,
                           100 if k == 'fine_cents' else 255, k)
                   for k, default in zip(ZONE_FIELDS, ZONE_DEFAULTS)]
-        zones.append(ZONE.pack(names[z['sample']], *values, bytes(7)))
-    data = bytearray(HEADER.pack(MAGIC, 1, 64, po + len(payload), len(ss), len(zz),
+        layer = integer(z.get('layer', 0), 0, 3, 'layer')
+        zones.append(ZONE.pack(names[z['sample']], *values, bytes([layer]) + bytes(6)))
+    data = bytearray(HEADER.pack(MAGIC, version, 64, po + len(payload), len(ss), len(zz),
                                 64, 64 + len(ss) * 32, po, len(payload), 0, 0, bytes(16)))
     data.extend(b''.join(records))
     data.extend(b''.join(zones))

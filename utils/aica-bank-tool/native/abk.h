@@ -1,4 +1,4 @@
-/* Original ABK draft-v1 parser/load planner. Private, not a published ABI. */
+/* Original ABK draft v1/v2 parser/load planner. Private, not a published ABI. */
 #ifndef ABK_H
 #define ABK_H
 #include <stdint.h>
@@ -27,6 +27,7 @@ typedef struct {
 typedef struct {
     uint32_t sample;
     int32_t values[20];
+    uint32_t layer; /* v1: always0; v2: explicit0..3. Rebuild all private users. */
 } abk_zone_t;
 
 typedef struct {

@@ -3,7 +3,7 @@
 
 _Static_assert(sizeof(abk_plan_t) == 20, "plan layout");
 _Static_assert(sizeof(abk_sample_t) == 36, "sample layout");
-_Static_assert(sizeof(abk_zone_t) == 84, "zone layout");
+_Static_assert(sizeof(abk_zone_t) == 88, "zone layout");
 
 /* Explicit byte loads; neither SH4 nor ARM7DI permits general unaligned words. */
 static uint32_t u16(const uint8_t *p) {
@@ -45,7 +45,7 @@ abk_result_t abk_plan_build(const void *data, uint32_t size, abk_plan_t *plan,
                           abk_sample_t *samples, uint32_t sample_capacity,
                           abk_zone_t *zones, uint32_t zone_capacity) {
     const uint8_t *p = data;
-    uint32_t ns, nz, zo, po, pb, cursor, i, j;
+    uint32_t ns, nz, zo, po, pb, cursor, i, j, version;
     uintptr_t sb, zb;
     static const uint8_t magic[8] = {'K','O','S','A','B','K',0,0};
     if(!span(data, size) || !plan || !samples || !zones ||
@@ -54,7 +54,8 @@ abk_result_t abk_plan_build(const void *data, uint32_t size, abk_plan_t *plan,
        !aligned(zones, _Alignof(abk_zone_t))) return ABK_ARGUMENT;
     if(size < 64 || size > ABK_MAX_FILE) return ABK_FORMAT;
     for(i = 0; i < 8; ++i) if(p[i] != magic[i]) return ABK_FORMAT;
-    if(u16(p+8) != 1 || u16(p+10) != 64 || u32(p+12) != size ||
+    version = u16(p+8);
+    if((version != 1 && version != 2) || u16(p+10) != 64 || u32(p+12) != size ||
        u32(p+44) || !zero(p+48,16)) return ABK_FORMAT;
     ns = u32(p+16); nz = u32(p+20);
     if(!ns || ns > ABK_MAX_SAMPLES || !nz || nz > ABK_MAX_ZONES)
@@ -85,14 +86,15 @@ abk_result_t abk_plan_build(const void *data, uint32_t size, abk_plan_t *plan,
     if(cursor != size) return ABK_FORMAT;
     for(i = 0; i < nz; ++i) {
         const uint8_t *z = p+zo+i*32;
-        if(u32(z) >= ns || !zero(z+25,7) || z[4]>127 || z[5]>127 || z[6]>1 ||
+        if(u32(z) >= ns || (version == 1 ? !zero(z+25,7) :
+           z[25]>3 || !zero(z+26,6)) || z[4]>127 || z[5]>127 || z[6]>1 ||
            z[7]>z[8] || z[8]>127 || !z[9] || z[9]>z[10] || z[10]>127 ||
            z[11]>127 || s16(z+12)<-100 || s16(z+12)>100) return ABK_FORMAT;
         for(j=16; j<=20; ++j) if(z[j]>31) return ABK_FORMAT;
         for(j=21; j<=24; ++j) if(z[j]>15) return ABK_FORMAT;
         for(j=0; j<i; ++j) {
             const uint8_t *q = p+zo+j*32;
-            if(z[4]==q[4] && z[5]==q[5] && z[6]==q[6] &&
+            if(z[4]==q[4] && z[5]==q[5] && z[6]==q[6] && z[25]==q[25] &&
                z[8]>=q[7] && q[8]>=z[7] && z[10]>=q[9] && q[10]>=z[9])
                 return ABK_FORMAT;
         }
@@ -116,7 +118,7 @@ abk_result_t abk_plan_build(const void *data, uint32_t size, abk_plan_t *plan,
     }
     for(i=0; i<nz; ++i) {
         const uint8_t *z=p+zo+i*32;
-        zones[i].sample=u32(z);
+        zones[i].sample=u32(z); zones[i].layer=z[25];
         for(j=0; j<8; ++j) zones[i].values[j]=z[4+j];
         zones[i].values[8]=s16(z+12);
         for(j=9; j<20; ++j) zones[i].values[j]=z[5+j];
