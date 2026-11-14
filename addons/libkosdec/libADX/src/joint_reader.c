@@ -20,6 +20,13 @@ enum kosdec_adx_status kosdec_adx_joint_reader_set_filter(
     if(r->terminal) return r->terminal == KOSDEC_ADX_DONE ? KOSDEC_ADX_BAD_ARGUMENT : r->terminal;
     return kosdec_adx_set_filter(&r->decoder, fn, context);
 }
+enum kosdec_adx_status kosdec_adx_joint_reader_set_feed(
+    struct kosdec_adx_joint_reader *r, kosdec_adx_joint_feed fn, void *context) {
+    if(!valid(r)) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(r->terminal) return r->terminal == KOSDEC_ADX_DONE ? KOSDEC_ADX_BAD_ARGUMENT : r->terminal;
+    r->feed = fn; r->feed_context = fn ? context : NULL;
+    return KOSDEC_ADX_DONE;
+}
 static enum kosdec_adx_joint_status release(struct kosdec_adx_joint_reader *r) {
     if(!r->held.bytes) return KOSDEC_ADX_JOINT_OK;
     enum kosdec_adx_joint_status s = kosdec_adx_joint_put(r->joint, &r->held);
@@ -41,6 +48,18 @@ struct kosdec_adx_joint_read_result kosdec_adx_joint_reader_read(
     struct kosdec_adx_joint_info info;
     enum kosdec_adx_joint_status s = kosdec_adx_joint_query(r->joint, &info);
     if(s != KOSDEC_ADX_JOINT_OK) goto joint_failure;
+    if(r->feed && !info.sealed) {
+        enum kosdec_adx_joint_feed_status feed = r->feed(r->feed_context, r->joint);
+        if(feed == KOSDEC_ADX_JOINT_FEED_END) {
+            s = kosdec_adx_joint_finish(r->joint);
+            if(s != KOSDEC_ADX_JOINT_OK) goto joint_failure;
+        }
+        else if(feed != KOSDEC_ADX_JOINT_FEED_MORE && feed != KOSDEC_ADX_JOINT_FEED_WAIT) {
+            r->terminal = KOSDEC_ADX_IO_ERROR; result.status = r->terminal; return result;
+        }
+        s = kosdec_adx_joint_query(r->joint, &info);
+        if(s != KOSDEC_ADX_JOINT_OK) goto joint_failure;
+    }
     if(!r->held.bytes) {
         size_t request = KOSDEC_ADX_HEADER_BUDGET;
         if(info.kind == KOSDEC_ADX_JOINT_QUEUE &&

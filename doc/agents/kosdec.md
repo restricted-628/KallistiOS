@@ -126,4 +126,12 @@ consumed so decode progress cannot precede a failed partial-return allocation.
 Read work stays one decoder step; queue whole-head retention can add backpressure.
 Cancel retains input until close; close discards unread admitted bytes and never
 joins/reset/frees the producer or joint. Queue detach explicitly removes a prefix
-from ownership accounting without freeing bytes. No implicit player binding.
+from ownership accounting without freeing bytes. Player binding uses explicit joint constructors.
+
+A bound joint feed runs only on the PCM producer, at most once per read. Paused,
+cancelled, full-pipe and consumer paths never feed. External transport callbacks
+stage/wake; they cannot mutate the live joint. END uses checked sealing, WAIT
+permits buffered DATA, ERROR closes source production. Existing player fiber owns
+reader/joint until release/cancel/stop joins; reader close and provider retirement
+remain separate. Keep same-format rebind checks and retained Audio allocation.
+Forward-only joint sources reject loop/repeat/enqueue controls; no hidden seek.

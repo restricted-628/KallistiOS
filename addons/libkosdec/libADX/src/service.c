@@ -17,6 +17,15 @@ enum kosdec_adx_status kosdec_adx_service_init(struct kosdec_adx_service *s,
     if(result == KOSDEC_ADX_MORE) *s = initial;
     return result;
 }
+enum kosdec_adx_status kosdec_adx_service_init_joint(struct kosdec_adx_service *s,
+    struct kosdec_adx_joint_reader *joint, int16_t *pcm, size_t samples, size_t capacity) {
+    if(!s) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
+    enum kosdec_adx_status result = kosdec_adx_pipe_init_joint(&initial.pipe,
+        joint, pcm, samples, capacity);
+    if(result == KOSDEC_ADX_MORE) *s = initial;
+    return result;
+}
 struct kosdec_adx_service_state kosdec_adx_service_get_state(
     const struct kosdec_adx_service *s) {
     struct kosdec_adx_service_state r = {KOSDEC_ADX_BAD_ARGUMENT, false};

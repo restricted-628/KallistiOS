@@ -2,6 +2,7 @@
 #ifndef KOSDEC_ADX_PIPE_H
 #define KOSDEC_ADX_PIPE_H
 #include <kosdec/adx_sequence.h>
+#include <kosdec/adx_joint_reader.h>
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -11,6 +12,7 @@ struct kosdec_adx_pipe {
     int16_t *pcm;
     struct kosdec_adx_stream *stream;
     struct kosdec_adx_sequence *sequence;
+    struct kosdec_adx_joint_reader *joint;
 };
 struct kosdec_adx_pipe_result {
     enum kosdec_adx_status producer; /* MORE until terminal, not last pump status. */
@@ -29,6 +31,12 @@ struct kosdec_adx_pipe_result {
 enum kosdec_adx_status kosdec_adx_pipe_init(struct kosdec_adx_pipe *,
     struct kosdec_adx_stream *, struct kosdec_adx_sequence *,
     int16_t *pcm, size_t samples, size_t capacity);
+/* Alternative joint source. Same PCM ownership/concurrency rules. Joint and
+   reader become producer-only; live input must use the reader's feed callback,
+   never concurrent application/IRQ publication. Join producer/consumer before
+   reader close, then separately retire external feed providers. */
+enum kosdec_adx_status kosdec_adx_pipe_init_joint(struct kosdec_adx_pipe *,
+    struct kosdec_adx_joint_reader *, int16_t *pcm, size_t samples, size_t capacity);
 /* One producer, one consumer may run concurrently. Pump is producer-only:
    at most one bounded source read, one32-frame decode and two PCM copies.
    Any configured source PCM filter runs on this producer before publication;

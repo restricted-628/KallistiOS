@@ -8,10 +8,11 @@ _Static_assert(__GCC_ATOMIC_INT_LOCK_FREE == 2, "lock-free atomic cursors requir
 static bool valid(const struct kosdec_adx_pipe *p) {
     return p && p->magic == PIPE_MAGIC;
 }
-enum kosdec_adx_status kosdec_adx_pipe_init(struct kosdec_adx_pipe *p,
+static enum kosdec_adx_status init(struct kosdec_adx_pipe *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
+    struct kosdec_adx_joint_reader *joint,
     int16_t *pcm, size_t samples, size_t capacity) {
-    if(!p || (!!stream == !!sequence) || !pcm ||
+    if(!p || (!!stream + !!sequence + !!joint != 1) || !pcm ||
        (uintptr_t)pcm % _Alignof(int16_t) || capacity < 32 ||
        capacity > 1048576 || (capacity & (capacity - 1)) || samples < 2 * capacity)
         return KOSDEC_ADX_BAD_ARGUMENT;
@@ -21,7 +22,17 @@ enum kosdec_adx_status kosdec_adx_pipe_init(struct kosdec_adx_pipe *p,
     p->capacity = (uint32_t)capacity;
     p->stream = stream;
     p->sequence = sequence;
+    p->joint = joint;
     return KOSDEC_ADX_MORE;
+}
+enum kosdec_adx_status kosdec_adx_pipe_init(struct kosdec_adx_pipe *p,
+    struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
+    int16_t *pcm, size_t samples, size_t capacity) {
+    return init(p, stream, sequence, NULL, pcm, samples, capacity);
+}
+enum kosdec_adx_status kosdec_adx_pipe_init_joint(struct kosdec_adx_pipe *p,
+    struct kosdec_adx_joint_reader *joint, int16_t *pcm, size_t samples, size_t capacity) {
+    return init(p, NULL, NULL, joint, pcm, samples, capacity);
 }
 bool kosdec_adx_pipe_get_format(const struct kosdec_adx_pipe *p,
                               uint32_t *rate, unsigned *channels) {
@@ -41,6 +52,7 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
     if(terminal) { r.status = (enum kosdec_adx_status)terminal; return r; }
     if(__atomic_load_n(&p->cancel_requested, __ATOMIC_ACQUIRE)) {
         if(p->stream) kosdec_adx_stream_cancel(p->stream);
+        else if(p->joint) kosdec_adx_joint_reader_cancel(p->joint);
         else kosdec_adx_sequence_cancel(p->sequence);
         r.status = KOSDEC_ADX_CANCELLED;
     }
@@ -60,16 +72,23 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
                 r.status = KOSDEC_ADX_MORE; /* Positioned; no PCM emitted yet. */
         }
         else if(p->stream) r = kosdec_adx_stream_read(p->stream, pcm, room);
+        else if(p->joint) {
+            struct kosdec_adx_joint_read_result s = kosdec_adx_joint_reader_read(p->joint, pcm, room);
+            r.status = s.status; r.frames = s.frames;
+        }
         else {
             struct kosdec_adx_sequence_result s = kosdec_adx_sequence_read(p->sequence, pcm, room);
             r.status = s.status;
             r.frames = s.frames;
         }
         if(!__atomic_load_n(&p->ready, __ATOMIC_RELAXED)) {
-            bool ready = p->stream ? p->stream->prepared : p->sequence->format_ready;
+            bool ready = p->stream ? p->stream->prepared : p->joint ?
+                p->joint->decoder.header_ready : p->sequence->format_ready;
             if(ready) {
-                p->sample_rate = p->stream ? p->stream->decoder.sample_rate : p->sequence->sample_rate;
-                p->channels = p->stream ? p->stream->decoder.channels : p->sequence->channels;
+                p->sample_rate = p->stream ? p->stream->decoder.sample_rate : p->joint ?
+                    p->joint->decoder.sample_rate : p->sequence->sample_rate;
+                p->channels = p->stream ? p->stream->decoder.channels : p->joint ?
+                    p->joint->decoder.channels : p->sequence->channels;
                 __atomic_store_n(&p->ready, 1, __ATOMIC_RELEASE);
             }
         }

@@ -6,6 +6,21 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+enum kosdec_adx_joint_feed_status {
+    KOSDEC_ADX_JOINT_FEED_MORE, KOSDEC_ADX_JOINT_FEED_WAIT,
+    KOSDEC_ADX_JOINT_FEED_END, KOSDEC_ADX_JOINT_FEED_ERROR
+};
+/* Optional input step on the serialized reader/pipe producer, before decoding.
+   May supply bytes via joint API; END requests checked joint_finish. WAIT may
+   still leave queued DATA readable. No reentry into reader or consumer/audio
+   APIs. At most one call per nonterminal read with nonzero output capacity.
+   Bounded nonblocking steps are required on a shared executor; a synchronous
+   blocking step contributes to read/pump latency. External DMA/IRQ callbacks
+   must stage/wake, never mutate the joint concurrently. Context and staging stay
+   borrowed until producer join and separate provider retirement. Cancellation
+   stops future calls but does not cancel/join that external provider. */
+typedef enum kosdec_adx_joint_feed_status (*kosdec_adx_joint_feed)(
+    void *context, struct kosdec_adx_joint *);
 struct kosdec_adx_joint_reader {
     uint32_t magic;
     struct kosdec_adx_decoder decoder;
@@ -15,6 +30,8 @@ struct kosdec_adx_joint_reader {
     uint64_t consumed_bytes;
     enum kosdec_adx_status terminal;
     enum kosdec_adx_joint_status joint_error;
+    kosdec_adx_joint_feed feed;
+    void *feed_context;
 };
 struct kosdec_adx_joint_read_result {
     enum kosdec_adx_status status;
@@ -33,11 +50,14 @@ enum kosdec_adx_joint_status kosdec_adx_joint_reader_init(
     struct kosdec_adx_joint_reader *, struct kosdec_adx_joint *);
 enum kosdec_adx_status kosdec_adx_joint_reader_set_filter(
     struct kosdec_adx_joint_reader *, kosdec_adx_pcm_filter, void *context);
+/* Configure only while unbound and serialized; NULL detaches. */
+enum kosdec_adx_status kosdec_adx_joint_reader_set_feed(
+    struct kosdec_adx_joint_reader *, kosdec_adx_joint_feed, void *context);
 /* One existing decoder call: <=32 PCM frames or512 metadata bytes. Output
    interleaved PCM16 with naturally aligned space for output_frames*channels
    (reserve two channels until metadata is known). Zero capacity does no work.
    Output must fit a logical group as required by kosdec_adx_decode.
-   At most one chunk admission/return, no transport callbacks/copies/yields.
+   At most one feed callback and chunk admission/return; no hidden copies/yields.
    Retains the whole borrow until consumed; queues in either mode can retain a
    large head across many bounded calls. Whole-head admission needs no spare
    node. Joint failures map to sticky IO_ERROR with the original joint status.

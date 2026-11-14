@@ -20,8 +20,9 @@ static int wake_producer(struct kosdec_adx_player *p) {
        command receipt remains available. Executor FINISHED rejects wake. */
     return kosdec_adx_service_get_state(&p->producer).status >= KOSDEC_ADX_DONE ? 0 : -1;
 }
-int kosdec_adx_player_init(struct kosdec_adx_player *p,
+static int init(struct kosdec_adx_player *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
+    struct kosdec_adx_joint_reader *joint,
     const struct kosdec_adx_player_config *c) {
     if(!p || !c || !c->scratch || (uintptr_t)c->scratch % _Alignof(int16_t) ||
        c->sound_bytes < 64 || c->sound_bytes > SND_STREAM_BUFFER_MAX_PCM16 ||
@@ -33,8 +34,10 @@ int kosdec_adx_player_init(struct kosdec_adx_player *p,
     struct kosdec_adx_player initial = {.magic = PLAYER_MAGIC, .memory = *c,
         .source_bound = true,
         .sound = SND_STREAM_INVALID, .info = {.retained_sound = SND_STREAM_INVALID}};
-    if(kosdec_adx_service_init(&initial.producer,stream,sequence,c->pcm,
-       c->pcm_samples,c->capacity) != KOSDEC_ADX_MORE) return bad();
+    enum kosdec_adx_status status = joint ?
+        kosdec_adx_service_init_joint(&initial.producer,joint,c->pcm,c->pcm_samples,c->capacity) :
+        kosdec_adx_service_init(&initial.producer,stream,sequence,c->pcm,c->pcm_samples,c->capacity);
+    if(status != KOSDEC_ADX_MORE) return bad();
     if(snd_stream_config_init(&initial.output) < 0) return -1;
     initial.output.transfer_timeout_ms = c->transfer_timeout_ms;
     /* Demonstrated aligned splitter bug: select existing exact split once at
@@ -42,6 +45,16 @@ int kosdec_adx_player_init(struct kosdec_adx_player *p,
     initial.scratch = c->scratch + ((uintptr_t)c->scratch % 32 == 0);
     *p = initial;
     return 0;
+}
+int kosdec_adx_player_init(struct kosdec_adx_player *p,
+    struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
+    const struct kosdec_adx_player_config *c) {
+    return init(p,stream,sequence,NULL,c);
+}
+int kosdec_adx_player_init_joint(struct kosdec_adx_player *p,
+    struct kosdec_adx_joint_reader *joint, const struct kosdec_adx_player_config *c) {
+    if(!joint) return bad();
+    return init(p,NULL,NULL,joint,c);
 }
 static void decode(fiber_service_t *self, void *data) {
     struct kosdec_adx_player *p = data;
@@ -53,7 +66,7 @@ static void decode(fiber_service_t *self, void *data) {
         int rc;
         if(kosdec_adx_service_get_state(&p->producer).paused || r.status == KOSDEC_ADX_NEED_OUTPUT)
             rc = fiber_service_wait(self,0);
-        else if(r.status == KOSDEC_ADX_NEED_INPUT)
+        else if(r.status == KOSDEC_ADX_NEED_INPUT || r.status == KOSDEC_ADX_NEED_END)
             rc = fiber_service_wait(self,timer_ms_gettime64() + 1);
         else rc = fiber_service_yield(self);
         if(rc < 0) kosdec_adx_service_request_cancel(&p->producer);
@@ -111,17 +124,29 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     p->info.state = p->sound == SND_STREAM_INVALID ? KOSDEC_ADX_PLAYER_READY : KOSDEC_ADX_PLAYER_IDLE;
     return 0;
 }
-int kosdec_adx_player_bind_source(struct kosdec_adx_player *p,
-    struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence) {
+static int bind_source(struct kosdec_adx_player *p,
+    struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence,
+    struct kosdec_adx_joint_reader *joint) {
     if(!valid(p) || p->source_bound ||
        (p->info.state != KOSDEC_ADX_PLAYER_IDLE && p->info.state != KOSDEC_ADX_PLAYER_READY)) return bad();
     struct kosdec_adx_service producer;
-    if(kosdec_adx_service_init(&producer,stream,sequence,p->memory.pcm,
-       p->memory.pcm_samples,p->memory.capacity) != KOSDEC_ADX_MORE) return bad();
+    enum kosdec_adx_status status = joint ?
+        kosdec_adx_service_init_joint(&producer,joint,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) :
+        kosdec_adx_service_init(&producer,stream,sequence,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity);
+    if(status != KOSDEC_ADX_MORE) return bad();
     p->producer = producer;
     p->source_bound = true;
     p->info.source_frames = 0;
     return start_source(p);
+}
+int kosdec_adx_player_bind_source(struct kosdec_adx_player *p,
+    struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence) {
+    return bind_source(p,stream,sequence,NULL);
+}
+int kosdec_adx_player_bind_joint(struct kosdec_adx_player *p,
+    struct kosdec_adx_joint_reader *joint) {
+    if(!joint) return bad();
+    return bind_source(p,NULL,NULL,joint);
 }
 static void *refill(snd_stream_hnd_t handle, int requested, int *received) {
     struct kosdec_adx_player *p = snd_stream_get_userdata(handle);

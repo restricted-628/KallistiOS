@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX joint sources in the native player
+
+- Add explicit joint-source constructors for the PCM pipe, control service and
+  native player, plus same-format rebinding without another output allocation
+  or start. An optional feed callback runs only on the serialized producer;
+  consumer, paused, full-pipe and cancelled paths do not feed.
+- Preserve checked sealing, first-error handling and separate producer/provider
+  retirement. NEED_END now follows the input-wait deadline. Joint sources reject
+  unsupported sequence/loop controls instead of claiming implicit seek support.
+  Rebuild consumers for enlarged reader/pipe and embedding player state.
+- Full host/ASan/UBSan suites and staged SH-4 C/C++ links pass, including actual
+  native player code exercised with pthread-backed fiber and Audio mocks. This
+  does not qualify audible playback, final hardware fetch or physical timing;
+  no shared Audio firmware/driver interface changes are included.
+
 ## 2026-11-13 — libADX live joint PCM reader
 
 - Connect compressed-byte joints to the existing strict incremental decoder,

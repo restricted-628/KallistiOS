@@ -73,6 +73,13 @@ struct kosdec_adx_player {
 int kosdec_adx_player_init(struct kosdec_adx_player *,
     struct kosdec_adx_stream *, struct kosdec_adx_sequence *,
     const struct kosdec_adx_player_config *);
+/* Joint reader alternative with the same output lifecycle. Once started, the
+   private producer fiber exclusively owns reader/joint and optional feed.
+   No application/IRQ joint mutation while bound. After checked release/cancel
+   or stop joins the producer, close reader and separately retire its provider.
+   No looping/seek or automatic joint reset; production pause is supported. */
+int kosdec_adx_player_init_joint(struct kosdec_adx_player *,
+    struct kosdec_adx_joint_reader *, const struct kosdec_adx_player_config *);
 /* Create/start the private fiber executor and begin prefill. No sound start yet.
    Poll rejects effective output below8000Hz with ENOTSUP before sound allocation;
    low-rate sources need an explicit in-range output override.
@@ -104,6 +111,9 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *);
    The old output tail may still play. Use sequence for queued transitions. */
 int kosdec_adx_player_bind_source(struct kosdec_adx_player *,
     struct kosdec_adx_stream *, struct kosdec_adx_sequence *);
+/* Same-format joint rebind after prior source release/join. Same ownership and
+   lifetime as init_joint; does not close the old reader/provider for caller. */
+int kosdec_adx_player_bind_joint(struct kosdec_adx_player *, struct kosdec_adx_joint_reader *);
 /* Progress prefill/start or poll output; call regularly, more often than a sound
    ring duration. May block inside checked sound operations (transfer timeout).
    Short live input is silence-padded and counted as starvation. SOURCE_END keeps

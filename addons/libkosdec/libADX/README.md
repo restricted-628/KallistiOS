@@ -794,7 +794,7 @@ by the existing producer fiber, with yields outside borrowed-buffer operations.
 
 The native contract deliberately uses typed status/kind instead of CRI error
 numbers/UUIDs and does not support arbitrary concurrent or multiple same-line
-borrows. Player binding and full SJ conformance remain open;
+borrows. Full SJ conformance remains open;
 this facility alone does not close the middleware milestone.
 
 The generic queue uses caller-supplied typed nodes and four FIFO lines. Seed
@@ -837,4 +837,26 @@ This lets a producer reclaim FREE chunks for reuse elsewhere, or explicitly pass
 storage between joints. It never frees payload; detached bytes leave capacity
 and overlap accounting. Fixed memory/ring storage cannot be detached. All joint
 and reader operations share the serialized owner; fiber scheduling belongs outside
-these operations. This reader is not yet a native player/service source variant.
+these operations. This reader also binds through the native pipe/service/player alternatives below.
+
+`pipe_init_joint`, `service_init_joint`, `player_init_joint` and
+`player_bind_joint` bind a joint reader as a producer source. The existing player
+fiber exclusively owns both reader and joint while bound. For live input, attach
+an optional `joint_reader_set_feed` callback before binding. It runs at most once
+per read on that producer, supplies bytes through joint APIs, and reports MORE,
+WAIT, END or ERROR. END performs checked sealing; ERROR becomes sticky IO_ERROR.
+WAIT can coexist with already queued readable DATA. No feed runs in the audio
+consumer callback, while production is paused/cancelled/terminal, with zero output
+space, or while the PCM pipe is full. NEED_END uses the normal input-wait deadline.
+
+External transport/IRQ callbacks may fill their own staging and wake the producer;
+they must not mutate the joint concurrently. Use bounded nonblocking feed steps
+with a shared executor. Synchronous blocking contributes to the producer budget.
+After checked player release/cancel/stop joins the producer, close the reader and
+separately retire feed-provider requests/staging before reclaiming resources.
+Cancel never invents provider retirement. A same-format joint can rebind without
+another sound allocation/start; mismatch fails before new PCM output. Production
+pause/resume and cancel work; sequence enqueue/repeat and embedded-loop release
+are UNSUPPORTED for a forward-only joint source. Sound RAM remains retained under
+the existing player contract. These are source/host/link facilities, not new
+qualification of audible completion, final sample fetch or physical performance.

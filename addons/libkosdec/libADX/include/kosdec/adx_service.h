@@ -35,6 +35,11 @@ struct kosdec_adx_service_state {
 enum kosdec_adx_status kosdec_adx_service_init(struct kosdec_adx_service *,
     struct kosdec_adx_stream *, struct kosdec_adx_sequence *,
     int16_t *pcm, size_t samples, size_t capacity);
+/* Joint alternative: same initial pause and exclusive producer ownership.
+   Production pause/cancel supported; loop/repeat/enqueue return UNSUPPORTED.
+   Feed and joint remain producer-only until all service users have joined. */
+enum kosdec_adx_status kosdec_adx_service_init_joint(struct kosdec_adx_service *,
+    struct kosdec_adx_joint_reader *, int16_t *pcm, size_t samples, size_t capacity);
 /* One controller, serialized post/take calls. Exactly one outstanding command.
    MORE means copied/accepted, not applied: wake producer, then take its receipt.
    NEED_OUTPUT means previous receipt not collected; no mutation. Invalid command
