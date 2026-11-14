@@ -119,7 +119,7 @@ static int apply(aica_music_wire_t *w) {
     }
 }
 int aica_music_wire_command(aica_music_wire_t *w,const aica_cmd_t *packet,uint32_t active_session) {
-    const uint32_t *v;unsigned op;
+    const uint32_t *v;unsigned op;int guarded;
     if(!w || !packet || packet->cmd!=AICA_MUSIC_WIRE_COMMAND || packet->size!=16 ||
        !packet->cmd_id || packet->timestamp || packet->misc[0] || packet->misc[1] || packet->misc[2] || packet->misc[3]) return 0;
     v=(const uint32_t *)packet->cmd_data;op=v[1];
@@ -129,6 +129,10 @@ int aica_music_wire_command(aica_music_wire_t *w,const aica_cmd_t *packet,uint32
         return 1;
     }
     if(packet->cmd_id<w->cookie || (w->pending && op!=AICA_MUSIC_WIRE_QUIESCE)) return 0;
+    guarded=w->protected_ports &&
+        (op==AICA_MUSIC_WIRE_QUIESCE || op==AICA_MUSIC_WIRE_CLOSE_ALL || op==AICA_MUSIC_WIRE_RESET_ALL ||
+         (v[2]<8 && (w->protected_ports&(1u<<v[2])) && op!=AICA_MUSIC_WIRE_QUERY && op!=AICA_MUSIC_WIRE_CLAIM));
+    if(guarded && w->pending) return 0; /* Never overwrite a foreign receipt. */
     /* Reserve both publications; urgent quiesce uses only one final receipt. */
     if((w->receipt->sequence&1u) ||
        w->receipt->sequence>UINT32_MAX-(op==AICA_MUSIC_WIRE_QUIESCE?3u:5u)) {
@@ -141,6 +145,7 @@ int aica_music_wire_command(aica_music_wire_t *w,const aica_cmd_t *packet,uint32
     }
     w->session=active_session;w->cookie=packet->cmd_id;
     for(unsigned i=0;i<8;i++) w->request[i]=v[i];
+    if(guarded) return publish(w,AICA_MUSIC_BUSY);
     if(w->claimed && w->music->count && !w->music->faulted &&
        ((op>=AICA_MUSIC_WIRE_OPEN && op<=AICA_MUSIC_WIRE_RESET &&
          op!=AICA_MUSIC_WIRE_MESSAGE && op!=AICA_MUSIC_WIRE_CLOSE) || op==AICA_MUSIC_WIRE_RESET_ALL)) {

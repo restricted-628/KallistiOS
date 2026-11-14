@@ -150,3 +150,48 @@ Run `make -C native wire-test wire-sanitize client-test client-sanitize
 owner-test owner-sanitize` for protocol and mocked host lifetime coverage.
 `examples/dreamcast/sound/sequence-resources` supplies the native publication
 fixture; its result is separate from host tests, playback and hardware evidence.
+
+## Private sequence playback controls
+
+`native/live-owner.h` connects an existing idle music owner and resource owner
+in the same live session. It allocates and frees nothing. Keep all contexts and
+their banks/pool alive, including after timeout or LOST. Use one serialized
+ordinary-thread caller, and leave the other owners idle while a sequence command
+is pending. PLAY/CHAIN require a local READY resource; the ARM rechecks readiness
+when applying the command. Receipt of a packet alone acquires no program pin.
+
+BIND requires an open, quiet logical music port: no earlier queued work, active
+voices or pending music control. It refuses takeover of direct-MIDI notes. The
+binding retains a tone-bank producer pin and excludes direct mutators on its port
+and global music reset/close/quiesce; queries remain allowed. UNBIND stops CPU
+sequence work and releases the producer pin. If that release fails, the guard and
+binding remain faulted; there is no force-unbind. Physical tone/sample references
+remain retained independently. Bound ports also prevent raw timer reset.
+
+Controls cover play/priority replacement, pause/continue, chain/loop exit, speed
+and fades, beat resolution, release policy, query, stop and all-stop. Paused
+position, musical debt and conversion fraction remain held. Existing native speed
+fades advance in wall time while paused. Continue restores timed notes through
+bounded FIFO batches; success acknowledges admission, not hardware execution.
+Rejected/declined PLAY preserves the old clock apart from normal scheduled work.
+
+Each main pass services MIDI and publication first, then urgent sequence stops,
+one bounded advance per bound port, and one ordinary control/resume step. Each
+port dispatches at most 32 sequence events per pass; overdue debt is retained.
+Successful PLAY starts a new clock epoch; successful CONTINUE excludes paused
+time while retaining pre-pause debt/fraction. The 4410 Hz timer conversion carries
+integer remainder. A gap too large for the core's elapsed-us input faults without
+reinitializing ownership; the caller must sample before a full timer wrap.
+
+Command 0x0f uses a coherent receipt at 0x29d00..0x29e00 and feature 0x200. Pending
+snapshots describe admission and remain unchanged until terminal completion;
+queries cannot overtake that pending receipt. Exact retries preserve cookies.
+An observed pending CONTINUE can be superseded by same-port STOP or STOP_ALL,
+preserving the complete cancelled request as a tombstone. All-stop reports faults
+after partial logical progress rather than claiming atomic success. None of these
+controls authorize physical channel/sample reuse or system shutdown.
+
+Run `make -C native live-test live-sanitize live-owner-test live-owner-sanitize`
+for actual core/adapter/catalog/protocol checks and mocked host-owner checks.
+The `sequence-live` native example uses original programs and tone data and
+retains played tone/pool ownership after CPU program cleanup.

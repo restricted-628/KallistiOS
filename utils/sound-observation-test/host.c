@@ -61,7 +61,7 @@ static pthread_mutex_t bus = PTHREAD_MUTEX_INITIALIZER;
 static aica_observation_header_t header;
 static aica_completion_header_t completion_header;
 static aica_bank_header_t bank_header;
-static uint32_t music_words[64],sequence_words[64];
+static uint32_t music_words[64],sequence_words[64],sequence_control_words[64];
 static aica_bank_record_t bank_records[AICA_BANK_SLOTS];
 static aica_completion_channel_t completions[64];
 static uint32_t lp_bits[64], selected_channel, lp_on_start;
@@ -139,6 +139,8 @@ static uint32_t g2_read_32_raw(uint32_t address) {
         return ((uint32_t *)bank_records)[(off - AICA_MEM_BANK_RECORDS) / 4];
     if(off >= AICA_MEM_SEQUENCE_RECEIPT && off < AICA_MEM_SEQUENCE_RECEIPT_END)
         return sequence_words[(off-AICA_MEM_SEQUENCE_RECEIPT)/4];
+    if(off >= AICA_MEM_SEQUENCE_CONTROL_RECEIPT && off < AICA_MEM_SEQUENCE_CONTROL_RECEIPT_END)
+        return sequence_control_words[(off-AICA_MEM_SEQUENCE_CONTROL_RECEIPT)/4];
     if(off >= AICA_MEM_MUSIC_RECEIPT && off < AICA_MEM_MUSIC_RECEIPT_END)
         return music_words[(off-AICA_MEM_MUSIC_RECEIPT)/4];
     assert(off >= AICA_MEM_OBSERVATION_CHANNELS && off < AICA_MEM_OBSERVATION_END);
@@ -284,6 +286,15 @@ int main(void) {
     CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_RECEIPT,snapshot,252)<0 && errno==EINVAL);
     sequence_words[0]=1;CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_RECEIPT,snapshot,256)<0 && errno==EAGAIN);
     sequence_words[0]=UINT32_MAX;CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_RECEIPT,snapshot,4)<0 && errno==EOVERFLOW);
+    CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_CONTROL_RECEIPT,snapshot,256)<0 && errno==EINVAL);
+    driver_features=AICA_DRIVER_FEATURE_SEQUENCE_CONTROL;
+    sequence_control_words[0]=2;sequence_control_words[63]=0x01234567;
+    CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_CONTROL_RECEIPT,snapshot,4)==0 && snapshot[0]==2);
+    CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_CONTROL_RECEIPT,snapshot,256)==0 && snapshot[63]==0x01234567);
+    CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_CONTROL_RECEIPT+4,snapshot,4)<0 && errno==EINVAL);
+    CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_CONTROL_RECEIPT,snapshot,252)<0 && errno==EINVAL);
+    sequence_control_words[0]=1;CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_CONTROL_RECEIPT,snapshot,256)<0 && errno==EAGAIN);
+    sequence_control_words[0]=UINT32_MAX;CHECK(snd_iface_observation_read(AICA_MEM_SEQUENCE_CONTROL_RECEIPT,snapshot,4)<0 && errno==EOVERFLOW);
     driver_features=AICA_DRIVER_FEATURE_MUSIC;
     music_words[0]=2;music_words[63]=0x12345678;
     CHECK(snd_iface_observation_read(AICA_MEM_MUSIC_RECEIPT,snapshot,4)==0 && snapshot[0]==2);

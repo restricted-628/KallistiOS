@@ -50,3 +50,22 @@ owner-test: wire-fixture.h
 	python3 owner-test.py
 owner-sanitize: wire-fixture.h
 	python3 owner-test.py --sanitize
+
+LIVE_SOURCES = live-test.c live-client.c live.c catalog.c asq.c $(ARM)/aica_sequence.c $(ARM)/aica_music_sequence.c $(ARM)/aica_music.c $(ARM)/aica_music_wire.c $(ARM)/aica_music_bank.c $(ARM)/aica_bank_registry.c
+LIVE_HEADERS = live.h live-client.h $(CATALOG_HEADERS) $(ARM)/aica_music_sequence.h $(ARM)/aica_music.h $(ARM)/aica_music_wire.h $(ARM)/aica_music_bank.h $(ARM)/aica_bank_registry.h
+live-fixture.h: live-fixture.py ../asq.py
+	python3 live-fixture.py
+live-check: $(LIVE_SOURCES) $(LIVE_HEADERS) live-fixture.h
+	$(CC) $(CFLAGS) $(WIRE_CPPFLAGS) $(LIVE_SOURCES) -o $@
+live-asan: $(LIVE_SOURCES) $(LIVE_HEADERS) live-fixture.h
+	$(CC) $(CFLAGS) $(WIRE_CPPFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer $(LIVE_SOURCES) -o $@
+.PHONY: live-test live-sanitize
+live-test: live-check
+	./live-check
+live-sanitize: live-asan
+	./live-asan
+.PHONY: live-owner-test live-owner-sanitize
+live-owner-test: live-fixture.h
+	python3 live-owner-test.py
+live-owner-sanitize: live-fixture.h
+	python3 live-owner-test.py --sanitize

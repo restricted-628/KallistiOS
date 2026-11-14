@@ -18,8 +18,8 @@ with tempfile.TemporaryDirectory(prefix='music-owner-') as d:
     cmd+=['-include',str(root/'utils/sound-observation-test/stubs/types.h')]
     cmd += [str(root/'utils/sound-music-live-test/host.c'),str(root/'utils/aica-music-client/music_live.c'),str(root/'utils/aica-music-client/music_client.c')]
     cmd += [str(arm/(s+'.c')) for s in ['aica_observer','aica_bank_registry','aica_music','aica_music_bank','aica_music_wire','aica_music_live']]
-    cmd += [str(root/'utils/aica-sequence-tool/native'/(s+'.c')) for s in ['asq','catalog','wire']]
-    cmd += [str(arm/(s+'.c')) for s in ['aica_sequence','aica_sequence_resource']]
+    cmd += [str(root/'utils/aica-sequence-tool/native'/(s+'.c')) for s in ['asq','catalog','wire','live']]
+    cmd += [str(arm/(s+'.c')) for s in ['aica_sequence','aica_sequence_resource','aica_music_sequence']]
     cmd += ['-o',str(t/'test')]
     if '--sanitize' in sys.argv: cmd += ['-fsanitize=address,undefined','-fno-omit-frame-pointer']
     subprocess.run(cmd,check=True)

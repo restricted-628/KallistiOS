@@ -46,6 +46,7 @@ typedef struct {
     aica_music_wire_ops_t ops;
     uint32_t session,cookie,cancelled_cookie,request[8];
     uint8_t claimed,pending,faulted,bank_pins;
+    uint32_t protected_ports; /* Bound sequence ports; external mutators excluded. */
 } aica_music_wire_t;
 /* First initialization only. Memory placement/firmware activation and host
    ownership are integration gates; this core assigns no absolute RAM address. */

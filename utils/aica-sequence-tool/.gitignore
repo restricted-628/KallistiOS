@@ -9,3 +9,6 @@ native/wire-asan
 native/wire-fixture.h
 native/client-check
 native/client-asan
+native/live-check
+native/live-asan
+native/live-fixture.h

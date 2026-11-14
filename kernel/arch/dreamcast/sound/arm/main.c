@@ -246,6 +246,7 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
                      AICA_DRIVER_FEATURE_BANK_REGISTRY | AICA_DRIVER_FEATURE_MUSIC |
                      AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE |
+                     AICA_DRIVER_FEATURE_SEQUENCE_CONTROL |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
@@ -611,6 +612,7 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
                 ++commands_rejected;
             break;
         case AICA_CMD_SYNC_CLOCK:
+            if(music->wire.protected_ports) { ++commands_rejected;break; }
             if(size == sizeof(aica_cmd_t) / sizeof(uint32)) {
                 timer = 0;
                 aica_music_clock_rebase(&music->backend);
@@ -672,6 +674,12 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
         case ASQ_WIRE_COMMAND:
             if(!observer.header->ready || observer.header->sequence==UINT32_MAX ||
                !asq_wire_command(&sequence_resources->wire,pkt,observer.header->active_session))
+                ++commands_rejected;
+            break;
+
+        case ASQL_COMMAND:
+            if(!observer.header->ready || observer.header->sequence==UINT32_MAX ||
+               !asql_command(&sequence_resources->control,pkt,observer.header->active_session))
                 ++commands_rejected;
             break;
         case AICA_MUSIC_WIRE_COMMAND:
@@ -791,6 +799,8 @@ int arm_main(void) {
         (volatile aica_music_receipt_t *)AICA_MEM_MUSIC_RECEIPT);
     asq_resource_runtime_init(sequence_resources,
         (volatile asq_receipt_t *)AICA_MEM_SEQUENCE_RECEIPT);
+    asq_resource_control_init(sequence_resources,music,&banks,
+        (volatile asql_receipt_t *)AICA_MEM_SEQUENCE_CONTROL_RECEIPT);
     commands_processed = 0;
     commands_rejected = 0;
     malformed_packets = 0;
@@ -839,6 +849,7 @@ int arm_main(void) {
         aica_bank_registry_service(&banks);
         aica_music_live_service(music,timer);
         asq_wire_service(&sequence_resources->wire);
+        asql_service(&sequence_resources->control,timer);
 
         /* Little delay to prevent memory lock */
         timer_wait(10);

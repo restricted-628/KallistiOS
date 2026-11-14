@@ -157,8 +157,31 @@ static void sequence_publication(void) {
     CHECK(sequence_receipt.result==0 && !sequence_receipt.state && !sequence_receipt.source);
     CHECK(writes==0 && lp_reads==0);
 }
+static void sequence_controls(void) {
+    static asql_receipt_t control_receipt;
+    fresh();asq_resource_runtime_init(sequence_resources,&sequence_receipt);
+    asq_resource_control_init(sequence_resources,music,&banks,&control_receipt);
+    registry_header.session=7;
+    registry_records[0]=(aica_bank_record_t){.session=7,.generation=1,.state=AICA_BANK_ACTIVE};
+    request(AICA_MUSIC_WIRE_CLAIM,1,1,0);request(AICA_MUSIC_WIRE_OPEN,2,0,1);
+    CHECK(music_receipt.result==0 && music->music.ports[0].generation==1);
+    init_packet(ASQL_COMMAND,16,1);data[8]=7;data[9]=ASQL_BIND;data[11]=1;
+    uint32_t rejected=commands_rejected;
+    header.ready=0;dispatch();CHECK(commands_rejected==rejected+1 && !control_receipt.cookie);
+    header.ready=1;data[8]=8;dispatch();CHECK(commands_rejected==rejected+2 && !control_receipt.cookie);
+    data[8]=7;dispatch();CHECK(control_receipt.result==ASQL_PENDING);
+    asql_service(&sequence_resources->control,10);
+    CHECK(control_receipt.result==0 && control_receipt.bound && music->wire.protected_ports==1);
+    request(AICA_MUSIC_WIRE_MESSAGE,3,0x90,60);
+    CHECK(music_receipt.result==AICA_MUSIC_BUSY && !music->music.count && !writes);
+    init_packet(AICA_CMD_SYNC_CLOCK,8,0);test_clock=123;dispatch();
+    CHECK(test_clock==123 && commands_rejected==rejected+3);
+    init_packet(ASQL_COMMAND,16,2);data[8]=7;data[9]=ASQL_UNBIND;data[11]=1;dispatch();
+    asql_service(&sequence_resources->control,11);
+    CHECK(control_receipt.result==0 && !control_receipt.bound && !music->wire.protected_ports);
+}
 int main(void) {
-    observation_regression();clocks();claims();backend_and_guards();sequence_publication();
+    observation_regression();clocks();claims();backend_and_guards();sequence_publication();sequence_controls();
     printf("LIVE music: %u actual-C checks passed; no hardware/retirement proof\n",checks);
     return 0;
 }

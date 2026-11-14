@@ -21,6 +21,8 @@ ARM command firmware, SH-4 transport, sound RAM, playback/DSP, PCM streams and b
   upload owner; `make catalog-test catalog-sanitize wire-test wire-sanitize
   client-test client-sanitize owner-test owner-sanitize`. Mocked transfer results
   establish host ownership behavior, not device execution or sample retirement.
+- The same native directory provides `live-test live-sanitize live-owner-test
+  live-owner-sanitize` for sequence control, clock, binding and host transport.
 - `utils/aica-bank-tool` — private original bank authoring; `native/` contains
   byte-safe validation/planning and a caller-owned unpublished PCM uploader.
   This is not an installed bank API or ARM bank playback implementation.
@@ -93,6 +95,8 @@ Target/example directories (source the assigned checkout's environment and inspe
   played bank and pool after logical quiesce, then remains alive.
 - `examples/dreamcast/sound/sequence-resources` — original ASQ publication, query,
   drop and cancelled-upload fixture; no sequence playback or physical samples.
+- `examples/dreamcast/sound/sequence-live` — original playback/pause/continue/chain
+  fixture; CPU program retirement is separate from retained tone/pool ownership.
 - `examples/dreamcast/sound/channel-sync`
 - `examples/dreamcast/sound/stream-service`
 - `examples/dreamcast/sound/dsp-control`

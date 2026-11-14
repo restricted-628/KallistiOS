@@ -8,3 +8,7 @@ void asq_resource_runtime_init(asq_resource_runtime_t *s,volatile asq_receipt_t 
     asq_catalog_init(&s->catalog);
     asq_wire_init(&s->wire,&s->catalog,r,map,NULL);
 }
+void asq_resource_control_init(asq_resource_runtime_t *s,aica_music_live_t *m,
+    aica_bank_registry_t *b,volatile asql_receipt_t *r) {
+    asql_init(&s->control,&m->sequences,&m->wire,b,&s->catalog,r);
+}

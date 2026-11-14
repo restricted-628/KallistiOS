@@ -2,7 +2,7 @@ CC ?= cc
 ROOT := ../..
 ARM := $(ROOT)/kernel/arch/dreamcast/sound/arm
 ASQ := ../aica-sequence-tool/native
-SEQUENCE = $(ASQ)/asq.c $(ASQ)/catalog.c $(ASQ)/wire.c $(ARM)/aica_sequence.c $(ARM)/aica_sequence_resource.c
+SEQUENCE = $(ASQ)/live.c $(ARM)/aica_music_sequence.c $(ASQ)/asq.c $(ASQ)/catalog.c $(ASQ)/wire.c $(ARM)/aica_sequence.c $(ARM)/aica_sequence_resource.c
 CPPFLAGS := -I$(ASQ) -Istubs -I$(ARM) -I$(ROOT)/kernel/arch/dreamcast/include/dc/sound -I$(ROOT)/kernel/arch/dreamcast/include -include stubs/types.h
 # Mach-O requires an explicit optional undefined symbol; ELF uses the source
 # weak reference directly. This applies only to the standalone host fixture.

@@ -129,7 +129,7 @@ def check(args):
                   "-I.", "-I" + str(native), "-I" + str(root / "kernel/arch/dreamcast/include"),
                   "-I" + str(root / "kernel/arch/dreamcast/include/dc/sound")]
         mapping = {"asq_native.o": native / "asq.c", "asq_catalog.o": native / "catalog.c",
-                   "asq_wire.o": native / "wire.c"}
+                   "asq_wire.o": native / "wire.c", "asq_live.o": native / "live.c"}
         require(args.objects and len(args.objects) == len(set(args.objects)), "object inventory")
         for name in args.objects:
             require(Path(name).name == name and name.endswith(".o"), "object name")

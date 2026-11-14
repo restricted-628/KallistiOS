@@ -25,7 +25,7 @@ stream.drv: stream.drv.prebuilt
 endif
 
 ASQ_DIR = $(KOS_BASE)/utils/aica-sequence-tool/native
-ASQ_OBJS = aica_sequence_resource.o aica_sequence.o asq_native.o asq_catalog.o asq_wire.o
+ASQ_OBJS = aica_sequence_resource.o aica_sequence.o aica_music_sequence.o asq_native.o asq_catalog.o asq_wire.o asq_live.o
 
 MUSIC_OBJS = aica_music.o aica_music_bank.o aica_music_wire.o aica_music_live.o
 FIRMWARE_C_OBJS = main.o aica.o aica_observer.o aica_bank_registry.o $(MUSIC_OBJS) $(ASQ_OBJS)
@@ -59,6 +59,7 @@ main.o aica_bank_registry.o: aica_bank_registry.h $(KOS_BASE)/kernel/arch/dreamc
 main.o $(MUSIC_OBJS): aica_music_live.h aica_music.h aica_music_bank.h aica_music_wire.h aica_music_sequence.h
 
 main.o aica_sequence_resource.o: aica_sequence_resource.h $(ASQ_DIR)/wire.h $(ASQ_DIR)/catalog.h $(ASQ_DIR)/asq.h
+main.o aica_sequence_resource.o asq_live.o: $(ASQ_DIR)/live.h aica_music_sequence.h aica_music_wire.h
 main.o $(ASQ_OBJS): aica_sequence.h $(ASQ_DIR)/asq.h
 main.o aica_sequence_resource.o: $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_sequence_resource.h $(KOS_BASE)/kernel/arch/dreamcast/include/dc/sound/aica_music_live.h
 asq_wire.o: $(ASQ_DIR)/asq.h aica_cmd_iface.h
@@ -67,4 +68,6 @@ asq_native.o: $(ASQ_DIR)/asq.c $(ASQ_DIR)/asq.h aica_sequence.h
 asq_catalog.o: $(ASQ_DIR)/catalog.c $(ASQ_DIR)/catalog.h $(ASQ_DIR)/asq.h
 	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@
 asq_wire.o: $(ASQ_DIR)/wire.c $(ASQ_DIR)/wire.h $(ASQ_DIR)/catalog.h
+	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@
+asq_live.o: $(ASQ_DIR)/live.c $(ASQ_DIR)/live.h $(ASQ_DIR)/catalog.h $(ASQ_DIR)/asq.h aica_music_sequence.h aica_music_wire.h
 	$(DC_ARM_CC) $(DC_ARM_CFLAGS) $(DC_ARM_INCS) -I. -I$(KOS_BASE)/kernel/arch/dreamcast/include -c $< -o $@
