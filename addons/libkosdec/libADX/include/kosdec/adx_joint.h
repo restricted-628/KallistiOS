@@ -83,6 +83,23 @@ enum kosdec_adx_joint_status kosdec_adx_joint_memory_init(
     struct kosdec_adx_joint *, void *data, size_t bytes);
 enum kosdec_adx_joint_status kosdec_adx_joint_ring_init(
     struct kosdec_adx_joint *, void *buffer, size_t capacity, size_t extra);
+/* Append zero-filled encoding3/block18/4-bit groups to a RING input joint.
+   This is the baseline compressed "silence" operation: it does not clear ADX
+   predictor history, so transient decoded PCM may be nonzero. Caller must insert
+   at a compressed group boundary after the header, before the endcode, and keep
+   the declared total/loop offsets consistent. No header rewrite or SFD demux.
+   channels1/2; requested PCM frames are rounded down to a multiple of32. At most
+   512 compressed bytes are written per call; inserted receives actual frames.
+   Insufficient space for a whole group is OK with zero inserted. Ring wrap and
+   mirror maintenance preserve whole-group publication, including with extra0.
+   Same serialized producer ownership as get/put; an outstanding DATA borrow is
+   allowed. FREE borrow returns BUSY, sealed returns SEALED, non-ring/invalid
+   arguments return BAD_ARGUMENT, all without mutation or changing inserted.
+   inserted must be disjoint from state/backing storage. No allocation, callbacks
+   other than the existing error hook, codec history changes or hardware access. */
+enum kosdec_adx_joint_status kosdec_adx_joint_insert_silence(
+    struct kosdec_adx_joint *, unsigned channels, uint32_t requested_frames,
+    uint32_t *inserted);
 /* Queue starts empty, with four independent FIFO lines and caller-owned nodes.
    SEPARATE get returns a whole head chunk only when request>=head bytes; JOIN
    permits partial gets and merges adjacent spans on Put/Unget/seed. Adjacent

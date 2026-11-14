@@ -276,6 +276,38 @@ static void publish(struct kosdec_adx_joint *j, const struct kosdec_adx_chunk *c
         memcpy(j->buffer + begin - j->capacity, j->buffer + begin, end - begin);
     }
 }
+enum kosdec_adx_joint_status kosdec_adx_joint_insert_silence(
+    struct kosdec_adx_joint *j, unsigned channels, uint32_t requested, uint32_t *inserted) {
+    if(!valid(j) || j->kind != KOSDEC_ADX_JOINT_RING || !inserted ||
+       (channels != 1 && channels != 2)) return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    if(j->sealed) return fail(j, KOSDEC_ADX_JOINT_SEALED);
+    if(j->borrowed[KOSDEC_ADX_JOINT_FREE].bytes) return fail(j, KOSDEC_ADX_JOINT_BUSY);
+    size_t group = 18u * channels;
+    size_t groups = minimum(requested / 32u, 512u / group);
+    groups = minimum(groups, j->available[KOSDEC_ADX_JOINT_FREE] / group);
+    size_t bytes = groups * group;
+    if(bytes) {
+        size_t at = j->position[KOSDEC_ADX_JOINT_FREE];
+        size_t first = minimum(bytes, j->capacity - at);
+        struct kosdec_adx_chunk span = {.data = j->buffer + at, .bytes = first};
+        memset(span.data, 0, span.bytes);
+        publish(j, &span);
+        if(first < bytes) {
+            span.data = j->buffer; span.bytes = bytes - first;
+            memset(span.data, 0, span.bytes);
+            publish(j, &span);
+        }
+        /* All admission is complete before writing. Publish accounting only
+           after both spans; no partial second borrow can fail at the wrap. */
+        at += bytes;
+        if(at >= j->capacity) at -= j->capacity;
+        j->position[KOSDEC_ADX_JOINT_FREE] = at;
+        j->available[KOSDEC_ADX_JOINT_FREE] -= bytes;
+        j->available[KOSDEC_ADX_JOINT_DATA] += bytes;
+    }
+    *inserted = (uint32_t)groups * 32u;
+    return KOSDEC_ADX_JOINT_OK;
+}
 enum kosdec_adx_joint_status kosdec_adx_joint_put(
     struct kosdec_adx_joint *j, const struct kosdec_adx_chunk *c) {
     enum kosdec_adx_joint_status status = check(j, c, 0);

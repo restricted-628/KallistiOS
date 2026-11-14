@@ -908,3 +908,21 @@ The native record/storage API differs from CRI's raw work-buffer and global pool
 
 The exact baseline format boundary and remaining container work are recorded in
 [FORMATS.md](FORMATS.md); passing the SDK sample corpus is not full parity.
+
+## Compressed silence insertion
+
+`kosdec_adx_joint_insert_silence` appends zero-filled ADX groups to a ring input
+joint, rounding requested frames down to32 and reporting actual inserted frames.
+It handles ring wrap and mirrored storage without partially publishing a group,
+writes at most512 compressed bytes per call, and returns zero when no complete
+group fits. An outstanding DATA borrow may remain; FREE borrows block insertion.
+Use it only on the serialized input producer (including a bound joint feed), at
+compressed group boundaries after the header and before the endcode. The caller
+must account for inserted frames in the header and any loop byte offsets.
+
+The name follows the baseline middleware operation. Zero residual groups preserve
+predictor histories: decoded output can have a transient after nonzero PCM.
+This is not a predictor reset or a PCM-zeroing filter. It does not provide SFD
+unknown-length/header coordination. Output-side sample discard is a separate Audio
+contract requiring actual queued-frame counts and playback-clock adjustment;
+source seek and producer-buffer discard do not establish that behavior.

@@ -6,6 +6,18 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX compressed zero-group insertion
+
+- Add bounded whole-group insertion into compressed ring input, preserving
+  wrap/mirror accounting and outstanding DATA borrows. FREE borrows and sealed
+  input reject insertion; each call writes at most512 compressed bytes.
+- Zero residual groups retain predictor history and may produce a PCM transient.
+  Callers retain header-length/group-ordering responsibility; output-side sample
+  discard and playback-clock adjustment remain separate Audio work.
+- Full host/ASan/UBSan suites and strict staged SH-4 C/C++ links pass, including
+  all tested ring offsets, mirror extents and carried-history decode cases.
+  No physical playback or timing qualification is claimed.
+
 ## 2026-11-13 — libADX bounded amplitude analysis
 
 - Add caller-owned mono/stereo peak-window analysis with bounded strided PCM

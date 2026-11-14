@@ -150,3 +150,8 @@ consumer per channel, release/acquire publication, explicit source-frame selecti
 and storage lifetime through producer join. Do not call analysis timestamps an
 Audio-qualified clock or replace the user's existing filter without composition.
 Native typed work sizing differs from the SDK; no peak-loop FPU/SH4ZAM claim.
+
+Compressed silence insertion means complete zero residual ADX groups, not clearing
+predictor history. Preserve ring wrap/mirror publication and producer ownership;
+caller maintains header sample length and group alignment. Output sample discard
+belongs to the Audio queue/time contract, not a decoder seek or pipe-read shortcut.
