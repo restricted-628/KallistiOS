@@ -155,3 +155,11 @@ Compressed silence insertion means complete zero residual ADX groups, not cleari
 predictor history. Preserve ring wrap/mirror publication and producer ownership;
 caller maintains header sample length and group alignment. Output sample discard
 belongs to the Audio queue/time contract, not a decoder seek or pipe-read shortcut.
+
+Resident partition metadata is published only after the whole AFS table passes
+bounds. Loading is one read_at call<=512 bytes/64 entries per step, with explicit
+workspace sizing and sticky failure/cancel. Registry references prevent metadata
+close while bound; all operations are caller-serialized. Copied member views bind
+an explicit immutable archive provider and may outlive metadata, never provider
+retirement. Do not equate registry replacement with appended AFS overlay semantics
+or native byte-range work sizing with CRI's compact sector ABI.

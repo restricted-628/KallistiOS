@@ -22,6 +22,14 @@ struct kosdec_adx_index {
     uint8_t scratch[8];
     struct kosdec_adx_view member;
 };
+/* Construct a bounded view of an already validated/selected source range.
+   DONE copies the range; BAD_ARGUMENT leaves output unchanged. No I/O.
+   offset<=input_bytes and bytes<=input_bytes-offset, including empty EOF views.
+   Source callback/context and immutable bytes must outlive all view consumers;
+   serialization follows read_at. This does not validate a container or payload. */
+enum kosdec_adx_status kosdec_adx_view_init(struct kosdec_adx_view *,
+    kosdec_adx_read_at, void *context, uint32_t input_bytes,
+    uint32_t offset, uint32_t bytes);
 /* Caller-owned serialized state; immutable source/context lifetime must extend
    through lookup AND every resulting member consumer. Reuses stream read_at's
    synchronous destination/no-reentry contract. No allocation, open, close or

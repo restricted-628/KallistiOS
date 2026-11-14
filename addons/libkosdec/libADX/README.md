@@ -926,3 +926,36 @@ This is not a predictor reset or a PCM-zeroing filter. It does not provide SFD
 unknown-length/header coordination. Output-side sample discard is a separate Audio
 contract requiring actual queued-frame counts and playback-clock adjustment;
 source seek and producer-buffer discard do not establish that behavior.
+
+## Resident AFS partitions
+
+`adx_partition.h` loads an entire original AFS directory into caller-owned typed
+ranges. Each step makes at most one source call of512 bytes and validates at most
+64 entries. Short reads and temporary WAIT preserve progress; errors and cancel
+are sticky. Member access is withheld until every entry is validated. Empty
+members and overlapping immutable ranges are retained, while nonempty ranges must
+follow the directory and fit the source. Optional filenames and appended AFS
+patch formats are not interpreted.
+
+Use `partition_init` with the same `read_at` contract as streams, then step until
+DONE. A zero-capacity first pass returns NEED_OUTPUT after a valid nonempty header;
+`partition_get_info` reports the required typed work size. Close that sizing pass
+and initialize with enough storage. Empty directories need no entry storage.
+Caller-owned memory remains borrowed through successful partition close.
+
+The256-slot registry binds completed directories to IDs. Aliases and multiple
+registries are counted; closing a registered partition returns BUSY unchanged.
+Replacement/unbind/registry-close releases metadata references. All operations
+are serialized by the caller; no globals, file handles or implicit worker exist.
+Registry lookup borrows metadata until its next mutation. `partition_open_view`
+copies a selected range into an independent view with an explicit source callback
+for the same immutable archive. The copied view survives directory close, but its
+source/provider must remain alive through all payload consumers. Use that view
+with `kosdec_adx_stream_init` and the existing service/player path.
+
+`kosdec_adx_view_init` also constructs checked byte-range views directly. Empty
+views report EOF without a provider call; nonempty reads remain capped at512 bytes
+and their selected extent. View construction validates bounds, not payloads.
+Native typed byte ranges replace the SDK's compact sector work layout. Directory
+registration is not appended-partition overlay merging, and source callbacks do
+not implicitly acquire or retire VFS descriptors, disc requests or DMA staging.

@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX resident AFS partition metadata
+
+- Add caller-owned AFS directory loading, work-size discovery and a256-ID
+  registry. Each step reads at most512 bytes and validates at most64 entries;
+  member access waits for whole-table validation. Short reads, WAIT, cancellation
+  and capacity failures retain explicit state without publishing partial tables.
+- Count registry references before allowing metadata close. Copied member views
+  survive directory close but retain their explicit archive-provider lifetime.
+  Native byte ranges do not claim the SDK's packed sector ABI or file ownership.
+- Full host/ASan/UBSan suites and strict staged SH-4 C/C++ links pass. The private
+  SDK AFS fixture's five ranges match independently parsed metadata. No shared
+  Storage/Audio change, physical playback or hardware timing claim is included.
+
 ## 2026-11-13 — libADX compressed zero-group insertion
 
 - Add bounded whole-group insertion into compressed ring input, preserving

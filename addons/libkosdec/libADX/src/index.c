@@ -3,6 +3,14 @@
 #include <string.h>
 #define INDEX_MAGIC UINT32_C(0x41445849)
 #define VIEW_MAGIC UINT32_C(0x41445856)
+enum kosdec_adx_status kosdec_adx_view_init(struct kosdec_adx_view *view,
+    kosdec_adx_read_at read_at, void *context, uint32_t input_bytes,
+    uint32_t offset, uint32_t bytes) {
+    if(!view || !read_at || offset > input_bytes || bytes > input_bytes - offset)
+        return KOSDEC_ADX_BAD_ARGUMENT;
+    *view = (struct kosdec_adx_view){VIEW_MAGIC, offset, bytes, read_at, context};
+    return KOSDEC_ADX_DONE;
+}
 static uint32_t word(const uint8_t *p, enum kosdec_adx_container format) {
     if(format == KOSDEC_ADX_ACX)
         return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 |
