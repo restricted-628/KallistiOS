@@ -13,6 +13,7 @@ enum mock_failure mock_failure;
 snd_stream_callback_t mock_callback;
 void *mock_userdata;
 snd_stream_config_t mock_output;
+uint32_t mock_update_fields;
 unsigned mock_allocs,mock_starts,mock_stops,mock_joins,mock_updates;
 size_t mock_frames;
 int mock_async_error;
@@ -32,7 +33,7 @@ static int error(void) {errno=EIO;return -1;}
 void mock_reset(void) {
     mock_failure=MOCK_OK;mock_callback=NULL;mock_userdata=NULL;mock_frames=0;
     mock_allocs=mock_starts=mock_stops=mock_joins=mock_updates=0;stopped=false;
-    mock_async_error=0;mock_status_failure=false;
+    mock_async_error=0;mock_status_failure=false;mock_update_fields=0;
 }
 void mock_pause(void) {struct timespec t={0,1000000};nanosleep(&t,NULL);}
 uint64_t timer_ms_gettime64(void) {
@@ -131,8 +132,8 @@ int snd_stream_poll_ex(snd_stream_hnd_t h) {
     (void)h;if(mock_failure==MOCK_POLL)return error();return fill();
 }
 int snd_stream_update(snd_stream_hnd_t h,const snd_stream_config_t *c,uint32_t fields) {
-    (void)h;assert(fields==(SND_CHANNEL_UPDATE_VOLUME|SND_CHANNEL_UPDATE_PAN) || fields==SND_CHANNEL_UPDATE_FREQUENCY);
-    ++mock_updates;if(mock_failure==MOCK_UPDATE)return error();mock_output=*c;return 0;
+    (void)h;assert(fields==(SND_CHANNEL_UPDATE_VOLUME|SND_CHANNEL_UPDATE_PAN) || fields==SND_CHANNEL_UPDATE_FREQUENCY || fields==SND_CHANNEL_UPDATE_PAN);
+    mock_update_fields=fields;++mock_updates;if(mock_failure==MOCK_UPDATE)return error();mock_output=*c;return 0;
 }
 int snd_stream_stop_ex(snd_stream_hnd_t h,uint32_t timeout) {
     (void)h;assert(timeout);++mock_stops;

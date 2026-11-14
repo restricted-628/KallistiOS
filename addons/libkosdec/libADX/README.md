@@ -577,11 +577,32 @@ policy, then stop explicitly. No estimated sound position is promoted to a clock
 
 `set_output` accepts per-channel linear volume and pan on KOS's0..255 scale,
 before or during playback. Defaults are full volume, centered mono and separated
-stereo. These differ from CRI attenuation/pan semantics. A live update error can
+stereo. This legacy API retains KOS units. A live update error can
 partially affect channels, so it latches failure and requires stop. Producer
 `post`/`take` expose acknowledged pause/resume, repeat, enqueue and loop release;
 production pause leaves already submitted sound playing. Terminal producer wake
 rejection is harmless when queued PCM/receipts remain; live wake failure is not.
+
+`set_pan` and `get_pan` add signed positions -15..15 and
+`KOSDEC_ADX_PAN_AUTO` (-128), independently for each channel. AUTO is the default:
+mono centers channel0; stereo separates left/right. An explicit setting on one
+channel no longer suppresses AUTO on the other. Settings persist across source
+release/rebind and apply before output starts or through checked live pan updates.
+Channel1 may be prepared before format discovery and is ignored for mono output.
+Getters return the last successful software setting, including AUTO, even after
+failure/stop; they are not device readback. Invalid channel/value/state is EINVAL
+without mutation, rather than reproducing unchecked SDK indexing or clamping.
+Legacy `set_output` still emits the exact supplied KOS bytes and clears AUTO for
+both channels; `get_pan` then reports their equivalent signed positions (zero
+attenuation in either direction is center). Live AUTO resolves immediately from
+the admitted format rather than forwarding the sentinel to a lower-level clamp.
+No stereo-atomic or hardware qualification follows from the checked call.
+Rebuild consumers for the expanded implementation-owned player state.
+
+Exact CRI volume remains open: SDK header5.93 documents0..-960 tenthsdB while
+manual5.78 documents0..-999. The current linear8 backend cannot represent every
+logarithmic attenuation step. An approximate conversion is not silently supplied;
+a reviewed raw-attenuation Audio contract is required before claiming parity.
 
 `set_rate` selects requested output frequency8000..48000Hz; zero follows the
 source rate again. Set it before first playback or use the existing checked live
@@ -708,7 +729,8 @@ asset requirements prioritize work without removing other baseline capabilities.
 Additional formats and out-of-domain coefficient setup, broader ACX/AFS partition/metadata services,
 SJ-compatible services, device stop/restart and allocation retirement, audible pause
 and seamless playback, multi-stream scheduling, qualified playback timing,
-CRI-unit volume/pan/pitch and fades, errors/recovery and host tools remain. The native player exercises output and software stop/join but does not provide
+CRI-unit volume/pitch and fades, errors/recovery and host tools remain; signed
+pan/AUTO setters and getters now have native equivalents. The native player exercises output and software stop/join but does not provide
 safe sound-memory reuse, audible completion or unlimited restart.
 There are no success-returning placeholder APIs for these capabilities.
 

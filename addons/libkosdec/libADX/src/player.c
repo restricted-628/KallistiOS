@@ -14,6 +14,15 @@ static int failed(struct kosdec_adx_player *p, int error) {
     errno = error ? error : EIO;
     return -1;
 }
+/* Representatives of the existing KOS pan encoding, not amplitude math. */
+static uint8_t output_pan(int pan, unsigned channel, unsigned channels) {
+    if(pan == KOSDEC_ADX_PAN_AUTO)
+        return channel ? 255 : channels == 2 ? 0 : 128;
+    return (uint8_t)(pan < 0 ? 127 + pan * 8 : 128 + pan * 8);
+}
+static int signed_pan(unsigned pan) {
+    return pan < 128 ? -(int)((127 - pan) / 8) : (int)((pan - 128) / 8);
+}
 static int wake_producer(struct kosdec_adx_player *p) {
     if(kosdec_adx_service_get_state(&p->producer).status >= KOSDEC_ADX_DONE) return 0;
     if(fiber_service_wake(p->worker) == 0) return 0;
@@ -33,7 +42,7 @@ static int init(struct kosdec_adx_player *p,
        c->stack_bytes > UINTPTR_MAX - (uintptr_t)c->stack ||
        !c->transfer_timeout_ms || !c->prefill_timeout_ms) return bad();
     struct kosdec_adx_player initial = {.magic = PLAYER_MAGIC, .memory = *c,
-        .source_bound = true,
+        .source_bound = true, .requested_pan = {KOSDEC_ADX_PAN_AUTO,KOSDEC_ADX_PAN_AUTO},
         .sound = SND_STREAM_INVALID, .info = {.retained_sound = SND_STREAM_INVALID}};
     enum kosdec_adx_status status = spsd ?
         kosdec_adx_service_init_spsd(&initial.producer,spsd,c->pcm,c->pcm_samples,c->capacity) : aiff ?
@@ -269,10 +278,9 @@ int kosdec_adx_player_poll(struct kosdec_adx_player *p) {
         p->output.channels = (uint8_t)channels;
         p->info.sample_rate = rate;
         p->info.channels = channels;
-        if(!p->custom_pan) {
-            p->output.channel[0].pan = channels == 1 ? 128 : 0;
-            p->output.channel[1].pan = 255;
-        }
+        for(unsigned ch = 0; ch < 2; ++ch)
+            if(p->requested_pan[ch] == KOSDEC_ADX_PAN_AUTO)
+                p->output.channel[ch].pan = output_pan(KOSDEC_ADX_PAN_AUTO,ch,channels);
         p->info.ready_start = true;
         if(p->info.wait_start) {
             if(p->sound != SND_STREAM_INVALID &&
@@ -308,7 +316,26 @@ int kosdec_adx_player_set_output(struct kosdec_adx_player *p,
         if(snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_VOLUME | SND_CHANNEL_UPDATE_PAN) < 0)
             return failed(p,errno);
     }
-    p->output = config; p->custom_pan = true;
+    p->output = config;
+    p->requested_pan[0] = (int16_t)signed_pan(lp);
+    p->requested_pan[1] = (int16_t)signed_pan(rp);
+    return 0;
+}
+int kosdec_adx_player_set_pan(struct kosdec_adx_player *p, unsigned channel, int pan) {
+    if(!valid(p) || channel > 1 || (pan != KOSDEC_ADX_PAN_AUTO && (pan < -15 || pan > 15)) ||
+       p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
+    snd_stream_config_t config = p->output;
+    config.channel[channel].pan = output_pan(pan,channel,p->info.channels);
+    if(p->sound != SND_STREAM_INVALID &&
+       snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_PAN) < 0)
+        return failed(p,errno);
+    p->output = config;
+    p->requested_pan[channel] = (int16_t)pan;
+    return 0;
+}
+int kosdec_adx_player_get_pan(const struct kosdec_adx_player *p, unsigned channel, int *pan) {
+    if(!valid(p) || channel > 1 || !pan) return bad();
+    *pan = p->requested_pan[channel];
     return 0;
 }
 int kosdec_adx_player_set_rate(struct kosdec_adx_player *p, uint32_t hz) {

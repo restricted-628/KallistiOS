@@ -8,6 +8,7 @@ extern enum mock_failure mock_failure;
 extern snd_stream_callback_t mock_callback;
 extern void *mock_userdata;
 extern snd_stream_config_t mock_output;
+extern uint32_t mock_update_fields;
 extern unsigned mock_allocs,mock_starts,mock_stops,mock_joins,mock_updates;
 extern size_t mock_frames;
 extern int mock_async_error;

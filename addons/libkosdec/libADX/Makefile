@@ -19,7 +19,8 @@ HEADERS = include/kosdec/adx_loader.h include/kosdec/adx_spsd.h include/kosdec/a
 
 .PHONY: sh4 test sanitize install clean
 sh4: $(BUILD)/sh4/libADX.a
-test: $(BUILD)/host-test/loader $(BUILD)/host-test/start_gate $(BUILD)/host-test/spsd $(BUILD)/host-test/spsd_player $(BUILD)/host-test/wave4 $(BUILD)/host-test/aiff_player $(BUILD)/host-test/aiff $(BUILD)/host-test/au_player $(BUILD)/host-test/au $(BUILD)/host-test/wave_player $(BUILD)/host-test/wave $(BUILD)/host-test/request_joint $(BUILD)/host-test/request $(BUILD)/host-test/partition_overlay $(BUILD)/host-test/partition $(BUILD)/host-test/silence $(BUILD)/host-test/amplitude $(BUILD)/host-test/loop_count $(BUILD)/host-test/joint_player $(BUILD)/host-test/joint_reader $(BUILD)/host-test/joint_queue $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+test: $(BUILD)/host-test/pan $(BUILD)/host-test/loader $(BUILD)/host-test/start_gate $(BUILD)/host-test/spsd $(BUILD)/host-test/spsd_player $(BUILD)/host-test/wave4 $(BUILD)/host-test/aiff_player $(BUILD)/host-test/aiff $(BUILD)/host-test/au_player $(BUILD)/host-test/au $(BUILD)/host-test/wave_player $(BUILD)/host-test/wave $(BUILD)/host-test/request_joint $(BUILD)/host-test/request $(BUILD)/host-test/partition_overlay $(BUILD)/host-test/partition $(BUILD)/host-test/silence $(BUILD)/host-test/amplitude $(BUILD)/host-test/loop_count $(BUILD)/host-test/joint_player $(BUILD)/host-test/joint_reader $(BUILD)/host-test/joint_queue $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+	$(BUILD)/host-test/pan
 	$(BUILD)/host-test/loader
 	$(BUILD)/host-test/start_gate
 	$(BUILD)/host-test/spsd
@@ -62,7 +63,8 @@ test: $(BUILD)/host-test/loader $(BUILD)/host-test/start_gate $(BUILD)/host-test
 	$(BUILD)/host-test/framing
 	$(BUILD)/host-test/profiles
 	$(BUILD)/host-test/loop_metadata
-sanitize: $(BUILD)/sanitize/loader $(BUILD)/sanitize/start_gate $(BUILD)/sanitize/spsd $(BUILD)/sanitize/spsd_player $(BUILD)/sanitize/wave4 $(BUILD)/sanitize/aiff_player $(BUILD)/sanitize/aiff $(BUILD)/sanitize/au_player $(BUILD)/sanitize/au $(BUILD)/sanitize/wave_player $(BUILD)/sanitize/wave $(BUILD)/sanitize/request_joint $(BUILD)/sanitize/request $(BUILD)/sanitize/partition_overlay $(BUILD)/sanitize/partition $(BUILD)/sanitize/silence $(BUILD)/sanitize/amplitude $(BUILD)/sanitize/loop_count $(BUILD)/sanitize/joint_player $(BUILD)/sanitize/joint_reader $(BUILD)/sanitize/joint_queue $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+sanitize: $(BUILD)/sanitize/pan $(BUILD)/sanitize/loader $(BUILD)/sanitize/start_gate $(BUILD)/sanitize/spsd $(BUILD)/sanitize/spsd_player $(BUILD)/sanitize/wave4 $(BUILD)/sanitize/aiff_player $(BUILD)/sanitize/aiff $(BUILD)/sanitize/au_player $(BUILD)/sanitize/au $(BUILD)/sanitize/wave_player $(BUILD)/sanitize/wave $(BUILD)/sanitize/request_joint $(BUILD)/sanitize/request $(BUILD)/sanitize/partition_overlay $(BUILD)/sanitize/partition $(BUILD)/sanitize/silence $(BUILD)/sanitize/amplitude $(BUILD)/sanitize/loop_count $(BUILD)/sanitize/joint_player $(BUILD)/sanitize/joint_reader $(BUILD)/sanitize/joint_queue $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+	$(BUILD)/sanitize/pan
 	$(BUILD)/sanitize/loader
 	$(BUILD)/sanitize/start_gate
 	$(BUILD)/sanitize/spsd
@@ -147,6 +149,7 @@ install: sh4
 	install -m 644 $(BUILD)/sh4/libADX.a "$(DESTDIR)$(PREFIX)/lib/dreamcast/libADX.a"
 
 clean:
+	rm -f $(BUILD)/host-test/pan $(BUILD)/sanitize/pan
 	rm -f $(BUILD)/host-test/loader $(BUILD)/sanitize/loader
 	rm -f $(BUILD)/host-test/start_gate $(BUILD)/sanitize/start_gate
 	rm -f $(BUILD)/host-test/spsd $(BUILD)/sanitize/spsd $(BUILD)/host-test/spsd_player $(BUILD)/sanitize/spsd_player
@@ -459,3 +462,9 @@ $(BUILD)/host-test/loader: tests/loader.c $(BUILD)/host-test/libADX-test.a $(HEA
 
 $(BUILD)/sanitize/loader: tests/loader.c $(BUILD)/sanitize/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+$(BUILD)/host-test/pan: tests/pan.c $(PLAYER_TEST_DEPS) $(BUILD)/host-test/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/pan.c tests/player_mock.c src/player.c $(BUILD)/host-test/libADX-test.a -lm -o $@
+
+$(BUILD)/sanitize/pan: tests/pan.c $(PLAYER_TEST_DEPS) $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/pan.c tests/player_mock.c src/player.c $(BUILD)/sanitize/libADX-test.a -lm -o $@

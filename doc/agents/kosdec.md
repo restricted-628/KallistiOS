@@ -229,3 +229,11 @@ explicit final joint sealing. Active-sector completion is separate from new
 low-water admission. Pause retains a partial borrow; failed stop cannot release
 storage. Published DATA survives stop and source metadata completion is not DMA
 retirement. Byte loading is not PCM sequence joining or audible seam proof.
+
+Signed player pan uses per-channel requested -15..15/AUTO settings, resolved at
+source admission or live update. Preserve independent AUTO across bindings and
+legacy set_output bytes; its getter reports equivalent signed positions after a
+legacy call. Checked update failure retains the previous requested snapshot but
+may partially affect hardware, so FAILED/stop is mandatory. Discrete pan encoding
+needs no FPU transform. Full-range logarithmic volume requires a separate reviewed
+Audio interface; linear8 approximation does not close attenuation parity.

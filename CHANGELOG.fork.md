@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX signed pan and AUTO controls
+
+- Add per-channel signed pan (-15 through +15), independent AUTO selection and
+  a requested-setting getter. Preserve settings across source bindings and the
+  exact byte behavior of the existing output-control API.
+- Live pan updates leave volume/rate unchanged. Invalid arguments do not mutate
+  settings; update failures retain the previous software snapshot and require
+  checked stop because hardware updates can be partial. Rebuild consumers for
+  the expanded player state.
+- Focused/full host and sanitizer suites, strict SH-4 archive installation and
+  staged C/C++ links pass. No shared Audio/default/pin changes. Audible output,
+  stereo atomicity and exact logarithmic volume parity remain unqualified.
+
 ## 2026-11-13 — Opt-in libSFD video prototype
 
 - Preserve the bounded video-only Sofdec prototype as an independently linkable

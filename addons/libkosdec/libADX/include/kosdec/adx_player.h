@@ -7,6 +7,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+/* Signed pan positions; AUTO selects mono center or stereo separation. */
+#define KOSDEC_ADX_PAN_AUTO (-128)
 enum kosdec_adx_player_state {
     KOSDEC_ADX_PLAYER_READY,
     KOSDEC_ADX_PLAYER_PREFILL,
@@ -53,7 +55,8 @@ struct kosdec_adx_player {
     uint64_t prefill_deadline;
     uint32_t requested_rate; /* Zero follows source rate. */
     int16_t *scratch;
-    bool custom_pan, callback_failed, pcm_enabled, source_bound;
+    int16_t requested_pan[2]; /* Signed -15..15 or KOSDEC_ADX_PAN_AUTO. */
+    bool callback_failed, pcm_enabled, source_bound;
 };
 /* All player APIs are serialized on one ordinary owner thread, not an IRQ,
    callback or shared fiber carrier. Only the private producer uses the source.
@@ -174,6 +177,19 @@ int kosdec_adx_player_poll(struct kosdec_adx_player *);
    not CRI's attenuation/pan ABI. Failure may partially update hardware: stop. */
 int kosdec_adx_player_set_output(struct kosdec_adx_player *,
     unsigned left_volume, unsigned right_volume, unsigned left_pan, unsigned right_pan);
+/* Signed per-channel pan: -15 left,0 center,+15 right, or KOSDEC_ADX_PAN_AUTO.
+   Defaults AUTO independently on both channels; resolves mono center/stereo
+   separation on source admission and live updates. Channel1 may be configured
+   before format discovery and is ignored by mono output. Only PAN is updated;
+   volume/rate and the other channel's requested setting are preserved.
+   Same serialized owner and checked-failure/stop rules as set_output. Invalid
+   channel/value/state returns -1/EINVAL without changing requested state.
+   Legacy set_output clears AUTO on both channels; get_pan then reports each
+   linear pan's equivalent signed hardware position (directional zero is0). */
+int kosdec_adx_player_set_pan(struct kosdec_adx_player *, unsigned channel, int pan);
+/* Last successfully configured software setting, including AUTO; not device
+   readback. Valid after failure/stop too. Null output or channel>1 is EINVAL. */
+int kosdec_adx_player_get_pan(const struct kosdec_adx_player *, unsigned channel, int *pan);
 /* Requested output frequency8000..48000Hz; zero restores the source frequency.
    Before first output, store for start; during output, checked frequency update.
    Restoring a source rate below8000Hz during output returns EINVAL unchanged.
