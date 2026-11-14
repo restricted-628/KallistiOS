@@ -30,9 +30,22 @@ enum kosdec_adx_partition_status {
     KOSDEC_ADX_PARTITION_BUSY, KOSDEC_ADX_PARTITION_NOT_READY,
     KOSDEC_ADX_PARTITION_NOT_FOUND, KOSDEC_ADX_PARTITION_LIMIT
 };
+struct kosdec_adx_partition_registry;
+struct kosdec_adx_partition_overlay {
+    uint32_t magic;
+    unsigned id;
+    struct kosdec_adx_partition_registry *owner;
+    struct kosdec_adx_partition *partition;
+    struct kosdec_adx_partition_overlay *previous;
+};
+struct kosdec_adx_partition_resolution {
+    const struct kosdec_adx_partition *partition;
+    struct kosdec_adx_range range;
+};
 struct kosdec_adx_partition_registry {
     uint32_t magic;
     struct kosdec_adx_partition *slots[KOSDEC_ADX_PARTITION_IDS];
+    struct kosdec_adx_partition_overlay *overlays[KOSDEC_ADX_PARTITION_IDS];
 };
 /* All calls on a partition and its registries are externally serialized.
    No allocation, locks, global state, scheduler or implicit file/driver calls.
@@ -44,7 +57,8 @@ size_t kosdec_adx_partition_work_size(uint32_t count);
    Callback uses existing synchronous read_at rules (no retained destination,
    reentry or mutation). Source/context remain alive through loading/cancel/close;
    callback may block, so use an appropriate owner thread/fiber, never audio IRQ.
-   AFS-NUL only. At most65536 members; no optional names or append-overlay format.
+   AFS-NUL only. At most65536 members; no optional names. Load sparse overlays as ordinary
+   directories, then attach them to a registry with push.
    MORE initializes, TRUNCATED initializes a terminal state when input_bytes<8.
    Workspace is private/partially written until DONE; preserve through close.
    Capacity0 probes required sizing: after a valid nonempty header, step returns
@@ -80,18 +94,49 @@ enum kosdec_adx_partition_status kosdec_adx_partition_open_view(
 enum kosdec_adx_partition_status kosdec_adx_partition_close(struct kosdec_adx_partition *);
 /* Init only initially/after close. Registry and each bound directory/workspace
    remain alive until unbound/closed. Bind accepts DONE only, replaces an occupied
-   ID transactionally, and counts aliases (including across registries). This is
-   ordinary registration/replacement, NOT ADXF_AddPartition overlay merging. */
+   ID transactionally, and counts aliases (including across registries). Replacing
+   with a different base releases that ID's overlays; binding the same base is
+   an idempotent no-op and preserves them. Use push below for append semantics.
+   Registry layout includes overlay heads: rebuild consumers when updating. */
 void kosdec_adx_partition_registry_init(struct kosdec_adx_partition_registry *);
 enum kosdec_adx_partition_status kosdec_adx_partition_bind(
     struct kosdec_adx_partition_registry *, unsigned id, struct kosdec_adx_partition *);
 enum kosdec_adx_partition_status kosdec_adx_partition_unbind(
     struct kosdec_adx_partition_registry *, unsigned id);
-/* Returns borrowed metadata pointer valid until next registry mutation/close;
-   make a copied range/view for longer use. Failure leaves output unchanged. */
+/* Returns newest active metadata (base if no overlays), borrowed until next
+   registry mutation/close. It defines visible file count, but direct get_range
+   on it does not resolve holes: use resolve for layered member selection.
+   Failure leaves output unchanged. */
 enum kosdec_adx_partition_status kosdec_adx_partition_lookup(
     const struct kosdec_adx_partition_registry *, unsigned id,
     const struct kosdec_adx_partition **);
+/* Init only initially or after detachment. Link/state remains alive while pushed;
+   do not copy or reinitialize a live link. No ownership of any payload provider. */
+void kosdec_adx_partition_overlay_init(struct kosdec_adx_partition_overlay *);
+/* Add a DONE sparse directory above an existing base. One link can belong to
+   only one registry/ID; an already attached link returns BUSY unchanged.
+   The same directory may appear in multiple independently owned links. */
+enum kosdec_adx_partition_status kosdec_adx_partition_push(
+    struct kosdec_adx_partition_registry *, unsigned id,
+    struct kosdec_adx_partition_overlay *, struct kosdec_adx_partition *);
+/* Remove newest overlay and release its directory reference. NOT_FOUND if no
+   overlay. removed may be NULL; otherwise unchanged on failure. Detached links
+   remain initialized and may be pushed again. Unbind/replace/registry-close
+   detach all associated links, also making them reusable without reinit. */
+enum kosdec_adx_partition_status kosdec_adx_partition_pop(
+    struct kosdec_adx_partition_registry *, unsigned id,
+    struct kosdec_adx_partition_overlay **removed);
+/* Newest-to-oldest sparse lookup, then base. Zero offset in an overlay means
+   fallback; a nonzero offset with zero bytes is an explicit empty override.
+   Newest count bounds visibility, even when smaller than an older directory.
+   A new-ID hole with no base member returns NOT_FOUND. No I/O; O(layer count).
+   Result contains a copied range and borrowed selected-directory identity. Use
+   its explicit archive provider with partition_open_view before registry changes;
+   never use the base's provider for a range selected from another archive.
+   No filename/sector rounding or decoder changes. Output unchanged on failure. */
+enum kosdec_adx_partition_status kosdec_adx_partition_resolve(
+    const struct kosdec_adx_partition_registry *, unsigned id, uint32_t file_id,
+    struct kosdec_adx_partition_resolution *);
 /* Release every registration and invalidate registry; does not close directories
    or any payload source. Other registries may still keep directories BUSY. */
 enum kosdec_adx_partition_status kosdec_adx_partition_registry_close(

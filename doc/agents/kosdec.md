@@ -161,5 +161,8 @@ bounds. Loading is one read_at call<=512 bytes/64 entries per step, with explici
 workspace sizing and sticky failure/cancel. Registry references prevent metadata
 close while bound; all operations are caller-serialized. Copied member views bind
 an explicit immutable archive provider and may outlive metadata, never provider
-retirement. Do not equate registry replacement with appended AFS overlay semantics
-or native byte-range work sizing with CRI's compact sector ABI.
+retirement. Sparse overlay push/pop uses caller-owned links; newest count bounds
+IDs and zero offsets fall back through older layers. Preserve selected archive
+identity, reference counts and same-base idempotence; replacement/unbind/close
+detach all associated links. Native byte-range work sizing is not CRI's compact
+sector ABI. Rebuild consumers after registry layout changes.

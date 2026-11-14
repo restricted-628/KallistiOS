@@ -2,6 +2,7 @@
 #include <string.h>
 #define PARTITION_MAGIC UINT32_C(0x41445854)
 #define REGISTRY_MAGIC UINT32_C(0x41445852)
+#define OVERLAY_MAGIC UINT32_C(0x4144584f)
 static bool valid(const struct kosdec_adx_partition *p) {
     return p && p->magic == PARTITION_MAGIC;
 }
@@ -110,6 +111,16 @@ enum kosdec_adx_partition_status kosdec_adx_partition_close(struct kosdec_adx_pa
 void kosdec_adx_partition_registry_init(struct kosdec_adx_partition_registry *r) {
     if(r) { memset(r, 0, sizeof(*r)); r->magic = REGISTRY_MAGIC; }
 }
+static struct kosdec_adx_partition_overlay *detach(struct kosdec_adx_partition_registry *r, unsigned id) {
+    struct kosdec_adx_partition_overlay *o = r->overlays[id];
+    r->overlays[id] = o->previous;
+    --o->partition->registrations;
+    o->owner = NULL; o->partition = NULL; o->previous = NULL; o->id = 0;
+    return o;
+}
+static void detach_all(struct kosdec_adx_partition_registry *r, unsigned id) {
+    while(r->overlays[id]) (void)detach(r, id);
+}
 enum kosdec_adx_partition_status kosdec_adx_partition_bind(
     struct kosdec_adx_partition_registry *r, unsigned id, struct kosdec_adx_partition *p) {
     if(!registry_valid(r) || id >= KOSDEC_ADX_PARTITION_IDS || !valid(p))
@@ -117,6 +128,7 @@ enum kosdec_adx_partition_status kosdec_adx_partition_bind(
     if(p->terminal != KOSDEC_ADX_DONE) return KOSDEC_ADX_PARTITION_NOT_READY;
     if(r->slots[id] == p) return KOSDEC_ADX_PARTITION_OK;
     if(p->registrations == UINT32_MAX) return KOSDEC_ADX_PARTITION_LIMIT;
+    detach_all(r, id);
     if(r->slots[id]) --r->slots[id]->registrations;
     r->slots[id] = p; ++p->registrations;
     return KOSDEC_ADX_PARTITION_OK;
@@ -125,6 +137,7 @@ enum kosdec_adx_partition_status kosdec_adx_partition_unbind(
     struct kosdec_adx_partition_registry *r, unsigned id) {
     if(!registry_valid(r) || id >= KOSDEC_ADX_PARTITION_IDS) return KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
     if(!r->slots[id]) return KOSDEC_ADX_PARTITION_NOT_FOUND;
+    detach_all(r, id);
     --r->slots[id]->registrations; r->slots[id] = NULL;
     return KOSDEC_ADX_PARTITION_OK;
 }
@@ -132,13 +145,59 @@ enum kosdec_adx_partition_status kosdec_adx_partition_lookup(
     const struct kosdec_adx_partition_registry *r, unsigned id, const struct kosdec_adx_partition **out) {
     if(!registry_valid(r) || id >= KOSDEC_ADX_PARTITION_IDS || !out) return KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
     if(!r->slots[id]) return KOSDEC_ADX_PARTITION_NOT_FOUND;
-    *out = r->slots[id];
+    *out = r->overlays[id] ? r->overlays[id]->partition : r->slots[id];
+    return KOSDEC_ADX_PARTITION_OK;
+}
+void kosdec_adx_partition_overlay_init(struct kosdec_adx_partition_overlay *o) {
+    if(o) { memset(o, 0, sizeof(*o)); o->magic = OVERLAY_MAGIC; }
+}
+enum kosdec_adx_partition_status kosdec_adx_partition_push(
+    struct kosdec_adx_partition_registry *r, unsigned id,
+    struct kosdec_adx_partition_overlay *o, struct kosdec_adx_partition *p) {
+    if(!registry_valid(r) || id >= KOSDEC_ADX_PARTITION_IDS || !o ||
+       o->magic != OVERLAY_MAGIC || !valid(p)) return KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
+    if(o->owner) return KOSDEC_ADX_PARTITION_BUSY;
+    if(!r->slots[id]) return KOSDEC_ADX_PARTITION_NOT_FOUND;
+    if(p->terminal != KOSDEC_ADX_DONE) return KOSDEC_ADX_PARTITION_NOT_READY;
+    if(p->registrations == UINT32_MAX) return KOSDEC_ADX_PARTITION_LIMIT;
+    o->owner = r; o->id = id; o->partition = p; o->previous = r->overlays[id];
+    r->overlays[id] = o; ++p->registrations;
+    return KOSDEC_ADX_PARTITION_OK;
+}
+enum kosdec_adx_partition_status kosdec_adx_partition_pop(
+    struct kosdec_adx_partition_registry *r, unsigned id, struct kosdec_adx_partition_overlay **out) {
+    if(!registry_valid(r) || id >= KOSDEC_ADX_PARTITION_IDS) return KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
+    if(!r->overlays[id]) return KOSDEC_ADX_PARTITION_NOT_FOUND;
+    struct kosdec_adx_partition_overlay *o = detach(r, id);
+    if(out) *out = o;
+    return KOSDEC_ADX_PARTITION_OK;
+}
+enum kosdec_adx_partition_status kosdec_adx_partition_resolve(
+    const struct kosdec_adx_partition_registry *r, unsigned id, uint32_t file,
+    struct kosdec_adx_partition_resolution *out) {
+    if(!out) return KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
+    const struct kosdec_adx_partition *p;
+    enum kosdec_adx_partition_status status = kosdec_adx_partition_lookup(r, id, &p);
+    if(status != KOSDEC_ADX_PARTITION_OK) return status;
+    if(file >= p->count) return KOSDEC_ADX_PARTITION_NOT_FOUND;
+    for(const struct kosdec_adx_partition_overlay *o = r->overlays[id]; o; o = o->previous) {
+        p = o->partition;
+        if(file < p->count && p->entries[file].offset) {
+            *out = (struct kosdec_adx_partition_resolution){p, p->entries[file]};
+            return KOSDEC_ADX_PARTITION_OK;
+        }
+    }
+    p = r->slots[id];
+    if(file >= p->count) return KOSDEC_ADX_PARTITION_NOT_FOUND;
+    *out = (struct kosdec_adx_partition_resolution){p, p->entries[file]};
     return KOSDEC_ADX_PARTITION_OK;
 }
 enum kosdec_adx_partition_status kosdec_adx_partition_registry_close(struct kosdec_adx_partition_registry *r) {
     if(!registry_valid(r)) return KOSDEC_ADX_PARTITION_BAD_ARGUMENT;
-    for(unsigned i = 0; i < KOSDEC_ADX_PARTITION_IDS; ++i)
+    for(unsigned i = 0; i < KOSDEC_ADX_PARTITION_IDS; ++i) {
+        detach_all(r, i);
         if(r->slots[i]) --r->slots[i]->registrations;
+    }
     memset(r, 0, sizeof(*r));
     return KOSDEC_ADX_PARTITION_OK;
 }

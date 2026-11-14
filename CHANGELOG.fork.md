@@ -6,6 +6,18 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-13 — libADX sparse AFS partition overlays
+
+- Add caller-owned overlay links with newest-first sparse range resolution.
+  Zero offsets fall back; nonzero empty entries override. The newest directory's
+  count bounds visible IDs, and missing new-ID holes return NOT_FOUND safely.
+- Preserve selected archive identity and counted metadata lifetimes. Pop,
+  different-base replacement, unbind and registry close detach owned links;
+  same-base binding preserves overlays. Rebuild consumers for registry growth.
+- Full host/ASan/UBSan suites and strict staged SH-4 C/C++ links pass, including
+  a10000-step independent layer/reference model. Filename/sector services and
+  audible/hardware qualification remain separate; no shared driver changes.
+
 ## 2026-11-13 — libADX resident AFS partition metadata
 
 - Add caller-owned AFS directory loading, work-size discovery and a256-ID

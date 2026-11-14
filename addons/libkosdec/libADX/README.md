@@ -351,7 +351,8 @@ outside the declared count; zero-length selected entries are `UNSUPPORTED`.
 Terminal statuses, including cancellation, are sticky. Existing enum values are
 unchanged. Lookup validates the selected range, not all other entries, payload
 format, member overlaps or optional filename/timestamp metadata. Other variants
-and appended partition services are not implemented.
+and full file-handle services remain incomplete; resident directories and sparse
+partition overlays are described below.
 
 Initialize a PCM stream after lookup reaches `DONE`:
 
@@ -934,8 +935,8 @@ ranges. Each step makes at most one source call of512 bytes and validates at mos
 64 entries. Short reads and temporary WAIT preserve progress; errors and cancel
 are sticky. Member access is withheld until every entry is validated. Empty
 members and overlapping immutable ranges are retained, while nonempty ranges must
-follow the directory and fit the source. Optional filenames and appended AFS
-patch formats are not interpreted.
+follow the directory and fit the source. Optional filenames are not interpreted;
+sparse overlay directories use the same validated offset/length table.
 
 Use `partition_init` with the same `read_at` contract as streams, then step until
 DONE. A zero-capacity first pass returns NEED_OUTPUT after a valid nonempty header;
@@ -957,5 +958,31 @@ with `kosdec_adx_stream_init` and the existing service/player path.
 views report EOF without a provider call; nonempty reads remain capped at512 bytes
 and their selected extent. View construction validates bounds, not payloads.
 Native typed byte ranges replace the SDK's compact sector work layout. Directory
-registration is not appended-partition overlay merging, and source callbacks do
-not implicitly acquire or retire VFS descriptors, disc requests or DMA staging.
+source callbacks do not implicitly acquire or retire VFS descriptors, disc
+requests or DMA staging.
+
+### Sparse partition overlays
+
+Initialize a caller-owned `partition_overlay` link, then `partition_push` a
+completed sparse directory above a bound base. Every nonzero-offset entry overrides
+the same file ID in older layers; zero offsets fall through. A nonzero offset with
+zero length explicitly overrides an empty member. The newest directory count
+limits visible IDs, including when it is smaller than an older directory. A hole
+at a newly added ID with no older member returns NOT_FOUND.
+
+`partition_lookup` returns the newest directory for count/status queries.
+`partition_resolve` walks the overlay chain and returns the selected directory
+and copied byte range. Build a view using that directory's archive provider;
+using the base archive's callback for an overlay range would read the wrong data.
+The borrowed directory identity lasts until the next registry mutation; a copied
+view retains no directory/workspace reference but still borrows its source.
+
+A link belongs to one registry/ID at a time. Pop removes only the newest link;
+unbind, different-base replacement and registry close detach all associated links.
+Same-base binding preserves overlays. Detached links can be reused without reinit.
+Each link counts a directory reference, including repeated use of one directory
+through separate links; partition close stays BUSY until every reference retires.
+Operations are externally serialized, allocate nothing and perform no I/O.
+Resolution costs O(number of layers); the caller controls chain depth. Rebuild
+consumers because registry state now includes overlay heads. Filename composition,
+sector read/seek/reload services and full file-handle lifecycle remain open.
