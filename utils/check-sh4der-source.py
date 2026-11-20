@@ -5,7 +5,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 SUBMODULE = "addons/libsh4der/upstream"
-PIN = "17a1f0623505f715824ab8cee85d45f16b9c3ebc"
+PIN = "32912914e28fbc523d8f560995bf6eb19dc4b0a5"
 URL = "https://github.com/JiltedValkyrie/SH4DER-PVR.git"
 
 

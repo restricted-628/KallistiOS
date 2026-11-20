@@ -3,6 +3,7 @@
 */
 #include "../../examples/dreamcast/pvr/sh4der_compact/effects.h"
 #include <assert.h>
+#include <sh4der_kos_uvwarp.h>
 #include <errno.h>
 #include <math.h>
 #include <stdalign.h>
@@ -87,6 +88,24 @@ int main(int argc, char **argv) {
             assert(out[i].flags == (i == 3 ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX));
         }
     }
+    /* The prepared UV warp composes with holo on the same memory-sink draw. */
+    const uint8_t rg[] = {255, 0};
+    const sh4der_uvwarp_t table = {rg, 1, 1};
+    sh4der_kos_uvwarp_t warp = {.weight = 0.5f};
+    pvr_vertex_t baseline[4];
+    memcpy(baseline, out, sizeof(out));
+    assert(sh4der_uvwarp_prepare(&warp.prepared, &table, 0, 0, 0));
+    shader.base_prepare = sh4der_kos_uvwarp_vertex;
+    shader.base_data = &warp;
+    assert(pvr_geometry_sink_init_memory(&sink, out, 4) == 0);
+    assert(pvr_chunk_model_emit_prepared(&plan, &identity, &sink, work, 4,
+        NULL, sh4der_kos_vertex, &shader, &result) == 0);
+    for(unsigned i = 0; i < 4; ++i) {
+        baseline[i].u += 0.5f;
+        assert(!memcmp(&out[i], &baseline[i], sizeof(out[i])));
+    }
+    shader.base_prepare = NULL;
+    shader.base_data = NULL;
     /* Changed destination capacity remains checked by the existing sink. */
     memset(out, 0x5a, sizeof(out));
     pvr_vertex_t before[4]; memcpy(before, out, sizeof(out));

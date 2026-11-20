@@ -1,7 +1,7 @@
 # SH4DER-PVR for KOS Experimental
 
 Pinned dependency: [JiltedValkyrie/SH4DER-PVR](https://github.com/JiltedValkyrie/SH4DER-PVR)
-at `17a1f0623505f715824ab8cee85d45f16b9c3ebc`. The upstream checkout is
+at `32912914e28fbc523d8f560995bf6eb19dc4b0a5`. The upstream checkout is
 unmodified. Initialize it with `git submodule update --init --recursive`.
 
 This addon supplies effect computations to the existing KOS Experimental
@@ -13,8 +13,11 @@ There is no new global fast-math policy.
 The reusable `<sh4der_kos.h>` adapter binds model-indexed sidecars once and
 composes blade/holo, AO and posed limb shadows through Compact's existing
 callback. See [coverage and contracts](COVERAGE.md) for exact available features
-and validation limits. All pinned effect families now have caller-owned KOS
-adapters and native consumers, including retained-frame screen effects.
+and validation limits. For a prepared UV warp, use
+`<sh4der_kos_uvwarp.h>` directly as the Compact vertex callback or chain it
+before an existing color effect. Install it only after prepare succeeds.
+The new upstream planar target and spark submission backends are not linked;
+the vendored SH4ZAM-DCE is not installed as a second math provider.
 
 The accepted build profile is the fork's ordinary `-O2` without fast-math.
 Inline helpers also inherit their application's flags. The bundled foot-shadow

@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-20 — SH4DER and Compact UV warp
+
+- Update SH4DER-PVR (including SH4DOW) from 17a1f062 to 32912914.
+  Add an opt-in Compact callback for prepared UV warps. It changes only U/V;
+  the existing renderer retains projection, strip, material and scene ownership.
+  Other new effect families are tracked separately in the addon coverage table.
+
 ## 2026-11-20 — SH4ZAM correctness update
 
 - Advance pristine SH4ZAM from 5b7dfc22 to 2d32eebb for SH-4 stack handling,

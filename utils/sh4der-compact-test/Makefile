@@ -16,6 +16,7 @@ SOURCES = ../../addons/libsh4der/kos/geometry.c ../../addons/libsh4der/upstream/
           ../../addons/libsh4der/upstream/src/sh4der_bloom.c \
           ../../addons/libsh4der/upstream/src/sh4der_holo.c
 all: $(TARGET)
+$(TARGET): ../../addons/include/sh4der_kos_uvwarp.h ../../addons/include/sh4der/sh4der_uvwarp.h
 $(TARGET): $(SOURCES) ../../addons/include/sh4der_kos.h ../../addons/include/sh4der_kos_geometry.h ../../examples/dreamcast/pvr/sh4der_compact/effects.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 test: $(TARGET)

@@ -1,6 +1,6 @@
 # SH4DER and SH4DOW integration coverage
 
-Pinned source: SH4DER `17a1f062`, including bundled SH4DOW. This inventory tracks
+Pinned source: SH4DER `32912914`, including bundled SH4DOW. This inventory tracks
 the full integration request; available math headers alone do not close a row.
 
 | Capability | Native integration | Remaining work |
@@ -22,8 +22,11 @@ the full integration request; available math headers alone do not close a row.
 | Torch | Prepared cone mesh and fog reach curve, caller-owned fog-table application; native consumer | Hardware visibility/performance |
 | CA | Prepared viewport and three complete channel packets over admitted image; native stride consumer | Hardware visibility/performance |
 | Shafts | Prepared light-distance field, caller shade map/history, multiply mesh and native retained-source consumer | Hardware visibility/performance |
+| Prepared UV warp | Caller-owned RG table and scroll; Compact vertex callback, composable before holo/blade | Hardware visuals/performance |
+| Planar reflections | Upstream mirror/Fresnel math available | Bind to KOS render targets; do not import upstream scene/VRAM ownership |
+| Water, transmission and SH4DOW heightfield | Upstream calculations available in the checkout | Material, normal and light-space integration |
+| Sparks and ground-light pools | Upstream geometry available in the checkout | Route packets through KOS sinks; no upstream submission backend |
 
-All pinned effect families have KOS adapters and native consumer coverage.
 Hardware visibility and performance qualification remain separate from implementation. KOS owns scene/list routing,
 allocation, fog, stride and render tickets. New adapters must use one sink for
 headers and vertices, retain producers and readers before resource reuse, and
