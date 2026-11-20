@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-20 — Retained PCM playback for libADX integration
+
+- Add a private fixed-rate PCM16 stream that tracks each source separately,
+  excludes inserted silence, and requires fresh observations from both
+  channels before crediting stereo playback.
+- Confirm STOP on each channel and preserve progress across a timed-out stop.
+  The source-built AICA driver accepts valid STOP commands without changing
+  the wire protocol. Stopping does not release played channels or sound RAM:
+  final device fetch and audible completion remain unverified on hardware.
+
 ## 2026-11-20 — Compact world materials and reflection capture
 
 - Route SH4DER light pools, sparks, water and transmission, and SH4DOW

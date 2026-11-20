@@ -35,6 +35,8 @@
 
 #include "arm/aica_cmd_iface.h"
 #include "snd_stream_internal.h"
+#include "snd_iface_internal.h"
+#include "snd_retained_pcm.h"
 #include "snd_stream_split.h"
 
 /*
@@ -1086,7 +1088,7 @@ static int stream_dma_wait(strchan_t *stream, uint32_t timeout_ms) {
 static int snd_stream_transfer(strchan_t *stream, void *first_buf,
                                uint32_t offset, size_t size,
                                uint64_t source_bytes,
-                               uint64_t buffered_bytes) {
+                               uint64_t buffered_bytes, uint64_t deadline) {
     int rs;
 
     if(!__is_aligned(first_buf, 32) || (size & 31)) {
@@ -1123,6 +1125,10 @@ static int snd_stream_transfer(strchan_t *stream, void *first_buf,
             return 0;
         if(errno != EINPROGRESS)
             break;
+        if(deadline && timer_ms_gettime64() >= deadline) {
+            errno = ETIMEDOUT;
+            break;
+        }
         thd_pass();
     } while(1);
 
@@ -1240,7 +1246,7 @@ static int snd_stream_fill(snd_stream_hnd_t hnd, uint32_t offset, size_t size,
         if(got_bytes)
             memcpy(sep_buffer[0], data, got_bytes);
         if(snd_stream_transfer(stream, sep_buffer[0], offset, size, got_bytes,
-                               needed_bytes) < 0)
+                               needed_bytes, 0) < 0)
             return -1;
     }
     else {
@@ -1266,7 +1272,7 @@ static int snd_stream_fill(snd_stream_hnd_t hnd, uint32_t offset, size_t size,
         }
 
         if(snd_stream_transfer(stream, sep_buffer[0], offset, size, got_bytes,
-                               needed_bytes) < 0)
+                               needed_bytes, 0) < 0)
             return -1;
     }
 
@@ -1709,4 +1715,661 @@ void snd_stream_pan(snd_stream_hnd_t hnd, int left_pan, int right_pan) {
     config.channel[1].pan = (uint8_t)right_pan;
     (void)snd_stream_update(hnd, &config, SND_CHANNEL_UPDATE_PAN);
     mutex_unlock(&stream_state_mutex);
+}
+
+/* Retained PCM uses the existing stream allocator, PCM splitter and two-stage
+   DMA. Its handle is private and permanently pinned once start is attempted. */
+#define RETAINED_SPANS (4 * SND_RETAINED_PCM_FILL_SPANS)
+#define RETAINED_OBSERVE_MS 100u
+
+typedef struct retained_span {
+    snd_retained_pcm_span_t tag;
+    uint64_t end;
+} retained_span_t;
+
+typedef struct retained_source {
+    uint64_t generation, written, played, next_frame, last_end;
+    bool sealed;
+} retained_source_t;
+
+typedef struct retained_cursor {
+    uint64_t frames, before_ms, after_ms;
+} retained_cursor_t;
+
+struct snd_retained_pcm {
+    snd_stream_hnd_t handle;
+    uint32_t session, ring, rate;
+    unsigned channels;
+    uint64_t epoch, key_on_not_before, written, output;
+    snd_retained_pcm_fill_t fill;
+    void *context;
+    int16_t *scratch;
+    bool attempted, stopping, stopped, valid;
+    int first_error, stop_error;
+    unsigned source_count, first, count;
+    unsigned stop_submitted, stop_observed;
+    retained_source_t sources[SND_RETAINED_PCM_GENERATIONS];
+    retained_span_t spans[RETAINED_SPANS];
+    retained_cursor_t cursor[2];
+    snd_channel_receipt_t receipt[2];
+    bool receipt_polled[2];
+};
+
+static uint64_t retained_epoch;
+
+static retained_source_t *retained_source(retained_source_t *sources,
+    unsigned count, uint64_t generation) {
+    for(unsigned i = 0; i < count; ++i)
+        if(sources[i].generation == generation)
+            return &sources[i];
+    return NULL;
+}
+
+static int retained_error(snd_retained_pcm_t *pcm) {
+    if(!pcm->first_error)
+        pcm->first_error = errno ? errno : EIO;
+    pcm->valid = false;
+    errno = pcm->first_error;
+    return -1;
+}
+
+int snd_retained_pcm_open(snd_retained_pcm_t **out, unsigned channels,
+    uint32_t rate, uint32_t ring, snd_retained_pcm_fill_t fill, void *context) {
+    if(!out || !fill || channels < 1 || channels > 2 || rate < 8000 ||
+       rate > 48000 || ring < 1024 || ring > 32768 || ring % 32) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+
+    snd_retained_pcm_t *pcm = calloc(1, sizeof(*pcm));
+    if(!pcm)
+        return -1;
+    pcm->scratch = aligned_alloc(32, ring * channels);
+    if(!pcm->scratch)
+        goto free_pcm;
+    if(mutex_lock(&stream_state_mutex) < 0)
+        goto free_pcm;
+    if(channels > (unsigned)max_channels) {
+        errno = max_channels ? ENOSPC : ENODEV;
+        goto unlock;
+    }
+    if(!sep_buffer[0]) {
+        errno = ENOTSUP;
+        goto unlock;
+    }
+    if(retained_epoch == UINT64_MAX) {
+        errno = EOVERFLOW;
+        goto unlock;
+    }
+    if(snd_observation_bind_until(timer_ms_gettime64() + RETAINED_OBSERVE_MS,
+                                  &pcm->session) < 0)
+        goto unlock;
+    pcm->handle = snd_stream_alloc(NULL, (int)(ring * 2));
+    if(pcm->handle == SND_STREAM_INVALID)
+        goto unlock;
+    streams[pcm->handle].service_owner = pcm;
+    pcm->epoch = ++retained_epoch;
+    pcm->ring = ring;
+    pcm->rate = rate;
+    pcm->channels = channels;
+    pcm->fill = fill;
+    pcm->context = context;
+    *out = pcm;
+    mutex_unlock(&stream_state_mutex);
+    return 0;
+
+unlock:
+    mutex_unlock(&stream_state_mutex);
+free_pcm:
+    free(pcm->scratch);
+    free(pcm);
+    return -1;
+}
+
+static int retained_session(const snd_retained_pcm_t *pcm, uint64_t deadline) {
+    uint32_t session;
+    if(snd_observation_bind_until(deadline, &session) < 0)
+        return -1;
+    if(session != pcm->session) {
+        errno = ENODEV;
+        return -1;
+    }
+    return 0;
+}
+
+/* Conservative service bound for the fixed-rate slice. The margin covers
+   pitch quantization and host millisecond rounding. This bounds accepted
+   cursor intervals, not analog output timing. */
+static uint64_t retained_movement(const snd_retained_pcm_t *pcm, uint64_t ms) {
+    if(ms > 4096)
+        return UINT64_MAX;
+    return (pcm->rate + pcm->rate / 100u + 1) * (ms + 1) / 1000 + 2;
+}
+
+static int retained_sample(snd_retained_pcm_t *pcm, retained_cursor_t *next,
+                           uint64_t *output) {
+    uint64_t deadline = timer_ms_gettime64() + RETAINED_OBSERVE_MS;
+
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        snd_channel_observation_t obs;
+        const retained_cursor_t *prev = &pcm->cursor[i];
+
+        if(snd_observation_poll_until(&pcm->receipt[i], deadline, &obs) < 0)
+            return -1;
+        pcm->receipt_polled[i] = true;
+        if(obs.session != pcm->session || obs.token != pcm->receipt[i].token ||
+           obs.channel != pcm->receipt[i].channel ||
+           obs.operation != SND_OBSERVATION_UPDATE ||
+           obs.result != SND_OBSERVATION_APPLIED || obs.key_on != 1 ||
+           obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
+           obs.attribution_token != obs.token || obs.position >= pcm->ring ||
+           obs.host_challenge_started_ms < prev->after_ms ||
+           obs.host_observed_ms < obs.host_challenge_started_ms ||
+           obs.host_observed_ms < prev->before_ms) {
+            errno = EPROTO;
+            return -1;
+        }
+
+        uint64_t bound = retained_movement(pcm, obs.host_observed_ms - prev->before_ms);
+        uint32_t prior = (uint32_t)(prev->frames % pcm->ring);
+        uint32_t delta = (obs.position + pcm->ring - prior) % pcm->ring;
+        if(bound >= pcm->ring || delta > bound || prev->frames > UINT64_MAX - delta) {
+            errno = EOVERFLOW;
+            return -1;
+        }
+        next[i] = (retained_cursor_t){ prev->frames + delta,
+            obs.host_challenge_started_ms, obs.host_observed_ms };
+    }
+
+    uint64_t latest = next[pcm->channels - 1].after_ms;
+    if(pcm->channels == 2 && next[1].before_ms < next[0].after_ms) {
+        errno = EPROTO;
+        return -1;
+    }
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        uint64_t possible = retained_movement(pcm, latest - next[i].before_ms);
+        /* It must still be possible to prove the entire interval was backed
+           by the old committed ring. Even a late successful transfer cannot
+           hide stale replay at the previous write frontier. */
+        if(next[i].frames >= pcm->written || possible >= pcm->written - next[i].frames) {
+            errno = EPIPE;
+            return -1;
+        }
+    }
+
+    *output = next[0].frames;
+    if(pcm->channels == 2) {
+        /* Synchronized key-on and equal fixed pitch define one timeline.
+           The right challenge starts after the left observation ends.
+           Elapsed time can advance the later cursor, never move it back.
+           There is no qualified reverse tolerance for this profile. */
+        uint64_t left = next[0].frames;
+        uint64_t right = next[1].frames;
+        if(right < left ||
+           right - left > retained_movement(pcm, latest - next[0].before_ms)) {
+            errno = EPROTO;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void retained_credit(snd_retained_pcm_t *pcm, const retained_cursor_t *next,
+                            uint64_t output) {
+    while(pcm->count && pcm->output < output) {
+        const retained_span_t *span = &pcm->spans[pcm->first];
+        uint64_t end = output < span->end ? output : span->end;
+        if(span->tag.kind == SND_RETAINED_PCM_SOURCE) {
+            retained_source_t *source = retained_source(pcm->sources,
+                pcm->source_count, span->tag.generation);
+            source->played += end - pcm->output;
+            source->next_frame = span->tag.first_frame +
+                (end - (span->end - span->tag.frames));
+        }
+        pcm->output = end;
+        if(end == span->end) {
+            pcm->first = (pcm->first + 1) % RETAINED_SPANS;
+            --pcm->count;
+        }
+    }
+    memcpy(pcm->cursor, next, pcm->channels * sizeof(*next));
+    pcm->valid = true;
+}
+
+static int retained_prepare(snd_retained_pcm_t *pcm, snd_retained_pcm_span_t *tags,
+    retained_source_t *sources, unsigned *source_count) {
+    uint32_t frames = pcm->ring / 2;
+    uint32_t covered = 0;
+    unsigned count = pcm->source_count;
+
+    memcpy(sources, pcm->sources, sizeof(pcm->sources));
+    int spans = pcm->fill(pcm->context, pcm->scratch, frames, tags,
+                         SND_RETAINED_PCM_FILL_SPANS);
+    if(spans < 0)
+        return -1;
+    if(!spans || spans > (int)SND_RETAINED_PCM_FILL_SPANS)
+        goto malformed;
+
+    for(int i = 0; i < spans; ++i) {
+        const snd_retained_pcm_span_t *tag = &tags[i];
+        if(!tag->frames || tag->frames > frames - covered)
+            goto malformed;
+        if(tag->kind == SND_RETAINED_PCM_SOURCE) {
+            if(!tag->generation || tag->first_frame > UINT64_MAX - tag->frames)
+                goto malformed;
+            if(!count || tag->generation > sources[count - 1].generation) {
+                if(count == SND_RETAINED_PCM_GENERATIONS) {
+                    errno = ENOSPC;
+                    return -1;
+                }
+                sources[count++].generation = tag->generation;
+            }
+            retained_source_t *source = &sources[count - 1];
+            if(source->generation != tag->generation || source->sealed ||
+               source->written > UINT64_MAX - tag->frames)
+                goto malformed;
+            source->written += tag->frames;
+            source->last_end = pcm->written + covered + tag->frames;
+        }
+        else {
+            if(tag->kind < SND_RETAINED_PCM_STARVATION ||
+               tag->kind > SND_RETAINED_PCM_TERMINAL_SILENCE ||
+               tag->generation || tag->first_frame)
+                goto malformed;
+            memset(pcm->scratch + covered * pcm->channels, 0,
+                   tag->frames * pcm->channels * sizeof(*pcm->scratch));
+        }
+        covered += tag->frames;
+    }
+
+    if(covered != frames)
+        goto malformed;
+    *source_count = count;
+    return spans;
+
+malformed:
+    errno = EPROTO;
+    return -1;
+}
+
+static int retained_write(snd_retained_pcm_t *pcm, bool running) {
+    snd_retained_pcm_span_t tags[SND_RETAINED_PCM_FILL_SPANS] = {0};
+    retained_source_t sources[SND_RETAINED_PCM_GENERATIONS];
+    unsigned source_count;
+    strchan_t *stream = &streams[pcm->handle];
+
+    if(pcm->count > RETAINED_SPANS - SND_RETAINED_PCM_FILL_SPANS) {
+        errno = EAGAIN;
+        return -1;
+    }
+    if(pcm->written > UINT64_MAX - pcm->ring / 2) {
+        errno = EOVERFLOW;
+        return retained_error(pcm);
+    }
+
+    int spans = retained_prepare(pcm, tags, sources, &source_count);
+    if(spans < 0)
+        return retained_error(pcm);
+
+    /* Check again after calling the producer. Even if the producer blocked,
+       do not start a DMA after the old write frontier became uncertain. */
+    retained_cursor_t next[2];
+    uint64_t output;
+    if(running) {
+        if(retained_sample(pcm, next, &output) < 0)
+            return retained_error(pcm);
+        retained_credit(pcm, next, output);
+        /* Credit changed while the shadow write transaction was being prepared. */
+        for(unsigned i = 0; i < pcm->source_count; ++i) {
+            sources[i].played = pcm->sources[i].played;
+            sources[i].next_frame = pcm->sources[i].next_frame;
+        }
+    }
+
+    uint32_t timeout = stream->config.transfer_timeout_ms;
+    if(sem_wait_timed(&stream_sem, timeout) < 0)
+        return retained_error(pcm);
+    size_t bytes = pcm->ring; /* One half, two bytes per channel sample. */
+    if(pcm->channels == 2)
+        snd_pcm16_split((void *)pcm->scratch, sep_buffer[0], sep_buffer[1], bytes * 2);
+    else
+        memcpy(sep_buffer[0], pcm->scratch, bytes);
+    uint32_t offset = (uint32_t)(pcm->written % pcm->ring) * 2;
+    if(snd_stream_transfer(stream, sep_buffer[0], offset, bytes, bytes * pcm->channels,
+                           bytes * pcm->channels, timer_ms_gettime64() + timeout) < 0 ||
+       stream_dma_wait(stream, timeout) < 0)
+        return retained_error(pcm);
+
+    if(running) {
+        if(retained_sample(pcm, next, &output) < 0)
+            return retained_error(pcm);
+        retained_credit(pcm, next, output);
+        for(unsigned i = 0; i < pcm->source_count; ++i) {
+            sources[i].played = pcm->sources[i].played;
+            sources[i].next_frame = pcm->sources[i].next_frame;
+        }
+    }
+
+    memcpy(pcm->sources, sources, sizeof(pcm->sources));
+    pcm->source_count = source_count;
+    for(int i = 0; i < spans; ++i) {
+        unsigned index = (pcm->first + pcm->count++) % RETAINED_SPANS;
+        pcm->written += tags[i].frames;
+        pcm->spans[index] = (retained_span_t){ tags[i], pcm->written };
+    }
+    return 0;
+}
+
+static int retained_consume(snd_retained_pcm_t *pcm, unsigned i, uint64_t deadline) {
+    if(!pcm->receipt[i].token)
+        return 0;
+    if(!pcm->receipt_polled[i]) {
+        snd_channel_observation_t obs;
+        if(snd_observation_poll_until(&pcm->receipt[i], deadline, &obs) < 0)
+            return -1;
+        pcm->receipt_polled[i] = true;
+    }
+    if(snd_observation_consume_until(&pcm->receipt[i], deadline) < 0)
+        return -1;
+    pcm->receipt[i] = (snd_channel_receipt_t){0};
+    pcm->receipt_polled[i] = false;
+    return 0;
+}
+
+static int retained_key_on(snd_retained_pcm_t *pcm, strchan_t *stream) {
+    snd_channel_config_t config[2];
+    uint64_t mask = 0;
+
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        snd_channel_observation_t obs;
+        unsigned channel = (unsigned)stream->ch[i];
+        uint64_t deadline = timer_ms_gettime64() + RETAINED_OBSERVE_MS;
+        stream_channel_config_pack(&config[i], &stream->config, i,
+                                   stream->spu_ram_sch[i], pcm->ring);
+        if(snd_observation_submit_until(channel, SND_OBSERVATION_START, &config[i],
+                0, SND_CHANNEL_START_DELAYED, &pcm->receipt[i], deadline) < 0)
+            return -1;
+        if(snd_observation_poll_until(&pcm->receipt[i], deadline, &obs) < 0)
+            return -1;
+        pcm->receipt_polled[i] = true;
+        if(obs.session != pcm->session || obs.result != SND_OBSERVATION_APPLIED ||
+           obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
+           obs.attribution_token != pcm->receipt[i].token || obs.key_on) {
+            errno = EPROTO;
+            return -1;
+        }
+        if(retained_consume(pcm, i, deadline) < 0)
+            return -1;
+        mask |= UINT64_C(1) << channel;
+    }
+
+    /* Measure from the earliest possible key-on, not the first receipt.
+       SYNC deliberately marks the channels legacy. A volume-preserving
+       UPDATE, ordered after it, establishes managed attribution while
+       leaving the position and the paired start untouched. */
+    pcm->key_on_not_before = timer_ms_gettime64();
+    if(snd_channels_start_sync(mask) < 0)
+        return -1;
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        pcm->cursor[i].before_ms = pcm->key_on_not_before;
+        pcm->cursor[i].after_ms = pcm->key_on_not_before;
+        if(snd_observation_submit_until((unsigned)stream->ch[i], SND_OBSERVATION_UPDATE,
+                &config[i], SND_CHANNEL_UPDATE_VOLUME, 0, &pcm->receipt[i],
+                timer_ms_gettime64() + RETAINED_OBSERVE_MS) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+int snd_retained_pcm_start(snd_retained_pcm_t *pcm) {
+    if(!pcm || pcm->attempted || pcm->stopping) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+
+    pcm->attempted = true;
+    strchan_t *stream = &streams[pcm->handle];
+    snd_stream_config_init(&stream->config);
+    stream->channels = stream->config.channels = pcm->channels;
+    stream->config.sample_rate = pcm->rate;
+    if(pcm->channels == 2) {
+        stream->config.channel[0].pan = 0;
+        stream->config.channel[1].pan = 255;
+    }
+
+    int result = -1;
+    retained_cursor_t next[2];
+    uint64_t output;
+    if(retained_session(pcm, timer_ms_gettime64() + RETAINED_OBSERVE_MS) == 0 &&
+       retained_write(pcm, false) == 0 &&
+       retained_write(pcm, false) == 0 && retained_key_on(pcm, stream) == 0 &&
+       retained_sample(pcm, next, &output) == 0) {
+        retained_credit(pcm, next, output);
+        result = 0;
+    }
+    else
+        retained_error(pcm);
+    mutex_unlock(&stream_state_mutex);
+    return result;
+}
+
+int snd_retained_pcm_poll(snd_retained_pcm_t *pcm) {
+    if(!pcm || !pcm->attempted || pcm->stopping) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pcm->first_error) {
+        errno = pcm->first_error;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+    retained_cursor_t next[2];
+    uint64_t output;
+    int result = retained_sample(pcm, next, &output);
+    if(result == 0) {
+        retained_credit(pcm, next, output);
+        /* Leave the current sample and the immediately preceding frame
+           alone at the reuse boundary. Write a complete old half. */
+        if(pcm->written - output <= pcm->ring / 2 - 2)
+            result = retained_write(pcm, true);
+    }
+    else
+        retained_error(pcm);
+    mutex_unlock(&stream_state_mutex);
+    return result;
+}
+
+int snd_retained_pcm_seal(snd_retained_pcm_t *pcm, uint64_t generation, uint64_t total) {
+    if(!pcm || !generation || pcm->stopping || pcm->first_error) {
+        errno = EINVAL;
+        return -1;
+    }
+    retained_source_t *source = retained_source(pcm->sources, pcm->source_count,
+                                                generation);
+    if(!source && !total && (!pcm->source_count ||
+       generation > pcm->sources[pcm->source_count - 1].generation)) {
+        if(pcm->source_count == SND_RETAINED_PCM_GENERATIONS) {
+            errno = ENOSPC;
+            return -1;
+        }
+        source = &pcm->sources[pcm->source_count++];
+        source->generation = generation;
+        source->last_end = pcm->output;
+    }
+    if(!source || source->sealed || source->written != total) {
+        errno = EINVAL;
+        return -1;
+    }
+    source->sealed = true;
+    return 0;
+}
+
+int snd_retained_pcm_query(const snd_retained_pcm_t *pcm, uint64_t generation,
+                           snd_retained_pcm_snapshot_t *out) {
+    if(!pcm || !out) {
+        errno = EINVAL;
+        return -1;
+    }
+    const retained_source_t *source = NULL;
+    if(generation) {
+        for(unsigned i = 0; i < pcm->source_count; ++i)
+            if(pcm->sources[i].generation == generation)
+                source = &pcm->sources[i];
+        if(!source) {
+            errno = ENOENT;
+            return -1;
+        }
+    }
+    uint64_t now = timer_ms_gettime64();
+    uint64_t before = pcm->cursor[0].before_ms;
+    bool fresh = now >= before &&
+        retained_movement(pcm, now - before) < pcm->ring;
+    bool valid = pcm->valid && fresh;
+    *out = (snd_retained_pcm_snapshot_t){
+        .epoch = pcm->epoch, .session = pcm->session,
+        .output_frames = pcm->output, .generation = generation,
+        .source_frames = source ? source->played : 0,
+        .next_source_frame = source ? source->next_frame : 0,
+        .observation_start_ms = before,
+        .observation_end_ms = pcm->cursor[pcm->channels - 1].after_ms,
+        .clock_error = valid ? 0 : pcm->first_error ? pcm->first_error :
+            pcm->stopping ? ECANCELED : pcm->valid ? ETIMEDOUT : EAGAIN,
+        .first_error = pcm->first_error, .stop_error = pcm->stop_error,
+        .valid = valid, .software_stopped = pcm->stopped,
+        .source_output_end = valid && source && source->sealed &&
+            source->played == source->written && source->last_end <= pcm->output
+    };
+    return 0;
+}
+
+/* A FIFO barrier after a raw STOP cannot establish that ARM applied it.
+   Retain each checked request and its observation across deadline failures. */
+static int retained_stop_channels(snd_retained_pcm_t *pcm, strchan_t *stream,
+                                  uint64_t deadline) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        unsigned bit = 1u << i;
+        if(pcm->stop_submitted & bit)
+            continue;
+        if(retained_consume(pcm, i, deadline) < 0 ||
+           snd_observation_submit_until((unsigned)stream->ch[i], SND_OBSERVATION_STOP,
+                    NULL, 0, 0, &pcm->receipt[i], deadline) < 0)
+            return -1;
+        pcm->stop_submitted |= bit;
+    }
+
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        unsigned bit = 1u << i;
+        while(!(pcm->stop_observed & bit)) {
+            snd_channel_observation_t obs;
+            if(snd_observation_poll_until(&pcm->receipt[i], deadline, &obs) < 0)
+                return -1;
+            pcm->receipt_polled[i] = true;
+            if(obs.session != pcm->session || obs.token != pcm->receipt[i].token ||
+               obs.channel != (unsigned)stream->ch[i] ||
+               obs.operation != SND_OBSERVATION_STOP ||
+               obs.result != SND_OBSERVATION_APPLIED ||
+               obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
+               obs.attribution_token != obs.token) {
+                errno = EPROTO;
+                return -1;
+            }
+            if(!obs.key_on)
+                pcm->stop_observed |= bit;
+        }
+        if(retained_consume(pcm, i, deadline) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static int retained_stop_transport(snd_retained_pcm_t *pcm, uint64_t deadline) {
+    uint32_t remaining = stream_time_remaining(deadline);
+    if(!remaining) {
+        errno = ETIMEDOUT;
+        return -1;
+    }
+    if(mutex_lock_timed(&stream_state_mutex, remaining) < 0)
+        return -1;
+
+    strchan_t *stream = &streams[pcm->handle];
+    int result = -1;
+    if(retained_session(pcm, deadline) < 0 ||
+       retained_stop_channels(pcm, stream, deadline) < 0)
+        goto done;
+
+    remaining = stream_time_remaining(deadline);
+    if(!remaining) {
+        errno = ETIMEDOUT;
+        goto done;
+    }
+    if(stream->dma_pending && stream_dma_wait(stream, remaining) < 0)
+        goto done;
+
+    /* A previously reported transfer error remains in first_error. The
+       pinned lease has no remaining transfer or command bookkeeping. */
+    stream->dma_error = 0;
+    stream->last_error = 0;
+    stream->state = SND_STREAM_STATE_STOPPED;
+    result = 0;
+done:
+    {
+        int saved = errno;
+        mutex_unlock(&stream_state_mutex);
+        errno = saved;
+    }
+    return result;
+}
+
+int snd_retained_pcm_stop(snd_retained_pcm_t *pcm, uint32_t timeout) {
+    if(!pcm || !timeout) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pcm->stopped)
+        return 0;
+
+    pcm->stopping = true;
+    pcm->valid = false;
+    uint64_t deadline = timer_ms_gettime64() + timeout;
+    if(pcm->attempted && retained_stop_transport(pcm, deadline) < 0)
+        goto failed;
+    free(pcm->scratch);
+    pcm->scratch = NULL;
+    pcm->fill = NULL;
+    pcm->context = NULL;
+    pcm->stopped = true;
+    pcm->stop_error = 0;
+    return 0;
+
+failed:
+    pcm->stop_error = errno ? errno : EIO;
+    errno = pcm->stop_error;
+    return -1;
+}
+
+int snd_retained_pcm_close(snd_retained_pcm_t *pcm) {
+    if(!pcm || pcm->attempted) {
+        errno = pcm ? EBUSY : EINVAL;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+    strchan_t *stream = &streams[pcm->handle];
+    stream->service_owner = NULL;
+    int result = snd_stream_destroy_ex(pcm->handle, SND_STREAM_TRANSFER_TIMEOUT_DEFAULT);
+    if(result == 0) {
+        free(pcm->scratch);
+        free(pcm);
+    }
+    else
+        stream->service_owner = pcm;
+    mutex_unlock(&stream_state_mutex);
+    return result;
 }

@@ -21,6 +21,7 @@ $(TARGET): sound-stream-test.c
 test: $(TARGET)
 	./$(TARGET)
 	$(PYTHON) run-lifetime.py
+	$(PYTHON) run-retained.py
 
 clean:
 	$(RM) -r $(TARGET) $(TARGET).dSYM

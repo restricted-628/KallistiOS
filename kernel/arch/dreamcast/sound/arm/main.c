@@ -465,8 +465,11 @@ static uint32_t observer_apply(uint32_t channel,
                 return AICA_OBSERVATION_BAD_FLAGS;
             break;
         case AICA_CHANNEL_OP_STOP:
-            if(control->start_flags || control->fields) return AICA_OBSERVATION_BAD_FLAGS;
-            break;
+            if(control->start_flags || control->fields)
+                return AICA_OBSERVATION_BAD_FLAGS;
+            /* Ownership and all STOP inputs have already been checked. */
+            channel_apply(channel, AICA_CHANNEL_OP_STOP, NULL, 0, 0);
+            return AICA_OBSERVATION_APPLIED;
         case AICA_CHANNEL_OP_UPDATE:
             if(control->start_flags || !control->fields || (control->fields&~AICA_CHANNEL_UPDATE_ALL))
                 return AICA_OBSERVATION_BAD_FLAGS;
