@@ -16,7 +16,12 @@ endif
 KOS_CFLAGS += -Iupstream/include -Iupstream/sh4dow-dc/include
 KOS_CFLAGS += -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT
 
+OBJS += .build/world.o
 $(OBJS): $(wildcard upstream/include/*.h upstream/sh4dow-dc/include/*.h)
+
+.build/world.o: kos/world.c ../include/sh4der_kos_world.h
+	@mkdir -p $(@D)
+	kos-cc $(CFLAGS) $(CPPFLAGS) -MMD -MP -c $< -o $@
 
 .build/compact.o: kos/compact.c ../include/sh4der_kos.h
 	@mkdir -p $(@D)

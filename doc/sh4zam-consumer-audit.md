@@ -1,5 +1,21 @@
 # SH4ZAM consumer audit: checked animation matrices and skinning
 
+## World-effect consumers (November 2026)
+
+At SH4ZAM `2d32eebb` and SH4DER `32912914`, the world-effect adapter uses
+SH4ZAM's Y-billboard rotation and supplies the model translation itself.
+Mirrored camera setup and batches use XMTRX, then return its previous contents;
+the Compact strip callback only reads prepared samples. Spark projection
+reuses one reciprocal depth per corner for its area test, screen XY and PVR Z.
+Wave and transmission preparation use the pinned math backend at pose/update
+time. See the [coverage record](../addons/libsh4der/COVERAGE.md) for ownership
+and the native consumer.
+
+The dense inverse correction does not make a general inverse necessary in an
+affine skinning loop. Likewise, aligned block copies are not a substitute for
+arbitrary asset reads. Existing animation and projection paths retain their
+alias, layout and XMTRX contracts; no second SH4ZAM provider is linked.
+
 ## Scope and source ownership
 
 This pass follows the source-dependency migration on KOS master (`6f8b3394`).

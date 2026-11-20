@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-20 — Compact world materials and reflection capture
+
+- Route SH4DER light pools, sparks, water and transmission, and SH4DOW
+  heightfield shadows through the existing graphics stack. Add a translated
+  SH4ZAM Y-billboard without leaving XMTRX modified.
+- Sample a KOS-owned planar render target on flat or curved Compact surfaces
+  using prepared per-index reflection data. Include a two-pass native fixture
+  with RGB565 readback. Neither upstream GPU submission nor a second math
+  provider is linked. Physical Dreamcast timing and visuals are unqualified.
+
 ## 2026-11-20 — SH4DER and Compact UV warp
 
 - Update SH4DER-PVR (including SH4DOW) from 17a1f062 to 32912914.

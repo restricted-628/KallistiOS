@@ -23,15 +23,53 @@ the full integration request; available math headers alone do not close a row.
 | CA | Prepared viewport and three complete channel packets over admitted image; native stride consumer | Hardware visibility/performance |
 | Shafts | Prepared light-distance field, caller shade map/history, multiply mesh and native retained-source consumer | Hardware visibility/performance |
 | Prepared UV warp | Caller-owned RG table and scroll; Compact vertex callback, composable before holo/blade | Hardware visuals/performance |
-| Planar reflections | Upstream mirror/Fresnel math available | Bind to KOS render targets; do not import upstream scene/VRAM ownership |
-| Water, transmission and SH4DOW heightfield | Upstream calculations available in the checkout | Material, normal and light-space integration |
-| Sparks and ground-light pools | Upstream geometry available in the checkout | Route packets through KOS sinks; no upstream submission backend |
+| Planar reflections | KOS RGB565 target, exact producer ID, flat/curved sample preparation and depth-tested Compact material; two-pass readback for flat receiver | Hardware visibility/performance |
+| Water, transmission and SH4DOW heightfield | Model-indexed wave displacement, normals and crest/solid transmission; terrain visibility converted to Compact retained-light bytes | Hardware visibility/performance |
+| Sparks and ground-light pools | Native quad and fan-to-strip builders, SH4ZAM billboard model transform, caller-owned KOS sink | Hardware visibility/performance |
 
 Hardware visibility and performance qualification remain separate from implementation. KOS owns scene/list routing,
 allocation, fog, stride and render tickets. New adapters must use one sink for
 headers and vertices, retain producers and readers before resource reuse, and
 avoid hidden state. Ordinary ordered GPU passes do not imply CPU waits between
 every pass. Host tests, SH-4 links, emulation and hardware remain distinct.
+
+## World effects in Compact
+
+Use `<sh4der_kos_world.h>`. The [two-pass example](../../examples/dreamcast/pvr/sh4der_world/world.c)
+draws a light pool and spark into a 64×64 texture, then draws a Compact model
+sampling it into a *different* texture. Its result is checked by readback and
+reported on the console, not by displaying an upstream demo.
+
+1. Give the reflected camera the capture's actual viewport and a unit world
+   plane normal. Cull opposite winding (or draw two-sided), exclude the
+   receiver from its own capture, and clip geometry as your scene requires.
+   Pool vertices are world/model space; spark quads are already projected.
+   Use SRCALPHA/ONE for additive pools with a faded rim, ONE/ONE for sparks.
+2. Bind a linear/stride RGB565 target with the image UV content extent equal
+   to the capture extent. Publish its producer ticket; compile the mirror
+   header for that exact image generation/render and the material blend mode.
+   Share KOS stride state. Do not alias source and destination, even partially.
+3. Prepare flat samples for points in the mirror plane, or curved samples from
+   world positions and unit normals after posing. Place results at the original
+   Compact indices. The vertex callback reads those samples without disturbing
+   Compact's projection matrix. The capture uses the mirrored camera; the
+   main pass uses the scene camera. For large oblique flat faces, tessellate
+   the receiver if needed: the PVR interpolates UVs perspectively. The public
+   `sh4der_pl4nar_tri_split` helper is a mesh-preparation tool, not an automatic
+   change to an admitted strip.
+4. Retain the capture through its *last sampling draw*. Invalidate before
+   overwriting; on replacement, bind a new generation even at the same address.
+   A valid frame ID is not proof that the last reader finished.
+
+Water preparation returns a Y displacement, a normal and transmitted RGB per
+unique index. Evaluate waves in a consistent Y-up space; apply displacement
+before projection and use the returned normal in the lighting space. For
+solid transmission, prepare RGB with `sh4der_sss_rgb` and leave displacement
+zero. The callback adds RGB to the current material without changing alpha;
+start with a base color that leaves room for the addition. Static heightfields
+can be cooked offline: remap the grid's retained-light bytes to the model's
+indices (including holes) and bind them as ordinary Compact AO. No per-strip
+wave evaluation, terrain sweep or render-target allocation is required.
 
 ## Compact binding and composition
 

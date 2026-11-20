@@ -693,6 +693,12 @@ the vendor's competing renderer or changing dependency pins. Reusable adapters
 and complete capability coverage are required, not only example callbacks.
 Full integration is in progress, not established by the earlier CPU-only addon.
 
+**November 20 implementation update:** The capability inventory at SH4DER
+`32912914` now includes Compact world materials and retained planar reflections
+alongside the earlier screen and pose effects. See `addons/libsh4der/COVERAGE.md`
+for the binding sequence and evidence limits. The renderer ownership rule and
+six-entry strip partition default are unchanged.
+
 **Accepted Compact slice:** `sh4der_kos_bind` admits indexed sidecar extent once;
 `sh4der_kos_vertex` composes blade/holo, AO and prepared limb shadows with an
 optional existing lighting callback. The caller retains model/frame/storage

@@ -18,6 +18,9 @@ Compact models/scenes, transforms, culling, collision, deformation, skeleton/ski
 - `kernel/arch/dreamcast/hardware/pvr/pvr_toon.c`
 - `addons/libsh4der` — pinned CPU effects; see its README for linked/held APIs,
   custom licenses and renderer ownership. No standalone vendor GPU backend.
+- `addons/include/sh4der_kos_world.h`, `examples/dreamcast/pvr/sh4der_world` —
+  Compact reflection capture/reader, prepared surface lighting, pool and spark
+  packets. Check the two-pass serial readback, not just the producer image.
 - `addons/include/sh4der_kos.h`, `addons/libsh4der/kos/compact.c` — reusable
   admitted sidecars and Compact effect/AO/limb-shadow composition; full capability
   status and remaining screen adapters are in `addons/libsh4der/COVERAGE.md`.

@@ -16,6 +16,10 @@ callback. See [coverage and contracts](COVERAGE.md) for exact available features
 and validation limits. For a prepared UV warp, use
 `<sh4der_kos_uvwarp.h>` directly as the Compact vertex callback or chain it
 before an existing color effect. Install it only after prepare succeeds.
+For reflections, water, transmission, heightfield shadows, light pools and
+sparks use `<sh4der_kos_world.h>`. The [Compact world example](../../examples/dreamcast/pvr/sh4der_world/)
+shows the two KOS passes and their resource lifetimes. With the fork environment
+sourced, build `addons/libsh4der` and then the example with make.
 The new upstream planar target and spark submission backends are not linked;
 the vendored SH4ZAM-DCE is not installed as a second math provider.
 
