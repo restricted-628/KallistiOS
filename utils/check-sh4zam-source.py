@@ -9,7 +9,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 SUBMODULE = "addons/libsh4zam/upstream"
 UPSTREAM_URL = "https://github.com/gyrovorbis/sh4zam.git"
-REVIEWED_REVISION = "5b7dfc22a91f7a21756f1e8f86b1ed3d99dd33bf"
+REVIEWED_REVISION = "2d32eebb94c2278332df066e1fc5d442e6383c04"
 
 
 def git(root, *args):

@@ -6,6 +6,12 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-20 — SH4ZAM correctness update
+
+- Advance pristine SH4ZAM from 5b7dfc22 to 2d32eebb for SH-4 stack handling,
+  matrix arithmetic and updated math helpers. Preserve the two exclusive fiber
+  providers, existing renderer ownership and the separate SH4DER pin.
+
 ## 2026-11-20 — KOS upstream through 9926b70ae
 
 - Merge the ten upstream commits since 6b1248c4d: BIOS disc streaming,

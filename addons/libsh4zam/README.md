@@ -9,13 +9,18 @@ adapter and integration documentation; separate KOS helpers live under
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`5b7dfc22a91f7a21756f1e8f86b1ed3d99dd33bf`, upstream **v0.10 update**, from
+`2d32eebb94c2278332df066e1fc5d442e6383c04`, upstream **v0.10 update**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
 and license are retained; no local source patches are applied. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
-This advances `ad2f8909`. It adds combined Euler and 16-bit-turn
+This advances `5b7dfc22`. It corrects dense matrix inverse/determinant and
+XMTRX add/subtract, revises SH-4 stack and copy code, and adds billboard and
+direction-rotation helpers. Rebuild consumers: much of this code is inline.
+The pin alone does not opt the renderer into a new effect or change its owner.
+
+The previous pin advanced `ad2f8909`. It added combined Euler and 16-bit-turn
 XMTRX rotations, quaternion initializer/apply optimizations, register permutations,
 scalar fixes and section-level assembly organization. The initial update retained
 the alignment overlay; its later retirement is described below. This update does
