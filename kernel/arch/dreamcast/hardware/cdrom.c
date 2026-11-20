@@ -1684,6 +1684,7 @@ int cdrom_bios_stream_start(int sector, int cnt, bool dma) {
         cdrom_bios_stream_stop(false);
     }
     stream_dma = dma;
+    stream_enabled = true;
 
     if(stream_dma) {
         rv = cdrom_exec_cmd_timed(CD_CMD_DMAREAD_STREAM, &params, 0);
@@ -2104,6 +2105,10 @@ static void cdrom_vblank(uint32_t evt, void *data) {
                 dma_blocking = false;
                 sem_signal(&dma_done);
                 thd_schedule(true);
+            }
+            else if(dma_auto_unlock) {
+                g1_bus_unlock();
+                dma_auto_unlock = false;
             }
         }
     }

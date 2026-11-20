@@ -6,6 +6,15 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-20 — KOS upstream through 9926b70ae
+
+- Merge the ten upstream commits since 6b1248c4d: BIOS disc streaming,
+  FAT directory iteration, filenames and in-place writes, and TCP accept/close.
+- Release nonblocking BIOS DMA through the fork's G1 arbiter. Keep direct
+  disc routing and the pinned graphics libraries unchanged by this merge.
+- Preserve the final eight UCS-2 characters of a full-length FAT name during
+  enumeration without writing beyond the terminator.
+
 ## 2026-11-14 — libADX source and middleware backlog
 
 - Add owned synchronous filenames and checked source loans, immutable memory/
