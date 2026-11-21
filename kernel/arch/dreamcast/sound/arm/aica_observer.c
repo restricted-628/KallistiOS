@@ -137,6 +137,19 @@ void aica_observer_service_timed_stop(aica_observer_t *o,
     }
 }
 
+void aica_observer_mark_stopped(aica_observer_t *o, uint32_t channel) {
+    o->timed_stops[channel].start_token = 0;
+    volatile aica_completion_channel_t *c = &o->completions[channel];
+    if(c->state == AICA_COMPLETION_ACTIVE &&
+       c->session == o->header->active_session &&
+       c->attribution_kind == AICA_OBSERVATION_ATTR_MANAGED &&
+       begin(&c->sequence)) {
+        c->state = AICA_COMPLETION_STOPPED;
+        c->flags &= ~AICA_COMPLETION_ELIGIBLE;
+        end(&c->sequence);
+    }
+}
+
 static int reject(aica_observer_t *o, uint32_t reason, uint32_t tick) {
     if(begin(&o->header->sequence)) {
         o->header->last_protocol_error = reason;

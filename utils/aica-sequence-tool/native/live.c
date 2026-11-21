@@ -21,11 +21,13 @@ static int shape(const uint32_t *v) {
 static int faulted(const asql_t *s) {
     return s->faulted || s->catalog->faulted || s->music->faulted || s->music->music->faulted;
 }
-static int bound(const asql_t *s,unsigned p,uint32_t g) {
+static uint32_t bound_generation(const asql_t *s,unsigned p,uint32_t g) {
     const aica_music_sequence_binding_t *b=&s->adapter->bindings[p];
     const aica_music_port_t *m=&s->music->music->ports[p];
-    return s->initialized && b->bound && b->generation==g && m->open && m->generation==g &&
-        m->bank==b->bank && m->bank_generation==b->bank_generation;
+    if(s->initialized && b->bound && b->generation==g && m->open && m->generation==g &&
+       m->bank==b->bank && m->bank_generation==b->bank_generation)
+        return g;
+    return 0;
 }
 static int publish(asql_t *s,int result) {
     volatile asql_receipt_t *r=s->receipt;uint32_t sequence=r->sequence;unsigned p=s->request[2];
@@ -78,7 +80,7 @@ int asql_command(asql_t *s,const aica_cmd_t *p,uint32_t active) {
          v[2]==s->request[2] && v[3]==s->request[3]));
     if(s->pending && !supersede) return 0;
     /* Recheck urgent ownership before it is allowed to cancel the old request. */
-    if(supersede && v[1]!=ASQL_STOP_ALL && !bound(s,v[2],v[3])) return 0;
+    if(supersede && v[1]!=ASQL_STOP_ALL && !bound_generation(s,v[2],v[3])) return 0;
     if((s->receipt->sequence&1u) || s->receipt->sequence>UINT32_MAX-5u) {
         s->receipt->sequence=UINT32_MAX;s->faulted=1;return 0;
     }
@@ -98,9 +100,9 @@ static int quiet(asql_t *s,unsigned p) {
     for(unsigned i=0;i<m->voice_count;i++) if(m->voices[i].state && m->voices[i].port==p) return 0;
     return 1;
 }
-static int stop_all(asql_t *s) {
+int asql_stop_all(asql_t *s) {
     if(s->initialized) for(unsigned p=0;p<8;p++) if(s->adapter->bindings[p].bound) {
-        if(!bound(s,p,s->adapter->bindings[p].generation)) s->faulted=1;
+        if(!bound_generation(s,p,s->adapter->bindings[p].generation)) s->faulted=1;
         aica_sequence_stop(&s->adapter->sequences[p]);
     }
     return faulted(s)?ASQL_FAULT:0;
@@ -108,10 +110,10 @@ static int stop_all(asql_t *s) {
 static int apply(asql_t *s,uint32_t tick) {
     const uint32_t *v=s->request,*a=v+4;unsigned op=v[1],p=v[2];uint32_t g=v[3];
     aica_sequence_t *q=&s->adapter->sequences[p];int result;
-    if(op==ASQL_STOP_ALL) return stop_all(s);
-    if(op==ASQL_QUERY) return bound(s,p,g)?(faulted(s)?ASQL_FAULT:0):ASQL_INVALID;
+    if(op==ASQL_STOP_ALL) return asql_stop_all(s);
+    if(op==ASQL_QUERY) return bound_generation(s,p,g)?(faulted(s)?ASQL_FAULT:0):ASQL_INVALID;
     if(op==ASQL_STOP) {
-        if(!bound(s,p,g)) return ASQL_INVALID;
+        if(!bound_generation(s,p,g)) return ASQL_INVALID;
         aica_sequence_stop(q);return faulted(s)?ASQL_FAULT:0;
     }
     if(faulted(s)) return ASQL_FAULT;
@@ -130,7 +132,7 @@ static int apply(asql_t *s,uint32_t tick) {
         s->music->protected_ports|=1u<<p;s->clocks[p].tick=tick;
         s->clocks[p].remainder=s->clocks[p].paused_remainder=0;return 0;
     }
-    if(!bound(s,p,g)) return ASQL_INVALID;
+    if(!bound_generation(s,p,g)) return ASQL_INVALID;
     if(op==ASQL_UNBIND) {
         result=aica_music_sequence_unbind(s->adapter,p);
         if(result || s->catalog->faulted) { s->faulted=1;return ASQL_FAULT; }
@@ -172,15 +174,15 @@ static void advance(asql_t *s,unsigned p,uint32_t tick) {
     asql_clock_t *c=&s->clocks[p];aica_sequence_t *q=&s->adapter->sequences[p];
     uint32_t delta=tick-c->tick,*fraction=q->state==AICA_SEQ_RUNNING?&c->remainder:&c->paused_remainder;
     uint64_t numerator=(uint64_t)delta*100000u+*fraction,us=numerator/441u;
-    if(!bound(s,p,s->adapter->bindings[p].generation)) { s->faulted=1;stop_all(s);return; }
+    if(!bound_generation(s,p,s->adapter->bindings[p].generation)) { s->faulted=1;asql_stop_all(s);return; }
     c->tick=tick;
-    if(us>UINT32_MAX) { s->faulted=1;stop_all(s);return; }
+    if(us>UINT32_MAX) { s->faulted=1;asql_stop_all(s);return; }
     *fraction=(uint32_t)(numerator%441u);
     aica_sequence_service(q,(uint32_t)us);
     if(s->chained[p].events && q->program.events==s->chained[p].events && !q->chain) {
         s->current[p]=s->chained[p];clear(&s->chained[p],sizeof(s->chained[p]));
     }
-    if(q->state==AICA_SEQ_FAULT || faulted(s)) { s->faulted=1;stop_all(s); }
+    if(q->state==AICA_SEQ_FAULT || faulted(s)) { s->faulted=1;asql_stop_all(s); }
 }
 void asql_service(asql_t *s,uint32_t tick) {
     unsigned op;int result;

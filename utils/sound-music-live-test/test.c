@@ -240,9 +240,57 @@ static void external_midi(void) {
     CHECK(midi_reads==before && !music->wire.input_generation);
 }
 
+static void coordinated_stop(void) {
+    static asql_receipt_t control_receipt;
+    fresh();asq_resource_runtime_init(sequence_resources,&sequence_receipt);
+    asq_resource_control_init(sequence_resources,music,&banks,&control_receipt);
+    sequence_resources->wire.map=sequence_map;
+    memcpy(sequence_ram+0x30000,fixture,sizeof(fixture));
+    init_packet(ASQ_WIRE_COMMAND,16,1);data[8]=7;data[9]=ASQ_WIRE_PREPARE;
+    data[11]=1;data[12]=0x30000;data[13]=sizeof(fixture);data[14]=0x40000;data[15]=7;
+    dispatch();
+    unsigned passes=0;
+    while(sequence_resources->wire.pending) { asq_wire_service(&sequence_resources->wire);CHECK(++passes<40); }
+    CHECK(sequence_receipt.result==0);
+    registry_header.session=7;
+    registry_records[0]=(aica_bank_record_t){.session=7,.generation=1,.state=AICA_BANK_ACTIVE};
+    request(AICA_MUSIC_WIRE_CLAIM,1,1,0);request(AICA_MUSIC_WIRE_OPEN,2,0,1);
+    init_packet(ASQL_COMMAND,16,1);data[8]=7;data[9]=ASQL_BIND;data[11]=1;dispatch();
+    asql_service(&sequence_resources->control,10);
+    CHECK(control_receipt.result==0 && control_receipt.bound);
+    init_packet(ASQL_COMMAND,16,2);data[8]=7;data[9]=ASQL_PLAY;data[11]=1;
+    data[13]=1;dispatch();
+    asql_service(&sequence_resources->control,11);
+    CHECK(control_receipt.result==0 && control_receipt.state==AICA_SEQ_RUNNING);
+    CHECK(aica_sequence_pause(&music->sequences.sequences[0])==0);
+
+    aica_observation_control_t *c=control(100,1);c->operation=AICA_CHANNEL_OP_START;
+    c->config=config();c->config.length=c->config.loopend=200;dispatch();ack(100,1,101);
+    CHECK(completions[1].state==AICA_COMPLETION_ACTIVE);
+    unsigned before=writes, rejected=commands_rejected;
+    init_packet(AICA_CMD_STOP_ALL,8,0);
+    dispatch();CHECK(commands_rejected==rejected+1 && writes==before);
+    init_packet(AICA_CMD_STOP_ALL,8,7);
+    packet()->misc[0]=1;
+    dispatch();CHECK(commands_rejected==rejected+2 && writes==before);
+    music->wire.pending=1;
+    CHECK(force_stop_all()==AICA_DRIVER_ACTION_BUSY && writes==before);
+    music->wire.pending=0;
+    sequence_resources->control.pending=1;
+    CHECK(force_stop_all()==AICA_DRIVER_ACTION_BUSY && writes==before);
+    sequence_resources->control.pending=0;
+    CHECK(force_stop_all()==AICA_DRIVER_ACTION_APPLIED);
+    CHECK(completions[1].state==AICA_COMPLETION_STOPPED &&
+          completions[1].start_token==100 && completions[1].command_token==100);
+    CHECK(test_finite_stops[1].position==123 && test_finite_stops[1].start_token==100);
+    CHECK(music->sequences.sequences[0].state==AICA_SEQ_IDLE &&
+          aica_sequence_continue(&music->sequences.sequences[0])<0);
+}
+
 int main(void) {
     observation_regression();clocks();claims();backend_and_guards();sequence_publication();sequence_controls();
     external_midi();
+    coordinated_stop();
     printf("LIVE music: %u actual-C checks passed; no hardware/retirement proof\n",checks);
     return 0;
 }

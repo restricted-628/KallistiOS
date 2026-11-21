@@ -1748,16 +1748,28 @@ static bool stream_group_member(const strchan_t *stream, bool reset) {
          stream->state != SND_STREAM_STATE_STOPPED);
 }
 
-static int stream_control_all(bool reset, uint32_t timeout_ms) {
+enum stream_group_operation {
+    STREAM_GROUP_RESET,
+    STREAM_GROUP_STOP,
+    STREAM_GROUP_FORCE_STOP
+};
+
+static int stream_control_all(enum stream_group_operation operation,
+                              uint32_t timeout_ms) {
+    bool reset = operation == STREAM_GROUP_RESET;
+    bool force = operation == STREAM_GROUP_FORCE_STOP;
+    uint64_t deadline = force ? timer_ms_gettime64() + timeout_ms : 0;
     if(irq_inside_int()) {
         errno = EPERM;
         return -1;
     }
-    if(mutex_lock(&stream_state_mutex) < 0)
+    if((force ? mutex_lock_timed(&stream_state_mutex, timeout_ms) :
+                 mutex_lock(&stream_state_mutex)) < 0)
         return -1;
+
     int error = 0;
     for(int i = 0; i < SND_STREAM_MAX; ++i) {
-        if(streams[i].queue_gate_held) {
+        if(streams[i].queue_gate_held || (force && streams[i].service_owner)) {
             error = EBUSY;
             goto done;
         }
@@ -1767,11 +1779,29 @@ static int stream_control_all(bool reset, uint32_t timeout_ms) {
         }
     }
 
+    if(force) {
+        uint32_t remaining = stream_time_remaining(deadline);
+        if(!remaining) {
+            error = ETIMEDOUT;
+            goto done;
+        }
+        if(snd_iface_force_stop_all(remaining) < 0) {
+            error = errno;
+            goto done;
+        }
+    }
+
     for(int i = 0; i < SND_STREAM_MAX; ++i) {
         if(!stream_group_member(&streams[i], reset))
             continue;
+        uint32_t remaining = force ? stream_time_remaining(deadline) : timeout_ms;
+        if(force && !remaining) {
+            if(!error)
+                error = ETIMEDOUT;
+            break;
+        }
         int result = reset ? snd_stream_reset_params(i, SND_STREAM_ALL_CHANNELS) :
-                             snd_stream_stop_ex(i, timeout_ms);
+                             snd_stream_stop_ex(i, remaining);
         if(result < 0 && !error)
             error = errno;
     }
@@ -1785,7 +1815,7 @@ done:
 }
 
 int snd_stream_reset_all_params(void) {
-    return stream_control_all(true, 0);
+    return stream_control_all(STREAM_GROUP_RESET, 0);
 }
 
 int snd_stream_stop_all_ex(uint32_t timeout_ms) {
@@ -1793,7 +1823,15 @@ int snd_stream_stop_all_ex(uint32_t timeout_ms) {
         errno = EINVAL;
         return -1;
     }
-    return stream_control_all(false, timeout_ms);
+    return stream_control_all(STREAM_GROUP_STOP, timeout_ms);
+}
+
+int snd_stop_all(uint32_t timeout_ms) {
+    if(!timeout_ms) {
+        errno = EINVAL;
+        return -1;
+    }
+    return stream_control_all(STREAM_GROUP_FORCE_STOP, timeout_ms);
 }
 
 int snd_stream_get_status(snd_stream_hnd_t hnd,

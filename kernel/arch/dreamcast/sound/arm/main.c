@@ -255,11 +255,12 @@ _Static_assert(!(AICA_DRIVER_FEATURE_OBSERVATION_TL &
      AICA_DRIVER_FEATURE_SEQUENCE_CONTROL | AICA_DRIVER_FEATURE_OBSERVATION |
      AICA_DRIVER_FEATURE_COMPLETION)), "distinct raw TL capability");
 
-static void respond_with_driver_info(uint32 command_id) {
+static void respond_with_driver_info(uint32 command_id, uint32 action_result) {
     AICA_CMDSTR_DRIVER_INFO(packet, response, info);
 
     initialize_response(response, AICA_CMDSTR_DRIVER_INFO_SIZE,
                         AICA_RESP_DRIVER_INFO, command_id);
+    response->misc[0] = action_result;
     info->protocol_version = AICA_DRIVER_PROTOCOL_VERSION;
     info->firmware_version = AICA_DRIVER_FIRMWARE_VERSION;
     const uint32 prior_features = AICA_DRIVER_FEATURE_SYNC_CHANNELS |
@@ -274,7 +275,8 @@ static void respond_with_driver_info(uint32 command_id) {
     info->features = prior_features | AICA_DRIVER_FEATURE_OBSERVATION_TL |
                      AICA_DRIVER_FEATURE_FINITE_STOP |
                      AICA_DRIVER_FEATURE_OBSERVATION_FAST_RELEASE |
-                     AICA_DRIVER_FEATURE_OBSERVATION_TIMED_STOP;
+                     AICA_DRIVER_FEATURE_OBSERVATION_TIMED_STOP |
+                     AICA_DRIVER_FEATURE_STOP_ALL;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
     info->commands_rejected = commands_rejected;
@@ -631,6 +633,32 @@ int process_chn(uint32 chn, aica_channel_t *chndat) {
     }
 }
 
+static uint32 force_stop_all(void) {
+    asql_t *control = &sequence_resources->control;
+    if(music->wire.pending || control->pending)
+        return AICA_DRIVER_ACTION_BUSY;
+    if(music->wire.faulted || music->music.faulted || control->faulted)
+        return AICA_DRIVER_ACTION_FAULT;
+    if(asql_stop_all(control))
+        return AICA_DRIVER_ACTION_FAULT;
+
+    for(unsigned i = 0; i < 8; ++i) {
+        const aica_music_port_t *port = &music->music.ports[i];
+        if(port->open)
+            aica_music_silence(&music->music, i, port->generation, 0);
+    }
+    for(unsigned channel = 0; channel < 64; ++channel) {
+        if(!channel_statuses[channel].configured)
+            continue;
+        aica_observer_capture_stop(&observer, channel, timer, &finite_stops[channel]);
+        aica_channel_set_fast_release(channel);
+        aica_stop(channel);
+        status_refresh(channel);
+        aica_observer_mark_stopped(&observer, channel);
+    }
+    return music->music.faulted ? AICA_DRIVER_ACTION_FAULT : AICA_DRIVER_ACTION_APPLIED;
+}
+
 /* Dispatch a copied, size-bounded packet. */
 static void process_packet(aica_cmd_t *pkt, uint32 size) {
     ++commands_processed;
@@ -711,7 +739,15 @@ static void process_packet(aica_cmd_t *pkt, uint32 size) {
             break;
         case AICA_CMD_QUERY_DRIVER:
             if(size == sizeof(aica_cmd_t) / sizeof(uint32))
-                respond_with_driver_info(pkt->cmd_id);
+                respond_with_driver_info(pkt->cmd_id, 0);
+            else
+                ++commands_rejected;
+            break;
+        case AICA_CMD_STOP_ALL:
+            if(size == sizeof(aica_cmd_t) / sizeof(uint32) && pkt->cmd_id &&
+               !pkt->timestamp && !pkt->misc[0] && !pkt->misc[1] &&
+               !pkt->misc[2] && !pkt->misc[3])
+                respond_with_driver_info(pkt->cmd_id, force_stop_all());
             else
                 ++commands_rejected;
             break;

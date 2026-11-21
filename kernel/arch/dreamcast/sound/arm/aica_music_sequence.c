@@ -1,21 +1,23 @@
 #include "aica_music_sequence.h"
 #include <stddef.h>
 static void clear(void *p,unsigned n) { uint8_t *b=p;while(n--) *b++=0; }
-static int valid(aica_music_sequence_binding_t *b) {
-    aica_music_port_t *p=&b->owner->music->ports[b->port];
-    return b->bound && p->open && p->generation==b->generation &&
-        p->bank==b->bank && p->bank_generation==b->bank_generation;
+static uint32_t matching_generation(const aica_music_sequence_binding_t *b) {
+    const aica_music_port_t *p=&b->owner->music->ports[b->port];
+    if(b->bound && p->open && p->generation==b->generation &&
+       p->bank==b->bank && p->bank_generation==b->bank_generation)
+        return b->generation;
+    return 0;
 }
 static int retain(void *ctx,const aica_seq_program_t *p) {
     aica_music_sequence_binding_t *b=ctx;
-    return valid(b) && b->owner->retain_program(b->owner->context,p)>0;
+    return matching_generation(b) && b->owner->retain_program(b->owner->context,p)>0;
 }
 static void release(void *ctx,const aica_seq_program_t *p) {
     aica_music_sequence_binding_t *b=ctx;b->owner->release_program(b->owner->context,p);
 }
 static void silence(void *ctx,int release_notes,int pause) {
     aica_music_sequence_binding_t *b=ctx;aica_music_sequences_t *a=b->owner;
-    if(valid(b)) aica_music_silence(a->music,b->port,b->generation,(unsigned)release_notes);
+    if(matching_generation(b)) aica_music_silence(a->music,b->port,b->generation,(unsigned)release_notes);
     b->cursor=0;b->resuming=(uint8_t)(pause!=0);
     if(!pause) for(unsigned i=0;i<AICA_TIMED_NOTES;i++)
         if(a->notes[i].live && a->notes[i].port==b->port) a->notes[i].live=0;
@@ -46,14 +48,18 @@ static void control(aica_music_sequence_binding_t *b,unsigned channel,unsigned c
 static int emit(void *ctx,unsigned status,unsigned key,unsigned velocity,unsigned priority) {
     aica_music_sequence_binding_t *b=ctx;aica_music_sequences_t *a=b->owner;
     unsigned channel=status&15,kind=status&0xf0,index=AICA_TIMED_NOTES;int result;
-    if(!valid(b)) return -1;
-    if(kind==0x90 && velocity) {
-        for(index=0;index<AICA_TIMED_NOTES && a->notes[index].live;index++) { }
-        /* A finite timed-note table must not deadlock the sequence before its
-           later note-offs. Deterministic drop is exposed, not queue backpressure. */
-        if(index==AICA_TIMED_NOTES) {
-            if(a->dropped!=UINT32_MAX) ++a->dropped;
-            return 1;
+    if(!matching_generation(b)) return -1;
+    if(kind==0x90) {
+        if(!velocity)
+            kind=0x80;
+        else {
+            for(index=0;index<AICA_TIMED_NOTES && a->notes[index].live;index++) { }
+            /* A finite timed-note table must not deadlock the sequence before
+               its later note-offs. Report a deterministic drop. */
+            if(index==AICA_TIMED_NOTES) {
+                if(a->dropped!=UINT32_MAX) ++a->dropped;
+                return 1;
+            }
         }
     }
     result=aica_music_message(a->music,b->port,b->generation,status,key,velocity,priority);
@@ -66,14 +72,14 @@ static int emit(void *ctx,unsigned status,unsigned key,unsigned velocity,unsigne
         n->live=1;n->port=b->port;n->channel=(uint8_t)channel;n->key=(uint8_t)key;
         n->velocity=(uint8_t)velocity;n->held=1;n->priority=(uint8_t)priority;n->reserved=0;
     }
-    else if(kind==0x80 || (kind==0x90 && !velocity)) note_off(b,channel,key);
+    else if(kind==0x80) note_off(b,channel,key);
     else if(kind==0xb0) control(b,channel,key,velocity);
     return 1;
 }
 static int resume(void *ctx) {
     aica_music_sequence_binding_t *b=ctx;aica_music_sequences_t *a=b->owner;
     unsigned visits=0,admitted=0;
-    if(!valid(b)) return -1;
+    if(!matching_generation(b)) return -1;
     /* Let retained controller/program changes, and each previously admitted
        resume batch, complete before advancing to the next batch. */
     for(unsigned i=0;i<a->music->count;i++) {

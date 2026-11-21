@@ -14,6 +14,7 @@
 #include <dc/sound/aica_completion.h>
 
 bool snd_iface_is_initialized(void);
+int snd_iface_force_stop_all(uint32_t timeout_ms);
 int snd_iface_exclusive_begin(uint32_t timeout_ms);
 void snd_iface_exclusive_end(void);
 

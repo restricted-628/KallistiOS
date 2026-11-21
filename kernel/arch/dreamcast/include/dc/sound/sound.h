@@ -169,6 +169,16 @@ typedef struct snd_driver_status {
 */
 int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms);
 
+/** Stop the current configured voices, resident MIDI and sequences, and
+    ordinary streams, with fast key-off regardless of per-port release mode.
+    Paused resident sequences return to idle. Ordinary streams complete their
+    normal checked stop. Serialize with other playback producers and quiesce
+    private stream owners before calling. Active private owners or pending
+    resident controls give EBUSY. A timeout may follow partial progress.
+    The operation retains all handles and sample ownership. It leaves GD-ROM
+    and DSP configuration alone. Capable firmware and thread context required. */
+int snd_stop_all(uint32_t timeout_ms);
+
 /** Diagnostic callback for checked command submission and driver status errors. */
 typedef void (*snd_driver_error_callback_t)(const char *operation, int error);
 

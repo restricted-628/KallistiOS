@@ -543,9 +543,11 @@ static int pb_current(playback_state_t *s, uint64_t deadline,
             errno = EBUSY; return -1;
         }
     }
+    uint32_t autonomous_stop = AICA_DRIVER_FEATURE_STOP_ALL;
+    if(c.loop_enabled)
+        autonomous_stop |= AICA_DRIVER_FEATURE_OBSERVATION_TIMED_STOP;
     if(s->control == PB_ACTIVE && c.state == AICA_COMPLETION_STOPPED &&
-       c.loop_enabled &&
-       (snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TIMED_STOP)) {
+       (snd_iface_observation_features() & autonomous_stop)) {
         if(snd_port_playback_stopped(s->port) < 0) {
             s->control = PB_LOST;
             errno = EPROTO;

@@ -1070,7 +1070,8 @@ int snd_aica_to_sh4(void *packetout) {
     return 1;
 }
 
-static int driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
+static int driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms,
+                             bool force_stop) {
     uint32_t request_words[sizeof(aica_cmd_t) / sizeof(uint32_t)] = {0};
     uint32_t response_words[AICA_CMD_MAX_SIZE];
     aica_cmd_t *request = (aica_cmd_t *)request_words;
@@ -1167,7 +1168,7 @@ static int driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
         next_command_id = 1;
 
     request->size = sizeof(request_words) / sizeof(request_words[0]);
-    request->cmd = AICA_CMD_QUERY_DRIVER;
+    request->cmd = force_stop ? AICA_CMD_STOP_ALL : AICA_CMD_QUERY_DRIVER;
     request->cmd_id = command_id;
 
     if(sh4_to_aica_post(request, request->size) < 0) {
@@ -1217,6 +1218,11 @@ static int driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
                 status->response_queue_size = info->response_queue_size;
                 status->response_queue_used = info->response_queue_used;
                 driver_features = status->features;
+                if(force_stop && response->misc[0] != AICA_DRIVER_ACTION_APPLIED) {
+                    errno = response->misc[0] == AICA_DRIVER_ACTION_BUSY ? EBUSY :
+                        response->misc[0] == AICA_DRIVER_ACTION_FAULT ? EIO : EPROTO;
+                    goto unlock_response_queue;
+                }
                 result = 0;
                 goto unlock_response_queue;
             }
@@ -1243,7 +1249,20 @@ unlock_command_queue:
 }
 
 int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
-    return report_driver_error(__func__, driver_get_status(status, timeout_ms));
+    return report_driver_error(__func__, driver_get_status(status, timeout_ms, false));
+}
+
+int snd_iface_force_stop_all(uint32_t timeout_ms) {
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+    if(!(driver_features & AICA_DRIVER_FEATURE_STOP_ALL)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    snd_driver_status_t status;
+    return driver_get_status(&status, timeout_ms, true);
 }
 
 /* Poll for responses from the AICA. We assume here that we're not

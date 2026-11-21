@@ -63,6 +63,8 @@ int asql_init(asql_t *,aica_music_sequences_t *,aica_music_wire_t *,
    signed-relative/fade-ms; BEAT multiply/shift; RELEASE0/1; others zero.
    STOP_ALL port/generation0. Acceptance is not resource pin or playback. */
 int asql_command(asql_t *,const aica_cmd_t *,uint32_t active_session);
+/* Firmware-owned action. The caller has excluded any pending control. */
+int asql_stop_all(asql_t *);
 /* After MIDI and resource service, once per main pass. Urgent stop first, then
    <=32 events per bound port, then one ordinary control/resume step. Sample tick
    before a full4410Hz wrap; a too-large representable delta faults conservatively.

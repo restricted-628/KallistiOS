@@ -42,6 +42,13 @@
 /* Managed START only. The lower 31 bits carry an absolute duration in 4410 Hz ticks. */
 #define AICA_OBSERVATION_START_TIMED 0x80000000u
 #define AICA_OBSERVATION_TIMED_TICKS_MAX 0x7fffffffu
+
+#define AICA_DRIVER_FEATURE_STOP_ALL 0x00008000u
+/* Private stop opcode. Its DRIVER_INFO reply carries the result in misc[0]. */
+#define AICA_CMD_STOP_ALL 0x00000010u
+#define AICA_DRIVER_ACTION_APPLIED 1u
+#define AICA_DRIVER_ACTION_BUSY 2u
+#define AICA_DRIVER_ACTION_FAULT 3u
 #define AICA_OBSERVATION_UNCONFIGURED  5u
 #define AICA_OBSERVATION_STALE_TOKEN   6u
 #define AICA_OBSERVATION_ACK_OK        1u

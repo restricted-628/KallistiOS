@@ -32,6 +32,7 @@ void aica_observer_refresh(aica_observer_t *observer, uint32_t channel,
                           uint32_t position, uint32_t key_on, uint32_t tick, uint32_t lp);
 void aica_observer_service_timed_stop(aica_observer_t *observer,
                                       uint32_t channel, uint32_t tick);
+void aica_observer_mark_stopped(aica_observer_t *observer, uint32_t channel);
 int aica_observer_needs_lp(const aica_observer_t *observer, uint32_t channel);
 /* Accepted managed STOP only, immediately before applying key-off. */
 void aica_observer_capture_stop(aica_observer_t *observer, uint32_t channel,
