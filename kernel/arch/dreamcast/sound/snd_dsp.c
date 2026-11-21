@@ -37,9 +37,13 @@
 #define DSP_RING_SIZE_MASK UINT32_C(0x00006000)
 #define DSP_RING_SIZE_SHIFT 13
 #define DSP_WORK_ALIGNMENT UINT32_C(2048)
+#define DSP_PRESET_ID_MAX 127u
 
 static mutex_t dsp_mutex = MUTEX_INITIALIZER;
 static snd_dsp_status_t dsp_status;
+static snd_dsp_preset_ids_t dsp_preset_ids = {
+    SND_DSP_PRESET_NONE, SND_DSP_PRESET_NONE
+};
 static uint32_t dsp_allocation_base;
 
 static uint32_t dsp_register(uint32_t offset) {
@@ -216,8 +220,23 @@ static uint32_t next_generation(void) {
     return generation ? generation : 1u;
 }
 
-int snd_dsp_program_load(const snd_dsp_program_t *program,
-                         uint32_t timeout_ms) {
+static int output_valid(const snd_dsp_output_t *output) {
+    return output && output->level <= 15;
+}
+
+static bool outputs_valid(const snd_dsp_output_t *outputs) {
+    if(!outputs)
+        return false;
+    for(unsigned int channel = 0; channel < SND_DSP_OUTPUT_COUNT; ++channel) {
+        if(!output_valid(&outputs[channel]))
+            return false;
+    }
+    return true;
+}
+
+static int program_load(const snd_dsp_program_t *program,
+                        const snd_dsp_output_t *outputs,
+                        int program_id, int output_id, uint32_t timeout_ms) {
     size_t work_bytes;
     size_t allocation_bytes;
     uint32_t allocation_base;
@@ -261,7 +280,12 @@ int snd_dsp_program_load(const snd_dsp_program_t *program,
         goto fail_allocation;
     }
 
+    if(outputs) {
+        memcpy(dsp_status.output, outputs, sizeof(dsp_status.output));
+        dsp_preset_ids.output_id = output_id;
+    }
     hardware_load(program, work_address);
+    dsp_preset_ids.program_id = program_id;
     old_allocation = dsp_allocation_base;
     dsp_allocation_base = allocation_base;
     dsp_status.loaded = true;
@@ -281,6 +305,30 @@ fail_allocation:
 fail_mutex:
     mutex_unlock(&dsp_mutex);
     return -1;
+}
+
+int snd_dsp_program_load(const snd_dsp_program_t *program,
+                         uint32_t timeout_ms) {
+    return program_load(program, NULL, SND_DSP_PRESET_NONE,
+                        SND_DSP_PRESET_NONE, timeout_ms);
+}
+
+int snd_dsp_program_load_preset(const snd_dsp_program_t *program,
+    const snd_dsp_output_t outputs[SND_DSP_OUTPUT_COUNT],
+    unsigned int program_id, unsigned int output_id, uint32_t timeout_ms) {
+    if(program_id > DSP_PRESET_ID_MAX || output_id > DSP_PRESET_ID_MAX ||
+       !outputs_valid(outputs)) {
+        errno = EINVAL;
+        return -1;
+    }
+    return program_load(program, outputs, (int)program_id, (int)output_id,
+                        timeout_ms);
+}
+
+static void clear_preset_ids(void) {
+    dsp_preset_ids = (snd_dsp_preset_ids_t){
+        SND_DSP_PRESET_NONE, SND_DSP_PRESET_NONE
+    };
 }
 
 int snd_dsp_program_clear(uint32_t timeout_ms) {
@@ -312,6 +360,7 @@ int snd_dsp_program_clear(uint32_t timeout_ms) {
     old_allocation = dsp_allocation_base;
     dsp_allocation_base = 0;
     memset(&dsp_status.output, 0, sizeof(dsp_status.output));
+    clear_preset_ids();
     dsp_status.loaded = false;
     dsp_status.generation = next_generation();
     dsp_status.work_address = 0;
@@ -329,23 +378,10 @@ fail_mutex:
     return -1;
 }
 
-static int output_valid(const snd_dsp_output_t *output) {
-    return output && output->level <= 15;
-}
-
-int snd_dsp_outputs_set(
-    const snd_dsp_output_t output[SND_DSP_OUTPUT_COUNT]) {
-    size_t channel;
-
-    if(!output) {
+static int outputs_set(const snd_dsp_output_t *output, int output_id) {
+    if(!outputs_valid(output)) {
         errno = EINVAL;
         return -1;
-    }
-    for(channel = 0; channel < SND_DSP_OUTPUT_COUNT; ++channel) {
-        if(!output_valid(&output[channel])) {
-            errno = EINVAL;
-            return -1;
-        }
     }
     if(irq_inside_int()) {
         errno = EPERM;
@@ -358,12 +394,27 @@ int snd_dsp_outputs_set(
     if(mutex_lock(&dsp_mutex) < 0)
         return -1;
     memcpy(dsp_status.output, output, sizeof(dsp_status.output));
+    dsp_preset_ids.output_id = output_id;
     {
         g2_lock_scoped();
         write_outputs_raw(dsp_status.output);
     }
     mutex_unlock(&dsp_mutex);
     return 0;
+}
+
+int snd_dsp_outputs_set(
+    const snd_dsp_output_t output[SND_DSP_OUTPUT_COUNT]) {
+    return outputs_set(output, SND_DSP_PRESET_NONE);
+}
+
+int snd_dsp_outputs_set_preset(
+    const snd_dsp_output_t output[SND_DSP_OUTPUT_COUNT], unsigned int output_id) {
+    if(output_id > DSP_PRESET_ID_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    return outputs_set(output, (int)output_id);
 }
 
 int snd_dsp_output_set(unsigned int channel,
@@ -432,11 +483,32 @@ int snd_dsp_get_status(snd_dsp_status_t *status) {
     return 0;
 }
 
+int snd_dsp_get_preset_ids(snd_dsp_preset_ids_t *ids) {
+    if(!ids) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(!snd_iface_is_initialized()) {
+        errno = ENODEV;
+        return -1;
+    }
+    if(mutex_lock(&dsp_mutex) < 0)
+        return -1;
+    *ids = dsp_preset_ids;
+    mutex_unlock(&dsp_mutex);
+    return 0;
+}
+
 void snd_dsp_system_reset(void) {
     if(mutex_lock(&dsp_mutex) < 0)
         return;
     dsp_allocation_base = 0;
     memset(&dsp_status, 0, sizeof(dsp_status));
+    clear_preset_ids();
     dsp_status.ring_size = SND_DSP_RING_16K;
     hardware_clear(true);
     mutex_unlock(&dsp_mutex);
@@ -451,6 +523,7 @@ void snd_dsp_system_shutdown(void) {
     old_allocation = dsp_allocation_base;
     dsp_allocation_base = 0;
     memset(&dsp_status, 0, sizeof(dsp_status));
+    clear_preset_ids();
     dsp_status.ring_size = SND_DSP_RING_16K;
     mutex_unlock(&dsp_mutex);
 

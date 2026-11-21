@@ -180,6 +180,60 @@ int snd_dsp_output_get(unsigned int channel, snd_dsp_output_t *output);
 */
 int snd_dsp_get_status(snd_dsp_status_t *status);
 
+/** \brief No identified preset selected for the corresponding component. */
+#define SND_DSP_PRESET_NONE (-1)
+
+/** \brief Caller-assigned identities of the applied program and outputs. */
+typedef struct snd_dsp_preset_ids {
+    int program_id; /**< 0-127 or SND_DSP_PRESET_NONE. */
+    int output_id;  /**< 0-127 or SND_DSP_PRESET_NONE. */
+} snd_dsp_preset_ids_t;
+
+/** \brief Install a program and all returns with caller-assigned identities.
+
+    Identifiers are in the range 0-127. The caller provides the complete
+    native program and return array. The loader applies the same admission
+    and work-area rules as snd_dsp_program_load(). A failed call preserves
+    the current selection.
+
+    \param program         Complete program image.
+    \param outputs         Array of SND_DSP_OUTPUT_COUNT effect returns.
+    \param program_id      Identity of the supplied program.
+    \param output_id       Identity of the supplied effect returns.
+    \param timeout_ms      Nonzero deadline for command-queue drain.
+    \retval 0              Program, outputs and both identities installed.
+    \retval -1             On failure, with errno set.
+*/
+int snd_dsp_program_load_preset(const snd_dsp_program_t *program,
+    const snd_dsp_output_t outputs[SND_DSP_OUTPUT_COUNT],
+    unsigned int program_id, unsigned int output_id, uint32_t timeout_ms);
+
+/** \brief Replace all effect returns with an identified configuration.
+
+    The output identity must be in the range 0-127. A later single-return
+    adjustment preserves this identity. A successful raw whole-output
+    replacement clears it. The program selection stays independent.
+
+    \param output          Array of SND_DSP_OUTPUT_COUNT effect returns.
+    \param output_id       Identity of the supplied effect returns.
+    \retval 0              Returns and output identity installed.
+    \retval -1             On failure, with errno set.
+*/
+int snd_dsp_outputs_set_preset(
+    const snd_dsp_output_t output[SND_DSP_OUTPUT_COUNT], unsigned int output_id);
+
+/** \brief Read both applied DSP preset identities coherently.
+
+    Initialization and clearing the DSP clear both identities. Installing
+    an untagged program clears its program identity. Queries reveal the
+    state published by the DSP manager in thread context.
+
+    \param ids             Receives the current identities.
+    \retval 0              State copied.
+    \retval -1             On failure, with errno set and output unchanged.
+*/
+int snd_dsp_get_preset_ids(snd_dsp_preset_ids_t *ids);
+
 /** @} */
 
 __END_DECLS

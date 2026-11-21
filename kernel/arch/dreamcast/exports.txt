@@ -321,6 +321,9 @@ snd_dsp_outputs_set
 snd_dsp_output_set
 snd_dsp_output_get
 snd_dsp_get_status
+snd_dsp_program_load_preset
+snd_dsp_outputs_set_preset
+snd_dsp_get_preset_ids
 snd_pcm16_split
 snd_pcm16_split_sq
 snd_pcm8_split
