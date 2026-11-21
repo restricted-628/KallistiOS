@@ -4,7 +4,7 @@ static enum fill_mode mode;
 
 static int fill(void *context, int16_t *samples, uint32_t frames,
                 snd_retained_pcm_span_t *spans, unsigned capacity) {
-    assert(context == &calls && capacity == 16 && frames == 512);
+    assert(context == &calls && capacity == 16 && (frames == 512 || mode == SILENCE));
     ++calls;
     for(unsigned i = 0; i < frames * streams[0].channels; ++i)
         samples[i] = i % 2 ? -2345 : 1234;
@@ -62,6 +62,7 @@ static snd_retained_pcm_t *open_case_with_channels(enum fill_mode next_mode, uns
     session = 1;
     stop_errno = 0;
     first_delay = right_dma_delay = right_observation_delay = 0;
+    left_dma_delay = left_observation_delay = 0;
     bad_channel = fail_dma_channel = -1;
     mode = next_mode;
     assert(!snd_retained_pcm_open(&pcm, channels, 44100, 1024, fill, &calls));
@@ -93,6 +94,67 @@ static void stop_case(snd_retained_pcm_t *pcm) {
     /* End of the model instance. Its retained hardware lease is never reused
        through the tested API. Only the host fixture allocation is disposed. */
     free(pcm);
+}
+
+static snd_retained_pcm_t *open_mono_frontier_case(void) {
+    snd_retained_pcm_t *pcm = open_case_with_channels(SILENCE, 1);
+    assert(!snd_retained_pcm_close(pcm));
+    frees = 0;
+    assert(!snd_retained_pcm_open(&pcm, 1, 48000, 2048, fill, &calls));
+    assert(!snd_retained_pcm_start(pcm) && pcm->written == 2048);
+    return pcm;
+}
+
+static void test_mono_frontier(void) {
+    snd_retained_pcm_t *pcm = open_mono_frontier_case();
+    poll_at(pcm, 32, 1500, 0);
+    assert(pcm->written == 3072);
+    poll_at(pcm, 10, 1941, 0);
+    left_observation_delay = 7;
+    /* The new bound reaches 3092. The prior bound at the same end is 2815. */
+    uint64_t output;
+    retained_cursor_t next[2];
+    now += 10;
+    position[0] = 2703 % 2048;
+    assert(!retained_sample(pcm, next, &output) && output == 2703);
+    retained_credit(pcm, next, output);
+    assert(query(pcm, 0).valid && query(pcm, 0).output_frames == 2703);
+    stop_case(pcm);
+
+    pcm = open_mono_frontier_case();
+    left_observation_delay = 7;
+    left_dma_delay = 8;
+    delayed_position = 2322 % 2048;
+    now += 28;
+    position[0] = 1561;
+    /* DMA has returned, but the new sample already exceeds the old frontier. */
+    assert(snd_retained_pcm_poll(pcm) == -1 && errno == EPIPE);
+    assert(pcm->written == 2048 && !query(pcm, 0).valid &&
+           query(pcm, 0).output_frames == 1561);
+    stop_case(pcm);
+
+    const struct {
+        unsigned prior, gap, candidate;
+        int error;
+    } rejected[] = {
+        {1907, 16, 2703, EPIPE},  /* Prior bound equals the frontier. */
+        {1907, 17, 2703, EPIPE},  /* Both bounds reach past the frontier. */
+        {1941, 16, 3072, EPIPE},  /* The measured cursor equals the frontier. */
+        {1941, 42, 2703, EOVERFLOW}, /* The unwrap can no longer be proven. */
+    };
+    for(unsigned i = 0; i < sizeof(rejected) / sizeof(rejected[0]); ++i) {
+        pcm = open_mono_frontier_case();
+        poll_at(pcm, 32, 1500, 0);
+        poll_at(pcm, 10, rejected[i].prior, 0);
+        left_observation_delay = 7;
+        now += rejected[i].gap;
+        position[0] = rejected[i].candidate % 2048;
+        assert(snd_retained_pcm_poll(pcm) == -1 && errno == rejected[i].error);
+        assert(pcm->written == 3072 && !query(pcm, 0).valid &&
+               query(pcm, 0).output_frames == rejected[i].prior);
+        stop_case(pcm);
+    }
+    puts("RETAINED MONO FRONTIER HOST PASS: prior proof, observed crossing, equality and wrap");
 }
 
 static snd_retained_gain_status_t gain_status(snd_retained_pcm_t *pcm, uint64_t id) {
@@ -432,5 +494,6 @@ int main(void) {
     puts("RETAINED PCM HOST PASS: spans, wrap, skew, stereo acknowledgement, DMA loss, capacity, lease retention");
     test_gain();
     test_initial_tl();
+    test_mono_frontier();
     return 0;
 }

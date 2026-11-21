@@ -1920,7 +1920,17 @@ static int retained_sample_until(snd_retained_pcm_t *pcm, retained_cursor_t *nex
         /* It must still be possible to prove the entire interval was backed
            by the old committed ring. Even a late successful transfer cannot
            hide stale replay at the previous write frontier. */
-        if(next[i].frames >= pcm->written || possible >= pcm->written - next[i].frames) {
+        bool before_frontier = next[i].frames < pcm->written;
+        if(before_frontier && possible >= pcm->written - next[i].frames) {
+            /* For an already qualified mono stream, the prior sample also
+               bounds the same cursor at latest. Either bound can prove the
+               interval safe. The new sample alone still determines credit. */
+            const retained_cursor_t *prev = &pcm->cursor[i];
+            before_frontier = pcm->channels == 1 && pcm->valid &&
+                prev->frames < pcm->written &&
+                retained_movement(pcm, latest - prev->before_ms) < pcm->written - prev->frames;
+        }
+        if(!before_frontier) {
             errno = EPIPE;
             return -1;
         }

@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Retained mono playback cursor check
+
+- When a fresh observation alone cannot establish that the playback cursor
+  stayed within committed audio, a fixed-rate mono stream can also use its
+  preceding valid observation to prove that bound. It credits only observed
+  frames. Reaching the committed write position still reports an error; this
+  does not qualify the 48 kHz, 2,048-frame mono profile.
+
 ## 2026-11-21 — Live transpose for ordinary mono libADX playback
 
 - An ordinary mono compatibility player can request a pitch change while

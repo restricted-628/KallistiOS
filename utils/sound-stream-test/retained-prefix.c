@@ -46,6 +46,7 @@ static strchan_t streams[1];
 static _Alignas(32) uint32_t separation[2][1024];
 static uint32_t *sep_buffer[2] = { separation[0], separation[1] };
 static uint64_t now, first_delay, right_dma_delay, right_observation_delay;
+static uint64_t left_dma_delay, left_observation_delay;
 static uint32_t delayed_position;
 static uint32_t position[2], session = 1, token;
 static int bad_channel = -1, fail_dma_channel = -1, stop_errno;
@@ -102,8 +103,9 @@ static int spu_dma_transfer(const void *p, uintptr_t dst, size_t n, int block,
         return -1;
     }
     spu_memload_sq(dst, p, n);
-    if(channel == 1 && right_dma_delay) {
-        now += right_dma_delay;
+    uint64_t dma_delay = channel == 0 ? left_dma_delay : right_dma_delay;
+    if(dma_delay) {
+        now += dma_delay;
         position[0] = position[1] = delayed_position;
     }
     if(retire_callback)
@@ -201,8 +203,8 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
     }
     if(stop && (int)ch == held_stop_channel)
         ++now;
-    if(update && ch == 1)
-        now += right_observation_delay;
+    if(update)
+        now += ch == 0 ? left_observation_delay : right_observation_delay;
     if(gain && (int)ch == gain_timeout_channel)
         now = deadline;
     if(receipt->session != session || now >= deadline) {
