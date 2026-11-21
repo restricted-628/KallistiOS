@@ -474,15 +474,17 @@ int kosdec_adx_compat_player_get_fx(const struct kosdec_adx_player *, int32_t *b
    +/-99 respectively. This cache does not submit a pitch change. */
 int kosdec_adx_compat_player_cache_transpose(struct kosdec_adx_player *, int32_t semitones, int32_t cents);
 int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *, int32_t *semitones, int32_t *cents);
-/* Stage initial pitch on a READY ordinary compatibility player and cache
+/* Stage initial pitch on a READY compatibility player and cache
    the requested values. ERANGE preserves staging when the request exceeds
    the stock pitch-unit domain after clamping. Successful staging confirms a
    request, with the exact output rate resolved when the source format becomes
    known. Prefill fails with ENOTSUP before output allocation if the source
    rate is outside 8000..48000 Hz or the exact pitch word has no representative
-   in 8000..88200 Hz. An explicit nonzero native rate takes precedence.
+   in 8000..88200 Hz for ordinary output or 8000..48000 Hz for retained output.
+   Retained clock and transpose can be enabled in either order. An explicit
+   nonzero native rate takes precedence.
    Source rate and requested output Hz remain separate in get_info.
-   Live and retained calls return ENOTSUP before changing the cache.
+   Live calls return ENOTSUP before changing the cache.
    Source cancellation before allocation clears staging. Same-format reuse
    of the output keeps its actual rate, and a replacement player starts fresh. */
 int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,

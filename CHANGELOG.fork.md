@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Initial pitch for retained libADX playback
+
+- A retained PCM player can start at an exact ADX pitch within its existing
+  8–48 kHz output range. Rebinding a source on the same lease preserves the
+  rate; unsupported pitches fail before sound allocation. This does not
+  enable pitch changes during playback. The tested ring held 8,192 frames
+  per channel; the separate 48 kHz mono failure at 2,048 frames remains open.
+
 ## 2026-11-21 — Finer initial pitch for ordinary libADX playback
 
 - Stage semitone and cent offsets for 8–48 kHz source PCM. At startup the

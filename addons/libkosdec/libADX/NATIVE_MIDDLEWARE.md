@@ -227,11 +227,13 @@ Same-slot recovery carries requested settings and previously staged or
 admitted fields to non-retained output. Unbind restores the native
 configuration and clears the compatibility settings.
 
-Use `kosdec_adx_compat_player_set_initial_transpose` on a READY ordinary
+Use `kosdec_adx_compat_player_set_initial_transpose` on a READY
 PCM16 player to stage semitones and cents. At prefill, the player uses
 the 8,000–48,000 Hz source header and the staged setting to select an
 integer rate that writes the same AICA pitch word as Sega Library 2.00J.
-The selection uses the exact rate interval within 8,000–88,200 Hz.
+The selection uses an exact rate in 8,000–88,200 Hz for ordinary
+output or 8,000–48,000 Hz for retained output. Retained output sets this
+rate when it opens the lease and uses it for the lifetime of that lease.
 Pitch words with no such rate fail with `ENOTSUP` before sound allocation.
 For example, the stock 8 kHz neutral word requires 7,994–7,998 Hz.
 The source rate and frame counts are unchanged. A nonzero explicit
@@ -240,7 +242,7 @@ prior staged setting and remains available through requested readback.
 The cache-only setter does not stage an output rate. Cancelling before
 allocation clears staging. Same-format source reuse keeps the active
 output rate, and replacement players need their own initial setting.
-Retained initial pitch, live transpose, retained routing,
+Live transpose, retained routing,
 applied stereo synchrony and physical DSP output remain open. Rebuild
 player users with the matching header and archive.
 
@@ -248,6 +250,12 @@ At 88.2 kHz the verified runtime used a fiber-backed producer, a 32,768-frame
 decoded PCM queue, a 16,384-byte sound ring per channel and a 1 ms sleep
 between service passes. The 2 ms phased producer fixture at that rate
 reported a refill shortfall in the SH-4 interpreter.
+
+The verified retained startup profile uses one lease at a time, 8,192
+frames per channel in the sound ring, a 32,768-frame decoded queue and
+the fiber-backed producer with a 1 ms sleep between service passes.
+A separate Audio-only probe at 48 kHz mono with a 2,048-frame ring
+returned `EPIPE` during clock qualification in both emulator CPU modes.
 
 For independent file handle requests, initialize caller-owned slots with
 `kosdec_adx_compat_files_init` and open a slot over a borrowed source.

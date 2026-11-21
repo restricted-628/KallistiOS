@@ -15,7 +15,7 @@ struct snd_retained_pcm {
     void *context;
     unsigned channels;
     bool in_fill, stopped, backpressure, no_refill, stop_fails, valid;
-    unsigned starts, fills, stops;
+    unsigned expected_rate, opens, starts, fills, stops;
     int injected_stop_error;
     uint64_t admitted[17], sealed, credited, reported_epoch;
     bool independent_generations;
@@ -42,8 +42,9 @@ static bool require_zero_pcm;
 
 int snd_retained_pcm_open(snd_retained_pcm_t **out, unsigned channels, uint32_t rate,
     uint32_t ring_frames, snd_retained_pcm_fill_t fill, void *context) {
-    CHECK(channels == 2 && rate == 44100 && ring_frames == 1024 && fill && context);
+    CHECK(channels == 2 && rate == backend.expected_rate && ring_frames == 1024 && fill && context);
     CHECK(!backend.starts);
+    ++backend.opens;
     backend.fill = fill;
     backend.context = context;
     backend.channels = channels;
@@ -230,6 +231,7 @@ struct retained_fixture {
 };
 static void retained_init(struct retained_fixture *t, bool sequence) {
     memset(&backend,0,sizeof(backend));
+    backend.expected_rate = 44100;
     request_frames = 64;
     span_capacity = SND_RETAINED_PCM_FILL_SPANS;
     require_zero_pcm = false;
@@ -825,7 +827,6 @@ static void compat_routing_excludes_retained(void) {
     CHECK(!kosdec_adx_compat_player_get_fx(p,&bus,&db) && !bus && db==-45);
     CHECK(!kosdec_adx_compat_player_cache_transpose(p,12,-50));
     CHECK(!kosdec_adx_compat_player_get_transpose(p,&transpose,&cents) && transpose==12 && cents==-50);
-    CHECK(kosdec_adx_compat_player_set_initial_transpose(p,12,0)<0 && errno==ENOTSUP);
     CHECK(!p->compat_route_fields && p->output.channel[0].routing.direct_level==15);
     CHECK(!kosdec_adx_compat_unbind(&service,0));
     CHECK(!kosdec_adx_player_init(p,&f->stream,NULL,&f->config));
@@ -836,6 +837,95 @@ static void compat_routing_excludes_retained(void) {
     CHECK(!kosdec_adx_compat_unbind(&service,0));
     free(f->data);
     puts("ADX_COMPAT_ROUTE_RETAINED_GUARD_PASS");
+}
+
+static void compat_initial_retained_pitch(void) {
+    const struct {
+        int semitones, cents;
+        unsigned source_rate, override_rate, output_rate;
+        bool pitch_first, skip_pitch, cancel, rebind;
+    } cases[] = {
+        {-12,0,44100,0,22050,false,false,false,true},
+        {0,3,44100,0,44144,true,false,false,false},
+        {0,0,17616,0,17604,false,false,false,false},
+        {0,1,8000,0,8000,false,false,false,false},
+        {0,0,48000,0,47976,false,false,false,false},
+        {0,1,48000,0,0,false,false,false,false},
+        {0,0,8000,0,0,false,false,false,false},
+        {-12,0,11023,0,0,false,false,false,false},
+        {12,0,44100,0,0,false,false,false,false},
+        {12,0,44100,32000,32000,false,false,false,false},
+        {0,0,8000,0,8000,false,true,false,false},
+        {0,0,8000,0,8000,false,false,true,false}
+    };
+    for(unsigned k=0;k<sizeof(cases)/sizeof(cases[0]);++k) {
+        struct retained_fixture t;
+        retained_init(&t,false);
+        struct fixture *f=&t.f;
+        struct kosdec_adx_player *p=&f->player;
+        unsigned rate=cases[k].source_rate;
+        for(unsigned byte=0;byte<4;++byte)
+            f->data[8+byte]=(uint8_t)(rate>>(24-8*byte));
+        if(cases[k].pitch_first)
+            CHECK(!kosdec_adx_player_init(p,&f->stream,NULL,&f->config));
+        backend.expected_rate=cases[k].output_rate;
+        uint64_t now=0;
+        const struct kosdec_adx_compat_config config={.clock_us=compat_clock,.clock_context=&now};
+        struct kosdec_adx_compat_service service;
+        struct kosdec_adx_compat_title title;
+        CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+        CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+        if(!cases[k].skip_pitch)
+            CHECK(!kosdec_adx_compat_player_set_initial_transpose(p,cases[k].semitones,cases[k].cents));
+        if(cases[k].pitch_first)
+            CHECK(!kosdec_adx_player_enable_retained_clock(p,t.offsets,2048));
+        if(cases[k].override_rate)
+            CHECK(!kosdec_adx_player_set_rate(p,cases[k].override_rate));
+        CHECK(!kosdec_adx_compat_player_cache_transpose(p,3,21));
+        CHECK(!kosdec_adx_player_start(p));
+        if(cases[k].cancel) {
+            CHECK(!kosdec_adx_player_cancel_source(p) && !backend.opens);
+            kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
+            CHECK(!kosdec_adx_player_bind_source(p,&f->stream,NULL));
+        }
+        for(unsigned source=0;source<(cases[k].rebind ? 2u : 1u);++source) {
+            for(unsigned step=0;step<32;++step) {
+                struct kosdec_adx_compat_result result;
+                now+=13332;
+                if(kosdec_adx_compat_exec_server(&service,&result)<0) {
+                    CHECK(!cases[k].output_rate && errno==ENOTSUP);
+                    break;
+                }
+                if(info(f).state==KOSDEC_ADX_PLAYER_SOURCE_END)
+                    break;
+            }
+            CHECK(!mock_allocs && !mock_updates);
+            if(!cases[k].output_rate) {
+                CHECK(info(f).state==KOSDEC_ADX_PLAYER_FAILED && !backend.opens && !p->retained_pcm);
+                break;
+            }
+            struct kosdec_adx_player_info state=info(f);
+            CHECK(state.state==KOSDEC_ADX_PLAYER_SOURCE_END && state.sample_rate==rate &&
+                  state.output_rate==cases[k].output_rate && state.source_frames==65);
+            CHECK(backend.opens==1 && backend.starts==1 && p->retained_pcm==&backend);
+            CHECK(backend.admitted[state.source_generation]==65);
+            CHECK(kosdec_adx_compat_player_set_initial_transpose(p,0,0)<0 && errno==ENOTSUP);
+            CHECK(kosdec_adx_player_set_rate(p,32000)<0 && errno==ENOTSUP);
+            int32_t semitones, cents;
+            CHECK(!kosdec_adx_compat_player_get_transpose(p,&semitones,&cents) &&
+                  semitones==3 && cents==21);
+            if(cases[k].rebind && source==0) {
+                CHECK(!kosdec_adx_player_release_source(p));
+                kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
+                CHECK(!kosdec_adx_player_bind_source(p,&f->stream,NULL));
+            }
+        }
+        CHECK(!kosdec_adx_player_stop(p,1000));
+        CHECK(backend.stops==(cases[k].output_rate!=0));
+        CHECK(!kosdec_adx_compat_unbind(&service,0));
+        free(f->data);
+    }
+    puts("ADX_COMPAT_RETAINED_PITCH_PASS staged rate, exact admission, override, cancellation and rebind");
 }
 
 enum playend_case {
@@ -1186,6 +1276,7 @@ int main(void) {
     compat_vsync_anchor();
     compat_collection_clock();
     compat_routing_excludes_retained();
+    compat_initial_retained_pitch();
     compat_initial_attenuation();
     compat_playend();
     split_records(16);

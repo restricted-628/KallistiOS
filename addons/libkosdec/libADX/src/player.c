@@ -326,7 +326,7 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *p,
        p->memory.sound_bytes > 65536)
         return bad();
 #ifdef MEDIA_ADX_RETAINED_CLOCK
-    if(p->compat_route_fields || p->compat_start_pitch) return unsupported();
+    if(p->compat_route_fields) return unsupported();
     if(p->output.channel[0].volume != 255 || p->output.channel[1].volume != 255 ||
        p->requested_pan[0] != KOSDEC_ADX_PAN_AUTO ||
        p->requested_pan[1] != KOSDEC_ADX_PAN_AUTO)
@@ -1000,7 +1000,8 @@ static int poll_player(struct kosdec_adx_player *p) {
             if(p->compat_start_pitch && !p->requested_rate) {
                 if(!p->compat_start_rate)
                     p->compat_start_rate = media_adx_initial_pitch_rate(rate,p->compat_start_pitch_units);
-                if(!p->compat_start_rate) return failed(p,ENOTSUP);
+                if(!p->compat_start_rate || (p->retained_offsets && p->compat_start_rate > 48000))
+                    return failed(p,ENOTSUP);
                 output_rate = p->compat_start_rate;
             }
             p->output.sample_rate = output_rate;
@@ -1759,8 +1760,7 @@ int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *p, in
 int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *p,
     int32_t semitones, int32_t cents) {
     if(!valid(p)) return bad();
-    if(p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound ||
-       p->retained_offsets) return unsupported();
+    if(p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound) return unsupported();
     if(kosdec_adx_compat_player_cache_transpose(p,semitones,cents) < 0) return -1;
 
     int units = 256 * p->compat_controls.transpose + (256 * p->compat_controls.detune) / 100;
