@@ -8,6 +8,9 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Opt-in libADX players can transpose a playing stereo ADX stream when the
+  requested output pitch maps to 8–48 kHz. Both voices must acknowledge
+  the update. Sample time stays in source-rate units and excludes padding.
 - A private, opt-in stereo PCM16 stream can change rate during playback.
   It checks both voices before reusing a buffer and credits a refill only
   after both DMA legs complete. The owner must let those transfers finish

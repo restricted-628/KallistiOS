@@ -621,6 +621,31 @@ resonance values and `kosdec_adx_player_get_filter_settings` reads them back.
 They persist across source rebinds. The SDK's Manatee route leaves playback
 unchanged by this setting. The producer PCM callback remains separate.
 
+### Ordinary stereo live transpose
+
+Build a separate archive with `ADX_ORDINARY_STEREO=1` against the fork's
+ordinary PCM16 backend. Bind a READY compatibility title to a direct
+unlinked stereo ADX stream, then call
+`kosdec_adx_compat_player_enable_stereo_transpose` before starting.
+Use 8192–32768 sound frames per channel in multiples of 32 and source
+and output rates in 8000–48000 Hz. Initialize the KOS stream pool for
+two channels. Keep the player and its provider storage through checked
+stop and producer shutdown. Rebuild consumers with the matching headers.
+
+Use `kosdec_adx_compat_player_set_live_transpose` to apply the cached
+semitone/cents request through separately acknowledged slot updates.
+On a partial update or refill failure, preserve ownership and complete
+checked stop, retrying it after a timeout. Keep the played reservation.
+Complete stop before shutting down sound or resetting G2. The private
+output owns its DMA through callback retirement.
+
+The compatibility clock uses slot 0, counts decoded source frames
+only, and divides by nominal source Hz. Padding and changed output
+pitch do not change the denominator. The optional retained clock,
+live pan/gain/routing and native frequency overrides use other output
+profiles. The build and player opt-ins leave the existing mono and
+default paths available.
+
 ### Retained output clock
 
 Build with `ADX_RETAINED_CLOCK=1` against the fork's private retained-PCM

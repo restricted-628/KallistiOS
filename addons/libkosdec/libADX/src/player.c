@@ -9,6 +9,9 @@
 #ifdef MEDIA_ADX_RETAINED_CLOCK
 #include "snd_retained_pcm.h"
 #endif
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+#include "snd_ordinary_pcm16.h"
+#endif
 #ifdef MEDIA_ADX_RETAINED_GAIN
 #include "snd_retained_gain.h"
 #endif
@@ -33,7 +36,8 @@ static int busy(void) { errno = EBUSY; return -1; }
 static int stop_player(struct kosdec_adx_player *, uint32_t timeout_ms);
 static bool compat_unrecognized_header(const struct kosdec_adx_player *);
 static bool has_output(const struct kosdec_adx_player *p) {
-    return p->retained_pcm || (p->sound != SND_STREAM_INVALID && !p->ordinary_reprime_pending);
+    return p->retained_pcm || p->ordinary_pcm ||
+        (p->sound != SND_STREAM_INVALID && !p->ordinary_reprime_pending);
 }
 static bool start_held(const struct kosdec_adx_player *p) {
     return p->compat_paused || (p->info.wait_start && !p->compat_preoutput_playing);
@@ -333,7 +337,7 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *p,
        p->memory.sound_bytes > 65536)
         return bad();
 #ifdef MEDIA_ADX_RETAINED_CLOCK
-    if(p->compat_route_fields) return unsupported();
+    if(p->compat_route_fields || p->ordinary_stereo) return unsupported();
     if(p->output.channel[0].volume != 255 || p->output.channel[1].volume != 255 ||
        p->requested_pan[0] != KOSDEC_ADX_PAN_AUTO ||
        p->requested_pan[1] != KOSDEC_ADX_PAN_AUTO)
@@ -559,21 +563,55 @@ static bool compat_single_title(const struct kosdec_adx_player *p) {
     return true;
 }
 
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+static int ordinary_source_frames(const struct kosdec_adx_player *p, uint32_t *frames) {
+    snd_ordinary_pcm16_status_t status;
+    if(snd_ordinary_pcm16_status(p->ordinary_pcm,&status) < 0) return -1;
+    if(status.error) {
+        errno = status.error;
+        return -1;
+    }
+    const uint32_t half = p->memory.sound_bytes / 4;
+    if(status.committed_frames != p->info.requested_frames ||
+       status.frames[0] >= status.committed_frames ||
+       status.committed_frames - status.frames[0] > 2u * half) {
+        errno = EPROTO;
+        return -1;
+    }
+    unsigned index = (unsigned)(status.frames[0] / half) % 2;
+    uint32_t within = status.frames[0] % half;
+    uint32_t available = p->ordinary_halves[index].source_frames;
+    *frames = (uint32_t)(p->ordinary_halves[index].source_first +
+                         (within < available ? within : available));
+    return 0;
+}
+#endif
+
 static int compat_live_time(struct kosdec_adx_player *p, struct kosdec_adx_time *out) {
     bool collection_clock = compat_collection_vsync(p);
-    if(!p->info.source_generation || (p->time_uses_vsync && !collection_clock && !p->vsync_ticks))
+    if(p->time_uses_vsync && !collection_clock && !p->vsync_ticks)
         return unsupported();
-    struct kosdec_adx_source_output clock;
-    if(qualified_clock(p,p->info.source_generation,&clock) < 0) return -1;
-
-    uint32_t frames = (uint32_t)clock.source_frames;
+    uint32_t frames;
+    bool at_end = false;
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+    if(p->ordinary_pcm) {
+        if(ordinary_source_frames(p,&frames) < 0) return -1;
+    } else
+#endif
+    {
+        if(!p->info.source_generation) return unsupported();
+        struct kosdec_adx_source_output clock;
+        if(qualified_clock(p,p->info.source_generation,&clock) < 0) return -1;
+        frames = (uint32_t)clock.source_frames;
+        at_end = clock.source_output_end;
+    }
     uint32_t bias = (uint32_t)p->time_offset;
     uint32_t rate = p->info.sample_rate;
     if(!p->time_uses_vsync) {
         *out = (struct kosdec_adx_time){.count = compat_signed_count(frames + bias), .frequency = rate};
         return 0;
     }
-    if(clock.source_output_end) return unsupported();
+    if(at_end) return unsupported();
 
     uint32_t tick = collection_clock ? p->compat_service->vsync_count : p->vsync_ticks(p->vsync_context);
     uint32_t estimate = (uint32_t)p->compat_vsync_anchor + (tick - p->compat_vsync_anchor_tick) * 100u;
@@ -745,6 +783,7 @@ static void cancel_producer(struct kosdec_adx_player *p) {
 int kosdec_adx_player_release_source(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END) return bad();
     if(in_phased_dispatch(p)) return busy();
+    if(p->ordinary_pcm) return unsupported();
     p->compat_playend = (struct kosdec_adx_playend){0};
     /* No poll/callback can race this serialized owner call. Future callbacks
        cannot touch the retired producer, even if join needs a retry. */
@@ -764,6 +803,7 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
     if(in_phased_dispatch(p)) return busy();
     if(p->ordinary_reprime_pending) return busy();
+    if(p->ordinary_pcm) return unsupported();
     if(!p->source_bound) return 0;
     p->compat_playend = (struct kosdec_adx_playend){0};
     p->pcm_enabled = false;
@@ -795,6 +835,7 @@ static int bind_source(struct kosdec_adx_player *p,
     struct kosdec_adx_joint_reader *joint, struct kosdec_adx_wave *wave, struct kosdec_adx_au *au, struct kosdec_adx_aiff *aiff, struct kosdec_adx_spsd *spsd) {
     if(!valid(p) || p->source_bound ||
        (p->info.state != KOSDEC_ADX_PLAYER_IDLE && p->info.state != KOSDEC_ADX_PLAYER_READY)) return bad();
+    if(p->ordinary_stereo && (!stream || stream->linked)) return unsupported();
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(p->retained_offsets && (p->retained_admissions >= SND_RETAINED_PCM_GENERATIONS ||
                               p->info.source_generation == UINT64_MAX)) {
@@ -966,9 +1007,41 @@ static int retained_fill(void *context, int16_t *pcm, uint32_t frames,
 }
 #endif
 
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+static int ordinary_stereo_fill(void *context, int16_t *pcm, uint32_t frames) {
+    struct kosdec_adx_player *p = context;
+    if(frames != p->memory.sound_bytes / 4 || !p->pcm_enabled) {
+        errno = EPROTO;
+        return -1;
+    }
+    struct kosdec_adx_pipe_result read = kosdec_adx_pipe_read(&p->producer.pipe,pcm,frames);
+    if(read.producer >= KOSDEC_ADX_INVALID) {
+        errno = EIO;
+        return -1;
+    }
+    if(read.frames && wake_producer(p) < 0) return -1;
+
+    /* The callback stages one metadata half. Audio publishes the matching
+       committed frontier after both DMA legs. A failed poll blocks time. */
+    unsigned index = (unsigned)(p->info.requested_frames / frames) % 2;
+    p->ordinary_halves[index].source_first = p->info.source_frames;
+    p->ordinary_halves[index].source_frames = (uint32_t)read.frames;
+    ++p->info.callbacks;
+    p->info.requested_frames += frames;
+    p->info.copied_frames += read.frames;
+    p->info.source_frames += read.frames;
+    if(read.starved) ++p->info.starvations;
+    return (int)read.frames;
+}
+#endif
+
 /* Return one on service, zero when a retained output reports backpressure
    before fill, and minus one on failure. */
 static int poll_output(struct kosdec_adx_player *p) {
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+    if(p->ordinary_pcm)
+        return snd_ordinary_pcm16_poll(p->ordinary_pcm) < 0 ? -1 : 1;
+#endif
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(p->retained_pcm) {
         if(!snd_retained_pcm_poll(p->retained_pcm)) return 1;
@@ -995,6 +1068,27 @@ static int close_unstarted_output(struct kosdec_adx_player *p) {
 #endif
 
 static int start_output(struct kosdec_adx_player *p) {
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+    if(p->ordinary_stereo) {
+        if(p->output.channels != 2 || p->info.sample_rate < 8000 ||
+           p->info.sample_rate > 48000 || p->output.sample_rate > 48000)
+            return unsupported();
+        if(snd_ordinary_pcm16_open(&p->ordinary_pcm,&p->output,p->memory.sound_bytes / 2,
+                                   ordinary_stereo_fill,p) < 0)
+            return -1;
+        if(snd_ordinary_pcm16_start(p->ordinary_pcm) < 0)
+            return -1;
+#ifndef MEDIA_ADX_RETAINED_CLOCK
+        bool collection_clock = compat_collection_vsync(p);
+        if(collection_clock || p->vsync_ticks) {
+            p->compat_vsync_anchor = 0;
+            p->compat_vsync_anchor_tick = collection_clock ? p->compat_service->vsync_count :
+                p->vsync_ticks(p->vsync_context);
+        }
+#endif
+        return 1;
+    }
+#endif
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(p->retained_offsets) {
         if(snd_retained_pcm_open(&p->retained_pcm,p->output.channels,p->output.sample_rate,
@@ -1550,6 +1644,7 @@ static int compat_detach(void *context) {
         return busy();
     p->compat_service = NULL;
     p->compat_phased = false;
+    p->ordinary_stereo = false;
     p->compat_ready_start = false;
     p->compat_decode_ended = false;
     p->compat_paused = false;
@@ -1858,6 +1953,7 @@ static uint8_t route_level(int32_t db, const int8_t minima[15]) {
 static int set_compat_routing(struct kosdec_adx_player *p, unsigned fields, int32_t bus, int32_t db) {
     if(!valid(p) || bus < 0 || bus > 16) return bad();
     if(!p->compat_service || p->retained_offsets) return unsupported();
+    if(p->ordinary_pcm && p->info.state != KOSDEC_ADX_PLAYER_STOPPED) return unsupported();
     if(p->compat_service->servicing ||
        (p->info.state >= KOSDEC_ADX_PLAYER_RELEASING && p->info.state != KOSDEC_ADX_PLAYER_STOPPED))
         return busy();
@@ -1966,17 +2062,43 @@ static int update_output_rate(struct kosdec_adx_player *p, uint32_t rate) {
     return 0;
 }
 
+int kosdec_adx_compat_player_enable_stereo_transpose(struct kosdec_adx_player *p) {
+    if(!valid(p)) return bad();
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+    if(!p->compat_service || p->retained_offsets || p->requested_rate ||
+       p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound ||
+       !p->producer.pipe.stream || p->producer.pipe.stream->linked ||
+       p->memory.sound_bytes < 16384 || p->memory.sound_bytes > 65536 ||
+       p->memory.sound_bytes % 64)
+        return unsupported();
+    if(p->compat_service->servicing) return busy();
+    p->ordinary_stereo = true;
+    return 0;
+#else
+    return unsupported();
+#endif
+}
+
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
     int32_t semitones, int32_t cents) {
     if(!valid(p)) return bad();
     if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING || !p->source_bound ||
-       p->retained_offsets || p->sound == SND_STREAM_INVALID || p->info.channels != 1)
+       p->retained_offsets ||
+       (!p->ordinary_pcm && (p->sound == SND_STREAM_INVALID || p->info.channels != 1)))
         return unsupported();
     int units;
     if(cache_pitch_units(p,semitones,cents,&units) < 0) return -1;
     if(p->requested_rate) return busy();
     uint32_t rate = media_adx_initial_pitch_rate(p->info.sample_rate,units);
     if(!rate || rate > 48000) return unsupported();
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+    if(p->ordinary_pcm) {
+        if(snd_ordinary_pcm16_set_rate(p->ordinary_pcm,rate) < 0)
+            return failed(p,errno);
+        p->output.sample_rate = p->info.output_rate = rate;
+        return 0;
+    }
+#endif
     return update_output_rate(p,rate);
 }
 
@@ -1984,7 +2106,7 @@ int kosdec_adx_player_set_output(struct kosdec_adx_player *p,
     unsigned lv, unsigned rv, unsigned lp, unsigned rp) {
     if(!valid(p) || lv > 255 || rv > 255 || lp > 255 || rp > 255 ||
        p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
-    if(p->retained_offsets) return unsupported();
+    if(p->retained_offsets || p->ordinary_pcm) return unsupported();
     snd_stream_config_t config = p->output;
     config.channel[0].volume = (uint8_t)lv; config.channel[1].volume = (uint8_t)rv;
     config.channel[0].pan = (uint8_t)lp; config.channel[1].pan = (uint8_t)rp;
@@ -2000,7 +2122,7 @@ int kosdec_adx_player_set_output(struct kosdec_adx_player *p,
 int kosdec_adx_player_set_pan(struct kosdec_adx_player *p, unsigned channel, int pan) {
     if(!valid(p) || channel > 1 || (pan != KOSDEC_ADX_PAN_AUTO && (pan < -15 || pan > 15)) ||
        p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
-    if(p->retained_offsets) return unsupported();
+    if(p->retained_offsets || p->ordinary_pcm) return unsupported();
     snd_stream_config_t config = p->output;
     config.channel[channel].pan = output_pan(pan,channel,p->info.channels);
     if(has_output(p) &&
@@ -2030,7 +2152,7 @@ int kosdec_adx_player_get_filter_settings(const struct kosdec_adx_player *p,
 int kosdec_adx_player_set_rate(struct kosdec_adx_player *p, uint32_t hz) {
     if(!valid(p) || (hz && (hz < 8000 || hz > 48000)) ||
        p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
-    if(p->retained_pcm || p->ordinary_reprime_pending) return unsupported();
+    if(p->retained_pcm || p->ordinary_reprime_pending || p->ordinary_stereo) return unsupported();
     if(p->sound != SND_STREAM_INVALID) {
         uint32_t rate = hz ? hz : p->info.sample_rate;
         if(rate < 8000 || rate > 48000) return bad();
@@ -2168,6 +2290,10 @@ static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
         if(snd_retained_pcm_stop(p->retained_pcm,timeout_ms) < 0) goto retain;
         p->retained_stopped = true;
     }
+#endif
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+    if(p->ordinary_pcm && snd_ordinary_pcm16_stop(p->ordinary_pcm,timeout_ms) < 0)
+        goto retain;
 #endif
     if(p->sound != SND_STREAM_INVALID && !p->ordinary_reprime_pending) {
         if(snd_stream_stop_ex(p->sound,timeout_ms) < 0) goto retain;

@@ -10,6 +10,12 @@ ADX_RETAINED_GAIN ?= 0
 ADX_RETAINED_START_TL ?= 0
 RETAINED_PCM_INCLUDE ?= $(KOS_BASE)/kernel/arch/dreamcast/sound
 RETAINED_CLOCK_FLAGS = -DMEDIA_ADX_RETAINED_CLOCK -I"$(RETAINED_PCM_INCLUDE)"
+ADX_ORDINARY_STEREO ?= 0
+ORDINARY_PCM16_INCLUDE ?= $(KOS_BASE)/kernel/arch/dreamcast/sound
+ifeq ($(ADX_ORDINARY_STEREO),1)
+BUILD ?= .build/ordinary-stereo$(if $(filter 1,$(ADX_RETAINED_CLOCK)),-retained$(if $(filter 1,$(ADX_RETAINED_START_TL)),-start-tl)$(if $(filter 1,$(ADX_RETAINED_GAIN)),-gain))
+$(BUILD)/sh4/player.o: PRIVATE_ORDINARY_FLAGS = -DMEDIA_ADX_ORDINARY_STEREO -I"$(ORDINARY_PCM16_INCLUDE)"
+endif
 ifneq ($(filter 1,$(ADX_RETAINED_GAIN) $(ADX_RETAINED_START_TL)),)
 ifneq ($(ADX_RETAINED_CLOCK),1)
 $(error ADX_RETAINED_GAIN and ADX_RETAINED_START_TL require ADX_RETAINED_CLOCK=1)
@@ -163,7 +169,7 @@ sanitize: $(BUILD)/sanitize/recovery_player $(BUILD)/sanitize/sfa $(BUILD)/sanit
 
 $(BUILD)/sh4/%.o: src/%.c $(HEADERS) Makefile
 	mkdir -p $(@D)
-	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) $(PRIVATE_PLAYER_FLAGS) -MMD -MP -c $< -o $@
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) $(PRIVATE_PLAYER_FLAGS) $(PRIVATE_ORDINARY_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/host-test/%.o: src/%.c $(HEADERS) Makefile
 	mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) $(INCLUDES) -DMEDIA_ADX_MATH_HOST_TEST -MMD -MP -c $< -o $@

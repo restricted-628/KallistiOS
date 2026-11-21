@@ -108,6 +108,7 @@ struct kosdec_adx_attenuation_status {
     int error;
 };
 struct snd_retained_pcm;
+struct snd_ordinary_pcm16;
 struct kosdec_adx_compat_service;
 struct kosdec_adx_compat_controls {
     int8_t direct_db, effect_db, transpose, detune;
@@ -179,6 +180,12 @@ struct kosdec_adx_player {
     uint32_t linked_reload_sectors;
     bool linked_reload_clamp;
     bool ordinary_reprime_pending;
+    bool ordinary_stereo;
+    struct snd_ordinary_pcm16 *ordinary_pcm;
+    struct {
+        uint64_t source_first;
+        uint32_t source_frames;
+    } ordinary_halves[2];
 };
 /* All player APIs are serialized on one ordinary owner thread, not an IRQ,
    callback or shared fiber carrier. The private producer owns the source
@@ -508,15 +515,20 @@ int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *, int
    of the output keeps its actual rate, and a replacement player starts fresh. */
 int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,
     int32_t semitones, int32_t cents);
-/* On the player owner thread, request live transpose for a PLAYING ordinary
-   mono compatibility title. Zero means the frequency command was admitted.
-   The output rate in get_info records admission; device application is
-   separate. Preparation, stereo, retained and shutdown return ENOTSUP
-   before changing the requested cache. On an eligible player the pair is
-   cached even if the request exceeds the stock unit domain (ERANGE), no
-   exact rate fits 8000..48000 Hz (ENOTSUP), or a nonzero native Hz override
-   takes precedence (EBUSY). A backend error preserves the last admitted
-   rate and requires checked STOP before fresh playback. */
+/* Opt in after binding a READY compatibility title with a direct, unlinked
+   ADX source. Requires the fork's ADX_ORDINARY_STEREO=1 build and a
+   stereo PCM16 source/rate in 8000..48000 Hz. Sound storage is 8192..32768
+   frames per channel, divisible by 32. This output is exclusive with the
+   retained clock, supports one binding until checked stop and keeps its
+   allocation after stop. Live pan, gain, routing and native rate setters
+   are unavailable on this output. */
+int kosdec_adx_compat_player_enable_stereo_transpose(struct kosdec_adx_player *);
+/* Request live transpose for a PLAYING ordinary compatibility title.
+   Mono success means host queue admission. Opted-in stereo success means
+   both slot updates were acknowledged. The slots can apply separately.
+   An eligible player's requested cache updates even when conversion or
+   submission fails. get_info reports the last admitted rate, and a hard
+   backend failure requires checked STOP. Retained playback is excluded. */
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *,
     int32_t semitones, int32_t cents);
 /* Checked linear0..255 per-channel gain and pan (0left,128center,255right).
