@@ -531,29 +531,29 @@ int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,
     int32_t semitones, int32_t cents);
 /* Opt in after binding a READY compatibility title with a direct, unlinked
    ADX source. Requires the fork's ADX_ORDINARY_STEREO=1 build and a
-   stereo PCM16 source/rate in 8000..48000 Hz. Sound storage is 8192..32768
+   stereo PCM16 source/rate in 8000..48000 Hz. Sound storage is 8192..65504
    frames per channel, divisible by 32. This output is exclusive with the
    retained clock, supports one binding until checked stop and keeps its
    allocation after stop. Live pan, gain, routing and native rate setters
    are unavailable on this output. */
 int kosdec_adx_compat_player_enable_stereo_transpose(struct kosdec_adx_player *);
-/* Opt a READY compatibility title into checked ordinary mono PCM16, nominal
-   source time and 8–48 kHz live pitch. Use a direct finite mono ADX source and
-   a 16,384-frame sound ring. Requires the fork's ordinary PCM16 backend. */
+/* Opt a READY compatibility title into checked ordinary mono PCM16 and
+   nominal source time. Use a direct finite mono ADX source with the
+   same ring geometry as checked stereo. */
 int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *);
 /* Request live transpose for a PLAYING ordinary compatibility title.
-   Opted-in stereo also accepts a decoded tail while its last qualified
+   Checked ordinary playback also accepts a decoded tail while its last qualified
    slot-zero cursor still has source PCM. Default mono success means host
    queue admission. With a checked ordinary output, success means every
    participating slot acknowledged its update. Stereo slots can apply separately.
-   Stereo live rates above 48000 Hz through 88200 Hz require the full
-   32768-frame ring per channel. Service must keep up with the live rate.
+   Checked ordinary live rates above 48000 Hz require at least 32768
+   ring frames per channel. Above 88200 Hz use 65504. EAGAIN before
+   posting preserves the admitted rate. Service and explicitly retry.
    An eligible player's requested cache updates even when conversion or
    submission fails. get_info reports the last admitted rate, and a hard
    backend failure requires checked STOP. The Flycast pause profile admits
-   22,050 to 44,100 Hz in PLAYING with no pending or held cut. EAGAIN there
-   preserves the admitted rate. Service and explicitly retry. Following
-   resume, the device keeps the admitted pitch and re-starts its phase.
+   22,050 to 44,100 Hz in PLAYING with no pending or held cut. Following
+   resume, the device keeps the admitted pitch and resets its phase.
    Retained playback is excluded. */
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *,
     int32_t semitones, int32_t cents);

@@ -8,6 +8,13 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The public checked mono and stereo ADX players now support the full
+  live pitch-word range verified for running 8–44.1 kHz source titles.
+  Startup limits are unchanged. If a refill is needed before a pitch
+  update, service the player and retry; the previous rate stays in use.
+  A decoded tail still accepts updates while real samples remain to play.
+  Changing pitch on an already paused title remains unsupported.
+
 - The private ordinary PCM16 renderer now uses the same live-rate check
   for one voice as for stereo. Both Flycast BIOS CPU modes passed mono
   playback at 3,997 Hz with an 8,192-frame ring and at 176,400 and

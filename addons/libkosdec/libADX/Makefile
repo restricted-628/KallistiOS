@@ -389,6 +389,11 @@ ifeq ($(ADX_ORDINARY_STEREO),1)
 ordinary-mono-clock-test-elf: $(BUILD)/sh4/adx_ordinary_mono_clock_test.elf
 $(BUILD)/sh4/adx_ordinary_mono_clock_test.elf: tests/ordinary_mono_clock.c $(BUILD)/sh4/libADX.a
 	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) -o $@ $^ -lm
+.PHONY: ordinary-wide-transpose-test-elf
+ADX_WIDE_TRANSPOSE_ELFS = $(BUILD)/sh4/adx_ordinary_wide_transpose_1.elf $(BUILD)/sh4/adx_ordinary_wide_transpose_2.elf
+ordinary-wide-transpose-test-elf: $(ADX_WIDE_TRANSPOSE_ELFS)
+$(ADX_WIDE_TRANSPOSE_ELFS): $(BUILD)/sh4/adx_ordinary_wide_transpose_%.elf: tests/ordinary_wide_transpose.c $(BUILD)/sh4/libADX.a
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) -I"$(ORDINARY_PCM16_INCLUDE)" -DTEST_CHANNELS=$* -o $@ $^ -lm
 endif
 
 # Optional fork-native integration exerciser. Supply your own /cd/test.adx.

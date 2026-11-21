@@ -627,17 +627,21 @@ Build a separate archive with `ADX_ORDINARY_STEREO=1` against the fork's
 ordinary PCM16 backend. Bind a READY compatibility title to a direct
 unlinked stereo ADX stream, then call
 `kosdec_adx_compat_player_enable_stereo_transpose` before starting.
-Use 8192–32768 sound frames per channel in multiples of 32 and source
+Use 8192–65504 sound frames per channel in multiples of 32 and source
 and initial output rates in 8000–48000 Hz. Initialize the KOS stream pool for
 two channels. Keep the player and its provider storage through checked
 stop and producer shutdown. Rebuild consumers with the matching headers.
 
 Use `kosdec_adx_compat_player_set_live_transpose` to apply the cached
 semitone/cents request through separately acknowledged slot updates.
-Live rates above 48000 Hz through 88200 Hz require 32768 frames per
-channel. Service and the producer must keep up with the higher rate.
-The 88.2 kHz stereo test uses one-millisecond service sleeps. Unsupported
-rates or ring sizes leave the last admitted rate active.
+Checked ordinary mono and stereo output accepts exact live pitch
+representatives from 1889 through 186736 Hz. Rates above 48000 Hz require
+at least 32768 frames per channel. Above 88200 Hz use a 65504-frame ring,
+at least 65536 queue frames, 131072 PCM samples of queue storage, and
+65505 scratch samples. Service and production must keep up with the
+output rate. Unsupported requests preserve the admitted rate.
+`EAGAIN` before an UPDATE is posted preserves playback and the last
+admitted rate. Service the player and explicitly retry.
 On a partial update or refill failure, preserve ownership and complete
 checked stop, retrying it after a timeout. Keep the played reservation.
 Complete stop before shutting down sound or resetting G2. The private
@@ -656,16 +660,23 @@ default paths available.
 ### Ordinary mono clock and live transpose
 
 Use the fork's ordinary PCM16 build and bind a READY title to one finite,
-direct mono ADX source with a 16,384-frame sound ring. Enable
-`kosdec_adx_compat_player_enable_mono_clock` before starting. The live
-transpose setter admits exact representable rates from 8 to 48 kHz and
-requires acknowledgement from the one output slot. Time uses that slot's
+direct mono ADX source. Enable `kosdec_adx_compat_player_enable_mono_clock`
+before starting. Ring geometry and live rate admission follow the checked
+ordinary profile above. A live change requires acknowledgement from the
+one output slot. Time uses that slot's
 qualified position and the nominal source rate. PCM padding does not count
 toward source time. The optional logical PLAYEND gate uses actual source
 drain and checked stop while keeping the played allocation. Build
 `ordinary-mono-clock-test-elf` with `ADX_ORDINARY_STEREO=1` against the
 matching backend. Generate the mono fixture with
-`tests/generate_flycast_pause.py proof 81920 1`.
+`tests/generate_flycast_pause.py proof 81920 1`. For the wider mono and
+stereo tests build `ordinary-wide-transpose-test-elf`. Generate the
+44,100 Hz `proof` track with 393216 frames and the 8,000 Hz `fresh` track
+with 49152 frames, using the channel count for the selected ELF.
+The high-rate stereo interpreter run starved with 65,536 producer queue
+frames and passed with 262,144; both runs used the same 65,504-frame
+sound ring per channel. Ring admission alone does not guarantee that the
+decoder will keep up.
 
 ### Flycast active pause
 

@@ -13,7 +13,7 @@ channels = int(sys.argv[3]) if len(sys.argv) >= 4 else 2
 assert channels in (1, 2)
 if len(sys.argv) == 5:
     rate = int(sys.argv[4])
-    assert 32000 <= rate <= 44100
+    assert 8000 <= rate <= 44100
 state = 15106 if name == "proof" else 115901
 def step():
     global state

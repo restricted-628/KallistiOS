@@ -6,4 +6,7 @@
 /* Resolve an ordinary startup representative Hz, or zero if unsupported. */
 uint32_t media_adx_initial_pitch_rate(uint32_t source_rate, int units);
 
+/* Resolve a checked ordinary live representative Hz, or zero if unsupported. */
+uint32_t media_adx_live_pitch_rate(uint32_t source_rate, int units);
+
 #endif

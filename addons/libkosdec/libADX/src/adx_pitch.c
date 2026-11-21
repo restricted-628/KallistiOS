@@ -1,4 +1,4 @@
-/* Original startup conversion for the Sega Library 2.00J PCM profile. */
+/* Original PCM pitch conversion for the Sega Library 2.00J PCM profile. */
 #include "adx_pitch.h"
 #include <math.h>
 #include <stddef.h>
@@ -22,7 +22,8 @@ static const uint16_t rounded_up_rates[] = {
     43360, 43507, 43951, 45382, 45464, 46313, 46470, 46491, 46596, 46849, 47509,
 };
 
-uint32_t media_adx_initial_pitch_rate(uint32_t source_rate, int units) {
+static uint32_t pcm_pitch_rate(uint32_t source_rate, int units,
+    unsigned min_hz, unsigned max_hz) {
     if(source_rate < 8000 || source_rate > 48000 || units < -6399 || units > 6399)
         return 0;
 
@@ -52,7 +53,15 @@ uint32_t media_adx_initial_pitch_rate(uint32_t source_rate, int units) {
        For example, 11024 Hz encodes a word for approximately 5512 Hz. */
     unsigned rate = (octave_hz * (1024 + fns) + 1023) / 1024;
     const unsigned end = (octave_hz * (1025 + fns) + 1023) / 1024;
-    if(rate < 8000)
-        rate = 8000;
-    return rate < end && rate <= 88200 ? rate : 0;
+    if(rate < min_hz)
+        rate = min_hz;
+    return rate < end && rate <= max_hz ? rate : 0;
+}
+
+uint32_t media_adx_initial_pitch_rate(uint32_t source_rate, int units) {
+    return pcm_pitch_rate(source_rate,units,8000,88200);
+}
+
+uint32_t media_adx_live_pitch_rate(uint32_t source_rate, int units) {
+    return pcm_pitch_rate(source_rate,units,1889,186736);
 }
