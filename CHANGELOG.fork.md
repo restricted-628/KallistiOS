@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — libADX starting volume during preparation
+
+- For a new retained stream that opts into initial attenuation, decoder setup
+  reads the cached 16-bit volume. A later request made before playback starts
+  sets the starting level from the full signed argument. Volume readback still
+  returns the cached 16-bit value. Cancelling preparation discards the staged
+  level; reusing an existing stream does not apply it.
+
 ## 2026-11-21 — Retained mono playback cursor check
 
 - When a fresh observation alone cannot establish that the playback cursor

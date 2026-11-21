@@ -56,6 +56,7 @@ static int failed(struct kosdec_adx_player *p, int error) {
     if(!p->info.first_error) p->info.first_error = error ? error : EIO;
     p->info.state = KOSDEC_ADX_PLAYER_FAILED;
     p->info.ready_start = false;
+    p->compat_initial_tl = 0;
     errno = error ? error : EIO;
     return -1;
 }
@@ -197,6 +198,7 @@ static int start_source(struct kosdec_adx_player *p) {
         p->compat_ready_start = false;
         p->compat_decode_ended = false;
         p->compat_preoutput_playing = false;
+        p->compat_initial_tl = 0;
         if(p->compat_phased && (pipe->stream || pipe->sequence))
             p->producer.input_capacity = sizeof(pipe->stream->input);
         p->compat_chained = pipe->sequence || (pipe->stream && pipe->stream->linked) ||
@@ -706,6 +708,7 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     p->pcm_enabled = false;
     p->info.ready_start = false;
     p->info.state = KOSDEC_ADX_PLAYER_RELEASING;
+    p->compat_initial_tl = 0;
     p->vsync_generation = 0;
     cancel_producer(p);
     /* Executor destruction requests stop/wakes and joins its carrier. A failed
@@ -910,7 +913,7 @@ static int start_output(struct kosdec_adx_player *p) {
             return -1;
 #ifdef MEDIA_ADX_RETAINED_START_TL
         if(p->compat_initial_attenuation) {
-            uint8_t tl = legacy_gain_tl(p->compat_requested_attenuation);
+            uint8_t tl = p->compat_initial_tl;
             if(!snd_retained_pcm_start_with_tl(p->retained_pcm,tl,tl))
                 return 1;
             int error = errno;
@@ -1268,7 +1271,13 @@ static int compat_dispatch(void *context, enum kosdec_adx_compat_state state) {
         return failed(p,errno);
     if(poll_title_output(p) < 0)
         return failed(p,errno);
-    return p->callback_failed ? failed(p,p->info.first_error) : 0;
+    if(p->callback_failed)
+        return failed(p,p->info.first_error);
+#ifdef MEDIA_ADX_RETAINED_START_TL
+    if(p->compat_initial_attenuation && !has_output(p))
+        p->compat_initial_tl = legacy_gain_tl(p->compat_requested_attenuation);
+#endif
+    return 0;
 }
 
 static int compat_observe(void *context, struct kosdec_adx_compat_observation *out) {
@@ -1415,6 +1424,7 @@ static int compat_detach(void *context) {
     p->compat_preoutput_playing = false;
     p->compat_requested_attenuation = 0;
     p->compat_initial_attenuation = false;
+    p->compat_initial_tl = 0;
     p->compat_controls = (struct kosdec_adx_compat_controls){.effect_db = -45};
     p->compat_start_pitch = false;
     p->compat_start_rate = 0;
@@ -1612,6 +1622,11 @@ int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *p,
     p->compat_requested_attenuation = attenuation_halfword(tenths_db);
     if(p->info.state == KOSDEC_ADX_PLAYER_READY || p->info.state == KOSDEC_ADX_PLAYER_PREFILL ||
        p->info.state == KOSDEC_ADX_PLAYER_STOPPED) {
+#ifdef MEDIA_ADX_RETAINED_START_TL
+        if(p->compat_initial_attenuation && p->info.state == KOSDEC_ADX_PLAYER_PREFILL &&
+           p->compat_prefill_frames && !has_output(p))
+            p->compat_initial_tl = legacy_gain_tl(tenths_db);
+#endif
         *request = 0;
         return 0;
     }
@@ -1981,6 +1996,7 @@ static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     p->info.state = KOSDEC_ADX_PLAYER_STOPPING;
     p->pcm_enabled = false;
     p->info.ready_start = false;
+    p->compat_initial_tl = 0;
     if(p->source_bound) cancel_producer(p);
     if(p->worker) fiber_service_request_stop(p->worker);
 #ifdef MEDIA_ADX_RETAINED_START_TL

@@ -167,6 +167,7 @@ struct kosdec_adx_player {
     int16_t requested_attenuation;
     int16_t compat_requested_attenuation;
     bool compat_initial_attenuation;
+    uint8_t compat_initial_tl; /* Staged by the owner for a fresh lease. */
     struct kosdec_adx_compat_controls compat_controls;
     uint32_t compat_start_rate;
     int16_t compat_start_pitch_units;
@@ -432,9 +433,10 @@ int kosdec_adx_player_get_requested_attenuation(const struct kosdec_adx_player *
 /* Compatibility-bound owner only. Cache the signed low halfword of the
    original request before attempting live admission. An inactive request
    (READY, PREFILL or STOPPED) updates the cache and returns request ID zero.
-   Initial attenuation uses this cache only after explicit opt-in below.
-   During playback, forward the
-   full signed request to the existing optional retained-gain adapter.
+   With initial attenuation enabled, a request after compatibility DECINFO
+   and before fresh lease admission stages the full signed argument.
+   During playback, forward the full signed request to the existing
+   optional retained-gain adapter.
    A live error leaves the request ID unchanged and preserves the new
    requested setting. Nonzero IDs use the normal acknowledgement query. */
 int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *,
@@ -445,7 +447,8 @@ int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_p
     int16_t *tenths_db);
 /* READY compatibility owner with retained clock selected. Enable exact stock
    initial device attenuation on the first new mono or stereo output lease.
-   START uses the cached signed volume, as for stock source preparation.
+   DECINFO stages the cached signed volume. A subsequent request before
+   lease admission replaces that setting using its full signed argument.
    Requires ADX_RETAINED_START_TL and supporting firmware. There is no live
    request ID. If START fails after attempting hardware, complete checked STOP.
    Reusing an active output does not apply an initial setting again. */

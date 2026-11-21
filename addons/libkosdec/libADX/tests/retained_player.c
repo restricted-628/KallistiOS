@@ -32,6 +32,7 @@ struct snd_retained_pcm {
 #endif
 #ifdef MEDIA_ADX_RETAINED_GAIN
     bool gain_supported, gain_retry, gain_reject_right;
+    unsigned gain_calls;
     snd_retained_gain_status_t gain;
 #endif
 };
@@ -134,6 +135,7 @@ static int service_gain(snd_retained_pcm_t *pcm) {
 
 int snd_retained_pcm_gain_begin(snd_retained_pcm_t *pcm, unsigned left_tl,
     unsigned right_tl, uint64_t *request) {
+    ++backend.gain_calls;
     CHECK(pcm == &backend && !pcm->stopped && pcm->starts && left_tl <= 255 && right_tl <= 255);
     if(!pcm->gain_supported) { errno = ENOTSUP; return -1; }
     snd_retained_gain_status_t previous = pcm->gain;
@@ -790,7 +792,7 @@ static void compat_initial_attenuation(void) {
         }
 #endif
         if(cases[k].error)
-            CHECK(info(f).first_error==cases[k].error);
+            CHECK(info(f).first_error==cases[k].error && !p->compat_initial_tl);
         else
             CHECK(info(f).state==KOSDEC_ADX_PLAYER_SOURCE_END && info(f).source_frames==65);
         CHECK(!kosdec_adx_player_stop(p,1000));
@@ -808,6 +810,116 @@ static void compat_initial_attenuation(void) {
     }
     puts("ADX_COMPAT_INITIAL_ATTENUATION_PASS opt-in, readback scale and checked stop");
 }
+
+#ifdef MEDIA_ADX_RETAINED_START_TL
+static void prep_gain_request(struct kosdec_adx_player *p, int32_t gain) {
+    uint64_t id=UINT64_MAX;
+    int16_t cached;
+    CHECK(!kosdec_adx_compat_player_set_attenuation(p,gain,&id) && !id);
+    CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-188);
+    CHECK(!mock_updates);
+#ifdef MEDIA_ADX_RETAINED_GAIN
+    CHECK(!backend.gain_calls);
+#endif
+}
+
+static void prep_gain_dispatch(struct kosdec_adx_compat_service *service, struct fixture *f,
+                               uint64_t *now, enum kosdec_adx_player_state target, bool hold) {
+    bool ready=false;
+    for(unsigned n=0;n<32;++n) {
+        struct kosdec_adx_compat_result result;
+        *now+=13332;
+        CHECK(!kosdec_adx_compat_exec_server(service,&result));
+        CHECK(!kosdec_adx_compat_player_is_ready_start(&f->player,&ready));
+        if(hold?ready:info(f).state==target) return;
+    }
+    CHECK(false);
+}
+
+static void compat_prepared_attenuation(void) {
+    const struct {
+        bool enabled, paused, cancel, rebind;
+        unsigned writes, tl;
+        int32_t late[2];
+    } cases[] = {
+        {true,false,false,false,0,60,{0}},
+        {true,false,false,false,1,60,{-188}},
+        {true,false,false,true,1,255,{-65724}},
+        {true,true,false,false,1,0,{65348}},
+        {true,false,false,false,2,0,{-65724,65348}},
+        {true,false,false,false,2,255,{65348,-65724}},
+        {true,false,true,false,1,255,{-65724}},
+        {false,false,false,false,1,0,{-65724}}
+    };
+    for(unsigned k=0;k<sizeof(cases)/sizeof(cases[0]);++k) {
+        struct retained_fixture t;
+        retained_init(&t,false);
+        struct fixture *f=&t.f;
+        struct kosdec_adx_player *p=&f->player;
+        uint64_t now=0;
+        const struct kosdec_adx_compat_config config={.clock_us=compat_clock,.clock_context=&now};
+        struct kosdec_adx_compat_service service;
+        struct kosdec_adx_compat_title title;
+        struct kosdec_adx_compat_result result;
+        CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+        CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+        if(cases[k].enabled)
+            CHECK(!kosdec_adx_compat_player_enable_initial_attenuation(p));
+        if(cases[k].paused)
+            CHECK(!kosdec_adx_compat_player_pause(p,true));
+        else
+            CHECK(!kosdec_adx_player_set_wait_start(p,true));
+
+        f->wait=true;
+        CHECK(!kosdec_adx_player_start(p));
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        enum kosdec_adx_compat_state state;
+        CHECK(!kosdec_adx_compat_player_get_state(p,&state) && state==KOSDEC_ADX_COMPAT_DECINFO);
+        prep_gain_request(p,-65724);
+        CHECK(!p->compat_initial_tl);
+        f->wait=false;
+        prep_gain_dispatch(&service,f,&now,KOSDEC_ADX_PLAYER_PREFILL,true);
+        CHECK(!kosdec_adx_compat_player_get_state(p,&state) &&
+              state==(cases[k].paused?KOSDEC_ADX_COMPAT_PLAYING:KOSDEC_ADX_COMPAT_PREP));
+        CHECK(!backend.opens && !backend.starts);
+        CHECK(p->compat_initial_tl==(cases[k].enabled?60:0));
+        for(unsigned n=0;n<cases[k].writes;++n)
+            prep_gain_request(p,cases[k].late[n]);
+        if(cases[k].cancel) {
+            CHECK(p->compat_initial_tl==cases[k].tl);
+            CHECK(!kosdec_adx_player_cancel_source(p) && !backend.opens && !p->compat_initial_tl);
+            int16_t cached;
+            CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-188);
+            kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
+            CHECK(!kosdec_adx_player_bind_source(p,&f->stream,NULL));
+        }
+        if(cases[k].paused)
+            CHECK(!kosdec_adx_compat_player_pause(p,false));
+        else
+            CHECK(!kosdec_adx_player_set_wait_start(p,false));
+        prep_gain_dispatch(&service,f,&now,KOSDEC_ADX_PLAYER_SOURCE_END,false);
+        unsigned expected=cases[k].cancel?60:cases[k].tl;
+        CHECK(backend.opens==1 && backend.starts==1 && backend.initial_calls==cases[k].enabled);
+        CHECK(backend.initial_left==expected && backend.initial_right==expected);
+        if(cases[k].rebind) {
+            CHECK(!kosdec_adx_player_release_source(p));
+            CHECK(!kosdec_adx_player_set_wait_start(p,true));
+            kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
+            CHECK(!kosdec_adx_player_bind_source(p,&f->stream,NULL));
+            prep_gain_dispatch(&service,f,&now,KOSDEC_ADX_PLAYER_PREFILL,true);
+            prep_gain_request(p,65348);
+            CHECK(!p->compat_initial_tl);
+            CHECK(!kosdec_adx_player_set_wait_start(p,false));
+            prep_gain_dispatch(&service,f,&now,KOSDEC_ADX_PLAYER_SOURCE_END,false);
+            CHECK(backend.opens==1 && backend.starts==1 && backend.initial_calls==1 &&
+                  backend.initial_left==expected);
+        }
+        CHECK(!kosdec_adx_player_stop(p,1000) && !kosdec_adx_compat_unbind(&service,0));
+        free(f->data);
+    }
+    puts("ADX_COMPAT_PREP_GAIN_PASS DECINFO boundary, last request, held starts, cancellation and reuse");
+}
+#endif
 
 static void compat_routing_excludes_retained(void) {
     struct retained_fixture t;
@@ -1279,6 +1391,9 @@ int main(void) {
     compat_routing_excludes_retained();
     compat_initial_retained_pitch();
     compat_initial_attenuation();
+#ifdef MEDIA_ADX_RETAINED_START_TL
+    compat_prepared_attenuation();
+#endif
     compat_playend();
     split_records(16);
     split_records(2);

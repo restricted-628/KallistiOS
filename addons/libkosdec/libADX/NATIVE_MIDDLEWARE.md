@@ -192,18 +192,22 @@ Use the compatibility attenuation setter and getter for stock requested
 volume readback. The title keeps the signed low halfword, including before
 start, through checked STOP, and on live admission failure. A new binding
 starts at zero. Recovery that replaces the player in the same slot keeps
-the setting. Request ID zero confirms a cached request. The initial
-attenuation opt-in uses the signed cached value at the first retained
-START. A live submission uses the original full request and its nonzero
+the setting. Request ID zero confirms a cached request. A live
+submission uses the original full request and its nonzero
 ID can be checked with the native acknowledgement query. The native
 requested getter reports the last locally admitted live device request.
 
 For mono or stereo initial attenuation, build with `ADX_RETAINED_CLOCK=1`
 and `ADX_RETAINED_START_TL=1`, select the retained clock, and call
 `kosdec_adx_compat_player_enable_initial_attenuation` on the READY title.
-The first lease applies the stock zero-fade TL for the signed cached
-volume before synchronized key-on. A reused output keeps its current
-device setting. A replacement title can opt in separately.
+Successful DECINFO stages the stock zero-fade TL from the cached signed
+halfword. A later request before the first retained lease opens replaces
+that level using the full signed argument, while the getter still reads
+the halfword. START applies the staged TL before synchronized key-on.
+Cancellation clears staging, and the next DECINFO uses the latest
+cached value. A reused output keeps its device setting. A replacement
+title can opt in separately. Rebuild consumers with the matching header
+and archive.
 Firmware without the checked TL capability fails startup with ENOTSUP.
 A failed close of an unstarted lease is reported in `stop_error` while
 `first_error` records startup ENOTSUP. STOP retries that close. A failed

@@ -692,8 +692,9 @@ Initial retained attenuation is opt-in for mono and stereo. Build with
 `snd_retained_start_tl.h` privately. On a READY compatibility player,
 select the retained clock, enable initial attenuation with
 `kosdec_adx_compat_player_enable_initial_attenuation`, and set the
-requested volume before start. The first lease applies the cached
-signed volume as stock TL before key-on. See
+requested volume before start. DECINFO stages the signed cached value.
+A later request before the first lease opens stages its full signed
+argument. The lease applies the selected stock TL before key-on. See
 [native middleware](NATIVE_MIDDLEWARE.md) for the startup and error contract.
 
 Live retained stereo attenuation is experimental. Keep
