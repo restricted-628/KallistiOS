@@ -643,9 +643,12 @@ checked stop, retrying it after a timeout. Keep the played reservation.
 Complete stop before shutting down sound or resetting G2. The private
 output owns its DMA through callback retirement.
 
-The compatibility clock uses slot 0, counts decoded source frames
-only, and divides by nominal source Hz. Padding and changed output
-pitch do not change the denominator. The optional retained clock,
+Live transpose can also apply after decoding ends while the last
+qualified slot-0 cursor still has real source PCM. A right-only remainder
+or padded silence does not keep the title eligible. The compatibility
+clock uses slot 0, counts decoded source frames only, and divides by
+nominal source Hz. Padding and changed output pitch do not change the
+denominator. The optional retained clock,
 live pan/gain/routing and native frequency overrides use other output
 profiles. The build and player opt-ins leave the existing mono and
 default paths available.

@@ -8,6 +8,10 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Ordinary opt-in stereo ADX playback accepts a live transpose after decoding
+  ends while slot 0 still has real source frames to play. An all-padding
+  tail, a right-only tail, or a stopped player does not qualify.
+
 - Opt-in libADX players can transpose a playing stereo ADX stream up to
   88.2 kHz with a 32,768-frame ring per channel. Smaller rings keep the
   8–48 kHz range and reject unsupported changes without interrupting playback.

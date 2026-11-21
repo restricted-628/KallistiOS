@@ -564,7 +564,7 @@ static bool compat_single_title(const struct kosdec_adx_player *p) {
 }
 
 #ifdef MEDIA_ADX_ORDINARY_STEREO
-static int ordinary_source_frames(const struct kosdec_adx_player *p, uint32_t *frames) {
+static int ordinary_source_frames(const struct kosdec_adx_player *p, uint64_t *frames) {
     snd_ordinary_pcm16_status_t status;
     if(snd_ordinary_pcm16_status(p->ordinary_pcm,&status) < 0) return -1;
     if(status.error) {
@@ -581,8 +581,8 @@ static int ordinary_source_frames(const struct kosdec_adx_player *p, uint32_t *f
     unsigned index = (unsigned)(status.frames[0] / half) % 2;
     uint32_t within = status.frames[0] % half;
     uint32_t available = p->ordinary_halves[index].source_frames;
-    *frames = (uint32_t)(p->ordinary_halves[index].source_first +
-                         (within < available ? within : available));
+    *frames = p->ordinary_halves[index].source_first +
+        (within < available ? within : available);
     return 0;
 }
 #endif
@@ -595,7 +595,9 @@ static int compat_live_time(struct kosdec_adx_player *p, struct kosdec_adx_time 
     bool at_end = false;
 #ifdef MEDIA_ADX_ORDINARY_STEREO
     if(p->ordinary_pcm) {
-        if(ordinary_source_frames(p,&frames) < 0) return -1;
+        uint64_t played;
+        if(ordinary_source_frames(p,&played) < 0) return -1;
+        frames = (uint32_t)played;
     } else
 #endif
     {
@@ -2082,10 +2084,22 @@ int kosdec_adx_compat_player_enable_stereo_transpose(struct kosdec_adx_player *p
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
     int32_t semitones, int32_t cents) {
     if(!valid(p)) return bad();
-    if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING || !p->source_bound ||
-       p->retained_offsets ||
+    if(!p->source_bound || p->retained_offsets ||
        (!p->ordinary_pcm && (p->sound == SND_STREAM_INVALID || p->info.channels != 1)))
         return unsupported();
+    if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING) {
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+        if(!p->ordinary_pcm || p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END)
+            return unsupported();
+        uint64_t played;
+        if(ordinary_source_frames(p,&played) < 0) return -1;
+        /* Stock's renderer measures unread PCM at slot zero. The other
+           slot still participates in the checked rate change. */
+        if(played >= p->info.source_frames) return unsupported();
+#else
+        return unsupported();
+#endif
+    }
     int units;
     if(cache_pitch_units(p,semitones,cents,&units) < 0) return -1;
     if(p->requested_rate) return busy();

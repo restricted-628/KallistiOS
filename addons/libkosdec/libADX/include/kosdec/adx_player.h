@@ -524,7 +524,8 @@ int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,
    are unavailable on this output. */
 int kosdec_adx_compat_player_enable_stereo_transpose(struct kosdec_adx_player *);
 /* Request live transpose for a PLAYING ordinary compatibility title.
-   Mono success means host queue admission. Opted-in stereo success means
+   Opted-in stereo also accepts a decoded tail while its last qualified
+   slot-zero cursor still has source PCM. Mono success means host queue admission. Opted-in stereo success means
    both slot updates were acknowledged. The slots can apply separately.
    Stereo live rates above 48000 Hz through 88200 Hz require the full
    32768-frame ring per channel. Service must keep up with the live rate.
