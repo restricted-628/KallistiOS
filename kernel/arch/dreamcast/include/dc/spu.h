@@ -353,6 +353,26 @@ void spu_cdda_pan(int left_pan, int right_pan);
 */
 void spu_master_mixer(int volume, int stereo);
 
+/** \brief Applied CDDA and master mixer settings. */
+typedef struct spu_mixer_status {
+    uint8_t cdda_volume[2]; /**< Left and right volumes, 0-15. */
+    uint8_t cdda_pan[2];    /**< Left and right panning, 0-31. */
+    uint8_t master_volume; /**< Master volume, 0-15. */
+    bool stereo;           /**< True when output panning is enabled. */
+} spu_mixer_status_t;
+
+/** \brief Read the applied CDDA and master mixer settings.
+
+    Read during a stable sound runtime. The snapshot is serialized with
+    the SH-4 mixer setters. Channel arrays are ordered left, right and
+    use the same units as spu_cdda_volume() and spu_cdda_pan().
+
+    \param status Destination for the settings.
+    \retval 0 On success.
+    \retval -1 If status is NULL, with errno set to EINVAL.
+*/
+int spu_mixer_get_status(spu_mixer_status_t *status);
+
 /** \brief  Initialize the SPU.
 
     This function will reset the SPU, clear the sound RAM, reinit the CDDA

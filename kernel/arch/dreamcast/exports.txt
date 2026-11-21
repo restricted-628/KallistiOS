@@ -217,6 +217,7 @@ spu_disable
 spu_cdda_volume
 spu_cdda_pan
 spu_master_mixer
+spu_mixer_get_status
 sq_clr
 sq_cpy
 sq_set

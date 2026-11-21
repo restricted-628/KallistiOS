@@ -361,6 +361,16 @@ void spu_disable(void) {
     spu_reset_chans();
 }
 
+static void spu_cdda_update(uint32_t mask, uint32_t left, uint32_t right) {
+    g2_lock_scoped();
+    g2_fifo_wait();
+
+    uint32_t left_reg = g2_read_32_raw(SNDREGADDR(0x2040));
+    uint32_t right_reg = g2_read_32_raw(SNDREGADDR(0x2044));
+    g2_write_32_raw(SNDREGADDR(0x2040), (left_reg & ~mask) | left);
+    g2_write_32_raw(SNDREGADDR(0x2044), (right_reg & ~mask) | right);
+}
+
 /* Set CDDA volume: values are 0-15 */
 void spu_cdda_volume(int left_volume, int right_volume) {
     if(left_volume > 15)
@@ -369,11 +379,7 @@ void spu_cdda_volume(int left_volume, int right_volume) {
     if(right_volume > 15)
         right_volume = 15;
 
-    g2_fifo_wait();
-    g2_write_32(SNDREGADDR(0x2040),
-                (g2_read_32(SNDREGADDR(0x2040)) & ~0xff00) | (left_volume << 8));
-    g2_write_32(SNDREGADDR(0x2044),
-                (g2_read_32(SNDREGADDR(0x2044)) & ~0xff00) | (right_volume << 8));
+    spu_cdda_update(0xff00, (uint32_t)left_volume << 8, (uint32_t)right_volume << 8);
 }
 
 void spu_cdda_pan(int left_pan, int right_pan) {
@@ -387,11 +393,7 @@ void spu_cdda_pan(int left_pan, int right_pan) {
 
     right_pan &= 0x1f;
 
-    g2_fifo_wait();
-    g2_write_32(SNDREGADDR(0x2040),
-                (g2_read_32(SNDREGADDR(0x2040)) & ~0xff) | (left_pan << 0));
-    g2_write_32(SNDREGADDR(0x2044),
-                (g2_read_32(SNDREGADDR(0x2044)) & ~0xff) | (right_pan << 0));
+    spu_cdda_update(0xff, left_pan, right_pan);
 }
 
 /* Initialize CDDA stuff */
@@ -402,13 +404,41 @@ static void spu_cdda_init(void) {
 
 /* Set master volume (0..15) and mono/stereo settings */
 void spu_master_mixer(int volume, int stereo) {
-    uint32_t val;
+    uint32_t ram_mode = spu_ram_mode();
 
+    g2_lock_scoped();
     g2_fifo_wait();
-    val = g2_read_32(SNDREGADDR(0x2800));
-    g2_write_32(SNDREGADDR(0x2800),
-                (val & ~0x800f) | (volume & 0xf) | (stereo ? 0 : 0x8000) |
-                spu_ram_mode());
+    uint32_t val = g2_read_32_raw(SNDREGADDR(0x2800));
+    g2_write_32_raw(SNDREGADDR(0x2800),
+                    (val & ~0x800f) | (volume & 0xf) | (stereo ? 0 : 0x8000) |
+                    ram_mode);
+}
+
+int spu_mixer_get_status(spu_mixer_status_t *status) {
+    if(!status) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    uint32_t cdda[2];
+    uint32_t master;
+    {
+        g2_lock_scoped();
+        g2_fifo_wait();
+        cdda[0] = g2_read_32_raw(SNDREGADDR(0x2040));
+        cdda[1] = g2_read_32_raw(SNDREGADDR(0x2044));
+        master = g2_read_32_raw(SNDREGADDR(0x2800));
+    }
+
+    for(unsigned int i = 0; i < 2; ++i) {
+        uint32_t pan = cdda[i] & 0x1f;
+        status->cdda_volume[i] = (cdda[i] >> 8) & 0xf;
+        status->cdda_pan[i] = pan & 0x10 ? pan : 15 - pan;
+    }
+
+    status->master_volume = master & 0xf;
+    status->stereo = !(master & 0x8000);
+    return 0;
 }
 
 /* Initialize the SPU; by default it will be left in a state of
