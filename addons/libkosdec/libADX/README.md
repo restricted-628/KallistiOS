@@ -621,6 +621,13 @@ resonance values and `kosdec_adx_player_get_filter_settings` reads them back.
 They persist across source rebinds. The SDK's Manatee route leaves playback
 unchanged by this setting. The producer PCM callback remains separate.
 
+After checked stop of a compatible ordinary stereo handle, the initial
+transpose setter can stage a different rate before re-prime. The last
+applied rate stays visible until the next successful checked START.
+Repeating re-prime uses the same staged setting. An out-of-device-domain
+request remains in the requested cache and the next START uses neutral
+pitch, matching reset and replay on the allocated stock port.
+
 ### Ordinary stereo live transpose
 
 Build a separate archive with `ADX_ORDINARY_STEREO=1` against the fork's

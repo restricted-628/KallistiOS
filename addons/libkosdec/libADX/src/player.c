@@ -946,13 +946,16 @@ int kosdec_adx_player_bind_source(struct kosdec_adx_player *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence) {
     return bind_source(p,stream,sequence,NULL,NULL,NULL,NULL,NULL);
 }
+static bool compat_reprime_port(const struct kosdec_adx_player *p) {
+    return p->compat_service && !p->compat_phased && !p->retained_offsets &&
+        p->info.sources_started && p->sound != SND_STREAM_INVALID &&
+        p->info.channels == 2 && !p->requested_rate && compat_single_title(p);
+}
+
 int kosdec_adx_compat_player_reprime(struct kosdec_adx_player *p, struct kosdec_adx_stream *stream) {
     if(!valid(p) || !stream) return bad();
     if(p->info.state != KOSDEC_ADX_PLAYER_STOPPED) return busy();
-    if(!p->compat_service || p->compat_phased || p->retained_offsets ||
-       !p->info.sources_started || p->sound == SND_STREAM_INVALID || p->info.channels != 2 ||
-       p->compat_start_pitch || p->requested_rate || !compat_single_title(p))
-        return unsupported();
+    if(!compat_reprime_port(p)) return unsupported();
     if(p->compat_service->servicing) return busy();
     if(stream->linked || stream->prepared || stream->seeking || stream->terminal ||
        stream->staged_error || stream->byte_position || stream->input_count || stream->returned_frames)
@@ -1463,17 +1466,27 @@ static int start_output(struct kosdec_adx_player *p) {
     }
 #endif
     if(p->ordinary_reprime_pending) {
+        snd_stream_config_t config = p->output;
+        config.sample_rate = p->info.sample_rate;
+        if(p->compat_start_pitch) {
+            config.sample_rate = media_adx_initial_pitch_rate(p->info.sample_rate,
+                                                             p->compat_start_pitch_units);
+            if(!config.sample_rate) return unsupported();
+        }
+
         /* Checked stop and join preceded binding. From the first START
            attempt onward, cleanup must use checked stop again. */
         p->ordinary_reprime_pending = false;
         snd_stream_set_callback(p->sound,refill);
         snd_stream_set_userdata(p->sound,p);
-        if(snd_stream_start_ex(p->sound,&p->output) < 0)
+        if(snd_stream_start_ex(p->sound,&config) < 0)
             return -1;
         if(p->info.source_frames != p->memory.sound_bytes / 2) {
             errno = p->callback_failed ? EOVERFLOW : EIO;
             return -1;
         }
+        p->output = config;
+        p->info.output_rate = config.sample_rate;
         return 1;
     }
     p->sound = snd_stream_alloc(refill,(int)p->memory.sound_bytes);
@@ -1540,7 +1553,7 @@ static int poll_player(struct kosdec_adx_player *p) {
         if(!kosdec_adx_pipe_get_format(&p->producer.pipe,&rate,&channels)) return failed(p,EPROTO);
         if((has_output(p) || p->ordinary_reprime_pending) &&
            (rate != p->info.sample_rate || channels != p->output.channels)) return failed(p,EPROTO);
-        if(!has_output(p)) {
+        if(!has_output(p) && !p->ordinary_reprime_pending) {
             uint32_t output_rate = p->requested_rate ? p->requested_rate : rate;
             if(output_rate < 8000 || output_rate > 48000) return failed(p,ENOTSUP);
             if(p->compat_start_pitch && !p->requested_rate) {
@@ -2403,12 +2416,23 @@ static int cache_pitch_units(struct kosdec_adx_player *p, int32_t semitones,
 int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *p,
     int32_t semitones, int32_t cents) {
     if(!valid(p)) return bad();
-    if(p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound) return unsupported();
+    const bool stopped = p->info.state == KOSDEC_ADX_PLAYER_STOPPED && compat_reprime_port(p);
+    if(!stopped && (p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound))
+        return unsupported();
     int units;
-    if(cache_pitch_units(p,semitones,cents,&units) < 0) return -1;
+    if(cache_pitch_units(p,semitones,cents,&units) < 0) {
+        if(stopped && errno == ERANGE) {
+            /* A reset followed by a rejected relative pitch starts neutral. */
+            p->compat_start_pitch = false;
+            p->compat_start_rate = 0;
+        }
+        return -1;
+    }
+    uint32_t rate = stopped ? media_adx_initial_pitch_rate(p->info.sample_rate,units) : 0;
+    if(stopped && !rate) return unsupported();
     p->compat_start_pitch_units = (int16_t)units;
     p->compat_start_pitch = true;
-    p->compat_start_rate = 0;
+    p->compat_start_rate = rate;
     return 0;
 }
 
