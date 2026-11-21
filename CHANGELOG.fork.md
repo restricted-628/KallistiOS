@@ -8,6 +8,9 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- DSP authors can update selected modules in a four- or eight-module spatial
+  program using their own position tables. A stale program generation or an
+  invalid coefficient span is rejected before any coefficient is written.
 - At setup, applications can optionally partition voices among MIDI, managed
   or automatic sound effects, and ordinary PCM streams. Stereo streams reserve
   both voices together. The default is still one shared pool; raw callers
