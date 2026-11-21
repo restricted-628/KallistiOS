@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- `snd_stop_all()` stops configured voices, resident MIDI and sequences,
+  and completes checked stop for ordinary streams. Stop other playback
+  producers and quiesce private stream owners first. A timeout can follow
+  partial progress; the call does not free handles or sample memory.
+  Driver status queries remain read-only.
 - An open direct music port can opt into AICA MIDI FIFO input. Input is off
   at boot, and an old port generation cannot enable it on a replacement port.
   The receiver handles channel running status and resynchronizes after FIFO
