@@ -6,6 +6,7 @@
 #include <dc/sound/sound.h>
 #include <errno.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 static mutex_t lock=MUTEX_INITIALIZER;
 static abk_bank_t *owners[AICA_BANK_SLOTS];
@@ -191,6 +192,128 @@ int abk_bank_stage(abk_bank_t *b,unsigned slot,const void *data,uint32_t size,
     if(rc<0) { b->state=ABKB_FAILED;fail(b,errno); }
     return leave(rc);
 }
+typedef struct bank_input_range {
+    const void *address;
+    size_t bytes;
+    bool writable;
+} bank_input_range_t;
+
+static void input_ranges(const abk_bank_input_t *input, bank_input_range_t out[4]) {
+    out[0] = (bank_input_range_t){input->bank, sizeof(*input->bank), true};
+    out[1] = (bank_input_range_t){input->samples,
+        input->sample_capacity * sizeof(*input->samples), true};
+    out[2] = (bank_input_range_t){input->zones,
+        input->zone_capacity * sizeof(*input->zones), true};
+    out[3] = (bank_input_range_t){input->read ? input->scratch : input->data,
+                                  input->size, input->read != NULL};
+}
+
+static bool inputs_overlap(bank_input_range_t a, bank_input_range_t b) {
+    return (a.writable || b.writable) &&
+           overlaps(a.address, a.bytes, b.address, b.bytes);
+}
+
+static bool input_valid(const abk_bank_input_t *in) {
+    return in->bank && in->slot < AICA_BANK_SLOTS &&
+           in->size && in->size <= ABK_MAX_FILE &&
+           (in->read ? (in->scratch && !in->data) : (in->data && !in->scratch)) &&
+           in->samples && in->sample_capacity <= ABK_MAX_SAMPLES &&
+           in->zones && in->zone_capacity <= ABK_MAX_ZONES &&
+           in->chunk_limit >= 32 && in->chunk_limit <= 32768 &&
+           !(in->chunk_limit & 31) && in->lifetime_ms;
+}
+
+static int stage_input(const abk_bank_input_t *in) {
+    const void *data = in->data;
+    if(in->read) {
+        unsigned char *scratch = in->scratch;
+        for(uint32_t offset = 0; offset < in->size;) {
+            uint32_t bytes = in->size - offset;
+            if(bytes > in->chunk_limit)
+                bytes = in->chunk_limit;
+            errno = 0;
+            if(in->read(in->context, offset, scratch + offset, bytes) != 0) {
+                if(!errno)
+                    errno = EIO;
+                return -1;
+            }
+            offset += bytes;
+        }
+        data = scratch;
+    }
+
+    return abk_bank_stage(in->bank, in->slot, data, in->size,
+                          in->samples, in->sample_capacity,
+                          in->zones, in->zone_capacity,
+                          in->chunk_limit, in->lifetime_ms);
+}
+
+int abk_bank_stage_unit(const abk_bank_input_t *inputs, size_t count,
+                        size_t *staged) {
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(!inputs || !staged || !count || count > AICA_BANK_SLOTS ||
+       overlaps(inputs, count * sizeof(*inputs), staged, sizeof(*staged))) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    bank_input_range_t manifest = {inputs, count * sizeof(*inputs), false};
+    bank_input_range_t result = {staged, sizeof(*staged), true};
+    for(size_t i = 0; i < count; ++i) {
+        if(!input_valid(&inputs[i])) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        bank_input_range_t candidate[4];
+        input_ranges(&inputs[i], candidate);
+        for(size_t k = 0; k < 4; ++k) {
+            if(inputs_overlap(candidate[k], manifest) ||
+               inputs_overlap(candidate[k], result)) {
+                errno = EINVAL;
+                return -1;
+            }
+            for(size_t l = 0; l < k; ++l)
+                if(inputs_overlap(candidate[k], candidate[l])) {
+                    errno = EINVAL;
+                    return -1;
+                }
+        }
+
+        for(size_t j = 0; j < i; ++j) {
+            if(inputs[i].slot == inputs[j].slot) {
+                errno = EINVAL;
+                return -1;
+            }
+            bank_input_range_t previous[4];
+            input_ranges(&inputs[j], previous);
+            for(size_t k = 0; k < 4; ++k)
+                for(size_t l = 0; l < 4; ++l)
+                    if(inputs_overlap(candidate[k], previous[l])) {
+                        errno = EINVAL;
+                        return -1;
+                    }
+        }
+    }
+
+    for(size_t i = 0; i < count; ++i) {
+        if(stage_input(&inputs[i]) < 0) {
+            *staged = i;
+            return -1;
+        }
+    }
+    *staged = count;
+    return 0;
+}
+
+int abk_bank_stage_input(const abk_bank_input_t *input) {
+    size_t staged;
+    return abk_bank_stage_unit(input, 1, &staged);
+}
+
 int abk_bank_poll(abk_bank_t *b,uint32_t timeout_ms) {
     int rc;if(enter(b)<0) return -1;
     rc=poll_locked(b,timeout_ms);return leave(rc);
