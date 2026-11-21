@@ -211,6 +211,7 @@ spu_transfer_wait
 spu_transfer_wait_callback
 spu_transfer_cancel
 spu_transfer_destroy
+spu_transfer_destroy_many
 spu_reset_chans
 spu_enable
 spu_disable

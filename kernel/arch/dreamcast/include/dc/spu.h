@@ -314,6 +314,23 @@ int spu_transfer_cancel(spu_transfer_request_t *request);
 */
 int spu_transfer_destroy(spu_transfer_request_t *request);
 
+/** \brief Destroy the eligible caller-owned requests in a collection.
+
+    A NULL entry is skipped, and each successful destruction clears its
+    entry. Failed entries stay intact for retry. All distinct entries are
+    attempted, with the first error returned. Duplicate non-NULL pointers
+    give EINVAL before any change. The caller must own the array and
+    serialize destruction of its requests. Sound-RAM allocations and
+    main-RAM transfer buffers keep their owners.
+
+    \param requests        Caller-owned entries, or NULL when count is zero.
+    \param count           Number of entries.
+    \retval 0              All supplied requests have been destroyed.
+    \retval -1             On error with errno set.
+    \sa spu_transfer_destroy
+*/
+int spu_transfer_destroy_many(spu_transfer_request_t **requests, size_t count);
+
 /** \brief  Enable the SPU.
 
     This function resets all sound channels and lets the ARM out of reset.

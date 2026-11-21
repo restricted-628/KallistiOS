@@ -905,6 +905,45 @@ int spu_transfer_destroy(spu_transfer_request_t *request) {
     return 0;
 }
 
+int spu_transfer_destroy_many(spu_transfer_request_t **requests, size_t count) {
+    if(!requests && count) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+
+    /* Reject aliased handles before any request can become dangling. */
+    for(size_t i = 0; i < count; ++i) {
+        if(!requests[i])
+            continue;
+        for(size_t j = 0; j < i; ++j) {
+            if(requests[i] == requests[j]) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
+    }
+
+    int error = 0;
+    for(size_t i = 0; i < count; ++i) {
+        if(!requests[i])
+            continue;
+        if(spu_transfer_destroy(requests[i]) == 0)
+            requests[i] = NULL;
+        else if(!error)
+            error = errno;
+    }
+
+    if(error) {
+        errno = error;
+        return -1;
+    }
+    return 0;
+}
+
 void spu_transfer_system_init(void) {
     irq_mask_t irq_state;
 
