@@ -697,28 +697,30 @@ A later request before the first lease opens stages its full signed
 argument. The lease applies the selected stock TL before key-on. See
 [native middleware](NATIVE_MIDDLEWARE.md) for the startup and error contract.
 
-Live retained stereo attenuation is experimental. Keep
-`ADX_RETAINED_GAIN=0` for playback deployments. The unchanged combined
-Flycast fixture returns `EPIPE` during polling after the first stereo
-request was applied. Diagnostic passes leave that failure unresolved.
-For development, this feature requires both `ADX_RETAINED_CLOCK=1` and
-`ADX_RETAINED_GAIN=1` and matching Audio firmware.
+Live retained attenuation requires `ADX_RETAINED_CLOCK=1`,
+`ADX_RETAINED_GAIN=1` and a supporting backend and firmware.
+Both Flycast CPU modes verified repeated gain changes on one 44.1 kHz
+mono ADX player with an 8,192-frame sound ring and 1 ms service sleep.
+Stereo remains experimental. The combined stereo fixture returns
+`EPIPE` during polling after the first request was applied. The
+default archive leaves live retained gain disabled.
 `kosdec_adx_player_set_attenuation` takes signed tenths of a dB and returns
 a request ID on local admission. The effective value clamps to -999 through
 0 and selects the stock 2.00J PCM route's zero-fade response after playback
 starts. The requested getter returns the signed low 16 bits of the accepted
-value before clamping. The setting applies to the retained pair across
+value before clamping. The setting applies to the active lease channels across
 source bindings.
 
-Progress the request with `kosdec_adx_player_poll` and check the exact ID
-with `kosdec_adx_player_get_attenuation_status`. Both applied bits mean
-both channels acknowledged. The hardware may apply them at different
-samples. An unknown channel can still have a historical acknowledged
-value, and poll can succeed with a pending retry. A terminal gain error
-requires checked stop. The source clock rejects invalid observations while
-gain receipts are being refreshed. Firmware without this capability and
-mono output report `ENOTSUP` for live changes. Fades and guaranteed
-acoustic mute require separate support.
+Service the player through its normal poll or compatibility service entry
+and query the exact ID with `kosdec_adx_player_get_attenuation_status`.
+Mono uses the left applied bit and leaves the right status fields zero.
+Stereo acknowledgement requires both applied bits and carries no
+same-sample guarantee. An unknown channel can still have a historical
+acknowledged value, and poll can succeed with a pending retry. A terminal
+gain error requires checked stop. The source clock rejects observations
+while gain receipts are being refreshed. Missing backend or firmware
+support returns `ENOTSUP`. Fades and guaranteed acoustic mute require
+separate support.
 
 `set_rate` selects requested output frequency8000..48000Hz; zero follows the
 source rate again. Set it before first playback or use the existing checked live

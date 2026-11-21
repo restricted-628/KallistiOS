@@ -418,10 +418,12 @@ int kosdec_adx_player_bind_spsd(struct kosdec_adx_player *, struct kosdec_adx_sp
    polling silence; caller chooses when to stop. No automatic tail-delay rule or
    playback clock. Failures latch first_error; caller must stop/retry stop. */
 int kosdec_adx_player_poll(struct kosdec_adx_player *);
-/* Admit one live attenuation request on a retained stereo pair. Requires the
-   optional ADX_RETAINED_GAIN build and supporting firmware. Uses the stock
+/* Admit one live attenuation request on a retained PCM lease. Requires the
+   optional ADX_RETAINED_GAIN build, a backend supporting the lease geometry
+   and supporting firmware. Uses the stock
    2.00J zero-fade response; effective request clamps to [-999, 0] tenths dB.
-   Success only issues a request. Call poll and check both applied bits.
+   Success only issues a request. Service the player and check the applied
+   bits for the active channels. Mono uses the left bit alone.
    Maximum TL carries no hard-mute guarantee.
    Failure leaves the previous cached setting and the request output intact. */
 int kosdec_adx_player_set_attenuation(struct kosdec_adx_player *,
@@ -453,8 +455,9 @@ int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_p
    request ID. If START fails after attempting hardware, complete checked STOP.
    Reusing an active output does not apply an initial setting again. */
 int kosdec_adx_compat_player_enable_initial_attenuation(struct kosdec_adx_player *);
-/* Latest admitted request only. Acknowledged TL is historical on unknown
-   channels. Poll success can coexist with a pending retry. Terminal failure
+/* Latest admitted request only. Mono leaves the right-side masks and TL bytes
+   zero. Acknowledged TL is historical on unknown channels.
+   Poll success can coexist with a pending retry. Terminal failure
    requires checked stop. Channel acknowledgements do not specify simultaneity. */
 int kosdec_adx_player_get_attenuation_status(const struct kosdec_adx_player *,
     uint64_t request, struct kosdec_adx_attenuation_status *out);

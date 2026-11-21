@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Mono volume changes through the libADX player
+
+- Verified three live volume changes through one 44.1 kHz mono libADX player
+  in both Flycast CPU modes. With an 8,192-frame sound ring, a 32,768-frame
+  decoded queue and a fiber producer serviced at 1 ms intervals, all 65,673
+  source frames were accounted for through eight ring wraps. Live gain remains
+  opt-in; this result does not qualify stereo or physical hardware.
+
 ## 2026-11-21 — Live attenuation for retained mono PCM
 
 - A playing mono stream can change its AICA attenuation through the optional

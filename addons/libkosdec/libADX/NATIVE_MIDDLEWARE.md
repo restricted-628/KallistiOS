@@ -214,6 +214,15 @@ A failed close of an unstarted lease is reported in `stop_error` while
 attempted start retains the lease through checked STOP.
 Fades, device gain on transitions, and physical mute remain open.
 
+For live mono use, build the additional `ADX_RETAINED_GAIN=1` option
+and use a mono-capable Audio backend. The compatibility getter still
+reports the cached signed halfword, even when a live request is rejected.
+The native getter reports the latest admitted request. Check the exact
+request ID for the left applied bit. The inactive right masks and TL
+bytes are zero. The qualified profile is one 44.1 kHz mono player with
+an 8,192-frame sound ring, a 32,768-frame decoded queue and fiber
+production with 1 ms service sleep. The held stereo result remains open.
+
 The non-retained compatibility player accepts direct and FX send levels
 in whole dB from -45 to 0 after clamping. The stock bus-16 alias reads
 back as 16 and reaches KOS as bus 0. A level-only FX adjustment preserves

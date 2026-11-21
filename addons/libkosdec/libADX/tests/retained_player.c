@@ -43,12 +43,11 @@ static bool require_zero_pcm;
 
 int snd_retained_pcm_open(snd_retained_pcm_t **out, unsigned channels, uint32_t rate,
     uint32_t ring_frames, snd_retained_pcm_fill_t fill, void *context) {
-    CHECK(channels == 2 && rate == backend.expected_rate && ring_frames == 1024 && fill && context);
+    CHECK(channels == backend.channels && rate == backend.expected_rate && ring_frames == 1024 && fill && context);
     CHECK(!backend.starts);
     ++backend.opens;
     backend.fill = fill;
     backend.context = context;
-    backend.channels = channels;
     *out = &backend;
     return 0;
 }
@@ -115,12 +114,14 @@ static int service_gain(snd_retained_pcm_t *pcm) {
         gain->error = EAGAIN;
         return 0;
     }
-    gain->admitted = SND_RETAINED_GAIN_LEFT | SND_RETAINED_GAIN_RIGHT;
+    const bool stereo = pcm->channels == 2;
+    gain->admitted = SND_RETAINED_GAIN_LEFT | (stereo ? SND_RETAINED_GAIN_RIGHT : 0);
     gain->applied = SND_RETAINED_GAIN_LEFT;
     gain->acknowledged |= SND_RETAINED_GAIN_LEFT;
     gain->acknowledged_tl[0] = gain->requested_tl[0];
     gain->unknown = 0;
     if(pcm->gain_reject_right) {
+        CHECK(stereo);
         gain->state = SND_RETAINED_GAIN_FAILED;
         gain->rejected = SND_RETAINED_GAIN_RIGHT;
         errno = gain->error = EIO;
@@ -128,7 +129,8 @@ static int service_gain(snd_retained_pcm_t *pcm) {
     }
     gain->state = SND_RETAINED_GAIN_APPLIED;
     gain->applied = gain->acknowledged = gain->admitted;
-    gain->acknowledged_tl[1] = gain->requested_tl[1];
+    if(stereo)
+        gain->acknowledged_tl[1] = gain->requested_tl[1];
     gain->error = 0;
     return 0;
 }
@@ -146,7 +148,7 @@ int snd_retained_pcm_gain_begin(snd_retained_pcm_t *pcm, unsigned left_tl,
     pcm->gain = (snd_retained_gain_status_t){
         .epoch = 90, .session = 7, .request = previous.request + 1,
         .state = SND_RETAINED_GAIN_PENDING, .acknowledged = previous.acknowledged,
-        .requested_tl = {(uint8_t)left_tl,(uint8_t)right_tl},
+        .requested_tl = {(uint8_t)left_tl,pcm->channels == 2 ? (uint8_t)right_tl : 0},
         .acknowledged_tl = {previous.acknowledged_tl[0],previous.acknowledged_tl[1]}
     };
     *request = pcm->gain.request;
@@ -231,14 +233,15 @@ struct retained_fixture {
     uint32_t offsets[2048];
     alignas(32) int16_t pcm[4096], scratch[1025];
 };
-static void retained_init(struct retained_fixture *t, bool sequence) {
+static void retained_init_channels(struct retained_fixture *t, bool sequence, unsigned channels) {
     memset(&backend,0,sizeof(backend));
     backend.expected_rate = 44100;
+    backend.channels = channels;
     request_frames = 64;
     span_capacity = SND_RETAINED_PCM_FILL_SPANS;
     require_zero_pcm = false;
     struct fixture *f = &t->f;
-    init(f,2,sequence);
+    init(f,channels,sequence);
     f->config.pcm = t->pcm;
     f->config.capacity = 2048;
     f->config.pcm_samples = 4096;
@@ -249,6 +252,9 @@ static void retained_init(struct retained_fixture *t, bool sequence) {
                                   sequence ? &f->sequence : NULL,&f->config));
     CHECK(kosdec_adx_player_enable_retained_clock(&f->player,t->offsets,2047) < 0);
     CHECK(!kosdec_adx_player_enable_retained_clock(&f->player,t->offsets,2048));
+}
+static void retained_init(struct retained_fixture *t, bool sequence) {
+    retained_init_channels(t,sequence,2);
 }
 static void finish_retained(struct fixture *f) {
     for(unsigned i = 0; i < 2000; ++i) {
@@ -1282,9 +1288,9 @@ static void cancel_rebind(void) {
 }
 
 #ifdef MEDIA_ADX_RETAINED_GAIN
-static void compat_live_attenuation_cache(void) {
+static void compat_live_attenuation_cache(unsigned channels) {
     struct retained_fixture t;
-    retained_init(&t,false);
+    retained_init_channels(&t,false,channels);
     struct fixture *f = &t.f;
     struct kosdec_adx_player *p = &f->player;
     uint64_t now = 0;
@@ -1306,19 +1312,34 @@ static void compat_live_attenuation_cache(void) {
     CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && !cached);
 
     backend.gain_supported=true;
-    CHECK(!kosdec_adx_compat_player_set_attenuation(p,-65537,&request) && request==1);
-    CHECK(backend.gain.requested_tl[0]==255 && backend.gain.requested_tl[1]==255);
-    CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-1);
-    CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && cached==-1);
+    const int32_t argument=channels==1 ? -188 : -65537;
+    const int16_t expected_cache=channels==1 ? -188 : -1;
+    CHECK(!kosdec_adx_compat_player_set_attenuation(p,argument,&request) && request==1);
+    CHECK(backend.gain.requested_tl[0]==(channels==1 ? 60 : 255) &&
+          backend.gain.requested_tl[1]==(channels==1 ? 0 : 255));
+    CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==expected_cache);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && cached==expected_cache);
     request=91;
     CHECK(kosdec_adx_compat_player_set_attenuation(p,-90,&request)<0 && errno==EBUSY && request==91);
     CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-90);
-    CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && cached==-1);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && cached==expected_cache);
+    if(channels==1) {
+        struct kosdec_adx_attenuation_status status;
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        CHECK(!kosdec_adx_player_get_attenuation_status(p,1,&status));
+        CHECK(status.state==KOSDEC_ADX_ATTENUATION_APPLIED && !status.error &&
+              status.admitted==KOSDEC_ADX_ATTENUATION_LEFT &&
+              status.applied==KOSDEC_ADX_ATTENUATION_LEFT &&
+              status.acknowledged==KOSDEC_ADX_ATTENUATION_LEFT &&
+              !status.unknown && !status.rejected);
+        CHECK(status.requested_tl[0]==60 && status.acknowledged_tl[0]==60 &&
+              !status.requested_tl[1] && !status.acknowledged_tl[1]);
+    }
     CHECK(!kosdec_adx_player_stop(p,1000));
     CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-90);
     CHECK(!kosdec_adx_compat_unbind(&service,0));
     free(f->data);
-    puts("ADX_COMPAT_LIVE_ATTENUATION_CACHE_PASS full request, rejected admission, independent native cache");
+    printf("ADX_COMPAT_LIVE_ATTENUATION_CACHE_PASS channels=%u full request and independent caches\n",channels);
 }
 
 static void legacy_attenuation(void) {
@@ -1399,7 +1420,8 @@ int main(void) {
     split_records(2);
     cancel_rebind();
 #ifdef MEDIA_ADX_RETAINED_GAIN
-    compat_live_attenuation_cache();
+    compat_live_attenuation_cache(1);
+    compat_live_attenuation_cache(2);
     legacy_attenuation();
 #endif
     puts("ADX_RETAINED_MOCK_PASS generation, exact spans, seal, backpressure, sample/VSync time and retained stop");
