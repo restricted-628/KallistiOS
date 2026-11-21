@@ -33,14 +33,15 @@ typedef struct snd_ordinary_pcm16_status {
    contract. Join the producer and complete stop before resetting or
    shutting down sound or G2 DMA.
 
-   Config must be mono or stereo PCM16 at 8–48 kHz with pitch LFO off.
-   Ring frames per channel must be 8192–65504 and divisible by 32. */
+   Config must be mono or stereo PCM16 with pitch LFO off. The initial
+   playback rate and ring must pass snd_ordinary_pcm16_rate_supported.
+   The caller provides enough PCM and service cadence for the chosen rate. */
 int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     const snd_stream_config_t *config, uint32_t ring,
     snd_ordinary_pcm16_fill_t fill, void *context);
 int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm);
 int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm);
-/* Live mono and stereo native rate admission for this ring geometry. The range
+/* Initial and live native rate admission for mono or stereo. The range
    is 1889–186736 Hz. Above 48 kHz use at least 32768 frames per channel.
    Above 88.2 kHz use 65504. Cadence and producer capacity still govern
    refill and deadline success. */

@@ -59,7 +59,10 @@ static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strcha
 int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
     if(ordinary_pcm16_lock(pcm) < 0)
         return -1;
-    if(!snd_flycast_pcm16_pause_geometry_supported(pcm->rate, pcm->ring) ||
+    /* Keep the original cold START range for this opt-in pause lease. */
+    if(pcm->rate < ORDINARY_PCM16_RATE_NOMINAL_MIN ||
+       pcm->rate > ORDINARY_PCM16_RATE_NOMINAL_MAX ||
+       !snd_flycast_pcm16_pause_geometry_supported(pcm->rate, pcm->ring) ||
        pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);

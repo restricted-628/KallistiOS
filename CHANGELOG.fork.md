@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The private checked PCM16 player can start at the same rates it can
+  switch to during playback. Rates above 88.2 kHz require 65,504 frames
+  per channel. Startup still checks both stereo cursors independently;
+  the opt-in Flycast pause player keeps its previous startup limits.
+
 - Ordinary stereo ADX playback can now stage transpose after a checked STOP
   and reuse the same handle. The next successful START applies the pitch;
   a failed START leaves the previously reported rate intact. Host tests and

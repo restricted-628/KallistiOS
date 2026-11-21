@@ -1950,8 +1950,8 @@ void snd_stream_pan(snd_stream_hnd_t hnd, int left_pan, int right_pan) {
 #define ORDINARY_PCM16_OBSERVE_MS 100u
 #define ORDINARY_PCM16_RING_MAX (SND_STREAM_BUFFER_MAX_PCM16 / 2u)
 #define ORDINARY_PCM16_RING_88K 32768u
-#define ORDINARY_PCM16_RATE_START_MIN 8000u
-#define ORDINARY_PCM16_RATE_START_MAX 48000u
+#define ORDINARY_PCM16_RATE_NOMINAL_MIN 8000u
+#define ORDINARY_PCM16_RATE_NOMINAL_MAX 48000u
 #define ORDINARY_PCM16_RATE_88K 88200u
 #define ORDINARY_PCM16_RATE_LIVE_MIN 1889u
 #define ORDINARY_PCM16_RATE_LIVE_MAX 186736u
@@ -1998,18 +1998,18 @@ bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring) {
         return false;
     if(rate > ORDINARY_PCM16_RATE_88K)
         return ring == ORDINARY_PCM16_RING_MAX;
-    return rate <= ORDINARY_PCM16_RATE_START_MAX || ring >= ORDINARY_PCM16_RING_88K;
+    return rate <= ORDINARY_PCM16_RATE_NOMINAL_MAX || ring >= ORDINARY_PCM16_RING_88K;
 }
 
 static bool ordinary_pcm16_extended_rate(uint32_t rate) {
-    return rate < ORDINARY_PCM16_RATE_START_MIN || rate > ORDINARY_PCM16_RATE_88K;
+    return rate < ORDINARY_PCM16_RATE_NOMINAL_MIN || rate > ORDINARY_PCM16_RATE_88K;
 }
 
 /* Preserve the nominal bounds of the original 8–48 kHz path. Otherwise
    mirror the ARM wire octave, then decode FNS using the exact 44.1 kHz
    clock. The wire octave shifts truncate at negative octaves. */
 static uint32_t ordinary_pcm16_motion_rate(uint32_t rate) {
-    if(rate >= ORDINARY_PCM16_RATE_START_MIN && rate <= ORDINARY_PCM16_RATE_START_MAX)
+    if(rate >= ORDINARY_PCM16_RATE_NOMINAL_MIN && rate <= ORDINARY_PCM16_RATE_NOMINAL_MAX)
         return rate;
 
     uint32_t wire_octave = 44100;
@@ -2040,8 +2040,6 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     snd_ordinary_pcm16_fill_t fill, void *context) {
     if(!out || !config || !fill || config->format != SND_STREAM_FORMAT_PCM16 ||
        (config->channels != 1 && config->channels != 2) ||
-       config->sample_rate < ORDINARY_PCM16_RATE_START_MIN ||
-       config->sample_rate > ORDINARY_PCM16_RATE_START_MAX ||
        !snd_ordinary_pcm16_rate_supported(config->sample_rate, ring) ||
        config->channel[0].lfo.pitch_depth ||
        (config->channels == 2 && config->channel[1].lfo.pitch_depth)) {
@@ -2086,7 +2084,8 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     stream->frequency = (int)config->sample_rate;
     pcm->ring = ring;
     pcm->channels = config->channels;
-    pcm->rate = pcm->motion_rate = config->sample_rate;
+    pcm->rate = config->sample_rate;
+    pcm->motion_rate = ordinary_pcm16_motion_rate(pcm->rate);
     pcm->fill = fill;
     pcm->context = context;
     *out = pcm;
