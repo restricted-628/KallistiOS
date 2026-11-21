@@ -710,6 +710,23 @@ static void compat_routing_live(unsigned channels) {
     free(f.data);
 }
 
+static void compat_rejected_time(struct kosdec_adx_player *player, enum kosdec_adx_time_mode mode,
+                                 bool inactive) {
+    struct kosdec_adx_time time = {.count = 71, .frequency = 99};
+    int64_t real = 272;
+    if(inactive) {
+        static const uint32_t frequency[] = {1, 5994, 5000};
+        static const int64_t centiseconds[] = {-5900, 0, -1};
+        CHECK(!kosdec_adx_compat_player_get_time(player,&time));
+        CHECK(time.count==-59 && time.frequency==frequency[mode]);
+        CHECK(!kosdec_adx_compat_player_get_time_real(player,&real) && real==centiseconds[mode]);
+    } else {
+        CHECK(kosdec_adx_compat_player_get_time(player,&time)<0 && errno==ENODATA);
+        CHECK(time.count==71 && time.frequency==99);
+        CHECK(kosdec_adx_compat_player_get_time_real(player,&real)<0 && errno==ENODATA && real==272);
+    }
+}
+
 static void compat_rejected_header_state(void) {
     static const struct {
         const char *prefix;
@@ -718,19 +735,20 @@ static void compat_rejected_header_state(void) {
         bool phased;
         enum kosdec_adx_status failure;
         enum kosdec_adx_compat_state phase;
+        enum kosdec_adx_time_mode time_mode;
     } cases[] = {
-        {"\0\0\0\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO},
-        {"\0\0\0\0", NULL, 0, false, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
-        {"\0\0\0\0", NULL, 12, true, KOSDEC_ADX_TRUNCATED, KOSDEC_ADX_COMPAT_DECEND},
-        {"\x80\0\0\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
-        {NULL, NULL, 0, true, KOSDEC_ADX_UNSUPPORTED, KOSDEC_ADX_COMPAT_DECEND},
-        {"SPSD", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
-        {"RIFF", "WAVE", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
-        {"FORM", "AIFF", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
-        {".snd", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
-        {".sd\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
-        {"RIFF", "TEST", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO},
-        {"FORM", "TEST", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO}
+        {"\0\0\0\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO, KOSDEC_ADX_TIME_SOURCE},
+        {"\0\0\0\0", NULL, 0, false, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_SOURCE},
+        {"\0\0\0\0", NULL, 12, true, KOSDEC_ADX_TRUNCATED, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_SOURCE},
+        {"\x80\0\0\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_SOURCE},
+        {NULL, NULL, 0, true, KOSDEC_ADX_UNSUPPORTED, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_SOURCE},
+        {"SPSD", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_SOURCE},
+        {"RIFF", "WAVE", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_NTSC},
+        {"FORM", "AIFF", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_PAL},
+        {".snd", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_SOURCE},
+        {".sd\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND, KOSDEC_ADX_TIME_SOURCE},
+        {"RIFF", "TEST", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO, KOSDEC_ADX_TIME_NTSC},
+        {"FORM", "TEST", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO, KOSDEC_ADX_TIME_PAL}
     };
     struct fixture f;
     uint64_t now = 0;
@@ -755,6 +773,8 @@ static void compat_rejected_header_state(void) {
         CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
         CHECK(!(cases[i].phased ? kosdec_adx_compat_bind_phased_player(&service,0,&f.player) :
                                  kosdec_adx_compat_bind_player(&service,0,&f.player)));
+        CHECK(!kosdec_adx_compat_player_set_time_mode(&f.player,cases[i].time_mode));
+        CHECK(!kosdec_adx_player_set_time_offset(&f.player,-59));
         CHECK(!kosdec_adx_player_start(&f.player));
         CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_DECINFO);
 
@@ -768,6 +788,8 @@ static void compat_rejected_header_state(void) {
         struct kosdec_adx_player_error error;
         CHECK(!kosdec_adx_player_get_error(&f.player,&error) && error.decoder==cases[i].failure);
         CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==cases[i].phase);
+        bool inactive = cases[i].phase == KOSDEC_ADX_COMPAT_DECINFO;
+        compat_rejected_time(&f.player,cases[i].time_mode,inactive);
         CHECK(!kosdec_adx_player_clear_error(&f.player));
         CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==cases[i].phase);
         CHECK(kosdec_adx_compat_exec_title(&service,0,&result)<0 && errno==EIO &&
@@ -776,11 +798,13 @@ static void compat_rejected_header_state(void) {
         if(cases[i].phased) {
             unsigned calls = f.calls;
             CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==cases[i].phase);
+            compat_rejected_time(&f.player,cases[i].time_mode,inactive);
             CHECK(f.calls==calls);
         }
 
         CHECK(!kosdec_adx_player_stop(&f.player,1000));
         CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_STOP);
+        compat_rejected_time(&f.player,cases[i].time_mode,true);
         CHECK(!kosdec_adx_compat_unbind(&service,0));
         free(f.data);
     }
@@ -796,6 +820,7 @@ static void compat_rejected_header_state(void) {
     CHECK(!kosdec_adx_compat_unbind(&service,0));
     free(f.data);
     puts("ADX_COMPAT_HEADER_STATE_PASS early failure, recognized and nonphased controls, STOP and fresh binding");
+    puts("ADX_COMPAT_HEADER_TIME_PASS signed offsets, sample/NTSC/PAL, scoped failure and repeated reads");
 }
 
 static void compat_transport_fault(void) {
@@ -840,6 +865,7 @@ static void compat_transport_fault(void) {
         CHECK(!kosdec_adx_compat_get_error(&service,0,&code) && code==KOSDEC_ADX_COMPAT_NO_ERROR);
         enum kosdec_adx_compat_state state;
         CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_DECEND);
+        compat_rejected_time(&f.player,KOSDEC_ADX_TIME_SOURCE,false);
         CHECK(!mock_starts && !mock_stops);
         CHECK(!kosdec_adx_player_stop(&f.player,1000));
         CHECK(!kosdec_adx_compat_unbind(&service,0));

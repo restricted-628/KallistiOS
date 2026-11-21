@@ -30,6 +30,7 @@ static int bad(void) { errno = EINVAL; return -1; }
 static int unsupported(void) { errno = ENOTSUP; return -1; }
 static int busy(void) { errno = EBUSY; return -1; }
 static int stop_player(struct kosdec_adx_player *, uint32_t timeout_ms);
+static bool compat_unrecognized_header(const struct kosdec_adx_player *);
 static bool has_output(const struct kosdec_adx_player *p) {
     return p->retained_pcm || p->sound != SND_STREAM_INVALID;
 }
@@ -600,6 +601,10 @@ int kosdec_adx_compat_player_get_time(struct kosdec_adx_player *p,
         return 0;
     }
     switch(p->info.state) {
+    case KOSDEC_ADX_PLAYER_FAILED:
+        if(!compat_unrecognized_header(p))
+            break;
+        /* fall through */
     case KOSDEC_ADX_PLAYER_READY:
     case KOSDEC_ADX_PLAYER_PREFILL:
     case KOSDEC_ADX_PLAYER_STOPPED: {
@@ -614,9 +619,10 @@ int kosdec_adx_compat_player_get_time(struct kosdec_adx_player *p,
     case KOSDEC_ADX_PLAYER_SOURCE_END:
         return compat_live_time(p,out);
     default:
-        errno = ENODATA;
-        return -1;
+        break;
     }
+    errno = ENODATA;
+    return -1;
 }
 
 int kosdec_adx_compat_player_get_time_real(struct kosdec_adx_player *p, int64_t *centiseconds) {

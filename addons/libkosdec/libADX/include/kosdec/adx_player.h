@@ -333,7 +333,9 @@ int kosdec_adx_compat_player_set_time_mode(struct kosdec_adx_player *, enum kosd
    in the selected units, with denominator 1/5994/5000. PLAYING/SOURCE_END
    use the current qualified generation. Optional logical PLAYEND uses the
    latched declared duration and correction anchor after a checked stop.
-   Idle, stopping, failed and releasing return ENODATA.
+   The phased unrecognized-header DECINFO case also returns the inactive
+   offset and denominator. Other failed, idle, stopping and releasing
+   states return ENODATA.
    Live counts use signed 32-bit wrap. The compatibility VSync anchor is
    separate from the native anchor and changes only on drift correction.
    The centisecond query independently reads the selected pair and uses

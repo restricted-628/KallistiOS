@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — libADX time after an unrecognized header
+
+- When a rejected header leaves a phased direct stream in the legacy DECINFO
+  phase, compatibility time queries return the configured offset in the
+  selected time units. This is not elapsed playback. The native player still
+  reports failure; other failure cases still return ENODATA without changing
+  the caller's outputs.
+
 ## 2026-11-21 — libADX status after an unrecognized header
 
 - When a phased direct stream rejects an unrecognized header before playback,
