@@ -43,6 +43,42 @@ static mutex_t response_mutex = RECURSIVE_MUTEX_INITIALIZER;
 static uint32_t next_command_id = 1;
 static uint32_t driver_features;
 
+static snd_driver_error_callback_t driver_error_callback;
+static _Thread_local bool delivering_driver_error;
+
+int snd_driver_set_error_callback(snd_driver_error_callback_t callback) {
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    irq_disable_scoped();
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+    driver_error_callback = callback;
+    return 0;
+}
+
+static int report_driver_error(const char *operation, int result) {
+    if(result >= 0 || irq_inside_int() || delivering_driver_error)
+        return result;
+
+    int error = errno;
+    snd_driver_error_callback_t callback;
+    {
+        irq_disable_scoped();
+        callback = initted ? driver_error_callback : NULL;
+    }
+    if(callback) {
+        delivering_driver_error = true;
+        callback(operation, error);
+        delivering_driver_error = false;
+    }
+    errno = error;
+    return result;
+}
+
 _Static_assert(SND_DRIVER_FEATURE_SYNC_CHANNELS ==
                AICA_DRIVER_FEATURE_SYNC_CHANNELS,
                "synchronized-channel capability ABI");
@@ -463,6 +499,10 @@ int snd_init(void) {
 
 /* Shut everything down and free mem */
 void snd_shutdown(void) {
+    {
+        irq_disable_scoped();
+        driver_error_callback = NULL;
+    }
     snd_observation_reset();
     if(initted) {
         spu_disable();
@@ -474,7 +514,7 @@ void snd_shutdown(void) {
 }
 
 /* Submit a request to the SH4->AICA queue; size is in uint32's */
-int snd_sh4_to_aica(void *packet, uint32_t size) {
+static int sh4_to_aica_post(void *packet, uint32_t size) {
     uint32_t qa, bot, start, top, tail, queue_size, used, free_space;
     const uint32_t *pkt32;
     uint32_t cnt;
@@ -541,6 +581,10 @@ int snd_sh4_to_aica(void *packet, uint32_t size) {
        not really much point; it'll just slow things down. */
     mutex_unlock(&queue_proc_mutex);
     return 0;
+}
+
+int snd_sh4_to_aica(void *packet, uint32_t size) {
+    return report_driver_error(__func__, sh4_to_aica_post(packet, size));
 }
 
 /* Start processing requests in the queue */
@@ -1026,7 +1070,7 @@ int snd_aica_to_sh4(void *packetout) {
     return 1;
 }
 
-int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
+static int driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
     uint32_t request_words[sizeof(aica_cmd_t) / sizeof(uint32_t)] = {0};
     uint32_t response_words[AICA_CMD_MAX_SIZE];
     aica_cmd_t *request = (aica_cmd_t *)request_words;
@@ -1126,7 +1170,7 @@ int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
     request->cmd = AICA_CMD_QUERY_DRIVER;
     request->cmd_id = command_id;
 
-    if(snd_sh4_to_aica(request, request->size) < 0) {
+    if(sh4_to_aica_post(request, request->size) < 0) {
         goto unlock_response_queue;
     }
 
@@ -1196,6 +1240,10 @@ unlock_response_queue:
 unlock_command_queue:
     mutex_unlock(&queue_proc_mutex);
     return result;
+}
+
+int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms) {
+    return report_driver_error(__func__, driver_get_status(status, timeout_ms));
 }
 
 /* Poll for responses from the AICA. We assume here that we're not

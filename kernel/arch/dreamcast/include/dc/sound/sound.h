@@ -169,6 +169,23 @@ typedef struct snd_driver_status {
 */
 int snd_driver_get_status(snd_driver_status_t *status, uint32_t timeout_ms);
 
+/** Diagnostic callback for checked command submission and driver status errors. */
+typedef void (*snd_driver_error_callback_t)(const char *operation, int error);
+
+/** \brief Install the driver error callback for the current sound instance.
+
+    The callback runs inline on the failing caller's thread and must return.
+    Keep callback code available to existing callers when replacing it.
+    Use it for diagnostics and schedule any further audio work separately.
+    Error reporting preserves errno and suppresses recursive delivery.
+    Sound shutdown removes the registration.
+
+    \param callback        Callback to install, or NULL to clear.
+    \retval 0              On success.
+    \retval -1             On inactive sound (ENODEV) or IRQ context (EPERM).
+*/
+int snd_driver_set_error_callback(snd_driver_error_callback_t callback);
+
 /** \brief  Copy a request packet to the AICA queue.
 
     This function is to put in a low-level request using the built-in streaming
