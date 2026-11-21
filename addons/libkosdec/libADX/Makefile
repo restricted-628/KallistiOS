@@ -357,6 +357,13 @@ $(BUILD)/sh4/adx_flycast_pause_pal.elf: tests/flycast_pause.c $(BUILD)/sh4/libAD
 	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) $(PRIVATE_PAUSE_TEST_FLAGS) -I"$(FLYCAST_PAUSE_INCLUDE)" -I"$(ORDINARY_PCM16_INCLUDE)" \
 	    -DADX_TEST_ENABLE_ACTIVE_PAUSE=kosdec_adx_compat_player_enable_flycast_pause \
 	    -Wl,--wrap=snd_flycast_pcm16_pause -o $@ $^ -lm
+
+ADX_PAUSE_TAIL_ELFS = $(addprefix $(BUILD)/sh4/adx_flycast_pause_tail_,0.elf 1.elf 2.elf 3.elf)
+.PHONY: flycast-pause-tail-test-elf
+flycast-pause-tail-test-elf: $(ADX_PAUSE_TAIL_ELFS)
+$(ADX_PAUSE_TAIL_ELFS): $(BUILD)/sh4/adx_flycast_pause_tail_%.elf: tests/flycast_pause_tail.c $(BUILD)/sh4/libADX.a
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) -I"$(FLYCAST_PAUSE_INCLUDE)" -I"$(ORDINARY_PCM16_INCLUDE)" \
+	    -DTEST_CASE=$* -Wl,--wrap=snd_flycast_pcm16_resume -o $@ $^ -lm
 endif
 
 # Optional fork-native integration exerciser. Supply your own /cd/test.adx.

@@ -184,6 +184,7 @@ struct kosdec_adx_player {
     bool ordinary_stereo;
     struct snd_ordinary_pcm16 *ordinary_pcm;
     struct kosdec_adx_flycast_pause *flycast_pause;
+    uint64_t flycast_stopped_epoch;
     bool flycast_pause_enabled, flycast_pause_unstarted;
     struct {
         uint64_t source_first;

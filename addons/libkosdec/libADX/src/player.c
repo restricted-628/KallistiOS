@@ -22,7 +22,7 @@ struct kosdec_adx_flycast_pause {
     uint64_t elapsed, source_first, output_first, written, real_end, cut;
     uint64_t epoch;
     uint32_t discarded, pending_vsync_count;
-    bool pending;
+    bool pending, exhausted;
     int16_t history[2 * FLYCAST_RING];
     int16_t staged[2 * FLYCAST_PREFILL];
 };
@@ -1095,20 +1095,22 @@ static int ordinary_stereo_fill(void *context, int16_t *pcm, uint32_t frames) {
 static int flycast_snapshot(const struct kosdec_adx_player *p, uint64_t generation,
     struct kosdec_adx_source_output *out) {
     if(generation > 1) { errno = ENOENT; return -1; }
+    snd_ordinary_pcm16_status_t status = {0};
+    if(p->ordinary_pcm && snd_ordinary_pcm16_status(p->ordinary_pcm,&status) < 0)
+        return -1;
     if(p->info.state == KOSDEC_ADX_PLAYER_STOPPED) {
         *out = (struct kosdec_adx_source_output){.generation = generation,
-            .software_stopped = true, .output_error = p->info.first_error};
+            .epoch = p->flycast_stopped_epoch, .software_stopped = true,
+            .output_error = status.error, .stop_error = p->info.stop_error};
         return 0;
     }
     const struct kosdec_adx_flycast_pause *f = p->flycast_pause;
     if(!f || p->flycast_pause_unstarted) { errno = ENODATA; return -1; }
-    snd_ordinary_pcm16_status_t status;
-    if(snd_ordinary_pcm16_status(p->ordinary_pcm,&status) < 0) return -1;
     if(!status.error && status.committed_frames != f->written) { errno = EPROTO; return -1; }
 
     /* Running time uses the ordinary slot-zero sample clock. Only Pause
        success establishes a common cut. While waiting, keep prior credit. */
-    uint64_t local = p->compat_paused || f->pending ? f->cut : status.frames[0];
+    uint64_t local = p->compat_paused || f->pending || f->exhausted ? f->cut : status.frames[0];
     uint64_t limit = local < f->real_end ? local : f->real_end;
     const unsigned lead = f->epoch > 1 ? FLYCAST_PREROLL : 0;
     const uint64_t played = limit > lead ? limit - lead : 0;
@@ -1116,13 +1118,13 @@ static int flycast_snapshot(const struct kosdec_adx_player *p, uint64_t generati
         .epoch = f->epoch, .generation = generation,
         .output_frames = f->output_first + local, .source_frames = f->elapsed + played,
         .next_source_frame = f->source_first + played + f->discarded,
-        .clock_error = status.error, .output_error = p->info.first_error,
+        .clock_error = status.error, .output_error = status.error,
         .stop_error = p->info.stop_error,
         .valid = !status.error && (p->info.state == KOSDEC_ADX_PLAYER_PLAYING ||
                                    p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END),
         .source_output_end = !status.error && !f->pending && !p->compat_paused &&
             p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END &&
-            status.frames[0] >= f->real_end && status.frames[1] >= f->real_end
+            (f->exhausted || (status.frames[0] >= f->real_end && status.frames[1] >= f->real_end))
     };
     return 0;
 }
@@ -1161,26 +1163,39 @@ static int flycast_resume(struct kosdec_adx_player *p) {
     uint32_t captured = survivor < f->real_end ? (uint32_t)(f->real_end-survivor) : 0;
     if(captured > FLYCAST_PREFILL) return failed(p,EPROTO);
     uint32_t continuation = FLYCAST_PREFILL-captured, tail;
-    if(continuation > flycast_available(pipe,&tail)) {
-        errno = p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END ? ENODATA : EAGAIN;
-        return -1;
+    struct kosdec_adx_pipe_result head = kosdec_adx_pipe_read(pipe,NULL,0);
+    if(head.producer >= KOSDEC_ADX_INVALID) return failed(p,EIO);
+    uint32_t available = flycast_available(pipe,&tail);
+    if(continuation > available) {
+        if(head.producer != KOSDEC_ADX_DONE) { errno = EAGAIN; return -1; }
+        continuation = available;
+    }
+    uint32_t real = captured+continuation;
+    if(!real && head.producer == KOSDEC_ADX_DONE) {
+        f->exhausted = true;
+        p->compat_paused = false;
+        p->info.state = KOSDEC_ADX_PLAYER_SOURCE_END;
+        return flycast_reanchor(p,true);
     }
 
     /* No source consumption before the synchronous, checked resume. The
        sole pipe consumer is this owner and the producer only appends. */
     flycast_copy_pcm(f->staged,f->history,FLYCAST_RING,survivor,captured);
     flycast_copy_pcm(f->staged+2*captured,pipe->pcm,pipe->capacity,tail,continuation);
+    memset(f->staged+2*real,0,2*(FLYCAST_PREFILL-real)*sizeof(*f->staged));
     if(snd_flycast_pcm16_resume(p->ordinary_pcm,f->staged,FLYCAST_PREFILL) < 0)
         return failed(p,errno);
 
     __atomic_store_n(&pipe->read_cursor,tail+continuation,__ATOMIC_RELEASE);
     memcpy(f->history+2*FLYCAST_PREROLL,f->staged,sizeof(f->staged));
     unsigned lead = f->epoch > 1 ? FLYCAST_PREROLL : 0;
-    f->elapsed += f->cut-lead;
-    f->source_first += f->cut-lead+f->discarded;
+    uint64_t source_cut = f->cut < f->real_end ? f->cut : f->real_end;
+    f->elapsed += source_cut-lead;
+    f->source_first += source_cut-lead+f->discarded;
     f->output_first += f->cut;
     ++f->epoch;
-    f->real_end = f->written = FLYCAST_RING;
+    f->real_end = FLYCAST_PREROLL+real;
+    f->written = FLYCAST_RING;
     f->discarded = 0;
     p->compat_paused = false;
     p->info.copied_frames += continuation;
@@ -1195,6 +1210,7 @@ static int flycast_player_pause(struct kosdec_adx_player *p, bool paused) {
               p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END))
         return unsupported();
     if(p->compat_paused == paused && !f->pending) return 0;
+    if(f->exhausted) return unsupported();
     if(!paused) return f->pending ? busy() : flycast_resume(p);
 
     if(!f->pending) {
@@ -1219,8 +1235,9 @@ static int flycast_player_pause(struct kosdec_adx_player *p, bool paused) {
         return errno == ETIMEDOUT || errno == EAGAIN ? -1 : failed(p,errno);
     }
     unsigned lead = f->epoch > 1 ? FLYCAST_PREROLL : 0;
-    if(cut < lead || cut < f->cut || cut > f->real_end || cut > FLYCAST_RING ||
-       f->written - cut > FLYCAST_RING || f->real_end - cut > FLYCAST_PREFILL)
+    if(cut < lead || cut < f->cut || cut > f->written || cut > FLYCAST_RING ||
+       f->written - cut > FLYCAST_RING ||
+       (cut < f->real_end && f->real_end - cut > FLYCAST_PREFILL))
         return failed(p,EPROTO);
     f->cut = cut;
     f->pending = false;
@@ -1291,7 +1308,8 @@ static int poll_output(struct kosdec_adx_player *p) {
 #ifdef MEDIA_ADX_ORDINARY_STEREO
     if(p->ordinary_pcm) {
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
-        if(p->flycast_pause && (p->compat_paused || p->flycast_pause->pending)) return 1;
+        if(p->flycast_pause && (p->compat_paused || p->flycast_pause->pending ||
+                                p->flycast_pause->exhausted)) return 1;
 #endif
         return snd_ordinary_pcm16_poll(p->ordinary_pcm) < 0 ? -1 : 1;
     }
@@ -1617,11 +1635,14 @@ static bool earlier_sources_drained(const struct kosdec_adx_player *p,
 
 static bool latch_playend(struct kosdec_adx_player *p) {
     struct kosdec_adx_playend *end = &p->compat_playend;
-    if(!end->stop_timeout_ms || !p->source_bound || !end->epoch || !end->generation ||
-       end->generation != p->retained_admissions ||
-       p->info.source_generation != end->generation || !p->retained_sealed ||
+    bool flycast = p->flycast_pause_enabled;
+    if(!end->stop_timeout_ms || !p->source_bound ||
        p->info.first_error || p->callback_failed ||
        p->compat_service->titles[p->compat_slot].faults)
+        return false;
+    if(!flycast && (!end->epoch || !end->generation ||
+                    end->generation != p->retained_admissions ||
+                    p->info.source_generation != end->generation || !p->retained_sealed))
         return false;
 
     struct kosdec_adx_pipe_result pipe = kosdec_adx_pipe_read(&p->producer.pipe,NULL,0);
@@ -1634,9 +1655,17 @@ static bool latch_playend(struct kosdec_adx_player *p) {
        progress.sample_rate != p->info.sample_rate)
         return false;
     struct kosdec_adx_source_output clock;
-    if(!drained_source(p,end->generation,&clock) || !playend_identity(end,&clock) ||
-       clock.source_frames != p->info.source_frames || !earlier_sources_drained(p,&clock))
+    if(flycast) {
+        if(!drained_source(p,p->info.source_generation,&clock) ||
+           clock.next_source_frame != progress.declared_frames)
+            return false;
+        end->generation = clock.generation;
+        end->epoch = clock.epoch;
+        end->session = clock.session;
+    } else if(!drained_source(p,end->generation,&clock) || !playend_identity(end,&clock) ||
+              clock.source_frames != p->info.source_frames || !earlier_sources_drained(p,&clock)) {
         return false;
+    }
 
     end->frames = progress.declared_frames;
     end->rate = progress.sample_rate;
@@ -1990,7 +2019,8 @@ int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *p, uint32_
     bool released = p->info.state == KOSDEC_ADX_PLAYER_IDLE && p->retained_sealed &&
         p->info.source_generation == p->retained_admissions;
     if(!first && !released) return bad();
-    if(!p->compat_service || !p->retained_offsets) return unsupported();
+    if(!p->compat_service || (!p->retained_offsets && !p->flycast_pause_enabled))
+        return unsupported();
     if(p->compat_service->servicing) return busy();
     p->compat_playend.stop_timeout_ms = timeout_ms;
     return 0;
@@ -2594,6 +2624,7 @@ static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     }
     if(p->executor && fiber_service_executor_destroy(p->executor) < 0) goto retain;
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
+    if(p->flycast_pause) p->flycast_stopped_epoch = p->flycast_pause->epoch;
     free(p->flycast_pause);
     p->flycast_pause = NULL;
 #endif

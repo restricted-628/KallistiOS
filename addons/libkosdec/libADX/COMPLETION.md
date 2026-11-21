@@ -60,11 +60,18 @@ After discards of 0, 128, 256, 0 and
 128 frames, both channels resumed at the expected source frame. Retrying
 a withheld cut result did not advance the cut or discard twice.
 
-This covers only a cut in the first traversal of each 16,384-frame bank.
-It requires enough source data to re-prime the bank. A fresh ordinary
-title after checked stop used a separate allocation; the test did not
-release or recycle the played allocation. Arbitrary
-late cuts, short end-of-source resumes and hardware retirement remain open.
+At a confirmed end of input, resume plays the remaining source frames and
+pads the rest of the bank with silence. If discard removed the entire
+tail, resume does not start the channels again. A temporary input shortage
+instead returns `EAGAIN` without consuming frames or restarting playback.
+Four cases in both BIOS CPU modes cover submitted and decoded tails, an
+empty tail, and a retry after the producer supplies more input. With logical
+PLAYEND enabled, completion follows the source boundary and checked stop.
+
+The pause cut is still limited to the first traversal of each 16,384-frame
+bank. A fresh ordinary title after checked stop used a separate allocation;
+these tests did not release or recycle the played allocation. Later cuts
+and hardware retirement remain open.
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
 The selected Manatee adapter ignores its command selector, and the getter

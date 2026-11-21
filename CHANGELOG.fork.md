@@ -8,6 +8,12 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- A paused Flycast stereo ADX title can now resume near the end of a finite
+  track even when the remaining PCM cannot fill a bank. It plays only the
+  surviving frames and excludes padding from elapsed source time. Discarding
+  the entire tail needs no device restart; a temporary input shortage
+  returns `EAGAIN` instead of reporting completion.
+
 - The Flycast active-pause profile now supports NTSC and PAL compatibility
   clocks as well as sample time. Pause freezes the displayed time; discard
   re-anchors it without charging discarded frames, and resume starts from

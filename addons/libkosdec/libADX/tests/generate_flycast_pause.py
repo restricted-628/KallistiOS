@@ -5,7 +5,10 @@ rate, frames = 44100, 196608
 import sys
 
 name = sys.argv[1]
-assert name in ("proof", "fresh")
+assert name in ("proof", "fresh") and len(sys.argv) in (2, 3)
+if len(sys.argv) == 3:
+    frames = int(sys.argv[2])
+    assert frames > 0 and frames % 32 == 0
 state = 15106 if name == "proof" else 115901
 def step():
     global state

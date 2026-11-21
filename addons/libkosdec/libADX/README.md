@@ -672,8 +672,11 @@ first traversal of the current bank, after START or resume. After a
 post-arm pause timeout, retry pause
 or complete checked stop. A pre-arm EAGAIN permits ordinary service and a
 new pause attempt. Resume uses the same reservation and inserts 64 silent
-output frames before the first surviving source frame. That preroll and the
-discarded source frames do not accrue title time. A hard resume failure
+output frames before the first surviving source frame. A finished source
+may resume with a short real tail followed by silence. Use the logical
+PLAYEND opt-in before start to report completion after the tail and checked
+stop. A live producer shortage returns EAGAIN with the previous cut intact.
+Preroll, padding and discarded frames do not accrue elapsed source time. A hard resume failure
 requires checked stop. Retain the played reservation after stop. One pause-enabled title owns
 the two banks for the sound runtime. A subsequent fresh title can use
 ordinary stereo on its own allocation.
@@ -684,7 +687,9 @@ and `fresh`. Mount the generated `disc` tree alongside the test ELF. It
 exercises five cycles, a withheld cut result retried on the same lease,
 a checked stop and an independent fresh title. The
 `flycast-pause-vsync-test-elf` target also exercises NTSC and PAL time
-with explicit owner-delivered VBlank events.
+with explicit owner-delivered VBlank events. For finite tails, build
+`flycast-pause-tail-test-elf`. Use `proof 22016` with the generator for
+case 0 and `proof 26048` for cases 1–3.
 
 ### Retained output clock
 
