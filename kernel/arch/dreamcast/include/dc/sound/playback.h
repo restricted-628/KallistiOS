@@ -57,6 +57,26 @@ int snd_port_playback_update(snd_port_t port, const snd_channel_config_t *config
     uint32_t fields, snd_port_operation_t *operation);
 int snd_port_playback_stop(snd_port_t port, snd_port_operation_t *operation);
 
+/** Restore frequency, volume, pan and routing from this mono attachment's
+    most recent applied START. Uses UPDATE observation and ACK, with the same
+    receipt, ownership and timeout rules. The sample region and playback
+    generation stay in place. EINVAL until a configuration has been applied. */
+int snd_port_playback_reset_params(snd_port_t port,
+                                   snd_port_operation_t *operation);
+
+/** Sweep configured cooperative mono attachments with one overall timeout.
+    Each successful submission writes a receipt, in port slot order, to the
+    caller's operations array. Poll and consume all submitted receipts even
+    when the sweep returns -1. After admission, *submitted always receives
+    the count. Unsubmitted entries are unchanged. If a port is unavailable
+    or capacity runs out, the first error is returned (including EBUSY for
+    a pending receipt or ENOSPC for insufficient capacity). Initial argument
+    and IRQ errors leave outputs unchanged. Other port owners should
+    serialize their operations with a group sweep. */
+int snd_port_playback_reset_all_params(snd_port_operation_t *operations,
+                                      size_t capacity, size_t *submitted,
+                                      uint32_t timeout_ms);
+
 /** Nonzero timeout required (zero EINVAL). One overall deadline includes all
     nested locks/submission. Return 0 with classified ARM outcome and fresh sample,
     or -1 with output unchanged. Commit historical policy exactly once; compare

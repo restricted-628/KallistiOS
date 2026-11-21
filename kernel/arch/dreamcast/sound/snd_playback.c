@@ -27,7 +27,7 @@ typedef struct playback_state {
     bool configured, observed, transaction_live;
     snd_port_transaction_t transaction;
     snd_channel_receipt_t receipt;
-    snd_channel_config_t committed, proposed;
+    snd_channel_config_t baseline, committed, proposed;
 } playback_state_t;
 static playback_state_t pb_states[SND_PORT_SLOT_COUNT];
 #define PB_LOCKS8 MUTEX_INITIALIZER, MUTEX_INITIALIZER, MUTEX_INITIALIZER, \
@@ -113,47 +113,37 @@ int snd_port_playback_attach(snd_port_t port) {
 static int pb_current(playback_state_t *s, uint64_t deadline,
                        snd_port_playback_state_t *out);
 
-static int pb_submit(snd_port_t port, uint32_t operation,
+/* The caller holds this attachment's slot mutex. */
+static int pb_submit_locked(playback_state_t *s, uint32_t operation,
     const snd_channel_config_t *config, uint32_t fields, unsigned priority,
-    snd_port_operation_t *out) {
-    uint64_t deadline = timer_ms_gettime64() + SND_PLAYBACK_TIMEOUT_MS;
-    playback_state_t *s;
+    snd_port_operation_t *out, uint64_t deadline) {
+    snd_port_t port = s->port;
     snd_port_transaction_t transaction;
     snd_channel_receipt_t receipt;
     bool transaction_live = false;
     int result;
-    if(!out || priority > 15 ||
-       snd_iface_observation_validate(operation, config, fields, 0) < 0) {
-        errno = EINVAL;
-        return -1;
-    }
-    if(pb_lock(port, deadline) < 0)
-        return -1;
-    s = pb_lookup(port);
-    if(!s)
-        return pb_unlock(port, -1);
     if(s->receipt.token ||
        (s->control == PB_INTERFERED && operation != SND_OBSERVATION_STOP)) {
         errno = EBUSY;
-        return pb_unlock(port, -1);
+        return -1;
     }
     if(operation == SND_OBSERVATION_UPDATE && !s->configured) {
         errno = EINVAL;
-        return pb_unlock(port, -1);
+        return -1;
     }
     if(operation == SND_OBSERVATION_START) {
         if(s->start_token && s->control == PB_ACTIVE &&
            (snd_iface_observation_features() & SND_DRIVER_FEATURE_COMPLETION)) {
             snd_port_playback_state_t current;
             if(pb_current(s, deadline, &current) < 0)
-                return pb_unlock(port, -1);
+                return -1;
             if(s->control == PB_INTERFERED) {
-                errno = EBUSY; return pb_unlock(port, -1);
+                errno = EBUSY; return -1;
             }
         }
         result = snd_port_begin(port, priority, &transaction);
         if(result <= 0)
-            return pb_unlock(port, result);
+            return result;
         transaction_live = true;
     }
     result = snd_observation_submit_validated_until(s->channel, operation, config, fields,
@@ -165,7 +155,7 @@ static int pb_submit(snd_port_t port, uint32_t operation,
         if(saved == ENODEV)
             s->control = PB_LOST;
         errno = saved;
-        return pb_unlock(port, -1);
+        return -1;
     }
     s->receipt = receipt;
     s->operation = operation;
@@ -177,7 +167,24 @@ static int pb_submit(snd_port_t port, uint32_t operation,
     if(config)
         s->proposed = *config;
     *out = (snd_port_operation_t){ port, receipt.session, receipt.token };
-    return pb_unlock(port, operation == SND_OBSERVATION_START ? 1 : 0);
+    return operation == SND_OBSERVATION_START ? 1 : 0;
+}
+
+static int pb_submit(snd_port_t port, uint32_t operation,
+    const snd_channel_config_t *config, uint32_t fields, unsigned priority,
+    snd_port_operation_t *out) {
+    uint64_t deadline = timer_ms_gettime64() + SND_PLAYBACK_TIMEOUT_MS;
+    if(!out || priority > 15 ||
+       snd_iface_observation_validate(operation, config, fields, 0) < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pb_lock(port, deadline) < 0)
+        return -1;
+    playback_state_t *s = pb_lookup(port);
+    int result = s ? pb_submit_locked(s, operation, config, fields, priority,
+                                     out, deadline) : -1;
+    return pb_unlock(port, result);
 }
 
 int snd_port_playback_start(snd_port_t port, const snd_channel_config_t *config,
@@ -192,6 +199,82 @@ int snd_port_playback_update(snd_port_t port, const snd_channel_config_t *config
 
 int snd_port_playback_stop(snd_port_t port, snd_port_operation_t *operation) {
     return pb_submit(port, SND_OBSERVATION_STOP, NULL, 0, 0, operation);
+}
+
+static int pb_reset_params_locked(playback_state_t *s,
+                                  snd_port_operation_t *operation,
+                                  uint64_t deadline) {
+    uint32_t fields = SND_CHANNEL_UPDATE_FREQUENCY | SND_CHANNEL_UPDATE_VOLUME |
+                      SND_CHANNEL_UPDATE_PAN | SND_CHANNEL_UPDATE_ROUTING;
+    return pb_submit_locked(s, SND_OBSERVATION_UPDATE, &s->baseline, fields, 0,
+                            operation, deadline);
+}
+
+int snd_port_playback_reset_params(snd_port_t port,
+                                   snd_port_operation_t *operation) {
+    if(!operation) {
+        errno = EINVAL;
+        return -1;
+    }
+    uint64_t deadline = timer_ms_gettime64() + SND_PLAYBACK_TIMEOUT_MS;
+    if(pb_lock(port, deadline) < 0)
+        return -1;
+    playback_state_t *s = pb_lookup(port);
+    int result = s ? pb_reset_params_locked(s, operation, deadline) : -1;
+    return pb_unlock(port, result);
+}
+
+int snd_port_playback_reset_all_params(snd_port_operation_t *operations,
+                                      size_t capacity, size_t *submitted,
+                                      uint32_t timeout_ms) {
+    if(!operations || !capacity || !submitted || !timeout_ms) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+
+    uint64_t deadline = timer_ms_gettime64() + timeout_ms;
+    size_t count = 0;
+    int error = 0;
+    for(unsigned i = 0; i < SND_PORT_SLOT_COUNT; ++i) {
+        if(pb_lock(i, deadline) < 0) {
+            if(!error)
+                error = errno;
+            break;
+        }
+
+        playback_state_t *s = &pb_states[i];
+        int result = 0;
+        if(s->port && (s->configured || s->receipt.token)) {
+            s = pb_lookup(s->port);
+            if(!s)
+                result = -1;
+            else if(s->receipt.token) {
+                errno = EBUSY;
+                result = -1;
+            }
+            else if(count == capacity) {
+                errno = ENOSPC;
+                result = -1;
+            }
+            else if((result = pb_reset_params_locked(s, &operations[count],
+                                                     deadline)) == 0)
+                ++count;
+        }
+        if(result < 0 && !error)
+            error = errno;
+        pb_unlock(i, result);
+    }
+
+    *submitted = count;
+    if(error) {
+        errno = error;
+        return -1;
+    }
+    return 0;
 }
 
 static playback_state_t *pb_operation(const snd_port_operation_t *operation) {
@@ -226,6 +309,7 @@ static int pb_classify(playback_state_t *s, const snd_channel_observation_t *o) 
         if(applied) {
             s->last_applied = o->token;
             if(s->operation == SND_OBSERVATION_START) {
+                s->baseline = s->proposed;
                 s->committed = s->proposed;
                 s->start_token = o->token;
                 s->end_reset_token = 0;
