@@ -37,6 +37,7 @@
 #include "snd_stream_internal.h"
 #include "snd_channel.h"
 #include "snd_iface_internal.h"
+#include "snd_ordinary_pcm16.h"
 #include "snd_retained_pcm.h"
 #include "snd_retained_gain.h"
 #include "snd_retained_memory.h"
@@ -1925,6 +1926,494 @@ void snd_stream_pan(snd_stream_hnd_t hnd, int left_pan, int right_pan) {
     config.channel[1].pan = (uint8_t)right_pan;
     (void)snd_stream_update(hnd, &config, SND_CHANNEL_UPDATE_PAN);
     mutex_unlock(&stream_state_mutex);
+}
+
+/* The opt-in ordinary renderer has no source attribution ledger. Its title
+   clock is slot 0, while each slot constrains writes to its physical ring. */
+#define ORDINARY_PCM16_OBSERVE_MS 100u
+
+typedef struct ordinary_pcm16_cursor {
+    uint64_t frames, before_ms, after_ms;
+} ordinary_pcm16_cursor_t;
+
+typedef struct ordinary_pcm16_voice {
+    uint32_t start, command;
+    snd_channel_receipt_t receipt;
+    bool polled;
+    ordinary_pcm16_cursor_t cursor;
+} ordinary_pcm16_voice_t;
+
+struct snd_ordinary_pcm16 {
+    snd_stream_hnd_t handle;
+    uint32_t session, ring, rate;
+    uint64_t committed;
+    snd_ordinary_pcm16_fill_t fill;
+    void *context;
+    int16_t *staging;
+    semaphore_t dma;
+    bool pending, attempted, running, in_callback, stopped;
+    int error;
+    ordinary_pcm16_voice_t voice[2];
+};
+
+static bool ordinary_pcm16_rate(uint32_t rate) {
+    return rate >= 8000 && rate <= 48000;
+}
+
+static int ordinary_pcm16_fault(snd_ordinary_pcm16_t *pcm) {
+    if(!pcm->error)
+        pcm->error = errno ? errno : EIO;
+    pcm->running = false;
+    errno = pcm->error;
+    return -1;
+}
+
+int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
+    const snd_stream_config_t *config, uint32_t ring,
+    snd_ordinary_pcm16_fill_t fill, void *context) {
+    if(!out || !config || !fill || config->format != SND_STREAM_FORMAT_PCM16 ||
+       config->channels != 2 || !ordinary_pcm16_rate(config->sample_rate) ||
+       config->channel[0].lfo.pitch_depth || config->channel[1].lfo.pitch_depth ||
+       ring < 8192 || ring > 32768 || ring % 32) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(snd_stream_config_validate(config) < 0)
+        return -1;
+    if(!(snd_iface_observation_features() & AICA_DRIVER_FEATURE_COMPLETION)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    snd_ordinary_pcm16_t *pcm = calloc(1, sizeof(*pcm));
+    if(!pcm)
+        return -1;
+    /* One half-ring interleaved, followed by two separated DMA sources. */
+    pcm->staging = aligned_alloc(32, ring * 4);
+    if(!pcm->staging || mutex_lock(&stream_state_mutex) < 0)
+        goto release;
+    if(max_channels != 2) {
+        errno = max_channels ? ENOSPC : ENODEV;
+        goto unlock;
+    }
+    if(snd_observation_bind_until(timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS,
+                                  &pcm->session) < 0)
+        goto unlock;
+    pcm->handle = snd_stream_alloc(NULL, (int)(ring * 2));
+    if(pcm->handle == SND_STREAM_INVALID)
+        goto unlock;
+    sem_init(&pcm->dma, 0);
+    strchan_t *stream = &streams[pcm->handle];
+    stream->service_owner = pcm;
+    stream->config = *config;
+    stream->active_buffer_size = ring * 2;
+    stream->type = SND_STREAM_FORMAT_PCM16;
+    stream->bitsize = 16;
+    stream->frequency = (int)config->sample_rate;
+    pcm->ring = ring;
+    pcm->rate = config->sample_rate;
+    pcm->fill = fill;
+    pcm->context = context;
+    *out = pcm;
+    mutex_unlock(&stream_state_mutex);
+    return 0;
+unlock:
+    mutex_unlock(&stream_state_mutex);
+release:
+    free(pcm->staging);
+    free(pcm);
+    return -1;
+}
+
+static int ordinary_pcm16_lock(const snd_ordinary_pcm16_t *pcm) {
+    if(!pcm) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+    if(pcm->in_callback) {
+        mutex_unlock(&stream_state_mutex);
+        errno = EDEADLK;
+        return -1;
+    }
+    return 0;
+}
+
+static int ordinary_pcm16_unlock(int result) {
+    int error = errno;
+    mutex_unlock(&stream_state_mutex);
+    errno = error;
+    return result;
+}
+
+static int ordinary_pcm16_ready(const snd_ordinary_pcm16_t *pcm) {
+    if(!pcm->running) {
+        errno = pcm->error ? pcm->error : EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+/* Same outward allowance as the retained profile. During a transition the
+   caller supplies the greater of both possible rates through this interval. */
+static uint64_t ordinary_pcm16_movement(uint32_t rate, uint64_t ms) {
+    if(ms > 4096)
+        return UINT64_MAX;
+    return (rate + rate / 100u + 1) * (ms + 1) / 1000 + 2;
+}
+
+static int ordinary_pcm16_unwrap(const ordinary_pcm16_voice_t *voice,
+    uint32_t session, uint32_t ring, uint32_t upper_rate,
+    const aica_completion_channel_t *c, uint64_t before, uint64_t after,
+    ordinary_pcm16_cursor_t *out) {
+    if(c->session != session || c->start_token != voice->start ||
+       c->command_token != voice->command ||
+       c->attribution_kind != AICA_OBSERVATION_ATTR_MANAGED ||
+       /* The owned legacy SYNC marks this state. Its bridge UPDATE restores
+          the managed command identity while preserving the checked START. */
+       c->state != AICA_COMPLETION_INTERFERED ||
+       c->format != AICA_SM_16BIT || !c->loop_enabled || c->key_on != 1 ||
+       c->position >= ring || before < voice->cursor.after_ms || after < before) {
+        errno = ESTALE;
+        return -1;
+    }
+    uint64_t bound = ordinary_pcm16_movement(upper_rate, after - voice->cursor.before_ms);
+    uint32_t prev = (uint32_t)(voice->cursor.frames % ring);
+    uint32_t delta = (c->position + ring - prev) % ring;
+    if(bound >= ring || delta > bound || voice->cursor.frames > UINT64_MAX - delta) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *out = (ordinary_pcm16_cursor_t){ voice->cursor.frames + delta, before, after };
+    return 0;
+}
+
+/* Strict frontier comparison. Equal is already an uncommitted fetch. */
+static bool ordinary_pcm16_before(const ordinary_pcm16_cursor_t *c, uint32_t rate,
+                                  uint64_t at, uint64_t committed) {
+    return c->frames < committed && at >= c->after_ms &&
+        ordinary_pcm16_movement(rate, at - c->before_ms) < committed - c->frames;
+}
+
+static int ordinary_pcm16_sample(snd_ordinary_pcm16_t *pcm, uint32_t upper_rate,
+                                 uint64_t deadline) {
+    const strchan_t *stream = &streams[pcm->handle];
+    ordinary_pcm16_cursor_t next[2];
+    for(unsigned i = 0; i < 2; ++i) {
+        aica_completion_channel_t c;
+        uint64_t before, after;
+        if(snd_observation_completion_until(stream->ch[i], pcm->session, deadline,
+                                            &c, &before, &after) < 0 ||
+           ordinary_pcm16_unwrap(&pcm->voice[i], pcm->session, pcm->ring,
+                                 upper_rate, &c, before, after, &next[i]) < 0)
+            return -1;
+    }
+    for(unsigned i = 0; i < 2; ++i) {
+        if(!ordinary_pcm16_before(&next[i], upper_rate, next[1].after_ms,
+                                  pcm->committed)) {
+            errno = EPIPE;
+            return -1;
+        }
+    }
+    for(unsigned i = 0; i < 2; ++i)
+        pcm->voice[i].cursor = next[i];
+    return 0;
+}
+
+static int ordinary_pcm16_retire(ordinary_pcm16_voice_t *voice, uint64_t deadline) {
+    if(!voice->receipt.token)
+        return 0;
+    if(!voice->polled) {
+        snd_channel_observation_t obs;
+        if(snd_observation_poll_until(&voice->receipt, deadline, &obs) < 0)
+            return -1;
+        voice->polled = true;
+    }
+    if(snd_observation_consume_until(&voice->receipt, deadline) < 0)
+        return -1;
+    voice->receipt = (snd_channel_receipt_t){0};
+    voice->polled = false;
+    return 0;
+}
+
+static int ordinary_pcm16_control(snd_ordinary_pcm16_t *pcm, uint32_t op,
+    uint32_t fields, uint32_t flags, const snd_stream_config_t *config,
+    uint64_t deadline) {
+    const strchan_t *stream = &streams[pcm->handle];
+    for(unsigned i = 0; i < 2; ++i) {
+        snd_channel_config_t channel;
+        stream_channel_config_pack(&channel, config, i, stream->spu_ram_sch[i],
+                                   pcm->ring);
+        if(snd_observation_submit_until(stream->ch[i], op, &channel, fields,
+                    flags, &pcm->voice[i].receipt, deadline) < 0)
+            return -1;
+    }
+    for(unsigned i = 0; i < 2; ++i) {
+        ordinary_pcm16_voice_t *voice = &pcm->voice[i];
+        snd_channel_observation_t obs;
+        if(snd_observation_poll_until(&voice->receipt, deadline, &obs) < 0)
+            return -1;
+        voice->polled = true;
+        if(obs.session != pcm->session || obs.token != voice->receipt.token ||
+           obs.channel != (unsigned)stream->ch[i] || obs.operation != op ||
+           obs.result != SND_OBSERVATION_APPLIED ||
+           obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
+           obs.attribution_token != obs.token ||
+           obs.key_on != (op == SND_OBSERVATION_UPDATE)) {
+            errno = ESTALE;
+            return -1;
+        }
+        if(op == SND_OBSERVATION_START)
+            voice->start = obs.token;
+        voice->command = obs.token;
+        if(ordinary_pcm16_retire(voice, deadline) < 0)
+            return -1;
+    }
+    return 0;
+}
+
+static void ordinary_pcm16_dma_done(void *data) {
+    snd_ordinary_pcm16_t *pcm = data;
+    sem_signal(&pcm->dma);
+}
+
+/* Only this leg's callback retires its borrowed staging. Raw external
+   cancellation can suppress it. A timeout leaves the borrow in place. */
+static int ordinary_pcm16_wait(snd_ordinary_pcm16_t *pcm, uint64_t deadline) {
+    if(!pcm->pending)
+        return 0;
+    if(sem_trywait(&pcm->dma) < 0) {
+        uint32_t remaining = stream_time_remaining(deadline);
+        if(!remaining) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        if(sem_wait_timed(&pcm->dma, remaining) < 0)
+            return -1;
+    }
+    pcm->pending = false;
+    return 0;
+}
+
+static int ordinary_pcm16_leg(snd_ordinary_pcm16_t *pcm, unsigned side,
+    uint32_t offset, uint64_t deadline) {
+    const strchan_t *stream = &streams[pcm->handle];
+    const ordinary_pcm16_cursor_t *cursor = &pcm->voice[side].cursor;
+    int16_t *plane = pcm->staging + pcm->ring + side * (pcm->ring / 2);
+    do {
+        uint64_t now = timer_ms_gettime64();
+        if(now >= deadline) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        if(pcm->running && !ordinary_pcm16_before(cursor, pcm->rate, now, pcm->committed)) {
+            errno = EPIPE;
+            return -1;
+        }
+        if(spu_dma_transfer(plane, stream->spu_ram_sch[side] + offset,
+                            pcm->ring, 0, ordinary_pcm16_dma_done, pcm) == 0) {
+            pcm->pending = true;
+            if(ordinary_pcm16_wait(pcm, deadline) < 0)
+                return -1;
+            now = timer_ms_gettime64();
+            if(now >= deadline) {
+                errno = ETIMEDOUT;
+                return -1;
+            }
+            if(pcm->running && !ordinary_pcm16_before(cursor, pcm->rate, now, pcm->committed)) {
+                errno = EPIPE;
+                return -1;
+            }
+            return 0;
+        }
+        if(errno != EINPROGRESS)
+            return -1;
+        thd_pass();
+    } while(1);
+}
+
+static int ordinary_pcm16_fill(snd_ordinary_pcm16_t *pcm) {
+    uint32_t frames = pcm->ring / 2;
+    if(pcm->committed > UINT64_MAX - frames) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    pcm->in_callback = true;
+    int got = pcm->fill(pcm->context, pcm->staging, frames);
+    pcm->in_callback = false;
+    if(got < 0)
+        return -1;
+    if((uint32_t)got > frames) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    memset(pcm->staging + 2 * got, 0, 4 * (frames - (uint32_t)got));
+    snd_pcm16_split((void *)pcm->staging, (void *)(pcm->staging + pcm->ring),
+                    (void *)(pcm->staging + pcm->ring + frames), 4 * frames);
+    const strchan_t *stream = &streams[pcm->handle];
+    uint64_t deadline = timer_ms_gettime64() + stream->config.transfer_timeout_ms;
+    uint32_t offset = (uint32_t)(pcm->committed % pcm->ring) * 2;
+    if(ordinary_pcm16_leg(pcm, 0, offset, deadline) < 0 ||
+       ordinary_pcm16_leg(pcm, 1, offset, deadline) < 0)
+        return -1;
+    pcm->committed += frames;
+    return 0;
+}
+
+int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm) {
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return -1;
+    if(pcm->attempted || pcm->stopped) {
+        errno = EBUSY;
+        return ordinary_pcm16_unlock(-1);
+    }
+
+    strchan_t *stream = &streams[pcm->handle];
+    pcm->attempted = true;
+    stream->channels = 2;
+    if(ordinary_pcm16_fill(pcm) < 0 || ordinary_pcm16_fill(pcm) < 0)
+        goto fail;
+
+    uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
+    if(ordinary_pcm16_control(pcm, SND_OBSERVATION_START, 0,
+            SND_CHANNEL_START_DELAYED, &stream->config, deadline) < 0)
+        goto fail;
+    uint64_t mask = (UINT64_C(1) << stream->ch[0]) | (UINT64_C(1) << stream->ch[1]);
+    uint64_t earliest = timer_ms_gettime64();
+    if(snd_channels_start_sync(mask) < 0)
+        goto fail;
+    for(unsigned i = 0; i < 2; ++i)
+        pcm->voice[i].cursor = (ordinary_pcm16_cursor_t){0, earliest, earliest};
+    if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
+            0, &stream->config, deadline) < 0 ||
+       ordinary_pcm16_sample(pcm, pcm->rate, deadline) < 0)
+        goto fail;
+
+    pcm->running = true;
+    stream->state = SND_STREAM_STATE_PLAYING;
+    return ordinary_pcm16_unlock(0);
+fail:
+    return ordinary_pcm16_unlock(ordinary_pcm16_fault(pcm));
+}
+
+static bool ordinary_pcm16_room(const snd_ordinary_pcm16_t *pcm) {
+    uint64_t old_end = pcm->committed - pcm->ring / 2;
+    return pcm->voice[0].cursor.frames >= old_end &&
+           pcm->voice[1].cursor.frames >= old_end;
+}
+
+int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm) {
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return -1;
+    int result = ordinary_pcm16_ready(pcm);
+    if(result == 0) {
+        uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
+        if(ordinary_pcm16_sample(pcm, pcm->rate, deadline) < 0 ||
+           (ordinary_pcm16_room(pcm) && ordinary_pcm16_fill(pcm) < 0))
+            result = ordinary_pcm16_fault(pcm);
+    }
+    return ordinary_pcm16_unlock(result);
+}
+
+int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
+    if(!ordinary_pcm16_rate(rate)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return -1;
+    int result = ordinary_pcm16_ready(pcm);
+    if(result < 0 || pcm->rate == rate)
+        return ordinary_pcm16_unlock(result);
+
+    strchan_t *stream = &streams[pcm->handle];
+    uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
+    snd_stream_config_t config = stream->config;
+    config.sample_rate = rate;
+    uint32_t upper = pcm->rate > rate ? pcm->rate : rate;
+    if(ordinary_pcm16_sample(pcm, pcm->rate, deadline) < 0 ||
+       ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_FREQUENCY,
+                              0, &config, deadline) < 0 ||
+       ordinary_pcm16_sample(pcm, upper, deadline) < 0)
+        return ordinary_pcm16_unlock(ordinary_pcm16_fault(pcm));
+
+    pcm->rate = rate;
+    stream->config = config;
+    stream->frequency = (int)rate;
+    return ordinary_pcm16_unlock(0);
+}
+
+int snd_ordinary_pcm16_status(const snd_ordinary_pcm16_t *pcm,
+                              snd_ordinary_pcm16_status_t *out) {
+    if(!out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return -1;
+    *out = (snd_ordinary_pcm16_status_t){
+        { pcm->voice[0].cursor.frames, pcm->voice[1].cursor.frames },
+        pcm->committed, pcm->rate, pcm->error
+    };
+    return ordinary_pcm16_unlock(0);
+}
+
+int snd_ordinary_pcm16_stop(snd_ordinary_pcm16_t *pcm, uint32_t timeout) {
+    if(!timeout) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return -1;
+    if(pcm->stopped)
+        return ordinary_pcm16_unlock(0);
+
+    pcm->running = false;
+    uint64_t deadline = timer_ms_gettime64() + timeout;
+    if(pcm->attempted && snd_stream_stop_ex(pcm->handle, timeout) < 0)
+        return ordinary_pcm16_unlock(-1);
+    if(ordinary_pcm16_wait(pcm, deadline) < 0)
+        return ordinary_pcm16_unlock(-1);
+    for(unsigned i = 0; i < 2; ++i)
+        if(ordinary_pcm16_retire(&pcm->voice[i], deadline) < 0)
+            return ordinary_pcm16_unlock(-1);
+
+    free(pcm->staging);
+    pcm->staging = NULL;
+    pcm->fill = NULL;
+    pcm->context = NULL;
+    pcm->stopped = true;
+    return ordinary_pcm16_unlock(0);
+}
+
+int snd_ordinary_pcm16_close(snd_ordinary_pcm16_t *pcm) {
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return -1;
+    if(pcm->attempted) {
+        errno = EBUSY;
+        return ordinary_pcm16_unlock(-1);
+    }
+
+    strchan_t *stream = &streams[pcm->handle];
+    stream->service_owner = NULL;
+    int result = snd_stream_destroy_ex(pcm->handle, SND_STREAM_TRANSFER_TIMEOUT_DEFAULT);
+    if(result == 0) {
+        sem_destroy(&pcm->dma);
+        free(pcm->staging);
+        free(pcm);
+    }
+    else
+        stream->service_owner = pcm;
+    return ordinary_pcm16_unlock(result);
 }
 
 /* Retained PCM uses the existing stream allocator, PCM splitter and two-stage
