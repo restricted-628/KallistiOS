@@ -14,7 +14,8 @@ it is a historical index, not evidence that those changes passed tests.
   CPU modes: after discarding 128 frames they resumed on the expected
   source frame, crossed two high-rate wraps, paused again and returned
   to unity through logical PLAYEND. The 16,384-frame ring retains its
-  previous limits. The larger-ring high endpoint is a separate test.
+  previous limits. A separate mono BIOS dynarec run verified the
+  186,736 Hz held restart on a 65,504-frame ring.
 
 - A mono or stereo Flycast title paused at a confirmed source frame can
   now request a different pitch for resume (22,050–44,100 Hz). Staging

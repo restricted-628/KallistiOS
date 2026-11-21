@@ -749,6 +749,14 @@ through each resume and terminal source drain. The
 tracks at 44,100 Hz. It stages +12 while held, checks 88,200 Hz playback
 across ring wraps, cuts at the higher pitch, and resumes at unity.
 
+A separate mono test on the 65,504-frame ring verified a held restart at
+186,736 Hz (pitch word `0x103c`) in Flycast's BIOS dynarec. After a cut
+at source frame 76,845 and a discard of 128 frames, 271 silent input
+frames placed the first survivor (76,973) exactly at mixer tick 64 of
+the restart. After two more wraps, the title paused again and resumed
+at unity through PLAYEND. This endpoint has not been verified in stereo,
+in the interpreter, or on retail hardware.
+
 ### Retained output clock
 
 Build with `ADX_RETAINED_CLOCK=1` against the fork's private retained-PCM
