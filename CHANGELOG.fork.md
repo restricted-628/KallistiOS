@@ -8,6 +8,10 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- At setup, applications can optionally partition voices among MIDI, managed
+  or automatic sound effects, and ordinary PCM streams. Stereo streams reserve
+  both voices together. The default is still one shared pool; raw callers
+  remain responsible for coordinating explicitly numbered channels.
 - An ordinary stereo ADX player can re-prime its existing allocation after
   checked stop and producer shutdown. Before first output, discard on a
   paused, fully decoded direct source reports the frames actually removed
