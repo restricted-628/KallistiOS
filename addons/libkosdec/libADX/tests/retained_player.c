@@ -611,6 +611,7 @@ static void compat_vsync_anchor(void) {
     for(unsigned pass = 0; pass < 16 && info(f).state == KOSDEC_ADX_PLAYER_PREFILL; ++pass)
         CHECK(!kosdec_adx_compat_exec_server(&service,&result));
     CHECK(info(f).state == KOSDEC_ADX_PLAYER_PLAYING && clock.reads == 1);
+    CHECK(kosdec_adx_compat_player_set_live_transpose(p,-12,0)<0 && errno==ENOTSUP && !mock_updates);
     CHECK(p->compat_vsync_anchor == 0 && p->compat_vsync_anchor_tick == UINT32_MAX - 1);
 
     CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_NTSC));

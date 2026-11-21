@@ -994,7 +994,7 @@ static int poll_player(struct kosdec_adx_player *p) {
         if(!kosdec_adx_pipe_get_format(&p->producer.pipe,&rate,&channels)) return failed(p,EPROTO);
         if(has_output(p) &&
            (rate != p->info.sample_rate || channels != p->output.channels)) return failed(p,EPROTO);
-        if(!p->compat_start_pitch || !has_output(p)) {
+        if(!has_output(p)) {
             uint32_t output_rate = p->requested_rate ? p->requested_rate : rate;
             if(output_rate < 8000 || output_rate > 48000) return failed(p,ENOTSUP);
             if(p->compat_start_pitch && !p->requested_rate) {
@@ -1757,21 +1757,51 @@ int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *p, in
     *cents = p->compat_controls.detune;
     return 0;
 }
+static int cache_pitch_units(struct kosdec_adx_player *p, int32_t semitones,
+    int32_t cents, int *units) {
+    if(kosdec_adx_compat_player_cache_transpose(p,semitones,cents) < 0) return -1;
+    *units = 256 * p->compat_controls.transpose + (256 * p->compat_controls.detune) / 100;
+    if(*units < -6399 || *units > 6399) {
+        errno = ERANGE;
+        return -1;
+    }
+    return 0;
+}
+
 int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *p,
     int32_t semitones, int32_t cents) {
     if(!valid(p)) return bad();
     if(p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound) return unsupported();
-    if(kosdec_adx_compat_player_cache_transpose(p,semitones,cents) < 0) return -1;
-
-    int units = 256 * p->compat_controls.transpose + (256 * p->compat_controls.detune) / 100;
-    if(units < -6399 || units > 6399) {
-        errno = ERANGE;
-        return -1;
-    }
+    int units;
+    if(cache_pitch_units(p,semitones,cents,&units) < 0) return -1;
     p->compat_start_pitch_units = (int16_t)units;
     p->compat_start_pitch = true;
     p->compat_start_rate = 0;
     return 0;
+}
+
+static int update_output_rate(struct kosdec_adx_player *p, uint32_t rate) {
+    snd_stream_config_t config = p->output;
+    config.sample_rate = rate;
+    if(snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_FREQUENCY) < 0)
+        return failed(p,errno);
+    p->output = config;
+    p->info.output_rate = rate;
+    return 0;
+}
+
+int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
+    int32_t semitones, int32_t cents) {
+    if(!valid(p)) return bad();
+    if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING || !p->source_bound ||
+       p->retained_offsets || p->sound == SND_STREAM_INVALID || p->info.channels != 1)
+        return unsupported();
+    int units;
+    if(cache_pitch_units(p,semitones,cents,&units) < 0) return -1;
+    if(p->requested_rate) return busy();
+    uint32_t rate = media_adx_initial_pitch_rate(p->info.sample_rate,units);
+    if(!rate || rate > 48000) return unsupported();
+    return update_output_rate(p,rate);
 }
 
 int kosdec_adx_player_set_output(struct kosdec_adx_player *p,
@@ -1826,13 +1856,9 @@ int kosdec_adx_player_set_rate(struct kosdec_adx_player *p, uint32_t hz) {
        p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
     if(p->retained_pcm) return unsupported();
     if(p->sound != SND_STREAM_INVALID) {
-        snd_stream_config_t config = p->output;
-        config.sample_rate = hz ? hz : p->info.sample_rate;
-        if(config.sample_rate < 8000 || config.sample_rate > 48000) return bad();
-        if(snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_FREQUENCY) < 0)
-            return failed(p,errno);
-        p->output = config;
-        p->info.output_rate = config.sample_rate;
+        uint32_t rate = hz ? hz : p->info.sample_rate;
+        if(rate < 8000 || rate > 48000) return bad();
+        if(update_output_rate(p,rate) < 0) return -1;
     }
     p->requested_rate = hz;
     return 0;

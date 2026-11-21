@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Live transpose for ordinary mono libADX playback
+
+- An ordinary mono compatibility player can request a pitch change while
+  playing. Success means the frequency command was queued, not that AICA
+  applied it at a particular sample. An explicit native rate override takes
+  precedence. Stereo and retained playback do not accept this operation.
+
 ## 2026-11-21 — Initial pitch for retained libADX playback
 
 - A retained PCM player can start at an exact ADX pitch within its existing

@@ -242,9 +242,20 @@ prior staged setting and remains available through requested readback.
 The cache-only setter does not stage an output rate. Cancelling before
 allocation clears staging. Same-format source reuse keeps the active
 output rate, and replacement players need their own initial setting.
-Live transpose, retained routing,
-applied stereo synchrony and physical DSP output remain open. Rebuild
-player users with the matching header and archive.
+On an ordinary PLAYING mono title,
+`kosdec_adx_compat_player_set_live_transpose` requests a frequency update
+using the decoded source rate and the exact native 8,000–48,000 Hz
+interval. Success records command admission in the output rate reported
+by `get_info`. A nonzero native Hz override takes precedence and returns
+`EBUSY`; clear it with the native setter before requesting live transpose.
+An unencodable request leaves playback at the last admitted rate.
+Request readback still reports the latest clamped pair on eligible
+players. If command submission fails, perform checked STOP. The
+verified mono runtime used the fiber-backed producer, 32,768-frame
+decoded queue, 8,192-frame sound ring and 1 ms service sleep.
+Live stereo and retained transpose, retained routing, applied stereo
+synchrony and physical DSP output remain open. Rebuild player users
+with the matching header and archive.
 
 At 88.2 kHz the verified runtime used a fiber-backed producer, a 32,768-frame
 decoded PCM queue, a 16,384-byte sound ring per channel and a 1 ms sleep

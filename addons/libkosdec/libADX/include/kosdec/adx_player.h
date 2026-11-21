@@ -489,6 +489,17 @@ int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *, int
    of the output keeps its actual rate, and a replacement player starts fresh. */
 int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,
     int32_t semitones, int32_t cents);
+/* On the player owner thread, request live transpose for a PLAYING ordinary
+   mono compatibility title. Zero means the frequency command was admitted.
+   The output rate in get_info records admission; device application is
+   separate. Preparation, stereo, retained and shutdown return ENOTSUP
+   before changing the requested cache. On an eligible player the pair is
+   cached even if the request exceeds the stock unit domain (ERANGE), no
+   exact rate fits 8000..48000 Hz (ENOTSUP), or a nonzero native Hz override
+   takes precedence (EBUSY). A backend error preserves the last admitted
+   rate and requires checked STOP before fresh playback. */
+int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *,
+    int32_t semitones, int32_t cents);
 /* Checked linear0..255 per-channel gain and pan (0left,128center,255right).
    May set before start or during playback. Default full volume; mono centered,
    stereo separated. Channel1 settings ignored for mono. This is KOS's scale,

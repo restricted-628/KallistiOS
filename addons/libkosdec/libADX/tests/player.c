@@ -848,6 +848,79 @@ static void compat_initial_pitch(void) {
     }
 }
 
+static void compat_live_pitch(unsigned channels, unsigned source_rate) {
+    struct fixture f;
+    init(&f,channels,false);
+    put32(f.data+8,source_rate);
+    struct kosdec_adx_player *p=&f.player;
+    uint64_t now=0;
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    const struct kosdec_adx_compat_config config={.clock_us=compat_clock,.clock_context=&now};
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+    CHECK(!kosdec_adx_player_set_output(p,200,170,143,72));
+    CHECK(kosdec_adx_compat_player_set_fx(p,7,-12)==KOSDEC_ADX_ROUTING_STAGED);
+    CHECK(kosdec_adx_compat_player_set_live_transpose(p,-12,0)<0 && errno==ENOTSUP);
+    CHECK(!kosdec_adx_player_start(p));
+    CHECK(kosdec_adx_compat_player_set_live_transpose(p,-12,0)<0 && errno==ENOTSUP);
+    for(unsigned i=0;i<32 && !mock_starts;++i)
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(&f).state==KOSDEC_ADX_PLAYER_PLAYING && mock_starts==1 && !mock_updates);
+    int32_t semitones, cents;
+    CHECK(!kosdec_adx_compat_player_get_transpose(p,&semitones,&cents) && !semitones && !cents);
+    if(channels==2 || source_rate==8000) {
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,0,0)<0 && errno==ENOTSUP);
+        CHECK(!mock_updates && info(&f).output_rate==source_rate);
+    }
+    else {
+        service.servicing=true;
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,-12,0)<0 && errno==EBUSY);
+        service.servicing=false;
+        CHECK(!kosdec_adx_compat_player_get_transpose(p,&semitones,&cents) && !semitones && !cents);
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,INT32_MIN,INT32_MAX)<0 && errno==ERANGE);
+        CHECK(!kosdec_adx_compat_player_get_transpose(p,&semitones,&cents) && semitones==-96 && cents==99);
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,12,0)<0 && errno==ENOTSUP);
+        CHECK(!mock_updates && info(&f).output_rate==44100 && info(&f).state==KOSDEC_ADX_PLAYER_PLAYING);
+        CHECK(!kosdec_adx_player_set_rate(p,32000));
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,-12,0)<0 && errno==EBUSY);
+        CHECK(mock_updates==1 && mock_output.sample_rate==32000 && info(&f).output_rate==32000);
+        CHECK(!kosdec_adx_compat_player_get_transpose(p,&semitones,&cents) && semitones==-12 && !cents);
+        CHECK(!kosdec_adx_player_set_rate(p,0));
+        CHECK(!kosdec_adx_compat_player_set_live_transpose(p,-12,0));
+        CHECK(mock_output.sample_rate==22050 && info(&f).output_rate==22050);
+        CHECK(!kosdec_adx_compat_player_set_live_transpose(p,0,3));
+        CHECK(mock_updates==4 && mock_update_fields==SND_CHANNEL_UPDATE_FREQUENCY);
+        CHECK(mock_output.sample_rate==44144 && info(&f).sample_rate==44100 &&
+              info(&f).output_rate==44144 && !p->requested_rate);
+        CHECK(mock_output.channel[0].volume==200 && mock_output.channel[0].pan==143 &&
+              mock_output.channel[0].routing.effect_channel==7 &&
+              mock_output.channel[0].routing.effect_send==13);
+        for(unsigned i=0;i<32 && info(&f).state!=KOSDEC_ADX_PLAYER_SOURCE_END;++i)
+            CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        CHECK(!kosdec_adx_player_release_source(p));
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,0,0)<0 && errno==ENOTSUP);
+        kosdec_adx_stream_init(&f.stream,input,&f,(uint32_t)f.bytes,false);
+        CHECK(!kosdec_adx_player_bind_source(p,&f.stream,NULL));
+        for(unsigned i=0;i<32 && info(&f).state==KOSDEC_ADX_PLAYER_PREFILL;++i)
+            CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        CHECK(info(&f).state==KOSDEC_ADX_PLAYER_PLAYING && info(&f).output_rate==44144 &&
+              mock_output.sample_rate==44144 && mock_starts==1 && mock_updates==4);
+        mock_failure=MOCK_UPDATE;
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,0,0)<0 && errno==EIO);
+        CHECK(info(&f).first_error==EIO && info(&f).state==KOSDEC_ADX_PLAYER_FAILED &&
+              info(&f).output_rate==44144 && mock_output.sample_rate==44144 && mock_updates==5);
+        CHECK(!kosdec_adx_compat_player_get_transpose(p,&semitones,&cents) && !semitones && !cents);
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p,-12,0)<0 && errno==ENOTSUP && mock_updates==5);
+        mock_failure=MOCK_OK;
+    }
+    CHECK(!kosdec_adx_player_stop(p,1000) && mock_stops==1);
+    CHECK(kosdec_adx_compat_player_set_live_transpose(p,-12,0)<0 && errno==ENOTSUP);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f.data);
+}
+
 static void compat_short_and_rebind(void) {
     struct fixture f;
     init(&f,2,false);
@@ -1543,6 +1616,8 @@ int main(void) {
     puts("ADX_COMPAT_ROUTING_PASS all whole-dB levels, mono/stereo, rebind and partial admission");
     compat_initial_pitch();
     puts("ADX_COMPAT_INITIAL_PITCH_PASS staging, request rejection, PCM source rate and output reuse");
+    compat_live_pitch(1,44100);compat_live_pitch(1,8000);compat_live_pitch(2,44100);
+    puts("ADX_COMPAT_LIVE_MONO_PITCH_PASS admission, unchanged controls, rebind and checked failure");
     compat_short_and_rebind();
     compat_transport_fault();
     finite_phased(PHASED_SEEK); finite_phased(PHASED_LOOP);
