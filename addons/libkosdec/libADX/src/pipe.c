@@ -194,6 +194,15 @@ struct kosdec_adx_stream_result media_adx_pipe_pump_limited(
 struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) {
     return media_adx_pipe_pump_limited(p,0,false);
 }
+bool media_adx_pipe_discard_done(struct kosdec_adx_pipe *p,
+    uint32_t read, uint32_t write, uint32_t frames) {
+    if(!valid(p) || __atomic_load_n(&p->terminal,__ATOMIC_ACQUIRE) != KOSDEC_ADX_DONE ||
+       __atomic_load_n(&p->write_cursor,__ATOMIC_ACQUIRE) != write ||
+       __atomic_load_n(&p->read_cursor,__ATOMIC_RELAXED) != read || frames > write-read)
+        return false;
+    if(frames) __atomic_store_n(&p->read_cursor,read+frames,__ATOMIC_RELEASE);
+    return true;
+}
 struct kosdec_adx_pipe_result kosdec_adx_pipe_read(
     struct kosdec_adx_pipe *p, int16_t *output, size_t capacity) {
     struct kosdec_adx_pipe_result r = {.producer = KOSDEC_ADX_BAD_ARGUMENT};

@@ -145,7 +145,7 @@ struct kosdec_adx_player {
     bool compat_chained, compat_phased, compat_renderer_ready;
     bool compat_ready_start; /* Last prepared result for the current compatibility binding. */
     bool compat_decode_ended; /* Logical DECEND, independent of final PCM submission. */
-    bool compat_paused, compat_preoutput_playing;
+    bool compat_paused, compat_preoutput_playing, compat_discarded_all;
     struct kosdec_adx_player_error diagnostic;
     kosdec_adx_player_error_callback error_callback;
     void *error_context;
@@ -364,9 +364,14 @@ int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
    With one bound, paused title preparing its first output, a nonpositive
    request services the collection once and re-anchors time at zero elapsed
    frames. A positive request of 1..15 frames does the same after preparation
-   begins for a direct nonlinked ADX stream. Neither case consumes PCM or
-   delivers VBlank. Other paused requests return ENOTSUP. A service error or
-   rejected request leaves discarded unchanged. */
+   begins for a direct nonlinked ADX stream. Larger requests on a fully
+   decoded, ordinary direct source round down to 16-frame units and then
+   remove at most the available common PCM. The cursor changes only after
+   successful service, and the result is the actual count per channel.
+   No VBlank is delivered and discarded frames do not advance playback
+   time. Releasing an entirely discarded source ends decode without
+   allocating Audio. Other paused requests return ENOTSUP. Service failure
+   or a rejected request leaves the cursor and discarded unchanged. */
 int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *,
     int32_t requested, int32_t *discarded);
 /* Owner-thread snapshot, updated by poll or compatibility title dispatch.

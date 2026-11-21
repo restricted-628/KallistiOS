@@ -201,6 +201,7 @@ static int start_source(struct kosdec_adx_player *p) {
         p->compat_ready_start = false;
         p->compat_decode_ended = false;
         p->compat_preoutput_playing = false;
+        p->compat_discarded_all = false;
         p->compat_initial_tl = 0;
         if(p->compat_phased && (pipe->stream || pipe->sequence))
             p->producer.input_capacity = sizeof(pipe->stream->input);
@@ -625,8 +626,15 @@ int kosdec_adx_compat_player_get_time(struct kosdec_adx_player *p,
         return 0;
     }
     case KOSDEC_ADX_PLAYER_PLAYING:
-    case KOSDEC_ADX_PLAYER_SOURCE_END:
         return compat_live_time(p,out);
+    case KOSDEC_ADX_PLAYER_SOURCE_END:
+        if(!p->compat_discarded_all)
+            return compat_live_time(p,out);
+        *out = (struct kosdec_adx_time){
+            .count = p->time_offset,
+            .frequency = p->time_uses_vsync ? p->vsync_frequency : p->info.sample_rate
+        };
+        return 0;
     default:
         break;
     }
@@ -668,22 +676,37 @@ int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *p,
     if(!valid(p) || !discarded) return bad();
     if(!p->compat_service) return unsupported();
     if(p->compat_service->servicing) return busy();
+    uint32_t removed = 0;
     if(p->compat_paused) {
         if(!p->source_bound || p->info.state != KOSDEC_ADX_PLAYER_PREFILL ||
            has_output(p) || p->info.copied_frames || !compat_single_title(p))
             return unsupported();
-        if(requested > 0) {
-            const struct kosdec_adx_stream *stream = p->producer.pipe.stream;
-            /* The stock renderer rounds a PCM16 request to 32 bytes per channel.
-               Before the first output, a smaller request leaves the decoded PCM intact. */
-            if(requested >= 16 || !p->compat_prefill_frames || !stream || stream->linked)
+        struct kosdec_adx_pipe *pipe = &p->producer.pipe;
+        const struct kosdec_adx_stream *stream = pipe->stream;
+        if(requested > 0 && (!p->compat_prefill_frames || !stream || stream->linked))
+            return unsupported();
+        uint32_t read = 0, write = 0;
+        if(requested >= 16) {
+            if(p->retained_offsets || kosdec_adx_service_get_state(&p->producer).status != KOSDEC_ADX_DONE)
                 return unsupported();
+            /* PCM16 requests round down to 32 bytes per channel. After DONE
+               the producer needs no freed space during this service pass. */
+            removed = (uint32_t)requested & ~UINT32_C(15);
+            read = __atomic_load_n(&pipe->read_cursor,__ATOMIC_RELAXED);
+            write = __atomic_load_n(&pipe->write_cursor,__ATOMIC_ACQUIRE);
+            if(removed > write-read) removed = write-read;
         }
         struct kosdec_adx_compat_result result;
         if(kosdec_adx_compat_exec_server(p->compat_service,&result) < 0)
             return -1;
         if(p->info.state != KOSDEC_ADX_PLAYER_PREFILL || has_output(p))
             return unsupported();
+        if(requested >= 16) {
+            if(!p->compat_paused || !p->source_bound || pipe->stream != stream ||
+               !media_adx_pipe_discard_done(pipe,read,write,removed))
+                return busy();
+            p->compat_discarded_all = removed == write-read;
+        }
 
         /* No frames have reached a renderer. Re-anchor to raw position zero
            only after the ordinary service pass, which delivers no VBlank. */
@@ -691,7 +714,7 @@ int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *p,
         p->compat_vsync_anchor_tick = compat_collection_vsync(p) || !p->vsync_ticks ?
             p->compat_service->vsync_count : p->vsync_ticks(p->vsync_context);
     }
-    *discarded = 0;
+    *discarded = (int32_t)removed;
     return 0;
 }
 
@@ -1103,6 +1126,10 @@ static int poll_player(struct kosdec_adx_player *p) {
             p->pcm_enabled = false;
             if(poll_title_output(p) < 0) return failed(p,errno);
             return p->callback_failed ? failed(p,p->info.first_error) : 0;
+        }
+        if(p->compat_discarded_all && r.drained) {
+            p->info.state = KOSDEC_ADX_PLAYER_SOURCE_END;
+            return 0;
         }
         /* The compatibility gate describes preparation. The native refill
            still needs its startup PCM window to avoid an internal gap. */
@@ -1522,6 +1549,7 @@ static int compat_detach(void *context) {
     p->compat_decode_ended = false;
     p->compat_paused = false;
     p->compat_preoutput_playing = false;
+    p->compat_discarded_all = false;
     p->compat_requested_attenuation = 0;
     p->compat_initial_attenuation = false;
     p->compat_initial_tl = 0;

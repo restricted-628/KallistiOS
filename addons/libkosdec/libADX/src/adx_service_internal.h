@@ -11,6 +11,10 @@
    PCM reservation. Zero selects the normal workspace limit. */
 struct kosdec_adx_stream_result media_adx_pipe_pump_limited(
     struct kosdec_adx_pipe *, size_t frame_limit, bool separate_transport);
+/* Owner-side commit of a staged decoded-only discard. Terminal and both
+   captured cursors must still match. A rejected commit leaves PCM intact. */
+bool media_adx_pipe_discard_done(struct kosdec_adx_pipe *,
+    uint32_t read, uint32_t write, uint32_t frames);
 /* While awaiting DECINFO, allow header and control steps. Once the format
    is published, wait for the owner to admit the first PCM reservation. */
 struct kosdec_adx_stream_result media_adx_service_step_limited(

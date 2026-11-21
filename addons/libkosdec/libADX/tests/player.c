@@ -342,10 +342,10 @@ static void compat_preoutput_pause(bool phased) {
     uint32_t tick=service.vsync_count;
     unsigned visits=probe.visits;
     removed=-999;
+    CHECK(!kosdec_adx_compat_bind(&service,1,&titles[0].ops,&f.player));
     CHECK(kosdec_adx_compat_player_discard_samples(&f.player,16,&removed)<0 &&
           errno==ENOTSUP && removed==-999 && service.vsync_count==tick);
     CHECK(probe.visits==visits);
-    CHECK(!kosdec_adx_compat_bind(&service,1,&titles[0].ops,&f.player));
     CHECK(kosdec_adx_compat_player_discard_samples(&f.player,0,&removed)<0 &&
           errno==ENOTSUP && removed==-999 && probe.visits==visits);
     CHECK(!kosdec_adx_compat_unbind(&service,1));
@@ -406,6 +406,112 @@ static void compat_preoutput_pause(bool phased) {
     removed=-999;
     CHECK(kosdec_adx_compat_player_discard_samples(&f.player,5,&removed)<0 &&
           errno==ENOTSUP && removed==-999);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f.data);
+}
+
+static void compat_discard_decoded(bool phased, bool short_source) {
+    struct fixture f;
+    init(&f,2,false);
+    unsigned frames=short_source ? 9 : 65;
+    if(short_source) {
+        put32(f.data+12,frames);
+        memmove(f.data+50+36,f.data+f.bytes-18,18);
+        f.bytes=50+36+18;
+        kosdec_adx_stream_init(&f.stream,input,&f,(uint32_t)f.bytes,false);
+    }
+    f.config.sound_bytes=64;
+    CHECK(!kosdec_adx_player_init(&f.player,&f.stream,NULL,&f.config));
+    uint64_t now=0;
+    struct compat_reload_probe probe={.player=&f.player};
+    const struct kosdec_adx_compat_config config={
+        .clock_us=compat_clock,.clock_context=&now,
+        .phases[KOSDEC_ADX_COMPAT_RELOAD]={.service=compat_count_reload,.context=&probe}
+    };
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_enable_vsync_clock(&service));
+    CHECK(!(phased ? kosdec_adx_compat_bind_phased_player(&service,0,&f.player) :
+                     kosdec_adx_compat_bind_player(&service,0,&f.player)));
+    CHECK(!kosdec_adx_compat_player_set_time_mode(&f.player,KOSDEC_ADX_TIME_PAL));
+    CHECK(!kosdec_adx_player_set_time_offset(&f.player,-59));
+    CHECK(!kosdec_adx_compat_player_pause(&f.player,true));
+    CHECK(!kosdec_adx_player_start(&f.player));
+    int32_t removed=-987;
+    bool blocked=false;
+    for(unsigned i=0;i<2000;++i) {
+        CHECK(!kosdec_adx_compat_exec_vsync(&service,&result));
+        struct kosdec_adx_player_info state=info(&f);
+        if(state.decoder==KOSDEC_ADX_DONE && state.ready_start) break;
+        if(phased && f.player.compat_prefill_frames && state.decoder<KOSDEC_ADX_DONE && !blocked) {
+            unsigned visits=probe.visits;
+            CHECK(kosdec_adx_compat_player_discard_samples(&f.player,16,&removed)<0 &&
+                  errno==ENOTSUP && removed==-987 && probe.visits==visits);
+            blocked=true;
+        }
+        if(!phased) mock_pause();
+    }
+    CHECK(!phased || blocked);
+    CHECK(info(&f).decoder==KOSDEC_ADX_DONE && info(&f).ready_start && !mock_allocs);
+    struct kosdec_adx_pipe *pipe=&f.player.producer.pipe;
+    CHECK(kosdec_adx_pipe_read(pipe,NULL,0).queued_frames==frames);
+
+    const unsigned visits=probe.visits;
+    const uint32_t tick=service.vsync_count;
+    f.player.compat_vsync_anchor=321;
+    f.player.compat_vsync_anchor_tick=tick-1;
+    probe.fail=true;
+    CHECK(kosdec_adx_compat_player_discard_samples(&f.player,47,&removed)<0 &&
+          errno==EIO && removed==-987 && probe.visits==visits+1);
+    CHECK(kosdec_adx_pipe_read(pipe,NULL,0).queued_frames==frames &&
+          f.player.compat_vsync_anchor==321 && service.vsync_count==tick);
+    probe.fail=false;
+    unsigned actual=short_source ? 9 : 32;
+    CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,47,&removed) &&
+          removed==(int32_t)actual && probe.visits==visits+2);
+    CHECK(probe.observed_anchor==321 && f.player.compat_vsync_anchor==0 &&
+          f.player.compat_vsync_anchor_tick==tick && service.vsync_count==tick);
+    CHECK(kosdec_adx_pipe_read(pipe,NULL,0).queued_frames==frames-actual);
+    if(short_source) {
+        removed=-987;
+        CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,32,&removed) && !removed);
+        CHECK(probe.visits==visits+3 && service.vsync_count==tick);
+    }
+    struct kosdec_adx_time time;
+    CHECK(!kosdec_adx_compat_player_get_time(&f.player,&time) &&
+          time.count==-59 && time.frequency==5000);
+    CHECK(!mock_allocs && !info(&f).copied_frames);
+    CHECK(!kosdec_adx_compat_player_pause(&f.player,false));
+    for(unsigned i=0;i<2000 && info(&f).state!=KOSDEC_ADX_PLAYER_SOURCE_END;++i) {
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        if(!phased) mock_pause();
+    }
+    struct kosdec_adx_player_info ended=info(&f);
+    CHECK(ended.state==KOSDEC_ADX_PLAYER_SOURCE_END &&
+          ended.copied_frames==frames-actual && ended.source_frames==frames-actual);
+    if(short_source) {
+        bool completed=true;
+        int64_t centiseconds=99;
+        enum kosdec_adx_compat_state state;
+        CHECK(!mock_allocs && !mock_starts && !ended.sources_started);
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_DECEND);
+        CHECK(!kosdec_adx_compat_player_is_completed(&f.player,&completed) && !completed);
+        CHECK(!kosdec_adx_compat_player_get_time(&f.player,&time) &&
+              time.count==-59 && time.frequency==5000);
+        CHECK(!kosdec_adx_compat_player_get_time_real(&f.player,&centiseconds) && centiseconds==-1);
+        CHECK(!kosdec_adx_compat_player_set_time_mode(&f.player,KOSDEC_ADX_TIME_SOURCE));
+        CHECK(!kosdec_adx_compat_player_get_time(&f.player,&time) &&
+              time.count==-59 && time.frequency==44100);
+        CHECK(!kosdec_adx_compat_player_get_time_real(&f.player,&centiseconds) && centiseconds==0);
+    }
+    else {
+        CHECK(mock_allocs==1 && mock_starts==1 && mock_frames==frames-actual);
+        for(unsigned i=0;i<frames-actual;++i)
+            for(unsigned ch=0;ch<2;++ch) CHECK(mock_pcm[2*i+ch]==golden[ch][i+actual]);
+    }
+    CHECK(!kosdec_adx_player_stop(&f.player,1000));
     CHECK(!kosdec_adx_compat_unbind(&service,0));
     free(f.data);
 }
@@ -1981,6 +2087,9 @@ int main(void) {
     compat_start_threshold();compat_prepare_room();compat_ready_lifecycle();compat_delayed_footer();compat_inactive_time();
     compat_preoutput_pause(true);compat_preoutput_pause(false);
     puts("ADX_COMPAT_PREOUTPUT_PAUSE_PASS logical PLAYING, time, resume and discard gate");
+    compat_discard_decoded(true,false);compat_discard_decoded(false,false);
+    compat_discard_decoded(true,true);compat_discard_decoded(false,true);
+    puts("ADX_COMPAT_DECODED_DISCARD_PASS stable heads, failed-service retry, preserved stereo tail and empty source");
     compat_attenuation_cache();
     compat_routing_domain();compat_routing_live(1);compat_routing_live(2);
     puts("ADX_COMPAT_ROUTING_PASS all whole-dB levels, mono/stereo, rebind and partial admission");

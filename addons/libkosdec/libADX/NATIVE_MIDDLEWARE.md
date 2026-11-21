@@ -162,8 +162,15 @@ or clock changes. A single paused title preparing its first output can
 submit zero or a negative count. For a direct ADX stream in preparation,
 positive requests of 1 to 15 frames also remove zero frames. These calls
 service the collection once and then re-anchor time at zero elapsed
-frames. They keep all decoded PCM and deliver no VBlank. Other paused
-requests return ENOTSUP.
+frames. They keep all decoded PCM and deliver no VBlank. With a fully
+decoded direct ADX source and ordinary output selected, requests of
+16 or more frames round down to 16-frame units, then remove only the
+available common frames. Service completes before the stable software
+cursor moves, so retry after a service error cannot discard twice.
+The return count through `discarded` is the whole frames actually
+removed per channel. Source time stays at zero until output starts.
+If nothing survives, resume publishes decode end without allocating
+audio. Other paused requests return ENOTSUP.
 
 The compatibility time query returns the signed display offset before
 start and after checked STOP. The selected denominator is 1 for source,
