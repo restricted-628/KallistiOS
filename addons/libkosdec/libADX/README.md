@@ -653,6 +653,34 @@ live pan/gain/routing and native frequency overrides use other output
 profiles. The build and player opt-ins leave the existing mono and
 default paths available.
 
+### Flycast active pause
+
+Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against
+the matching build-gated Audio backend. Bind a READY title with one finite,
+direct stereo ADX source at 44,100 Hz. Enable ordinary stereo and then
+`kosdec_adx_compat_player_enable_flycast_pause` before start. This profile
+uses sample time and a 16,384-frame/channel sound ring. It requires an
+owner and a producer that can supply a dense continuation. Rebuild with
+matching headers.
+
+Call the normal compatibility pause and discard APIs. A pending cut must
+finish before discard or resume. This backend can arm only during the
+first traversal of the current bank, after START or resume. After a
+post-arm pause timeout, retry pause
+or complete checked stop. A pre-arm EAGAIN permits ordinary service and a
+new pause attempt. Resume uses the same reservation and inserts 64 silent
+output frames before the first surviving source frame. That preroll and the
+discarded source frames do not accrue title time. A hard resume failure
+requires checked stop. Retain the played reservation after stop. One pause-enabled title owns
+the two banks for the sound runtime. A subsequent fresh title can use
+ordinary stereo on its own allocation.
+
+The synthetic regression builds with `flycast-pause-test-elf`. Run
+`tests/generate_flycast_pause.py` with Python and each of the names `proof`
+and `fresh`. Mount the generated `disc` tree alongside the test ELF. It
+exercises five cycles, a withheld cut result retried on the same lease,
+a checked stop and an independent fresh title.
+
 ### Retained output clock
 
 Build with `ADX_RETAINED_CLOCK=1` against the fork's private retained-PCM

@@ -109,6 +109,7 @@ struct kosdec_adx_attenuation_status {
 };
 struct snd_retained_pcm;
 struct snd_ordinary_pcm16;
+struct kosdec_adx_flycast_pause;
 struct kosdec_adx_compat_service;
 struct kosdec_adx_compat_controls {
     int8_t direct_db, effect_db, transpose, detune;
@@ -182,6 +183,8 @@ struct kosdec_adx_player {
     bool ordinary_reprime_pending;
     bool ordinary_stereo;
     struct snd_ordinary_pcm16 *ordinary_pcm;
+    struct kosdec_adx_flycast_pause *flycast_pause;
+    bool flycast_pause_enabled, flycast_pause_unstarted;
     struct {
         uint64_t source_first;
         uint32_t source_frames;
@@ -293,7 +296,10 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *,
 /* Snapshot only. Generation zero queries output time without source attribution.
    Check valid before using the cursor. End denotes measured traversal of that
    generation's source spans. Audible end and physical retirement are separate.
-   A successful stop retains the Audio lease. Snapshot access remains valid. */
+   A successful stop retains the Audio lease. Snapshot access remains valid.
+   The Flycast-only pause opt-in also supports source snapshots with one
+   generation, slot-zero running credit, and adapter-local epochs. These
+   snapshots have no retained firmware session identity. */
 int kosdec_adx_player_get_source_output(const struct kosdec_adx_player *,
     uint64_t generation, struct kosdec_adx_source_output *);
 /* Set a signed display offset in the units of the query, source frames or
@@ -365,9 +371,13 @@ int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
    When ready and the separate wait-start gate is open, the compatibility
    title reports PLAYING and zero elapsed source frames. Clearing pause lets
    the next service pass start output when primed. Checked STOP preserves the
-   request. Playback with an admitted Audio handle requires a live-pause
-   backend, so this call returns ENOTSUP there. */
+   request. Playback with an admitted Audio handle requires the explicit
+   Flycast active-pause opt-in. */
 int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
+/* Experimental Flycast-only pause profile. Enable a READY compatibility
+   title with one finite 44.1 kHz direct stereo ADX source and a 16,384-frame
+   sound ring per channel. Requires matching build-gated Audio and libADX. */
+int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *);
 /* With pause clear, return zero discarded without servicing the title.
    With one bound, paused title preparing its first output, a nonpositive
    request services the collection once and re-anchors time at zero elapsed

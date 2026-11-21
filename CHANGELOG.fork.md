@@ -8,6 +8,13 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The optional Flycast libADX player now exposes active pause, sample
+  discard and resume for finite 44.1 kHz stereo ADX. Five cycles through the
+  public API passed in both BIOS CPU modes: source time froze while paused,
+  a lost cut result could be retried, and both channels resumed on the
+  exact surviving frame. See the libADX README for the synthetic test and
+  the limits on eligible sources, pause timing and end-of-stream data.
+
 - A Flycast-only build of the ordinary PCM16 backend can pause and resume one
   44.1 kHz stereo stream on the same two channels. It alternates between two
   reserved banks (128 KiB total); resume inserts 64 silent frames before the
