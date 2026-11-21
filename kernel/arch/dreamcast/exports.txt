@@ -257,6 +257,7 @@ snd_sh4_to_aica
 snd_sh4_to_aica_start
 snd_sh4_to_aica_stop
 snd_command_queue_is_locked
+snd_driver_has_pending_commands
 snd_channels_start_sync
 snd_driver_get_status
 snd_channel_config_init

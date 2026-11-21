@@ -571,6 +571,27 @@ int snd_command_queue_is_locked(bool *locked) {
     return 0;
 }
 
+int snd_driver_has_pending_commands(bool *pending) {
+    if(!pending) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    irq_disable_scoped();
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    bool empty;
+    if(shared_queue_state(SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE,
+                          AICA_MEM_RESP_QUEUE, &empty, NULL) < 0)
+        return -1;
+
+    *pending = !empty;
+    return 0;
+}
+
 int snd_channels_start_sync(uint64_t channels) {
     AICA_CMDSTR_CHANNEL_MASK(tmp, cmd, mask);
 

@@ -207,6 +207,21 @@ void snd_sh4_to_aica_stop(void);
 */
 int snd_command_queue_is_locked(bool *locked);
 
+/** \brief Snapshot whether any submitted commands remain in the AICA queue.
+
+    Includes commands waiting for dispatch, even while processing is gated.
+    The driver removes each record after dispatch or drops an invalid record.
+    This observation takes no host command mutex and submits no packet.
+
+    \param pending        Receives the pending state.
+    \retval 0             On success.
+    \retval -1            On NULL output (EINVAL), inactive sound or queue
+                          (ENODEV), or corrupt queue geometry (EPROTO).
+                          On failure the output is unchanged.
+    \sa snd_command_queue_is_locked
+*/
+int snd_driver_has_pending_commands(bool *pending);
+
 /** \brief Atomically start any selected AICA channels.
 
     The selected channels must first have been configured with delayed key-on.
