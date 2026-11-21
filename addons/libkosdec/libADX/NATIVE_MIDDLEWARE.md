@@ -228,15 +228,19 @@ admitted fields to non-retained output. Unbind restores the native
 configuration and clears the compatibility settings.
 
 Use `kosdec_adx_compat_player_set_initial_transpose` on a READY ordinary
-player to stage a zero-detune setting of −12, 0 or +12 semitones for a
-44.1 kHz source. The selected output rate is 22,050, 44,100 or 88,200 Hz.
+PCM16 player to stage semitones and cents. At prefill, the player uses
+the 8,000–48,000 Hz source header and the staged setting to select an
+integer rate that writes the same AICA pitch word as Sega Library 2.00J.
+The selection uses the exact rate interval within 8,000–88,200 Hz.
+Pitch words with no such rate fail with `ENOTSUP` before sound allocation.
+For example, the stock 8 kHz neutral word requires 7,994–7,998 Hz.
 The source rate and frame counts are unchanged. A nonzero explicit
-native rate takes precedence. Rejected requests leave the prior staged
-setting and are still available through requested transpose readback.
+native rate takes precedence. A rejected slot-domain request leaves the
+prior staged setting and remains available through requested readback.
 The cache-only setter does not stage an output rate. Cancelling before
 allocation clears staging. Same-format source reuse keeps the active
 output rate, and replacement players need their own initial setting.
-Live transpose, finer offsets, other source rates, retained routing,
+Retained initial pitch, live transpose, retained routing,
 applied stereo synchrony and physical DSP output remain open. Rebuild
 player users with the matching header and archive.
 

@@ -169,6 +169,8 @@ struct kosdec_adx_player {
     bool compat_initial_attenuation;
     struct kosdec_adx_compat_controls compat_controls;
     uint32_t compat_start_rate;
+    int16_t compat_start_pitch_units;
+    bool compat_start_pitch;
     unsigned compat_route_fields;
     snd_channel_routing_t compat_original_routing[2];
     bool time_uses_vsync;
@@ -472,14 +474,15 @@ int kosdec_adx_compat_player_get_fx(const struct kosdec_adx_player *, int32_t *b
    +/-99 respectively. This cache does not submit a pitch change. */
 int kosdec_adx_compat_player_cache_transpose(struct kosdec_adx_player *, int32_t semitones, int32_t cents);
 int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *, int32_t *semitones, int32_t *cents);
-/* Stage initial pitch on a READY ordinary compatibility player. The checked
-   profile is 44100 Hz source PCM at -12, 0 or +12 semitones and zero detune.
-   The first START uses exact playback Hz for this profile. An explicit
-   nonzero native rate set through kosdec_adx_player_set_rate takes precedence.
-   The source frequency remains available separately in get_info.
-   Cache the clamped request. ERANGE (outside the stock slot-command range)
-   and ENOTSUP (outside the qualified profile) preserve the prior staged
-   setting. Live and retained calls return ENOTSUP before changing the cache.
+/* Stage initial pitch on a READY ordinary compatibility player and cache
+   the requested values. ERANGE preserves staging when the request exceeds
+   the stock pitch-unit domain after clamping. Successful staging confirms a
+   request, with the exact output rate resolved when the source format becomes
+   known. Prefill fails with ENOTSUP before output allocation if the source
+   rate is outside 8000..48000 Hz or the exact pitch word has no representative
+   in 8000..88200 Hz. An explicit nonzero native rate takes precedence.
+   Source rate and requested output Hz remain separate in get_info.
+   Live and retained calls return ENOTSUP before changing the cache.
    Source cancellation before allocation clears staging. Same-format reuse
    of the output keeps its actual rate, and a replacement player starts fresh. */
 int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,

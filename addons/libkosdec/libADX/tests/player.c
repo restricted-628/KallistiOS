@@ -758,16 +758,25 @@ static void compat_transport_fault(void) {
 
 static void compat_initial_pitch(void) {
     const struct {
-        int semitones;
+        int semitones, cents;
         uint32_t source_rate, native_rate, output_rate;
         bool rebind, cancel;
     } cases[] = {
-        {-12, 44100, 0, 22050, false, false},
-        {0, 44100, 0, 44100, false, false},
-        {12, 44100, 0, 88200, true, false},
-        {12, 44100, 32000, 32000, false, false},
-        {12, 32000, 0, 0, false, false},
-        {12, 44100, 0, 44100, false, true}
+        {-12, 0, 44100, 0, 22050, false, false},
+        {0, 0, 44100, 0, 44100, false, false},
+        {12, 0, 44100, 0, 88200, true, false},
+        {12, 0, 44100, 32000, 32000, false, false},
+        {12, 0, 32000, 0, 63954, false, false},
+        {0, 2, 44100, 0, 44100, false, false},
+        {0, 3, 44100, 0, 44144, false, false},
+        {0, -50, 44100, 0, 42830, false, false},
+        {0, 0, 17616, 0, 17604, false, false},
+        {0, 1, 8000, 0, 8000, false, false},
+        {0, 0, 8000, 0, 0, false, false},
+        {-12, 0, 11023, 0, 0, false, false},
+        {12, 50, 44100, 0, 0, false, false},
+        {0, 0, 7999, 0, 0, false, false},
+        {0, 0, 8000, 0, 8000, false, true}
     };
     for(unsigned k=0;k<sizeof(cases)/sizeof(cases[0]);++k) {
         struct fixture f;
@@ -782,7 +791,7 @@ static void compat_initial_pitch(void) {
         const struct kosdec_adx_compat_config config={.clock_us=compat_clock,.clock_context=&now};
         CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
         CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,&f.player));
-        CHECK(!kosdec_adx_compat_player_set_initial_transpose(&f.player,cases[k].semitones,0));
+        CHECK(!kosdec_adx_compat_player_set_initial_transpose(&f.player,cases[k].semitones,cases[k].cents));
         CHECK(!mock_starts && !mock_allocs);
         CHECK(kosdec_adx_compat_player_set_initial_transpose(&f.player,INT32_MAX,INT32_MAX)<0 &&
               errno==ERANGE);
@@ -793,8 +802,7 @@ static void compat_initial_pitch(void) {
               errno==ERANGE);
         CHECK(!kosdec_adx_compat_player_get_transpose(&f.player,&semitones,&cents) &&
               semitones==-96 && cents==-99);
-        CHECK(kosdec_adx_compat_player_set_initial_transpose(&f.player,24,99)<0 && errno==ENOTSUP);
-        CHECK(kosdec_adx_compat_player_set_initial_transpose(&f.player,-24,-99)<0 && errno==ENOTSUP);
+        CHECK(!kosdec_adx_compat_player_cache_transpose(&f.player,3,21));
         CHECK(kosdec_adx_player_set_rate(&f.player,88200)<0 && errno==EINVAL);
         if(cases[k].native_rate)
             CHECK(!kosdec_adx_player_set_rate(&f.player,cases[k].native_rate));
@@ -827,7 +835,7 @@ static void compat_initial_pitch(void) {
             CHECK(kosdec_adx_compat_player_set_initial_transpose(&f.player,-12,0)<0 &&
                   errno==ENOTSUP);
             CHECK(!kosdec_adx_compat_player_get_transpose(&f.player,&semitones,&cents) &&
-                  semitones==-24 && cents==-99);
+                  semitones==3 && cents==21);
             if(cases[k].rebind && source==0) {
                 CHECK(!kosdec_adx_player_release_source(&f.player));
                 kosdec_adx_stream_init(&f.stream,input,&f,(uint32_t)f.bytes,false);

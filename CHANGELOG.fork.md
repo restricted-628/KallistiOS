@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Finer initial pitch for ordinary libADX playback
+
+- Stage semitone and cent offsets for 8–48 kHz source PCM. At startup the
+  player selects an integer rate that produces the requested AICA pitch word,
+  or rejects it before sound allocation. No conversion runs during refill.
+  This does not add live or retained pitch control. The measured default
+  SH-4 player consumer grew by 6,896 bytes of linked text, including libm.
+
 ## 2026-11-21 — libADX initial music volume
 
 - Retained mono and stereo playback can apply the cached ADX volume before

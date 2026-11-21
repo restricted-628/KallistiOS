@@ -18,6 +18,7 @@
 #include "adx_legacy_gain_table.h"
 static uint8_t legacy_gain_tl(int32_t requested);
 #endif
+#include "adx_pitch.h"
 #include <kos/timer.h>
 #include <errno.h>
 #define PLAYER_MAGIC UINT32_C(0x41445841)
@@ -325,7 +326,7 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *p,
        p->memory.sound_bytes > 65536)
         return bad();
 #ifdef MEDIA_ADX_RETAINED_CLOCK
-    if(p->compat_route_fields || p->compat_start_rate) return unsupported();
+    if(p->compat_route_fields || p->compat_start_pitch) return unsupported();
     if(p->output.channel[0].volume != 255 || p->output.channel[1].volume != 255 ||
        p->requested_pan[0] != KOSDEC_ADX_PAN_AUTO ||
        p->requested_pan[1] != KOSDEC_ADX_PAN_AUTO)
@@ -718,8 +719,10 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     p->source_bound = false;
     p->info.decoder = status < KOSDEC_ADX_DONE ? KOSDEC_ADX_CANCELLED : status;
     if(status >= KOSDEC_ADX_INVALID && status != KOSDEC_ADX_CANCELLED) return failed(p,EIO);
-    if(!has_output(p))
+    if(!has_output(p)) {
+        p->compat_start_pitch = false;
         p->compat_start_rate = 0;
+    }
     p->info.state = has_output(p) ? KOSDEC_ADX_PLAYER_IDLE : KOSDEC_ADX_PLAYER_READY;
     return 0;
 }
@@ -991,11 +994,13 @@ static int poll_player(struct kosdec_adx_player *p) {
         if(!kosdec_adx_pipe_get_format(&p->producer.pipe,&rate,&channels)) return failed(p,EPROTO);
         if(has_output(p) &&
            (rate != p->info.sample_rate || channels != p->output.channels)) return failed(p,EPROTO);
-        if(!p->compat_start_rate || !has_output(p)) {
+        if(!p->compat_start_pitch || !has_output(p)) {
             uint32_t output_rate = p->requested_rate ? p->requested_rate : rate;
             if(output_rate < 8000 || output_rate > 48000) return failed(p,ENOTSUP);
-            if(p->compat_start_rate && !p->requested_rate) {
-                if(rate != 44100) return failed(p,ENOTSUP);
+            if(p->compat_start_pitch && !p->requested_rate) {
+                if(!p->compat_start_rate)
+                    p->compat_start_rate = media_adx_initial_pitch_rate(rate,p->compat_start_pitch_units);
+                if(!p->compat_start_rate) return failed(p,ENOTSUP);
                 output_rate = p->compat_start_rate;
             }
             p->output.sample_rate = output_rate;
@@ -1410,6 +1415,7 @@ static int compat_detach(void *context) {
     p->compat_requested_attenuation = 0;
     p->compat_initial_attenuation = false;
     p->compat_controls = (struct kosdec_adx_compat_controls){.effect_db = -45};
+    p->compat_start_pitch = false;
     p->compat_start_rate = 0;
     for(unsigned channel = 0; channel < 2; ++channel)
         copy_route_fields(&p->output.channel[channel].routing,&p->compat_original_routing[channel],
@@ -1762,12 +1768,9 @@ int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *p,
         errno = ERANGE;
         return -1;
     }
-    switch(units) {
-    case -12 * 256: p->compat_start_rate = 22050; break;
-    case 0: p->compat_start_rate = 44100; break;
-    case 12 * 256: p->compat_start_rate = 88200; break;
-    default: return unsupported();
-    }
+    p->compat_start_pitch_units = (int16_t)units;
+    p->compat_start_pitch = true;
+    p->compat_start_rate = 0;
     return 0;
 }
 
