@@ -1987,7 +1987,9 @@ struct snd_ordinary_pcm16 {
 };
 #ifdef AICA_FLYCAST_PCM16_PAUSE
 static snd_ordinary_pcm16_t *pause_owner;
-static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream);
+static uint32_t pause_motion_rate(uint32_t rate);
+static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream,
+                                   uint32_t rate);
 #endif
 
 bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring) {
@@ -2366,7 +2368,7 @@ static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, strchan_t *stream) {
        ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
         return -1;
 #ifdef AICA_FLYCAST_PCM16_PAUSE
-    if(pause_owner == pcm && !pause_identity_matches(pcm, stream)) {
+    if(pause_owner == pcm && !pause_identity_matches(pcm, stream, pcm->rate)) {
         errno = ESTALE;
         return -1;
     }
@@ -2438,7 +2440,7 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
         return ordinary_pcm16_unlock(-1);
     }
 #ifdef AICA_FLYCAST_PCM16_PAUSE
-    if(pause_owner == pcm && rate != pcm->rate) {
+    if(pause_owner == pcm && !snd_flycast_pcm16_pause_rate_supported(rate)) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);
     }
@@ -2453,11 +2455,19 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
     snd_stream_config_t config = stream->config;
     config.sample_rate = rate;
     uint32_t motion_rate = ordinary_pcm16_motion_rate(rate);
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    if(pause_owner == pcm)
+        motion_rate = pause_motion_rate(rate);
+#endif
     uint32_t upper = pcm->motion_rate > motion_rate ? pcm->motion_rate : motion_rate;
     if(ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
         goto fail;
 
-    if(ordinary_pcm16_extended_rate(pcm->rate) || ordinary_pcm16_extended_rate(rate)) {
+    bool check_window = ordinary_pcm16_extended_rate(pcm->rate) || ordinary_pcm16_extended_rate(rate);
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    check_window |= pause_owner == pcm;
+#endif
+    if(check_window) {
         for(unsigned i = 0; i < pcm->channels; ++i) {
             if(!ordinary_pcm16_before(&pcm->voice[i].cursor, upper, deadline,
                                       pcm->committed)) {
@@ -2467,10 +2477,22 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
         }
     }
 
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    if(pause_owner == pcm && !pause_identity_matches(pcm, stream, pcm->rate)) {
+        errno = ESTALE;
+        goto fail;
+    }
+#endif
     if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_FREQUENCY,
                               0, &config, deadline) < 0 ||
        ordinary_pcm16_sample(pcm, upper, deadline) < 0)
         goto fail;
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    if(pause_owner == pcm && !pause_identity_matches(pcm, stream, rate)) {
+        errno = ESTALE;
+        goto fail;
+    }
+#endif
 
     pcm->rate = rate;
     pcm->motion_rate = motion_rate;

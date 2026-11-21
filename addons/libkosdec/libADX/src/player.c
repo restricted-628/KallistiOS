@@ -2443,9 +2443,17 @@ int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *p) {
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
     int32_t semitones, int32_t cents) {
     if(!valid(p)) return bad();
-    if(!p->source_bound || p->retained_offsets || p->flycast_pause_enabled ||
+    if(!p->source_bound || p->retained_offsets ||
        (!p->ordinary_pcm && (p->sound == SND_STREAM_INVALID || p->info.channels != 1)))
         return unsupported();
+#ifdef MEDIA_ADX_FLYCAST_PAUSE
+    if(p->flycast_pause_enabled) {
+        if(!p->flycast_pause || p->flycast_pause->exhausted ||
+           p->info.state != KOSDEC_ADX_PLAYER_PLAYING)
+            return unsupported();
+        if(p->compat_paused || p->flycast_pause->pending) return busy();
+    }
+#endif
     if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING) {
 #ifdef MEDIA_ADX_ORDINARY_STEREO
         if(!p->ordinary_pcm || p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END)
@@ -2469,8 +2477,17 @@ int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
         if(p->ordinary_mono_clock ? rate > 48000 :
            !snd_ordinary_pcm16_rate_supported(rate,p->memory.sound_bytes / 2))
             return unsupported();
-        if(snd_ordinary_pcm16_set_rate(p->ordinary_pcm,rate) < 0)
+#ifdef MEDIA_ADX_FLYCAST_PAUSE
+        if(p->flycast_pause_enabled && !snd_flycast_pcm16_pause_rate_supported(rate))
+            return unsupported();
+#endif
+        if(snd_ordinary_pcm16_set_rate(p->ordinary_pcm,rate) < 0) {
+#ifdef MEDIA_ADX_FLYCAST_PAUSE
+            /* Audio uses EAGAIN only before posting a pitch update. */
+            if(p->flycast_pause_enabled && errno == EAGAIN) return -1;
+#endif
             return failed(p,errno);
+        }
         p->output.sample_rate = p->info.output_rate = rate;
         return 0;
     }

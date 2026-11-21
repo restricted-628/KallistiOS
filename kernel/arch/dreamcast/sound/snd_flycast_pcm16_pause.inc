@@ -31,8 +31,9 @@ static uint32_t pause_motion_rate(uint32_t rate) {
     return (FLYCAST_CUT_RATE_MAX * step + 1023u) / 1024u;
 }
 
-static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream) {
-    uint32_t pitch = pause_pitch_word(pcm->rate);
+static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream,
+                                   uint32_t rate) {
+    uint32_t pitch = pause_pitch_word(rate);
     for(unsigned i = 0; i < pcm->channels; ++i) {
         uintptr_t reg = UINT32_C(0xa0700000) + stream->ch[i] * 0x80u;
         uint32_t address = ((g2_read_32(reg) & 0x7fu) << 16) |
@@ -200,7 +201,7 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
         if(pause_word(offsetof(flycast_cut_mailbox_t, done)) == start) {
             if(pcm->pause_state != PAUSE_AUTHORIZED ||
                pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
-               !pause_identity_matches(pcm, stream)) {
+               !pause_identity_matches(pcm, stream, pcm->rate)) {
                 errno = EPROTO;
                 goto fail;
             }
@@ -256,7 +257,7 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
     if(pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC ||
        pause_word(offsetof(flycast_cut_mailbox_t, done)) != start[0] ||
        pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
-       !pause_identity_matches(pcm, stream)) {
+       !pause_identity_matches(pcm, stream, pcm->rate)) {
         errno = ESTALE;
         goto fail;
     }

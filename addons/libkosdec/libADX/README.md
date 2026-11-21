@@ -671,8 +671,8 @@ matching backend. Generate the mono fixture with
 
 Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against
 the matching build-gated Audio backend. Bind a READY title with one finite,
-direct mono or stereo ADX source at 32,000 to 44,100 Hz. The startup output
-rate must match the source rate and stay fixed during playback. Enable
+direct mono or stereo ADX source at 22,050 to 44,100 Hz. The startup output
+rate must match the source rate. Enable
 its checked ordinary output and then
 `kosdec_adx_compat_player_enable_flycast_pause` before start. This profile
 uses a 16,384-frame/channel sound ring. It requires an owner and a
@@ -681,6 +681,12 @@ PAL time, enable the collection's VBlank clock before binding and then
 select the desired time mode. While paused, VBlank delivery does not advance
 the count. Resume re-anchors to elapsed source time and the current tick. Rebuild with
 matching headers.
+
+During PLAYING, the compatibility live transpose call accepts an output
+rate within the same range. Public sample time still uses the nominal source
+rate. If the update returns `EAGAIN` before posting, service the player and
+explicitly retry. A pending or held cut rejects a new live request. Resume
+starts the new bank at phase zero with the last admitted pitch.
 
 Call the normal compatibility pause and discard APIs. A pending cut must
 finish before discard or resume. A cut can occur after earlier wraps or
@@ -716,6 +722,9 @@ case 0 and `proof 26048` for cases 1–3. The
 `flycast-pause-32k-test-elf` target builds mono and stereo post-wrap
 fixtures at 32,000 Hz. Generate both tracks with the matching channel
 count, for example `proof 393216 1 32000` and `fresh 393216 1 32000`.
+The `flycast-pause-live-transpose-test-elf` target uses 44,100 Hz tracks
+of the same lengths. It requests −12 semitones before the first pause and
+checks the admitted pitch through each resume and terminal source drain.
 
 ### Retained output clock
 

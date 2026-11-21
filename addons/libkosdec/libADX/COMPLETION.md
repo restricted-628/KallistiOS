@@ -86,28 +86,31 @@ CPU modes passed five post-wrap pauses. The recorded output resumed at
 the first unread source frame plus the actual discard count on each
 cycle. A fresh ordinary title used a separate allocation.
 
-The fixed-rate profile admits matching source and startup output rates from
-32,000 to 44,100 Hz. Public mono and stereo runs at 32,000 Hz cover five
+The earlier fixed-rate profile admitted matching source and startup output
+rates from 32,000 to 44,100 Hz. Public mono and stereo runs at 32,000 Hz cover five
 post-wrap cuts, the actual discard count, a frozen sample clock, exact
 resume phase and natural PLAYEND. Time uses the nominal 32,000 Hz source
 denominator. Flycast advances the device phase by 743/1024 per mixer
 tick. The waveform check accounts for interpolation at the cut and from
 the silent preroll into the first surviving sample.
 
-Pause after a live pitch change remains outside this profile. For example,
-a 44.1 kHz source transposed down 12 semitones continues to use 44.1 kHz
-for public time while the output voice runs near 22.05 kHz. That sequence
-requires a cut qualified against the admitted live device rate. The
-fixed-rate tests cover the 32 and 44.1 kHz endpoints.
+With the live-pitch backend, a playing title can change pitch within
+22,050–44,100 Hz and then use the same pause/discard/resume calls. A
+44.1 kHz source transposed down 12 semitones keeps the nominal 44.1 kHz
+title clock while playing at 22.05 kHz. The voices can apply the update on
+different mixer ticks. Each reaches the same exclusive source cut, and
+resume uses the admitted pitch with a new phase from START. The public
+regression checks both widths through five cuts and natural PLAYEND in
+sample-time mode.
 
 ### Which player functions share a blocker?
 
 | 2.00J entry | What the public tests distinguish | What still needs a native implementation or test |
 | --- | --- | --- |
-| `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. | Native rates below 32,000 Hz and a live transpose before pause remain open. |
+| `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. | Rates outside the checked pause range and repeating sources still cannot take this path. |
 | `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. | Stock-valid titles that cannot yet pause also cannot discard that head. The native count deliberately excludes ring capacity when no frames moved. |
 | `ADXT_GetStat` | A running mono title can remain logically PLAYING while paused. Decoder end is not PLAYEND; the natural mono drain test requires the final real frame and checked stop. | Status during a stock-valid pause outside the fixed-rate profile remains open. The retained group-poll failure remains a separate case. |
-| `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo pause covers sample and NTSC/PAL clocks. Mono pause covers sample and PAL clocks, including centisecond readback. The 32 kHz tests cover sample and centisecond clocks through paused hold and terminal completion. | A pause and live pitch change on the same title remains open. NTSC/PAL testing at 32 kHz is separate from sample-time coverage. |
+| `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo pause covers sample and NTSC/PAL clocks. Mono pause covers sample and PAL clocks, including centisecond readback. The 32 kHz tests cover sample and centisecond clocks through paused hold and terminal completion. | Combined NTSC/PAL time after live transpose and unavailable transport states remain separate from the verified sample clocks. |
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
 The selected Manatee adapter ignores its command selector, and the getter
@@ -196,8 +199,10 @@ The existing native path already supplies standard ADX decoding, buffered file
 input, loop metadata, whole-file sequence repeat and fixed-rate output. The
 file_audio consumer and file_player tests exercise that composition. Application
 integration is separate from middleware completion. Source-end counters are not
-an audible clock. Runtime live stereo rate changes and sound retirement
-remain Audio/Integration work; no alternate firmware behavior is hidden here.
+an audible clock. Ordinary stereo supports checked live rate changes in
+the profiles above. The same-title live-transpose/pause sequence requires
+the matching opt-in firmware. Neither checked stop nor a bank restart
+releases the played sound allocation.
 
 The separate host-tool/authoring milestone remains open: compatibility checking
 exists, while encoding/conversion and archive authoring do not. Sega's ADX record

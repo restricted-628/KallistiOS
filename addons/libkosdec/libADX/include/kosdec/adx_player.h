@@ -377,11 +377,10 @@ int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
    Flycast active-pause opt-in. */
 int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
 /* Experimental Flycast-only pause profile. Enable a READY compatibility
-   title with one finite direct mono or stereo ADX source at 32,000 to
-   44,100 Hz and a 16,384-frame sound ring per channel. The startup output
-   rate must match the source rate and stay fixed during playback. Enable
-   its checked ordinary output first. Requires matching build-gated Audio
-   and libADX. */
+   title with one finite direct mono or stereo ADX source at 22,050 to
+   44,100 Hz and a 16,384-frame sound ring per channel. Startup output
+   Hz must match the source. Enable checked ordinary output first.
+   Requires matching build-gated Audio and libADX. */
 int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *);
 /* With pause clear, return zero discarded without servicing the title.
    With one bound, paused title preparing its first output, a nonpositive
@@ -551,7 +550,11 @@ int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *);
    32768-frame ring per channel. Service must keep up with the live rate.
    An eligible player's requested cache updates even when conversion or
    submission fails. get_info reports the last admitted rate, and a hard
-   backend failure requires checked STOP. Retained playback is excluded. */
+   backend failure requires checked STOP. The Flycast pause profile admits
+   22,050 to 44,100 Hz in PLAYING with no pending or held cut. EAGAIN there
+   preserves the admitted rate. Service and explicitly retry. Following
+   resume, the device keeps the admitted pitch and re-starts its phase.
+   Retained playback is excluded. */
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *,
     int32_t semitones, int32_t cents);
 /* Checked linear0..255 per-channel gain and pan (0left,128center,255right).

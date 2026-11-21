@@ -8,6 +8,13 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- A pause-enabled ADX title can now change pitch while playing, then
+  pause, discard and resume on the same voice or voice pair. In the
+  Flycast regression a 44.1 kHz source changed to 22.05 kHz; source
+  time kept the 44.1 kHz denominator. Stereo updates need not arrive
+  on the same mixer tick. Both voices stop at the same source-frame
+  boundary and restart the first survivor at the admitted pitch.
+
 - The opt-in Flycast pause profile now accepts fixed source and playback
   rates from 32,000 through 44,100 Hz. At 32 kHz, mono and stereo titles
   passed five post-wrap pause/discard/resume cycles and reached natural

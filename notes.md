@@ -704,6 +704,15 @@ bank's terminal reads precede its next write. This is not allocator
 release, a retail AICA read-drain guarantee, or permission to change the
 default or retained stream paths.
 
+The same Flycast-only bank rule now applies to one mono voice or to both
+voices of a stereo title. A running rate change need not reach the two
+slots on the same mixer tick. A pause accepts the cut only when every
+active voice has reached the same exclusive source-frame boundary.
+Resume starts the first surviving frame at the last admitted pitch with
+a fresh key-on phase; it does not promise continuity of fractional
+interpolation across silence. Public sample time remains at nominal
+source Hz. The libADX completion matrix records the qualified rate range.
+
 ## D22 — SH4DER/SH4DOW integration and strip partition default
 
 **Owner direction, 2026-11-13:** Fully integrate the pinned SH4DER and bundled
