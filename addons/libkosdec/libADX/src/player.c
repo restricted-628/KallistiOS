@@ -2090,15 +2090,18 @@ int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
     if(cache_pitch_units(p,semitones,cents,&units) < 0) return -1;
     if(p->requested_rate) return busy();
     uint32_t rate = media_adx_initial_pitch_rate(p->info.sample_rate,units);
-    if(!rate || rate > 48000) return unsupported();
+    if(!rate) return unsupported();
 #ifdef MEDIA_ADX_ORDINARY_STEREO
     if(p->ordinary_pcm) {
+        if(!snd_ordinary_pcm16_rate_supported(rate,p->memory.sound_bytes / 2))
+            return unsupported();
         if(snd_ordinary_pcm16_set_rate(p->ordinary_pcm,rate) < 0)
             return failed(p,errno);
         p->output.sample_rate = p->info.output_rate = rate;
         return 0;
     }
 #endif
+    if(rate > 48000) return unsupported();
     return update_output_rate(p,rate);
 }
 

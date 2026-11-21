@@ -8,9 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
-- Opt-in libADX players can transpose a playing stereo ADX stream when the
-  requested output pitch maps to 8–48 kHz. Both voices must acknowledge
-  the update. Sample time stays in source-rate units and excludes padding.
+- Opt-in libADX players can transpose a playing stereo ADX stream up to
+  88.2 kHz with a 32,768-frame ring per channel. Smaller rings keep the
+  8–48 kHz range and reject unsupported changes without interrupting playback.
+  Both voices must acknowledge the update. Sample time stays in source-rate
+  units and excludes padding.
 - A private, opt-in stereo PCM16 stream can change rate during playback.
   With a 32,768-frame ring per channel it supports live updates up to
   88.2 kHz; startup and smaller rings retain the 48 kHz ceiling.

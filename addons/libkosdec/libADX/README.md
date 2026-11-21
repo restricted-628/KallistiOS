@@ -628,12 +628,16 @@ ordinary PCM16 backend. Bind a READY compatibility title to a direct
 unlinked stereo ADX stream, then call
 `kosdec_adx_compat_player_enable_stereo_transpose` before starting.
 Use 8192–32768 sound frames per channel in multiples of 32 and source
-and output rates in 8000–48000 Hz. Initialize the KOS stream pool for
+and initial output rates in 8000–48000 Hz. Initialize the KOS stream pool for
 two channels. Keep the player and its provider storage through checked
 stop and producer shutdown. Rebuild consumers with the matching headers.
 
 Use `kosdec_adx_compat_player_set_live_transpose` to apply the cached
 semitone/cents request through separately acknowledged slot updates.
+Live rates above 48000 Hz through 88200 Hz require 32768 frames per
+channel. Service and the producer must keep up with the higher rate.
+The 88.2 kHz stereo test uses one-millisecond service sleeps. Unsupported
+rates or ring sizes leave the last admitted rate active.
 On a partial update or refill failure, preserve ownership and complete
 checked stop, retrying it after a timeout. Keep the played reservation.
 Complete stop before shutting down sound or resetting G2. The private
