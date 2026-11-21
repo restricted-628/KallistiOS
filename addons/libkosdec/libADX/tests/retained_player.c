@@ -3,6 +3,9 @@
 #include "player.c"
 #undef main
 #include "snd_retained_pcm.h"
+#ifdef MEDIA_ADX_RETAINED_START_TL
+#include "snd_retained_start_tl.h"
+#endif
 #ifdef MEDIA_ADX_RETAINED_GAIN
 #include "snd_retained_gain.h"
 #endif
@@ -21,6 +24,12 @@ struct snd_retained_pcm {
     snd_retained_pcm_span_t spans[SND_RETAINED_PCM_FILL_SPANS];
     unsigned span_count;
     int16_t pcm[2 * 1024];
+#ifdef MEDIA_ADX_RETAINED_START_TL
+    unsigned initial_calls, initial_left, initial_right, closes;
+    unsigned close_failures;
+    int start_error, first_start_error;
+    bool unsupported_preflight;
+#endif
 #ifdef MEDIA_ADX_RETAINED_GAIN
     bool gain_supported, gain_retry, gain_reject_right;
     snd_retained_gain_status_t gain;
@@ -76,6 +85,25 @@ int snd_retained_pcm_start(snd_retained_pcm_t *pcm) {
     ++pcm->starts;
     return fill_mock(pcm);
 }
+#ifdef MEDIA_ADX_RETAINED_START_TL
+int snd_retained_pcm_start_with_tl(snd_retained_pcm_t *pcm,unsigned left,unsigned right) {
+    CHECK(pcm == &backend && !pcm->starts && !pcm->initial_calls && left <= 255 && right <= 255);
+    ++pcm->initial_calls;
+    pcm->initial_left = left;
+    pcm->initial_right = right;
+    if(pcm->unsupported_preflight) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if(snd_retained_pcm_start(pcm) < 0) return -1;
+    if(pcm->start_error) {
+        pcm->first_start_error = pcm->start_error;
+        errno = pcm->start_error;
+        return -1;
+    }
+    return 0;
+}
+#endif
 #ifdef MEDIA_ADX_RETAINED_GAIN
 static int service_gain(snd_retained_pcm_t *pcm) {
     snd_retained_gain_status_t *gain = &pcm->gain;
@@ -163,6 +191,9 @@ int snd_retained_pcm_query(const snd_retained_pcm_t *pcm, uint64_t generation,
         .source_output_end = generation && generation <= pcm->sealed &&
                              source_credit == pcm->admitted[generation],
         .clock_error = pcm->stopped ? ECANCELED : pcm->valid ? 0 : ESTALE,
+#ifdef MEDIA_ADX_RETAINED_START_TL
+        .first_error = pcm->first_start_error,
+#endif
         .software_stopped = pcm->stopped
     };
     return 0;
@@ -176,9 +207,20 @@ int snd_retained_pcm_stop(snd_retained_pcm_t *pcm, uint32_t timeout_ms) {
     return 0;
 }
 int snd_retained_pcm_close(snd_retained_pcm_t *pcm) {
+#ifdef MEDIA_ADX_RETAINED_START_TL
+    CHECK(pcm == &backend && pcm->initial_calls == 1 && !pcm->starts && pcm->unsupported_preflight);
+    ++pcm->closes;
+    if(pcm->close_failures) {
+        --pcm->close_failures;
+        errno = pcm->closes == 1 ? EIO : EBUSY;
+        return -1;
+    }
+    return 0;
+#else
     (void)pcm;
     CHECK(false);
     return -1;
+#endif
 }
 
 struct retained_fixture {
@@ -659,6 +701,111 @@ static void compat_collection_clock(void) {
     puts("ADX_COMPAT_COLLECTION_CLOCK_PASS admission, shared tick and independent native reader");
 }
 
+static void compat_initial_attenuation(void) {
+    const struct {
+        bool enabled;
+        int32_t requested;
+        unsigned expected_tl;
+        int error;
+        bool unsupported_preflight;
+        unsigned close_failures;
+    } cases[] = {
+        {false,-188,0,0,false,0},
+        {true,-188,60,0,false,0},
+        {true,-65724,60,0,false,0},
+        {true,-65537,0,0,false,0},
+        {true,-188,60,ENOTSUP,true,0},
+        {true,-188,60,ENOTSUP,true,1},
+        {true,-188,60,ENOTSUP,true,3},
+        {true,-188,60,ENOTSUP,false,0},
+        {true,-188,60,EIO,false,0}
+    };
+    for(unsigned k=0;k<sizeof(cases)/sizeof(cases[0]);++k) {
+        struct retained_fixture t;
+        retained_init(&t,false);
+        struct fixture *f=&t.f;
+        struct kosdec_adx_player *p=&f->player;
+        uint64_t now=0;
+        const struct kosdec_adx_compat_config config={.clock_us=compat_clock,.clock_context=&now};
+        struct kosdec_adx_compat_service service;
+        struct kosdec_adx_compat_title title;
+        CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+        CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+        uint64_t request=UINT64_MAX;
+        CHECK(!kosdec_adx_compat_player_set_attenuation(p,cases[k].requested,&request) && !request);
+#ifdef MEDIA_ADX_RETAINED_START_TL
+        if(cases[k].enabled)
+            CHECK(!kosdec_adx_compat_player_enable_initial_attenuation(p));
+        backend.start_error=cases[k].error;
+        backend.unsupported_preflight=cases[k].unsupported_preflight;
+        backend.close_failures=cases[k].close_failures;
+#else
+        if(cases[k].enabled) {
+            CHECK(kosdec_adx_compat_player_enable_initial_attenuation(p)<0 && errno==ENOTSUP);
+            CHECK(!kosdec_adx_compat_unbind(&service,0));
+            free(f->data);
+            continue;
+        }
+#endif
+        CHECK(!backend.starts && !kosdec_adx_player_start(p));
+        for(unsigned step=0;step<32;++step) {
+            struct kosdec_adx_compat_result result;
+            now+=13332;
+            if(kosdec_adx_compat_exec_server(&service,&result)<0) {
+                CHECK(errno==cases[k].error);
+                break;
+            }
+            if(info(f).state==KOSDEC_ADX_PLAYER_SOURCE_END)
+                break;
+        }
+#ifdef MEDIA_ADX_RETAINED_START_TL
+        CHECK(backend.initial_calls==cases[k].enabled);
+        CHECK(backend.initial_left==cases[k].expected_tl && backend.initial_right==cases[k].expected_tl);
+        if(cases[k].unsupported_preflight) {
+            CHECK(backend.closes==1 && !backend.starts && !backend.fills && !backend.stops);
+            if(cases[k].close_failures) {
+                CHECK(p->retained_pcm==&backend && info(f).state==KOSDEC_ADX_PLAYER_FAILED &&
+                      info(f).first_error==ENOTSUP && info(f).stop_error==EIO);
+                for(unsigned n=1;n<cases[k].close_failures;++n) {
+                    CHECK(kosdec_adx_player_stop(p,1000)<0 && errno==EBUSY);
+                    CHECK(backend.closes==n+1 && !backend.stops && p->retained_pcm==&backend &&
+                          info(f).state==KOSDEC_ADX_PLAYER_STOPPING &&
+                          info(f).first_error==ENOTSUP && info(f).stop_error==EBUSY);
+                }
+            } else {
+                CHECK(!p->retained_pcm && !info(f).stop_error);
+            }
+        } else {
+            CHECK(!backend.closes && backend.starts==1 && p->retained_pcm==&backend);
+        }
+        if(cases[k].error && !cases[k].unsupported_preflight) {
+            backend.stop_fails=true;
+            CHECK(kosdec_adx_player_stop(p,1000)<0 && errno==ETIMEDOUT && p->retained_pcm==&backend);
+            CHECK(info(f).first_error==cases[k].error && info(f).stop_error==ETIMEDOUT &&
+                  info(f).state==KOSDEC_ADX_PLAYER_STOPPING && !backend.closes);
+            backend.stop_fails=false;
+        }
+#endif
+        if(cases[k].error)
+            CHECK(info(f).first_error==cases[k].error);
+        else
+            CHECK(info(f).state==KOSDEC_ADX_PLAYER_SOURCE_END && info(f).source_frames==65);
+        CHECK(!kosdec_adx_player_stop(p,1000));
+#ifdef MEDIA_ADX_RETAINED_START_TL
+        CHECK(info(f).state==KOSDEC_ADX_PLAYER_STOPPED && !info(f).stop_error);
+        if(cases[k].unsupported_preflight) {
+            CHECK(!p->retained_pcm && !backend.stops && backend.closes==cases[k].close_failures+1 &&
+                  info(f).first_error==ENOTSUP);
+        } else {
+            CHECK(p->retained_pcm==&backend && !backend.closes && backend.stopped);
+        }
+#endif
+        CHECK(!kosdec_adx_compat_unbind(&service,0));
+        free(f->data);
+    }
+    puts("ADX_COMPAT_INITIAL_ATTENUATION_PASS opt-in, readback scale and checked stop");
+}
+
 static void compat_routing_excludes_retained(void) {
     struct retained_fixture t;
     retained_init(&t,false);
@@ -678,6 +825,7 @@ static void compat_routing_excludes_retained(void) {
     CHECK(!kosdec_adx_compat_player_get_fx(p,&bus,&db) && !bus && db==-45);
     CHECK(!kosdec_adx_compat_player_cache_transpose(p,12,-50));
     CHECK(!kosdec_adx_compat_player_get_transpose(p,&transpose,&cents) && transpose==12 && cents==-50);
+    CHECK(kosdec_adx_compat_player_set_initial_transpose(p,12,0)<0 && errno==ENOTSUP);
     CHECK(!p->compat_route_fields && p->output.channel[0].routing.direct_level==15);
     CHECK(!kosdec_adx_compat_unbind(&service,0));
     CHECK(!kosdec_adx_player_init(p,&f->stream,NULL,&f->config));
@@ -1038,6 +1186,7 @@ int main(void) {
     compat_vsync_anchor();
     compat_collection_clock();
     compat_routing_excludes_retained();
+    compat_initial_attenuation();
     compat_playend();
     split_records(16);
     split_records(2);

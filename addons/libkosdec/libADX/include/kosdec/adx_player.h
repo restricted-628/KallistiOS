@@ -154,7 +154,7 @@ struct kosdec_adx_player {
     uint32_t *retained_offsets;
     struct snd_retained_pcm *retained_pcm;
     unsigned retained_admissions;
-    bool retained_sealed, retained_stopped;
+    bool retained_sealed, retained_stopped, retained_close_pending;
     int32_t time_offset;
     kosdec_adx_vsync_ticks vsync_ticks;
     void *vsync_context;
@@ -166,6 +166,7 @@ struct kosdec_adx_player {
     struct kosdec_adx_playend compat_playend;
     int16_t requested_attenuation;
     int16_t compat_requested_attenuation;
+    bool compat_initial_attenuation;
     struct kosdec_adx_compat_controls compat_controls;
     uint32_t compat_start_rate;
     unsigned compat_route_fields;
@@ -429,7 +430,8 @@ int kosdec_adx_player_get_requested_attenuation(const struct kosdec_adx_player *
 /* Compatibility-bound owner only. Cache the signed low halfword of the
    original request before attempting live admission. An inactive request
    (READY, PREFILL or STOPPED) updates the cache and returns request ID zero.
-   It does not set the initial device level. During playback, forward the
+   Initial attenuation uses this cache only after explicit opt-in below.
+   During playback, forward the
    full signed request to the existing optional retained-gain adapter.
    A live error leaves the request ID unchanged and preserves the new
    requested setting. Nonzero IDs use the normal acknowledgement query. */
@@ -439,6 +441,13 @@ int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *,
    admission. Starts at zero and persists through checked STOP. */
 int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_player *,
     int16_t *tenths_db);
+/* READY compatibility owner with retained clock selected. Enable exact stock
+   initial device attenuation on the first new mono or stereo output lease.
+   START uses the cached signed volume, as for stock source preparation.
+   Requires ADX_RETAINED_START_TL and supporting firmware. There is no live
+   request ID. If START fails after attempting hardware, complete checked STOP.
+   Reusing an active output does not apply an initial setting again. */
+int kosdec_adx_compat_player_enable_initial_attenuation(struct kosdec_adx_player *);
 /* Latest admitted request only. Acknowledged TL is historical on unknown
    channels. Poll success can coexist with a pending retry. Terminal failure
    requires checked stop. Channel acknowledgements do not specify simultaneity. */

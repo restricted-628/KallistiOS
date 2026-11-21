@@ -10,7 +10,13 @@
 #endif
 #ifdef MEDIA_ADX_RETAINED_GAIN
 #include "snd_retained_gain.h"
+#endif
+#ifdef MEDIA_ADX_RETAINED_START_TL
+#include "snd_retained_start_tl.h"
+#endif
+#if defined(MEDIA_ADX_RETAINED_GAIN) || defined(MEDIA_ADX_RETAINED_START_TL)
 #include "adx_legacy_gain_table.h"
+static uint8_t legacy_gain_tl(int32_t requested);
 #endif
 #include <kos/timer.h>
 #include <errno.h>
@@ -884,12 +890,40 @@ static int poll_title_output(struct kosdec_adx_player *p) {
     return poll_output(p);
 }
 
+#ifdef MEDIA_ADX_RETAINED_START_TL
+static int close_unstarted_output(struct kosdec_adx_player *p) {
+    if(snd_retained_pcm_close(p->retained_pcm) < 0) return -1;
+    p->retained_pcm = NULL;
+    p->retained_close_pending = false;
+    return 0;
+}
+#endif
+
 static int start_output(struct kosdec_adx_player *p) {
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(p->retained_offsets) {
         if(snd_retained_pcm_open(&p->retained_pcm,p->output.channels,p->output.sample_rate,
                                 p->memory.sound_bytes / 2,retained_fill,p) < 0)
             return -1;
+#ifdef MEDIA_ADX_RETAINED_START_TL
+        if(p->compat_initial_attenuation) {
+            uint8_t tl = legacy_gain_tl(p->compat_requested_attenuation);
+            if(!snd_retained_pcm_start_with_tl(p->retained_pcm,tl,tl))
+                return 1;
+            int error = errno;
+            snd_retained_pcm_snapshot_t snapshot;
+            /* The backend latches first_error on every attempted failure.
+               Only the unsupported preflight can take the close path. */
+            if(error == ENOTSUP &&
+               !snd_retained_pcm_query(p->retained_pcm,0,&snapshot) && !snapshot.first_error) {
+                p->retained_close_pending = true;
+                if(close_unstarted_output(p) < 0)
+                    p->info.stop_error = errno ? errno : EIO;
+            }
+            errno = error;
+            return -1;
+        }
+#endif
         return snd_retained_pcm_start(p->retained_pcm) < 0 ? -1 : 1;
     }
 #endif
@@ -1374,6 +1408,7 @@ static int compat_detach(void *context) {
     p->compat_paused = false;
     p->compat_preoutput_playing = false;
     p->compat_requested_attenuation = 0;
+    p->compat_initial_attenuation = false;
     p->compat_controls = (struct kosdec_adx_compat_controls){.effect_db = -45};
     p->compat_start_rate = 0;
     for(unsigned channel = 0; channel < 2; ++channel)
@@ -1517,7 +1552,7 @@ int media_adx_player_start_compat_in_service(struct kosdec_adx_player *p) {
     return start_source(p);
 }
 
-#ifdef MEDIA_ADX_RETAINED_GAIN
+#if defined(MEDIA_ADX_RETAINED_GAIN) || defined(MEDIA_ADX_RETAINED_START_TL)
 static uint8_t legacy_gain_tl(int32_t requested) {
     const unsigned magnitude = requested < -999 ? 999 : requested < 0 ? (unsigned)-requested : 0;
     size_t lo = 0, hi = sizeof(legacy_gain_ranges) / sizeof(legacy_gain_ranges[0]);
@@ -1582,6 +1617,19 @@ int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_p
     if(!p->compat_service) return unsupported();
     *tenths_db = p->compat_requested_attenuation;
     return 0;
+}
+
+int kosdec_adx_compat_player_enable_initial_attenuation(struct kosdec_adx_player *p) {
+    if(!valid(p)) return bad();
+#ifdef MEDIA_ADX_RETAINED_START_TL
+    if(!p->compat_service || !p->retained_offsets) return unsupported();
+    if(p->compat_service->servicing) return busy();
+    if(p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound) return bad();
+    p->compat_initial_attenuation = true;
+    return 0;
+#else
+    return unsupported();
+#endif
 }
 
 int kosdec_adx_player_get_attenuation_status(const struct kosdec_adx_player *p,
@@ -1906,6 +1954,9 @@ static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     p->info.ready_start = false;
     if(p->source_bound) cancel_producer(p);
     if(p->worker) fiber_service_request_stop(p->worker);
+#ifdef MEDIA_ADX_RETAINED_START_TL
+    if(p->retained_close_pending && close_unstarted_output(p) < 0) goto retain;
+#endif
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(p->retained_pcm && !p->retained_stopped) {
         if(snd_retained_pcm_stop(p->retained_pcm,timeout_ms) < 0) goto retain;

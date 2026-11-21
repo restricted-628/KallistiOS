@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — libADX initial music volume
+
+- Retained mono and stereo playback can apply the cached ADX volume before
+  sound starts, without enabling live gain. Build with `ADX_RETAINED_CLOCK=1`
+  and `ADX_RETAINED_START_TL=1` and opt in on the ready player. Default
+  playback is unchanged. A failed startup keeps the original error while
+  allowing the caller to retry cleanup.
+
 ## 2026-11-21 — libADX compatibility service and initial transpose
 
 - Add caller-owned service phases for titles and file requests, pre-output

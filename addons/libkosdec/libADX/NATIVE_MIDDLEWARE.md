@@ -192,11 +192,23 @@ Use the compatibility attenuation setter and getter for stock requested
 volume readback. The title keeps the signed low halfword, including before
 start, through checked STOP, and on live admission failure. A new binding
 starts at zero. Recovery that replaces the player in the same slot keeps
-the setting. Request ID zero means only the software cache was updated.
-A live submission uses the original full request and its nonzero ID
-can be checked with the native acknowledgement query. The native requested
-getter still reports the last locally admitted device request. Initial
-device attenuation and fades remain open.
+the setting. Request ID zero confirms a cached request. The initial
+attenuation opt-in uses the signed cached value at the first retained
+START. A live submission uses the original full request and its nonzero
+ID can be checked with the native acknowledgement query. The native
+requested getter reports the last locally admitted live device request.
+
+For mono or stereo initial attenuation, build with `ADX_RETAINED_CLOCK=1`
+and `ADX_RETAINED_START_TL=1`, select the retained clock, and call
+`kosdec_adx_compat_player_enable_initial_attenuation` on the READY title.
+The first lease applies the stock zero-fade TL for the signed cached
+volume before synchronized key-on. A reused output keeps its current
+device setting. A replacement title can opt in separately.
+Firmware without the checked TL capability fails startup with ENOTSUP.
+A failed close of an unstarted lease is reported in `stop_error` while
+`first_error` records startup ENOTSUP. STOP retries that close. A failed
+attempted start retains the lease through checked STOP.
+Fades, device gain on transitions, and physical mute remain open.
 
 The non-retained compatibility player accepts direct and FX send levels
 in whole dB from -45 to 0 after clamping. The stock bus-16 alias reads

@@ -687,6 +687,15 @@ changes. A switch keeps the accumulated VSync count and tick anchor.
 The explicit audio and VSync queries retain their own units. Rebuild
 player consumers with the matching header and archive.
 
+Initial retained attenuation is opt-in for mono and stereo. Build with
+`ADX_RETAINED_CLOCK=1 ADX_RETAINED_START_TL=1` and a fork that exposes
+`snd_retained_start_tl.h` privately. On a READY compatibility player,
+select the retained clock, enable initial attenuation with
+`kosdec_adx_compat_player_enable_initial_attenuation`, and set the
+requested volume before start. The first lease applies the cached
+signed volume as stock TL before key-on. See
+[native middleware](NATIVE_MIDDLEWARE.md) for the startup and error contract.
+
 Live retained stereo attenuation is experimental. Keep
 `ADX_RETAINED_GAIN=0` for playback deployments. The unchanged combined
 Flycast fixture returns `EPIPE` during polling after the first stereo
@@ -707,8 +716,8 @@ samples. An unknown channel can still have a historical acknowledged
 value, and poll can succeed with a pending retry. A terminal gain error
 requires checked stop. The source clock rejects invalid observations while
 gain receipts are being refreshed. Firmware without this capability and
-mono output report `ENOTSUP`. Pre-start gain, fades and guaranteed acoustic
-mute require separate support.
+mono output report `ENOTSUP` for live changes. Fades and guaranteed
+acoustic mute require separate support.
 
 `set_rate` selects requested output frequency8000..48000Hz; zero follows the
 source rate again. Set it before first playback or use the existing checked live

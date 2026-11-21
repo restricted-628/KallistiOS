@@ -7,15 +7,22 @@ HOST_AR ?= ar
 SHZ_INCLUDE ?= ../../libsh4zam/upstream/include
 ADX_RETAINED_CLOCK ?= 0
 ADX_RETAINED_GAIN ?= 0
+ADX_RETAINED_START_TL ?= 0
 RETAINED_PCM_INCLUDE ?= $(KOS_BASE)/kernel/arch/dreamcast/sound
 RETAINED_CLOCK_FLAGS = -DMEDIA_ADX_RETAINED_CLOCK -I"$(RETAINED_PCM_INCLUDE)"
-ifeq ($(ADX_RETAINED_GAIN),1)
+ifneq ($(filter 1,$(ADX_RETAINED_GAIN) $(ADX_RETAINED_START_TL)),)
 ifneq ($(ADX_RETAINED_CLOCK),1)
-$(error ADX_RETAINED_GAIN requires ADX_RETAINED_CLOCK=1)
+$(error ADX_RETAINED_GAIN and ADX_RETAINED_START_TL require ADX_RETAINED_CLOCK=1)
 endif
+RETAINED_GAIN_DEPS = src/adx_legacy_gain_table.h
+endif
+ifeq ($(ADX_RETAINED_START_TL),1)
+BUILD ?= .build/retained-start-tl$(if $(filter 1,$(ADX_RETAINED_GAIN)),-gain)
+RETAINED_CLOCK_FLAGS += -DMEDIA_ADX_RETAINED_START_TL
+endif
+ifeq ($(ADX_RETAINED_GAIN),1)
 BUILD ?= .build/retained-gain
 RETAINED_CLOCK_FLAGS += -DMEDIA_ADX_RETAINED_GAIN
-RETAINED_GAIN_DEPS = src/adx_legacy_gain_table.h
 endif
 ifeq ($(ADX_RETAINED_CLOCK),1)
 BUILD ?= .build/retained-clock
