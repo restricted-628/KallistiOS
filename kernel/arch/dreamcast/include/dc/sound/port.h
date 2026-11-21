@@ -21,6 +21,19 @@ __BEGIN_DECLS
 typedef uint32_t snd_port_t;
 #define SND_PORT_INVALID ((snd_port_t)0)
 
+typedef struct snd_voice_limits {
+    unsigned midi; /**< Resident music voice allocation, 0..64. */
+    unsigned shot; /**< Managed ports and automatic sound effects, 0..64. */
+    unsigned pcm;  /**< Stream channel allocation, 0..16. */
+} snd_voice_limits_t;
+
+/** Set optional class limits whose sum is at most 64, or pass NULL for the
+    default shared allocator. Call at setup with playback stopped and allocators
+    quiesced. Existing reservations give EBUSY and preserve the old limits.
+    Channels outside the configured pools remain available for raw use. Raw
+    commands and explicitly numbered sound effects require caller coordination. */
+int snd_voice_set_limits(const snd_voice_limits_t *limits);
+
 typedef struct snd_port_info {
     unsigned channel_count;
     int channels[2]; /**< Unused second channel is -1. Pair need not be adjacent. */

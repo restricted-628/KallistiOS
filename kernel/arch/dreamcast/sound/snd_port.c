@@ -27,7 +27,7 @@ static port_slot_t *lookup(snd_port_t handle) {
     return slot;
 }
 
-int snd_port_reserve(unsigned count, snd_port_t *handle) {
+static int port_reserve(snd_channel_class_t source, unsigned count, snd_port_t *handle) {
     int old, result = -1;
     bool exhausted = false;
     if(!handle || (count != 1 && count != 2)) {
@@ -44,7 +44,7 @@ int snd_port_reserve(unsigned count, snd_port_t *handle) {
             exhausted = true;
             continue;
         }
-        if(snd_channel_reserve(count, channels) < 0)
+        if(snd_channel_reserve(source, count, channels) < 0)
             goto done;
         ++slot->generation;
         slot->info.channel_count = count;
@@ -62,6 +62,14 @@ int snd_port_reserve(unsigned count, snd_port_t *handle) {
 done:
     irq_restore(old);
     return result;
+}
+
+int snd_port_reserve(unsigned count, snd_port_t *handle) {
+    return port_reserve(SND_CHANNEL_CLASS_SHOT, count, handle);
+}
+
+int snd_port_reserve_music(snd_port_t *handle) {
+    return port_reserve(SND_CHANNEL_CLASS_MIDI, 1, handle);
 }
 
 int snd_port_query(snd_port_t handle, snd_port_info_t *info) {

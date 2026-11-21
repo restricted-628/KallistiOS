@@ -35,6 +35,7 @@
 
 #include "arm/aica_cmd_iface.h"
 #include "snd_stream_internal.h"
+#include "snd_channel.h"
 #include "snd_iface_internal.h"
 #include "snd_retained_pcm.h"
 #include "snd_retained_gain.h"
@@ -460,8 +461,7 @@ snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
     int i, saved_errno;
     snd_stream_hnd_t hnd = SND_STREAM_INVALID;
     uint32_t ram = 0;
-    int ch0 = -1;
-    int ch1 = -1;
+    int reserved[2] = {-1, -1};
 
     if(mutex_lock(&stream_state_mutex) < 0)
         return SND_STREAM_INVALID;
@@ -503,26 +503,16 @@ snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
     if(!ram)
         goto fail;
 
-    ch0 = snd_sfx_chn_alloc();
-
-    if(ch0 < 0) {
-        errno = ENOSPC;
+    irq_t old_irq = irq_disable();
+    int admitted = snd_channel_reserve(SND_CHANNEL_CLASS_PCM, max_channels, reserved);
+    irq_restore(old_irq);
+    if(admitted < 0)
         goto fail;
-    }
-
-    if(max_channels == 2) {
-        ch1 = snd_sfx_chn_alloc();
-
-        if(ch1 < 0) {
-            errno = ENOSPC;
-            goto fail;
-        }
-    }
 
     /* A handle becomes visible only after all resources are owned. */
     memset(&streams[hnd], 0, sizeof(streams[hnd]));
-    streams[hnd].ch[0] = ch0;
-    streams[hnd].ch[1] = ch1;
+    streams[hnd].ch[0] = reserved[0];
+    streams[hnd].ch[1] = reserved[1];
     streams[hnd].buffer_size = (size_t)bufsize;
     streams[hnd].spu_ram_sch[0] = ram;
     streams[hnd].spu_ram_sch[1] = max_channels == 2 ? ram + (uint32_t)bufsize : 0;
@@ -539,12 +529,6 @@ snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
 
 fail:
     saved_errno = errno;
-
-    if(ch1 >= 0)
-        snd_sfx_chn_free(ch1);
-
-    if(ch0 >= 0)
-        snd_sfx_chn_free(ch0);
 
     if(ram)
         snd_mem_free(ram);

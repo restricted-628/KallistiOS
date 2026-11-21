@@ -842,7 +842,7 @@ static int find_free_channel(bool stereo) {
 
     old = irq_disable();
     chn = sfx_nextchan;
-    reserved = snd_channel_reserved();
+    reserved = snd_channel_shot_unavailable();
 
     for(checked = 0; checked < 64; ++checked) {
         if(!(reserved & (1ULL << chn)) &&
@@ -970,9 +970,12 @@ void snd_sfx_stop_all(void) {
     int i;
 
     for(i = 0; i < 64; i++) {
-        if(snd_channel_reserved() & (1ULL << i))
-            continue;
-
-        snd_sfx_stop(i);
+        int old = irq_disable();
+        uint64_t unavailable = snd_channel_shot_unavailable();
+        irq_restore(old);
+        /* This is an eligibility snapshot. Reservation and command posting
+           still rely on the caller's existing playback coordination. */
+        if(!(unavailable & (UINT64_C(1) << i)))
+            snd_sfx_stop(i);
     }
 }

@@ -261,9 +261,9 @@ void snd_sfx_stop(int chn);
 
 /** \brief  Stop all channels playing sound effects.
 
-    This function stops all channels currently allocated to sound effects from
-    playing. It does not affect channels allocated for use by something other
-    than sound effects..
+    Sweep the automatic sound-effect channel pool and skip reservations
+    observed before each STOP. Callers serialize channel assignment and
+    playback across command posting when strict exclusion is required.
 */
 void snd_sfx_stop_all(void);
 

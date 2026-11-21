@@ -20,6 +20,7 @@ typedef struct snd_port_transaction {
    Playback keeps an admitted START pending until ARM classification and finishes
    exactly once: false on known refusal/rejection, true on APPLIED. Timeout is
    neither. Committed policy state is not hardware/sample retirement. */
+int snd_port_reserve_music(snd_port_t *handle);
 int snd_port_begin(snd_port_t port, unsigned priority,
                    snd_port_transaction_t *transaction);
 int snd_port_finish(snd_port_transaction_t transaction, bool succeeded);

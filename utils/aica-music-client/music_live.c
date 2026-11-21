@@ -59,7 +59,7 @@ int aica_music_owner_init(aica_music_owner_t *o, unsigned voices, uint32_t timeo
     }
     while(o->count<voices) {
         snd_port_t port;
-        if(snd_port_reserve(1,&port)<0) { unused_unwind(o);return -1; }
+        if(snd_port_reserve_music(&port)<0) { unused_unwind(o);return -1; }
         if(snd_port_playback_pin(port,&channel)<0) {
             snd_port_close(port);unused_unwind(o);return -1;
         }

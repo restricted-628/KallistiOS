@@ -128,9 +128,44 @@ static void exhaustion(void) {
     snd_sfx_chn_free(0);
 }
 
+static void source_limits(void) {
+    snd_port_t music, shot, unused = 0;
+    snd_port_info_t info;
+    int pcm[2] = {-1, -1};
+
+    CHECK(snd_voice_set_limits(&(snd_voice_limits_t){64, 1, 0}) == -1 && errno == EINVAL);
+    CHECK(snd_voice_set_limits(&(snd_voice_limits_t){0, 0, 17}) == -1 && errno == EINVAL);
+    CHECK(snd_voice_set_limits(&(snd_voice_limits_t){64, 0, 0}) == 0);
+    CHECK(snd_channel_shot_unavailable() == UINT64_MAX);
+    CHECK(snd_port_reserve_music(&music) == 0);
+    CHECK(snd_port_reserve(1, &unused) == -1 && errno == ENOSPC && !unused);
+    CHECK(snd_voice_set_limits(NULL) == -1 && errno == EBUSY);
+    CHECK(snd_port_close(music) == 0);
+
+    CHECK(snd_voice_set_limits(&(snd_voice_limits_t){1, 2, 2}) == 0);
+    CHECK(snd_channel_shot_unavailable() == ~(UINT64_C(6)));
+    CHECK(snd_port_reserve_music(&music) == 0);
+    CHECK(snd_port_query(music, &info) == 0 && info.channels[0] == 0);
+    CHECK(snd_port_reserve_music(&unused) == -1 && errno == ENOSPC && !unused);
+    CHECK(snd_port_reserve(2, &shot) == 0);
+    CHECK(snd_port_query(shot, &info) == 0 && info.channels[0] == 1 && info.channels[1] == 2);
+    CHECK(snd_sfx_chn_alloc() == -1 && errno == ENOSPC);
+    int irq = irq_disable();
+    int paired = snd_channel_reserve(SND_CHANNEL_CLASS_PCM, 2, pcm);
+    int denied = snd_channel_reserve(SND_CHANNEL_CLASS_PCM, 2, pcm);
+    irq_restore(irq);
+    CHECK(paired == 0 && denied == -1 && errno == ENOSPC && pcm[0] == 3 && pcm[1] == 4);
+    CHECK(snd_voice_set_limits(NULL) == -1 && errno == EBUSY);
+    snd_sfx_chn_free(pcm[0]);
+    snd_sfx_chn_free(pcm[1]);
+    CHECK(snd_port_close(shot) == 0 && snd_port_close(music) == 0);
+    CHECK(snd_voice_set_limits(NULL) == 0 && !snd_channel_shot_unavailable());
+}
+
 int main(void) {
     capacity();
     priority();
+    source_limits();
     exhaustion();
     printf("sound-port-test: PASS (%u checks)\n", checks);
     return 0;

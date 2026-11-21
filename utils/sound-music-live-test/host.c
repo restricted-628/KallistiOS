@@ -35,7 +35,8 @@ int snd_iface_observation_submit(void *packet_data, uint32_t words, uint64_t end
     if(!skip_submit) process_packet(packet_data,words);
     return submit_error?-1:0;
 }
-int snd_port_reserve(unsigned count, snd_port_t *out) {
+int snd_port_reserve_music(snd_port_t *out) {
+    const unsigned count = 1;
     CHECK(count==1);
     if(reserve_fail && reserved==reserve_fail) { errno=ENOSPC;return -1; }
     *out=++reserved;return 0;
