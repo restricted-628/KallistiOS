@@ -359,9 +359,12 @@ int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
    request. Playback with an admitted Audio handle requires a live-pause
    backend, so this call returns ENOTSUP there. */
 int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
-/* With pause clear, return success with zero discarded for any request.
-   A paused call requires a qualified discard backend and returns ENOTSUP,
-   leaving the result and queued PCM unchanged. */
+/* With pause clear, return zero discarded without servicing the title.
+   With one bound, paused title preparing its first output, a nonpositive
+   request services the collection once and re-anchors time at zero elapsed
+   frames without consuming PCM or delivering VBlank. Returns the service
+   error on failure. Other paused cases return ENOTSUP. Failure leaves
+   discarded unchanged. */
 int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *,
     int32_t requested, int32_t *discarded);
 /* Owner-thread snapshot, updated by poll or compatibility title dispatch.

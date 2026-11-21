@@ -548,6 +548,14 @@ static bool compat_collection_vsync(const struct kosdec_adx_player *p) {
     return p->compat_service && p->compat_service->use_vsync_clock;
 }
 
+static bool compat_single_title(const struct kosdec_adx_player *p) {
+    const struct kosdec_adx_compat_service *service = p->compat_service;
+    for(unsigned slot = 0; slot < service->capacity; ++slot)
+        if(slot != p->compat_slot && service->titles[slot].ops.state)
+            return false;
+    return true;
+}
+
 static int compat_live_time(struct kosdec_adx_player *p, struct kosdec_adx_time *out) {
     bool collection_clock = compat_collection_vsync(p);
     if(!p->info.source_generation || (p->time_uses_vsync && !collection_clock && !p->vsync_ticks))
@@ -659,9 +667,22 @@ int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *p,
     if(!valid(p) || !discarded) return bad();
     if(!p->compat_service) return unsupported();
     if(p->compat_service->servicing) return busy();
-    if(p->compat_paused) return unsupported();
-    /* The SDK ignores the request completely with its pause latch clear. */
-    (void)requested;
+    if(p->compat_paused) {
+        if(requested > 0 || !p->source_bound || p->info.state != KOSDEC_ADX_PLAYER_PREFILL ||
+           has_output(p) || p->info.copied_frames || !compat_single_title(p))
+            return unsupported();
+        struct kosdec_adx_compat_result result;
+        if(kosdec_adx_compat_exec_server(p->compat_service,&result) < 0)
+            return -1;
+        if(p->info.state != KOSDEC_ADX_PLAYER_PREFILL || has_output(p))
+            return unsupported();
+
+        /* No frames have reached a renderer. Re-anchor to raw position zero
+           only after the ordinary service pass, which delivers no VBlank. */
+        p->compat_vsync_anchor = 0;
+        p->compat_vsync_anchor_tick = compat_collection_vsync(p) || !p->vsync_ticks ?
+            p->compat_service->vsync_count : p->vsync_ticks(p->vsync_context);
+    }
     *discarded = 0;
     return 0;
 }
@@ -1156,9 +1177,8 @@ static bool latch_playend(struct kosdec_adx_player *p) {
        p->info.first_error || p->callback_failed ||
        p->compat_service->titles[p->compat_slot].faults)
         return false;
-    for(unsigned slot = 0; slot < p->compat_service->capacity; ++slot)
-        if(slot != p->compat_slot && p->compat_service->titles[slot].ops.state)
-            return false;
+    if(!compat_single_title(p))
+        return false;
 
     struct kosdec_adx_pipe_result pipe = kosdec_adx_pipe_read(&p->producer.pipe,NULL,0);
     uint32_t queued;

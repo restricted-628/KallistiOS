@@ -274,14 +274,31 @@ static void check_prepared(struct fixture *f, bool current, bool latched) {
     CHECK(!kosdec_adx_compat_player_is_ready_start(&f->player,&legacy) && legacy==latched);
 }
 
+struct compat_reload_probe {
+    unsigned visits;
+    bool fail;
+};
+
+static int compat_count_reload(void *context) {
+    struct compat_reload_probe *probe = context;
+    ++probe->visits;
+    if(!probe->fail) return 0;
+    errno = EIO;
+    return -1;
+}
+
 static void compat_preoutput_pause(bool phased) {
     struct fixture f;
     init(&f,2,false);
     f.read_limit=512;
     uint64_t now=0;
-    struct kosdec_adx_compat_config config={.clock_us=compat_clock,.clock_context=&now};
+    struct compat_reload_probe probe = {0};
+    struct kosdec_adx_compat_config config={
+        .clock_us=compat_clock,.clock_context=&now,
+        .phases[KOSDEC_ADX_COMPAT_RELOAD]={.service=compat_count_reload,.context=&probe}
+    };
     struct kosdec_adx_compat_service service;
-    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_title titles[2];
     struct kosdec_adx_compat_result result;
     struct kosdec_adx_time time;
     enum kosdec_adx_compat_state state;
@@ -289,11 +306,11 @@ static void compat_preoutput_pause(bool phased) {
     CHECK(kosdec_adx_compat_player_pause(&f.player,true)<0 && errno==ENOTSUP);
     CHECK(kosdec_adx_compat_player_discard_samples(&f.player,3,&removed)<0 &&
           errno==ENOTSUP && removed==-999);
-    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_service_init(&service,titles,2,&config));
     CHECK(!kosdec_adx_compat_enable_vsync_clock(&service));
     CHECK(!(phased ? kosdec_adx_compat_bind_phased_player(&service,0,&f.player) :
                      kosdec_adx_compat_bind_player(&service,0,&f.player)));
-    CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,-17,&removed) && !removed);
+    CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,-17,&removed) && !removed && !probe.visits);
     CHECK(!kosdec_adx_compat_player_set_time_mode(&f.player,KOSDEC_ADX_TIME_SOURCE));
     CHECK(!kosdec_adx_compat_player_pause(&f.player,true));
     CHECK(!kosdec_adx_compat_player_get_time(&f.player,&time) && !time.count && time.frequency==1);
@@ -320,14 +337,39 @@ static void compat_preoutput_pause(bool phased) {
         CHECK(!kosdec_adx_compat_player_get_time(&f.player,&time) && !time.count && time.frequency==5000);
     }
     uint32_t tick=service.vsync_count;
+    unsigned visits=probe.visits;
     removed=-999;
     CHECK(kosdec_adx_compat_player_discard_samples(&f.player,5,&removed)<0 &&
           errno==ENOTSUP && removed==-999 && service.vsync_count==tick);
+    CHECK(probe.visits==visits);
+    CHECK(!kosdec_adx_compat_bind(&service,1,&titles[0].ops,&f.player));
+    CHECK(kosdec_adx_compat_player_discard_samples(&f.player,0,&removed)<0 &&
+          errno==ENOTSUP && removed==-999 && probe.visits==visits);
+    CHECK(!kosdec_adx_compat_unbind(&service,1));
+
+    f.player.compat_vsync_anchor=123;
+    f.player.compat_vsync_anchor_tick=tick-1;
+    probe.fail=true;
+    CHECK(kosdec_adx_compat_player_discard_samples(&f.player,0,&removed)<0 &&
+          errno==EIO && removed==-999 && probe.visits==++visits);
+    CHECK(f.player.compat_vsync_anchor==123 && f.player.compat_vsync_anchor_tick==tick-1);
+    probe.fail=false;
+    CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,0,&removed) &&
+          !removed && probe.visits==++visits);
+    CHECK(!f.player.compat_vsync_anchor && f.player.compat_vsync_anchor_tick==tick);
+    CHECK(!kosdec_adx_compat_exec_vsync(&service,&result));
+    ++tick;
+    ++visits;
+    removed=-999;
+    CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,INT32_MIN,&removed) &&
+          !removed && probe.visits==++visits);
+    CHECK(service.vsync_count==tick && f.player.compat_vsync_anchor_tick==tick);
     CHECK(!mock_allocs && !mock_frames);
     CHECK(!kosdec_adx_player_set_wait_start(&f.player,true)); /* Already logically PLAYING. */
     CHECK(!kosdec_adx_compat_player_pause(&f.player,false) && f.player.prefill_deadline);
     CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,5,&removed) &&
           !removed && service.vsync_count==tick);
+    CHECK(probe.visits==visits);
     for(unsigned i=0;i<2000 && info(&f).state!=KOSDEC_ADX_PLAYER_SOURCE_END;++i) {
         CHECK(!kosdec_adx_compat_exec_vsync(&service,&result));
         if(!phased) mock_pause();
