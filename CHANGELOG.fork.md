@@ -15,7 +15,9 @@ it is a historical index, not evidence that those changes passed tests.
 - Ordinary PCM streams expose refill readiness and can start at a fractional
   rate when the requested pitch word has an integer transport representation.
   Managed shots gain checked parameter reset, close-all, finite-frame
-  observation and optional fast release. Key-off does not release sample RAM.
+  observation and optional fast release. A looped shot can also start with
+  a time limit in milliseconds; its timer cannot stop a replacement shot.
+  Neither timed nor explicit key-off releases sample RAM.
 - The driver exposes pending command state and an optional synchronous error
   callback. Bulk transfer disposal preserves busy descriptors for retry.
   Native ABK banks can stage resident or externally read members together;
