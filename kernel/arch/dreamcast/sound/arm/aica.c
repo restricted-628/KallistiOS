@@ -135,8 +135,8 @@ static void write_lfo(int ch, const aica_channel_config_t *config) {
 }
 
 static void write_routing(int ch, const aica_channel_config_t *config) {
-    CHNREG8(ch, 0x20) = config->effect_channel;
-    CHNREG8(ch, 0x21) = config->effect_send;
+    /* IMXL (send level) and ISEL (DSP input bus) share this byte. */
+    CHNREG8(ch, 0x20) = (config->effect_send << 4) | config->effect_channel;
     CHNREG8(ch, 0x25) = config->direct_level;
 }
 

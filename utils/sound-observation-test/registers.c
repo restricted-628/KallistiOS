@@ -30,6 +30,43 @@ static volatile uint32_t *reg32(unsigned offset) {
 #define SNDREG32A(x) reg32(x)
 #define SNDREG8A(x) ((volatile uint8_t *)registers + (x))
 #include "../../../kernel/arch/dreamcast/sound/arm/aica.c"
+
+static void check_routing(aica_channel_config_t config) {
+    const unsigned channel = 37, base = channel * 0x80;
+    uint8_t *mmio = (uint8_t *)registers;
+    uint8_t expected[sizeof(registers)];
+    const uint8_t adjacent[] = {0x93, 0x52, 0xd1};
+    const struct { uint8_t bus, send, direct, packed; } routes[] = {
+        {7, 12, 3, 0xc7}, {0, 0, 0, 0x00}, {15, 15, 15, 0xff},
+    };
+
+    for(unsigned i = 0; i < sizeof(routes) / sizeof(routes[0]); ++i) {
+        config.effect_channel = routes[i].bus;
+        config.effect_send = routes[i].send;
+        config.direct_level = routes[i].direct;
+        memcpy(mmio + base + 0x21, adjacent, sizeof(adjacent));
+        aica_channel_start(channel, &config, 1);
+        CHECK(mmio[base + 0x20] == routes[i].packed);
+        CHECK(!memcmp(mmio + base + 0x21, adjacent, sizeof(adjacent)));
+        CHECK(mmio[base + 0x25] == routes[i].direct);
+
+        mmio[base + 0x20] = 0x5a;
+        mmio[base + 0x25] = 0xa5;
+        memcpy(expected, registers, sizeof(expected));
+        expected[base + 0x20] = routes[i].packed;
+        expected[base + 0x25] = routes[i].direct;
+        aica_channel_update(channel, &config, AICA_CHANNEL_UPDATE_ROUTING);
+        CHECK(!memcmp(registers, expected, sizeof(expected)));
+    }
+
+    config.effect_channel = config.effect_send = config.direct_level = 0;
+    config.vol = 255;
+    mmio[base + 0x29] = 0x5a;
+    expected[base + 0x29] = 0;
+    aica_channel_update(channel, &config, AICA_CHANNEL_UPDATE_VOLUME);
+    CHECK(!memcmp(registers, expected, sizeof(expected)));
+}
+
 int main(void) {
     aica_channel_config_t config = {0};
     config.base = 0x30000; config.length = config.loopend = 32;
@@ -55,6 +92,7 @@ int main(void) {
         aica_channel_start(0, &config, mode == 0);
         CHECK(lp_reads == before && pending[0]);
     }
+    check_routing(config);
     uint8_t expected[sizeof(registers)];
     memcpy(expected, registers, sizeof(expected));
     aica_channel_set_tl(0, 128);
