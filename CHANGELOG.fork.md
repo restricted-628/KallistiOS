@@ -8,6 +8,9 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- libADX no longer reports decode completion when phased playback encounters
+  an output error while the decoder is still active. The compatibility state
+  stays PLAYING; the native player still reports the error and requires stop.
 - The aligned SH-4 PCM16 splitter now preserves left/right channel order and
   the order of adjacent frames. For a final half cache line it uses ordinary
   stores so the bytes beyond the requested output are preserved.

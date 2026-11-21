@@ -58,6 +58,9 @@ int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *, uint32_t
    for source validation and full PCM submission. A phased direct stream with
    an unrecognized header can retain DECINFO after failure. Check the service
    result and kosdec_adx_player_get_error for the failure before waiting again. */
+/* If the phased renderer fails while the title is PLAYING and decoding is
+   still active, this snapshot keeps PLAYING until stop. The service reports
+   the error, native player state is FAILED, and the clock is unavailable. */
 int kosdec_adx_compat_player_get_state(const struct kosdec_adx_player *, enum kosdec_adx_compat_state *);
 int kosdec_adx_compat_player_is_completed(const struct kosdec_adx_player *, bool *);
 

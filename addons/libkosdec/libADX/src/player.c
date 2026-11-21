@@ -200,6 +200,7 @@ static int start_source(struct kosdec_adx_player *p) {
         p->compat_renderer_ready = false;
         p->compat_ready_start = false;
         p->compat_decode_ended = false;
+        p->compat_renderer_failed_playing = false;
         p->compat_preoutput_playing = false;
         p->compat_discarded_all = false;
         p->compat_initial_tl = 0;
@@ -1468,8 +1469,14 @@ static int compat_player_phase(void *context, enum kosdec_adx_compat_phase phase
             return 0;
         p->compat_renderer_ready = false;
         int status = poll_output(p);
-        if(status < 0)
-            return failed(p,errno);
+        if(status < 0) {
+            int error = errno;
+            struct kosdec_adx_decode_progress progress;
+            p->compat_renderer_failed_playing = state == KOSDEC_ADX_PLAYER_PLAYING &&
+                !p->compat_decode_ended && !kosdec_adx_player_get_decode_progress(p,&progress) &&
+                progress.status < KOSDEC_ADX_DONE && !progress.samples_complete;
+            return failed(p,error);
+        }
         if(p->callback_failed)
             return failed(p,p->info.first_error);
         p->compat_renderer_ready = status > 0;
@@ -1655,7 +1662,10 @@ int kosdec_adx_compat_player_get_state(const struct kosdec_adx_player *p,
                                       enum kosdec_adx_compat_state *state) {
     if(!valid(p) || !state) return bad();
     if(!p->compat_service) return unsupported();
-    *state = compat_unrecognized_header(p) ? KOSDEC_ADX_COMPAT_DECINFO : player_compat_state(p);
+    if(p->info.state == KOSDEC_ADX_PLAYER_FAILED && p->compat_renderer_failed_playing)
+        *state = KOSDEC_ADX_COMPAT_PLAYING;
+    else
+        *state = compat_unrecognized_header(p) ? KOSDEC_ADX_COMPAT_DECINFO : player_compat_state(p);
     return 0;
 }
 

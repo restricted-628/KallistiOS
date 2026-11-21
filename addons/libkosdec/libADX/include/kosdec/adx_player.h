@@ -145,6 +145,7 @@ struct kosdec_adx_player {
     bool compat_chained, compat_phased, compat_renderer_ready;
     bool compat_ready_start; /* Last prepared result for the current compatibility binding. */
     bool compat_decode_ended; /* Logical DECEND, independent of final PCM submission. */
+    bool compat_renderer_failed_playing; /* Preserve the admitted title phase in GetStat. */
     bool compat_paused, compat_preoutput_playing, compat_discarded_all;
     struct kosdec_adx_player_error diagnostic;
     kosdec_adx_player_error_callback error_callback;

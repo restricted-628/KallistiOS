@@ -40,6 +40,7 @@ static snd_retained_pcm_t backend;
 static uint32_t request_frames;
 static unsigned span_capacity;
 static bool require_zero_pcm;
+static bool reject_refill;
 
 int snd_retained_pcm_open(snd_retained_pcm_t **out, unsigned channels, uint32_t rate,
     uint32_t ring_frames, snd_retained_pcm_fill_t fill, void *context) {
@@ -167,6 +168,7 @@ int snd_retained_pcm_poll(snd_retained_pcm_t *pcm) {
 #ifdef MEDIA_ADX_RETAINED_GAIN
     if(service_gain(pcm) < 0) return -1;
 #endif
+    if(reject_refill) { errno = EIO; return -1; }
     if(pcm->backpressure) { errno = EAGAIN; return -1; }
     if(pcm->no_refill) return 0;
     return fill_mock(pcm);
@@ -525,7 +527,7 @@ static void live_time_mode(void) {
     free(f->data);
 }
 
-static void compat_decode_tail(void) {
+static void compat_decode_tail(bool renderer_fault) {
     struct retained_fixture t;
     retained_init(&t,false);
     struct fixture *f = &t.f;
@@ -545,6 +547,19 @@ static void compat_decode_tail(void) {
     CHECK(!kosdec_adx_compat_exec_title(&service,0,&result));
     CHECK(!kosdec_adx_compat_player_get_state(&f->player,&state));
     CHECK(state == KOSDEC_ADX_COMPAT_PLAYING && backend.fills == 1 && !backend.sealed);
+    if(renderer_fault) {
+        struct kosdec_adx_decode_progress progress;
+        CHECK(!kosdec_adx_player_get_decode_progress(&f->player,&progress) && progress.samples_complete);
+        reject_refill = true;
+        CHECK(kosdec_adx_compat_exec_server(&service,&result) < 0 && errno == EIO);
+        reject_refill = false;
+        CHECK(!kosdec_adx_compat_player_get_state(&f->player,&state) && state == KOSDEC_ADX_COMPAT_DECEND);
+        CHECK(info(f).state == KOSDEC_ADX_PLAYER_FAILED && backend.fills == 1);
+        CHECK(!kosdec_adx_player_stop(&f->player,1000));
+        CHECK(!kosdec_adx_compat_unbind(&service,0));
+        free(f->data);
+        return;
+    }
 
     request_frames = 1;
     CHECK(!kosdec_adx_compat_exec_server(&service,&result));
@@ -1405,7 +1420,8 @@ int main(void) {
     vsync_time(KOSDEC_ADX_VSYNC_NTSC,5994);
     vsync_time(KOSDEC_ADX_VSYNC_PAL,5000);
     live_time_mode();
-    compat_decode_tail();
+    compat_decode_tail(false);
+    compat_decode_tail(true);
     compat_live_time_qualification();
     compat_vsync_anchor();
     compat_collection_clock();
