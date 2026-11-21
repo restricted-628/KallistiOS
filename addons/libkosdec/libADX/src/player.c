@@ -23,7 +23,7 @@ enum { FLYCAST_RING = SND_FLYCAST_PCM16_PAUSE_RING,
 struct kosdec_adx_flycast_pause {
     uint64_t elapsed, source_first, output_first, written, real_end, cut;
     uint64_t epoch;
-    uint32_t discarded, pending_vsync_count;
+    uint32_t discarded, pending_vsync_count, resume_rate;
     bool pending, exhausted;
     int16_t history[2 * FLYCAST_RING];
     int16_t staged[2 * FLYCAST_PREFILL];
@@ -1208,6 +1208,7 @@ static int flycast_resume(struct kosdec_adx_player *p) {
     }
     uint32_t real = captured+continuation;
     if(!real && head.producer == KOSDEC_ADX_DONE) {
+        f->resume_rate = 0;
         f->exhausted = true;
         p->compat_paused = false;
         p->info.state = KOSDEC_ADX_PLAYER_SOURCE_END;
@@ -1223,6 +1224,10 @@ static int flycast_resume(struct kosdec_adx_player *p) {
     memset(f->staged+channels*real,0,channels*(FLYCAST_PREFILL-real)*sizeof(*f->staged));
     if(snd_flycast_pcm16_resume(p->ordinary_pcm,f->staged,FLYCAST_PREFILL) < 0)
         return failed(p,errno);
+    if(f->resume_rate) {
+        p->output.sample_rate = p->info.output_rate = f->resume_rate;
+        f->resume_rate = 0;
+    }
 
     __atomic_store_n(&pipe->read_cursor,tail+continuation,__ATOMIC_RELEASE);
     memcpy(f->history+channels*FLYCAST_PREROLL,f->staged,
@@ -2446,15 +2451,20 @@ int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
     if(!p->source_bound || p->retained_offsets ||
        (!p->ordinary_pcm && (p->sound == SND_STREAM_INVALID || p->info.channels != 1)))
         return unsupported();
+    bool held = false;
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
     if(p->flycast_pause_enabled) {
-        if(!p->flycast_pause || p->flycast_pause->exhausted ||
-           p->info.state != KOSDEC_ADX_PLAYER_PLAYING)
+        if(!p->flycast_pause || p->flycast_pause->exhausted)
             return unsupported();
-        if(p->compat_paused || p->flycast_pause->pending) return busy();
+        if(p->flycast_pause->pending) return busy();
+        held = p->compat_paused &&
+            (p->info.state == KOSDEC_ADX_PLAYER_PLAYING ||
+             p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END);
+        if(!held && p->info.state != KOSDEC_ADX_PLAYER_PLAYING)
+            return unsupported();
     }
 #endif
-    if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING) {
+    if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING && !held) {
 #ifdef MEDIA_ADX_ORDINARY_STEREO
         if(!p->ordinary_pcm || p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END)
             return unsupported();
@@ -2478,6 +2488,12 @@ int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *p,
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
         if(p->flycast_pause_enabled && !snd_flycast_pcm16_pause_rate_supported(rate))
             return unsupported();
+        if(held) {
+            if(snd_flycast_pcm16_stage_resume_rate(p->ordinary_pcm,rate) < 0)
+                return -1;
+            p->flycast_pause->resume_rate = rate;
+            return 0;
+        }
 #endif
         if(snd_ordinary_pcm16_set_rate(p->ordinary_pcm,rate) < 0) {
             /* Only a pre-post headroom refusal returns EAGAIN. */

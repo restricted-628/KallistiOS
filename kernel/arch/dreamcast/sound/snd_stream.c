@@ -1981,7 +1981,7 @@ struct snd_ordinary_pcm16 {
 #ifdef AICA_FLYCAST_PCM16_PAUSE
     enum { PAUSE_LIVE, PAUSE_PLANNED, PAUSE_POSTED, PAUSE_AUTHORIZED, PAUSE_CUT, PAUSE_HELD } pause_state;
     uint64_t pause_cut;
-    uint32_t pause_banks[2];
+    uint32_t pause_banks[2], pause_resume_rate;
     unsigned pause_bank;
 #endif
 };
@@ -2350,10 +2350,11 @@ static int ordinary_pcm16_fill(snd_ordinary_pcm16_t *pcm) {
     return ordinary_pcm16_write(pcm);
 }
 
-static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, strchan_t *stream) {
+static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, const strchan_t *stream,
+                                 const snd_stream_config_t *config, uint32_t motion_rate) {
     uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
     if(ordinary_pcm16_control(pcm, SND_OBSERVATION_START, 0,
-            SND_CHANNEL_START_DELAYED, &stream->config, deadline) < 0)
+            SND_CHANNEL_START_DELAYED, config, deadline) < 0)
         return -1;
     uint64_t mask = 0;
     for(unsigned i = 0; i < pcm->channels; ++i)
@@ -2364,18 +2365,16 @@ static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, strchan_t *stream) {
     for(unsigned i = 0; i < pcm->channels; ++i)
         pcm->voice[i].cursor = (ordinary_pcm16_cursor_t){0, earliest, earliest};
     if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
-            0, &stream->config, deadline) < 0 ||
-       ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
+            0, config, deadline) < 0 ||
+       ordinary_pcm16_sample(pcm, motion_rate, deadline) < 0)
         return -1;
 #ifdef AICA_FLYCAST_PCM16_PAUSE
-    if(pause_owner == pcm && !pause_identity_matches(pcm, stream, pcm->rate)) {
+    if(pause_owner == pcm && !pause_identity_matches(pcm, stream, config->sample_rate)) {
         errno = ESTALE;
         return -1;
     }
 #endif
 
-    pcm->running = true;
-    stream->state = SND_STREAM_STATE_PLAYING;
     return 0;
 }
 
@@ -2393,8 +2392,10 @@ int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm) {
     if(ordinary_pcm16_fill(pcm) < 0 || ordinary_pcm16_fill(pcm) < 0)
         goto fail;
 
-    if(ordinary_pcm16_key_on(pcm, stream) < 0)
+    if(ordinary_pcm16_key_on(pcm, stream, &stream->config, pcm->motion_rate) < 0)
         goto fail;
+    pcm->running = true;
+    stream->state = SND_STREAM_STATE_PLAYING;
     return ordinary_pcm16_unlock(0);
 fail:
     return ordinary_pcm16_unlock(ordinary_pcm16_fault(pcm));

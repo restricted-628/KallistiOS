@@ -552,8 +552,9 @@ int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *);
    An eligible player's requested cache updates even when conversion or
    submission fails. get_info reports the last admitted rate, and a hard
    backend failure requires checked STOP. The Flycast pause profile admits
-   22,050 to 44,100 Hz in PLAYING with no pending or held cut. Following
-   resume, the device keeps the admitted pitch and resets its phase.
+   22,050 to 44,100 Hz during playback and at a confirmed cut. A pending
+   cut returns EBUSY. A held request stages the pitch for the next
+   checked START, which publishes the new admitted rate on success.
    Retained playback is excluded. */
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *,
     int32_t semitones, int32_t cents);

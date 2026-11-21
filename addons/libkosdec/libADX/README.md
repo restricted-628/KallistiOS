@@ -696,8 +696,11 @@ matching headers.
 During PLAYING, the compatibility live transpose call accepts an output
 rate within the same range. Public sample time still uses the nominal source
 rate. If the update returns `EAGAIN` before posting, service the player and
-explicitly retry. A pending or held cut rejects a new live request. Resume
-starts the new bank at phase zero with the last admitted pitch.
+explicitly retry. A pending cut rejects a new pitch request. After the cut
+is confirmed, a request stages the pitch for the next START. Time, source
+position and the admitted output rate stay fixed during the hold. Resume
+starts the new bank at phase zero and publishes the staged rate after a
+successful START.
 
 Call the normal compatibility pause and discard APIs. A pending cut must
 finish before discard or resume. A cut can occur after earlier wraps or
@@ -734,8 +737,9 @@ case 0 and `proof 26048` for cases 1–3. The
 fixtures at 32,000 Hz. Generate both tracks with the matching channel
 count, for example `proof 393216 1 32000` and `fresh 393216 1 32000`.
 The `flycast-pause-live-transpose-test-elf` target uses 44,100 Hz tracks
-of the same lengths. It requests −12 semitones before the first pause and
-checks the admitted pitch through each resume and terminal source drain.
+of the same lengths. It requests −12 semitones before the first pause,
+then requests unity during a later hold. It checks the admitted pitch
+through each resume and terminal source drain.
 
 ### Retained output clock
 

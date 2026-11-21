@@ -708,8 +708,11 @@ The same Flycast-only bank rule now applies to one mono voice or to both
 voices of a stereo title. A running rate change need not reach the two
 slots on the same mixer tick. A pause accepts the cut only when every
 active voice has reached the same exclusive source-frame boundary.
-Resume starts the first surviving frame at the last admitted pitch with
-a fresh key-on phase; it does not promise continuity of fractional
+After a confirmed cut, the caller may stage a supported pitch without
+changing the old cut, source clock or device rate. Resume starts the
+first surviving frame at the staged pitch (or the existing pitch if none
+was staged). It reports the new applied rate only after checked START.
+Key-on begins a fresh phase; it does not promise continuity of fractional
 interpolation across silence. Public sample time remains at nominal
 source Hz. The libADX completion matrix records the qualified rate range.
 

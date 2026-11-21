@@ -8,6 +8,12 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- A mono or stereo Flycast title paused at a confirmed source frame can
+  now request a different pitch for resume (22,050–44,100 Hz). Staging
+  the request does not move the clock or change a stopped voice. Resume
+  applies the last accepted rate at the first surviving sample; failed
+  restart does not report it as applied. A still-pending cut remains busy.
+
 - The public checked mono and stereo ADX players now support the full
   live pitch-word range verified for running 8–44.1 kHz source titles.
   Startup limits are unchanged. If a refill is needed before a pitch

@@ -236,6 +236,21 @@ fail:
     return ordinary_pcm16_unlock(-1);
 }
 
+int snd_flycast_pcm16_stage_resume_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return -1;
+    if(pause_owner != pcm || pcm->pause_state != PAUSE_CUT || pcm->pending || pcm->stopped) {
+        errno = pcm->error ? pcm->error : EBUSY;
+        return ordinary_pcm16_unlock(-1);
+    }
+    if(pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || !snd_flycast_pcm16_pause_rate_supported(rate)) {
+        errno = ENOTSUP;
+        return ordinary_pcm16_unlock(-1);
+    }
+    pcm->pause_resume_rate = rate;
+    return ordinary_pcm16_unlock(0);
+}
+
 int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
                             uint32_t frames) {
     if(!samples || frames != SND_FLYCAST_PCM16_PAUSE_RING - SND_FLYCAST_PCM16_PAUSE_PREROLL) {
@@ -261,6 +276,10 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
         errno = ESTALE;
         goto fail;
     }
+    snd_stream_config_t config = stream->config;
+    if(pcm->pause_resume_rate)
+        config.sample_rate = pcm->pause_resume_rate;
+    uint32_t motion_rate = pause_motion_rate(config.sample_rate);
     unsigned bank = pcm->pause_bank ^ 1u;
     uint32_t base = pcm->pause_banks[bank];
     stream->spu_ram_sch[0] = base;
@@ -276,7 +295,8 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
     if(ordinary_pcm16_write(pcm) < 0)
         goto fail;
     memcpy(pcm->staging, samples + channels * (half - pad), sizeof(*samples) * channels * half);
-    if(ordinary_pcm16_write(pcm) < 0 || ordinary_pcm16_key_on(pcm, stream) < 0)
+    if(ordinary_pcm16_write(pcm) < 0 ||
+       ordinary_pcm16_key_on(pcm, stream, &config, motion_rate) < 0)
         goto fail;
     for(unsigned i = 0; i < pcm->channels; ++i) {
         if(pcm->voice[i].start <= start[i]) {
@@ -284,8 +304,15 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
             goto fail;
         }
     }
+    pcm->rate = config.sample_rate;
+    pcm->motion_rate = motion_rate;
+    pcm->pause_resume_rate = 0;
     pcm->pause_bank = bank;
     pcm->pause_state = PAUSE_LIVE;
+    pcm->running = true;
+    stream->config = config;
+    stream->frequency = (int)config.sample_rate;
+    stream->state = SND_STREAM_STATE_PLAYING;
     return ordinary_pcm16_unlock(0);
 fail:
     pcm->pause_state = PAUSE_HELD;

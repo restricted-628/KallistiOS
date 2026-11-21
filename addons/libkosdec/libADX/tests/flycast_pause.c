@@ -257,12 +257,34 @@ static int live_transpose(struct kosdec_adx_player *p) {
     return 0;
 }
 
+static int stage_held_transpose(struct kosdec_adx_player *p, bool restore) {
+    CHECK(!kosdec_adx_compat_player_set_live_transpose(p, 0, 0));
+    int32_t semitones, cents;
+    CHECK(!kosdec_adx_compat_player_get_transpose(p, &semitones, &cents) &&
+          semitones == 0 && cents == 0);
+    if(restore) {
+        /* A rejected replacement changes the request cache, not the stage. */
+        CHECK(kosdec_adx_compat_player_set_live_transpose(p, 12, 0) < 0 && errno == ENOTSUP);
+    } else {
+        CHECK(!kosdec_adx_compat_player_set_live_transpose(p, -12, 0));
+    }
+    CHECK(!kosdec_adx_compat_player_get_transpose(p, &semitones, &cents) &&
+          semitones == (restore ? 12 : -12) && cents == 0);
+    struct kosdec_adx_player_info info;
+    CHECK(!kosdec_adx_player_get_info(p, &info) && info.output_rate == OUTPUT_RATE);
+    CHECK(device_pitch(0x7800));
+    return 0;
+}
+
 static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint64_t target,
-                 int32_t request, uint32_t owned) {
+                 int32_t request, uint32_t owned, unsigned index) {
+    const bool restore = ADX_TEST_LIVE_TRANSPOSE && index == 1;
+    const uint32_t old_rate = ADX_TEST_LIVE_TRANSPOSE && index >= 2 ? RATE : OUTPUT_RATE;
+    const uint32_t new_rate = restore ? RATE : old_rate;
     CHECK(!await_source(p, target, &result->before));
     struct kosdec_adx_player_info before;
     CHECK(!kosdec_adx_player_get_info(p, &before) && before.channels == CHANNELS && !before.starvations);
-    CHECK(before.sample_rate == RATE && before.output_rate == OUTPUT_RATE);
+    CHECK(before.sample_rate == RATE && before.output_rate == old_rate);
     if(VIDEO_HZ) CHECK(!snapshot(p, &result->before));
     uint32_t pause_anchor_tick = p->compat_vsync_anchor_tick;
     if(lose_cut_once) {
@@ -271,6 +293,12 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
         CHECK(kosdec_adx_compat_player_discard_samples(p, 128, &rejected) < 0 &&
               errno == EBUSY && rejected == -123);
         CHECK(kosdec_adx_compat_player_pause(p, false) < 0 && errno == EBUSY);
+        if(restore) {
+            CHECK(kosdec_adx_compat_player_set_live_transpose(p, 0, 0) < 0 && errno == EBUSY);
+            int32_t semitones, cents;
+            CHECK(!kosdec_adx_compat_player_get_transpose(p, &semitones, &cents) &&
+                  semitones == -12 && cents == 0);
+        }
         if(VIDEO_HZ) CHECK(!deliver_tick());
         else CHECK(!service_title());
         CHECK(!snapshot(p, &result->held) && !check_frozen(&result->before, &result->held));
@@ -294,11 +322,11 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
     CHECK(!kosdec_adx_compat_player_pause(p, true) && private_pauses == cut_queries);
     CHECK(!snapshot(p, &result->held) && !check_frozen(&result->cut, &result->held));
     CHECK(result->held.clock.next_source_frame == result->cut.clock.next_source_frame);
-    if(ADX_TEST_LIVE_TRANSPOSE) {
-        CHECK(kosdec_adx_compat_player_set_live_transpose(p, 0, 0) < 0 && errno == EBUSY);
-        int32_t semitones, cents;
-        CHECK(!kosdec_adx_compat_player_get_transpose(p, &semitones, &cents) &&
-              semitones == -12 && cents == 0);
+    if(ADX_TEST_LIVE_TRANSPOSE && index < 2) {
+        CHECK(!stage_held_transpose(p, restore));
+        CHECK(!snapshot(p, &result->held) && !check_frozen(&result->cut, &result->held));
+        CHECK(result->held.clock.output_frames == result->cut.clock.output_frames &&
+              result->held.clock.next_source_frame == result->cut.clock.next_source_frame);
     }
     result->requested = request;
     result->removed = -1;
@@ -322,7 +350,12 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
     } while(timer_ms_gettime64() < deadline);
 
     CHECK(!kosdec_adx_compat_player_pause(p, false));
-    if(ADX_TEST_LIVE_TRANSPOSE) CHECK(device_pitch(0x7800));
+    if(ADX_TEST_LIVE_TRANSPOSE) {
+        struct kosdec_adx_player_info after;
+        CHECK(!kosdec_adx_player_get_info(p, &after) && after.output_rate == new_rate);
+        CHECK(device_pitch(new_rate == RATE ? 0 : 0x7800));
+        if(restore) puts("ADX-FIVE held pitch staged at cut and applied at START");
+    }
     if(VIDEO_HZ) {
         struct title_snapshot restarted, next;
         CHECK(service.vsync_count - before_hold > 4 &&
@@ -381,7 +414,7 @@ static int run(void) {
             target = elapsed + late_targets[i] - (i ? SND_FLYCAST_PCM16_PAUSE_PREROLL : 0);
         }
         lose_cut_once = i == 1;
-        CHECK(!cycle(&players[0], &cycles[i], target, requests[i], owned));
+        CHECK(!cycle(&players[0], &cycles[i], target, requests[i], owned, i));
         if(ADX_TEST_LATE_CUT) {
             uint64_t before = cycles[i].before.clock.output_frames - base;
             uint64_t cut = cycles[i].cut.clock.output_frames - base;
