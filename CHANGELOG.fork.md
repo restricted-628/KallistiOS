@@ -8,6 +8,10 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- An open direct music port can opt into AICA MIDI FIFO input. Input is off
+  at boot, and an old port generation cannot enable it on a replacement port.
+  The receiver handles channel running status and resynchronizes after FIFO
+  overflow. External MIDI hardware has not been qualified.
 - DSP authors can update selected modules in a four- or eight-module spatial
   program using their own position tables. A stale program generation or an
   invalid coefficient span is rejected before any coefficient is written.
