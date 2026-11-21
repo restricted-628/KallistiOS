@@ -6,6 +6,21 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Ordinary ADX playback and checked AICA operations
+
+- An ordinary stereo ADX player can re-prime its existing allocation after
+  checked stop and producer shutdown. Before first output, discard on a
+  paused, fully decoded direct source reports the frames actually removed
+  from the PCM queue. It cannot recall samples already sent to AICA.
+- Ordinary PCM streams expose refill readiness and can start at a fractional
+  rate when the requested pitch word has an integer transport representation.
+  Managed shots gain checked parameter reset, close-all, finite-frame
+  observation and optional fast release. Key-off does not release sample RAM.
+- The driver exposes pending command state and an optional synchronous error
+  callback. Bulk transfer disposal preserves busy descriptors for retry.
+  Native ABK banks can stage resident or externally read members together;
+  clearing their mappings does not erase sample data.
+
 ## 2026-11-21 — libADX channel-limit rejection before playback
 
 - The phased player now stops and drops its unused direct input when a

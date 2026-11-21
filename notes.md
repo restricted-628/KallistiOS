@@ -684,6 +684,12 @@ preparation. Adjacent-record playback and finite SFA publication preserve strict
 framing and fixed-format admission. Audible seams, running-stall policy,
 unknown-length SFD framing and device-retirement/reuse gates remain open.
 
+**Accepted ordinary playback scope, 2026-11-21:** Same-owner re-prime keeps
+the stopped stereo allocation; it does not authorize reclaiming played
+sample RAM. Before first output, a decoded-only discard reports actual
+common frames removed, not the legacy renderer's capacity-dependent raw
+return. Active-device pause/discard and retained playback remain separate.
+
 **Accepted continuation, 2026-11-20:** The default libADX archive keeps its
 existing output path. Retained PCM and its source-attributed clock are opt-in.
 Accept the qualified decoder, input, timing and service work independently
