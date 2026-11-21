@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #define FLYCAST_CUT_ADDR 0x021500u
-#define FLYCAST_CUT_MAGIC 0x46504331u
+#define FLYCAST_CUT_MAGIC 0x46504332u
 #define FLYCAST_CUT_RING 16384u
 #define FLYCAST_CUT_LEAD 32u
 #define FLYCAST_CUT_NATURAL 1u
@@ -20,6 +20,7 @@ typedef struct flycast_cut_slot {
 typedef struct flycast_cut_mailbox {
     uint32_t ready, request, session, cut;
     flycast_cut_slot_t slot[2];
+    uint32_t position[2], quoted, authorize;
     uint32_t done, result;
 } flycast_cut_mailbox_t;
 #endif

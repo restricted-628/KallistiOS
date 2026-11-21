@@ -1235,7 +1235,7 @@ static int flycast_player_pause(struct kosdec_adx_player *p, bool paused) {
         return errno == ETIMEDOUT || errno == EAGAIN ? -1 : failed(p,errno);
     }
     unsigned lead = f->epoch > 1 ? FLYCAST_PREROLL : 0;
-    if(cut < lead || cut < f->cut || cut > f->written || cut > FLYCAST_RING ||
+    if(cut < lead || cut < f->cut || cut > f->written ||
        f->written - cut > FLYCAST_RING ||
        (cut < f->real_end && f->real_end - cut > FLYCAST_PREFILL))
         return failed(p,EPROTO);

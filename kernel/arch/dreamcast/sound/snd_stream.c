@@ -1966,8 +1966,9 @@ struct snd_ordinary_pcm16 {
     int error;
     ordinary_pcm16_voice_t voice[2];
 #ifdef AICA_FLYCAST_PCM16_PAUSE
-    enum { PAUSE_LIVE, PAUSE_POSTED, PAUSE_CUT, PAUSE_HELD } pause_state;
-    uint32_t pause_banks[2], pause_cut;
+    enum { PAUSE_LIVE, PAUSE_PLANNED, PAUSE_POSTED, PAUSE_AUTHORIZED, PAUSE_CUT, PAUSE_HELD } pause_state;
+    uint64_t pause_cut;
+    uint32_t pause_banks[2];
     unsigned pause_bank;
 #endif
 };

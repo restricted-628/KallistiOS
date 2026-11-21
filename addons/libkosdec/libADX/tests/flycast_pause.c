@@ -10,6 +10,10 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
+#ifndef ADX_TEST_LATE_CUT
+#define ADX_TEST_LATE_CUT 0
+#endif
+
 #ifndef ADX_TEST_VSYNC_MODE
 #define ADX_TEST_VSYNC_MODE 0
 #endif
@@ -22,7 +26,8 @@ enum { VIDEO_HZ = 0, DISPLAY_OFFSET = 0 };
 #endif
 
 enum {
-    RATE = 44100, RING = 16384, QUEUE = 32768, FRAMES = 196608,
+    RATE = 44100, RING = 16384, QUEUE = 32768,
+    FRAMES = ADX_TEST_LATE_CUT ? 393216 : 196608,
     TRACK_HEADER = 32, TRACK_BLOCK = 36, TRACK_FOOTER = 18,
     TRACK_SIZE = TRACK_HEADER + FRAMES / 32 * TRACK_BLOCK + TRACK_FOOTER,
     CYCLES = 5, HOLD_MS = RING * 1000 / RATE + 40
@@ -288,9 +293,23 @@ static int run(void) {
     const struct snd_ordinary_pcm16 *lease = players[0].ordinary_pcm;
     CHECK(lease);
     uint64_t target = RING / 2 + 2048;
+    const uint64_t late_targets[CYCLES] = {
+        2*RING+9000, 3*RING-1900, 3*RING+1200, 4*RING-1900, 4*RING+9500
+    };
     for(unsigned i = 0; i < CYCLES; ++i) {
+        uint64_t base = i ? cycles[i-1].cut.clock.output_frames : 0;
+        if(ADX_TEST_LATE_CUT) {
+            uint64_t elapsed = i ? cycles[i-1].cut.clock.source_frames : 0;
+            target = elapsed + late_targets[i] - (i ? SND_FLYCAST_PCM16_PAUSE_PREROLL : 0);
+        }
         lose_cut_once = i == 1;
         CHECK(!cycle(&players[0], &cycles[i], target, requests[i], owned));
+        if(ADX_TEST_LATE_CUT) {
+            uint64_t before = cycles[i].before.clock.output_frames - base;
+            uint64_t cut = cycles[i].cut.clock.output_frames - base;
+            CHECK(before >= late_targets[i] && cut > before && cut > 2*RING);
+            CHECK(cut/RING == before/RING + (i == 1 || i == 3));
+        }
         struct kosdec_adx_player_info state;
         CHECK(players[0].ordinary_pcm == lease &&
               !kosdec_adx_player_get_info(&players[0], &state) && state.sources_started == 1);
@@ -319,6 +338,11 @@ static int run(void) {
     CHECK(owned - fresh_owned == 4u * RING && !checked_stop(1, fresh_owned));
     for(unsigned i = 0; i < CYCLES; ++i) {
         const struct cycle_result *r = &cycles[i];
+        if(ADX_TEST_LATE_CUT) {
+            uint64_t base = i ? cycles[i-1].cut.clock.output_frames : 0;
+            printf("ADX-FIVE late=%u local-before=%" PRIu64 " local-cut=%" PRIu64 "\n",
+                   i+1, r->before.clock.output_frames-base, r->cut.clock.output_frames-base);
+        }
         printf("ADX-FIVE cycle=%u session=%" PRIu32 " pre=%" PRIu64 " cut=%" PRIu64
                " first-unread=%" PRIu64 " discard-result=%" PRId32 " resumed-next=%" PRIu64
                " resumed-count=%" PRIu64 " epoch=%" PRIu64 " aram=%" PRIu32 "\n",

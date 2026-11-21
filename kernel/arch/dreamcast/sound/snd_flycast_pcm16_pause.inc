@@ -48,7 +48,7 @@ static void pause_submit(const snd_ordinary_pcm16_t *pcm, const strchan_t *strea
     uintptr_t box = pause_mailbox();
     g2_lock_scoped();
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, session), pcm->session);
-    g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, cut), pcm->pause_cut);
+    g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, cut), pcm->pause_cut % pcm->ring);
     for(unsigned i = 0; i < 2; ++i) {
         uintptr_t slot = box + offsetof(flycast_cut_mailbox_t, slot) +
                          i * sizeof(flycast_cut_slot_t);
@@ -61,6 +61,32 @@ static void pause_submit(const snd_ordinary_pcm16_t *pcm, const strchan_t *strea
     g2_fifo_wait();
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, request), pcm->voice[0].start);
     g2_fifo_wait();
+}
+
+/* Each quote was captured after the prior cursor sample. The time from the
+   start of that sample to receipt of the quote must exclude a full traversal.
+   Then the residue has only one possible forward mapping from that anchor. */
+static bool pause_quote_matches(const snd_ordinary_pcm16_t *pcm) {
+    uint32_t position[2];
+    for(unsigned i = 0; i < 2; ++i)
+        position[i] = pause_word(offsetof(flycast_cut_mailbox_t, position) + i * sizeof(uint32_t));
+
+    uint64_t now = timer_ms_gettime64();
+    uint64_t lap = pcm->pause_cut - pcm->pause_cut % pcm->ring;
+    for(unsigned i = 0; i < 2; ++i) {
+        const ordinary_pcm16_cursor_t *anchor = &pcm->voice[i].cursor;
+        uint64_t bound = ordinary_pcm16_movement(pcm->motion_rate, now - anchor->before_ms);
+        if(now < anchor->after_ms || bound >= pcm->ring || position[i] >= pcm->ring)
+            return false;
+        uint32_t prev = anchor->frames % pcm->ring;
+        uint32_t delta = (position[i] + pcm->ring - prev) % pcm->ring;
+        if(delta > bound || anchor->frames > UINT64_MAX - delta)
+            return false;
+        uint64_t frames = anchor->frames + delta;
+        if(frames < lap || frames >= pcm->pause_cut || pcm->pause_cut - frames <= FLYCAST_CUT_LEAD)
+            return false;
+    }
+    return true;
 }
 
 int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
@@ -95,21 +121,57 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
         uint64_t second = pcm->voice[1].cursor.frames;
         uint64_t furthest = first > second ? first : second;
 
-        /* Bound the supported operation to this bank's first traversal
-           and reserve a future endpoint already committed on both legs. */
-        if(furthest >= pcm->ring - 2048u || furthest + 2048u >= pcm->committed) {
+        const uint32_t lead = 2048;
+        if(furthest > UINT64_MAX - 2 * lead) {
+            errno = EOVERFLOW;
+            goto fail;
+        }
+        uint64_t cut = furthest + lead;
+        /* Leave time for the quote and authorization if the target is across
+           the wrap. Only a short guard interval is added, never another lap. */
+        uint32_t position = cut % pcm->ring;
+        if(position < lead)
+            cut += lead - position;
+        if(cut >= pcm->committed) {
             errno = EAGAIN;
             return ordinary_pcm16_unlock(-1);
         }
-        pcm->pause_cut = (uint32_t)furthest + 2048u;
-        pcm->pause_state = PAUSE_POSTED;
+        pcm->pause_cut = cut;
+        pcm->pause_state = PAUSE_PLANNED;
         pcm->running = false;
+    }
+
+    /* Let both cursors enter the target traversal with the original LEA.
+       Keep the same absolute cut and stop refilling throughout the wait. */
+    if(pcm->pause_state == PAUSE_PLANNED) {
+        uint64_t lap = pcm->pause_cut - pcm->pause_cut % pcm->ring;
+        while(pcm->voice[0].cursor.frames < lap || pcm->voice[1].cursor.frames < lap) {
+            if(!stream_time_remaining(deadline))
+                goto timeout;
+            if(ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0) {
+                if(errno == ETIMEDOUT)
+                    goto timeout;
+                goto fail;
+            }
+        }
+        for(unsigned i = 0; i < 2; ++i) {
+            if(pcm->voice[i].cursor.frames >= pcm->pause_cut ||
+               pcm->pause_cut - pcm->voice[i].cursor.frames <= FLYCAST_CUT_LEAD) {
+                errno = EPROTO;
+                goto fail;
+            }
+        }
+        if(!stream_time_remaining(deadline))
+            goto timeout;
         pause_submit(pcm, stream);
+        pcm->pause_state = PAUSE_POSTED;
     }
 
     while(stream_time_remaining(deadline)) {
-        if(pause_word(offsetof(flycast_cut_mailbox_t, done)) == pcm->voice[0].start) {
-            if(pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
+        uint32_t start = pcm->voice[0].start;
+        if(pause_word(offsetof(flycast_cut_mailbox_t, done)) == start) {
+            if(pcm->pause_state != PAUSE_AUTHORIZED ||
+               pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
                !pause_address_matches(stream)) {
                 errno = EPROTO;
                 goto fail;
@@ -119,8 +181,20 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
             *exclusive_cut = pcm->pause_cut;
             return ordinary_pcm16_unlock(0);
         }
+        if(pcm->pause_state == PAUSE_POSTED &&
+           pause_word(offsetof(flycast_cut_mailbox_t, quoted)) == start) {
+            if(!pause_quote_matches(pcm)) {
+                errno = EPROTO;
+                goto fail;
+            }
+            if(!stream_time_remaining(deadline))
+                goto timeout;
+            g2_write_32(pause_mailbox() + offsetof(flycast_cut_mailbox_t, authorize), start);
+            pcm->pause_state = PAUSE_AUTHORIZED;
+        }
         thd_pass();
     }
+timeout:
     errno = ETIMEDOUT;
     return ordinary_pcm16_unlock(-1);
 

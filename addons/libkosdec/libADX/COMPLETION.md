@@ -68,10 +68,25 @@ Four cases in both BIOS CPU modes cover submitted and decoded tails, an
 empty tail, and a retry after the producer supplies more input. With logical
 PLAYEND enabled, completion follows the source boundary and checked stop.
 
-The pause cut is still limited to the first traversal of each 16,384-frame
-bank. A fresh ordinary title after checked stop used a separate allocation;
-these tests did not release or recycle the played allocation. Later cuts
-and hardware retirement remain open.
+The cut now counts frames from the current START, including completed
+traversals of the 16,384-frame bank. A successful late cut must still fall
+inside the committed stereo data whose source samples the player retains.
+Both installed BIOS modes passed the public regression with uninterrupted
+stereo source data between five late pauses. A separate backend-only
+interpreter recording had seven extra silent blocks; its traced mixer
+output passed, but the unmodified disk recording did not. A fresh
+ordinary title after checked stop used a
+separate allocation; these tests did not release or recycle the played
+allocation. Hardware retirement is not established.
+
+### Which player functions share a blocker?
+
+| 2.00J entry | What the public tests distinguish | What still needs a native implementation or test |
+| --- | --- | --- |
+| `ADXT_Pause` | A confirmed stereo cut stops both voices. A timeout followed by retry returns the same cut. | Active mono playback and other stock nominal rates are outside the 44.1 kHz stereo profile. |
+| `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. | Stock-valid titles that cannot yet pause also cannot discard that head. The native count deliberately excludes ring capacity when no frames moved. |
+| `ADXT_GetStat` | A paused title can reach DECEND when the decoder finishes. That is not PLAYEND: logical completion requires a drained source and checked stop. | Check a live-transposed mono title through natural drain. A failed retained group poll does not, by itself, establish a status-getter bug. |
+| `ADXT_GetTime` / `ADXT_GetTimeReal` | Sample time, owner-delivered NTSC/PAL time and centiseconds freeze on the qualified stereo cut and resume from the confirmed source position. | Ordinary mono supports live transpose but lacks the corresponding qualified source cursor. Retained mono has a clock but does not admit live transpose. Neither alone verifies time across that pitch change. |
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
 The selected Manatee adapter ignores its command selector, and the getter

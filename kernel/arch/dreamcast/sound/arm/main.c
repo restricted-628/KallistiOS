@@ -944,7 +944,8 @@ int arm_main(void) {
     aica_init();
     aica_observer_ready(&observer);
 #ifdef AICA_FLYCAST_PCM16_PAUSE
-    flycast_cut->request = flycast_cut->done = 0;
+    flycast_cut->request = flycast_cut->quoted = flycast_cut->authorize =
+        flycast_cut->done = 0;
     flycast_cut->ready = FLYCAST_CUT_MAGIC;
 #endif
 

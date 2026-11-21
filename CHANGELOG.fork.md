@@ -8,6 +8,12 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The optional Flycast stereo ADX player can now pause after multiple
+  sound-ring wraps, including when the pause request and cut fall on
+  opposite sides of a wrap. The SH-4 checks each voice's reported position
+  against its last confirmed traversal before authorizing the AICA cut.
+  Resume keeps the same two channels and 128 KiB reservation.
+
 - A paused Flycast stereo ADX title can now resume near the end of a finite
   track even when the remaining PCM cannot fill a bank. It plays only the
   surviving frames and excludes padding from elapsed source time. Discarding
@@ -30,9 +36,9 @@ it is a historical index, not evidence that those changes passed tests.
 - A Flycast-only build of the ordinary PCM16 backend can pause and resume one
   44.1 kHz stereo stream on the same two channels. It alternates between two
   reserved banks (128 KiB total); resume inserts 64 silent frames before the
-  caller's first surviving frame. The cut is limited to the first traversal
-  of each bank. Both processors must opt in at build time and the caller
-  must enable the profile before startup. Default firmware is unchanged.
+  caller's first surviving frame. Both processors must opt in at build
+  time and the caller must enable the profile before startup. Default
+  firmware is unchanged.
 
 - Ordinary opt-in stereo ADX playback accepts a live transpose after decoding
   ends while slot 0 still has real source frames to play. An all-padding

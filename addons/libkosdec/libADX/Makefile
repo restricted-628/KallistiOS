@@ -347,13 +347,15 @@ $(BUILD)/sh4/adx_native_test.elf: tests/native.c $(ADX_NATIVE_OBJS) $(BUILD)/sh4
 -include $(ADX_NATIVE_OBJS:.o=.d)
 
 ifeq ($(ADX_FLYCAST_ACTIVE_PAUSE),1)
-.PHONY: flycast-pause-test-elf flycast-pause-vsync-test-elf
+.PHONY: flycast-pause-test-elf flycast-pause-vsync-test-elf flycast-pause-late-test-elf
 flycast-pause-test-elf: $(BUILD)/sh4/adx_flycast_pause_test.elf
+flycast-pause-late-test-elf: $(BUILD)/sh4/adx_flycast_pause_late.elf
+$(BUILD)/sh4/adx_flycast_pause_late.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_LATE_CUT=1
 flycast-pause-vsync-test-elf: $(BUILD)/sh4/adx_flycast_pause_ntsc.elf $(BUILD)/sh4/adx_flycast_pause_pal.elf
 $(BUILD)/sh4/adx_flycast_pause_ntsc.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_VSYNC_MODE=1
 $(BUILD)/sh4/adx_flycast_pause_pal.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_VSYNC_MODE=2
 $(BUILD)/sh4/adx_flycast_pause_test.elf $(BUILD)/sh4/adx_flycast_pause_ntsc.elf \
-$(BUILD)/sh4/adx_flycast_pause_pal.elf: tests/flycast_pause.c $(BUILD)/sh4/libADX.a
+$(BUILD)/sh4/adx_flycast_pause_pal.elf $(BUILD)/sh4/adx_flycast_pause_late.elf: tests/flycast_pause.c $(BUILD)/sh4/libADX.a
 	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) $(PRIVATE_PAUSE_TEST_FLAGS) -I"$(FLYCAST_PAUSE_INCLUDE)" -I"$(ORDINARY_PCM16_INCLUDE)" \
 	    -DADX_TEST_ENABLE_ACTIVE_PAUSE=kosdec_adx_compat_player_enable_flycast_pause \
 	    -Wl,--wrap=snd_flycast_pcm16_pause -o $@ $^ -lm
