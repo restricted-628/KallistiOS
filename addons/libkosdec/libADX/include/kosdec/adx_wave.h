@@ -14,7 +14,7 @@ struct kosdec_adx_wave {
     kosdec_adx_read_at read_at;
     void *context;
     struct kosdec_adx_wave_info info;
-    enum kosdec_adx_status terminal;
+    enum kosdec_adx_status terminal, staged_error;
     unsigned phase, used, need, frame_bytes;
     bool format_ready, header_ready, seeking;
     uint32_t seek_target;
@@ -23,7 +23,7 @@ struct kosdec_adx_wave {
     int16_t cached[8];
     kosdec_adx_pcm_filter filter;
     void *filter_context;
-    uint8_t buffer[512];
+    uint8_t buffer[4096]; /* One provider request is at most 512 bytes. */
 };
 struct kosdec_adx_wave_result { enum kosdec_adx_status status; size_t frames; };
 /* Initially/after all prior users retire. Caller owns state/provider/context;

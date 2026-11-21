@@ -1,5 +1,5 @@
 /* Original bounded descriptor queue and independent-file PCM transitions. */
-#include <kosdec/adx_sequence.h>
+#include "adx_stream_internal.h"
 #include "adx_filter.h"
 #include <string.h>
 #define SEQUENCE_MAGIC UINT32_C(0x41445851)
@@ -51,8 +51,15 @@ void kosdec_adx_sequence_cancel(struct kosdec_adx_sequence *s) {
         s->terminal = KOSDEC_ADX_CANCELLED;
     }
 }
-struct kosdec_adx_sequence_result kosdec_adx_sequence_read(
-    struct kosdec_adx_sequence *s, int16_t *output, size_t capacity) {
+enum kosdec_adx_status media_adx_sequence_step_file(struct kosdec_adx_sequence *s) {
+    if(s->terminal) return s->terminal;
+    if(!s->active || s->paused) return KOSDEC_ADX_NEED_OUTPUT;
+    enum kosdec_adx_status status = media_adx_stream_step_file(&s->reader);
+    if(status >= KOSDEC_ADX_DONE) s->terminal = status;
+    return status;
+}
+struct kosdec_adx_sequence_result media_adx_sequence_read(
+    struct kosdec_adx_sequence *s, int16_t *output, size_t capacity, bool separate_transport) {
     struct kosdec_adx_sequence_result r = {.status = KOSDEC_ADX_BAD_ARGUMENT};
     if(!valid(s) || (!output && capacity) ||
        (output && (uintptr_t)output % _Alignof(int16_t))) return r;
@@ -69,8 +76,8 @@ struct kosdec_adx_sequence_result kosdec_adx_sequence_read(
                               source->bytes, false);
         s->active = true;
     }
-    struct kosdec_adx_stream_result step = kosdec_adx_stream_read(
-        &s->reader, output, capacity);
+    struct kosdec_adx_stream_result step = media_adx_stream_read(
+        &s->reader, output, capacity, separate_transport);
     r.status = step.status;
     r.frames = step.frames;
     if(!s->admitted && s->reader.prepared && r.status < KOSDEC_ADX_DONE) {
@@ -104,4 +111,9 @@ struct kosdec_adx_sequence_result kosdec_adx_sequence_read(
     }
     if(r.status >= KOSDEC_ADX_DONE) s->terminal = r.status;
     return r;
+}
+
+struct kosdec_adx_sequence_result kosdec_adx_sequence_read(
+    struct kosdec_adx_sequence *s, int16_t *output, size_t capacity) {
+    return media_adx_sequence_read(s,output,capacity,false);
 }

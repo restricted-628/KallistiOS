@@ -1,6 +1,8 @@
 /* Original stream/sequence PCM bridge. SPSC ownership/order follows KOS's
    snd_adx_pipe.c, Copyright(C)2026 Joseph Black, under the KOS license. */
-#include <kosdec/adx_pipe.h>
+#include "adx_service_internal.h"
+#include "adx_container_internal.h"
+#include "adx_stream_internal.h"
 #include "adx_joint_reader_internal.h"
 #include <string.h>
 #define PIPE_MAGIC UINT32_C(0x41445850)
@@ -80,7 +82,8 @@ static uint32_t source_end(const struct kosdec_adx_pipe *p) {
     if(p->spsd) return p->spsd->frames_done;
     return p->sequence->reader.source_frame;
 }
-struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) {
+struct kosdec_adx_stream_result media_adx_pipe_pump_limited(
+    struct kosdec_adx_pipe *p, size_t frame_limit, bool separate_transport) {
     struct kosdec_adx_stream_result r = {KOSDEC_ADX_BAD_ARGUMENT, 0};
     if(!valid(p)) return r;
     uint32_t terminal = __atomic_load_n(&p->terminal, __ATOMIC_RELAXED);
@@ -99,8 +102,9 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
         uint32_t head = __atomic_load_n(&p->write_cursor, __ATOMIC_RELAXED);
         uint32_t tail = __atomic_load_n(&p->read_cursor, __ATOMIC_ACQUIRE);
         uint32_t room = p->capacity - (uint32_t)(head - tail);
-        bool input_prefetch = p->joint && (p->joint->sector.request.read_at ||
-            (p->joint->linked.enabled && (p->joint->feed || p->joint->linked.loader)));
+        bool input_prefetch = p->joint && !separate_transport &&
+            (p->joint->sector.request.read_at ||
+             (p->joint->linked.enabled && (p->joint->feed || p->joint->linked.loader)));
         if(!room && !input_prefetch) {
             r.status = KOSDEC_ADX_NEED_OUTPUT;
             return r;
@@ -109,40 +113,47 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
         int16_t scratch[64];
         bool job = p->joint && p->joint->job.pcm;
         int16_t *pcm = job ? p->joint->job.pcm : scratch;
+        if(frame_limit && room > frame_limit) room = (uint32_t)frame_limit;
         if(!job && room > 32) room = 32;
         if(job) {
             struct kosdec_adx_joint_read_result s =
-                media_adx_joint_reader_read_pipe(p->joint, room, p->capacity - index);
+                media_adx_joint_reader_read_pipe(p->joint, room, p->capacity - index, separate_transport);
             r.status = s.status; r.frames = s.frames;
         }
         else if(p->stream && p->stream->seeking) {
-            r.status = kosdec_adx_stream_seek_step(p->stream);
+            /* A phased seek discards at most one window of scalar groups per
+               visit, without a provider call. Stop separately at the target. */
+            unsigned steps = separate_transport ? sizeof(p->stream->input)/18u : 1;
+            do {
+                r.status = media_adx_stream_seek_step(p->stream,separate_transport);
+            } while(r.status == KOSDEC_ADX_MORE && --steps);
             if(r.status == KOSDEC_ADX_DONE && !p->stream->seeking)
                 r.status = KOSDEC_ADX_MORE; /* Positioned; no PCM emitted yet. */
         }
-        else if(p->stream) r = kosdec_adx_stream_read(p->stream, pcm, room);
+        else if(p->stream) r = media_adx_stream_read(p->stream,pcm,room,separate_transport);
         else if(p->joint) {
             struct kosdec_adx_joint_read_result s = kosdec_adx_joint_reader_read(p->joint, pcm, room);
             r.status = s.status; r.frames = s.frames;
         }
         else if(p->wave) {
-            struct kosdec_adx_wave_result s = kosdec_adx_wave_read(p->wave, pcm, room);
+            struct kosdec_adx_wave_result s = media_adx_wave_read(p->wave, pcm, room, separate_transport);
             r.status = s.status; r.frames = s.frames;
         }
         else if(p->au) {
-            struct kosdec_adx_au_result s = kosdec_adx_au_read(p->au, pcm, room);
+            struct kosdec_adx_au_result s = media_adx_au_read(p->au, pcm, room, separate_transport);
             r.status = s.status; r.frames = s.frames;
         }
         else if(p->aiff) {
-            struct kosdec_adx_aiff_result s = kosdec_adx_aiff_read(p->aiff, pcm, room);
+            struct kosdec_adx_aiff_result s = media_adx_aiff_read(p->aiff, pcm, room, separate_transport);
             r.status = s.status; r.frames = s.frames;
         }
         else if(p->spsd) {
-            struct kosdec_adx_spsd_result s = kosdec_adx_spsd_read(p->spsd, pcm, room);
+            struct kosdec_adx_spsd_result s = media_adx_spsd_read(p->spsd, pcm, room, separate_transport);
             r.status = s.status; r.frames = s.frames;
         }
         else {
-            struct kosdec_adx_sequence_result s = kosdec_adx_sequence_read(p->sequence, pcm, room);
+            struct kosdec_adx_sequence_result s =
+                media_adx_sequence_read(p->sequence,pcm,room,separate_transport);
             r.status = s.status;
             r.frames = s.frames;
         }
@@ -178,6 +189,9 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
     if(r.status >= KOSDEC_ADX_DONE)
         __atomic_store_n(&p->terminal, r.status, __ATOMIC_RELEASE);
     return r;
+}
+struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) {
+    return media_adx_pipe_pump_limited(p,0,false);
 }
 struct kosdec_adx_pipe_result kosdec_adx_pipe_read(
     struct kosdec_adx_pipe *p, int16_t *output, size_t capacity) {

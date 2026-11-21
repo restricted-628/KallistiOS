@@ -1,6 +1,7 @@
 /* Original command ownership, terminal races and PCM continuity regressions. */
 #include <kosdec/adx_service.h>
 #include <pthread.h>
+#include <errno.h>
 #include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -139,20 +140,65 @@ static void lifecycle(void) {
     CHECK(kosdec_adx_service_post(&f.service,&c)==KOSDEC_ADX_CANCELLED);free(f.in.data);
 }
 static void loop_release(void) {
-    struct fixture f;init(&f,2,false,true);pause(&f,false);
+    struct fixture f;init(&f,2,false,true);
+    struct kosdec_adx_decode_progress progress={.decoded_frames=99};
+    CHECK(kosdec_adx_service_get_decode_progress(&f.service,&progress)<0 &&
+          errno==ENOTSUP && progress.decoded_frames==99);
+    CHECK(!kosdec_adx_service_enable_decode_progress(&f.service));
+    CHECK(!kosdec_adx_service_get_decode_progress(&f.service,&progress) &&
+          progress.paused && !progress.sample_rate && !progress.decoded_frames);
+    pause(&f,false);
+    uint32_t decoded=0, prior_position=0;
+    unsigned rewinds=0;
     size_t total=0;bool released=false,done=false;
     for(unsigned n=0;n<10000;++n) {
         if(f.stream.wraps==2 && !released) {
             command(&f,(struct kosdec_adx_command){.kind=KOSDEC_ADX_RELEASE_LOOP},KOSDEC_ADX_MORE);
             released=true;
         }
-        kosdec_adx_service_step(&f.service);int16_t pcm[14];
+        struct kosdec_adx_stream_result produced=kosdec_adx_service_step(&f.service);
+        decoded+=(uint32_t)produced.frames;
+        CHECK(!kosdec_adx_service_get_decode_progress(&f.service,&progress) &&
+              progress.decoded_frames==decoded && !progress.paused);
+        if(progress.sample_rate)
+            CHECK(progress.sample_rate==44100 && progress.loop_present);
+        if(progress.source_frame<prior_position) ++rewinds;
+        prior_position=progress.source_frame;
+        int16_t pcm[14];
         struct kosdec_adx_pipe_result r=kosdec_adx_pipe_read(&f.service.pipe,pcm,7);
         for(size_t j=0;j<r.frames;++j)for(unsigned k=0;k<2;++k)
             CHECK(total+j<131 && pcm[j*2+k]==vectors[4].pcm[k][total+j]);
         total+=r.frames;if(r.drained){CHECK(r.producer==KOSDEC_ADX_DONE);done=true;break;}
     }
-    CHECK(done && released && total==123);free(f.in.data);
+    CHECK(done && released && total==123 && rewinds==2);
+    CHECK(progress.decoded_frames==123 && progress.source_frame==65 &&
+          progress.samples_complete && progress.status==KOSDEC_ADX_DONE);
+    free(f.in.data);
+}
+static void seek_progress(void) {
+    struct fixture f;init(&f,1,false,false);
+    CHECK(kosdec_adx_stream_seek_begin(&f.stream,35)==KOSDEC_ADX_MORE);
+    CHECK(!kosdec_adx_service_enable_decode_progress(&f.service));
+    pause(&f,false);
+    bool positioned=false;
+    for(unsigned i=0;i<1000;++i) {
+        struct kosdec_adx_stream_result r=kosdec_adx_service_step(&f.service);
+        struct kosdec_adx_decode_progress p;
+        CHECK(!kosdec_adx_service_get_decode_progress(&f.service,&p));
+        CHECK(!r.frames && !p.decoded_frames && p.source_frame<=35);
+        if(p.sample_rate) {
+            CHECK(p.source_frame==35 && p.sample_rate==44100 && !p.loop_present);
+            positioned=true;
+            break;
+        }
+    }
+    CHECK(positioned);
+    kosdec_adx_service_request_cancel(&f.service);
+    CHECK(kosdec_adx_service_step(&f.service).status==KOSDEC_ADX_CANCELLED);
+    struct kosdec_adx_decode_progress p;
+    CHECK(!kosdec_adx_service_get_decode_progress(&f.service,&p));
+    CHECK(p.status==KOSDEC_ADX_CANCELLED && p.source_frame==35 && !p.decoded_frames);
+    free(f.in.data);
 }
 struct racing { struct fixture *f;size_t frames; };
 static void *worker(void *arg) {
@@ -162,7 +208,17 @@ static void *worker(void *arg) {
 }
 static void *consumer(void *arg) {
     struct racing *race=arg;int16_t pcm[38];size_t total=0;
+    uint32_t last=0;
     for(;;) {
+        struct kosdec_adx_decode_progress sample={.decoded_frames=UINT32_MAX};
+        if(kosdec_adx_service_get_decode_progress(&race->f->service,&sample)==0) {
+            CHECK(sample.decoded_frames>=last && sample.source_frame<=65);
+            CHECK(!sample.sample_rate || sample.sample_rate==44100);
+            CHECK(sample.input_bytes<=512 && !sample.loop_present);
+            last=sample.decoded_frames;
+        } else {
+            CHECK(errno==EAGAIN && sample.decoded_frames==UINT32_MAX);
+        }
         struct kosdec_adx_pipe_result r=kosdec_adx_pipe_read(&race->f->service.pipe,pcm,19);
         for(size_t j=0;j<r.frames;++j)for(unsigned k=0;k<2;++k)
             CHECK(pcm[j*2+k]==golden[k][(total+j)%65]);
@@ -176,6 +232,7 @@ static void races(void) {
     for(unsigned trial=0;trial<200;++trial) {
         struct fixture f;init(&f,2,true,false);
         if(trial%2)kosdec_adx_sequence_repeat(&f.sequence,true);
+        CHECK(!kosdec_adx_service_enable_decode_progress(&f.service));
         struct racing r={.f=&f};pthread_t producer,reader;
         CHECK(!pthread_create(&producer,NULL,worker,&r));
         CHECK(!pthread_create(&reader,NULL,consumer,&r));
@@ -192,12 +249,15 @@ static void races(void) {
         }
         CHECK(!pthread_join(producer,NULL) && !pthread_join(reader,NULL));
         if(!(trial%2))CHECK(r.frames==65 || kosdec_adx_service_get_state(&f.service).status==KOSDEC_ADX_CANCELLED);
+        struct kosdec_adx_decode_progress progress;
+        CHECK(!kosdec_adx_service_get_decode_progress(&f.service,&progress) &&
+              progress.decoded_frames==r.frames);
         frames+=r.frames;free(f.in.data);
     }
     printf("SERVICE_RACES_PASS trials=200 commands=%zu frames=%zu\n",commands,frames);
 }
 int main(void) {
-    combinations();lifecycle();loop_release();races();
+    combinations();lifecycle();loop_release();seek_progress();races();
     puts("SERVICE_PASS controls, PCM continuity, close/cancel and concurrent receipts");
     return 0;
 }

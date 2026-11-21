@@ -5,7 +5,10 @@ bool media_adx_joint_reader_enable_live_sfa(struct kosdec_adx_joint_reader *);
 bool media_adx_joint_reader_set_sfa_length(struct kosdec_adx_joint_reader *,
     struct kosdec_adx_joint *, uint32_t frames);
 struct kosdec_adx_joint_read_result media_adx_joint_reader_read_pipe(
-    struct kosdec_adx_joint_reader *, size_t room, size_t tail);
+    struct kosdec_adx_joint_reader *, size_t room, size_t tail, bool separate_transport);
+enum kosdec_adx_status media_adx_joint_reader_step_loader(
+    struct kosdec_adx_joint_reader *, bool reload);
 enum kosdec_adx_status media_adx_joint_sector_step(struct kosdec_adx_joint_reader *);
+enum kosdec_adx_status media_adx_joint_sector_step_stream(struct kosdec_adx_joint_reader *);
 enum kosdec_adx_joint_status media_adx_joint_sector_close(struct kosdec_adx_joint_reader *);
 #endif

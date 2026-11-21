@@ -23,7 +23,7 @@ typedef int (*kosdec_adx_replay_prepare)(void *context,
 struct kosdec_adx_recovery_info {
     enum kosdec_adx_recovery_phase phase;
     int first_error, stop_error, prepare_error;
-    uint32_t replays;
+    uint32_t replays, compat_faults; /* Admitted typed causes in compatibility mode. */
     uint64_t deadline;
     snd_stream_hnd_t retained_sound;
 };
@@ -36,6 +36,8 @@ struct kosdec_adx_recovery {
     struct kosdec_adx_recovery_info info;
     uint64_t last_time;
     bool clock_started, replay_pending;
+    uint32_t compat_stop_timeout;
+    struct kosdec_adx_player *compat_successor;
 };
 /* Initialize on the player's serialized ordinary owner thread; only after any
    previous recovery users stop. Caller owns all player/source/storage lifetimes.
@@ -58,6 +60,34 @@ int kosdec_adx_recovery_init(struct kosdec_adx_recovery *, struct kosdec_adx_pla
    another owner/group while a recovery step is in progress. */
 int kosdec_adx_recovery_step(struct kosdec_adx_recovery *, uint64_t now_ms,
     uint32_t stop_timeout_ms);
+/* Owner calls after servicing the player's compatibility collection. This
+   advances checked recovery from the admitted fault snapshot without polling
+   the player again. A stagnant decoder takes STOP precedence. Isolated low
+   DATA or transport failure may prepare a fresh READY player for the same
+   slot in REPLAY mode. On stop failure, preserve causes and ownership for
+   retry. A stopped recovery remains stopped until explicit owner setup.
+   Same return values and borrowed preparation contract as recovery_step. */
+int kosdec_adx_recovery_step_compat(struct kosdec_adx_recovery *, uint64_t now_ms,
+    uint32_t stop_timeout_ms);
+/* Optional same-call recovery for an existing phased binding. Use fresh or
+   detached recovery storage. The title borrows it until detach. A fault
+   schedules checked stop during its title visit, before any later title or
+   reload. A failed stop retains the binding and is retried on its next visit.
+   Explicit player stop suppresses any pending replay. Do not edit recovery
+   structure fields or the staged player directly while the binding is live.
+   REPLAY requires a positive limit and an independently prepared successor.
+   NOACT records the observation only. The manual step APIs are independent.
+   Rebuild consumers with the matching recovery and collection headers. */
+int kosdec_adx_recovery_attach_compat(struct kosdec_adx_recovery *, struct kosdec_adx_player *,
+    enum kosdec_adx_recovery_mode, uint32_t timeout_ms, uint32_t max_replays);
+/* Stage one fresh READY successor for REPLAY, or NULL to release the offer.
+   Supply an independent, rewound source. Borrowed player and source must stay
+   valid and unserviced until consumed or released. No application prepare
+   callback runs in service. A stalled decoder still selects STOP only. */
+int kosdec_adx_recovery_stage_compat(struct kosdec_adx_recovery *, struct kosdec_adx_player *);
+/* Release the recovery and any unused successor before unbinding the title.
+   An in-flight checked stop must finish first. Retained sound stays owned. */
+int kosdec_adx_recovery_detach_compat(struct kosdec_adx_recovery *);
 int kosdec_adx_recovery_get_info(const struct kosdec_adx_recovery *,
     struct kosdec_adx_recovery_info *);
 #ifdef __cplusplus

@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — libADX compatibility service and initial transpose
+
+- Add caller-owned service phases for titles and file requests, pre-output
+  pause, and logical completion after the final source has drained and software
+  stop succeeds. Logical completion does not release sound RAM.
+- Add opt-in initial transpose for ordinary playback of 44.1 kHz sources:
+  one octave down, neutral, or one octave up. The 88.2 kHz case was verified
+  with the fiber-backed producer; the slower phased-service test short-refilled.
+  Neither the default rate limits nor retained pitch support changed. Rebuild
+  consumers against the matching libADX headers and archive.
+
 ## 2026-11-21 — Retained PCM initial channel gain
 
 - Private retained PCM callers can start mono or stereo playback at an exact

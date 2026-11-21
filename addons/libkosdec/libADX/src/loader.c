@@ -80,60 +80,130 @@ static uint32_t lsc_refill_sectors(const struct kosdec_adx_loader_entry *e, size
     return sectors < LSC_MAX_REFILL_SECTORS ? (uint32_t)sectors : LSC_MAX_REFILL_SECTORS;
 }
 
-enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *l) {
-    if(!valid(l))return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
-    if(l->state==KOSDEC_ADX_LOADER_FAILED)return KOSDEC_ADX_LOADER_IO_ERROR;
-    if(l->paused || l->state!=KOSDEC_ADX_LOADER_EXEC)return KOSDEC_ADX_LOADER_OK;
-    struct kosdec_adx_loader_entry *e=&l->entries[l->head];
-    if(!l->active) {
-        if(e->completed_sectors==e->info.sectors){complete(l,e);return KOSDEC_ADX_LOADER_OK;}
-        struct kosdec_adx_joint_info joint;
-        if(kosdec_adx_joint_query(l->joint,&joint)!=KOSDEC_ADX_JOINT_OK || joint.sealed || joint.capacity!=l->capacity)
-            return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
-        if(joint.borrowed[KOSDEC_ADX_JOINT_FREE])return KOSDEC_ADX_LOADER_BUSY;
-        if(l->lsc_flow && e->info.state == KOSDEC_ADX_LOADER_QUEUED) {
-            l->source_flow_limit = l->flow_limit;
-            e->info.state = KOSDEC_ADX_LOADER_READING;
-        }
-        size_t buffered=joint.available[KOSDEC_ADX_JOINT_DATA];
-        if(!l->sector_policy && !l->lsc_flow) buffered+=joint.borrowed[KOSDEC_ADX_JOINT_DATA];
-        size_t limit = effective_flow_limit(l);
-        if((limit || l->sector_policy || l->lsc_flow) && buffered >= limit)
-            return KOSDEC_ADX_LOADER_NEED_OUTPUT;
-        uint32_t sectors = 1;
-        if(l->lsc_flow) {
-            sectors = lsc_refill_sectors(e, joint.contiguous[KOSDEC_ADX_JOINT_FREE]);
-            if(!sectors) {
-                /* Native joints can split a single sector over a wrap or nodes. */
-                if(!lsc_refill_sectors(e, joint.available[KOSDEC_ADX_JOINT_FREE]))
-                    return KOSDEC_ADX_LOADER_NEED_OUTPUT;
-                sectors = 1;
-            }
-        }
-        (void)kosdec_adx_request_init(&l->request,e->read_at,e->context,e->input_bytes);
-        l->active=true;
-        if(kosdec_adx_request_seek(&l->request,(int64_t)e->info.start_sector+e->completed_sectors,KOSDEC_ADX_REQUEST_SET)!=KOSDEC_ADX_REQUEST_STOPPED)
-            return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
-        enum kosdec_adx_request_status s=kosdec_adx_request_start_joint(&l->request,sectors,l->joint);
-        if(s!=KOSDEC_ADX_REQUEST_READING)return failed(l,s);
-        e->info.state=KOSDEC_ADX_LOADER_READING;
+static enum kosdec_adx_loader_status admit_read(struct kosdec_adx_loader *l,
+                                               struct kosdec_adx_loader_entry *e) {
+    struct kosdec_adx_joint_info joint;
+    if(kosdec_adx_joint_query(l->joint,&joint)!=KOSDEC_ADX_JOINT_OK ||
+       joint.sealed || joint.capacity!=l->capacity)
+        return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
+    if(joint.borrowed[KOSDEC_ADX_JOINT_FREE])
+        return KOSDEC_ADX_LOADER_BUSY;
+    if(l->lsc_flow && e->info.state == KOSDEC_ADX_LOADER_QUEUED) {
+        l->source_flow_limit = l->flow_limit;
+        e->info.state = KOSDEC_ADX_LOADER_READING;
     }
+    size_t buffered=joint.available[KOSDEC_ADX_JOINT_DATA];
+    if(!l->sector_policy && !l->lsc_flow)
+        buffered+=joint.borrowed[KOSDEC_ADX_JOINT_DATA];
+    size_t limit = effective_flow_limit(l);
+    if((limit || l->sector_policy || l->lsc_flow) && buffered >= limit)
+        return KOSDEC_ADX_LOADER_NEED_OUTPUT;
+    uint32_t sectors = 1;
+    if(l->lsc_flow) {
+        sectors = lsc_refill_sectors(e, joint.contiguous[KOSDEC_ADX_JOINT_FREE]);
+        if(!sectors) {
+            /* Native joints can split a single sector over a wrap or nodes. */
+            if(!lsc_refill_sectors(e, joint.available[KOSDEC_ADX_JOINT_FREE]))
+                return KOSDEC_ADX_LOADER_NEED_OUTPUT;
+            sectors = 1;
+        }
+    }
+    (void)kosdec_adx_request_init(&l->request,e->read_at,e->context,e->input_bytes);
+    l->active=true;
+    if(kosdec_adx_request_seek(&l->request,(int64_t)e->info.start_sector+e->completed_sectors,
+                             KOSDEC_ADX_REQUEST_SET)!=KOSDEC_ADX_REQUEST_STOPPED)
+        return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
+    enum kosdec_adx_request_status status = kosdec_adx_request_start_joint(&l->request,sectors,l->joint);
+    if(status!=KOSDEC_ADX_REQUEST_READING)
+        return failed(l,status);
+    e->info.state=KOSDEC_ADX_LOADER_READING;
+    return KOSDEC_ADX_LOADER_OK;
+}
+
+static enum kosdec_adx_loader_status advance_read(struct kosdec_adx_loader *l,
+                                                 struct kosdec_adx_loader_entry *e) {
     enum kosdec_adx_request_status status=kosdec_adx_request_step(&l->request);
     struct kosdec_adx_request_info info;
-    if(!kosdec_adx_request_get_info(&l->request,&info))return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
+    if(!kosdec_adx_request_get_info(&l->request,&info))
+        return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
     e->info.read_sectors=e->completed_sectors+info.completed;
     e->info.published_bytes=e->completed_bytes+(uint32_t)info.output_bytes;
-    if(status==KOSDEC_ADX_REQUEST_READEND) {
-        if(kosdec_adx_request_close(&l->request)!=KOSDEC_ADX_REQUEST_STOPPED)return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
-        l->active=false;e->completed_sectors=e->info.read_sectors;e->completed_bytes=e->info.published_bytes;
-        if(e->completed_sectors==e->info.sectors)complete(l,e);
+    if(status==KOSDEC_ADX_REQUEST_READEND || status==KOSDEC_ADX_REQUEST_READING)
         return KOSDEC_ADX_LOADER_OK;
-    }
-    if(status==KOSDEC_ADX_REQUEST_READING)return KOSDEC_ADX_LOADER_OK;
-    if(status==KOSDEC_ADX_REQUEST_WAIT)return KOSDEC_ADX_LOADER_NEED_INPUT;
-    if(status==KOSDEC_ADX_REQUEST_NEED_OUTPUT)return KOSDEC_ADX_LOADER_NEED_OUTPUT;
+    if(status==KOSDEC_ADX_REQUEST_WAIT)
+        return KOSDEC_ADX_LOADER_NEED_INPUT;
+    if(status==KOSDEC_ADX_REQUEST_NEED_OUTPUT)
+        return KOSDEC_ADX_LOADER_NEED_OUTPUT;
     return failed(l,status);
 }
+
+static enum kosdec_adx_loader_status finish_read(struct kosdec_adx_loader *l,
+                                                struct kosdec_adx_loader_entry *e) {
+    if(kosdec_adx_request_close(&l->request)!=KOSDEC_ADX_REQUEST_STOPPED)
+        return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
+    l->active=false;
+    e->completed_sectors=e->info.read_sectors;
+    e->completed_bytes=e->info.published_bytes;
+    if(e->completed_sectors==e->info.sectors)
+        complete(l,e);
+    return KOSDEC_ADX_LOADER_OK;
+}
+
+enum loader_step_mode { LOADER_COMBINED, LOADER_STREAM, LOADER_RELOAD };
+
+static enum kosdec_adx_loader_status service(struct kosdec_adx_loader *l,
+                                            enum loader_step_mode mode) {
+    if(!valid(l))
+        return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    if(l->state==KOSDEC_ADX_LOADER_FAILED)
+        return KOSDEC_ADX_LOADER_IO_ERROR;
+    if(l->paused || l->state!=KOSDEC_ADX_LOADER_EXEC)
+        return KOSDEC_ADX_LOADER_OK;
+
+    struct kosdec_adx_loader_entry *e=&l->entries[l->head];
+    if(mode == LOADER_RELOAD && l->active) {
+        if(l->request.state != KOSDEC_ADX_REQUEST_READEND)
+            return KOSDEC_ADX_LOADER_OK;
+        enum kosdec_adx_loader_status status=finish_read(l,e);
+        if(status!=KOSDEC_ADX_LOADER_OK || l->state!=KOSDEC_ADX_LOADER_EXEC)
+            return status;
+        e=&l->entries[l->head];
+        /* Only one entry can finish this visit, including zero-length entries. */
+        return e->completed_sectors==e->info.sectors ?
+            KOSDEC_ADX_LOADER_OK : admit_read(l,e);
+    }
+    if(!l->active) {
+        if(mode == LOADER_STREAM)
+            return KOSDEC_ADX_LOADER_OK;
+        if(e->completed_sectors==e->info.sectors) {
+            complete(l,e);
+            return KOSDEC_ADX_LOADER_OK;
+        }
+        enum kosdec_adx_loader_status status=admit_read(l,e);
+        if(status!=KOSDEC_ADX_LOADER_OK || mode == LOADER_RELOAD)
+            return status;
+    }
+    if(l->request.state != KOSDEC_ADX_REQUEST_READEND) {
+        enum kosdec_adx_loader_status status=advance_read(l,e);
+        if(status!=KOSDEC_ADX_LOADER_OK)
+            return status;
+    }
+    return mode == LOADER_COMBINED && l->request.state == KOSDEC_ADX_REQUEST_READEND ?
+        finish_read(l,e) : KOSDEC_ADX_LOADER_OK;
+}
+
+enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *l) {
+    return service(l,LOADER_COMBINED);
+}
+
+enum kosdec_adx_loader_status kosdec_adx_loader_step_stream(struct kosdec_adx_loader *l) {
+    return service(l,LOADER_STREAM);
+}
+
+enum kosdec_adx_loader_status kosdec_adx_loader_step_reload(struct kosdec_adx_loader *l) {
+    return service(l,LOADER_RELOAD);
+}
+
 enum kosdec_adx_loader_status kosdec_adx_loader_pause(struct kosdec_adx_loader *l,bool pause) {
     if(!valid(l))return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
     l->paused=pause;return KOSDEC_ADX_LOADER_OK;

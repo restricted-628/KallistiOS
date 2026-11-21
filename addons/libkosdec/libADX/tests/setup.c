@@ -31,41 +31,40 @@ static int rounded_setup(void) {
         0, 0, 3, 0, '(', 'c', ')', 'C', 'R', 'I'
     };
     struct kosdec_adx_decoder d;
-    for(unsigned i = 0; i < COUNT(cases); ++i) {
-        header[10] = (uint8_t)(cases[i].rate >> 8);
-        header[11] = (uint8_t)cases[i].rate;
-        header[16] = (uint8_t)(cases[i].cutoff >> 8);
-        header[17] = (uint8_t)cases[i].cutoff;
+    for(unsigned version = 3; version <= 5; version += 2) {
+        header[18] = (uint8_t)version;
+        for(unsigned i = 0; i < COUNT(cases); ++i) {
+            header[10] = (uint8_t)(cases[i].rate >> 8);
+            header[11] = (uint8_t)cases[i].rate;
+            header[16] = (uint8_t)(cases[i].cutoff >> 8);
+            header[17] = (uint8_t)cases[i].cutoff;
+            kosdec_adx_init(&d);
+            struct kosdec_adx_result r = kosdec_adx_decode(&d, header, sizeof(header), NULL, 0, false);
+            CHECK(r.status == KOSDEC_ADX_MORE && r.consumed == sizeof(header) && d.header_ready);
+            CHECK(d.coefficient[0] == cases[i].first && d.coefficient[1] == cases[i].second);
+        }
+        header[16] = 0;
+        header[17] = 1;
         kosdec_adx_init(&d);
-        struct kosdec_adx_result r = kosdec_adx_decode(&d, header, sizeof(header), NULL, 0, false);
-        CHECK(r.status == KOSDEC_ADX_MORE && r.consumed == sizeof(header) && d.header_ready);
-        CHECK(d.coefficient[0] == cases[i].first && d.coefficient[1] == cases[i].second);
-    }
-    header[16] = 0;
-    header[17] = 1;
-    kosdec_adx_init(&d);
-    CHECK(kosdec_adx_decode(&d, header, sizeof(header), NULL, 0, false).status == KOSDEC_ADX_MORE);
-    uint8_t group[18] = {0, 0, 0x10};
-    int16_t pcm[32];
-    struct kosdec_adx_result r = kosdec_adx_decode(&d, group, sizeof(group), pcm, 32, false);
-    CHECK(r.status == KOSDEC_ADX_MORE && r.frames == 32);
-    for(unsigned i = 0; i < 32; ++i)
-        CHECK(pcm[i] == (int16_t)(i + 1));
+        CHECK(kosdec_adx_decode(&d, header, sizeof(header), NULL, 0, false).status == KOSDEC_ADX_MORE);
+        uint8_t group[18] = {0, 0, 0x10};
+        int16_t pcm[32];
+        struct kosdec_adx_result r = kosdec_adx_decode(&d, group, sizeof(group), pcm, 32, false);
+        CHECK(r.status == KOSDEC_ADX_MORE && r.frames == 32);
+        for(unsigned i = 0; i < 32; ++i)
+            CHECK(pcm[i] == (int16_t)(i + 1));
 
-    header[18] = 5;
-    kosdec_adx_init(&d);
-    CHECK(kosdec_adx_decode(&d, header, sizeof(header), NULL, 0, false).status == KOSDEC_ADX_MORE);
-    CHECK(d.coefficient[0] == 8190 && d.coefficient[1] == -4094);
-    header[18] = 3;
-    header[10] = (uint8_t)(48000 >> 8);
-    header[11] = (uint8_t)48000;
-    kosdec_adx_init(&d);
-    CHECK(kosdec_adx_decode(&d, header, sizeof(header), NULL, 0, false).status == KOSDEC_ADX_MORE);
-    int16_t extension[2];
-    CHECK(!media_adx_coefficients(48000, 1, extension));
-    CHECK(!memcmp(d.coefficient, extension, sizeof(extension)));
-    CHECK(media_adx_rounded_coefficients(48000, 1, extension) == -1);
-    printf("ADX_ROUNDED_SETUP profiles=%u pcm_frames=32 extensions=2 failures=0\n", (unsigned)COUNT(cases));
+        header[10] = (uint8_t)(48000 >> 8);
+        header[11] = (uint8_t)48000;
+        kosdec_adx_init(&d);
+        CHECK(kosdec_adx_decode(&d, header, sizeof(header), NULL, 0, false).status == KOSDEC_ADX_MORE);
+        int16_t extension[2];
+        CHECK(!media_adx_coefficients(48000, 1, extension));
+        CHECK(!memcmp(d.coefficient, extension, sizeof(extension)));
+        CHECK(media_adx_rounded_coefficients(48000, 1, extension) == -1);
+    }
+    printf("ADX_ROUNDED_SETUP profiles=%u pcm_frames=64 extensions=2 failures=0\n",
+           (unsigned)COUNT(cases) * 2);
     return 0;
 }
 

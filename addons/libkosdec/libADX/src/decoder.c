@@ -41,7 +41,7 @@ static enum kosdec_adx_status header(struct kosdec_adx_decoder *d) {
     /* Metadata remains private until complete header/extension admission. */
     unsigned rate = be32(h + 8);
     unsigned cutoff = be16(h + 16);
-    int coefficient_error = h[18] == 3 && rate <= MEDIA_ADX_ROUNDED_MAX_RATE ?
+    int coefficient_error = rate <= MEDIA_ADX_ROUNDED_MAX_RATE ?
         media_adx_rounded_coefficients(rate, cutoff, d->coefficient) :
         media_adx_coefficients(rate, cutoff, d->coefficient);
     if(coefficient_error)

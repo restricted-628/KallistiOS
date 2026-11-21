@@ -1,3 +1,4 @@
+#include <kosdec/adx_compat_service.h>
 #include <kosdec/adx_loader.h>
 #include <kosdec/adx_joint_reader.h>
 #include <kosdec/adx_service.h>
@@ -640,7 +641,143 @@ static void live_registration(void) {
     CHECK(kosdec_adx_loader_close(&f.loader)==KOSDEC_ADX_LOADER_OK);
     CHECK(kosdec_adx_joint_close(&f.joint)==KOSDEC_ADX_JOINT_OK);
 }
+struct phased_loader {
+    struct fixture transport;
+    enum kosdec_adx_loader_status streamed, reloaded;
+    unsigned pending_at_title, title_visits;
+    uint64_t head_at_title;
+    uint8_t output[1024];
+    size_t used;
+};
+
+static uint64_t phased_clock(void *context) {
+    (void)context;
+    return 0;
+}
+
+static int service_stream(void *context) {
+    struct phased_loader *f=context;
+    f->streamed=kosdec_adx_loader_step_stream(&f->transport.loader);
+    CHECK(f->streamed==KOSDEC_ADX_LOADER_OK || f->streamed==KOSDEC_ADX_LOADER_NEED_INPUT);
+    return 0;
+}
+
+static int service_reload(void *context) {
+    struct phased_loader *f=context;
+    f->reloaded=kosdec_adx_loader_step_reload(&f->transport.loader);
+    CHECK(f->reloaded==KOSDEC_ADX_LOADER_OK);
+    return 0;
+}
+
+static enum kosdec_adx_compat_state phased_state(void *context) {
+    return info(&((struct phased_loader *)context)->transport).pending ?
+        KOSDEC_ADX_COMPAT_PREP : KOSDEC_ADX_COMPAT_STOP;
+}
+
+static int phased_title(void *context, enum kosdec_adx_compat_state state) {
+    struct phased_loader *f=context;
+    CHECK(state==KOSDEC_ADX_COMPAT_PREP);
+    ++f->title_visits;
+    f->pending_at_title=info(&f->transport).pending;
+    CHECK(kosdec_adx_loader_get_id(&f->transport.loader,0,&f->head_at_title));
+    f->used+=drain(&f->transport,f->output+f->used,sizeof(f->output)-f->used);
+    return 0;
+}
+
+static int phased_observe(void *context, struct kosdec_adx_compat_observation *out) {
+    struct phased_loader *f=context;
+    struct kosdec_adx_loader_buffer_info buffer;
+    CHECK(kosdec_adx_loader_get_buffer_info(&f->transport.loader,1,44100,&buffer));
+    out->input_bytes=(uint32_t)buffer.queued_bytes;
+    return 0;
+}
+
+static void phased_service_order(void) {
+    struct phased_loader f={0};
+    init(&f.transport,0,2048);
+    struct kosdec_adx_loader *loader=&f.transport.loader;
+    struct source a={.bytes=513,.fragment=512,.wait=2,.salt=19};
+    struct source b={.bytes=5,.fragment=512,.salt=31};
+    uint64_t first, next;
+    CHECK(kosdec_adx_loader_set_lsc_flow(loader,1024)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_loader_enqueue(loader,"first",read_at,&a,a.bytes,0,1,&first)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_loader_enqueue(loader,"next",read_at,&b,b.bytes,0,1,&next)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_loader_start(loader)==KOSDEC_ADX_LOADER_OK);
+
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    const struct kosdec_adx_compat_config config={
+        .clock_us=phased_clock,
+        .phases={
+            [KOSDEC_ADX_COMPAT_STREAMS]={service_stream,&f},
+            [KOSDEC_ADX_COMPAT_RELOAD]={service_reload,&f},
+        },
+    };
+    const struct kosdec_adx_compat_title_ops ops={
+        .state=phased_state,.dispatch=phased_title,.observe=phased_observe,
+    };
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind(&service,0,&ops,&f));
+    struct kosdec_adx_compat_result r;
+    const uint32_t phases=(1u<<KOSDEC_ADX_COMPAT_STREAMS)|(1u<<KOSDEC_ADX_COMPAT_RELOAD);
+
+    CHECK(!kosdec_adx_compat_exec_title(&service,0,&r));
+    CHECK(r.visited==1 && !r.serviced_phases && !a.calls && !b.calls && !loader->active);
+    CHECK(!kosdec_adx_compat_exec_server(&service,&r));
+    CHECK(r.serviced_phases==phases && !r.failed_phases && !r.failed_titles);
+    CHECK(f.title_visits==2 && f.pending_at_title==2 && f.head_at_title==first);
+    CHECK(loader->active && !a.calls && !b.calls && !f.used);
+
+    CHECK(!kosdec_adx_compat_exec_server(&service,&r));
+    CHECK(r.serviced_phases==phases && f.used==512 && a.calls==1 && !b.calls);
+    CHECK(loader->active && entry(&f.transport,first).published_bytes==512);
+    CHECK(!kosdec_adx_compat_exec_server(&service,&r));
+    CHECK(r.serviced_phases==phases && f.streamed==KOSDEC_ADX_LOADER_NEED_INPUT &&
+          f.used==512 && a.calls==2 && !b.calls && loader->active);
+
+    /* The title sees the final DATA before LSC retires the source. In the
+       same reload the next request is admitted without making a read. */
+    CHECK(!kosdec_adx_compat_exec_server(&service,&r));
+    CHECK(r.serviced_phases==phases && f.pending_at_title==2 &&
+          f.head_at_title==first && f.used==513 && a.calls==3 && !b.calls);
+    CHECK(info(&f.transport).pending==1 && loader->active);
+    CHECK(entry(&f.transport,first).state==KOSDEC_ADX_LOADER_END);
+    CHECK(entry(&f.transport,next).state==KOSDEC_ADX_LOADER_READING);
+
+    CHECK(!kosdec_adx_compat_exec_server(&service,&r));
+    CHECK(r.serviced_phases==phases && f.pending_at_title==1 &&
+          f.head_at_title==next && f.used==518 && a.calls==3 && b.calls==1);
+    CHECK(info(&f.transport).state==KOSDEC_ADX_LOADER_WAIT && !loader->active);
+    for(unsigned i=0;i<a.bytes;++i) CHECK(f.output[i]==sample(&a,i));
+    for(unsigned i=0;i<b.bytes;++i) CHECK(f.output[a.bytes+i]==sample(&b,i));
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    CHECK(kosdec_adx_loader_close(loader)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_joint_close(&f.transport.joint)==KOSDEC_ADX_JOINT_OK);
+}
+
+static void phased_stop(void) {
+    struct fixture f;
+    init(&f,0,2048);
+    struct source source={.bytes=1,.fragment=512};
+    uint64_t id;
+    CHECK(kosdec_adx_loader_enqueue(&f.loader,"pending",read_at,&source,1,0,1,&id)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_loader_start(&f.loader)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_loader_step_reload(&f.loader)==KOSDEC_ADX_LOADER_OK && f.loader.active);
+    CHECK(kosdec_adx_loader_step_stream(&f.loader)==KOSDEC_ADX_LOADER_OK && source.calls==1);
+    CHECK(kosdec_adx_loader_step_stream(&f.loader)==KOSDEC_ADX_LOADER_OK && source.calls==1);
+    CHECK(info(&f).pending==1 && entry(&f,id).published_bytes==1);
+    CHECK(kosdec_adx_loader_pause(&f.loader,true)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_loader_step_reload(&f.loader)==KOSDEC_ADX_LOADER_OK && info(&f).pending==1);
+    CHECK(kosdec_adx_loader_stop(&f.loader)==KOSDEC_ADX_LOADER_OK &&
+          entry(&f,id).state==KOSDEC_ADX_LOADER_CANCELLED);
+    uint8_t out;
+    CHECK(drain(&f,&out,1)==1 && out==sample(&source,0));
+    CHECK(kosdec_adx_loader_close(&f.loader)==KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_joint_close(&f.joint)==KOSDEC_ADX_JOINT_OK);
+}
+
 int main(void) {
+    phased_service_order(); phased_stop();
     concatenation(); queue(); flow_pause(); lsc_flow(); lsc_wrap(); faults(); limits(); live_decoder();
     repeat_full_queue();
     for(unsigned jobs=0;jobs<2;++jobs) {

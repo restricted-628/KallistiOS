@@ -1,5 +1,5 @@
 /* Independent short-read staging and PCM cursor; no device ownership. */
-#include <kosdec/adx_stream.h>
+#include "adx_stream_internal.h"
 #include "adx_math.h"
 #include "adx_filter.h"
 #include <string.h>
@@ -52,8 +52,62 @@ static void consume(struct kosdec_adx_stream *s, size_t bytes) {
     s->input_used += (unsigned)bytes;
     s->byte_position += (uint32_t)bytes;
 }
+static bool pending_rewind(const struct kosdec_adx_stream *s) {
+    return s->prepared && s->repeat && s->source_frame == s->decoder.loop.end_frame;
+}
+
+static bool cached_pcm(const struct kosdec_adx_stream *s) {
+    return s->prepared && s->source_frame < s->decoder.total_frames &&
+           s->cache_position < s->cache_frames;
+}
+
+/* Append a bounded chunk at the end of the contiguous, unconsumed window. */
+static enum kosdec_adx_status stage_bytes(struct kosdec_adx_stream *s, size_t room) {
+    uint32_t offset = s->byte_position + (s->input_count - s->input_used);
+    size_t request = s->input_bytes - offset;
+    if(request > MEDIA_ADX_READ_CHUNK) request = MEDIA_ADX_READ_CHUNK;
+    if(request > room) request = room;
+    if(!request) return KOSDEC_ADX_NEED_OUTPUT;
+    struct kosdec_adx_input_result in = s->read_at(s->context,offset,s->input+s->input_count,request);
+    if(in.status == KOSDEC_ADX_INPUT_DATA && in.bytes && in.bytes <= request) {
+        s->input_count += (unsigned)in.bytes;
+        return KOSDEC_ADX_MORE;
+    }
+    if(in.status == KOSDEC_ADX_INPUT_WAIT && !in.bytes)
+        return KOSDEC_ADX_NEED_INPUT;
+    return in.status == KOSDEC_ADX_INPUT_END && !in.bytes ?
+        KOSDEC_ADX_TRUNCATED : KOSDEC_ADX_IO_ERROR;
+}
+
+enum kosdec_adx_status media_adx_stream_step_file(struct kosdec_adx_stream *s) {
+    if(s->terminal) return s->terminal;
+    if(s->paused || pending_rewind(s) ||
+       (s->linked && s->linked_entries && !s->follow_links && !s->prepared))
+        return KOSDEC_ADX_NEED_OUTPUT;
+    if(s->staged_error) return KOSDEC_ADX_NEED_OUTPUT;
+    if(s->input_used) {
+        s->input_count -= s->input_used;
+        memmove(s->input,s->input+s->input_used,s->input_count);
+        s->input_used = 0;
+    }
+    enum kosdec_adx_status status = KOSDEC_ADX_NEED_OUTPUT;
+    for(unsigned i=0; i<sizeof(s->input)/MEDIA_ADX_READ_CHUNK; ++i) {
+        status = stage_bytes(s,sizeof(s->input)-s->input_count);
+        if(status != KOSDEC_ADX_MORE)
+            break;
+    }
+    if(status >= KOSDEC_ADX_DONE) {
+        if(!s->input_count && !cached_pcm(s))
+            return s->terminal = status;
+        /* Earlier bytes remain valid. Observe the fault at decoder demand. */
+        s->staged_error = status;
+        return KOSDEC_ADX_MORE;
+    }
+    return status;
+}
+
 static struct kosdec_adx_stream_result read_step(
-    struct kosdec_adx_stream *s, int16_t *output, size_t capacity) {
+    struct kosdec_adx_stream *s, int16_t *output, size_t capacity, bool separate_transport) {
     struct kosdec_adx_stream_result result = {KOSDEC_ADX_BAD_ARGUMENT, 0};
     if(!valid(s) || (!output && capacity) ||
        (output && (uintptr_t)output % _Alignof(int16_t))) return result;
@@ -65,32 +119,28 @@ static struct kosdec_adx_stream_result read_step(
         result.status=KOSDEC_ADX_DONE;goto terminal;
     }
     struct kosdec_adx_decoder *d = &s->decoder;
-    if(s->prepared && s->repeat && s->source_frame == d->loop.end_frame) {
+    if(pending_rewind(s)) {
         s->byte_position = d->loop.start_byte;
         s->source_frame = d->loop.start_frame;
         s->input_used = s->input_count = 0;
+        s->staged_error = KOSDEC_ADX_MORE;
         s->cache_position = s->cache_frames = 0;
         ++s->wraps;
     }
-    if(s->prepared && s->source_frame < d->total_frames &&
-       s->cache_position < s->cache_frames) goto emit;
+    if(cached_pcm(s)) goto emit;
     if(s->input_used == s->input_count && s->byte_position < s->input_bytes) {
-        size_t request = s->input_bytes - s->byte_position;
-        if(request > sizeof(s->input)) request = sizeof(s->input);
-        struct kosdec_adx_input_result in = s->read_at(s->context,
-            s->byte_position, s->input, request);
-        if(in.status == KOSDEC_ADX_INPUT_DATA && in.bytes && in.bytes <= request) {
-            s->input_used = 0;
-            s->input_count = (unsigned)in.bytes;
-        }
-        else if(in.status == KOSDEC_ADX_INPUT_WAIT && !in.bytes) {
-            result.status = KOSDEC_ADX_NEED_INPUT; return result;
-        }
-        else {
-            result.status = in.status == KOSDEC_ADX_INPUT_END && !in.bytes ?
-                KOSDEC_ADX_TRUNCATED : KOSDEC_ADX_IO_ERROR;
+        if(s->staged_error) {
+            result.status = s->staged_error;
             goto terminal;
         }
+        if(separate_transport) {
+            result.status = KOSDEC_ADX_NEED_INPUT;
+            return result;
+        }
+        s->input_count = s->input_used = 0;
+        result.status = stage_bytes(s,MEDIA_ADX_READ_CHUNK);
+        if(result.status >= KOSDEC_ADX_DONE) goto terminal;
+        if(result.status != KOSDEC_ADX_MORE) return result;
     }
     size_t available = s->input_count - s->input_used;
     const uint8_t *input = s->input + s->input_used;
@@ -183,11 +233,15 @@ terminal:
     s->terminal = result.status;
     return result;
 }
-struct kosdec_adx_stream_result kosdec_adx_stream_read(
-    struct kosdec_adx_stream *s, int16_t *output, size_t capacity) {
+struct kosdec_adx_stream_result media_adx_stream_read(
+    struct kosdec_adx_stream *s, int16_t *output, size_t capacity, bool separate_transport) {
     if(valid(s) && s->seeking)
         return (struct kosdec_adx_stream_result){KOSDEC_ADX_BAD_ARGUMENT,0};
-    return read_step(s,output,capacity);
+    return read_step(s,output,capacity,separate_transport);
+}
+struct kosdec_adx_stream_result kosdec_adx_stream_read(
+    struct kosdec_adx_stream *s, int16_t *output, size_t capacity) {
+    return media_adx_stream_read(s,output,capacity,false);
 }
 enum kosdec_adx_status kosdec_adx_stream_seek_begin(struct kosdec_adx_stream *s, uint32_t frame) {
     if(!valid(s) || !s->read_at || frame > KOSDEC_ADX_MAX_FRAMES ||
@@ -200,7 +254,8 @@ enum kosdec_adx_status kosdec_adx_stream_seek_begin(struct kosdec_adx_stream *s,
     s->seek_frame = frame; s->seeking = true;
     return KOSDEC_ADX_MORE;
 }
-enum kosdec_adx_status kosdec_adx_stream_seek_step(struct kosdec_adx_stream *s) {
+enum kosdec_adx_status media_adx_stream_seek_step(struct kosdec_adx_stream *s,
+                                                bool separate_transport) {
     if(!valid(s)) return KOSDEC_ADX_BAD_ARGUMENT;
     if(s->terminal) return s->terminal;
     if(!s->seeking) return KOSDEC_ADX_BAD_ARGUMENT;
@@ -208,7 +263,7 @@ enum kosdec_adx_status kosdec_adx_stream_seek_step(struct kosdec_adx_stream *s) 
     int16_t discarded[64];
     size_t frames = s->prepared ? s->seek_frame - s->source_frame : 32;
     if(frames > 32) frames = 32;
-    struct kosdec_adx_stream_result r = read_step(s,discarded,frames);
+    struct kosdec_adx_stream_result r = read_step(s,discarded,frames,separate_transport);
     s->returned_frames = 0;
     if(r.status >= KOSDEC_ADX_DONE) return r.status;
     if(s->prepared) {
@@ -222,4 +277,8 @@ enum kosdec_adx_status kosdec_adx_stream_seek_step(struct kosdec_adx_stream *s) 
         }
     }
     return r.status == KOSDEC_ADX_NEED_OUTPUT ? KOSDEC_ADX_MORE : r.status;
+}
+
+enum kosdec_adx_status kosdec_adx_stream_seek_step(struct kosdec_adx_stream *s) {
+    return media_adx_stream_seek_step(s,false);
 }

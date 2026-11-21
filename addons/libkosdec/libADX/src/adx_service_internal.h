@@ -7,4 +7,16 @@
    and the available DATA count together at the producer boundary. */
 #define MEDIA_ADX_INPUT_FORMAT_READY UINT32_C(0x80000000)
 
+/* One producer step. A nonzero, block-aligned limit caps an individual
+   PCM reservation. Zero selects the normal workspace limit. */
+struct kosdec_adx_stream_result media_adx_pipe_pump_limited(
+    struct kosdec_adx_pipe *, size_t frame_limit, bool separate_transport);
+/* While awaiting DECINFO, allow header and control steps. Once the format
+   is published, wait for the owner to admit the first PCM reservation. */
+struct kosdec_adx_stream_result media_adx_service_step_limited(
+    struct kosdec_adx_service *, size_t frame_limit, bool await_format_admission,
+    bool separate_transport);
+/* Serialized with decoder steps in the owner-driven compatibility binding. */
+enum kosdec_adx_status media_adx_service_step_transport(struct kosdec_adx_service *, bool reload);
+
 #endif

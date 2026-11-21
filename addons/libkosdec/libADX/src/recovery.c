@@ -1,4 +1,4 @@
-#include <kosdec/adx_recovery.h>
+#include "adx_recovery_internal.h"
 #include <errno.h>
 #define RECOVERY_MAGIC UINT32_C(0x41445859)
 static int fail(int e) { errno=e?e:EIO;return -1; }
@@ -20,33 +20,22 @@ int kosdec_adx_recovery_get_info(const struct kosdec_adx_recovery *r,
     if(!valid(r) || !out) return fail(EINVAL);
     *out=r->info;return 0;
 }
-int kosdec_adx_recovery_step(struct kosdec_adx_recovery *r,uint64_t now,uint32_t timeout) {
+int media_adx_recovery_clock(struct kosdec_adx_recovery *r,uint64_t now,uint32_t timeout) {
     if(!valid(r) || !timeout || (r->clock_started && now<r->last_time)) return fail(EINVAL);
     r->last_time=now;r->clock_started=true;
-    if(r->info.phase==KOSDEC_ADX_RECOVERY_STOPPED) return 1;
-    if(r->info.phase==KOSDEC_ADX_RECOVERY_RUNNING) {
-        struct kosdec_adx_player_info info;
-        if(kosdec_adx_player_get_info(r->player,&info)<0) return -1;
-        if(info.state==KOSDEC_ADX_PLAYER_STOPPED) {
-            r->info.retained_sound=info.retained_sound;
-            r->info.phase=KOSDEC_ADX_RECOVERY_STOPPED;return 1;
-        }
-        int result=info.state==KOSDEC_ADX_PLAYER_READY?
-            kosdec_adx_player_start(r->player):kosdec_adx_player_poll(r->player);
-        if(result==0) return 0;
-        int error=errno?errno:EIO;
-        if(!r->info.first_error) r->info.first_error=error;
-        if(r->mode==KOSDEC_ADX_RECOVERY_NOACT) return fail(error);
-        if(kosdec_adx_player_get_info(r->player,&info)<0) return -1;
-        r->replay_pending=r->mode==KOSDEC_ADX_RECOVERY_REPLAY &&
-            (info.decoder==KOSDEC_ADX_IO_ERROR || info.input_stalled) &&
-            r->info.replays<r->max_replays;
-        r->info.deadline=UINT64_MAX-now<r->delay_ms?UINT64_MAX:now+r->delay_ms;
-        r->info.phase=KOSDEC_ADX_RECOVERY_WAIT_STOP;
-    }
+    return 0;
+}
+void media_adx_recovery_schedule(struct kosdec_adx_recovery *r,uint64_t now,bool replay_eligible) {
+    r->replay_pending=r->mode==KOSDEC_ADX_RECOVERY_REPLAY &&
+        replay_eligible && r->info.replays<r->max_replays;
+    r->info.deadline=UINT64_MAX-now<r->delay_ms?UINT64_MAX:now+r->delay_ms;
+    r->info.phase=KOSDEC_ADX_RECOVERY_WAIT_STOP;
+}
+int media_adx_recovery_finish(struct kosdec_adx_recovery *r,uint64_t now,uint32_t timeout,
+                              const struct media_adx_recovery_ops *ops) {
     if(r->info.phase==KOSDEC_ADX_RECOVERY_WAIT_STOP && now<r->info.deadline) return 0;
     r->info.phase=KOSDEC_ADX_RECOVERY_STOPPING;
-    if(kosdec_adx_player_stop(r->player,timeout)<0) {
+    if(ops->stop(r->player,timeout)<0) {
         r->info.stop_error=errno?errno:EIO;return fail(r->info.stop_error);
     }
     r->info.stop_error=0;
@@ -66,8 +55,43 @@ int kosdec_adx_recovery_step(struct kosdec_adx_recovery *r,uint64_t now,uint32_t
        ready.retained_sound!=SND_STREAM_INVALID) {
         r->info.prepare_error=EINVAL;return fail(EINVAL);
     }
+    if(ops->replace && ops->replace(r->player,next)<0) {
+        r->info.prepare_error=errno?errno:EIO;
+        return fail(r->info.prepare_error);
+    }
     r->player=next;
     r->info.phase=KOSDEC_ADX_RECOVERY_RUNNING;
+    int status=ops->start(next);
+    if(status<0 && r->compat_stop_timeout) {
+        r->info.prepare_error=errno?errno:EIO;
+        return fail(r->info.prepare_error);
+    }
     ++r->info.replays;
-    return kosdec_adx_player_start(next);
+    return status;
+}
+
+int kosdec_adx_recovery_step(struct kosdec_adx_recovery *r,uint64_t now,uint32_t timeout) {
+    if(valid(r) && (r->player->compat_service || r->compat_stop_timeout)) return fail(EBUSY);
+    if(media_adx_recovery_clock(r,now,timeout)<0) return -1;
+    if(r->info.phase==KOSDEC_ADX_RECOVERY_STOPPED) return 1;
+    if(r->info.phase==KOSDEC_ADX_RECOVERY_RUNNING) {
+        struct kosdec_adx_player_info info;
+        if(kosdec_adx_player_get_info(r->player,&info)<0) return -1;
+        if(info.state==KOSDEC_ADX_PLAYER_STOPPED) {
+            r->info.retained_sound=info.retained_sound;
+            r->info.phase=KOSDEC_ADX_RECOVERY_STOPPED;return 1;
+        }
+        int result=info.state==KOSDEC_ADX_PLAYER_READY?
+            kosdec_adx_player_start(r->player):kosdec_adx_player_poll(r->player);
+        if(result==0) return 0;
+        int error=errno?errno:EIO;
+        if(!r->info.first_error) r->info.first_error=error;
+        if(r->mode==KOSDEC_ADX_RECOVERY_NOACT) return fail(error);
+        if(kosdec_adx_player_get_info(r->player,&info)<0) return -1;
+        media_adx_recovery_schedule(r,now,info.decoder==KOSDEC_ADX_IO_ERROR || info.input_stalled);
+    }
+    static const struct media_adx_recovery_ops ops={
+        .stop=kosdec_adx_player_stop,.start=kosdec_adx_player_start
+    };
+    return media_adx_recovery_finish(r,now,timeout,&ops);
 }

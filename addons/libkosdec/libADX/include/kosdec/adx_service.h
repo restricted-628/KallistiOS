@@ -34,6 +34,9 @@ struct kosdec_adx_service {
     enum kosdec_adx_status reply;
     uint64_t reply_source_id;
     struct kosdec_adx_pipe pipe;
+    uint32_t progress_epoch, progress_frames, progress_position, progress_format, progress_state;
+    uint32_t progress_declared_frames;
+    bool progress_enabled;
 };
 struct kosdec_adx_service_state {
     enum kosdec_adx_status status; /* MORE or sticky producer terminal. */
@@ -70,6 +73,27 @@ enum kosdec_adx_status kosdec_adx_service_init_aiff(struct kosdec_adx_service *,
 /* SPSD mono/stereo PCM16; same source lifetime and output rules. */
 enum kosdec_adx_status kosdec_adx_service_init_spsd(struct kosdec_adx_service *,
     struct kosdec_adx_spsd *, int16_t *pcm, size_t samples, size_t capacity);
+
+/* One producer publication for watchdog/preparation decisions. Decoded frames
+   count released decoder PCM modulo 2^32 and exclude seek-discarded PCM.
+   The logical source frame can rewind. Rate and block size are zero until
+   current format admission. Input counts staged DATA bytes, excluding headers.
+   Samples complete describes the producer, before downstream playback. */
+struct kosdec_adx_decode_progress {
+    uint32_t decoded_frames, source_frame, input_bytes, sample_rate;
+    enum kosdec_adx_status status;
+    bool loop_present, paused, samples_complete;
+    uint8_t block_frames;
+    uint32_t declared_frames; /* Current admitted record when sample_rate is nonzero. */
+};
+
+/* Enable before the first service step and before sharing the bound service.
+   One bounded read on any thread;
+   both calls return 0 or -1/errno. A concurrent publication can yield EAGAIN,
+   leaving the output unchanged. Storage must outlive all queries. */
+int kosdec_adx_service_enable_decode_progress(struct kosdec_adx_service *);
+int kosdec_adx_service_get_decode_progress(const struct kosdec_adx_service *,
+                                          struct kosdec_adx_decode_progress *);
 
 /* Any thread: pending sequence decode entries or pending linked-loader reads.
    Each count includes the active entry at its own stage.

@@ -8,12 +8,16 @@
 #define SND_CHANNEL_UPDATE_FREQUENCY 1u
 #define SND_CHANNEL_UPDATE_VOLUME 2u
 #define SND_CHANNEL_UPDATE_PAN 4u
+#define SND_CHANNEL_UPDATE_ROUTING 8u
 typedef int snd_stream_hnd_t;
 typedef void *(*snd_stream_callback_t)(snd_stream_hnd_t,int,int *);
+typedef struct snd_channel_routing {
+    uint8_t effect_channel,effect_send,direct_level;
+} snd_channel_routing_t;
 typedef struct snd_stream_config {
     uint32_t sample_rate, transfer_timeout_ms;
     uint8_t channels;
-    struct {uint8_t volume,pan;} channel[2];
+    struct {uint8_t volume,pan; snd_channel_routing_t routing;} channel[2];
 } snd_stream_config_t;
 typedef struct snd_stream_status {int last_error;} snd_stream_status_t;
 int snd_stream_config_init(snd_stream_config_t *);

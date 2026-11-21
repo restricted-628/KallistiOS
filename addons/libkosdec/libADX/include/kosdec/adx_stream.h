@@ -33,8 +33,8 @@ struct kosdec_adx_stream {
     uint32_t segment_start, linked_rate;
     unsigned linked_channels;
     uint64_t linked_entries;
-    enum kosdec_adx_status terminal;
-    uint8_t input[512];
+    enum kosdec_adx_status terminal, staged_error;
+    uint8_t input[2048]; /* Larger window used only by phased playback. */
     int16_t pcm[64];
 };
 struct kosdec_adx_stream_result {

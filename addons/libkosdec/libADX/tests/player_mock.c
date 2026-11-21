@@ -99,7 +99,12 @@ int fiber_service_executor_destroy(fiber_service_executor_t *e) {
 }
 int snd_stream_config_init(snd_stream_config_t *c) {
     memset(c,0,sizeof(*c));c->sample_rate=44100;c->channels=1;c->transfer_timeout_ms=1000;
-    for(unsigned i=0;i<2;++i){c->channel[i].volume=255;c->channel[i].pan=128;}return 0;
+    for(unsigned i=0;i<2;++i) {
+        c->channel[i].volume=255;
+        c->channel[i].pan=128;
+        c->channel[i].routing.direct_level=15;
+    }
+    return 0;
 }
 snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb,int bytes) {
     if(mock_failure==MOCK_ALLOC){error();return SND_STREAM_INVALID;}
@@ -132,11 +137,33 @@ int snd_stream_poll_ex(snd_stream_hnd_t h) {
     (void)h;if(mock_failure==MOCK_POLL)return error();return fill();
 }
 int snd_stream_update(snd_stream_hnd_t h,const snd_stream_config_t *c,uint32_t fields) {
-    (void)h;assert(fields==(SND_CHANNEL_UPDATE_VOLUME|SND_CHANNEL_UPDATE_PAN) || fields==SND_CHANNEL_UPDATE_FREQUENCY || fields==SND_CHANNEL_UPDATE_PAN);
-    mock_update_fields=fields;++mock_updates;if(mock_failure==MOCK_UPDATE)return error();mock_output=*c;return 0;
+    (void)h;
+    assert(fields==(SND_CHANNEL_UPDATE_VOLUME|SND_CHANNEL_UPDATE_PAN) ||
+           fields==SND_CHANNEL_UPDATE_FREQUENCY || fields==SND_CHANNEL_UPDATE_PAN ||
+           fields==SND_CHANNEL_UPDATE_ROUTING);
+    mock_update_fields=fields;
+    ++mock_updates;
+    if(mock_failure==MOCK_UPDATE) return error();
+    if(fields==SND_CHANNEL_UPDATE_ROUTING) {
+        for(unsigned ch=0;ch<c->channels;++ch) {
+            if(ch==1 && mock_failure==MOCK_ROUTING_SECOND) {
+                mock_async_error=EPIPE;
+                errno=EPIPE;
+                return -1;
+            }
+            mock_output.channel[ch].routing=c->channel[ch].routing;
+        }
+        return 0;
+    }
+    mock_output=*c;
+    return 0;
 }
 int snd_stream_stop_ex(snd_stream_hnd_t h,uint32_t timeout) {
     (void)h;assert(timeout);++mock_stops;
+    if(mock_failure==MOCK_STOP_TIMEOUT) {
+        errno=ETIMEDOUT;
+        return -1;
+    }
     if(mock_failure==MOCK_STOP)
         return error();
     stopped=true;

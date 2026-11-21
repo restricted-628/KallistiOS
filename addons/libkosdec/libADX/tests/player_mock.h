@@ -3,7 +3,8 @@
 #include <dc/sound/stream.h>
 #include <stdbool.h>
 enum mock_failure { MOCK_OK, MOCK_CREATE, MOCK_ADD, MOCK_EXEC_START, MOCK_ALLOC,
-    MOCK_SOUND_START, MOCK_POLL, MOCK_UPDATE, MOCK_STOP, MOCK_JOIN, MOCK_CALLBACK };
+    MOCK_SOUND_START, MOCK_POLL, MOCK_UPDATE, MOCK_STOP, MOCK_JOIN, MOCK_CALLBACK, MOCK_STOP_TIMEOUT,
+    MOCK_ROUTING_SECOND };
 extern enum mock_failure mock_failure;
 extern snd_stream_callback_t mock_callback;
 extern void *mock_userdata;

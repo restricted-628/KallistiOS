@@ -10,19 +10,18 @@ The native ADX path admits encoding3,18-byte blocks,4-bit samples, mono/stereo,
 versions3/5 with zero extensions or the documented v3 single-loop layout.
 Encoding 3 reads a 13-bit scale. The high bit identifies a control word; bits
 13 and 14 do not contribute to the scale.
-Version5 remains a native extension, not a format established by the baseline
-sample corpus. Other encoding/history/encryption layouts remain unsupported.
-The baseline setup initializes predictor histories rather than loading a v4
-history extension. Exact numerical and batching equivalence remains a separate
-gate from recognizing header fields.
+Standalone samples use version 3. The Sofdec sample corpus also contains
+version 5 records at 44100 Hz and a 500 Hz cutoff. The linked SDK header
+path selects coefficients by rate and cutoff for both versions. The native
+reader uses the rounded setup through 44100 Hz for either admitted version.
+The baseline setup initializes predictor histories. Other encoding, history
+and encryption layouts remain unsupported.
 
 All11 standalone ADX files in the baseline sample tree were decoded completely
 through the native host checker, including strict body/endcode/EOF validation.
 They use version3,flags0,44100Hz/500Hz, mono/stereo, with ordinary and looped
 headers. All ten ADX members in the supplied ACX sample also passed strict
-full-member decoding at 22050 Hz with a 500 Hz cutoff. This covers those assets: it does not prove every
-archive member, vendor-output PCM equivalence, repeat playback or audible output.
-Private asset hashes and source identities are retained outside the repository.
+full-member decoding at 22050 Hz with a 500 Hz cutoff. These checks cover those assets and their exact record boundaries.
 
 All 16 SFD samples in the SDK's Sofdec sample directory contain a finite ADX
 record in their C0 audio stream, including a 288-byte header and an endcode at
@@ -36,6 +35,15 @@ endcode. Alternatively, the demux can supply the exact record extent to the
 default strict reader. Both compositions produced identical PCM on the supplied
 corpus. Standalone decoding continues to require strict EOF. Headerless or
 late-count SFA uses the separate paired writer and joint reader.
+
+On both Flycast BIOS CPU modes, the native decoder matched the Sega Library
+2.00J SH-4 floating decoder primitive across all 37 complete records above.
+Each mode compared 37,743,869 frames, 74,472,221 PCM values and 4,654,574
+history values. Comparisons use identical one-group calls and independently
+observed stock coefficient pairs. The native decoder also validates the
+record footer and EOF. The comparison covers linear decode of each record.
+Middleware batching, repeat playback, demux timing and physical output
+remain separate. Asset identities and reference binaries stay private.
 
 The player manual explicitly supports WAV16-bit PCM and4-bit ADPCM at runtime.
 Its WAV/AIFF authoring-input description alone does not establish runtime AIFF;

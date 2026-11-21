@@ -7,9 +7,10 @@ API accepts every combination. Rates above 44100 Hz are an original extension.
 Native player output remains 8000..48000 Hz; low-rate sources need an explicit
 in-range output override, which changes pitch and duration.
 
-## Dreamcast v3 rounding
+## Dreamcast rounding
 
-Version 3 streams through 44100 Hz use the rounded Sega Library 2.00J setup.
+Versions 3 and 5 through 44100 Hz use the rounded Sega Library 2.00J setup.
+The linked SDK header path uses the same rate and cutoff calculation for both.
 Header setup rounds the binary32 product of the cutoff and 2π before dividing
 by the rate. The integer significand calculation reconstructs that angle with
 ties to even. The Q12 lookup represents changes in the modeled setup output
@@ -23,8 +24,8 @@ At 44100 Hz and a 1 Hz cutoff this setup returns {8192,-4096}. It matches the
 established profiles at 500 Hz. The argument calculation leaves FPSCR
 untouched. Target lookup uses at most 31 transitions after checkpoint search,
 at header setup only. The rounded table adds about 60 KiB of read-only data.
-Tests run the actual header/PCM path and check that v5 and higher-rate v3
-extensions retain the exact-real setup below.
+Tests run the header and PCM path for both versions at the low-cutoff
+rounding boundary and check that higher-rate extensions use the setup below.
 
 ## Exact-real extension setup
 
@@ -83,8 +84,10 @@ The rounded map was checked against the binary32 model's transitions and their
 neighbors. The integer argument calculation matched strict IEEE binary32
 arithmetic at all 486,202,500 nonzero rate/cutoff pairs through 44100 Hz. A
 SuperH p-code execution of the linked 2.00J routine matched 185 model witnesses,
-including all 140 differences found in the original eight-rate sweep. Retail
-execution of the reference routine remains unverified.
+including all 140 differences found in the original eight-rate sweep. A separate
+run of that linked routine matched the native pair at all 22,051 integer
+cutoffs from zero through Nyquist at 44.1 kHz. Retail execution of the
+reference routine remains unverified.
 
 
 Private same-guest comparisons against the original 2.00J mono/stereo routines
@@ -94,3 +97,12 @@ clipping and group carry. SDK decoding of multiple groups in one call preserves
 float history between them and differs from one-group calls on the test data.
 The native decoder fixes that boundary at each group for input-fragmentation
 invariance. Retail FPSCR and SDK scheduling equivalence remain unverified.
+
+A whole-record comparison on the 11 standalone 2.00J ADX samples matched
+51,457,454 visible PCM values per Flycast CPU mode at the same one-group
+boundaries. Each run checked carried histories and validated the native
+footer for every record. For a partial final group, the native history
+reflects the last admitted samples. The stock primitive also consumes its
+padding when called for a whole group. The comparison covers linear decoding
+with the matched schedule. Original player scheduling and physical playback
+have separate evidence.

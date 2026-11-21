@@ -492,8 +492,48 @@ static enum kosdec_adx_joint_feed_status step_feed(struct kosdec_adx_joint_reade
     return info.state == KOSDEC_ADX_LOADER_EXEC && !info.paused ?
         KOSDEC_ADX_JOINT_FEED_MORE : KOSDEC_ADX_JOINT_FEED_WAIT;
 }
+static enum kosdec_adx_status loader_error(struct kosdec_adx_joint_reader *r) {
+    struct kosdec_adx_loader_info info;
+    return kosdec_adx_loader_get_info(r->linked.loader,&info) &&
+           info.state == KOSDEC_ADX_LOADER_FAILED &&
+           info.error == KOSDEC_ADX_REQUEST_TRUNCATED ?
+        KOSDEC_ADX_TRUNCATED : KOSDEC_ADX_IO_ERROR;
+}
+
+enum kosdec_adx_status media_adx_joint_reader_step_loader(
+    struct kosdec_adx_joint_reader *r, bool reload) {
+    struct kosdec_adx_loader *loader = r->linked.loader;
+    enum kosdec_adx_loader_status status;
+    if(reload) {
+        status = kosdec_adx_loader_step_reload(loader);
+    } else {
+        /* A single 512-byte step cannot sustain 44.1 kHz stereo at 60 Hz.
+           Budget up to one sector, stopping at WAIT, backpressure or EOF. */
+        for(unsigned i = 0; i < KOSDEC_ADX_REQUEST_SECTOR_BYTES / 512u; ++i) {
+            status = kosdec_adx_loader_step_stream(loader);
+            if(status != KOSDEC_ADX_LOADER_OK || !loader->active || loader->paused ||
+               loader->request.state == KOSDEC_ADX_REQUEST_READEND)
+                break;
+        }
+    }
+    if(status == KOSDEC_ADX_LOADER_NEED_INPUT)
+        return KOSDEC_ADX_NEED_INPUT;
+    if(status == KOSDEC_ADX_LOADER_NEED_OUTPUT)
+        return KOSDEC_ADX_NEED_OUTPUT;
+    struct kosdec_adx_loader_info info;
+    if(status != KOSDEC_ADX_LOADER_OK || !kosdec_adx_loader_get_info(loader,&info))
+        return r->terminal = loader_error(r);
+    if(reload && info.state == KOSDEC_ADX_LOADER_WAIT && r->linked.seal_when_empty) {
+        r->joint_error = kosdec_adx_joint_finish(r->joint);
+        if(r->joint_error != KOSDEC_ADX_JOINT_OK)
+            return r->terminal = KOSDEC_ADX_IO_ERROR;
+    }
+    return KOSDEC_ADX_MORE;
+}
+
 static struct kosdec_adx_joint_read_result read_window(
-    struct kosdec_adx_joint_reader *r, int16_t *output, size_t frames, size_t tail) {
+    struct kosdec_adx_joint_reader *r, int16_t *output, size_t frames, size_t tail,
+    bool separate_transport) {
     struct kosdec_adx_joint_read_result result = {
         KOSDEC_ADX_BAD_ARGUMENT, KOSDEC_ADX_JOINT_OK, 0};
     if(!valid(r) || (!output && frames) ||
@@ -516,14 +556,14 @@ static struct kosdec_adx_joint_read_result read_window(
         return result;
     }
     bool sector_source = r->sector.request.read_at != NULL;
-    bool has_feed = r->feed || r->linked.loader;
+    bool has_feed = r->feed || (r->linked.loader && !separate_transport);
     bool eager_feed = has_feed && r->linked.enabled;
     bool output_blocked = !frames || (r->job.pcm && frames < 32);
     if(output_blocked && !sector_source && !eager_feed) {
         result.status = KOSDEC_ADX_NEED_OUTPUT; return result;
     }
     enum kosdec_adx_status transport = KOSDEC_ADX_NEED_OUTPUT;
-    if(sector_source &&
+    if(sector_source && !separate_transport &&
        (!r->decoder.header_ready || r->decoder.frames_done < r->decoder.total_frames ||
         r->job.trap)) {
         transport = media_adx_joint_sector_step(r);
@@ -537,6 +577,10 @@ static struct kosdec_adx_joint_read_result read_window(
         result.status = transport;
         return result;
     }
+    if(sector_source && separate_transport && r->decoder.header_ready && !r->sector.configured) {
+        result.status = KOSDEC_ADX_NEED_INPUT;
+        return result;
+    }
     struct kosdec_adx_joint_info info;
     s = kosdec_adx_joint_query(r->joint, &info);
     if(s != KOSDEC_ADX_JOINT_OK) goto joint_failure;
@@ -548,13 +592,7 @@ static struct kosdec_adx_joint_read_result read_window(
             if(s != KOSDEC_ADX_JOINT_OK) goto joint_failure;
         }
         else if(feed != KOSDEC_ADX_JOINT_FEED_MORE && feed != KOSDEC_ADX_JOINT_FEED_WAIT) {
-            struct kosdec_adx_loader_info loader;
-            result.status = KOSDEC_ADX_IO_ERROR;
-            if(r->linked.loader && kosdec_adx_loader_get_info(r->linked.loader, &loader) &&
-               loader.state == KOSDEC_ADX_LOADER_FAILED &&
-               loader.error == KOSDEC_ADX_REQUEST_TRUNCATED)
-                result.status = KOSDEC_ADX_TRUNCATED;
-            r->terminal = result.status;
+            result.status = r->terminal = loader_error(r);
             return result;
         }
         feed_progress = feed == KOSDEC_ADX_JOINT_FEED_MORE;
@@ -637,11 +675,11 @@ joint_failure:
 }
 struct kosdec_adx_joint_read_result kosdec_adx_joint_reader_read(
     struct kosdec_adx_joint_reader *r, int16_t *output, size_t frames) {
-    return read_window(r, output, frames, 0);
+    return read_window(r, output, frames, 0, false);
 }
 struct kosdec_adx_joint_read_result media_adx_joint_reader_read_pipe(
-    struct kosdec_adx_joint_reader *r, size_t room, size_t tail) {
-    return read_window(r, r->job.pcm, room, tail);
+    struct kosdec_adx_joint_reader *r, size_t room, size_t tail, bool separate_transport) {
+    return read_window(r, r->job.pcm, room, tail, separate_transport);
 }
 void kosdec_adx_joint_reader_cancel(struct kosdec_adx_joint_reader *r) {
     if(valid(r) && !r->terminal) {

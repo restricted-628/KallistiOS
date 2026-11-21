@@ -14,12 +14,12 @@ struct kosdec_adx_au {
     kosdec_adx_read_at read_at;
     void *context;
     struct kosdec_adx_au_info info;
-    enum kosdec_adx_status terminal;
-    unsigned used, frame_bytes;
+    enum kosdec_adx_status terminal, staged_error;
+    unsigned used, input_pos, frame_bytes;
     bool header_ready;
     kosdec_adx_pcm_filter filter;
     void *filter_context;
-    uint8_t buffer[512];
+    uint8_t buffer[4096]; /* One provider request is at most 512 bytes. */
 };
 struct kosdec_adx_au_result { enum kosdec_adx_status status; size_t frames; };
 /* Caller owns state, immutable source and synchronous read_at provider/context;

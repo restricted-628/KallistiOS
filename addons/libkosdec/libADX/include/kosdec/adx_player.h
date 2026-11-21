@@ -108,6 +108,17 @@ struct kosdec_adx_attenuation_status {
     int error;
 };
 struct snd_retained_pcm;
+struct kosdec_adx_compat_service;
+struct kosdec_adx_compat_controls {
+    int8_t direct_db, effect_db, transpose, detune;
+    uint8_t effect_bus;
+};
+struct kosdec_adx_playend {
+    uint64_t epoch, generation;
+    uint32_t session, frames, rate, stop_timeout_ms;
+    int32_t anchor;
+    bool pending, completed;
+};
 typedef void (*kosdec_adx_player_error_callback)(void *context,
     const struct kosdec_adx_player_error *error);
 /* Fields are implementation-owned; inspect through get_info, not direct edits. */
@@ -126,7 +137,15 @@ struct kosdec_adx_player {
     uint32_t requested_rate; /* Zero follows source rate. */
     int16_t *scratch;
     int16_t requested_pan[2]; /* Signed -15..15 or KOSDEC_ADX_PAN_AUTO. */
-    bool callback_failed, pcm_enabled, source_bound;
+    bool callback_failed, pcm_enabled, source_bound, decode_progress;
+    struct kosdec_adx_compat_service *compat_service;
+    unsigned compat_slot;
+    uint32_t compat_prefill_frames;
+    uint8_t compat_block_frames;
+    bool compat_chained, compat_phased, compat_renderer_ready;
+    bool compat_ready_start; /* Last prepared result for the current compatibility binding. */
+    bool compat_decode_ended; /* Logical DECEND, independent of final PCM submission. */
+    bool compat_paused, compat_preoutput_playing;
     struct kosdec_adx_player_error diagnostic;
     kosdec_adx_player_error_callback error_callback;
     void *error_context;
@@ -142,13 +161,22 @@ struct kosdec_adx_player {
     uint64_t vsync_generation;
     int64_t vsync_count;
     uint32_t vsync_frequency, vsync_last_tick;
+    int32_t compat_vsync_anchor;
+    uint32_t compat_vsync_anchor_tick;
+    struct kosdec_adx_playend compat_playend;
     int16_t requested_attenuation;
+    int16_t compat_requested_attenuation;
+    struct kosdec_adx_compat_controls compat_controls;
+    uint32_t compat_start_rate;
+    unsigned compat_route_fields;
+    snd_channel_routing_t compat_original_routing[2];
     bool time_uses_vsync;
     uint32_t linked_reload_sectors;
     bool linked_reload_clamp;
 };
 /* All player APIs are serialized on one ordinary owner thread, not an IRQ,
-   callback or shared fiber carrier. Only the private producer uses the source.
+   callback or shared fiber carrier. The private producer owns the source
+   unless the caller explicitly selects the synchronous compatibility binding.
    Application initializes the sound stream system with adequate limits BEFORE
    start, and retains global sound resources; player never init/shuts down sound.
    Do not externally poll/control/attach a sound service to the owned handle.
@@ -232,6 +260,14 @@ int kosdec_adx_player_set_linked_reload_time(struct kosdec_adx_player *,
    completed unbind/stop and for direct PCM sources, returns a zero snapshot.
    Invalid arguments return -1/EINVAL and leave the output unchanged. */
 int kosdec_adx_player_get_input(const struct kosdec_adx_player *, struct kosdec_adx_player_input *);
+
+/* Serialized player owner. Opt in before starting or at IDLE before rebind.
+   Future rebinds start a fresh decoded count.
+   No sample/device clock is implied. Query returns ENODATA if unbound or
+   stopped, and EAGAIN if a producer publication overlaps the query. */
+int kosdec_adx_player_enable_decode_progress(struct kosdec_adx_player *);
+int kosdec_adx_player_get_decode_progress(const struct kosdec_adx_player *,
+                                         struct kosdec_adx_decode_progress *);
 /* Optional fixed-rate retained clock profile. Build the archive with
    ADX_RETAINED_CLOCK=1. Enable before the first start with a disjoint caller
    buffer of at least config.capacity uint32_t offsets, lent until stop.
@@ -284,18 +320,52 @@ int kosdec_adx_player_get_time(struct kosdec_adx_player *, uint64_t generation,
     struct kosdec_adx_time *out);
 int kosdec_adx_player_get_time_real(struct kosdec_adx_player *, uint64_t generation,
     int64_t *centiseconds);
+/* Compatibility-selected display units. NTSC/PAL may be selected without
+   a tick reader for literal pre-start and checked-STOPPED results. A live
+   VSync query uses the opted-in collection's delivered events or the
+   player's tick callback. It still requires a qualified source clock. */
+int kosdec_adx_compat_player_set_time_mode(struct kosdec_adx_player *, enum kosdec_adx_time_mode);
+/* Compatibility-bound only. READY/PREFILL/STOPPED return the stored offset
+   in the selected units, with denominator 1/5994/5000. PLAYING/SOURCE_END
+   use the current qualified generation. Optional logical PLAYEND uses the
+   latched declared duration and correction anchor after a checked stop.
+   Idle, stopping, failed and releasing return ENODATA.
+   Live counts use signed 32-bit wrap. The compatibility VSync anchor is
+   separate from the native anchor and changes only on drift correction.
+   The centisecond query independently reads the selected pair and uses
+   binary32 rounding and signed 32-bit saturated truncation. Errors leave
+   caller outputs unchanged. The native time queries keep wide arithmetic. */
+int kosdec_adx_compat_player_get_time(struct kosdec_adx_player *, struct kosdec_adx_time *);
+int kosdec_adx_compat_player_get_time_real(struct kosdec_adx_player *, int64_t *centiseconds);
 /* Set before start or during prefill to hold source PCM admission. Producer
    keeps filling the bounded ring; poll reports readiness without allocating or
    starting fresh output. Existing retained output continues polling silence.
-   Clearing the gate admits prepared PCM on the next poll. Changing it after
-   playback starts only affects later sources, never pauses current sound.
+   Clearing the gate allows a subsequent poll to admit primed PCM. Changing
+   it after playback starts only affects later sources, never pauses sound.
    Persists across source binds. READY/PREFILL/PLAYING/SOURCE_END/IDLE only;
    no provider/device work in this setter. This is not an audible pause API. */
 int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
-/* Owner-thread snapshot, updated by poll. True after format-validated prefill
-   or sourceDONE, whether waiting or already started. False initially and after
-   source release/cancel, a new source start, failure or stop. No I/O; invalid
-   arguments leave output unchanged. Waiting after ready has no prefill timeout. */
+
+/* Compatibility title pause before output admission. Preparation continues.
+   When ready and the separate wait-start gate is open, the compatibility
+   title reports PLAYING and zero elapsed source frames. Clearing pause lets
+   the next service pass start output when primed. Checked STOP preserves the
+   request. Playback with an admitted Audio handle requires a live-pause
+   backend, so this call returns ENOTSUP there. */
+int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
+/* With pause clear, return success with zero discarded for any request.
+   A paused call requires a qualified discard backend and returns ENOTSUP,
+   leaving the result and queued PCM unchanged. */
+int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *,
+    int32_t requested, int32_t *discarded);
+/* Owner-thread snapshot, updated by poll or compatibility title dispatch.
+   Format-validated native prefill or sourceDONE sets ready. In the optional
+   compatibility service the captured frame target or one decoder block of
+   remaining PCM room also sets ready. Starting playback may still need to
+   prime the native sound buffer. False initially and after source release,
+   cancel, a new source start, failure or stop. No I/O; invalid arguments leave
+   output unchanged. Explicitly holding after ready suspends the prefill
+   timeout. Releasing a prepared compatibility title renews its priming window. */
 int kosdec_adx_player_is_ready_start(const struct kosdec_adx_player *, bool *ready);
 /* Only at SOURCE_END: disable PCM admission and join the producer, entering
    IDLE while output continues. Discards outstanding command receipts. Failure
@@ -356,11 +426,55 @@ int kosdec_adx_player_set_attenuation(struct kosdec_adx_player *,
    Starts at zero. Remains available through stop. */
 int kosdec_adx_player_get_requested_attenuation(const struct kosdec_adx_player *,
     int16_t *tenths_db);
+/* Compatibility-bound owner only. Cache the signed low halfword of the
+   original request before attempting live admission. An inactive request
+   (READY, PREFILL or STOPPED) updates the cache and returns request ID zero.
+   It does not set the initial device level. During playback, forward the
+   full signed request to the existing optional retained-gain adapter.
+   A live error leaves the request ID unchanged and preserves the new
+   requested setting. Nonzero IDs use the normal acknowledgement query. */
+int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *,
+    int32_t tenths_db, uint64_t *request);
+/* Requested setting of this compatibility title, independent of device
+   admission. Starts at zero and persists through checked STOP. */
+int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_player *,
+    int16_t *tenths_db);
 /* Latest admitted request only. Acknowledged TL is historical on unknown
    channels. Poll success can coexist with a pending retry. Terminal failure
    requires checked stop. Channel acknowledgements do not specify simultaneity. */
 int kosdec_adx_player_get_attenuation_status(const struct kosdec_adx_player *,
     uint64_t request, struct kosdec_adx_attenuation_status *out);
+enum kosdec_adx_routing_result {
+    KOSDEC_ADX_ROUTING_STAGED,
+    KOSDEC_ADX_ROUTING_ADMITTED
+};
+/* Ordinary owner of a non-retained compatibility binding. Levels are
+   whole dB, clamped to [-45,0]. Bus 16 preserves its legacy readback and
+   uses device bus 0. Level-only changes preserve the configured bus.
+   Success reports STAGED without live output or ADMITTED after command
+   submission. A live submission error can leave one channel changed
+   and requires checked STOP. Getters report the last requested settings. */
+int kosdec_adx_compat_player_set_direct_level(struct kosdec_adx_player *, int32_t db);
+int kosdec_adx_compat_player_get_direct_level(const struct kosdec_adx_player *, int32_t *db);
+int kosdec_adx_compat_player_set_fx(struct kosdec_adx_player *, int32_t bus, int32_t db);
+int kosdec_adx_compat_player_set_fx_level(struct kosdec_adx_player *, int32_t db);
+int kosdec_adx_compat_player_get_fx(const struct kosdec_adx_player *, int32_t *bus, int32_t *db);
+/* Requested transpose/detune in semitones/cents, clamped to +/-96 and
+   +/-99 respectively. This cache does not submit a pitch change. */
+int kosdec_adx_compat_player_cache_transpose(struct kosdec_adx_player *, int32_t semitones, int32_t cents);
+int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *, int32_t *semitones, int32_t *cents);
+/* Stage initial pitch on a READY ordinary compatibility player. The checked
+   profile is 44100 Hz source PCM at -12, 0 or +12 semitones and zero detune.
+   The first START uses exact playback Hz for this profile. An explicit
+   nonzero native rate set through kosdec_adx_player_set_rate takes precedence.
+   The source frequency remains available separately in get_info.
+   Cache the clamped request. ERANGE (outside the stock slot-command range)
+   and ENOTSUP (outside the qualified profile) preserve the prior staged
+   setting. Live and retained calls return ENOTSUP before changing the cache.
+   Source cancellation before allocation clears staging. Same-format reuse
+   of the output keeps its actual rate, and a replacement player starts fresh. */
+int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,
+    int32_t semitones, int32_t cents);
 /* Checked linear0..255 per-channel gain and pan (0left,128center,255right).
    May set before start or during playback. Default full volume; mono centered,
    stereo separated. Channel1 settings ignored for mono. This is KOS's scale,

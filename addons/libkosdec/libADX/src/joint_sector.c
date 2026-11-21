@@ -98,6 +98,20 @@ enum kosdec_adx_status media_adx_joint_sector_step(struct kosdec_adx_joint_reade
     return status == KOSDEC_ADX_NEED_OUTPUT ? KOSDEC_ADX_MORE : status;
 }
 
+enum kosdec_adx_status media_adx_joint_sector_step_stream(struct kosdec_adx_joint_reader *r) {
+    enum kosdec_adx_status status = KOSDEC_ADX_NEED_OUTPUT;
+    /* Bound owner-side I/O to at most one sector of provider calls per pass.
+       Admission can consume one step without calling the provider. */
+    for(unsigned i = 0; i < SECTOR / 512u; ++i) {
+        status = media_adx_joint_sector_step(r);
+        if(status != KOSDEC_ADX_MORE || r->joint->sealed)
+            break;
+    }
+    if(status >= KOSDEC_ADX_DONE)
+        r->terminal = status;
+    return status;
+}
+
 enum kosdec_adx_joint_status media_adx_joint_sector_close(struct kosdec_adx_joint_reader *r) {
     if(!r->sector.request.read_at) return KOSDEC_ADX_JOINT_OK;
     if(r->sector.held.bytes) {

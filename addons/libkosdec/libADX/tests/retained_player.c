@@ -13,7 +13,11 @@ struct snd_retained_pcm {
     unsigned channels;
     bool in_fill, stopped, backpressure, no_refill, stop_fails, valid;
     unsigned starts, fills, stops;
-    uint64_t admitted[17], sealed, credited;
+    int injected_stop_error;
+    uint64_t admitted[17], sealed, credited, reported_epoch;
+    bool independent_generations;
+    uint64_t source_credit[17];
+    uint64_t missing_generation, stale_generation, foreign_generation, shifted_observation;
     snd_retained_pcm_span_t spans[SND_RETAINED_PCM_FILL_SPANS];
     unsigned span_count;
     int16_t pcm[2 * 1024];
@@ -142,16 +146,22 @@ int snd_retained_pcm_seal(snd_retained_pcm_t *pcm, uint64_t generation, uint64_t
 }
 int snd_retained_pcm_query(const snd_retained_pcm_t *pcm, uint64_t generation,
     snd_retained_pcm_snapshot_t *out) {
-    if(generation > 16 || (generation > pcm->sealed && !pcm->admitted[generation])) {
+    if(generation > 16 || (generation && generation == pcm->missing_generation) ||
+       (generation > pcm->sealed && !pcm->admitted[generation])) {
         errno = ENOENT;
         return -1;
     }
+    uint64_t epoch = pcm->reported_epoch ? pcm->reported_epoch : 90;
+    uint64_t source_credit = pcm->independent_generations ? pcm->source_credit[generation] : pcm->credited;
     *out = (snd_retained_pcm_snapshot_t){
-        .epoch = 90, .session = 7, .generation = generation,
-        .output_frames = pcm->credited + 18, .source_frames = pcm->credited,
-        .next_source_frame = 19, .valid = pcm->valid && !pcm->stopped,
+        .epoch = epoch + (generation && generation == pcm->foreign_generation),
+        .session = 7, .generation = generation,
+        .output_frames = pcm->credited + 18, .source_frames = source_credit,
+        .observation_end_ms = generation && generation == pcm->shifted_observation ? 1 : 0,
+        .next_source_frame = 19, .valid = pcm->valid && !pcm->stopped &&
+                                        (!generation || generation != pcm->stale_generation),
         .source_output_end = generation && generation <= pcm->sealed &&
-                             pcm->credited == pcm->admitted[generation],
+                             source_credit == pcm->admitted[generation],
         .clock_error = pcm->stopped ? ECANCELED : pcm->valid ? 0 : ESTALE,
         .software_stopped = pcm->stopped
     };
@@ -160,6 +170,7 @@ int snd_retained_pcm_query(const snd_retained_pcm_t *pcm, uint64_t generation,
 int snd_retained_pcm_stop(snd_retained_pcm_t *pcm, uint32_t timeout_ms) {
     CHECK(pcm == &backend && timeout_ms && pcm->starts == 1);
     ++pcm->stops;
+    if(pcm->injected_stop_error) { errno = pcm->injected_stop_error; return -1; }
     if(pcm->stop_fails) { errno = ETIMEDOUT; return -1; }
     pcm->stopped = true;
     return 0;
@@ -462,6 +473,422 @@ static void live_time_mode(void) {
     free(f->data);
 }
 
+static void compat_decode_tail(void) {
+    struct retained_fixture t;
+    retained_init(&t,false);
+    struct fixture *f = &t.f;
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us = compat_clock, .clock_context = &now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    enum kosdec_adx_compat_state state;
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,&f->player));
+    request_frames = 49;
+    CHECK(!kosdec_adx_player_start(&f->player));
+    for(unsigned pass = 0; pass < 16 && info(f).state == KOSDEC_ADX_PLAYER_PREFILL; ++pass)
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(f).state == KOSDEC_ADX_PLAYER_PLAYING && backend.admitted[1] == 49);
+    CHECK(!kosdec_adx_compat_exec_title(&service,0,&result));
+    CHECK(!kosdec_adx_compat_player_get_state(&f->player,&state));
+    CHECK(state == KOSDEC_ADX_COMPAT_PLAYING && backend.fills == 1 && !backend.sealed);
+
+    request_frames = 1;
+    CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(!kosdec_adx_compat_player_get_state(&f->player,&state));
+    CHECK(state == KOSDEC_ADX_COMPAT_DECEND && backend.admitted[1] == 50);
+    CHECK(!kosdec_adx_compat_exec_title(&service,0,&result));
+    CHECK(info(f).state == KOSDEC_ADX_PLAYER_PLAYING && backend.fills == 2 && !backend.sealed);
+
+    request_frames = 64;
+    CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(f).state == KOSDEC_ADX_PLAYER_SOURCE_END && backend.sealed == 1);
+    CHECK(backend.admitted[1] == 65 && backend.spans[0].first_frame == 50 &&
+          backend.spans[0].frames == 15);
+    CHECK(!kosdec_adx_player_release_source(&f->player));
+    kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
+    CHECK(!kosdec_adx_player_bind_source(&f->player,&f->stream,NULL));
+    CHECK(!kosdec_adx_compat_player_get_state(&f->player,&state));
+    CHECK(state == KOSDEC_ADX_COMPAT_DECINFO);
+    CHECK(!kosdec_adx_player_stop(&f->player,1000));
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f->data);
+}
+
+static void compat_live_time_qualification(void) {
+    struct retained_fixture t;
+    retained_init(&t,false);
+    struct fixture *f = &t.f;
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us = compat_clock, .clock_context = &now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,&f->player));
+    CHECK(!kosdec_adx_player_start(&f->player));
+    for(unsigned pass = 0; pass < 16 && info(f).state == KOSDEC_ADX_PLAYER_PREFILL; ++pass)
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(f).state == KOSDEC_ADX_PLAYER_PLAYING && backend.admitted[1]);
+    struct kosdec_adx_time out = {7, 9};
+    int64_t centiseconds = 13;
+    CHECK(kosdec_adx_compat_player_get_time(&f->player,&out) < 0 && errno == ESTALE);
+    CHECK(out.count == 7 && out.frequency == 9);
+    backend.valid = true;
+    backend.credited = 32;
+    CHECK(!kosdec_adx_compat_player_get_time(&f->player,&out));
+    CHECK(out.count == 32 && out.frequency == 44100);
+    CHECK(!kosdec_adx_compat_player_get_time_real(&f->player,&centiseconds) && centiseconds == 0);
+    CHECK(!kosdec_adx_compat_player_set_time_mode(&f->player,KOSDEC_ADX_TIME_PAL));
+    CHECK(kosdec_adx_compat_player_get_time(&f->player,&out) < 0 && errno == ENOTSUP);
+    CHECK(out.count == 32 && out.frequency == 44100);
+    CHECK(!kosdec_adx_player_stop(&f->player,1000));
+    CHECK(!kosdec_adx_compat_player_get_time(&f->player,&out) && !out.count && out.frequency == 5000);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f->data);
+}
+
+static void compat_vsync_anchor(void) {
+    struct retained_fixture t;
+    retained_init(&t,false);
+    struct fixture *f = &t.f;
+    struct kosdec_adx_player *p = &f->player;
+    struct tick_reader clock = {.ticks = UINT32_MAX - 1};
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us = compat_clock, .clock_context = &now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    CHECK(!kosdec_adx_player_enable_vsync_clock(p,KOSDEC_ADX_VSYNC_NTSC,read_ticks,&clock));
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+    CHECK(!kosdec_adx_player_start(p));
+    for(unsigned pass = 0; pass < 16 && info(f).state == KOSDEC_ADX_PLAYER_PREFILL; ++pass)
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(f).state == KOSDEC_ADX_PLAYER_PLAYING && clock.reads == 1);
+    CHECK(p->compat_vsync_anchor == 0 && p->compat_vsync_anchor_tick == UINT32_MAX - 1);
+
+    CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_NTSC));
+    struct kosdec_adx_time out = {7,9};
+    CHECK(kosdec_adx_compat_player_get_time(p,&out) < 0 && errno == ESTALE);
+    CHECK(out.count == 7 && out.frequency == 9 && clock.reads == 1);
+
+    backend.valid = true;
+    backend.credited = 735;
+    clock.ticks = UINT32_MAX;
+    CHECK(!kosdec_adx_compat_player_get_time(p,&out) && out.count == 100 && out.frequency == 5994);
+    CHECK(p->compat_vsync_anchor == 0 && p->compat_vsync_anchor_tick == UINT32_MAX - 1);
+    CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_PAL));
+    clock.ticks = 0;
+    backend.credited = 1764;
+    CHECK(!kosdec_adx_player_get_time(p,1,&out) && out.count == 200 && out.frequency == 5000);
+    CHECK(p->vsync_count == 200 && p->vsync_last_tick == 0);
+    CHECK(!kosdec_adx_compat_player_get_time(p,&out) && out.count == 200 && out.frequency == 5000);
+    CHECK(p->compat_vsync_anchor == 0 && p->compat_vsync_anchor_tick == UINT32_MAX - 1);
+
+    backend.credited = 44100;
+    clock.ticks = 1;
+    CHECK(!kosdec_adx_compat_player_get_time(p,&out) && out.count == 300);
+    CHECK(p->compat_vsync_anchor == 5000 && p->compat_vsync_anchor_tick == 1);
+    CHECK(!kosdec_adx_compat_player_get_time(p,&out) && out.count == 5000);
+    CHECK(p->vsync_count == 200 && p->vsync_last_tick == 0);
+    backend.valid = false;
+    clock.ticks = 2;
+    CHECK(kosdec_adx_compat_player_get_time(p,&out) < 0 && errno == ESTALE);
+    CHECK(out.count == 5000 && p->compat_vsync_anchor_tick == 1);
+
+    backend.valid = true;
+    clock.ticks = 21474837;
+    CHECK(!kosdec_adx_compat_player_get_time(p,&out) && out.count == INT32_MIN + 4952);
+    CHECK(p->compat_vsync_anchor == 5000 && p->compat_vsync_anchor_tick == 21474837);
+
+    CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_SOURCE));
+    CHECK(!kosdec_adx_player_set_time_offset(p,1));
+    backend.credited = INT32_MAX;
+    CHECK(!kosdec_adx_compat_player_get_time(p,&out) && out.count == INT32_MIN && out.frequency == 44100);
+    CHECK(!kosdec_adx_player_get_time(p,1,&out) && out.count == (int64_t)INT32_MAX + 1);
+    CHECK(!kosdec_adx_player_stop(p,1000));
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f->data);
+    puts("ADX_COMPAT_VSYNC_ANCHOR_PASS wrap, correction, qualification and native independence");
+}
+
+static void compat_collection_clock(void) {
+    struct retained_fixture t;
+    retained_init(&t,false);
+    struct fixture *f = &t.f;
+    struct kosdec_adx_player *p = &f->player;
+    struct tick_reader native = {.ticks = 5000};
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us = compat_clock, .clock_context = &now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    CHECK(!kosdec_adx_player_enable_vsync_clock(p,KOSDEC_ADX_VSYNC_NTSC,read_ticks,&native));
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_enable_vsync_clock(&service));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+    CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_NTSC));
+    CHECK(!kosdec_adx_player_start(p));
+    for(unsigned pass = 0; pass < 16 && info(f).state == KOSDEC_ADX_PLAYER_PREFILL; ++pass)
+        CHECK(!kosdec_adx_compat_exec_vsync(&service,&result));
+    CHECK(info(f).state == KOSDEC_ADX_PLAYER_PLAYING && native.reads == 1);
+    uint32_t start;
+    CHECK(!kosdec_adx_compat_get_vsync_count(&service,&start) && start > 0);
+    CHECK(p->compat_vsync_anchor_tick == start && p->vsync_last_tick == native.ticks);
+
+    struct kosdec_adx_time time = {7,9};
+    CHECK(kosdec_adx_compat_player_get_time(p,&time)<0 && errno == ESTALE);
+    CHECK(time.count == 7 && time.frequency == 9);
+    backend.credited = 32;
+    backend.valid = true;
+    CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(!kosdec_adx_compat_exec_title(&service,0,&result));
+    CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == 0 && time.frequency == 5994);
+    CHECK(!kosdec_adx_compat_exec_vsync(&service,&result));
+    CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == 100 && time.frequency == 5994);
+    CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_PAL));
+    CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == 100 && time.frequency == 5000);
+    CHECK(native.reads == 1);
+    CHECK(!kosdec_adx_player_get_time(p,1,&time) && time.count == 0 && time.frequency == 5000);
+    CHECK(native.reads == 2);
+    CHECK(!kosdec_adx_player_stop(p,1000));
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f->data);
+    puts("ADX_COMPAT_COLLECTION_CLOCK_PASS admission, shared tick and independent native reader");
+}
+
+static void compat_routing_excludes_retained(void) {
+    struct retained_fixture t;
+    retained_init(&t,false);
+    struct fixture *f=&t.f;
+    struct kosdec_adx_player *p=&f->player;
+    uint64_t now=0;
+    const struct kosdec_adx_compat_config config = {.clock_us=compat_clock,.clock_context=&now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+    CHECK(kosdec_adx_compat_player_set_direct_level(p,-15)<0 && errno==ENOTSUP);
+    CHECK(kosdec_adx_compat_player_set_fx(p,7,-12)<0 && errno==ENOTSUP);
+    CHECK(kosdec_adx_compat_player_set_fx_level(p,-20)<0 && errno==ENOTSUP);
+    int32_t bus, db, transpose, cents;
+    CHECK(!kosdec_adx_compat_player_get_direct_level(p,&db) && !db);
+    CHECK(!kosdec_adx_compat_player_get_fx(p,&bus,&db) && !bus && db==-45);
+    CHECK(!kosdec_adx_compat_player_cache_transpose(p,12,-50));
+    CHECK(!kosdec_adx_compat_player_get_transpose(p,&transpose,&cents) && transpose==12 && cents==-50);
+    CHECK(!p->compat_route_fields && p->output.channel[0].routing.direct_level==15);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    CHECK(!kosdec_adx_player_init(p,&f->stream,NULL,&f->config));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+    CHECK(kosdec_adx_compat_player_set_direct_level(p,-15)==KOSDEC_ADX_ROUTING_STAGED);
+    CHECK(kosdec_adx_player_enable_retained_clock(p,t.offsets,2048)<0 && errno==ENOTSUP);
+    CHECK(!p->retained_offsets && p->output.channel[0].routing.direct_level==12);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f->data);
+    puts("ADX_COMPAT_ROUTE_RETAINED_GUARD_PASS");
+}
+
+enum playend_case {
+    PLAYEND_RETRY, PLAYEND_EXPLICIT, PLAYEND_LOST_EPOCH, PLAYEND_CANCEL,
+    PLAYEND_EMPTY, PLAYEND_REBOUND_EMPTY, PLAYEND_FINAL_EMPTY, PLAYEND_FINAL_PCM,
+    PLAYEND_FATAL_STOP, PLAYEND_FIBER
+};
+
+static void make_empty_source(struct fixture *f) {
+    memset(f->data+12,0,4);
+    memmove(f->data+50,f->data+50+3*36,18);
+    f->bytes = 68;
+    kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
+}
+
+static void compat_playend_case(enum playend_case scenario) {
+    struct retained_fixture t;
+    retained_init(&t,false);
+    struct fixture *f = &t.f;
+    struct kosdec_adx_player *p = &f->player;
+    struct tick_reader clock = {0};
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us = compat_clock, .clock_context = &now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    enum kosdec_adx_compat_state state;
+    bool completed = true;
+    unsigned frames = 65;
+    if(scenario == PLAYEND_EMPTY) {
+        frames = 0;
+        make_empty_source(f);
+    }
+    CHECK(!kosdec_adx_player_enable_vsync_clock(p,KOSDEC_ADX_VSYNC_NTSC,read_ticks,&clock));
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    if(scenario == PLAYEND_FIBER)
+        CHECK(!kosdec_adx_compat_bind_player(&service,0,p));
+    else
+        CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+    CHECK(!kosdec_adx_compat_player_enable_playend(p,1000));
+    CHECK(!kosdec_adx_player_start(p));
+    for(unsigned pass = 0; pass < 2000 && info(f).state != KOSDEC_ADX_PLAYER_SOURCE_END; ++pass) {
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        if(scenario == PLAYEND_FIBER)
+            mock_pause();
+    }
+    CHECK(info(f).state == KOSDEC_ADX_PLAYER_SOURCE_END && backend.sealed == 1);
+    CHECK(!kosdec_adx_compat_player_get_state(p,&state) && state == KOSDEC_ADX_COMPAT_DECEND);
+    CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
+
+    struct kosdec_adx_time time = {7,9};
+    if(frames) {
+        backend.valid = true;
+        backend.credited = 32;
+        clock.ticks = 80;
+        CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_NTSC));
+        CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == 8000);
+        CHECK(p->compat_vsync_anchor == 4);
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        CHECK(!backend.stops && backend.span_count == 1 &&
+              backend.spans[0].kind == SND_RETAINED_PCM_TERMINAL_SILENCE);
+    }
+    if(scenario == PLAYEND_REBOUND_EMPTY || scenario == PLAYEND_FINAL_EMPTY ||
+       scenario == PLAYEND_FINAL_PCM) {
+        /* Seal the successor while the first generation still has an
+           unplayed tail. Keep their credited counts independent. */
+        bool armed = scenario != PLAYEND_REBOUND_EMPTY;
+        bool empty = scenario != PLAYEND_FINAL_PCM;
+        CHECK(backend.credited == 32 && backend.admitted[1] == 65);
+        CHECK(kosdec_adx_compat_player_enable_playend(p,1000)<0 && errno==EINVAL);
+        CHECK(!kosdec_adx_player_release_source(p));
+        CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
+        if(armed)
+            CHECK(!kosdec_adx_compat_player_enable_playend(p,1000));
+        if(empty)
+            make_empty_source(f);
+        else
+            kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
+        CHECK(!kosdec_adx_player_bind_source(p,&f->stream,NULL));
+        for(unsigned pass = 0; pass < 32 && info(f).state != KOSDEC_ADX_PLAYER_SOURCE_END; ++pass)
+            CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+        CHECK(info(f).state == KOSDEC_ADX_PLAYER_SOURCE_END && backend.sealed == 2);
+        backend.independent_generations = true;
+        backend.source_credit[1] = 32;
+        backend.source_credit[2] = empty ? 0 : 65;
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result) && !backend.stops);
+        CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
+        backend.source_credit[1] = 65;
+        if(armed) {
+            uint64_t *bad_receipts[] = {&backend.missing_generation, &backend.stale_generation,
+                                       &backend.foreign_generation, &backend.shifted_observation};
+            for(unsigned i=0;i<sizeof(bad_receipts)/sizeof(*bad_receipts);++i) {
+                *bad_receipts[i] = 1;
+                CHECK(!kosdec_adx_compat_exec_server(&service,&result) && !backend.stops);
+                CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
+                *bad_receipts[i] = 0;
+            }
+        }
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result) && backend.stops == (unsigned)armed);
+        CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && completed == armed);
+        if(armed) {
+            CHECK(!kosdec_adx_compat_player_get_state(p,&state) && state == KOSDEC_ADX_COMPAT_PLAYEND);
+            CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_SOURCE));
+            CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == (empty ? 0 : 65) &&
+                  time.frequency == 44100);
+        }
+        CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 1);
+        CHECK(!kosdec_adx_compat_unbind(&service,0));
+        free(f->data);
+        return;
+    }
+    backend.credited = frames;
+    backend.valid = false;
+    CHECK(!kosdec_adx_compat_exec_server(&service,&result) && !backend.stops);
+    backend.valid = true;
+    backend.reported_epoch = 91;
+    CHECK(!kosdec_adx_compat_exec_server(&service,&result) && !backend.stops);
+    backend.reported_epoch = 0;
+
+    if(scenario == PLAYEND_EXPLICIT) {
+        CHECK(!kosdec_adx_player_stop(p,1000));
+    }
+    else if(scenario == PLAYEND_CANCEL) {
+        CHECK(!kosdec_adx_player_cancel_source(p));
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result) && !backend.stops);
+        CHECK(!kosdec_adx_player_stop(p,1000));
+    }
+    else if(scenario == PLAYEND_EMPTY) {
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result) && backend.stops == 1);
+        CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && completed);
+        CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == 0 && time.frequency == 44100);
+        CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 1);
+    }
+    else if(scenario == PLAYEND_FIBER) {
+        CHECK(!mock_joins);
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result) && backend.stops == 1 && mock_joins == 1);
+        CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && completed);
+        CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 1 && mock_joins == 1);
+    }
+    else if(scenario == PLAYEND_FATAL_STOP) {
+        backend.injected_stop_error = EIO;
+        CHECK(kosdec_adx_compat_exec_server(&service,&result)<0 && errno==EIO);
+        CHECK(info(f).state == KOSDEC_ADX_PLAYER_STOPPING && backend.stops == 1);
+        backend.injected_stop_error = 0;
+        CHECK(kosdec_adx_compat_exec_server(&service,&result)<0 && errno==EIO && backend.stops==1);
+        CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
+        CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 2);
+    }
+    else {
+        CHECK(!kosdec_adx_player_set_time_offset(p,-15));
+        backend.stop_fails = true;
+        CHECK(kosdec_adx_compat_exec_server(&service,&result)<0 && errno==ETIMEDOUT);
+        CHECK(info(f).state == KOSDEC_ADX_PLAYER_STOPPING && backend.stops == 1);
+        CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
+        CHECK(kosdec_adx_compat_player_get_time(p,&time)<0 && errno==ENODATA && time.count==8000);
+        backend.stop_fails = false;
+        backend.valid = false;
+        if(scenario == PLAYEND_LOST_EPOCH) {
+            backend.reported_epoch = 91;
+            CHECK(kosdec_adx_compat_exec_server(&service,&result)<0 && errno==ESTALE);
+            CHECK(info(f).state == KOSDEC_ADX_PLAYER_STOPPING && backend.stops == 1);
+            CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 2);
+        }
+        else {
+            CHECK(!kosdec_adx_compat_exec_server(&service,&result) && backend.stops == 2);
+            CHECK(info(f).state == KOSDEC_ADX_PLAYER_STOPPED && backend.stopped);
+            CHECK(!kosdec_adx_compat_player_get_state(p,&state) && state == KOSDEC_ADX_COMPAT_PLAYEND);
+            CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && completed);
+            unsigned reads = clock.reads;
+            CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == -2 && time.frequency == 5994);
+            CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_SOURCE));
+            CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == 50 && time.frequency == 44100);
+            CHECK(!kosdec_adx_compat_player_set_time_mode(p,KOSDEC_ADX_TIME_PAL));
+            CHECK(!kosdec_adx_compat_player_get_time(p,&time) && time.count == -3 && time.frequency == 5000);
+            int64_t cents;
+            CHECK(!kosdec_adx_compat_player_get_time_real(p,&cents) && cents == 0);
+            CHECK(clock.reads == reads);
+            CHECK(!kosdec_adx_compat_exec_server(&service,&result) && backend.stops == 2);
+            CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 2);
+        }
+    }
+    CHECK(!kosdec_adx_compat_player_get_state(p,&state) && state == KOSDEC_ADX_COMPAT_STOP);
+    CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f->data);
+}
+
+static void compat_playend(void) {
+    compat_playend_case(PLAYEND_RETRY);
+    compat_playend_case(PLAYEND_EXPLICIT);
+    compat_playend_case(PLAYEND_LOST_EPOCH);
+    compat_playend_case(PLAYEND_CANCEL);
+    compat_playend_case(PLAYEND_EMPTY);
+    compat_playend_case(PLAYEND_REBOUND_EMPTY);
+    compat_playend_case(PLAYEND_FINAL_EMPTY);
+    compat_playend_case(PLAYEND_FINAL_PCM);
+    compat_playend_case(PLAYEND_FATAL_STOP);
+    compat_playend_case(PLAYEND_FIBER);
+    puts("ADX_COMPAT_PLAYEND_PASS sealed drain, stale/wrong epoch, timeout retry, stop/join, cancel, empty and rebind");
+}
+
 static void split_records(unsigned budget) {
     struct retained_fixture t;
     retained_init(&t,true);
@@ -504,6 +931,45 @@ static void cancel_rebind(void) {
 }
 
 #ifdef MEDIA_ADX_RETAINED_GAIN
+static void compat_live_attenuation_cache(void) {
+    struct retained_fixture t;
+    retained_init(&t,false);
+    struct fixture *f = &t.f;
+    struct kosdec_adx_player *p = &f->player;
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us=compat_clock,.clock_context=&now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+    CHECK(!kosdec_adx_player_start(p));
+    for(unsigned pass=0; pass<16 && info(f).state==KOSDEC_ADX_PLAYER_PREFILL; ++pass)
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(f).state==KOSDEC_ADX_PLAYER_PLAYING);
+
+    int16_t cached;
+    uint64_t request=91;
+    CHECK(kosdec_adx_compat_player_set_attenuation(p,-60,&request)<0 && errno==ENOTSUP && request==91);
+    CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-60);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && !cached);
+
+    backend.gain_supported=true;
+    CHECK(!kosdec_adx_compat_player_set_attenuation(p,-65537,&request) && request==1);
+    CHECK(backend.gain.requested_tl[0]==255 && backend.gain.requested_tl[1]==255);
+    CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-1);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && cached==-1);
+    request=91;
+    CHECK(kosdec_adx_compat_player_set_attenuation(p,-90,&request)<0 && errno==EBUSY && request==91);
+    CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-90);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(p,&cached) && cached==-1);
+    CHECK(!kosdec_adx_player_stop(p,1000));
+    CHECK(!kosdec_adx_compat_player_get_requested_attenuation(p,&cached) && cached==-90);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f->data);
+    puts("ADX_COMPAT_LIVE_ATTENUATION_CACHE_PASS full request, rejected admission, independent native cache");
+}
+
 static void legacy_attenuation(void) {
     struct retained_fixture t;
     retained_init(&t,false);
@@ -532,11 +998,11 @@ static void legacy_attenuation(void) {
     CHECK(status.state == KOSDEC_ADX_ATTENUATION_APPLIED && status.applied == 3);
     CHECK(status.acknowledged == 3 && status.acknowledged_tl[0] == 15 && status.acknowledged_tl[1] == 15);
 
-    CHECK(!kosdec_adx_player_set_attenuation(&f->player,INT32_MIN,&request) && request == 2);
-    CHECK(!kosdec_adx_player_get_requested_attenuation(&f->player,&cached) && !cached);
+    CHECK(!kosdec_adx_player_set_attenuation(&f->player,INT32_MIN + 17,&request) && request == 2);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(&f->player,&cached) && cached == 17);
     CHECK(kosdec_adx_player_set_attenuation(&f->player,-30,&request) < 0 && errno == EBUSY);
     CHECK(request == 2);
-    CHECK(!kosdec_adx_player_get_requested_attenuation(&f->player,&cached) && !cached);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(&f->player,&cached) && cached == 17);
     backend.gain_retry = true;
     CHECK(!kosdec_adx_player_poll(&f->player));
     CHECK(kosdec_adx_player_get_attenuation_status(&f->player,1,&status) < 0 && errno == ENOENT);
@@ -556,6 +1022,7 @@ static void legacy_attenuation(void) {
     CHECK(!status.unknown && status.acknowledged_tl[0] == 255 && status.acknowledged_tl[1] == 15);
     CHECK(!kosdec_adx_player_stop(&f->player,10));
     CHECK(!kosdec_adx_player_get_attenuation_status(&f->player,request,&status) && status.error == EIO);
+    CHECK(!kosdec_adx_player_get_requested_attenuation(&f->player,&cached) && cached == 17);
     free(f->data);
 }
 #endif
@@ -566,10 +1033,17 @@ int main(void) {
     vsync_time(KOSDEC_ADX_VSYNC_NTSC,5994);
     vsync_time(KOSDEC_ADX_VSYNC_PAL,5000);
     live_time_mode();
+    compat_decode_tail();
+    compat_live_time_qualification();
+    compat_vsync_anchor();
+    compat_collection_clock();
+    compat_routing_excludes_retained();
+    compat_playend();
     split_records(16);
     split_records(2);
     cancel_rebind();
 #ifdef MEDIA_ADX_RETAINED_GAIN
+    compat_live_attenuation_cache();
     legacy_attenuation();
 #endif
     puts("ADX_RETAINED_MOCK_PASS generation, exact spans, seal, backpressure, sample/VSync time and retained stop");

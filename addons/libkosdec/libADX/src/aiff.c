@@ -1,4 +1,4 @@
-#include <kosdec/adx_aiff.h>
+#include "adx_container_internal.h"
 #include <string.h>
 #include "adx_filter.h"
 #define AIFF_MAGIC UINT32_C(0x41445849)
@@ -16,13 +16,11 @@ enum kosdec_adx_status kosdec_adx_aiff_init(struct kosdec_adx_aiff *w,
     return w->terminal = bytes < 12 ? KOSDEC_ADX_TRUNCATED : KOSDEC_ADX_MORE;
 }
 static enum kosdec_adx_status fill(struct kosdec_adx_aiff *w, unsigned n) {
-    struct kosdec_adx_input_result in = w->read_at(w->context, w->offset, w->buffer + w->used, n);
-    if(in.status == KOSDEC_ADX_INPUT_WAIT && !in.bytes) return KOSDEC_ADX_NEED_INPUT;
-    if(in.status != KOSDEC_ADX_INPUT_DATA || !in.bytes || in.bytes > n)
-        return w->terminal = in.status == KOSDEC_ADX_INPUT_END && !in.bytes ?
-            KOSDEC_ADX_TRUNCATED : KOSDEC_ADX_IO_ERROR;
-    w->used += (unsigned)in.bytes;w->offset += (uint32_t)in.bytes;
-    return KOSDEC_ADX_MORE;
+    enum kosdec_adx_status status =
+        media_adx_container_fill(w->read_at, w->context, w->buffer, &w->used, &w->offset, n);
+    if(status >= KOSDEC_ADX_DONE)
+        w->terminal = status;
+    return status;
 }
 static enum kosdec_adx_status admit(struct kosdec_adx_aiff *w) {
     if(!w->format_ready || (!w->sound_ready && w->info.total_frames))
@@ -44,14 +42,52 @@ static enum kosdec_adx_status sample_rate(const uint8_t *p, uint32_t *out) {
     *out = (uint32_t)(mantissa >> shift);
     return KOSDEC_ADX_MORE;
 }
-static enum kosdec_adx_status header(struct kosdec_adx_aiff *w) {
+static unsigned pcm_request(const struct kosdec_adx_aiff *w) {
+    uint32_t remaining = w->info.data_offset + w->info.data_bytes - w->offset;
+    return media_adx_container_pcm_request(MEDIA_ADX_CONTAINER_CHUNK - w->used, remaining);
+}
+
+enum kosdec_adx_status media_adx_aiff_step_file(struct kosdec_adx_aiff *w) {
+    if(!valid(w)) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(w->terminal) return w->terminal;
+    if(!w->header_ready) {
+        if(w->phase == CHUNK_HEADER && !w->used &&
+           (w->offset >= w->form_end || w->form_end - w->offset < 8))
+            return KOSDEC_ADX_MORE;
+        unsigned n = w->need - w->used;
+        return n ? fill(w, n) : KOSDEC_ADX_MORE;
+    }
+
+    enum kosdec_adx_status status = w->staged_error;
+    if(!status) {
+        uint32_t end = w->info.data_offset + w->info.data_bytes;
+        if(w->offset == end)
+            return KOSDEC_ADX_MORE;
+        media_adx_container_compact(w->buffer, &w->used, &w->input_pos);
+        status = media_adx_container_stage(w->read_at, w->context, w->buffer, sizeof(w->buffer),
+                                           &w->used, &w->offset, end);
+        if(status < KOSDEC_ADX_DONE)
+            return status;
+        w->staged_error = status;
+    }
+    /* Keep the complete prefix available to DECODER before publishing the
+       failure. An incomplete final unit cannot be reconstructed. */
+    if(w->used - w->input_pos >= w->frame_bytes)
+        return KOSDEC_ADX_MORE;
+    return w->terminal = status;
+}
+
+static enum kosdec_adx_status header(struct kosdec_adx_aiff *w, bool staged) {
     if(w->phase == CHUNK_HEADER && !w->used) {
         if(w->offset == w->form_end) return admit(w);
         if(w->offset > w->form_end || w->form_end - w->offset < 8)
             return w->terminal = KOSDEC_ADX_INVALID;
     }
-    enum kosdec_adx_status status = fill(w, w->need - w->used);
-    if(status != KOSDEC_ADX_MORE || w->used < w->need) return status;
+    if(w->used < w->need) {
+        if(staged) return KOSDEC_ADX_NEED_INPUT;
+        enum kosdec_adx_status status = fill(w, w->need - w->used);
+        if(status != KOSDEC_ADX_MORE || w->used < w->need) return status;
+    }
     w->used = 0;
     if(w->phase == FORM_HEADER) {
         if(memcmp(w->buffer, "FORM", 4) || memcmp(w->buffer + 8, "AIFF", 4))
@@ -76,7 +112,7 @@ static enum kosdec_adx_status header(struct kosdec_adx_aiff *w) {
         if((channels != 1 && channels != 2) || (bits != 8 && bits != 16))
             return w->terminal = KOSDEC_ADX_UNSUPPORTED;
         uint32_t rate;
-        status = sample_rate(w->buffer + 8, &rate);
+        enum kosdec_adx_status status = sample_rate(w->buffer + 8, &rate);
         if(status != KOSDEC_ADX_MORE) return w->terminal = status;
         w->info.sample_rate = rate; w->info.channels = (uint8_t)channels;
         w->info.sample_bits = (uint8_t)bits; w->info.total_frames = be32(w->buffer + 2);
@@ -91,39 +127,46 @@ static enum kosdec_adx_status header(struct kosdec_adx_aiff *w) {
     }
     return w->format_ready && w->sound_ready ? admit(w) : KOSDEC_ADX_MORE;
 }
-struct kosdec_adx_aiff_result kosdec_adx_aiff_read(struct kosdec_adx_aiff *w,
-                                                 int16_t *out, size_t capacity) {
+struct kosdec_adx_aiff_result media_adx_aiff_read(struct kosdec_adx_aiff *w,
+                                                 int16_t *out, size_t capacity, bool staged) {
     struct kosdec_adx_aiff_result result = {KOSDEC_ADX_BAD_ARGUMENT, 0};
     if(!valid(w) || (!out && capacity) || (out && (uintptr_t)out % _Alignof(int16_t))) return result;
     if(w->terminal) { result.status = w->terminal;return result; }
     if(!capacity) { result.status = KOSDEC_ADX_NEED_OUTPUT;return result; }
-    if(!w->header_ready) { result.status = header(w);return result; }
-    if(w->used < w->frame_bytes) {
-        uint32_t remaining = w->info.data_offset + w->info.data_bytes - w->offset;
-        unsigned n = sizeof(w->buffer) - w->used;
-        if(n > remaining) n = remaining;
+    if(!w->header_ready) { result.status = header(w, staged);return result; }
+    if(w->used - w->input_pos < w->frame_bytes) {
+        if(w->staged_error) {
+            result.status = w->terminal = w->staged_error;
+            return result;
+        }
+        if(staged) { result.status = KOSDEC_ADX_NEED_INPUT; return result; }
+        media_adx_container_compact(w->buffer, &w->used, &w->input_pos);
+        unsigned n = pcm_request(w);
         if(!n) { result.status = w->terminal = KOSDEC_ADX_TRUNCATED;return result; }
         result.status = fill(w, n);
         if(result.status != KOSDEC_ADX_MORE) return result;
     }
-    size_t frames = w->used / w->frame_bytes;
+    size_t frames = (w->used - w->input_pos) / w->frame_bytes;
     if(frames > capacity) frames = capacity;
     if(frames > 32) frames = 32;
     size_t samples = frames * w->info.channels;
+    const uint8_t *input = w->buffer + w->input_pos;
     for(size_t i = 0; i < samples; ++i) {
         int value;
-        if(w->info.sample_bits == 8) value = (w->buffer[i] < 128 ? (int)w->buffer[i] : (int)w->buffer[i] - 256) * 256;
-        else { unsigned u = be16(w->buffer + i * 2);value = u < 32768 ? (int)u : (int)u - 65536; }
+        if(w->info.sample_bits == 8) value = (input[i] < 128 ? (int)input[i] : (int)input[i] - 256) * 256;
+        else { unsigned u = be16(input + i * 2);value = u < 32768 ? (int)u : (int)u - 65536; }
         out[i] = (int16_t)value;
     }
     if(frames) media_adx_filter_pcm(w->filter, w->filter_context, w->info.channels, out, frames);
-    unsigned consumed = (unsigned)frames * w->frame_bytes;
-    w->used -= consumed;
-    if(w->used && consumed) memmove(w->buffer, w->buffer + consumed, w->used);
+    w->input_pos += (unsigned)frames * w->frame_bytes;
     w->frames_done += (uint32_t)frames;result.frames = frames;
     result.status = w->frames_done == w->info.total_frames ?
         (w->terminal = KOSDEC_ADX_DONE) : KOSDEC_ADX_MORE;
     return result;
+}
+struct kosdec_adx_aiff_result kosdec_adx_aiff_read(struct kosdec_adx_aiff *w,
+                                               int16_t *out, size_t capacity) {
+    return media_adx_aiff_read(w, out, capacity, false);
 }
 enum kosdec_adx_status kosdec_adx_aiff_get_info(const struct kosdec_adx_aiff *w,
                                              struct kosdec_adx_aiff_info *out) {
@@ -133,7 +176,8 @@ enum kosdec_adx_status kosdec_adx_aiff_get_info(const struct kosdec_adx_aiff *w,
 }
 enum kosdec_adx_status kosdec_adx_aiff_seek(struct kosdec_adx_aiff *w, uint32_t frame) {
     if(!valid(w) || !w->header_ready || frame > w->info.total_frames) return KOSDEC_ADX_BAD_ARGUMENT;
-    w->offset = w->info.data_offset + frame * w->frame_bytes;w->frames_done = frame;w->used = 0;
+    w->offset = w->info.data_offset + frame * w->frame_bytes;w->frames_done = frame;w->used = w->input_pos = 0;
+    w->staged_error = KOSDEC_ADX_MORE;
     w->terminal = frame == w->info.total_frames ? KOSDEC_ADX_DONE : KOSDEC_ADX_MORE;
     return KOSDEC_ADX_DONE;
 }

@@ -81,6 +81,16 @@ enum kosdec_adx_loader_status kosdec_adx_loader_start(struct kosdec_adx_loader *
    appropriate thread/fiber, never audio IRQ. Empty queue is WAIT, not sealed EOF.
    Error is sticky, with all ownership retained until checked stop/close. */
 enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *);
+/* Optional split service for a caller-owned loader. STREAM progresses only an
+   already admitted read, with at most one provider call. Published DATA and
+   byte counts are immediately visible on the serialized owner. A completed
+   request remains current until RELOAD. RELOAD completes at most one entry
+   and may admit the next request. It never calls the provider. Idle or paused
+   returns OK. Use these calls in place of the combined step for this loader.
+   Both phases, the DATA consumer and controls require the same serialized
+   owner. A loader bound to a private player producer stays with that producer. */
+enum kosdec_adx_loader_status kosdec_adx_loader_step_stream(struct kosdec_adx_loader *);
+enum kosdec_adx_loader_status kosdec_adx_loader_step_reload(struct kosdec_adx_loader *);
 enum kosdec_adx_loader_status kosdec_adx_loader_pause(struct kosdec_adx_loader *, bool);
 /* Rotate completed source descriptions to the queue tail at transport EOF.
    Repeat defaults off. The original source ID remains pending and its context

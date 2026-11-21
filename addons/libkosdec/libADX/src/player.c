@@ -1,7 +1,10 @@
 /* Original application-owned PCM stream adapter; shared Audio stays in KOS. */
 #include <kosdec/adx_player.h>
+#include <kosdec/adx_compat_service.h>
 #include "adx_loader_internal.h"
+#include "adx_recovery_internal.h"
 #include "adx_service_internal.h"
+#include "adx_container_internal.h"
 #ifdef MEDIA_ADX_RETAINED_CLOCK
 #include "snd_retained_pcm.h"
 #endif
@@ -17,9 +20,21 @@ static bool valid(const struct kosdec_adx_player *p) {
 }
 static int bad(void) { errno = EINVAL; return -1; }
 static int unsupported(void) { errno = ENOTSUP; return -1; }
+static int busy(void) { errno = EBUSY; return -1; }
+static int stop_player(struct kosdec_adx_player *, uint32_t timeout_ms);
 static bool has_output(const struct kosdec_adx_player *p) {
     return p->retained_pcm || p->sound != SND_STREAM_INVALID;
 }
+static bool start_held(const struct kosdec_adx_player *p) {
+    return p->compat_paused || (p->info.wait_start && !p->compat_preoutput_playing);
+}
+
+static void released_start_hold(struct kosdec_adx_player *p, bool was_held) {
+    if(p->compat_service && p->info.state == KOSDEC_ADX_PLAYER_PREFILL &&
+       p->info.ready_start && was_held && !start_held(p))
+        p->prefill_deadline = timer_ms_gettime64() + p->memory.prefill_timeout_ms;
+}
+
 static void report_error(struct kosdec_adx_player *p, int error) {
     if(p->diagnostic.code) return;
     p->diagnostic = (struct kosdec_adx_player_error){
@@ -47,7 +62,8 @@ static int signed_pan(unsigned pan) {
     return pan < 128 ? -(int)((127 - pan) / 8) : (int)((pan - 128) / 8);
 }
 static int wake_producer(struct kosdec_adx_player *p) {
-    if(kosdec_adx_service_get_state(&p->producer).status >= KOSDEC_ADX_DONE) return 0;
+    if(p->compat_phased || kosdec_adx_service_get_state(&p->producer).status >= KOSDEC_ADX_DONE)
+        return 0;
     if(fiber_service_wake(p->worker) == 0) return 0;
     /* Natural decoder exit may race this wake while published PCM or a closed
        command receipt remains available. Executor FINISHED rejects wake. */
@@ -66,6 +82,7 @@ static int init(struct kosdec_adx_player *p,
        !c->transfer_timeout_ms || !c->prefill_timeout_ms) return bad();
     struct kosdec_adx_player initial = {.magic = PLAYER_MAGIC, .memory = *c,
         .source_bound = true, .requested_pan = {KOSDEC_ADX_PAN_AUTO,KOSDEC_ADX_PAN_AUTO},
+        .compat_controls = {.effect_db = -45},
         .linked_reload_sectors = MEDIA_ADX_RELOAD_DEFAULT,
         .sound = SND_STREAM_INVALID, .info = {.retained_sound = SND_STREAM_INVALID}};
     enum kosdec_adx_status status = spsd ?
@@ -125,13 +142,17 @@ static uint64_t input_progress(const struct kosdec_adx_pipe *pipe) {
 
 static void decode(fiber_service_t *self, void *data) {
     struct kosdec_adx_player *p = data;
-    const bool detect_stalls = p->memory.input_stall_timeout_ms != 0;
+    const bool compat = p->compat_service != NULL;
+    const bool detect_stalls = !compat && p->memory.input_stall_timeout_ms != 0;
     uint32_t generation = 0;
     for(;;) {
         if(fiber_service_stop_requested(self))
             kosdec_adx_service_request_cancel(&p->producer);
         uint64_t before = detect_stalls ? input_progress(&p->producer.pipe) : 0;
-        struct kosdec_adx_stream_result r = kosdec_adx_service_step(&p->producer);
+        uint32_t limit = compat ?
+            __atomic_load_n(&p->compat_prefill_frames,__ATOMIC_ACQUIRE) : 0;
+        struct kosdec_adx_stream_result r =
+            media_adx_service_step_limited(&p->producer,limit,compat && !limit,false);
         bool paused = kosdec_adx_service_get_state(&p->producer).paused;
         if(detect_stalls) {
             bool waiting = !paused && r.status == KOSDEC_ADX_NEED_INPUT && !r.frames &&
@@ -160,6 +181,20 @@ static void decode(fiber_service_t *self, void *data) {
     }
 }
 static int start_source(struct kosdec_adx_player *p) {
+    if(p->compat_service) {
+        media_adx_compat_reset_title_error(&p->compat_service->titles[p->compat_slot]);
+        const struct kosdec_adx_pipe *pipe = &p->producer.pipe;
+        p->compat_prefill_frames = 0;
+        p->compat_block_frames = 0;
+        p->compat_renderer_ready = false;
+        p->compat_ready_start = false;
+        p->compat_decode_ended = false;
+        p->compat_preoutput_playing = false;
+        if(p->compat_phased && (pipe->stream || pipe->sequence))
+            p->producer.input_capacity = sizeof(pipe->stream->input);
+        p->compat_chained = pipe->sequence || (pipe->stream && pipe->stream->linked) ||
+                            (pipe->joint && pipe->joint->linked.enabled);
+    }
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     p->vsync_generation = 0;
     if(p->retained_offsets) {
@@ -180,11 +215,13 @@ static int start_source(struct kosdec_adx_player *p) {
     kosdec_adx_service_step(&p->producer);
     if(!kosdec_adx_service_take(&p->producer,&receipt) || receipt != KOSDEC_ADX_MORE)
         return failed(p,EINVAL);
-    p->executor = fiber_service_executor_create();
-    if(!p->executor) return failed(p,errno);
-    p->worker = fiber_service_add(p->executor,p->memory.stack,p->memory.stack_bytes,decode,p);
-    if(!p->worker || fiber_service_executor_start(p->executor,NULL) < 0)
-        return failed(p,errno);
+    if(!p->compat_phased) {
+        p->executor = fiber_service_executor_create();
+        if(!p->executor) return failed(p,errno);
+        p->worker = fiber_service_add(p->executor,p->memory.stack,p->memory.stack_bytes,decode,p);
+        if(!p->worker || fiber_service_executor_start(p->executor,NULL) < 0)
+            return failed(p,errno);
+    }
     p->info.state = KOSDEC_ADX_PLAYER_PREFILL;
     p->prefill_deadline = timer_ms_gettime64() + p->memory.prefill_timeout_ms;
     if(wake_producer(p) < 0) return failed(p,errno);
@@ -204,6 +241,7 @@ static int start_linked_loader(const struct kosdec_adx_player *p,
 }
 int kosdec_adx_player_start(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound) return bad();
+    if(p->compat_service && p->compat_service->servicing) return busy();
     if(start_linked_loader(p,p->producer.pipe.joint) < 0) return -1;
     return start_source(p);
 }
@@ -231,7 +269,8 @@ int kosdec_adx_player_get_input(const struct kosdec_adx_player *p,
     *input = (struct kosdec_adx_player_input){0};
     const struct kosdec_adx_service *s = &p->producer;
     if(!p->source_bound || p->info.state == KOSDEC_ADX_PLAYER_READY ||
-       p->info.state == KOSDEC_ADX_PLAYER_STOPPED || !s->input_capacity) return 0;
+       p->info.state == KOSDEC_ADX_PLAYER_STOPPED || !s->input_capacity ||
+       media_adx_pipe_has_container(&s->pipe)) return 0;
 
     const uint32_t sector = KOSDEC_ADX_REQUEST_SECTOR_BYTES;
     uint32_t data = __atomic_load_n(&s->input_data,__ATOMIC_ACQUIRE);
@@ -254,6 +293,24 @@ int kosdec_adx_player_get_input(const struct kosdec_adx_player *p,
         input->seconds = media_adx_input_seconds(bytes,channels,rate);
     return 0;
 }
+int kosdec_adx_player_enable_decode_progress(struct kosdec_adx_player *p) {
+    if(!valid(p) || (p->info.state != KOSDEC_ADX_PLAYER_READY &&
+                     p->info.state != KOSDEC_ADX_PLAYER_IDLE))
+        return bad();
+    if(p->source_bound && kosdec_adx_service_enable_decode_progress(&p->producer) < 0)
+        return -1;
+    p->decode_progress = true;
+    return 0;
+}
+int kosdec_adx_player_get_decode_progress(const struct kosdec_adx_player *p,
+                                         struct kosdec_adx_decode_progress *out) {
+    if(!valid(p) || !out) return bad();
+    if(!p->source_bound || p->info.state == KOSDEC_ADX_PLAYER_STOPPED) {
+        errno = ENODATA;
+        return -1;
+    }
+    return kosdec_adx_service_get_decode_progress(&p->producer,out);
+}
 int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *p,
     uint32_t *offsets, size_t count) {
     if(!valid(p) || p->info.state != KOSDEC_ADX_PLAYER_READY ||
@@ -262,6 +319,7 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *p,
        p->memory.sound_bytes > 65536)
         return bad();
 #ifdef MEDIA_ADX_RETAINED_CLOCK
+    if(p->compat_route_fields || p->compat_start_rate) return unsupported();
     if(p->output.channel[0].volume != 255 || p->output.channel[1].volume != 255 ||
        p->requested_pan[0] != KOSDEC_ADX_PAN_AUTO ||
        p->requested_pan[1] != KOSDEC_ADX_PAN_AUTO)
@@ -319,19 +377,23 @@ static int display_frames(uint64_t count, int32_t bias, int64_t *frames) {
     return 0;
 }
 
+static int qualified_clock(const struct kosdec_adx_player *p, uint64_t generation,
+    struct kosdec_adx_source_output *clock) {
+    if(kosdec_adx_player_get_source_output(p,generation,clock) < 0) return -1;
+    if(!clock->valid || !p->info.sample_rate) {
+        errno = clock->clock_error ? clock->clock_error : ENODATA;
+        return -1;
+    }
+    return 0;
+}
+
 static int sample_time(const struct kosdec_adx_player *p, uint64_t generation,
     struct kosdec_adx_time *out) {
     struct kosdec_adx_source_output clock;
-    if(kosdec_adx_player_get_source_output(p,generation,&clock) < 0) return -1;
-    uint32_t rate = p->info.sample_rate;
-    if(!clock.valid || !rate) {
-        errno = clock.clock_error ? clock.clock_error : ENODATA;
-        return -1;
-    }
-
+    if(qualified_clock(p,generation,&clock) < 0) return -1;
     int64_t frames;
     if(display_frames(clock.source_frames,p->time_offset,&frames) < 0) return -1;
-    *out = (struct kosdec_adx_time){.count = frames, .frequency = rate};
+    *out = (struct kosdec_adx_time){.count = frames, .frequency = p->info.sample_rate};
     return 0;
 }
 
@@ -383,11 +445,7 @@ int kosdec_adx_player_get_vsync_time(struct kosdec_adx_player *p,
         return -1;
     }
     struct kosdec_adx_source_output clock;
-    if(kosdec_adx_player_get_source_output(p,generation,&clock) < 0) return -1;
-    if(!clock.valid || !p->info.sample_rate) {
-        errno = clock.clock_error ? clock.clock_error : ENODATA;
-        return -1;
-    }
+    if(qualified_clock(p,generation,&clock) < 0) return -1;
     if(clock.source_output_end) return unsupported();
 
     int64_t frames;
@@ -415,17 +473,22 @@ int kosdec_adx_player_get_vsync_time(struct kosdec_adx_player *p,
     return 0;
 }
 
+static bool valid_time_mode(enum kosdec_adx_time_mode mode) {
+    return (unsigned)mode <= KOSDEC_ADX_TIME_PAL;
+}
+
+static void select_time_mode(struct kosdec_adx_player *p, enum kosdec_adx_time_mode mode) {
+    p->time_uses_vsync = mode != KOSDEC_ADX_TIME_SOURCE;
+    if(p->time_uses_vsync)
+        p->vsync_frequency = mode == KOSDEC_ADX_TIME_NTSC ? 5994 : 5000;
+}
+
 int kosdec_adx_player_set_time_mode(struct kosdec_adx_player *p,
     enum kosdec_adx_time_mode mode) {
-    if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_RELEASING) return bad();
-    if(mode == KOSDEC_ADX_TIME_SOURCE) {
-        p->time_uses_vsync = false;
-        return 0;
-    }
-    if(mode != KOSDEC_ADX_TIME_NTSC && mode != KOSDEC_ADX_TIME_PAL) return bad();
-    if(!p->vsync_ticks) return unsupported();
-    p->vsync_frequency = mode == KOSDEC_ADX_TIME_NTSC ? 5994 : 5000;
-    p->time_uses_vsync = true;
+    if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_RELEASING || !valid_time_mode(mode))
+        return bad();
+    if(mode != KOSDEC_ADX_TIME_SOURCE && !p->vsync_ticks) return unsupported();
+    select_time_mode(p,mode);
     return 0;
 }
 
@@ -447,23 +510,178 @@ int kosdec_adx_player_get_time_real(struct kosdec_adx_player *p, uint64_t genera
     return time_centiseconds(&time,centiseconds);
 }
 
-int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *p, bool wait) {
-    if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_RELEASING) return bad();
-    p->info.wait_start = wait;
+int kosdec_adx_compat_player_set_time_mode(struct kosdec_adx_player *p,
+    enum kosdec_adx_time_mode mode) {
+    if(!valid(p) || !valid_time_mode(mode) ||
+       (p->info.state >= KOSDEC_ADX_PLAYER_RELEASING && p->info.state != KOSDEC_ADX_PLAYER_STOPPED))
+        return bad();
+    if(!p->compat_service) return unsupported();
+    select_time_mode(p,mode);
     return 0;
 }
+
+static int32_t compat_signed_count(uint32_t value) {
+    return value <= INT32_MAX ? (int32_t)value :
+        (int32_t)((int64_t)value - INT64_C(4294967296));
+}
+
+static int32_t compat_truncate(float value) {
+    /* SH-4 FTRC with invalid-operation traps masked returns the signed
+       endpoint on overflow. Clamp before converting to keep C defined. */
+    if(value >= 0x1p31f) return INT32_MAX;
+    if(value <= -0x1p31f) return INT32_MIN;
+    return (int32_t)value;
+}
+
+static bool compat_collection_vsync(const struct kosdec_adx_player *p) {
+    return p->compat_service && p->compat_service->use_vsync_clock;
+}
+
+static int compat_live_time(struct kosdec_adx_player *p, struct kosdec_adx_time *out) {
+    bool collection_clock = compat_collection_vsync(p);
+    if(!p->info.source_generation || (p->time_uses_vsync && !collection_clock && !p->vsync_ticks))
+        return unsupported();
+    struct kosdec_adx_source_output clock;
+    if(qualified_clock(p,p->info.source_generation,&clock) < 0) return -1;
+
+    uint32_t frames = (uint32_t)clock.source_frames;
+    uint32_t bias = (uint32_t)p->time_offset;
+    uint32_t rate = p->info.sample_rate;
+    if(!p->time_uses_vsync) {
+        *out = (struct kosdec_adx_time){.count = compat_signed_count(frames + bias), .frequency = rate};
+        return 0;
+    }
+    if(clock.source_output_end) return unsupported();
+
+    uint32_t tick = collection_clock ? p->compat_service->vsync_count : p->vsync_ticks(p->vsync_context);
+    uint32_t estimate = (uint32_t)p->compat_vsync_anchor + (tick - p->compat_vsync_anchor_tick) * 100u;
+    float frequency = (float)p->vsync_frequency;
+    float sample_seconds = (float)compat_signed_count(frames + bias) / (float)rate;
+    float vsync_seconds = (float)compat_signed_count(estimate) / frequency;
+    float drift_ms = (sample_seconds - vsync_seconds) * 1000.0f;
+    if(drift_ms > 60.0f || drift_ms < -60.0f) {
+        float raw_seconds = (float)compat_signed_count(frames) / (float)rate;
+        p->compat_vsync_anchor = compat_truncate(raw_seconds * frequency);
+        p->compat_vsync_anchor_tick = tick;
+    }
+    *out = (struct kosdec_adx_time){
+        .count = compat_signed_count(estimate + bias), .frequency = p->vsync_frequency
+    };
+    return 0;
+}
+
+int kosdec_adx_compat_player_get_time(struct kosdec_adx_player *p,
+    struct kosdec_adx_time *out) {
+    if(!valid(p) || !out) return bad();
+    if(!p->compat_service) return unsupported();
+    if(p->compat_playend.completed) {
+        const struct kosdec_adx_playend *end = &p->compat_playend;
+        uint32_t frequency = p->time_uses_vsync ? p->vsync_frequency : end->rate;
+        uint32_t count = end->frames;
+        if(p->time_uses_vsync) {
+            float seconds = (float)compat_signed_count(count) / (float)end->rate;
+            count = (uint32_t)compat_truncate(seconds * (float)frequency) +
+                (uint32_t)end->anchor + 1u;
+        }
+        *out = (struct kosdec_adx_time){
+            .count = compat_signed_count(count + (uint32_t)p->time_offset),
+            .frequency = frequency
+        };
+        return 0;
+    }
+    switch(p->info.state) {
+    case KOSDEC_ADX_PLAYER_READY:
+    case KOSDEC_ADX_PLAYER_PREFILL:
+    case KOSDEC_ADX_PLAYER_STOPPED: {
+        uint32_t rate = p->info.state == KOSDEC_ADX_PLAYER_PREFILL && p->compat_preoutput_playing ?
+            p->info.sample_rate : 1;
+        *out = (struct kosdec_adx_time){
+            .count = p->time_offset, .frequency = p->time_uses_vsync ? p->vsync_frequency : rate
+        };
+        return 0;
+    }
+    case KOSDEC_ADX_PLAYER_PLAYING:
+    case KOSDEC_ADX_PLAYER_SOURCE_END:
+        return compat_live_time(p,out);
+    default:
+        errno = ENODATA;
+        return -1;
+    }
+}
+
+int kosdec_adx_compat_player_get_time_real(struct kosdec_adx_player *p, int64_t *centiseconds) {
+    if(!centiseconds) return bad();
+    struct kosdec_adx_time time;
+    if(kosdec_adx_compat_player_get_time(p,&time) < 0) return -1;
+    float seconds = (float)time.count / (float)time.frequency;
+    *centiseconds = compat_truncate(seconds * 100.0f);
+    return 0;
+}
+
+int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *p, bool wait) {
+    if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_RELEASING) return bad();
+    bool was_held = start_held(p);
+    p->info.wait_start = wait;
+    released_start_hold(p,was_held);
+    return 0;
+}
+
+int kosdec_adx_compat_player_pause(struct kosdec_adx_player *p, bool paused) {
+    if(!valid(p)) return bad();
+    if(!p->compat_service) return unsupported();
+    if(p->compat_service->servicing) return busy();
+    if(p->info.state != KOSDEC_ADX_PLAYER_STOPPED &&
+       (p->info.state > KOSDEC_ADX_PLAYER_PREFILL || has_output(p))) return unsupported();
+    bool was_held = start_held(p);
+    p->compat_paused = paused;
+    released_start_hold(p,was_held);
+    return 0;
+}
+
+int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *p,
+    int32_t requested, int32_t *discarded) {
+    if(!valid(p) || !discarded) return bad();
+    if(!p->compat_service) return unsupported();
+    if(p->compat_service->servicing) return busy();
+    if(p->compat_paused) return unsupported();
+    /* The SDK ignores the request completely with its pause latch clear. */
+    (void)requested;
+    *discarded = 0;
+    return 0;
+}
+
 int kosdec_adx_player_is_ready_start(const struct kosdec_adx_player *p, bool *ready) {
     if(!valid(p) || !ready) return bad();
     *ready = p->info.ready_start;
     return 0;
 }
+static bool in_phased_dispatch(const struct kosdec_adx_player *p) {
+    return p->compat_phased && p->compat_service->servicing;
+}
+
+static bool phased_source(const struct kosdec_adx_pipe *pipe) {
+    const struct kosdec_adx_joint_reader *joint = pipe->joint;
+    return pipe->stream || pipe->sequence || media_adx_pipe_has_container(pipe) ||
+           (joint && joint->job.pcm && !joint->feed &&
+           ((joint->joint->kind == KOSDEC_ADX_JOINT_MEMORY && joint->joint->sealed) ||
+            joint->sector.request.read_at || (joint->linked.enabled && joint->linked.loader)));
+}
+
+static void cancel_producer(struct kosdec_adx_player *p) {
+    kosdec_adx_service_request_cancel(&p->producer);
+    if(p->compat_phased)
+        (void)kosdec_adx_service_step(&p->producer);
+}
+
 int kosdec_adx_player_release_source(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END) return bad();
+    if(in_phased_dispatch(p)) return busy();
+    p->compat_playend = (struct kosdec_adx_playend){0};
     /* No poll/callback can race this serialized owner call. Future callbacks
        cannot touch the retired producer, even if join needs a retry. */
     p->pcm_enabled = false;
     p->info.ready_start = false;
-    if(fiber_service_executor_destroy(p->executor) < 0) {
+    if(p->executor && fiber_service_executor_destroy(p->executor) < 0) {
         report_error(p,errno);
         return -1;
     }
@@ -475,12 +693,14 @@ int kosdec_adx_player_release_source(struct kosdec_adx_player *p) {
 }
 int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
+    if(in_phased_dispatch(p)) return busy();
     if(!p->source_bound) return 0;
+    p->compat_playend = (struct kosdec_adx_playend){0};
     p->pcm_enabled = false;
     p->info.ready_start = false;
     p->info.state = KOSDEC_ADX_PLAYER_RELEASING;
     p->vsync_generation = 0;
-    kosdec_adx_service_request_cancel(&p->producer);
+    cancel_producer(p);
     /* Executor destruction requests stop/wakes and joins its carrier. A failed
        join retains all source users and may be retried while output polls zero. */
     if(p->executor && fiber_service_executor_destroy(p->executor) < 0) {
@@ -492,6 +712,8 @@ int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     p->source_bound = false;
     p->info.decoder = status < KOSDEC_ADX_DONE ? KOSDEC_ADX_CANCELLED : status;
     if(status >= KOSDEC_ADX_INVALID && status != KOSDEC_ADX_CANCELLED) return failed(p,EIO);
+    if(!has_output(p))
+        p->compat_start_rate = 0;
     p->info.state = has_output(p) ? KOSDEC_ADX_PLAYER_IDLE : KOSDEC_ADX_PLAYER_READY;
     return 0;
 }
@@ -507,6 +729,7 @@ static int bind_source(struct kosdec_adx_player *p,
         return -1;
     }
 #endif
+    if(p->compat_service && p->compat_service->servicing) return busy();
     struct kosdec_adx_service producer;
     enum kosdec_adx_status status = spsd ?
         kosdec_adx_service_init_spsd(&producer,spsd,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) : aiff ?
@@ -515,7 +738,12 @@ static int bind_source(struct kosdec_adx_player *p,
         kosdec_adx_service_init_wave(&producer,wave,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) : joint ?
         kosdec_adx_service_init_joint(&producer,joint,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity) :
         kosdec_adx_service_init(&producer,stream,sequence,p->memory.pcm,p->memory.pcm_samples,p->memory.capacity);
+    if(p->compat_phased && (status != KOSDEC_ADX_MORE || !phased_source(&producer.pipe)))
+        return unsupported();
     if(status != KOSDEC_ADX_MORE) return bad();
+    if((p->decode_progress || p->compat_service) &&
+       kosdec_adx_service_enable_decode_progress(&producer) < 0)
+        return -1;
     if(start_linked_loader(p,joint) < 0) return -1;
     p->producer = producer;
     p->source_bound = true;
@@ -650,6 +878,12 @@ static int poll_output(struct kosdec_adx_player *p) {
            snd_stream_poll_ex(p->sound) < 0 && errno != ENODATA ? -1 : 1;
 }
 
+static int poll_title_output(struct kosdec_adx_player *p) {
+    if(p->compat_phased)
+        return !has_output(p) || p->compat_renderer_ready;
+    return poll_output(p);
+}
+
 static int start_output(struct kosdec_adx_player *p) {
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(p->retained_offsets) {
@@ -689,8 +923,13 @@ static bool input_stalled(struct kosdec_adx_player *p, uint64_t callbacks,
            __atomic_load_n(&p->input_wait_generation,__ATOMIC_ACQUIRE) == generation;
 }
 
-int kosdec_adx_player_poll(struct kosdec_adx_player *p) {
-    if(!valid(p)) return bad();
+static int prefill_wait(struct kosdec_adx_player *p) {
+    if(timer_ms_gettime64() >= p->prefill_deadline) return failed(p,ETIMEDOUT);
+    if(poll_title_output(p) < 0) return failed(p,errno);
+    return p->callback_failed ? failed(p,p->info.first_error) : 0;
+}
+
+static int poll_player(struct kosdec_adx_player *p) {
     if(p->info.state == KOSDEC_ADX_PLAYER_FAILED) { errno = p->info.first_error; return -1; }
     if(p->info.state != KOSDEC_ADX_PLAYER_PREFILL &&
        p->info.state != KOSDEC_ADX_PLAYER_PLAYING &&
@@ -698,26 +937,35 @@ int kosdec_adx_player_poll(struct kosdec_adx_player *p) {
        p->info.state != KOSDEC_ADX_PLAYER_IDLE &&
        p->info.state != KOSDEC_ADX_PLAYER_RELEASING) return bad();
     if(p->info.state == KOSDEC_ADX_PLAYER_IDLE || p->info.state == KOSDEC_ADX_PLAYER_RELEASING) {
-        if(poll_output(p) < 0) return failed(p,errno);
+        if(poll_title_output(p) < 0) return failed(p,errno);
         return p->callback_failed ? failed(p,p->info.first_error) : 0;
     }
     struct kosdec_adx_pipe_result r = kosdec_adx_pipe_read(&p->producer.pipe,NULL,0);
     if(r.producer >= KOSDEC_ADX_INVALID) return failed(p,EIO);
+    bool starting = p->info.state == KOSDEC_ADX_PLAYER_PREFILL;
     bool running = p->info.state == KOSDEC_ADX_PLAYER_PLAYING;
     uint64_t callbacks = p->info.callbacks, starvations = p->info.starvations;
-    if(p->info.state == KOSDEC_ADX_PLAYER_PREFILL) {
-        if(r.queued_frames < p->memory.sound_bytes / 2 && r.producer != KOSDEC_ADX_DONE) {
-            if(timer_ms_gettime64() >= p->prefill_deadline) return failed(p,ETIMEDOUT);
-            if(poll_output(p) < 0) return failed(p,errno);
-            if(p->callback_failed) return failed(p,p->info.first_error);
-            return 0;
-        }
+    if(starting) {
+        const size_t sound_frames = p->memory.sound_bytes / 2;
+        const bool source_done = r.producer == KOSDEC_ADX_DONE;
+        const size_t target = p->compat_service ? p->compat_prefill_frames : sound_frames;
+        const bool little_room = p->compat_service &&
+            p->memory.capacity - r.queued_frames <= p->compat_block_frames;
+        if(r.queued_frames < target && !little_room && !source_done)
+            return prefill_wait(p);
         uint32_t rate; unsigned channels;
         if(!kosdec_adx_pipe_get_format(&p->producer.pipe,&rate,&channels)) return failed(p,EPROTO);
         if(has_output(p) &&
            (rate != p->info.sample_rate || channels != p->output.channels)) return failed(p,EPROTO);
-        p->output.sample_rate = p->requested_rate ? p->requested_rate : rate;
-        if(p->output.sample_rate < 8000 || p->output.sample_rate > 48000) return failed(p,ENOTSUP);
+        if(!p->compat_start_rate || !has_output(p)) {
+            uint32_t output_rate = p->requested_rate ? p->requested_rate : rate;
+            if(output_rate < 8000 || output_rate > 48000) return failed(p,ENOTSUP);
+            if(p->compat_start_rate && !p->requested_rate) {
+                if(rate != 44100) return failed(p,ENOTSUP);
+                output_rate = p->compat_start_rate;
+            }
+            p->output.sample_rate = output_rate;
+        }
         p->info.output_rate = p->output.sample_rate;
         p->output.channels = (uint8_t)channels;
         p->info.sample_rate = rate;
@@ -726,31 +974,53 @@ int kosdec_adx_player_poll(struct kosdec_adx_player *p) {
             if(p->requested_pan[ch] == KOSDEC_ADX_PAN_AUTO)
                 p->output.channel[ch].pan = output_pan(KOSDEC_ADX_PAN_AUTO,ch,channels);
         p->info.ready_start = true;
-        if(p->info.wait_start) {
+        if(p->compat_service) p->compat_ready_start = true;
+        if(p->compat_paused && !p->info.wait_start)
+            p->compat_preoutput_playing = true;
+        if(start_held(p)) {
             p->pcm_enabled = false;
-            if(poll_output(p) < 0) return failed(p,errno);
+            if(poll_title_output(p) < 0) return failed(p,errno);
             return p->callback_failed ? failed(p,p->info.first_error) : 0;
         }
+        /* The compatibility gate describes preparation. The native refill
+           still needs its startup PCM window to avoid an internal gap. */
+        if(r.queued_frames < sound_frames && !source_done) return prefill_wait(p);
         p->pcm_enabled = true;
-        int service = has_output(p) ? poll_output(p) : start_output(p);
+        int service = has_output(p) ? poll_title_output(p) : start_output(p);
         if(service <= 0) return service ? failed(p,errno) : 0;
 #ifdef MEDIA_ADX_RETAINED_CLOCK
         if(p->retained_pcm) ++p->retained_admissions;
+        if(p->compat_playend.stop_timeout_ms && p->retained_pcm) {
+            struct kosdec_adx_source_output clock;
+            if(!kosdec_adx_player_get_source_output(p,0,&clock)) {
+                p->compat_playend.epoch = clock.epoch;
+                p->compat_playend.session = clock.session;
+                p->compat_playend.generation = p->info.source_generation;
+            }
+        }
 #endif
         ++p->info.sources_started;
         p->info.state = KOSDEC_ADX_PLAYER_PLAYING;
     }
     else {
-        int service = poll_output(p);
+        int service = poll_title_output(p);
         if(service <= 0) return service ? failed(p,errno) : 0;
     }
     if(p->callback_failed) return failed(p,p->info.first_error);
     r = kosdec_adx_pipe_read(&p->producer.pipe,NULL,0);
     if(r.producer >= KOSDEC_ADX_INVALID) return failed(p,EIO);
 #ifdef MEDIA_ADX_RETAINED_CLOCK
+    bool collection_clock = compat_collection_vsync(p);
+    bool compat_start_tick = starting && p->compat_service && (collection_clock || p->vsync_ticks);
+    if(compat_start_tick) {
+        p->compat_vsync_anchor = 0;
+        p->compat_vsync_anchor_tick = collection_clock ? p->compat_service->vsync_count :
+            p->vsync_ticks(p->vsync_context);
+    }
     /* A successful poll can service the clock without admitting source PCM. */
     if(p->vsync_ticks && !p->vsync_generation && p->info.source_frames) {
-        p->vsync_last_tick = p->vsync_ticks(p->vsync_context);
+        p->vsync_last_tick = compat_start_tick && !collection_clock ? p->compat_vsync_anchor_tick :
+            p->vsync_ticks(p->vsync_context);
         p->vsync_count = 0;
         p->vsync_generation = p->info.source_generation;
     }
@@ -763,14 +1033,490 @@ int kosdec_adx_player_poll(struct kosdec_adx_player *p) {
             p->retained_sealed = true;
         }
 #endif
-        p->info.state = KOSDEC_ADX_PLAYER_SOURCE_END;
+        /* Initial refill can copy a whole short source during PREP.
+           Publish its end on a separate PLAYING dispatch in this profile. */
+        if(!p->compat_service || running)
+            p->info.state = KOSDEC_ADX_PLAYER_SOURCE_END;
     }
-    else if(running && input_stalled(p,callbacks,starvations)) {
+    else if(running && !p->compat_service && input_stalled(p,callbacks,starvations)) {
         p->info.input_stalled = true;
         return failed(p,ETIMEDOUT);
     }
     return 0;
 }
+int kosdec_adx_player_poll(struct kosdec_adx_player *p) {
+    if(!valid(p)) return bad();
+    return p->compat_service ? busy() : poll_player(p);
+}
+
+static enum kosdec_adx_compat_state player_compat_state(const struct kosdec_adx_player *p) {
+    if(p->compat_playend.completed)
+        return KOSDEC_ADX_COMPAT_PLAYEND;
+    switch(p->info.state) {
+    case KOSDEC_ADX_PLAYER_READY:
+    case KOSDEC_ADX_PLAYER_STOPPED:
+        return KOSDEC_ADX_COMPAT_STOP;
+    case KOSDEC_ADX_PLAYER_PREFILL:
+        if(p->compat_preoutput_playing) return KOSDEC_ADX_COMPAT_PLAYING;
+        return p->compat_prefill_frames ? KOSDEC_ADX_COMPAT_PREP : KOSDEC_ADX_COMPAT_DECINFO;
+    case KOSDEC_ADX_PLAYER_PLAYING:
+        return p->compat_decode_ended ? KOSDEC_ADX_COMPAT_DECEND : KOSDEC_ADX_COMPAT_PLAYING;
+    default:
+        return KOSDEC_ADX_COMPAT_DECEND;
+    }
+}
+
+static enum kosdec_adx_compat_state compat_state(void *context) {
+    return player_compat_state(context);
+}
+
+static bool playend_identity(const struct kosdec_adx_playend *end,
+                             const struct kosdec_adx_source_output *clock) {
+    return clock->epoch == end->epoch && clock->session == end->session &&
+        clock->generation == end->generation;
+}
+
+static bool drained_source(const struct kosdec_adx_player *p, uint64_t generation,
+                            struct kosdec_adx_source_output *clock) {
+    return !qualified_clock(p,generation,clock) && clock->generation == generation &&
+        clock->source_output_end && !clock->software_stopped &&
+        !clock->output_error && !clock->stop_error;
+}
+
+static bool earlier_sources_drained(const struct kosdec_adx_player *p,
+                                    const struct kosdec_adx_source_output *final) {
+    /* The caller has matched the final generation to the bounded lease
+       admissions. An empty final seal can succeed before earlier PCM drains. */
+    for(uint64_t generation = 1; generation < final->generation; ++generation) {
+        struct kosdec_adx_source_output prior;
+        if(!drained_source(p,generation,&prior) || prior.epoch != final->epoch ||
+           prior.session != final->session || prior.output_frames != final->output_frames ||
+           prior.observation_start_ms != final->observation_start_ms ||
+           prior.observation_end_ms != final->observation_end_ms)
+            return false;
+    }
+    return true;
+}
+
+static bool latch_playend(struct kosdec_adx_player *p) {
+    struct kosdec_adx_playend *end = &p->compat_playend;
+    if(!end->stop_timeout_ms || !p->source_bound || !end->epoch || !end->generation ||
+       end->generation != p->retained_admissions ||
+       p->info.source_generation != end->generation || !p->retained_sealed ||
+       p->info.first_error || p->callback_failed ||
+       p->compat_service->titles[p->compat_slot].faults)
+        return false;
+    for(unsigned slot = 0; slot < p->compat_service->capacity; ++slot)
+        if(slot != p->compat_slot && p->compat_service->titles[slot].ops.state)
+            return false;
+
+    struct kosdec_adx_pipe_result pipe = kosdec_adx_pipe_read(&p->producer.pipe,NULL,0);
+    uint32_t queued;
+    struct kosdec_adx_decode_progress progress;
+    if(!pipe.drained || pipe.producer != KOSDEC_ADX_DONE ||
+       !kosdec_adx_service_get_queue_count(&p->producer,&queued) || queued ||
+       kosdec_adx_service_get_decode_progress(&p->producer,&progress) < 0 ||
+       !progress.samples_complete || progress.status != KOSDEC_ADX_DONE ||
+       progress.sample_rate != p->info.sample_rate)
+        return false;
+    struct kosdec_adx_source_output clock;
+    if(!drained_source(p,end->generation,&clock) || !playend_identity(end,&clock) ||
+       clock.source_frames != p->info.source_frames || !earlier_sources_drained(p,&clock))
+        return false;
+
+    end->frames = progress.declared_frames;
+    end->rate = progress.sample_rate;
+    end->anchor = p->compat_vsync_anchor;
+    end->pending = true;
+    return true;
+}
+
+static int finish_playend(struct kosdec_adx_player *p) {
+    struct kosdec_adx_playend *end = &p->compat_playend;
+    struct kosdec_adx_source_output clock;
+    bool retrying = p->info.state == KOSDEC_ADX_PLAYER_STOPPING;
+    if(retrying) {
+        if(kosdec_adx_player_get_source_output(p,end->generation,&clock) < 0) {
+            end->pending = false;
+            return -1;
+        }
+        if(!playend_identity(end,&clock) || clock.output_error) {
+            end->pending = false;
+            errno = clock.output_error ? clock.output_error : ESTALE;
+            return -1;
+        }
+    }
+    if(stop_player(p,end->stop_timeout_ms) < 0) {
+        if(errno != ETIMEDOUT || p->info.first_error != ETIMEDOUT)
+            end->pending = false;
+        return -1;
+    }
+    end->pending = false;
+
+    if(kosdec_adx_player_get_source_output(p,end->generation,&clock) < 0)
+        return -1;
+    if(!playend_identity(end,&clock)) {
+        errno = ESTALE;
+        return -1;
+    }
+    if(!clock.software_stopped || clock.output_error || clock.stop_error) {
+        errno = clock.output_error ? clock.output_error : clock.stop_error ? clock.stop_error : EIO;
+        return -1;
+    }
+    if(p->info.first_error && !retrying) {
+        errno = p->info.first_error;
+        return -1;
+    }
+    end->completed = true;
+    return 0;
+}
+
+static int compat_dispatch(void *context, enum kosdec_adx_compat_state state) {
+    struct kosdec_adx_player *p = context;
+    if(state == KOSDEC_ADX_COMPAT_PLAYEND)
+        return 0;
+    if(p->compat_playend.pending)
+        return finish_playend(p);
+    if(p->info.state == KOSDEC_ADX_PLAYER_STOPPING) {
+        errno = p->info.stop_error ? p->info.stop_error : EBUSY;
+        return -1;
+    }
+    if(state != KOSDEC_ADX_COMPAT_DECINFO) {
+        if(poll_player(p) < 0) return -1;
+        if(state == KOSDEC_ADX_COMPAT_PLAYING && p->info.state == KOSDEC_ADX_PLAYER_PLAYING) {
+            struct kosdec_adx_decode_progress progress;
+            if(kosdec_adx_player_get_decode_progress(p,&progress) < 0)
+                return errno == EAGAIN ? 0 : failed(p,errno);
+            if(progress.samples_complete && progress.status <= KOSDEC_ADX_DONE) {
+                /* Read the queue after acquiring sample completion. Each channel
+                   has two bytes per pending frame. Continue submitting this tail. */
+                struct kosdec_adx_pipe_result pipe = kosdec_adx_pipe_read(&p->producer.pipe,NULL,0);
+                if(pipe.producer >= KOSDEC_ADX_INVALID)
+                    return failed(p,EIO);
+                if(pipe.queued_frames < 32 / sizeof(int16_t))
+                    p->compat_decode_ended = true;
+            }
+        }
+        return state == KOSDEC_ADX_COMPAT_DECEND &&
+            p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END && latch_playend(p) ? finish_playend(p) : 0;
+    }
+
+    struct kosdec_adx_decode_progress progress;
+    if(kosdec_adx_player_get_decode_progress(p,&progress) < 0)
+        return errno == EAGAIN ? prefill_wait(p) : failed(p,errno);
+    if(progress.status >= KOSDEC_ADX_INVALID)
+        return failed(p,EIO);
+
+    uint32_t rate = progress.sample_rate;
+    if(!rate && p->compat_chained) {
+        /* Validated chained records all share one format and cannot loop.
+           A producer between entries may already have staged this format. */
+        unsigned channels;
+        (void)kosdec_adx_pipe_get_format(&p->producer.pipe,&rate,&channels);
+    }
+    if(!rate)
+        return progress.status == KOSDEC_ADX_DONE ? failed(p,EPROTO) : prefill_wait(p);
+    uint32_t frames;
+    unsigned block = progress.block_frames ? progress.block_frames : 32;
+    if(kosdec_adx_compat_prefill(p->compat_service,p->compat_slot,rate,block,
+                                 progress.loop_present,&frames) < 0)
+        return failed(p,errno);
+    p->compat_block_frames = (uint8_t)block;
+    /* Publish the first reservation before releasing the header wait. */
+    __atomic_store_n(&p->compat_prefill_frames,frames,__ATOMIC_RELEASE);
+    if(wake_producer(p) < 0)
+        return failed(p,errno);
+    if(poll_title_output(p) < 0)
+        return failed(p,errno);
+    return p->callback_failed ? failed(p,p->info.first_error) : 0;
+}
+
+static int compat_observe(void *context, struct kosdec_adx_compat_observation *out) {
+    struct kosdec_adx_player *p = context;
+    struct kosdec_adx_decode_progress progress;
+    if(kosdec_adx_player_get_decode_progress(p,&progress) < 0)
+        return errno == EAGAIN ? 1 : -1;
+    *out = (struct kosdec_adx_compat_observation){
+        .decoded_position = progress.decoded_frames, .input_bytes = progress.input_bytes,
+        .decoder_done = progress.samples_complete, .paused = progress.paused || p->compat_paused
+    };
+    return 0;
+}
+
+static bool compat_transport_failed(void *context) {
+    const struct kosdec_adx_player *p = context;
+    if(!p->source_bound || p->info.state == KOSDEC_ADX_PLAYER_STOPPED)
+        return false;
+    enum kosdec_adx_status status = kosdec_adx_service_get_state(&p->producer).status;
+    if(status == KOSDEC_ADX_IO_ERROR)
+        return true;
+    if(status != KOSDEC_ADX_MORE || !p->compat_phased ||
+       p->info.state >= KOSDEC_ADX_PLAYER_RELEASING)
+        return false;
+
+    /* Only the phased owner may inspect read-ahead before the decoder
+       publishes a terminal error. Earlier staged bytes remain valid. */
+    const struct kosdec_adx_pipe *pipe = &p->producer.pipe;
+    const struct kosdec_adx_stream *stream = pipe->stream;
+    if(pipe->sequence && pipe->sequence->active)
+        stream = &pipe->sequence->reader;
+    if(!stream || stream->terminal || stream->staged_error != KOSDEC_ADX_IO_ERROR ||
+       (stream->linked && !stream->follow_links))
+        return false;
+    if(!stream->repeat)
+        return true;
+
+    /* Bytes at or beyond the repeat trap may never be used. */
+    uint32_t offset = stream->byte_position + (stream->input_count - stream->input_used);
+    return stream->prepared && offset < stream->decoder.loop.end_byte;
+}
+
+static enum kosdec_adx_status compat_decode(struct kosdec_adx_player *p) {
+    const struct kosdec_adx_pipe *pipe = &p->producer.pipe;
+    bool finite = !pipe->joint;
+    uint32_t remaining = p->compat_prefill_frames;
+    for(;;) {
+        struct kosdec_adx_stream_result result =
+            media_adx_service_step_limited(&p->producer,remaining,!p->compat_prefill_frames,true);
+        if(!finite || !result.frames || result.frames >= remaining || result.status != KOSDEC_ADX_MORE)
+            return result.status;
+        remaining -= (uint32_t)result.frames;
+    }
+}
+
+static int compat_player_phase(void *context, enum kosdec_adx_compat_phase phase) {
+    struct kosdec_adx_player *p = context;
+    enum kosdec_adx_player_state state = p->info.state;
+    if(state == KOSDEC_ADX_PLAYER_READY || state >= KOSDEC_ADX_PLAYER_RELEASING)
+        return 0;
+    if(phase == KOSDEC_ADX_COMPAT_RENDERER) {
+        if(!has_output(p))
+            return 0;
+        p->compat_renderer_ready = false;
+        int status = poll_output(p);
+        if(status < 0)
+            return failed(p,errno);
+        if(p->callback_failed)
+            return failed(p,p->info.first_error);
+        p->compat_renderer_ready = status > 0;
+        return status;
+    }
+    if(!p->source_bound)
+        return 0;
+    struct kosdec_adx_service_state producer = kosdec_adx_service_get_state(&p->producer);
+    if(producer.status >= KOSDEC_ADX_DONE)
+        return 0;
+    enum kosdec_adx_status status;
+    switch(phase) {
+    case KOSDEC_ADX_COMPAT_DECODER:
+        status = compat_decode(p);
+        break;
+    case KOSDEC_ADX_COMPAT_FILES:
+    case KOSDEC_ADX_COMPAT_STREAMS:
+    case KOSDEC_ADX_COMPAT_RELOAD: {
+        const struct kosdec_adx_pipe *pipe = &p->producer.pipe;
+        const struct kosdec_adx_joint_reader *joint = pipe->joint;
+        bool finite = !joint;
+        bool sector_source = joint && joint->sector.request.read_at;
+        bool serves_source = (phase == KOSDEC_ADX_COMPAT_FILES && finite) ||
+            (phase == KOSDEC_ADX_COMPAT_STREAMS && !finite) ||
+            (phase == KOSDEC_ADX_COMPAT_RELOAD && joint && joint->linked.loader);
+        if(!serves_source || producer.paused || (joint && joint->joint->sealed))
+            return 0;
+        /* Container providers share the ordinary reader's demand bound.
+           Do not surface a later read error while PCM already fills the ring. */
+        if(media_adx_pipe_has_container(pipe) &&
+           kosdec_adx_pipe_read(&p->producer.pipe,NULL,0).queued_frames == pipe->capacity)
+            return 0;
+        if(sector_source && joint->decoder.header_ready &&
+           joint->decoder.frames_done == joint->decoder.total_frames && !joint->job.trap)
+            return 0;
+        status = media_adx_service_step_transport(&p->producer,phase == KOSDEC_ADX_COMPAT_RELOAD);
+        break;
+    }
+    default:
+        return 0;
+    }
+    return status >= KOSDEC_ADX_INVALID ? failed(p,EIO) : 1;
+}
+
+enum compat_route_field {
+    COMPAT_ROUTE_DIRECT = 1,
+    COMPAT_ROUTE_EFFECT_LEVEL = 2,
+    COMPAT_ROUTE_EFFECT_BUS = 4
+};
+
+static void copy_route_fields(snd_channel_routing_t *to, const snd_channel_routing_t *from,
+                              unsigned fields) {
+    if(fields & COMPAT_ROUTE_DIRECT)
+        to->direct_level = from->direct_level;
+    if(fields & COMPAT_ROUTE_EFFECT_LEVEL)
+        to->effect_send = from->effect_send;
+    if(fields & COMPAT_ROUTE_EFFECT_BUS)
+        to->effect_channel = from->effect_channel;
+}
+
+static void remember_routing(struct kosdec_adx_player *p, unsigned fields) {
+    if(!p->compat_route_fields)
+        for(unsigned channel = 0; channel < 2; ++channel)
+            p->compat_original_routing[channel] = p->output.channel[channel].routing;
+    p->compat_route_fields |= fields;
+}
+
+static int compat_detach(void *context) {
+    struct kosdec_adx_player *p = context;
+    if(p->info.state != KOSDEC_ADX_PLAYER_READY && p->info.state != KOSDEC_ADX_PLAYER_STOPPED)
+        return busy();
+    p->compat_service = NULL;
+    p->compat_phased = false;
+    p->compat_ready_start = false;
+    p->compat_decode_ended = false;
+    p->compat_paused = false;
+    p->compat_preoutput_playing = false;
+    p->compat_requested_attenuation = 0;
+    p->compat_controls = (struct kosdec_adx_compat_controls){.effect_db = -45};
+    p->compat_start_rate = 0;
+    for(unsigned channel = 0; channel < 2; ++channel)
+        copy_route_fields(&p->output.channel[channel].routing,&p->compat_original_routing[channel],
+                          p->compat_route_fields);
+    p->compat_route_fields = 0;
+    p->compat_prefill_frames = 0;
+    p->compat_playend = (struct kosdec_adx_playend){0};
+    if(!p->decode_progress)
+        p->producer.progress_enabled = false;
+    return 0;
+}
+
+static int bind_compat_player(struct kosdec_adx_compat_service *service, unsigned slot,
+                              struct kosdec_adx_player *p, bool phased) {
+    if(!valid(p) || p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound)
+        return bad();
+    if(p->compat_service)
+        return busy();
+    const struct kosdec_adx_pipe *pipe = &p->producer.pipe;
+    if(phased && !phased_source(pipe))
+        return unsupported();
+
+    static const struct kosdec_adx_compat_title_ops ops = {
+        .state = compat_state, .dispatch = compat_dispatch, .observe = compat_observe,
+        .transport_failed = compat_transport_failed
+    };
+    if(kosdec_adx_compat_bind(service,slot,&ops,p) < 0)
+        return -1;
+    if(kosdec_adx_service_enable_decode_progress(&p->producer) < 0) {
+        int error = errno;
+        (void)kosdec_adx_compat_unbind(service,slot);
+        errno = error;
+        return -1;
+    }
+    service->titles[slot].detach = compat_detach;
+    service->titles[slot].service_phase = phased ? compat_player_phase : NULL;
+    p->compat_slot = slot;
+    p->compat_service = service;
+    p->compat_phased = phased;
+    return 0;
+}
+
+int kosdec_adx_compat_bind_player(struct kosdec_adx_compat_service *service, unsigned slot,
+                                 struct kosdec_adx_player *p) {
+    return bind_compat_player(service,slot,p,false);
+}
+
+int kosdec_adx_compat_bind_phased_player(struct kosdec_adx_compat_service *service, unsigned slot,
+                                        struct kosdec_adx_player *p) {
+    return bind_compat_player(service,slot,p,true);
+}
+
+int kosdec_adx_compat_player_is_ready_start(const struct kosdec_adx_player *p, bool *ready) {
+    if(!valid(p) || !ready) return bad();
+    if(!p->compat_service) return unsupported();
+    *ready = p->compat_ready_start;
+    return 0;
+}
+
+int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *p, uint32_t timeout_ms) {
+    if(!valid(p) || !timeout_ms) return bad();
+    bool first = p->info.state == KOSDEC_ADX_PLAYER_READY && !p->info.source_generation;
+    bool released = p->info.state == KOSDEC_ADX_PLAYER_IDLE && p->retained_sealed &&
+        p->info.source_generation == p->retained_admissions;
+    if(!first && !released) return bad();
+    if(!p->compat_service || !p->retained_offsets) return unsupported();
+    if(p->compat_service->servicing) return busy();
+    p->compat_playend.stop_timeout_ms = timeout_ms;
+    return 0;
+}
+
+int kosdec_adx_compat_player_get_state(const struct kosdec_adx_player *p,
+                                      enum kosdec_adx_compat_state *state) {
+    if(!valid(p) || !state) return bad();
+    if(!p->compat_service) return unsupported();
+    *state = player_compat_state(p);
+    return 0;
+}
+
+int kosdec_adx_compat_player_is_completed(const struct kosdec_adx_player *p, bool *completed) {
+    if(!valid(p) || !completed) return bad();
+    if(!p->compat_service) return unsupported();
+    *completed = p->compat_playend.completed;
+    return 0;
+}
+
+static int replace_compat(struct kosdec_adx_player *stopped, struct kosdec_adx_player *next,
+                          bool in_service) {
+    if(!valid(stopped) || !valid(next) || !stopped->compat_service ||
+       stopped->info.state != KOSDEC_ADX_PLAYER_STOPPED ||
+       next->info.state != KOSDEC_ADX_PLAYER_READY || !next->source_bound)
+        return bad();
+    struct kosdec_adx_compat_service *service = stopped->compat_service;
+    if(service->servicing != in_service || next->compat_service)
+        return busy();
+    bool phased = stopped->compat_phased;
+    const struct kosdec_adx_pipe *pipe = &next->producer.pipe;
+    if(phased && !phased_source(pipe))
+        return unsupported();
+    if(kosdec_adx_service_enable_decode_progress(&next->producer) < 0)
+        return -1;
+
+    unsigned slot = stopped->compat_slot;
+    /* Validation is complete. The collection retains the same occupied
+       slot, frequency and cadence clock throughout the handover. */
+    next->compat_ready_start = stopped->compat_ready_start;
+    next->compat_paused = stopped->compat_paused;
+    next->compat_requested_attenuation = stopped->compat_requested_attenuation;
+    next->compat_controls = stopped->compat_controls;
+    if(stopped->compat_route_fields && !next->retained_offsets) {
+        remember_routing(next,stopped->compat_route_fields);
+        for(unsigned channel = 0; channel < 2; ++channel)
+            copy_route_fields(&next->output.channel[channel].routing,&stopped->output.channel[channel].routing,
+                              stopped->compat_route_fields);
+    }
+    (void)compat_detach(stopped);
+    service->titles[slot].context = next;
+    next->compat_slot = slot;
+    next->compat_service = service;
+    next->compat_phased = phased;
+    return 0;
+}
+
+int media_adx_player_replace_compat(struct kosdec_adx_player *stopped,
+                                    struct kosdec_adx_player *next) {
+    return replace_compat(stopped,next,false);
+}
+
+int media_adx_player_replace_compat_in_service(struct kosdec_adx_player *stopped,
+                                               struct kosdec_adx_player *next) {
+    return replace_compat(stopped,next,true);
+}
+
+int media_adx_player_start_compat_in_service(struct kosdec_adx_player *p) {
+    if(!valid(p) || !in_phased_dispatch(p) ||
+       p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound)
+        return bad();
+    if(start_linked_loader(p,p->producer.pipe.joint) < 0)
+        return failed(p,errno);
+    return start_source(p);
+}
+
 #ifdef MEDIA_ADX_RETAINED_GAIN
 static uint8_t legacy_gain_tl(int32_t requested) {
     const unsigned magnitude = requested < -999 ? 999 : requested < 0 ? (unsigned)-requested : 0;
@@ -784,6 +1530,11 @@ static uint8_t legacy_gain_tl(int32_t requested) {
 }
 #endif
 
+static int16_t attenuation_halfword(int32_t requested) {
+    uint16_t raw = (uint16_t)requested;
+    return (int16_t)(raw <= INT16_MAX ? raw : (int32_t)raw - 65536);
+}
+
 int kosdec_adx_player_set_attenuation(struct kosdec_adx_player *p,
     int32_t tenths_db, uint64_t *request) {
     if(!valid(p) || !request) return bad();
@@ -796,8 +1547,7 @@ int kosdec_adx_player_set_attenuation(struct kosdec_adx_player *p,
     if(p->info.state >= KOSDEC_ADX_PLAYER_RELEASING) return bad();
     uint8_t tl = legacy_gain_tl(tenths_db);
     if(snd_retained_pcm_gain_begin(p->retained_pcm,tl,tl,request) < 0) return -1;
-    uint16_t raw = (uint16_t)tenths_db;
-    p->requested_attenuation = (int16_t)(raw <= INT16_MAX ? raw : (int32_t)raw - 65536);
+    p->requested_attenuation = attenuation_halfword(tenths_db);
     return 0;
 #else
     (void)tenths_db;
@@ -809,6 +1559,28 @@ int kosdec_adx_player_get_requested_attenuation(const struct kosdec_adx_player *
     int16_t *tenths_db) {
     if(!valid(p) || !tenths_db) return bad();
     *tenths_db = p->requested_attenuation;
+    return 0;
+}
+
+int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *p,
+    int32_t tenths_db, uint64_t *request) {
+    if(!valid(p) || !request) return bad();
+    if(!p->compat_service) return unsupported();
+    if(p->compat_service->servicing) return busy();
+    p->compat_requested_attenuation = attenuation_halfword(tenths_db);
+    if(p->info.state == KOSDEC_ADX_PLAYER_READY || p->info.state == KOSDEC_ADX_PLAYER_PREFILL ||
+       p->info.state == KOSDEC_ADX_PLAYER_STOPPED) {
+        *request = 0;
+        return 0;
+    }
+    return kosdec_adx_player_set_attenuation(p,tenths_db,request);
+}
+
+int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_player *p,
+    int16_t *tenths_db) {
+    if(!valid(p) || !tenths_db) return bad();
+    if(!p->compat_service) return unsupported();
+    *tenths_db = p->compat_requested_attenuation;
     return 0;
 }
 
@@ -839,6 +1611,116 @@ int kosdec_adx_player_get_attenuation_status(const struct kosdec_adx_player *p,
 #else
     return unsupported();
 #endif
+}
+
+static int32_t clamp_control(int32_t value, int32_t lo, int32_t hi) {
+    return value < lo ? lo : value > hi ? hi : value;
+}
+
+static uint8_t route_level(int32_t db, const int8_t minima[15]) {
+    uint8_t level = 0;
+    while(level < 15 && db >= minima[level])
+        ++level;
+    return level;
+}
+
+static int set_compat_routing(struct kosdec_adx_player *p, unsigned fields, int32_t bus, int32_t db) {
+    if(!valid(p) || bus < 0 || bus > 16) return bad();
+    if(!p->compat_service || p->retained_offsets) return unsupported();
+    if(p->compat_service->servicing ||
+       (p->info.state >= KOSDEC_ADX_PLAYER_RELEASING && p->info.state != KOSDEC_ADX_PLAYER_STOPPED))
+        return busy();
+
+    /* First whole-dB request attaining each 4-bit level. The FX response
+       crosses levels 1 and 2 at the same request. */
+    static const int8_t direct_minima[15] = {
+        -41, -40, -39, -37, -35, -33, -31, -29, -26, -23, -20, -17, -13, -9, -5
+    };
+    static const int8_t effect_minima[15] = {
+        -42, -42, -41, -39, -37, -35, -33, -30, -28, -25, -21, -18, -14, -10, -5
+    };
+    db = clamp_control(db,-45,0);
+    snd_channel_routing_t requested = {0};
+    if(fields & COMPAT_ROUTE_DIRECT)
+        requested.direct_level = route_level(db,direct_minima);
+    else
+        requested.effect_send = route_level(db,effect_minima);
+    requested.effect_channel = (uint8_t)(bus & 15);
+    snd_stream_config_t config = p->output;
+    for(unsigned channel = 0; channel < 2; ++channel)
+        copy_route_fields(&config.channel[channel].routing,&requested,fields);
+
+    bool live = p->sound != SND_STREAM_INVALID && p->info.state != KOSDEC_ADX_PLAYER_STOPPED;
+    int result = live ? snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_ROUTING) : 0;
+    if(fields & COMPAT_ROUTE_DIRECT)
+        p->compat_controls.direct_db = (int8_t)db;
+    if(fields & COMPAT_ROUTE_EFFECT_LEVEL)
+        p->compat_controls.effect_db = (int8_t)db;
+    if(fields & COMPAT_ROUTE_EFFECT_BUS)
+        p->compat_controls.effect_bus = (uint8_t)bus;
+    if(result < 0)
+        return failed(p,errno);
+    remember_routing(p,fields);
+    p->output = config;
+    return live ? KOSDEC_ADX_ROUTING_ADMITTED : KOSDEC_ADX_ROUTING_STAGED;
+}
+
+int kosdec_adx_compat_player_set_direct_level(struct kosdec_adx_player *p, int32_t db) {
+    return set_compat_routing(p,COMPAT_ROUTE_DIRECT,0,db);
+}
+int kosdec_adx_compat_player_get_direct_level(const struct kosdec_adx_player *p, int32_t *db) {
+    if(!valid(p) || !db) return bad();
+    if(!p->compat_service) return unsupported();
+    *db = p->compat_controls.direct_db;
+    return 0;
+}
+int kosdec_adx_compat_player_set_fx(struct kosdec_adx_player *p, int32_t bus, int32_t db) {
+    return set_compat_routing(p,COMPAT_ROUTE_EFFECT_BUS | COMPAT_ROUTE_EFFECT_LEVEL,bus,db);
+}
+int kosdec_adx_compat_player_set_fx_level(struct kosdec_adx_player *p, int32_t db) {
+    return set_compat_routing(p,COMPAT_ROUTE_EFFECT_LEVEL,0,db);
+}
+int kosdec_adx_compat_player_get_fx(const struct kosdec_adx_player *p, int32_t *bus, int32_t *db) {
+    if(!valid(p) || !bus || !db) return bad();
+    if(!p->compat_service) return unsupported();
+    *bus = p->compat_controls.effect_bus;
+    *db = p->compat_controls.effect_db;
+    return 0;
+}
+int kosdec_adx_compat_player_cache_transpose(struct kosdec_adx_player *p, int32_t semitones, int32_t cents) {
+    if(!valid(p)) return bad();
+    if(!p->compat_service) return unsupported();
+    if(p->compat_service->servicing) return busy();
+    p->compat_controls.transpose = (int8_t)clamp_control(semitones,-96,96);
+    p->compat_controls.detune = (int8_t)clamp_control(cents,-99,99);
+    return 0;
+}
+int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *p, int32_t *semitones, int32_t *cents) {
+    if(!valid(p) || !semitones || !cents) return bad();
+    if(!p->compat_service) return unsupported();
+    *semitones = p->compat_controls.transpose;
+    *cents = p->compat_controls.detune;
+    return 0;
+}
+int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *p,
+    int32_t semitones, int32_t cents) {
+    if(!valid(p)) return bad();
+    if(p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound ||
+       p->retained_offsets) return unsupported();
+    if(kosdec_adx_compat_player_cache_transpose(p,semitones,cents) < 0) return -1;
+
+    int units = 256 * p->compat_controls.transpose + (256 * p->compat_controls.detune) / 100;
+    if(units < -6399 || units > 6399) {
+        errno = ERANGE;
+        return -1;
+    }
+    switch(units) {
+    case -12 * 256: p->compat_start_rate = 22050; break;
+    case 0: p->compat_start_rate = 44100; break;
+    case 12 * 256: p->compat_start_rate = 88200; break;
+    default: return unsupported();
+    }
+    return 0;
 }
 
 int kosdec_adx_player_set_output(struct kosdec_adx_player *p,
@@ -969,6 +1851,24 @@ int kosdec_adx_player_dispatch_error(struct kosdec_adx_player *p) {
 }
 int kosdec_adx_player_stop(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     if(!valid(p) || !timeout_ms) return bad();
+    if(in_phased_dispatch(p)) return busy();
+    if(p->compat_service) {
+        struct kosdec_adx_recovery *recovery =
+            p->compat_service->titles[p->compat_slot].recovery;
+        if(recovery)
+            recovery->replay_pending = false;
+    }
+    p->compat_playend = (struct kosdec_adx_playend){0};
+    return stop_player(p,timeout_ms);
+}
+
+int media_adx_player_stop_compat_in_service(struct kosdec_adx_player *p, uint32_t timeout_ms) {
+    if(!valid(p) || !timeout_ms || !in_phased_dispatch(p)) return bad();
+    p->compat_playend = (struct kosdec_adx_playend){0};
+    return stop_player(p,timeout_ms);
+}
+
+static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     if(p->info.state == KOSDEC_ADX_PLAYER_STOPPED) return 0;
     if(p->info.state != KOSDEC_ADX_PLAYER_STOPPING) {
         /* DMA can fail after the last poll. Checked stop clears driver errors:
@@ -1004,7 +1904,7 @@ int kosdec_adx_player_stop(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     p->info.state = KOSDEC_ADX_PLAYER_STOPPING;
     p->pcm_enabled = false;
     p->info.ready_start = false;
-    if(p->source_bound) kosdec_adx_service_request_cancel(&p->producer);
+    if(p->source_bound) cancel_producer(p);
     if(p->worker) fiber_service_request_stop(p->worker);
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(p->retained_pcm && !p->retained_stopped) {

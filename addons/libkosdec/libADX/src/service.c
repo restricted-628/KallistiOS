@@ -1,10 +1,21 @@
 /* Original single-controller command exchange over the PCM producer. */
 #include "adx_service_internal.h"
+#include "adx_container_internal.h"
+#include "adx_joint_reader_internal.h"
+#include "adx_stream_internal.h"
 #include <kosdec/adx_loader.h>
+#include <errno.h>
 #include <string.h>
 #define SERVICE_MAGIC UINT32_C(0x41445856)
 enum { EMPTY, WRITING, PENDING, COMPLETE, CLOSED = 4 };
 enum { PAUSED, RUNNING, TERMINAL_BASE };
+
+#define PROGRESS_SAMPLES_COMPLETE UINT32_C(0x80000000)
+#define PROGRESS_LOOP UINT32_C(0x40000000)
+#define PROGRESS_FRAME_BLOCK UINT32_C(0x20000000)
+#define PROGRESS_PACKED_BLOCK UINT32_C(0x10000000)
+#define PROGRESS_FLAGS (PROGRESS_LOOP | PROGRESS_FRAME_BLOCK | PROGRESS_PACKED_BLOCK | \
+                        PROGRESS_SAMPLES_COMPLETE)
 _Static_assert(__GCC_ATOMIC_INT_LOCK_FREE == 2, "lock-free controls required");
 static bool valid(const struct kosdec_adx_service *s) {
     return s && s->magic == SERVICE_MAGIC;
@@ -22,6 +33,35 @@ static bool follow_links(const struct kosdec_adx_pipe *pipe) {
 static const struct kosdec_adx_joint *input_joint(const struct kosdec_adx_pipe *pipe) {
     return pipe->joint ? pipe->joint->joint : NULL;
 }
+struct container_progress {
+    uint32_t rate, position, declared, bytes;
+    unsigned block_frames;
+};
+
+static struct container_progress container_progress(const struct kosdec_adx_pipe *pipe) {
+    if(pipe->wave && pipe->wave->header_ready && !pipe->wave->seeking) {
+        const struct kosdec_adx_wave *w = pipe->wave;
+        return (struct container_progress){w->info.sample_rate, w->frames_done,
+            w->info.total_frames, w->used - w->input_pos, w->info.sample_bits == 4 ? 4u : 1u};
+    }
+    if(pipe->aiff && pipe->aiff->header_ready) {
+        const struct kosdec_adx_aiff *a = pipe->aiff;
+        return (struct container_progress){a->info.sample_rate, a->frames_done,
+            a->info.total_frames, a->used - a->input_pos, 1};
+    }
+    if(pipe->au && pipe->au->header_ready) {
+        const struct kosdec_adx_au *a = pipe->au;
+        return (struct container_progress){a->info.sample_rate, a->frames_done,
+            a->info.total_frames, a->used - a->input_pos, 1};
+    }
+    if(pipe->spsd && pipe->spsd->header_ready) {
+        const struct kosdec_adx_spsd *a = pipe->spsd;
+        return (struct container_progress){a->info.sample_rate, a->frames_done,
+            a->info.total_frames, a->used - a->input_pos, 1};
+    }
+    return (struct container_progress){0};
+}
+
 static uint32_t input_snapshot(const struct kosdec_adx_pipe *pipe) {
     const struct kosdec_adx_joint *joint = input_joint(pipe);
     const struct kosdec_adx_stream *stream = pipe->stream;
@@ -36,8 +76,11 @@ static uint32_t input_snapshot(const struct kosdec_adx_pipe *pipe) {
         ready = ready && stream->prepared && !stream->seeking &&
                 (!pipe->sequence || pipe->sequence->admitted);
     }
-    else
-        return 0;
+    else {
+        struct container_progress progress = container_progress(pipe);
+        bytes = progress.bytes;
+        ready = ready && progress.block_frames;
+    }
     return bytes | (ready ? MEDIA_ADX_INPUT_FORMAT_READY : 0);
 }
 enum kosdec_adx_status kosdec_adx_service_init(struct kosdec_adx_service *s,
@@ -50,7 +93,7 @@ enum kosdec_adx_status kosdec_adx_service_init(struct kosdec_adx_service *s,
     if(result == KOSDEC_ADX_MORE) {
         initial.queued_sources=sequence?sequence->count:0;
         initial.link_enabled=stream && stream->linked && stream->follow_links;
-        initial.input_capacity = sizeof(stream->input);
+        initial.input_capacity = MEDIA_ADX_READ_CHUNK;
         initial.input_data = input_snapshot(&initial.pipe);
         *s = initial;
     }
@@ -80,7 +123,11 @@ enum kosdec_adx_status kosdec_adx_service_init_wave(struct kosdec_adx_service *s
     struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
     enum kosdec_adx_status result = kosdec_adx_pipe_init_wave(&initial.pipe,
         wave, pcm, samples, capacity);
-    if(result == KOSDEC_ADX_MORE) *s = initial;
+    if(result == KOSDEC_ADX_MORE) {
+        initial.input_capacity = sizeof(wave->buffer);
+        initial.input_data = input_snapshot(&initial.pipe);
+        *s = initial;
+    }
     return result;
 }
 enum kosdec_adx_status kosdec_adx_service_init_au(struct kosdec_adx_service *s,
@@ -89,7 +136,11 @@ enum kosdec_adx_status kosdec_adx_service_init_au(struct kosdec_adx_service *s,
     struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
     enum kosdec_adx_status result = kosdec_adx_pipe_init_au(&initial.pipe,
         au, pcm, samples, capacity);
-    if(result == KOSDEC_ADX_MORE) *s = initial;
+    if(result == KOSDEC_ADX_MORE) {
+        initial.input_capacity = sizeof(au->buffer);
+        initial.input_data = input_snapshot(&initial.pipe);
+        *s = initial;
+    }
     return result;
 }
 enum kosdec_adx_status kosdec_adx_service_init_aiff(struct kosdec_adx_service *s,
@@ -98,7 +149,11 @@ enum kosdec_adx_status kosdec_adx_service_init_aiff(struct kosdec_adx_service *s
     struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
     enum kosdec_adx_status result = kosdec_adx_pipe_init_aiff(&initial.pipe,
         aiff, pcm, samples, capacity);
-    if(result == KOSDEC_ADX_MORE) *s = initial;
+    if(result == KOSDEC_ADX_MORE) {
+        initial.input_capacity = sizeof(aiff->buffer);
+        initial.input_data = input_snapshot(&initial.pipe);
+        *s = initial;
+    }
     return result;
 }
 enum kosdec_adx_status kosdec_adx_service_init_spsd(struct kosdec_adx_service *s,
@@ -107,7 +162,11 @@ enum kosdec_adx_status kosdec_adx_service_init_spsd(struct kosdec_adx_service *s
     struct kosdec_adx_service initial = {.magic = SERVICE_MAGIC};
     enum kosdec_adx_status result = kosdec_adx_pipe_init_spsd(&initial.pipe,
         spsd, pcm, samples, capacity);
-    if(result == KOSDEC_ADX_MORE) *s = initial;
+    if(result == KOSDEC_ADX_MORE) {
+        initial.input_capacity = sizeof(spsd->buffer);
+        initial.input_data = input_snapshot(&initial.pipe);
+        *s = initial;
+    }
     return result;
 }
 struct kosdec_adx_service_state kosdec_adx_service_get_state(
@@ -131,9 +190,138 @@ bool kosdec_adx_service_get_linked(const struct kosdec_adx_service *s,bool *enab
     *enabled=__atomic_load_n(&s->link_enabled,__ATOMIC_ACQUIRE)!=0;
     return true;
 }
-static void publish_controls(struct kosdec_adx_service *s) {
-    if(s->input_capacity)
-        __atomic_store_n(&s->input_data,input_snapshot(&s->pipe),__ATOMIC_RELEASE);
+static void publish_progress(struct kosdec_adx_service *s, uint32_t data,
+                             size_t emitted, uint32_t state) {
+    const struct kosdec_adx_pipe *pipe = &s->pipe;
+    const struct kosdec_adx_joint_reader *joint = pipe->joint;
+    const struct kosdec_adx_sequence *sequence = pipe->sequence;
+    const struct kosdec_adx_stream *stream = pipe->stream;
+    const struct kosdec_adx_decoder *decoder = NULL;
+    const bool done = state == TERMINAL_BASE + KOSDEC_ADX_DONE;
+    bool final_record = false;
+    uint32_t position = 0;
+    if(joint) {
+        position = joint->decoder.frames_done;
+        if(joint->decoder.header_ready && !joint->linked.scan_active) {
+            decoder = &joint->decoder;
+            final_record = (!joint->sfa_live || joint->sfa_length_known) &&
+                           !joint->job.trap && !joint->linked.enabled;
+        }
+    } else {
+        if(sequence && (sequence->active || (done && sequence->completed_entries)))
+            stream = &sequence->reader;
+        if(stream) {
+            position = stream->source_frame;
+            if(stream->prepared && !stream->seeking && (!sequence || sequence->admitted || done)) {
+                decoder = &stream->decoder;
+                final_record = !stream->repeat && !stream->linked && !sequence;
+            }
+        }
+    }
+
+    uint32_t rate = 0, declared = 0;
+    if(decoder) {
+        rate = decoder->sample_rate;
+        declared = decoder->total_frames;
+        if(decoder->loop.present)
+            state |= PROGRESS_LOOP;
+    } else if(media_adx_pipe_has_container(pipe)) {
+        struct container_progress progress = container_progress(pipe);
+        rate = progress.rate;
+        position = progress.position;
+        declared = progress.declared;
+        final_record = progress.block_frames != 0;
+        if(progress.block_frames == 4)
+            state |= PROGRESS_PACKED_BLOCK;
+        else if(progress.block_frames == 1)
+            state |= PROGRESS_FRAME_BLOCK;
+    }
+    if(done || (final_record && position == declared))
+        state |= PROGRESS_SAMPLES_COMPLETE;
+    uint32_t frames = __atomic_load_n(&s->progress_frames,__ATOMIC_RELAXED) + (uint32_t)emitted;
+    uint32_t epoch = __atomic_load_n(&s->progress_epoch,__ATOMIC_RELAXED);
+
+    /* Only the opted-in producer writes. All snapshot words and both epoch
+       markers share the sequentially consistent order. A preempted writer
+       cannot make a higher-priority reader spin. */
+    __atomic_store_n(&s->progress_epoch,epoch + 1,__ATOMIC_SEQ_CST);
+    __atomic_store_n(&s->input_data,data,__ATOMIC_SEQ_CST);
+    __atomic_store_n(&s->progress_frames,frames,__ATOMIC_SEQ_CST);
+    __atomic_store_n(&s->progress_position,position,__ATOMIC_SEQ_CST);
+    __atomic_store_n(&s->progress_format,rate,__ATOMIC_SEQ_CST);
+    __atomic_store_n(&s->progress_declared_frames,declared,__ATOMIC_SEQ_CST);
+    __atomic_store_n(&s->progress_state,state,__ATOMIC_SEQ_CST);
+    __atomic_store_n(&s->progress_epoch,epoch + 2,__ATOMIC_SEQ_CST);
+}
+
+int kosdec_adx_service_enable_decode_progress(struct kosdec_adx_service *s) {
+    if(!valid(s) || !kosdec_adx_service_get_state(s).paused) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!s->input_capacity) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if(!s->progress_enabled) {
+        publish_progress(s,input_snapshot(&s->pipe),0,PAUSED);
+        s->progress_enabled = true;
+    }
+    return 0;
+}
+
+int kosdec_adx_service_get_decode_progress(const struct kosdec_adx_service *s,
+                                          struct kosdec_adx_decode_progress *out) {
+    if(!valid(s) || !out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!s->progress_enabled) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    uint32_t epoch = __atomic_load_n(&s->progress_epoch,__ATOMIC_SEQ_CST);
+    if(epoch & 1u) {
+        errno = EAGAIN;
+        return -1;
+    }
+    uint32_t frames = __atomic_load_n(&s->progress_frames,__ATOMIC_SEQ_CST);
+    uint32_t position = __atomic_load_n(&s->progress_position,__ATOMIC_SEQ_CST);
+    uint32_t rate = __atomic_load_n(&s->progress_format,__ATOMIC_SEQ_CST);
+    uint32_t declared = __atomic_load_n(&s->progress_declared_frames,__ATOMIC_SEQ_CST);
+    uint32_t state = __atomic_load_n(&s->progress_state,__ATOMIC_SEQ_CST);
+    uint32_t data = __atomic_load_n(&s->input_data,__ATOMIC_SEQ_CST);
+    if(__atomic_load_n(&s->progress_epoch,__ATOMIC_SEQ_CST) != epoch) {
+        errno = EAGAIN;
+        return -1;
+    }
+    uint32_t status = state & ~PROGRESS_FLAGS;
+    *out = (struct kosdec_adx_decode_progress){
+        .decoded_frames = frames, .source_frame = position,
+        .input_bytes = data & ~MEDIA_ADX_INPUT_FORMAT_READY,
+        .sample_rate = rate,
+        .status = status < TERMINAL_BASE ? KOSDEC_ADX_MORE :
+                  (enum kosdec_adx_status)(status - TERMINAL_BASE),
+        .loop_present = (state & PROGRESS_LOOP) != 0, .paused = status == PAUSED,
+        .samples_complete = (state & PROGRESS_SAMPLES_COMPLETE) != 0,
+        .declared_frames = declared,
+        .block_frames = !rate ? 0 : state & PROGRESS_PACKED_BLOCK ? 4 :
+                        state & PROGRESS_FRAME_BLOCK ? 1 : 32
+    };
+    return 0;
+}
+
+static void publish_controls(struct kosdec_adx_service *s, struct kosdec_adx_stream_result result) {
+    if(s->input_capacity) {
+        uint32_t data = input_snapshot(&s->pipe);
+        if(s->progress_enabled) {
+            uint32_t state = result.status >= KOSDEC_ADX_DONE ? TERMINAL_BASE + result.status :
+                             __atomic_load_n(&s->state,__ATOMIC_RELAXED);
+            publish_progress(s,data,result.frames,state);
+        } else {
+            __atomic_store_n(&s->input_data,data,__ATOMIC_RELEASE);
+        }
+    }
     __atomic_store_n(&s->queued_sources,queued_sources(&s->pipe),__ATOMIC_RELEASE);
     __atomic_store_n(&s->link_enabled,follow_links(&s->pipe),__ATOMIC_RELEASE);
 }
@@ -234,7 +422,41 @@ static enum kosdec_adx_status apply(struct kosdec_adx_service *s) {
     }
     return KOSDEC_ADX_BAD_ARGUMENT;
 }
-struct kosdec_adx_stream_result kosdec_adx_service_step(struct kosdec_adx_service *s) {
+static void publish_step(struct kosdec_adx_service *s, struct kosdec_adx_stream_result r) {
+    publish_controls(s,r);
+    if(r.status >= KOSDEC_ADX_DONE) {
+        __atomic_store_n(&s->state, TERMINAL_BASE + r.status, __ATOMIC_RELEASE);
+        __atomic_fetch_or(&s->mailbox, CLOSED, __ATOMIC_RELEASE);
+    }
+}
+
+enum kosdec_adx_status media_adx_service_step_transport(struct kosdec_adx_service *s, bool reload) {
+    struct kosdec_adx_joint_reader *joint = s->pipe.joint;
+    struct kosdec_adx_stream_result r = {0};
+    if(s->pipe.stream)
+        r.status = media_adx_stream_step_file(s->pipe.stream);
+    else if(s->pipe.sequence)
+        r.status = media_adx_sequence_step_file(s->pipe.sequence);
+    else if(s->pipe.wave)
+        r.status = media_adx_wave_step_file(s->pipe.wave);
+    else if(s->pipe.aiff)
+        r.status = media_adx_aiff_step_file(s->pipe.aiff);
+    else if(s->pipe.au)
+        r.status = media_adx_au_step_file(s->pipe.au);
+    else if(s->pipe.spsd)
+        r.status = media_adx_spsd_step_file(s->pipe.spsd);
+    else if(joint->sector.request.read_at)
+        r.status = media_adx_joint_sector_step_stream(joint);
+    else
+        r.status = media_adx_joint_reader_step_loader(joint,reload);
+    if(r.status >= KOSDEC_ADX_DONE)
+        __atomic_store_n(&s->pipe.terminal,r.status,__ATOMIC_RELEASE);
+    publish_step(s,r);
+    return r.status;
+}
+
+struct kosdec_adx_stream_result media_adx_service_step_limited(
+    struct kosdec_adx_service *s, size_t frame_limit, bool await_format_admission, bool separate_transport) {
     struct kosdec_adx_stream_result r = {KOSDEC_ADX_BAD_ARGUMENT, 0};
     if(!valid(s)) return r;
     struct kosdec_adx_service_state state = kosdec_adx_service_get_state(s);
@@ -246,16 +468,19 @@ struct kosdec_adx_stream_result kosdec_adx_service_step(struct kosdec_adx_servic
     }
     else if(__atomic_load_n(&s->mailbox, __ATOMIC_ACQUIRE) == PENDING) {
         s->reply = apply(s);
-        publish_controls(s);
+        publish_controls(s,r);
         __atomic_store_n(&s->mailbox, COMPLETE, __ATOMIC_RELEASE);
         return r;
     }
     else if(state.paused) return r;
-    else r = kosdec_adx_pipe_pump(&s->pipe);
-    publish_controls(s);
-    if(r.status >= KOSDEC_ADX_DONE) {
-        __atomic_store_n(&s->state, TERMINAL_BASE + r.status, __ATOMIC_RELEASE);
-        __atomic_fetch_or(&s->mailbox, CLOSED, __ATOMIC_RELEASE);
+    else if(await_format_admission && __atomic_load_n(&s->progress_format,__ATOMIC_RELAXED)) {
+        r.status = KOSDEC_ADX_NEED_OUTPUT;
+        return r;
     }
+    else r = media_adx_pipe_pump_limited(&s->pipe,frame_limit,separate_transport);
+    publish_step(s,r);
     return r;
+}
+struct kosdec_adx_stream_result kosdec_adx_service_step(struct kosdec_adx_service *s) {
+    return media_adx_service_step_limited(s,0,false,false);
 }

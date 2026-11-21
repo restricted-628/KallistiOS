@@ -809,8 +809,8 @@ capture and physical-device retirement remain distinct evidence levels.
 The predictor uses float Q16 histories within each fixed logical channel group;
 histories quantize on group return, independently of input fragmentation.
 The single-pass codec never decodes padding; the resident reader uses full groups
-as described above. Version 3 through 44100 Hz uses the rounded Dreamcast
-2.00J setup model. Version 5 and higher-rate v3 extensions use the certified
+as described above. Versions 3 and 5 through 44100 Hz use the rounded Dreamcast
+2.00J setup model. Higher-rate extensions use the certified
 exact-real setup. All admit integer cutoffs 0..floor(rate/2) within the
 supported sample-rate range.
 The original 500 Hz pairs remain `{7334, -3283}` for 44100 Hz and

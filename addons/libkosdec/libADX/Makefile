@@ -27,19 +27,22 @@ HOST_CFLAGS ?= -O2
 SAN_CFLAGS ?= -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 STRICT = -std=gnu17 -Wall -Wextra -Werror -fno-fast-math -ffp-contract=off -fno-lto
 INCLUDES = -Iinclude -isystem $(SHZ_INCLUDE)
-NAMES = sfa source loader spsd aiff au wave request partition amplitude joint joint_reader joint_sector decoder adx_math adx_setup memory stream index sequence pipe service
-SH_OBJS = $(BUILD)/sh4/recovery.o $(BUILD)/sh4/group.o $(BUILD)/sh4/files.o $(BUILD)/sh4/named_file.o $(BUILD)/sh4/player.o $(BUILD)/sh4/disc.o $(BUILD)/sh4/file.o $(addprefix $(BUILD)/sh4/,$(addsuffix .o,$(NAMES)))
+NAMES = container compat_service compat_file sfa source loader spsd aiff au wave request partition amplitude joint joint_reader joint_sector decoder adx_math adx_setup memory stream index sequence pipe service
+SH_OBJS = $(BUILD)/sh4/recovery.o $(BUILD)/sh4/compat_recovery.o $(BUILD)/sh4/group.o $(BUILD)/sh4/files.o $(BUILD)/sh4/named_file.o $(BUILD)/sh4/player.o $(BUILD)/sh4/disc.o $(BUILD)/sh4/file.o $(addprefix $(BUILD)/sh4/,$(addsuffix .o,$(NAMES)))
 HOST_OBJS = $(addprefix $(BUILD)/host-test/,$(addsuffix .o,$(NAMES)))
 SAN_OBJS = $(addprefix $(BUILD)/sanitize/,$(addsuffix .o,$(NAMES)))
-HEADERS = src/adx_decoder_internal.h src/adx_joint_internal.h src/adx_joint_reader_internal.h include/kosdec/adx_sfa.h include/kosdec/adx_recovery.h include/kosdec/adx_group.h include/kosdec/adx_files.h include/kosdec/adx_source.h include/kosdec/adx_named_file.h include/kosdec/adx_loader.h include/kosdec/adx_spsd.h include/kosdec/adx_aiff.h include/kosdec/adx_au.h include/kosdec/adx_partition.h include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_filter.h src/adx_setup_table.h src/adx_rounded_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
+HEADERS = src/adx_container_internal.h src/adx_stream_internal.h src/adx_recovery_internal.h src/adx_service_internal.h include/kosdec/adx_compat_service.h include/kosdec/adx_compat_file.h src/adx_decoder_internal.h src/adx_joint_internal.h src/adx_joint_reader_internal.h include/kosdec/adx_sfa.h include/kosdec/adx_recovery.h include/kosdec/adx_group.h include/kosdec/adx_files.h include/kosdec/adx_source.h include/kosdec/adx_named_file.h include/kosdec/adx_loader.h include/kosdec/adx_spsd.h include/kosdec/adx_aiff.h include/kosdec/adx_au.h include/kosdec/adx_partition.h include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_filter.h src/adx_setup_table.h src/adx_rounded_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
 
 .PHONY: sh4 test sanitize install clean
 sh4: $(BUILD)/sh4/libADX.a
-test: $(BUILD)/host-test/recovery_player $(BUILD)/host-test/sfa $(BUILD)/host-test/recovery $(BUILD)/host-test/linked $(BUILD)/host-test/group $(BUILD)/host-test/files $(BUILD)/host-test/source $(BUILD)/host-test/player_error $(BUILD)/host-test/input_policy $(BUILD)/host-test/clipped_history $(BUILD)/host-test/named_file $(BUILD)/host-test/named_player $(BUILD)/host-test/pan $(BUILD)/host-test/loader $(BUILD)/host-test/start_gate $(BUILD)/host-test/spsd $(BUILD)/host-test/spsd_player $(BUILD)/host-test/wave4 $(BUILD)/host-test/aiff_player $(BUILD)/host-test/aiff $(BUILD)/host-test/au_player $(BUILD)/host-test/au $(BUILD)/host-test/wave_player $(BUILD)/host-test/wave $(BUILD)/host-test/request_joint $(BUILD)/host-test/request $(BUILD)/host-test/partition_overlay $(BUILD)/host-test/partition $(BUILD)/host-test/silence $(BUILD)/host-test/amplitude $(BUILD)/host-test/loop_count $(BUILD)/host-test/joint_player $(BUILD)/host-test/joint_reader $(BUILD)/host-test/joint_queue $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
+test: $(BUILD)/host-test/recovery_player $(BUILD)/host-test/sfa $(BUILD)/host-test/recovery $(BUILD)/host-test/linked $(BUILD)/host-test/compat_container $(BUILD)/host-test/compat_service $(BUILD)/host-test/compat_file $(BUILD)/host-test/group $(BUILD)/host-test/files $(BUILD)/host-test/source $(BUILD)/host-test/player_error $(BUILD)/host-test/input_policy $(BUILD)/host-test/clipped_history $(BUILD)/host-test/named_file $(BUILD)/host-test/named_player $(BUILD)/host-test/pan $(BUILD)/host-test/loader $(BUILD)/host-test/start_gate $(BUILD)/host-test/spsd $(BUILD)/host-test/spsd_player $(BUILD)/host-test/wave4 $(BUILD)/host-test/aiff_player $(BUILD)/host-test/aiff $(BUILD)/host-test/au_player $(BUILD)/host-test/au $(BUILD)/host-test/wave_player $(BUILD)/host-test/wave $(BUILD)/host-test/request_joint $(BUILD)/host-test/request $(BUILD)/host-test/partition_overlay $(BUILD)/host-test/partition $(BUILD)/host-test/silence $(BUILD)/host-test/amplitude $(BUILD)/host-test/loop_count $(BUILD)/host-test/joint_player $(BUILD)/host-test/joint_reader $(BUILD)/host-test/joint_queue $(BUILD)/host-test/joint $(BUILD)/host-test/filter $(BUILD)/host-test/initialization $(BUILD)/host-test/query $(BUILD)/host-test/file_player $(BUILD)/host-test/setup $(BUILD)/host-test/expanded $(BUILD)/host-test/seek $(BUILD)/host-test/player $(BUILD)/host-test/service $(BUILD)/host-test/pipe $(BUILD)/host-test/sequence $(BUILD)/host-test/disc $(BUILD)/host-test/rates $(BUILD)/host-test/index $(BUILD)/host-test/stream $(BUILD)/host-test/file $(BUILD)/host-test/memory $(BUILD)/host-test/framing $(BUILD)/host-test/profiles $(BUILD)/host-test/loop_metadata
 	$(BUILD)/host-test/sfa
 	$(BUILD)/host-test/recovery_player
 	$(BUILD)/host-test/recovery
 	$(BUILD)/host-test/linked
+	$(BUILD)/host-test/compat_container
+	$(BUILD)/host-test/compat_service
+	$(BUILD)/host-test/compat_file
 	$(BUILD)/host-test/group
 	$(BUILD)/host-test/files
 	$(BUILD)/host-test/source
@@ -91,11 +94,14 @@ test: $(BUILD)/host-test/recovery_player $(BUILD)/host-test/sfa $(BUILD)/host-te
 	$(BUILD)/host-test/framing
 	$(BUILD)/host-test/profiles
 	$(BUILD)/host-test/loop_metadata
-sanitize: $(BUILD)/sanitize/recovery_player $(BUILD)/sanitize/sfa $(BUILD)/sanitize/recovery $(BUILD)/sanitize/linked $(BUILD)/sanitize/group $(BUILD)/sanitize/files $(BUILD)/sanitize/source $(BUILD)/sanitize/player_error $(BUILD)/sanitize/input_policy $(BUILD)/sanitize/clipped_history $(BUILD)/sanitize/named_file $(BUILD)/sanitize/named_player $(BUILD)/sanitize/pan $(BUILD)/sanitize/loader $(BUILD)/sanitize/start_gate $(BUILD)/sanitize/spsd $(BUILD)/sanitize/spsd_player $(BUILD)/sanitize/wave4 $(BUILD)/sanitize/aiff_player $(BUILD)/sanitize/aiff $(BUILD)/sanitize/au_player $(BUILD)/sanitize/au $(BUILD)/sanitize/wave_player $(BUILD)/sanitize/wave $(BUILD)/sanitize/request_joint $(BUILD)/sanitize/request $(BUILD)/sanitize/partition_overlay $(BUILD)/sanitize/partition $(BUILD)/sanitize/silence $(BUILD)/sanitize/amplitude $(BUILD)/sanitize/loop_count $(BUILD)/sanitize/joint_player $(BUILD)/sanitize/joint_reader $(BUILD)/sanitize/joint_queue $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
+sanitize: $(BUILD)/sanitize/recovery_player $(BUILD)/sanitize/sfa $(BUILD)/sanitize/recovery $(BUILD)/sanitize/linked $(BUILD)/sanitize/compat_container $(BUILD)/sanitize/compat_service $(BUILD)/sanitize/compat_file $(BUILD)/sanitize/group $(BUILD)/sanitize/files $(BUILD)/sanitize/source $(BUILD)/sanitize/player_error $(BUILD)/sanitize/input_policy $(BUILD)/sanitize/clipped_history $(BUILD)/sanitize/named_file $(BUILD)/sanitize/named_player $(BUILD)/sanitize/pan $(BUILD)/sanitize/loader $(BUILD)/sanitize/start_gate $(BUILD)/sanitize/spsd $(BUILD)/sanitize/spsd_player $(BUILD)/sanitize/wave4 $(BUILD)/sanitize/aiff_player $(BUILD)/sanitize/aiff $(BUILD)/sanitize/au_player $(BUILD)/sanitize/au $(BUILD)/sanitize/wave_player $(BUILD)/sanitize/wave $(BUILD)/sanitize/request_joint $(BUILD)/sanitize/request $(BUILD)/sanitize/partition_overlay $(BUILD)/sanitize/partition $(BUILD)/sanitize/silence $(BUILD)/sanitize/amplitude $(BUILD)/sanitize/loop_count $(BUILD)/sanitize/joint_player $(BUILD)/sanitize/joint_reader $(BUILD)/sanitize/joint_queue $(BUILD)/sanitize/joint $(BUILD)/sanitize/filter $(BUILD)/sanitize/initialization $(BUILD)/sanitize/query $(BUILD)/sanitize/file_player $(BUILD)/sanitize/setup $(BUILD)/sanitize/expanded $(BUILD)/sanitize/seek $(BUILD)/sanitize/player $(BUILD)/sanitize/service $(BUILD)/sanitize/pipe $(BUILD)/sanitize/sequence $(BUILD)/sanitize/disc $(BUILD)/sanitize/rates $(BUILD)/sanitize/index $(BUILD)/sanitize/stream $(BUILD)/sanitize/file $(BUILD)/sanitize/memory $(BUILD)/sanitize/framing $(BUILD)/sanitize/profiles $(BUILD)/sanitize/loop_metadata
 	$(BUILD)/sanitize/sfa
 	$(BUILD)/sanitize/recovery_player
 	$(BUILD)/sanitize/recovery
 	$(BUILD)/sanitize/linked
+	$(BUILD)/sanitize/compat_container
+	$(BUILD)/sanitize/compat_service
+	$(BUILD)/sanitize/compat_file
 	$(BUILD)/sanitize/group
 	$(BUILD)/sanitize/files
 	$(BUILD)/sanitize/source
@@ -185,10 +191,11 @@ $(BUILD)/sanitize/loop_metadata: tests/loop_metadata.c tests/profile_vectors.h $
 install: sh4
 	@test -n "$(PREFIX)" || { echo 'Set PREFIX to the destination addon directory'; exit 1; }
 	install -d "$(DESTDIR)$(PREFIX)/include/kosdec" "$(DESTDIR)$(PREFIX)/lib/dreamcast"
-	install -m 644 include/kosdec/adx_sfa.h include/kosdec/adx_recovery.h include/kosdec/adx_group.h include/kosdec/adx_files.h include/kosdec/adx_source.h include/kosdec/adx_named_file.h include/kosdec/adx_loader.h include/kosdec/adx_spsd.h include/kosdec/adx_aiff.h include/kosdec/adx_au.h include/kosdec/adx_wave.h include/kosdec/adx_request.h include/kosdec/adx_partition.h include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_disc.h include/kosdec/adx.h include/kosdec/adx_memory.h include/kosdec/adx_stream.h include/kosdec/adx_file.h include/kosdec/adx_index.h "$(DESTDIR)$(PREFIX)/include/kosdec/"
+	install -m 644 include/kosdec/adx_compat_service.h include/kosdec/adx_compat_file.h include/kosdec/adx_sfa.h include/kosdec/adx_recovery.h include/kosdec/adx_group.h include/kosdec/adx_files.h include/kosdec/adx_source.h include/kosdec/adx_named_file.h include/kosdec/adx_loader.h include/kosdec/adx_spsd.h include/kosdec/adx_aiff.h include/kosdec/adx_au.h include/kosdec/adx_wave.h include/kosdec/adx_request.h include/kosdec/adx_partition.h include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_disc.h include/kosdec/adx.h include/kosdec/adx_memory.h include/kosdec/adx_stream.h include/kosdec/adx_file.h include/kosdec/adx_index.h "$(DESTDIR)$(PREFIX)/include/kosdec/"
 	install -m 644 $(BUILD)/sh4/libADX.a "$(DESTDIR)$(PREFIX)/lib/dreamcast/libADX.a"
 
 clean:
+	rm -f $(BUILD)/host-test/compat_file $(BUILD)/sanitize/compat_file
 	rm -f $(ADX_NATIVE_OBJS) $(ADX_NATIVE_OBJS:.o=.d) $(BUILD)/sh4/adx_native_test.elf
 	rm -f $(BUILD)/host-test/sfa $(BUILD)/sanitize/sfa $(BUILD)/host-test/recovery $(BUILD)/sanitize/recovery $(BUILD)/host-test/recovery_player $(BUILD)/sanitize/recovery_player
 	rm -f $(BUILD)/host-test/linked $(BUILD)/sanitize/linked
@@ -208,6 +215,7 @@ clean:
 	rm -f $(BUILD)/host-test/aiff $(BUILD)/sanitize/aiff
 	rm -f $(BUILD)/host-test/au_player $(BUILD)/sanitize/au_player
 	rm -f $(BUILD)/host-test/au $(BUILD)/sanitize/au
+	rm -f $(BUILD)/host-test/compat_container $(BUILD)/sanitize/compat_container
 	rm -f $(BUILD)/host-test/wave_player $(BUILD)/sanitize/wave_player
 	rm -f $(BUILD)/host-test/wave $(BUILD)/sanitize/wave
 	rm -f $(BUILD)/host-test/request_joint $(BUILD)/sanitize/request_joint
@@ -587,6 +595,14 @@ $(BUILD)/host-test/files: tests/files.c src/files.c src/file.c src/named_file.c 
 	mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -DKOSDEC_ADX_NAMED_HOST_TEST -Itests/named_include -Itests -Iinclude tests/files.c src/files.c src/file.c src/named_file.c $(BUILD)/host-test/libADX-test.a -lm -o $@
 
+$(BUILD)/host-test/compat_service: tests/compat_service.c src/compat_service.c include/kosdec/adx_compat_service.h
+	mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $(filter %.c,$^) -o $@
+
+$(BUILD)/sanitize/compat_service: tests/compat_service.c src/compat_service.c include/kosdec/adx_compat_service.h
+	mkdir -p $(@D)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $(filter %.c,$^) -o $@
+
 $(BUILD)/host-test/group: tests/group.c src/group.c $(HEADERS)
 	mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Itests/player_include -Iinclude tests/group.c src/group.c -o $@
@@ -619,8 +635,20 @@ $(BUILD)/host-test/sfa: tests/sfa.c $(BUILD)/host-test/libADX-test.a $(HEADERS)
 $(BUILD)/sanitize/sfa: tests/sfa.c $(BUILD)/sanitize/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude tests/sfa.c $(BUILD)/sanitize/libADX-test.a -lm -o $@
 
-$(BUILD)/host-test/recovery_player: tests/recovery_player.c src/recovery.c $(PLAYER_TEST_DEPS) $(BUILD)/host-test/libADX-test.a $(HEADERS)
-	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/recovery_player.c tests/player_mock.c src/player.c src/recovery.c $(BUILD)/host-test/libADX-test.a -lm -o $@
+$(BUILD)/host-test/recovery_player: tests/recovery_player.c src/recovery.c src/compat_recovery.c $(PLAYER_TEST_DEPS) $(BUILD)/host-test/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/recovery_player.c tests/player_mock.c src/player.c src/recovery.c src/compat_recovery.c $(BUILD)/host-test/libADX-test.a -lm -o $@
 
-$(BUILD)/sanitize/recovery_player: tests/recovery_player.c src/recovery.c $(PLAYER_TEST_DEPS) $(BUILD)/sanitize/libADX-test.a $(HEADERS)
-	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/recovery_player.c tests/player_mock.c src/player.c src/recovery.c $(BUILD)/sanitize/libADX-test.a -lm -o $@
+$(BUILD)/sanitize/recovery_player: tests/recovery_player.c src/recovery.c src/compat_recovery.c $(PLAYER_TEST_DEPS) $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/recovery_player.c tests/player_mock.c src/player.c src/recovery.c src/compat_recovery.c $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+$(BUILD)/host-test/compat_file: tests/compat_file.c $(BUILD)/host-test/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
+
+$(BUILD)/sanitize/compat_file: tests/compat_file.c $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+$(BUILD)/host-test/compat_container: tests/compat_container.c $(PLAYER_TEST_DEPS) $(BUILD)/host-test/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/compat_container.c tests/player_mock.c src/player.c $(BUILD)/host-test/libADX-test.a -lm -o $@
+
+$(BUILD)/sanitize/compat_container: tests/compat_container.c $(PLAYER_TEST_DEPS) $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -pthread -Itests/player_include -Iinclude tests/compat_container.c tests/player_mock.c src/player.c $(BUILD)/sanitize/libADX-test.a -lm -o $@
