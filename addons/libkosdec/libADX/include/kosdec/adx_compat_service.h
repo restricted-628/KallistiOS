@@ -55,7 +55,9 @@ int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *, uint32_t
 /* Owner-only observation. A PLAYING dispatch may publish DECEND after the
    final samples are decoded with under 32 bytes of PCM16 pending per channel.
    Output still submits the remaining frames. Native SOURCE_END also waits
-   for source validation and full PCM submission. */
+   for source validation and full PCM submission. A phased direct stream with
+   an unrecognized header can retain DECINFO after failure. Check the service
+   result and kosdec_adx_player_get_error for the failure before waiting again. */
 int kosdec_adx_compat_player_get_state(const struct kosdec_adx_player *, enum kosdec_adx_compat_state *);
 int kosdec_adx_compat_player_is_completed(const struct kosdec_adx_player *, bool *);
 

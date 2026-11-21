@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — libADX status after an unrecognized header
+
+- When a phased direct stream rejects an unrecognized header before playback,
+  the compatibility status getter reports DECINFO (header inspection) rather
+  than DECEND (end of decoding). Service still returns EIO, the native player
+  still reports failure, and checked stop still reports STOP. Querying the phase
+  does not read more input or retry playback.
+
 ## 2026-11-21 — Mono volume changes through the libADX player
 
 - Verified three live volume changes through one 44.1 kHz mono libADX player

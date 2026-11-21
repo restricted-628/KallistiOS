@@ -21,6 +21,7 @@ static uint8_t legacy_gain_tl(int32_t requested);
 #include "adx_pitch.h"
 #include <kos/timer.h>
 #include <errno.h>
+#include <string.h>
 #define PLAYER_MAGIC UINT32_C(0x41445841)
 static bool valid(const struct kosdec_adx_player *p) {
     return p && p->magic == PLAYER_MAGIC;
@@ -1498,11 +1499,36 @@ int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *p, uint32_
     return 0;
 }
 
+static bool compat_unrecognized_header(const struct kosdec_adx_player *p) {
+    if(!p->compat_phased || !p->source_bound || p->info.state != KOSDEC_ADX_PLAYER_FAILED ||
+       p->compat_prefill_frames)
+        return false;
+
+    const struct kosdec_adx_stream *s = p->producer.pipe.stream;
+    if(!s || s->linked || s->seeking || s->staged_error || s->terminal != KOSDEC_ADX_INVALID)
+        return false;
+
+    /* The phased owner can inspect the immutable rejected header of its current
+       binding. A rebind replaces the producer, including this terminal state. */
+    const struct kosdec_adx_decoder *d = &s->decoder;
+    if(d->header_ready || d->terminal != KOSDEC_ADX_INVALID ||
+       d->header_used != sizeof(d->header) || s->byte_position != sizeof(d->header))
+        return false;
+
+    const uint8_t *h = d->header;
+    /* Stock DECINFO waits when none of the container signatures match. */
+    return !(h[0] == 0x80 && h[1] == 0) &&
+           memcmp(h,"SPSD",4) &&
+           (memcmp(h,"RIFF",4) || memcmp(h + 8,"WAVE",4)) &&
+           (memcmp(h,"FORM",4) || memcmp(h + 8,"AIFF",4)) &&
+           memcmp(h,".snd",4) && memcmp(h,".sd\0",4);
+}
+
 int kosdec_adx_compat_player_get_state(const struct kosdec_adx_player *p,
                                       enum kosdec_adx_compat_state *state) {
     if(!valid(p) || !state) return bad();
     if(!p->compat_service) return unsupported();
-    *state = player_compat_state(p);
+    *state = compat_unrecognized_header(p) ? KOSDEC_ADX_COMPAT_DECINFO : player_compat_state(p);
     return 0;
 }
 

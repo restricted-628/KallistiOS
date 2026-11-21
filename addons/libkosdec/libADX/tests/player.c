@@ -438,6 +438,7 @@ static void compat_delayed_footer(void) {
             CHECK(rv < 0 && errno == EIO && info(&f).state == KOSDEC_ADX_PLAYER_FAILED);
         else
             CHECK(!rv && info(&f).state == KOSDEC_ADX_PLAYER_SOURCE_END);
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state == KOSDEC_ADX_COMPAT_DECEND);
         CHECK(!mock_stops);
         if(!damaged) {
             CHECK(mock_frames == 65);
@@ -709,6 +710,94 @@ static void compat_routing_live(unsigned channels) {
     free(f.data);
 }
 
+static void compat_rejected_header_state(void) {
+    static const struct {
+        const char *prefix;
+        const char *form;
+        size_t extent;
+        bool phased;
+        enum kosdec_adx_status failure;
+        enum kosdec_adx_compat_state phase;
+    } cases[] = {
+        {"\0\0\0\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO},
+        {"\0\0\0\0", NULL, 0, false, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
+        {"\0\0\0\0", NULL, 12, true, KOSDEC_ADX_TRUNCATED, KOSDEC_ADX_COMPAT_DECEND},
+        {"\x80\0\0\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
+        {NULL, NULL, 0, true, KOSDEC_ADX_UNSUPPORTED, KOSDEC_ADX_COMPAT_DECEND},
+        {"SPSD", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
+        {"RIFF", "WAVE", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
+        {"FORM", "AIFF", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
+        {".snd", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
+        {".sd\0", NULL, 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECEND},
+        {"RIFF", "TEST", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO},
+        {"FORM", "TEST", 0, true, KOSDEC_ADX_INVALID, KOSDEC_ADX_COMPAT_DECINFO}
+    };
+    struct fixture f;
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us = compat_clock, .clock_context = &now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    enum kosdec_adx_compat_state state;
+
+    for(size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        init(&f,1,false);
+        if(cases[i].prefix) {
+            memset(f.data,0,f.bytes);
+            memcpy(f.data,cases[i].prefix,4);
+        } else {
+            f.data[7] = 3; /* ADX header with unsupported channel count. */
+        }
+        if(cases[i].form)
+            memcpy(f.data + 8,cases[i].form,4);
+        if(cases[i].extent)
+            kosdec_adx_stream_init(&f.stream,input,&f,(uint32_t)cases[i].extent,false);
+        CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+        CHECK(!(cases[i].phased ? kosdec_adx_compat_bind_phased_player(&service,0,&f.player) :
+                                 kosdec_adx_compat_bind_player(&service,0,&f.player)));
+        CHECK(!kosdec_adx_player_start(&f.player));
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_DECINFO);
+
+        int status = 0;
+        for(unsigned step = 0; step < 1000 && !status; ++step) {
+            status = kosdec_adx_compat_exec_server(&service,&result);
+            if(!status && !cases[i].phased)
+                mock_pause();
+        }
+        CHECK(status < 0 && errno==EIO && info(&f).state==KOSDEC_ADX_PLAYER_FAILED);
+        struct kosdec_adx_player_error error;
+        CHECK(!kosdec_adx_player_get_error(&f.player,&error) && error.decoder==cases[i].failure);
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==cases[i].phase);
+        CHECK(!kosdec_adx_player_clear_error(&f.player));
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==cases[i].phase);
+        CHECK(kosdec_adx_compat_exec_title(&service,0,&result)<0 && errno==EIO &&
+              result.failed_titles==1 && !result.serviced_phases);
+        CHECK(!mock_starts && !mock_stops && !mock_frames && !info(&f).copied_frames);
+        if(cases[i].phased) {
+            unsigned calls = f.calls;
+            CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==cases[i].phase);
+            CHECK(f.calls==calls);
+        }
+
+        CHECK(!kosdec_adx_player_stop(&f.player,1000));
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_STOP);
+        CHECK(!kosdec_adx_compat_unbind(&service,0));
+        free(f.data);
+    }
+
+    init(&f,1,false);
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,&f.player));
+    CHECK(!kosdec_adx_player_start(&f.player));
+    for(unsigned step = 0; step < 100 && info(&f).state!=KOSDEC_ADX_PLAYER_SOURCE_END; ++step)
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(&f).state==KOSDEC_ADX_PLAYER_SOURCE_END && mock_starts==1 && mock_frames==65);
+    CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_DECEND);
+    CHECK(!kosdec_adx_player_stop(&f.player,1000));
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f.data);
+    puts("ADX_COMPAT_HEADER_STATE_PASS early failure, recognized and nonphased controls, STOP and fresh binding");
+}
+
 static void compat_transport_fault(void) {
     for(unsigned truncated=0;truncated<2;++truncated) {
         struct fixture f;
@@ -749,6 +838,8 @@ static void compat_transport_fault(void) {
               faults==(truncated?0u:KOSDEC_ADX_COMPAT_FAULT_TRANSPORT));
         enum kosdec_adx_compat_error code;
         CHECK(!kosdec_adx_compat_get_error(&service,0,&code) && code==KOSDEC_ADX_COMPAT_NO_ERROR);
+        enum kosdec_adx_compat_state state;
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_DECEND);
         CHECK(!mock_starts && !mock_stops);
         CHECK(!kosdec_adx_player_stop(&f.player,1000));
         CHECK(!kosdec_adx_compat_unbind(&service,0));
@@ -1619,6 +1710,7 @@ int main(void) {
     compat_live_pitch(1,44100);compat_live_pitch(1,8000);compat_live_pitch(2,44100);
     puts("ADX_COMPAT_LIVE_MONO_PITCH_PASS admission, unchanged controls, rebind and checked failure");
     compat_short_and_rebind();
+    compat_rejected_header_state();
     compat_transport_fault();
     finite_phased(PHASED_SEEK); finite_phased(PHASED_LOOP);
     finite_phased(PHASED_SEQUENCE); finite_phased(PHASED_ERROR);
