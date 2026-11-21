@@ -1929,11 +1929,11 @@ static int retained_sample_until(snd_retained_pcm_t *pcm, retained_cursor_t *nex
         bool before_frontier = next[i].frames < pcm->written;
         if(before_frontier && possible >= pcm->written - next[i].frames) {
             /* A qualified prior sample also bounds the same slot at latest.
-               On the stereo gain path this is valid before any old receipt
-               is retired or any gain command is sent. The new samples
-               alone still determine credit. */
+               Stereo gain rotates receipts using only TL updates, leaving
+               the slot and pitch unchanged even across pending retries.
+               The new samples alone still determine credit. */
             const retained_cursor_t *prev = &pcm->cursor[i];
-            before_frontier = (pcm->channels == 1 || phase == RETAINED_SAMPLE_GAIN_OLD) &&
+            before_frontier = (pcm->channels == 1 || phase != RETAINED_SAMPLE_NORMAL) &&
                 pcm->valid &&
                 prev->frames < pcm->written &&
                 retained_movement(pcm, latest - prev->before_ms) < pcm->written - prev->frames;

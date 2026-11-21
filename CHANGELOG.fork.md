@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Stereo position checks after a live volume change
+
+- After a volume-only update, a retained stereo stream can use the last
+  confirmed position of each unchanged channel to bound its new reading,
+  including after a delayed acknowledgement. This avoids a false EPIPE;
+  acknowledging a volume write does not itself advance playback credit.
+  Ordinary polling and refill checks are unchanged.
+
 ## 2026-11-21 — Stereo position checks before a live volume change
 
 - Before sending a retained stereo volume change, the driver can use each

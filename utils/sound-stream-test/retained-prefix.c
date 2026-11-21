@@ -50,6 +50,7 @@ static uint64_t now, first_delay, right_dma_delay, right_observation_delay;
 static uint64_t left_dma_delay, left_observation_delay;
 static uint64_t stereo_model_origin;
 static unsigned stereo_model_ring;
+static unsigned replacement_observation_delay[2];
 static bool overlap_right_observation;
 static uint32_t delayed_position;
 static uint32_t position[2], session = 1, token;
@@ -64,7 +65,7 @@ static uint32_t gain_tokens[2], gain_features;
 static unsigned gain_submissions[2], gain_tl[2];
 static unsigned linear_anchors, key_off_tl_acks, tl_at_sync[2];
 static int gain_submit_error, gain_reject_channel, gain_stale_channel;
-static int gain_timeout_channel, gain_unattributed_channel;
+static int gain_timeout_channel, gain_unattributed_channel, gain_retry_channel;
 static int delayed_start_key_on, delayed_tl_key_on;
 static bool in_irq;
 
@@ -208,7 +209,16 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
     }
     if(stop && (int)ch == held_stop_channel)
         ++now;
+    if(gain && (int)ch == gain_retry_channel) {
+        gain_retry_channel = -1;
+        errno = EAGAIN;
+        return -1;
+    }
     if(update) {
+        if(gain && gain_submissions[ch] == 2) {
+            now += replacement_observation_delay[ch];
+            replacement_observation_delay[ch] = 0;
+        }
         uint64_t *delay = ch == 0 ? &left_observation_delay : &right_observation_delay;
         now += *delay;
         if(stereo_model_ring)
