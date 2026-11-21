@@ -162,8 +162,113 @@ static void bad_args(void) {
     OK(kosdec_adx_chunk_split(&c,0,&a,&c)); CHECK(!a.bytes && c.bytes==4);
     OK(kosdec_adx_joint_put(&j,&c)); OK(kosdec_adx_joint_close(&j));
 }
+static void check_pair(struct kosdec_adx_joint *j, struct kosdec_adx_chunk *a,
+                       struct kosdec_adx_chunk *b, size_t held) {
+    struct kosdec_adx_joint_info info;
+    struct kosdec_adx_chunk third=*b;
+    struct kosdec_adx_joint before=*j;
+    CHECK(kosdec_adx_joint_get_next_data(j,1,&third)==KOSDEC_ADX_JOINT_BUSY);
+    CHECK(third.token==b->token && third.data==b->data && third.bytes==b->bytes);
+    CHECK(kosdec_adx_joint_put(j,b)==KOSDEC_ADX_JOINT_BUSY);
+    CHECK(kosdec_adx_joint_unget(j,a)==KOSDEC_ADX_JOINT_BUSY);
+    CHECK(kosdec_adx_joint_reset(j)==KOSDEC_ADX_JOINT_BUSY);
+    CHECK(kosdec_adx_joint_close(j)==KOSDEC_ADX_JOINT_BUSY);
+    unchanged(j,before);
+    OK(kosdec_adx_joint_query(j,&info));
+    CHECK(info.borrowed[DATA]==held && info.contiguous[DATA]==0);
+}
+static void paired_memory(void) {
+    uint8_t data[]={0,1,2,3,4,5,6,7};
+    struct kosdec_adx_joint j;
+    struct kosdec_adx_chunk a,b,prefix,suffix;
+    OK(kosdec_adx_joint_memory_init(&j,data,sizeof(data)));
+    CHECK(kosdec_adx_joint_get_next_data(&j,3,&b)==KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    OK(kosdec_adx_joint_get(&j,DATA,3,&a));
+    OK(kosdec_adx_joint_get_next_data(&j,4,&b));
+    CHECK(a.data==data && b.data==data+3);
+    check_pair(&j,&a,&b,7);
+    OK(kosdec_adx_joint_finish(&j));
+    OK(kosdec_adx_chunk_split(&b,2,&prefix,&suffix));
+    OK(kosdec_adx_joint_unget(&j,&suffix));
+    OK(kosdec_adx_joint_put(&j,&a));
+    OK(kosdec_adx_joint_put(&j,&prefix));
+    CHECK(kosdec_adx_joint_put(&j,&b)==KOSDEC_ADX_JOINT_STALE);
+    OK(kosdec_adx_joint_get(&j,DATA,8,&a));
+    CHECK(a.data==data+5 && a.bytes==3);
+    OK(kosdec_adx_joint_unget(&j,&a));
+    OK(kosdec_adx_joint_close(&j));
+}
+static void paired_ring(unsigned extra) {
+    struct kosdec_adx_joint j;
+    uint8_t mem[16];
+    struct kosdec_adx_chunk w,a,b;
+    struct kosdec_adx_joint_info info;
+    OK(kosdec_adx_joint_ring_init(&j,mem,8,extra));
+    OK(kosdec_adx_joint_get(&j,FREE,6,&w));
+    memset(w.data,0,w.bytes);OK(kosdec_adx_joint_put(&j,&w));
+    OK(kosdec_adx_joint_get(&j,DATA,6,&a));OK(kosdec_adx_joint_put(&j,&a));
+    for(unsigned written=0;written<8;) {
+        OK(kosdec_adx_joint_get(&j,FREE,8-written,&w));CHECK(w.bytes);
+        for(size_t i=0;i<w.bytes;++i) w.data[i]=(uint8_t)(written+i);
+        written+=(unsigned)w.bytes;
+        OK(kosdec_adx_joint_put(&j,&w));
+    }
+    OK(kosdec_adx_joint_get(&j,DATA,2,&a));
+    OK(kosdec_adx_joint_get_next_data(&j,3,&b));
+    CHECK(a.bytes==2 && b.bytes==3 && a.data[1]==1 && b.data[2]==4);
+    check_pair(&j,&a,&b,5);
+    OK(kosdec_adx_joint_get(&j,FREE,1,&w));CHECK(!w.bytes);
+    OK(kosdec_adx_joint_unget(&j,&b));OK(kosdec_adx_joint_unget(&j,&a));
+    OK(kosdec_adx_joint_get(&j,DATA,2,&a));OK(kosdec_adx_joint_get_next_data(&j,3,&b));
+    OK(kosdec_adx_joint_put(&j,&a));
+    OK(kosdec_adx_joint_get(&j,FREE,8,&w));CHECK(w.bytes==2);
+    memset(w.data,99,w.bytes);OK(kosdec_adx_joint_put(&j,&w));
+    CHECK(b.data[0]==2 && b.data[1]==3 && b.data[2]==4);
+    OK(kosdec_adx_joint_put(&j,&b));
+    OK(kosdec_adx_joint_query(&j,&info));
+    CHECK(info.available[DATA]==5 && info.available[FREE]==3 && !info.borrowed[DATA]);
+    OK(kosdec_adx_joint_close(&j));
+}
+static void paired_queue(enum kosdec_adx_joint_mode mode) {
+    struct kosdec_adx_joint j;
+    struct kosdec_adx_joint_node nodes[3];
+    uint8_t data[12]={0};
+    struct kosdec_adx_chunk a,b,prefix,suffix;
+    OK(kosdec_adx_joint_queue_init(&j,nodes,3,mode));
+    OK(kosdec_adx_joint_seed(&j,DATA,data,3));
+    OK(kosdec_adx_joint_seed(&j,DATA,data+4,4));
+    OK(kosdec_adx_joint_seed(&j,KOSDEC_ADX_JOINT_AUX2,data+9,1));
+    OK(kosdec_adx_joint_get(&j,DATA,3,&a));
+    if(mode==KOSDEC_ADX_JOINT_JOIN)
+        CHECK(kosdec_adx_joint_get_next_data(&j,2,&b)==KOSDEC_ADX_JOINT_LIMIT);
+    else {
+        OK(kosdec_adx_joint_get_next_data(&j,2,&b));
+        CHECK(!b.bytes);
+    }
+    OK(kosdec_adx_joint_get_next_data(&j,8,&b));
+    CHECK(a.bytes==3 && b.bytes==4 && b.data==data+4);
+    check_pair(&j,&a,&b,7);
+    CHECK(kosdec_adx_joint_seed(&j,FREE,b.data,b.bytes)==KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    OK(kosdec_adx_chunk_split(&b,2,&prefix,&suffix));
+    CHECK(kosdec_adx_joint_unget(&j,&suffix)==KOSDEC_ADX_JOINT_LIMIT);
+    OK(kosdec_adx_joint_unget(&j,&b));OK(kosdec_adx_joint_unget(&j,&a));
+    OK(kosdec_adx_joint_get(&j,DATA,3,&a));OK(kosdec_adx_joint_get_next_data(&j,4,&b));
+    CHECK(a.data==data && b.data==data+4);
+    CHECK(kosdec_adx_joint_detach(&j,&b)==KOSDEC_ADX_JOINT_BUSY);
+    OK(kosdec_adx_joint_move(&j,FREE,&a));
+    OK(kosdec_adx_joint_detach(&j,&b));
+    struct kosdec_adx_joint_info info;
+    OK(kosdec_adx_joint_query(&j,&info));
+    CHECK(info.available[FREE]==3 && info.capacity==4 && info.spare_nodes==1 &&
+          !info.available[DATA] && !info.borrowed[DATA]);
+    OK(kosdec_adx_joint_close(&j));
+}
 int main(void) {
     bad_args(); memory(); simultaneous();
+    paired_memory();
+    for(unsigned extra=0;extra<=8;++extra) paired_ring(extra);
+    paired_queue(KOSDEC_ADX_JOINT_JOIN);
+    paired_queue(KOSDEC_ADX_JOINT_SEPARATE);
     for(unsigned cap=1;cap<=24;++cap)
         for(unsigned extra=0;extra<=cap;++extra) ring_model(cap,extra);
     printf("joint: %u checks passed\n",checks);

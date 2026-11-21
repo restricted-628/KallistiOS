@@ -170,8 +170,80 @@ static void modes(void) {
     OK(kosdec_adx_joint_query(&j,&info)); CHECK(info.chunks[DATA]==1 && info.spare_nodes==3);
     OK(kosdec_adx_joint_close(&j));
 }
+static void check_fit(struct kosdec_adx_joint *joint, enum kosdec_adx_joint_line line,
+    size_t request, bool fits, size_t bytes) {
+    struct kosdec_adx_joint_readiness out = {SIZE_MAX,!fits};
+    OK(kosdec_adx_joint_can_get(joint,line,request,&out));
+    CHECK(out.fits == fits && out.bytes == bytes);
+}
+
+static void readiness(void) {
+    struct kosdec_adx_joint joint;
+    struct kosdec_adx_joint_node nodes[2];
+    struct kosdec_adx_chunk chunk;
+    uint8_t buffer[40] = {0};
+    static const size_t requests[] = {0,8,16,24,32,40};
+
+    /* The six profiles match the linked 2.00J readiness witness. */
+    OK(kosdec_adx_joint_memory_init(&joint,buffer,24));
+    for(unsigned i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i) {
+        size_t request = requests[i];
+        check_fit(&joint,DATA,request,request <= 24, request < 24 ? request : 24);
+    }
+    OK(kosdec_adx_joint_close(&joint));
+    OK(kosdec_adx_joint_ring_init(&joint,buffer,32,8));
+    for(unsigned i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i) {
+        size_t request = requests[i];
+        check_fit(&joint,FREE,request,request <= 32, request < 32 ? request : 32);
+    }
+    OK(kosdec_adx_joint_get(&joint,FREE,24,&chunk));
+    OK(kosdec_adx_joint_put(&joint,&chunk));
+    OK(kosdec_adx_joint_get(&joint,DATA,24,&chunk));
+    OK(kosdec_adx_joint_put(&joint,&chunk));
+    OK(kosdec_adx_joint_get(&joint,FREE,16,&chunk));
+    CHECK(chunk.bytes == 16);
+    OK(kosdec_adx_joint_put(&joint,&chunk));
+    for(unsigned i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i) {
+        size_t request = requests[i];
+        check_fit(&joint,DATA,request,request <= 16, request < 16 ? request : 16);
+    }
+    OK(kosdec_adx_joint_close(&joint));
+
+    OK(kosdec_adx_joint_queue_init(&joint,nodes,2,KOSDEC_ADX_JOINT_SEPARATE));
+    OK(kosdec_adx_joint_seed(&joint,DATA,buffer,16));
+    for(unsigned i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i)
+        check_fit(&joint,DATA,requests[i],requests[i] == 16,16);
+    OK(kosdec_adx_joint_get(&joint,DATA,24,&chunk));
+    CHECK(chunk.bytes == 16);
+    OK(kosdec_adx_joint_unget(&joint,&chunk));
+    OK(kosdec_adx_joint_close(&joint));
+    OK(kosdec_adx_joint_queue_init(&joint,nodes,2,KOSDEC_ADX_JOINT_JOIN));
+    for(unsigned i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i)
+        check_fit(&joint,DATA,requests[i],false,0);
+    OK(kosdec_adx_joint_seed(&joint,DATA,buffer,16));
+    for(unsigned i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i)
+        check_fit(&joint,DATA,requests[i],requests[i] <= 16,16);
+
+    /* Native admission guards retain ownership and leave the head intact. */
+    OK(kosdec_adx_joint_seed(&joint,FREE,buffer+16,8));
+    check_fit(&joint,DATA,8,false,16);
+    check_fit(&joint,DATA,16,true,16);
+    OK(kosdec_adx_joint_get(&joint,DATA,16,&chunk));
+    check_fit(&joint,DATA,16,false,0);
+    OK(kosdec_adx_joint_unget(&joint,&chunk));
+    OK(kosdec_adx_joint_finish(&joint));
+    check_fit(&joint,FREE,8,false,0);
+    check_fit(&joint,DATA,16,true,16);
+    joint.next_token = UINT64_MAX;
+    check_fit(&joint,DATA,16,false,16);
+    struct kosdec_adx_joint_readiness out = {91,true};
+    CHECK(kosdec_adx_joint_can_get(&joint,(enum kosdec_adx_joint_line)4,1,&out)
+        == KOSDEC_ADX_JOINT_BAD_ARGUMENT && out.bytes == 91 && out.fits);
+    OK(kosdec_adx_joint_close(&joint));
+}
+
 int main(void) {
-    limits(); modes(); model(0); model(1);
+    limits(); modes(); model(0); model(1); readiness();
     printf("joint_queue: %u checks passed\n",checks);
     return 0;
 }

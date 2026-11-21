@@ -684,6 +684,13 @@ preparation. Adjacent-record playback and finite SFA publication preserve strict
 framing and fixed-format admission. Audible seams, running-stall policy,
 unknown-length SFD framing and device-retirement/reuse gates remain open.
 
+**Accepted continuation, 2026-11-20:** The default libADX archive keeps its
+existing output path. Retained PCM and its source-attributed clock are opt-in.
+Accept the qualified decoder, input, timing and service work independently
+of consecutive live-gain updates and concurrent retained stereo playback:
+both compositions have returned EPIPE. Passing an isolated backend test does
+not qualify either composition, audible completion, or sound-RAM reuse.
+
 ## D22 — SH4DER/SH4DOW integration and strip partition default
 
 **Owner direction, 2026-11-13:** Fully integrate the pinned SH4DER and bundled

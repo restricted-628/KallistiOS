@@ -39,7 +39,8 @@ int kosdec_adx_recovery_step(struct kosdec_adx_recovery *r,uint64_t now,uint32_t
         if(r->mode==KOSDEC_ADX_RECOVERY_NOACT) return fail(error);
         if(kosdec_adx_player_get_info(r->player,&info)<0) return -1;
         r->replay_pending=r->mode==KOSDEC_ADX_RECOVERY_REPLAY &&
-            info.decoder==KOSDEC_ADX_IO_ERROR && r->info.replays<r->max_replays;
+            (info.decoder==KOSDEC_ADX_IO_ERROR || info.input_stalled) &&
+            r->info.replays<r->max_replays;
         r->info.deadline=UINT64_MAX-now<r->delay_ms?UINT64_MAX:now+r->delay_ms;
         r->info.phase=KOSDEC_ADX_RECOVERY_WAIT_STOP;
     }

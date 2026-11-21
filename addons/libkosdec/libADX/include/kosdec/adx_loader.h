@@ -19,6 +19,7 @@ struct kosdec_adx_loader_source_info {
     char name[KOSDEC_ADX_LOADER_NAME_BYTES];
     uint32_t start_sector, sectors, data_bytes, read_sectors, published_bytes;
     enum kosdec_adx_loader_source_state state;
+    uint64_t completed_passes;
 };
 struct kosdec_adx_loader_entry {
     struct kosdec_adx_loader_source_info info;
@@ -34,11 +35,11 @@ struct kosdec_adx_loader {
     struct kosdec_adx_request request;
     struct kosdec_adx_loader_entry entries[KOSDEC_ADX_LOADER_SOURCES];
     uint64_t next_id;
-    size_t capacity, flow_limit;
+    size_t capacity, flow_limit, source_flow_limit;
     unsigned head, tail, count;
     enum kosdec_adx_loader_state state;
     enum kosdec_adx_request_status error;
-    bool paused, active, sector_policy;
+    bool paused, active, sector_policy, lsc_flow, repeat;
     kosdec_adx_loader_error error_fn;
     void *error_context;
 };
@@ -71,17 +72,37 @@ enum kosdec_adx_loader_status kosdec_adx_loader_enqueue(struct kosdec_adx_loader
 /* Start only from STOPPED; empty queue enters WAIT, new entry resumes EXEC.
    Existing running state returns BUSY; no implicit destructive restart. */
 enum kosdec_adx_loader_status kosdec_adx_loader_start(struct kosdec_adx_loader *);
-/* One<=512-byte provider call, at most one sector request/entry completion.
+/* One<=512-byte provider call, at most one request/entry completion.
    WAIT/paused/stopped returns OK without source work. Start a new sector only
-   when DATA bytes (including outstanding DATA borrow) <flow_limit;0 disables
-   that threshold. Active sector finishes independently, respecting backpressure.
+   when DATA bytes (including outstanding DATA borrow) <flow_limit by default.
+   A zero default-policy limit disables the threshold. An active request finishes
+   independently, respecting backpressure. LSC mode may request several sectors.
    NEED_INPUT/OUTPUT must be rescheduled, not spun. Provider may block; use an
    appropriate thread/fiber, never audio IRQ. Empty queue is WAIT, not sealed EOF.
    Error is sticky, with all ownership retained until checked stop/close. */
 enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *);
 enum kosdec_adx_loader_status kosdec_adx_loader_pause(struct kosdec_adx_loader *, bool);
-/* Bytes0..initial joint capacity; no I/O. Changes affect new sector admission. */
+/* Rotate completed source descriptions to the queue tail at transport EOF.
+   Repeat defaults off. The original source ID remains pending and its context
+   stays borrowed across passes. Disabling repeat lets the pending queue drain.
+   read_sectors and published_bytes describe the current pass. completed_passes
+   counts fully published passes modulo 2^64. Stop preserves repeat policy. */
+enum kosdec_adx_loader_status kosdec_adx_loader_set_repeat(struct kosdec_adx_loader *, bool);
+/* Bytes0..initial joint capacity; no I/O. Restores immediate byte flow. Changes
+   affect new sector admission and an already admitted request can finish. */
 enum kosdec_adx_loader_status kosdec_adx_loader_set_flow(struct kosdec_adx_loader *, size_t);
+/* Select 2.00J LSC refill policy while STOPPED with at least one sector of joint
+   capacity. Once selected, update the requested byte limit at any time on the
+   serialized owner. get_info reports that requested value. Each nonempty
+   source/pass captures it on first service before checking refill eligibility.
+   QUEUED DATA >= captured limit prevents a new refill, including zero on an
+   empty joint. Changing a captured zero cannot resume that source. Checked stop
+   preserves the requested policy for the next start. set_flow and the reload
+   setters select immediate policies instead.
+   Admit up to512 sectors at once with a separate bounded provider step, fitting
+   the native joint and exact source extent. Rebuild consumers for loader layout. */
+enum kosdec_adx_loader_status kosdec_adx_loader_set_lsc_flow(
+    struct kosdec_adx_loader *, size_t);
 /* ADX input-buffer policy, opt-in instead of the generic byte-flow policy.
    Same serialized producer owner as step/read/joint operations; configure before
    binding to a player, or from its producer feed. Never query/mutate concurrently
@@ -116,9 +137,10 @@ struct kosdec_adx_loader_buffer_info {
    Counts all queued bytes, including any header/footer: this is a nominal
    compressed-data estimate, not promised playable PCM or an audible clock.
    Held input, decoded PCM and sound RAM are excluded. safe means queued bytes
-   >=reload_bytes (including equality and zero). It matches the ADX admission
-   threshold; generic byte-flow additionally counts held DATA, and zero disables
-   its gate. This snapshot is not permission to monopolize the disc/DMA engine.
+   >=reload_bytes (including equality and zero). In LSC mode this threshold is
+   the current source's captured value once service has selected it. Generic byte
+   flow counts held DATA for admission, and zero disables its gate. This snapshot
+   is not permission to monopolize the disc/DMA engine.
    Output remains unchanged on invalid/stale joint or format arguments. */
 bool kosdec_adx_loader_get_buffer_info(const struct kosdec_adx_loader *,
     unsigned channels, unsigned rate, struct kosdec_adx_loader_buffer_info *);

@@ -29,7 +29,7 @@ struct kosdec_adx_stream {
     uint64_t returned_frames, wraps;
     unsigned input_used, input_count, cache_position, cache_frames;
     bool repeat, paused, prepared, seeking;
-    bool linked, follow_links;
+    bool linked, follow_links, link_released;
     uint32_t segment_start, linked_rate;
     unsigned linked_channels;
     uint64_t linked_entries;
@@ -59,6 +59,10 @@ void kosdec_adx_stream_cancel(struct kosdec_adx_stream *);
    describe the current record; linked_entries counts validated record footers,
    not audible transitions. All are producer-owned; no concurrent controller read. */
 enum kosdec_adx_status kosdec_adx_stream_set_linked(struct kosdec_adx_stream *, bool);
+/* Change following on an already configured linked source. Applies at the
+   next record boundary. A terminal stream or final release cannot resume.
+   Serialized producer only. Use the service mailbox when bound. */
+enum kosdec_adx_status kosdec_adx_stream_set_link_follow(struct kosdec_adx_stream *, bool);
 /* Producer-only release: finish current record then DONE, ignoring later
    records. Irreversible after reads begin; does not cancel provider work.
    Use service RELEASE_LINK for a source already owned by a producer. */

@@ -1,6 +1,7 @@
 /* Original stream/sequence PCM bridge. SPSC ownership/order follows KOS's
    snd_adx_pipe.c, Copyright(C)2026 Joseph Black, under the KOS license. */
 #include <kosdec/adx_pipe.h>
+#include "adx_joint_reader_internal.h"
 #include <string.h>
 #define PIPE_MAGIC UINT32_C(0x41445850)
 _Static_assert(sizeof(uint32_t) == sizeof(unsigned int), "32-bit atomic cursors");
@@ -70,6 +71,15 @@ bool kosdec_adx_pipe_get_loop_count(const struct kosdec_adx_pipe *p, uint32_t *l
     *loops = __atomic_load_n(&p->decoded_loops, __ATOMIC_ACQUIRE);
     return true;
 }
+static uint32_t source_end(const struct kosdec_adx_pipe *p) {
+    if(p->stream) return p->stream->source_frame;
+    if(p->joint) return p->joint->decoder.frames_done;
+    if(p->wave) return p->wave->frames_done;
+    if(p->au) return p->au->frames_done;
+    if(p->aiff) return p->aiff->frames_done;
+    if(p->spsd) return p->spsd->frames_done;
+    return p->sequence->reader.source_frame;
+}
 struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) {
     struct kosdec_adx_stream_result r = {KOSDEC_ADX_BAD_ARGUMENT, 0};
     if(!valid(p)) return r;
@@ -89,13 +99,23 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
         uint32_t head = __atomic_load_n(&p->write_cursor, __ATOMIC_RELAXED);
         uint32_t tail = __atomic_load_n(&p->read_cursor, __ATOMIC_ACQUIRE);
         uint32_t room = p->capacity - (uint32_t)(head - tail);
-        if(!room) {
+        bool input_prefetch = p->joint && (p->joint->sector.request.read_at ||
+            (p->joint->linked.enabled && (p->joint->feed || p->joint->linked.loader)));
+        if(!room && !input_prefetch) {
             r.status = KOSDEC_ADX_NEED_OUTPUT;
             return r;
         }
-        if(room > 32) room = 32;
-        int16_t pcm[64];
-        if(p->stream && p->stream->seeking) {
+        size_t index = head & (p->capacity - 1);
+        int16_t scratch[64];
+        bool job = p->joint && p->joint->job.pcm;
+        int16_t *pcm = job ? p->joint->job.pcm : scratch;
+        if(!job && room > 32) room = 32;
+        if(job) {
+            struct kosdec_adx_joint_read_result s =
+                media_adx_joint_reader_read_pipe(p->joint, room, p->capacity - index);
+            r.status = s.status; r.frames = s.frames;
+        }
+        else if(p->stream && p->stream->seeking) {
             r.status = kosdec_adx_stream_seek_step(p->stream);
             if(r.status == KOSDEC_ADX_DONE && !p->stream->seeking)
                 r.status = KOSDEC_ADX_MORE; /* Positioned; no PCM emitted yet. */
@@ -138,17 +158,23 @@ struct kosdec_adx_stream_result kosdec_adx_pipe_pump(struct kosdec_adx_pipe *p) 
             }
         }
         if(r.frames) {
-            size_t index = head & (p->capacity - 1);
             size_t first = r.frames < p->capacity - index ? r.frames : p->capacity - index;
             memcpy(p->pcm + index * p->channels, pcm, first * p->channels * sizeof(*pcm));
             if(first < r.frames)
                 memcpy(p->pcm, pcm + first * p->channels,
                        (r.frames - first) * p->channels * sizeof(*pcm));
+            if(p->source_offsets) {
+                uint32_t frame = job ? p->joint->job.first_frame :
+                    source_end(p) - (uint32_t)r.frames;
+                for(uint32_t i = 0; i < r.frames; ++i)
+                    p->source_offsets[(head + i) & (p->capacity - 1)] = frame + i;
+            }
             __atomic_store_n(&p->write_cursor, head + (uint32_t)r.frames, __ATOMIC_RELEASE);
         }
     }
-    __atomic_store_n(&p->decoded_loops, p->stream ? (uint32_t)p->stream->wraps : 0,
-                     __ATOMIC_RELEASE);
+    uint32_t loops = p->stream ? (uint32_t)p->stream->wraps :
+        p->joint ? p->joint->job.wraps : 0;
+    __atomic_store_n(&p->decoded_loops, loops, __ATOMIC_RELEASE);
     if(r.status >= KOSDEC_ADX_DONE)
         __atomic_store_n(&p->terminal, r.status, __ATOMIC_RELEASE);
     return r;

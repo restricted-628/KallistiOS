@@ -64,7 +64,7 @@ static void faults(void) {
         struct fixture f;init(&f,0,512,1,0);CHECK(kosdec_adx_spsd_init(&f.reader,source,&f,off)==KOSDEC_ADX_TRUNCATED);CHECK(!f.calls);
     }
     const unsigned fields[]={0,4,5,6,7,8,9,10,11,12,42};
-    const unsigned values[]={0,2,0,1,3,3,1,13,1,1,0};
+    const unsigned values[]={0,2,0,1,3,3,2,13,1,1,0};
     for(unsigned i=0;i<11;++i) {
         struct fixture f;init(&f,33,512,1,0);f.raw[1+fields[i]]=(uint8_t)values[i];if(fields[i]==42)f.raw[44]=0;
         int16_t pcm[32];enum kosdec_adx_status s=kosdec_adx_spsd_read(&f.reader,pcm,32).status;
@@ -77,4 +77,60 @@ static void faults(void) {
     CHECK(kosdec_adx_spsd_seek(&f.reader,1)==KOSDEC_ADX_DONE);CHECK(drain(&f,1,33,false)==KOSDEC_ADX_DONE);
     init(&f,33,512,1,0);f.bytes+=2;CHECK(kosdec_adx_spsd_init(&f.reader,source,&f,f.bytes)==KOSDEC_ADX_MORE);CHECK(drain(&f,0,33,false)==KOSDEC_ADX_DONE);
 }
-int main(void){conversions();faults();printf("SPSD: %u checks passed\n",checks);return 0;}
+static void stereo(void) {
+    const unsigned frames = 73;
+    const unsigned begin = 31;
+    struct fixture f;
+    init(&f, frames, 1, 1, 0x81);
+    f.bytes = 64 + 4 * frames;
+    f.wait = 5;
+    for(unsigned i = 0; i < frames; ++i) {
+        put(f.raw + 65 + 4 * i, 0x7fff - i, 2);
+        put(f.raw + 67 + 4 * i, 0x8000 + 3 * i, 2);
+    }
+    CHECK(kosdec_adx_spsd_init(&f.reader, source, &f, f.bytes) == KOSDEC_ADX_MORE);
+    int16_t out[2 * 5 + 2];
+    for(unsigned i = 0; !f.reader.header_ready; ++i) {
+        CHECK(i < 100);
+        CHECK(kosdec_adx_spsd_read(&f.reader, out, 5).status < KOSDEC_ADX_DONE);
+    }
+    struct kosdec_adx_spsd_info info;
+    CHECK(kosdec_adx_spsd_get_info(&f.reader, &info) == KOSDEC_ADX_DONE);
+    CHECK(info.channels == 2 && info.total_frames == frames && info.data_bytes == 4 * frames);
+    unsigned before = f.calls;
+    CHECK(kosdec_adx_spsd_seek(&f.reader, begin) == KOSDEC_ADX_DONE && f.calls == before);
+    unsigned frame = begin;
+    enum kosdec_adx_status status = KOSDEC_ADX_MORE;
+    for(unsigned i = 0; status < KOSDEC_ADX_DONE; ++i) {
+        CHECK(i < 250);
+        for(unsigned j = 0; j < sizeof(out) / sizeof(*out); ++j) out[j] = 42;
+        struct kosdec_adx_spsd_result r = kosdec_adx_spsd_read(&f.reader, out + 1, 5);
+        CHECK(r.frames <= 5 && out[0] == 42 && out[2 * r.frames + 1] == 42);
+        for(size_t j = 0; j < r.frames; ++j, ++frame) {
+            CHECK(out[2 * j + 1] == 32767 - (int)frame);
+            CHECK(out[2 * j + 2] == -32768 + 3 * (int)frame);
+        }
+        status = r.status;
+    }
+    CHECK(status == KOSDEC_ADX_DONE && frame == frames);
+    CHECK(f.reader.offset == f.bytes);
+
+    /* Aggregate count, one-byte truncation, padding, odd count, and wrap. */
+    const uint32_t lengths[] = {4 * frames, 2 * frames, 2 * frames, 2 * frames - 1, UINT32_MAX - 1};
+    const int extent_deltas[] = {0, -1, 4, 0, 0};
+    for(unsigned i = 0; i < sizeof(lengths) / sizeof(*lengths); ++i) {
+        init(&f, frames, 64, 0, 1);
+        f.bytes = (unsigned)(64 + (int)frames * 4 + extent_deltas[i]);
+        put(f.raw + 13, lengths[i], 4);
+        CHECK(kosdec_adx_spsd_init(&f.reader, source, &f, f.bytes) == KOSDEC_ADX_MORE);
+        CHECK(kosdec_adx_spsd_read(&f.reader, out, 1).status == KOSDEC_ADX_INVALID);
+        CHECK(f.calls == 1 && !f.reader.header_ready);
+    }
+}
+int main(void) {
+    conversions();
+    faults();
+    stereo();
+    printf("SPSD: %u checks passed\n", checks);
+    return 0;
+}

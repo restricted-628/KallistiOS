@@ -15,6 +15,14 @@ feed the existing stream, sequence, container, loader and sector-request APIs.
 The loan covers every copied descriptor consumer, not just its original storage.
 Return it only after all consumers join and their provider obligations retire.
 
+`ADXT_StartMem2` maps to an explicit resident extent. The native
+`ADXT_StartMem` equivalent also requires the actual available size.
+For `ADXT_StartMemIdx`, select the ACX entry and use
+`kosdec_adx_source_init_memory_joint` with the exact resident loan.
+The joint is finite and reports the selected bounds to the player.
+The 2.00J unsized and indexed calls use a one-GiB extent sentinel.
+The native indexed selector preserves the last valid view on failure.
+
 `adx_files.h` owns up to32 named inputs per caller-owned collection. Filenames are
 copied; IDs are never reused during that collection's lifetime. File source loans
 use private synchronous descriptors and the existing optional read cache. Return
@@ -41,6 +49,28 @@ Explicit KOS paths replace a hidden current-directory API. Direct-disc providers
 retain their existing separate request-destruction requirement. Owned filenames
 remain restricted to immutable synchronous VFS backends.
 
+`LSC_SetFlowLimit` and `LSC_GetFlowLimit` map to the selected LSC policy
+and the requested limit in the loader snapshot. The active source keeps
+its captured threshold. The buffer snapshot reports the effective value.
+Batch admission uses queued DATA and a 512-sector cap. The native loader
+services each batch through bounded provider calls and exposes incremental
+progress. Stock cvFs completion visibility remains a separate gate.
+
+For `ADXT_StartSeamless`, select the linked player reload profile and
+bind a fresh reader with a stopped loader. The player stages the cached
+`ADXT_SetReloadSct` or `ADXT_SetReloadTime` equivalent before start or
+source rebind. Changing the player cache while linked playback runs
+affects the next linked start. The controller's direct LSC setter
+remains a producer-owned operation with per-source capture.
+
+The player's input snapshot provides queued bytes, whole sectors,
+nominal seconds and safety for ADX. It excludes held joint DATA and
+uses only locally staged bytes for a read-at stream or active sequence
+entry. Time uses whole groups at the validated source rate. Safety
+uses the live player cache. The producer publishes the byte count and
+format phase together. The `ADXT_GetInputSj` equivalent returns a const
+identity only when the native source uses a joint.
+
 ## Lifecycle and service
 
 `adx_group.h` collects up to32 initialized players. Poll visits a bounded number
@@ -65,9 +95,13 @@ Error query/clear and explicit owner notification remain independent of safety
 errors and stop state. `adx_recovery.h` adds NOACT, STOP and bounded REPLAY policy.
 Its owner supplies nondecreasing monotonic milliseconds. STOP schedules checked
 shutdown after a configured delay; failed stop retains resources and retries.
-REPLAY applies only to terminal source IO_ERROR, with a finite retry count.
-Malformed input, prefill timeout and other failures stop without assuming a disc
-fault. No running-input stall detector or SDK numeric-code translation is claimed.
+REPLAY accepts terminal source IO_ERROR and the optional running input watchdog,
+with a finite retry count. To enable the watchdog for a continuously supplied
+source, set `input_stall_timeout_ms` in the player config. Repeated short refills
+during one continuous input wait cause ETIMEDOUT and set `input_stalled` in the
+player snapshot. Input progress, production pause, a full refill and terminal
+status disarm the timer. Malformed input and unrelated timeouts take the stop
+path. The threshold uses native monotonic milliseconds and diagnostics use errno.
 
 Replay preparation runs once after successful software stop/join. The callback
 receives the old retained sound handle and must retain it until Audio permits
@@ -82,20 +116,38 @@ Normal source end is neither an error nor proof that the last sample played.
 
 The existing PCM sequence retains strict same-format validation, bounded enqueue,
 repeat/release and per-entry predictor reset. An atomic service queue-count query
-and player snapshot report queued decode entries, including the active entry.
-They exclude audio already consumed from the sequence and are not audible clocks.
+and player snapshot report pending entries, including the active entry at the
+counted stage. A bound loader counts pending reads. A PCM sequence counts
+pending decodes. Neither count measures audible progress.
 
 Opt-in `stream_set_linked` accepts adjacent complete ADX records. Each footer is
 validated before the next header; histories reset for each record. Rate/channels
 must stay fixed. Embedded loops and linked seeking are rejected. Ordinary streams
 still reject trailing records. Producer-side `RELEASE_LINK` finishes the current
 record; an atomic service query/player snapshot reports the follow setting.
-It never scans for a plausible next header or silently changes devices.
-The reader's staging handles split records without multiple simultaneous joint
-DATA loans. This differs from the SDK's joint mechanics. Audible seamlessness,
-exact prefetch timing and unrestricted multi-borrow SJ compatibility remain open.
+Both the stream and linked joint validate exact header and footer boundaries.
+The joint can bind the native loader over the same compressed ring. Loader
+repeat rotates the descriptor at transport completion and keeps its source ID
+and ownership. The decoder can start the next linked record while earlier PCM
+remains queued. Native loader steps stay bounded to one provider call.
+For live registration, the ordinary owner opens a named file or selects an
+AFS member, then posts its borrowed descriptor with `LOADER_ENQUEUE`. The
+producer returns admission and the assigned source ID in the one-shot receipt.
+`LOADER_FINISH` closes registration, disables repeat and lets the queue drain.
+Keep accepted source loans through producer join and backend retirement.
 
-## Finite live SFA framing
+Optional linked scan snapshots two DATA spans when a footer validates. The
+next header must already fit in those spans, at an even offset in its own
+span. This permits transport padding and supports the stock next-header
+cutoff. Default linked input waits for the next adjacent header.
+
+A joint consumer can use `kosdec_adx_joint_get_next_data` to hold two adjacent
+logical DATA spans, including a ring wrap or a queue head boundary. Consume the
+oldest prefix first and return the newest suffix first. Each queue loan reserves
+its own node. Reset and close still require both spans to be returned. Audible
+transitions and physical drive timing remain to be qualified.
+
+## Live SFA framing
 
 `adx_sfa.h` publishes a validated288-byte prefix, complete compressed body groups,
 and an18-byte endcode to a live ring. The declared frame count is known at init;
@@ -105,10 +157,16 @@ to512 bytes and report backpressure, including split headers and ring wraps.
 A joint reader may consume between calls or invoke the writer from its feed hook;
 all joint mutations remain serialized on that producer.
 
-Zero residual groups preserve predictor history and need not sound immediately
-silent. This is not an encoder. Unknown-length SFD input, demux-controlled live
-length revisions, output-side sample discard and playback-time amplitude lookup
-are not supplied by the finite writer.
+When setup precedes the final length, use `kosdec_adx_sfa_init_live` to pair the
+writer with its joint reader. The writer publishes a placeholder header and
+accepts whole groups while the producer determines the length. Call
+`kosdec_adx_sfa_set_length` once with the authoritative sample count before
+publishing a partial final group. The paired reader uses that count for output.
+Unpaired readers validate ordinary stream lengths as before. The mux or demux
+integration must determine the count and supply it on the serialized producer.
+
+Zero residual groups preserve predictor history and may produce nonzero PCM.
+Output-side sample discard and playback-time amplitude lookup remain Audio work.
 
 ## Baseline dispositions and remaining qualifications
 

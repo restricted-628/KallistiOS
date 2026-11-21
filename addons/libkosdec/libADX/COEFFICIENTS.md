@@ -7,11 +7,32 @@ API accepts every combination. Rates above 44100 Hz are an original extension.
 Native player output remains 8000..48000 Hz; low-rate sources need an explicit
 in-range output override, which changes pitch and duration.
 
+## Dreamcast v3 rounding
+
+Version 3 streams through 44100 Hz use the rounded Sega Library 2.00J setup.
+Header setup rounds the binary32 product of the cutoff and 2π before dividing
+by the rate. The integer significand calculation reconstructs that angle with
+ties to even. The Q12 lookup represents changes in the modeled setup output
+at consecutive angle words. It includes local reversals caused by intermediate
+rounding. Blocks of up to 32 transitions have an absolute checkpoint followed
+by variable-length angle deltas and two signed coefficient deltas per entry.
+Use `tests/pack_rounded_setup.py` to pack ordered numerical transition values.
+The table contains output pairs. It uses no SDK polynomial or runtime code.
+
+At 44100 Hz and a 1 Hz cutoff this setup returns {8192,-4096}. It matches the
+established profiles at 500 Hz. The argument calculation leaves FPSCR
+untouched. Target lookup uses at most 31 transitions after checkpoint search,
+at header setup only. The rounded table adds about 60 KiB of read-only data.
+Tests run the actual header/PCM path and check that v5 and higher-rate v3
+extensions retain the exact-real setup below.
+
+## Exact-real extension setup
+
 For r = cutoff/rate, let b = sqrt(2)-1, a = sqrt(2)-cos(2*pi*r), and
 p = b/(a+sqrt(a*a-b*b)). The coefficient contract is
 `q0 = trunc(8192*p)` and `q1 = -trunc(4096*p*p)` using the mathematical real
 values. Zero cutoff gives {8192,-4096}; Nyquist gives {708,-30}. This does not
-claim bitwise equivalence to a proprietary SDK's transcendental implementation.
+model the SDK's intermediate rounding.
 
 As r increases, both positive coefficient magnitudes decrease monotonically.
 The runtime searches two original tables of transition thresholds using exact
@@ -57,3 +78,19 @@ using independent binary32 PCM vectors, stream fragmentation, loop/release and
 seek cases. Host checks, SH-4 execution and real hardware are distinct evidence
 levels. No playback performance or physical sound retirement follows from a
 coefficient or PCM test pass.
+
+The rounded map was checked against the binary32 model's transitions and their
+neighbors. The integer argument calculation matched strict IEEE binary32
+arithmetic at all 486,202,500 nonzero rate/cutoff pairs through 44100 Hz. A
+SuperH p-code execution of the linked 2.00J routine matched 185 model witnesses,
+including all 140 differences found in the original eight-rate sweep. Retail
+execution of the reference routine remains unverified.
+
+
+Private same-guest comparisons against the original 2.00J mono/stereo routines
+matched 8,064 PCM values and 504 stored histories in both Flycast CPU modes.
+The test covered the 13-bit scale, both ignored scale-word bits, seeded history,
+clipping and group carry. SDK decoding of multiple groups in one call preserves
+float history between them and differs from one-group calls on the test data.
+The native decoder fixes that boundary at each group for input-fragmentation
+invariance. Retail FPSCR and SDK scheduling equivalence remain unverified.

@@ -1,4 +1,4 @@
-#include <kosdec/adx_joint.h>
+#include "adx_joint_internal.h"
 #include <string.h>
 
 #define JOINT_MAGIC UINT32_C(0x4144584a)
@@ -111,6 +111,9 @@ enum kosdec_adx_joint_status kosdec_adx_joint_seed(struct kosdec_adx_joint *j,
     if(overlap(address, bytes, (uintptr_t)j, sizeof(*j)) ||
        overlap(address, bytes, (uintptr_t)j->nodes, j->node_count * sizeof(*j->nodes)))
         return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    if(j->next_data.bytes && overlap(address, bytes,
+        (uintptr_t)j->next_data.data, j->next_data.bytes))
+        return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
     for(unsigned l = 0; l < 4; ++l) {
         if(j->borrowed[l].bytes && overlap(address, bytes,
             (uintptr_t)j->borrowed[l].data, j->borrowed[l].bytes))
@@ -143,6 +146,14 @@ enum kosdec_adx_joint_status kosdec_adx_joint_close(struct kosdec_adx_joint *j) 
     *j = (struct kosdec_adx_joint){0};
     return KOSDEC_ADX_JOINT_OK;
 }
+bool media_adx_joint_rewind_memory(struct kosdec_adx_joint *j, uint32_t offset) {
+    if(!valid(j) || j->kind != KOSDEC_ADX_JOINT_MEMORY || busy(j) ||
+       offset >= j->capacity)
+        return false;
+    j->position[KOSDEC_ADX_JOINT_DATA] = offset;
+    j->available[KOSDEC_ADX_JOINT_DATA] = j->capacity - offset;
+    return true;
+}
 enum kosdec_adx_joint_status kosdec_adx_joint_set_error(
     struct kosdec_adx_joint *j, kosdec_adx_joint_error fn, void *context) {
     if(!valid(j)) return KOSDEC_ADX_JOINT_BAD_ARGUMENT;
@@ -150,7 +161,6 @@ enum kosdec_adx_joint_status kosdec_adx_joint_set_error(
     return KOSDEC_ADX_JOINT_OK;
 }
 static size_t contiguous(const struct kosdec_adx_joint *j, unsigned line) {
-    if(j->borrowed[line].bytes) return 0;
     if(j->kind == KOSDEC_ADX_JOINT_QUEUE)
         return j->head[line] ? j->head[line]->bytes : 0;
     return minimum(j->available[line], j->capacity - j->position[line] + j->extra);
@@ -163,19 +173,48 @@ enum kosdec_adx_joint_status kosdec_adx_joint_query(
         .spare_nodes=j->spare_count, .total_nodes=j->node_count, .sealed=j->sealed};
     for(unsigned line = 0; line < 4; ++line) {
         info->available[line] = j->available[line];
-        info->contiguous[line] = contiguous(j, line);
+        info->contiguous[line] = j->borrowed[line].bytes ? 0 : contiguous(j, line);
         info->borrowed[line] = j->borrowed[line].bytes;
         info->chunks[line] = j->chunks[line];
     }
+    info->borrowed[KOSDEC_ADX_JOINT_DATA] += j->next_data.bytes;
     return KOSDEC_ADX_JOINT_OK;
 }
-enum kosdec_adx_joint_status kosdec_adx_joint_get(struct kosdec_adx_joint *j,
-    enum kosdec_adx_joint_line line, size_t request, struct kosdec_adx_chunk *out) {
+enum kosdec_adx_joint_status kosdec_adx_joint_can_get(
+    struct kosdec_adx_joint *j, enum kosdec_adx_joint_line line, size_t request,
+    struct kosdec_adx_joint_readiness *out) {
+    if(!valid(j) || !line_valid(j,line) || !out)
+        return fail(j,KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    if(request && (j->borrowed[line].bytes || (j->sealed && line != KOSDEC_ADX_JOINT_DATA))) {
+        *out = (struct kosdec_adx_joint_readiness){0};
+        return KOSDEC_ADX_JOINT_OK;
+    }
+
+    size_t available = contiguous(j,line);
+    size_t bytes = minimum(request,available);
+    bool fits = request <= available;
+    if(j->kind == KOSDEC_ADX_JOINT_QUEUE) {
+        bytes = available;
+        if(j->mode == KOSDEC_ADX_JOINT_SEPARATE)
+            fits = available && request == available;
+        else if(!available || (request && request < available && !j->spare_count))
+            fits = false;
+    }
+    if(request && j->next_token == UINT64_MAX) fits = false;
+    *out = (struct kosdec_adx_joint_readiness){.bytes = bytes, .fits = fits};
+    return KOSDEC_ADX_JOINT_OK;
+}
+
+static enum kosdec_adx_joint_status get(struct kosdec_adx_joint *j,
+    enum kosdec_adx_joint_line line, size_t request, struct kosdec_adx_chunk *out, bool next) {
     if(!valid(j) || !line_valid(j, line) || !out)
         return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
     if(request && j->sealed && line != KOSDEC_ADX_JOINT_DATA)
         return fail(j, KOSDEC_ADX_JOINT_SEALED);
-    if(request && j->borrowed[line].bytes) return fail(j, KOSDEC_ADX_JOINT_BUSY);
+    if(next && !j->borrowed[line].bytes) return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
+    struct kosdec_adx_chunk *loan = next ? &j->next_data : &j->borrowed[line];
+    struct kosdec_adx_joint_node **node = next ? &j->next_data_node : &j->reserved[line];
+    if(request && loan->bytes) return fail(j, KOSDEC_ADX_JOINT_BUSY);
     size_t n = minimum(request, contiguous(j, line));
     if(j->kind == KOSDEC_ADX_JOINT_QUEUE && j->mode == KOSDEC_ADX_JOINT_SEPARATE &&
        n < contiguous(j, line)) n = 0;
@@ -193,7 +232,7 @@ enum kosdec_adx_joint_status kosdec_adx_joint_get(struct kosdec_adx_joint *j,
         }
         chunk = (struct kosdec_adx_chunk){head->data, n, j, ++j->next_token, line};
         if(reserved != head) { head->data += n; head->bytes -= n; }
-        j->reserved[line] = reserved; j->borrowed[line] = chunk;
+        *node = reserved; *loan = chunk;
         j->available[line] -= n;
         *out = chunk;
         return KOSDEC_ADX_JOINT_OK;
@@ -201,7 +240,7 @@ enum kosdec_adx_joint_status kosdec_adx_joint_get(struct kosdec_adx_joint *j,
     if(n) {
         chunk = (struct kosdec_adx_chunk){j->buffer + j->position[line], n,
                                          j, ++j->next_token, line};
-        j->borrowed[line] = chunk;
+        *loan = chunk;
         j->available[line] -= n;
         j->position[line] += n;
         if(j->kind == KOSDEC_ADX_JOINT_RING && j->position[line] >= j->capacity)
@@ -210,33 +249,59 @@ enum kosdec_adx_joint_status kosdec_adx_joint_get(struct kosdec_adx_joint *j,
     *out = chunk;
     return KOSDEC_ADX_JOINT_OK;
 }
+enum kosdec_adx_joint_status kosdec_adx_joint_get(struct kosdec_adx_joint *j,
+    enum kosdec_adx_joint_line line, size_t request, struct kosdec_adx_chunk *out) {
+    return get(j,line,request,out,false);
+}
+enum kosdec_adx_joint_status kosdec_adx_joint_get_next_data(struct kosdec_adx_joint *j,
+    size_t request, struct kosdec_adx_chunk *out) {
+    return get(j,KOSDEC_ADX_JOINT_DATA,request,out,true);
+}
+static bool is_next(const struct kosdec_adx_joint *j, const struct kosdec_adx_chunk *c) {
+    return c->line == KOSDEC_ADX_JOINT_DATA && j->next_data.bytes &&
+           j->next_data.token == c->token;
+}
+static void promote_data(struct kosdec_adx_joint *j, enum kosdec_adx_joint_line line) {
+    if(line != KOSDEC_ADX_JOINT_DATA || !j->next_data.bytes) return;
+    j->borrowed[line] = j->next_data;
+    j->reserved[line] = j->next_data_node;
+    j->next_data = (struct kosdec_adx_chunk){0};
+    j->next_data_node = NULL;
+}
 static enum kosdec_adx_joint_status check(struct kosdec_adx_joint *j,
     const struct kosdec_adx_chunk *c, int suffix) {
     if(!valid(j) || !c) return fail(j, KOSDEC_ADX_JOINT_BAD_ARGUMENT);
     if(!c->bytes) return KOSDEC_ADX_JOINT_OK;
     if(c->owner != j || !line_valid(j, c->line)) return fail(j, KOSDEC_ADX_JOINT_STALE);
-    const struct kosdec_adx_chunk *b = &j->borrowed[c->line];
+    bool next = is_next(j,c);
+    const struct kosdec_adx_chunk *b = next ? &j->next_data : &j->borrowed[c->line];
     if(!b->bytes || b->token != c->token || c->bytes > b->bytes ||
        c->data != b->data + (suffix ? b->bytes - c->bytes : 0))
         return fail(j, KOSDEC_ADX_JOINT_STALE);
+    if((!suffix && next) || (suffix && !next &&
+       c->line == KOSDEC_ADX_JOINT_DATA && j->next_data.bytes))
+        return fail(j, KOSDEC_ADX_JOINT_BUSY);
     return KOSDEC_ADX_JOINT_OK;
 }
 static enum kosdec_adx_joint_status return_queue(struct kosdec_adx_joint *j,
     unsigned destination, const struct kosdec_adx_chunk *c, int prepend) {
     if(j->sealed && !prepend && destination == KOSDEC_ADX_JOINT_DATA)
         return fail(j, KOSDEC_ADX_JOINT_SEALED);
-    struct kosdec_adx_chunk *b = &j->borrowed[c->line];
+    bool next = is_next(j,c);
+    struct kosdec_adx_chunk *b = next ? &j->next_data : &j->borrowed[c->line];
+    struct kosdec_adx_joint_node **node = next ? &j->next_data_node : &j->reserved[c->line];
     int whole = c->bytes == b->bytes;
     int used = enqueue(j, destination, c->data, c->bytes, prepend,
-                       whole ? j->reserved[c->line] : NULL);
+                       whole ? *node : NULL);
     if(used < 0) return fail(j, KOSDEC_ADX_JOINT_LIMIT);
     j->available[destination] += c->bytes;
     if(!prepend) b->data += c->bytes;
     b->bytes -= c->bytes;
     if(whole) {
-        if(!used) free_node(j, j->reserved[c->line]);
-        j->reserved[c->line] = NULL;
+        if(!used) free_node(j, *node);
+        *node = NULL;
         *b = (struct kosdec_adx_chunk){0};
+        if(!prepend) promote_data(j,c->line);
     }
     return KOSDEC_ADX_JOINT_OK;
 }
@@ -259,6 +324,7 @@ enum kosdec_adx_joint_status kosdec_adx_joint_detach(
     if(!b->bytes) {
         free_node(j, j->reserved[c->line]); j->reserved[c->line] = NULL;
         *b = (struct kosdec_adx_chunk){0};
+        promote_data(j,c->line);
     }
     return KOSDEC_ADX_JOINT_OK;
 }
@@ -319,7 +385,10 @@ enum kosdec_adx_joint_status kosdec_adx_joint_put(
         j->available[1 - c->line] += c->bytes;
     }
     b->data += c->bytes; b->bytes -= c->bytes;
-    if(!b->bytes) *b = (struct kosdec_adx_chunk){0};
+    if(!b->bytes) {
+        *b = (struct kosdec_adx_chunk){0};
+        promote_data(j,c->line);
+    }
     return KOSDEC_ADX_JOINT_OK;
 }
 enum kosdec_adx_joint_status kosdec_adx_joint_unget(
@@ -327,7 +396,7 @@ enum kosdec_adx_joint_status kosdec_adx_joint_unget(
     enum kosdec_adx_joint_status status = check(j, c, 1);
     if(status != KOSDEC_ADX_JOINT_OK || !c->bytes) return status;
     if(j->kind == KOSDEC_ADX_JOINT_QUEUE) return return_queue(j, c->line, c, 1);
-    struct kosdec_adx_chunk *b = &j->borrowed[c->line];
+    struct kosdec_adx_chunk *b = is_next(j,c) ? &j->next_data : &j->borrowed[c->line];
     size_t position = j->position[c->line];
     if(position < c->bytes) position += j->capacity;
     j->position[c->line] = position - c->bytes;

@@ -61,7 +61,8 @@ def pcm(bits):
 def group(block, frames, coeff, history):
     c0, c1 = [rn32(F(x, 4096)) for x in coeff]
     h1, h2 = [rn32(F(x * 65536)) for x in history]
-    scale = rn32(F(block[0] * 256 + block[1] + 1))
+    scale_word = (block[0] << 8) | block[1]
+    scale = rn32(F((scale_word & 0x1fff) + 1))
     samples, clips = [], 0
     for i in range(frames):
         n = (block[2 + i // 2] >> (0 if i & 1 else 4)) & 15

@@ -1,8 +1,9 @@
-#include <kosdec/adx_loader.h>
+#include "adx_loader_internal.h"
 #include <string.h>
 #include <math.h>
 #define LOADER_MAGIC UINT32_C(0x4144584c)
 #define SECTOR KOSDEC_ADX_REQUEST_SECTOR_BYTES
+#define LSC_MAX_REFILL_SECTORS 512u
 static bool valid(const struct kosdec_adx_loader *l){return l && l->magic==LOADER_MAGIC;}
 enum kosdec_adx_loader_status kosdec_adx_loader_init(struct kosdec_adx_loader *l,
                                                    struct kosdec_adx_joint *joint) {
@@ -48,10 +49,37 @@ static enum kosdec_adx_loader_status failed(struct kosdec_adx_loader *l,enum kos
     return KOSDEC_ADX_LOADER_IO_ERROR;
 }
 static void complete(struct kosdec_adx_loader *l,struct kosdec_adx_loader_entry *e) {
+    ++e->info.completed_passes;
+    l->head=(l->head+1)%KOSDEC_ADX_LOADER_SOURCES;
+    if(l->repeat) {
+        struct kosdec_adx_loader_entry next = *e;
+        *e = (struct kosdec_adx_loader_entry){0};
+        next.info.state = KOSDEC_ADX_LOADER_QUEUED;
+        next.info.read_sectors = next.info.published_bytes = 0;
+        next.completed_sectors = next.completed_bytes = 0;
+        l->entries[l->tail] = next;
+        l->tail = (l->tail + 1) % KOSDEC_ADX_LOADER_SOURCES;
+        return;
+    }
     e->info.state=KOSDEC_ADX_LOADER_END;e->read_at=NULL;e->context=NULL;
-    l->head=(l->head+1)%KOSDEC_ADX_LOADER_SOURCES;--l->count;
-    if(!l->count)l->state=KOSDEC_ADX_LOADER_WAIT;
+    if(!--l->count)l->state=KOSDEC_ADX_LOADER_WAIT;
 }
+
+static size_t effective_flow_limit(const struct kosdec_adx_loader *l) {
+    if(l->lsc_flow && l->count && l->entries[l->head].info.state == KOSDEC_ADX_LOADER_READING)
+        return l->source_flow_limit;
+    return l->flow_limit;
+}
+
+static uint32_t lsc_refill_sectors(const struct kosdec_adx_loader_entry *e, size_t bytes) {
+    uint32_t remaining = e->info.sectors - e->completed_sectors;
+    if(remaining <= LSC_MAX_REFILL_SECTORS &&
+       e->info.data_bytes - e->completed_bytes <= bytes)
+        return remaining;
+    size_t sectors = bytes / SECTOR;
+    return sectors < LSC_MAX_REFILL_SECTORS ? (uint32_t)sectors : LSC_MAX_REFILL_SECTORS;
+}
+
 enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *l) {
     if(!valid(l))return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
     if(l->state==KOSDEC_ADX_LOADER_FAILED)return KOSDEC_ADX_LOADER_IO_ERROR;
@@ -63,15 +91,30 @@ enum kosdec_adx_loader_status kosdec_adx_loader_step(struct kosdec_adx_loader *l
         if(kosdec_adx_joint_query(l->joint,&joint)!=KOSDEC_ADX_JOINT_OK || joint.sealed || joint.capacity!=l->capacity)
             return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
         if(joint.borrowed[KOSDEC_ADX_JOINT_FREE])return KOSDEC_ADX_LOADER_BUSY;
+        if(l->lsc_flow && e->info.state == KOSDEC_ADX_LOADER_QUEUED) {
+            l->source_flow_limit = l->flow_limit;
+            e->info.state = KOSDEC_ADX_LOADER_READING;
+        }
         size_t buffered=joint.available[KOSDEC_ADX_JOINT_DATA];
-        if(!l->sector_policy) buffered+=joint.borrowed[KOSDEC_ADX_JOINT_DATA];
-        if((l->flow_limit || l->sector_policy) && buffered>=l->flow_limit)
+        if(!l->sector_policy && !l->lsc_flow) buffered+=joint.borrowed[KOSDEC_ADX_JOINT_DATA];
+        size_t limit = effective_flow_limit(l);
+        if((limit || l->sector_policy || l->lsc_flow) && buffered >= limit)
             return KOSDEC_ADX_LOADER_NEED_OUTPUT;
+        uint32_t sectors = 1;
+        if(l->lsc_flow) {
+            sectors = lsc_refill_sectors(e, joint.contiguous[KOSDEC_ADX_JOINT_FREE]);
+            if(!sectors) {
+                /* Native joints can split a single sector over a wrap or nodes. */
+                if(!lsc_refill_sectors(e, joint.available[KOSDEC_ADX_JOINT_FREE]))
+                    return KOSDEC_ADX_LOADER_NEED_OUTPUT;
+                sectors = 1;
+            }
+        }
         (void)kosdec_adx_request_init(&l->request,e->read_at,e->context,e->input_bytes);
         l->active=true;
         if(kosdec_adx_request_seek(&l->request,(int64_t)e->info.start_sector+e->completed_sectors,KOSDEC_ADX_REQUEST_SET)!=KOSDEC_ADX_REQUEST_STOPPED)
             return failed(l,KOSDEC_ADX_REQUEST_IO_ERROR);
-        enum kosdec_adx_request_status s=kosdec_adx_request_start_joint(&l->request,1,l->joint);
+        enum kosdec_adx_request_status s=kosdec_adx_request_start_joint(&l->request,sectors,l->joint);
         if(s!=KOSDEC_ADX_REQUEST_READING)return failed(l,s);
         e->info.state=KOSDEC_ADX_LOADER_READING;
     }
@@ -95,9 +138,26 @@ enum kosdec_adx_loader_status kosdec_adx_loader_pause(struct kosdec_adx_loader *
     if(!valid(l))return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
     l->paused=pause;return KOSDEC_ADX_LOADER_OK;
 }
+enum kosdec_adx_loader_status kosdec_adx_loader_set_repeat(struct kosdec_adx_loader *l, bool repeat) {
+    if(!valid(l)) return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    if(l->state == KOSDEC_ADX_LOADER_FAILED) return KOSDEC_ADX_LOADER_IO_ERROR;
+    l->repeat = repeat;
+    return KOSDEC_ADX_LOADER_OK;
+}
 enum kosdec_adx_loader_status kosdec_adx_loader_set_flow(struct kosdec_adx_loader *l,size_t bytes) {
     if(!valid(l) || bytes>l->capacity)return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
-    l->flow_limit=bytes;l->sector_policy=false;return KOSDEC_ADX_LOADER_OK;
+    l->flow_limit=bytes;l->sector_policy=false;l->lsc_flow=false;return KOSDEC_ADX_LOADER_OK;
+}
+enum kosdec_adx_loader_status kosdec_adx_loader_set_lsc_flow(
+    struct kosdec_adx_loader *l, size_t bytes) {
+    if(!valid(l) || l->capacity < SECTOR || bytes > l->capacity)
+        return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    if(!l->lsc_flow && l->state != KOSDEC_ADX_LOADER_STOPPED)
+        return KOSDEC_ADX_LOADER_BUSY;
+    l->flow_limit = bytes;
+    l->sector_policy = false;
+    l->lsc_flow = true;
+    return KOSDEC_ADX_LOADER_OK;
 }
 static bool sector_capacity(const struct kosdec_adx_loader *l) {
     return valid(l) && l->capacity/SECTOR && l->capacity/SECTOR<=INT16_MAX;
@@ -105,31 +165,65 @@ static bool sector_capacity(const struct kosdec_adx_loader *l) {
 static bool adx_format(unsigned channels,unsigned rate) {
     return (channels==1 || channels==2) && rate && rate<=48000;
 }
+uint32_t media_adx_default_reload_sectors(size_t capacity) {
+    return (uint32_t)(int32_t)((float)(capacity / SECTOR) * 0.85f);
+}
 enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_sectors(
     struct kosdec_adx_loader *l,uint32_t sectors) {
     if(!sector_capacity(l) || sectors>l->capacity/SECTOR)
         return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
-    l->flow_limit=(size_t)sectors*SECTOR;l->sector_policy=true;
+    l->flow_limit=(size_t)sectors*SECTOR;l->sector_policy=true;l->lsc_flow=false;
     return KOSDEC_ADX_LOADER_OK;
 }
 enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_default(
     struct kosdec_adx_loader *l) {
     if(!sector_capacity(l)) return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
-    float threshold=(float)(l->capacity/SECTOR)*0.85f;
-    return kosdec_adx_loader_set_reload_sectors(l,(uint32_t)(int32_t)threshold);
+    return kosdec_adx_loader_set_reload_sectors(l,media_adx_default_reload_sectors(l->capacity));
 }
-enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_time(
-    struct kosdec_adx_loader *l,float seconds,unsigned channels,unsigned rate) {
-    if(!sector_capacity(l) || !adx_format(channels,rate) ||
-       !isfinite(seconds) || seconds<0.0f) return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+bool media_adx_reload_time_sectors(float seconds, unsigned channels,
+    unsigned rate, uint32_t capacity_sectors, uint32_t *out) {
+    if(!adx_format(channels,rate) || !isfinite(seconds) || seconds<0.0f) return false;
     float samples=(float)rate*seconds;
-    uint32_t sectors=(uint32_t)(l->capacity/SECTOR);
+    uint32_t sectors=capacity_sectors;
     if(samples<0x1p31f) {
         uint32_t frames=(uint32_t)(int32_t)samples;
         uint64_t requested=(uint64_t)(frames/32)*18*channels/SECTOR;
         if(requested<sectors) sectors=(uint32_t)requested;
     }
+    *out = sectors;
+    return true;
+}
+enum kosdec_adx_loader_status kosdec_adx_loader_set_reload_time(
+    struct kosdec_adx_loader *l,float seconds,unsigned channels,unsigned rate) {
+    uint32_t sectors;
+    if(!sector_capacity(l) ||
+       !media_adx_reload_time_sectors(seconds,channels,rate,(uint32_t)(l->capacity/SECTOR),&sectors))
+        return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
     return kosdec_adx_loader_set_reload_sectors(l,sectors);
+}
+enum kosdec_adx_loader_status media_adx_loader_start_linked(
+    struct kosdec_adx_loader *l, uint32_t sectors, bool clamp) {
+    if(!sector_capacity(l)) return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    if(l->state != KOSDEC_ADX_LOADER_STOPPED) return KOSDEC_ADX_LOADER_BUSY;
+    struct kosdec_adx_joint_info joint;
+    if(kosdec_adx_joint_query(l->joint,&joint) != KOSDEC_ADX_JOINT_OK ||
+       joint.sealed || joint.capacity != l->capacity ||
+       joint.borrowed[KOSDEC_ADX_JOINT_FREE] || joint.borrowed[KOSDEC_ADX_JOINT_DATA] ||
+       joint.available[KOSDEC_ADX_JOINT_DATA])
+        return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+    uint32_t capacity_sectors = (uint32_t)(l->capacity / SECTOR);
+    if(sectors == MEDIA_ADX_RELOAD_DEFAULT) sectors = media_adx_default_reload_sectors(l->capacity);
+    if(sectors > capacity_sectors) {
+        if(!clamp) return KOSDEC_ADX_LOADER_BAD_ARGUMENT;
+        sectors = capacity_sectors;
+    }
+    enum kosdec_adx_loader_status status = kosdec_adx_loader_set_lsc_flow(l,(size_t)sectors * SECTOR);
+    if(status != KOSDEC_ADX_LOADER_OK) return status;
+    return kosdec_adx_loader_start(l);
+}
+float media_adx_input_seconds(uint32_t bytes, unsigned channels, unsigned rate) {
+    uint32_t frames = (bytes / (18 * channels)) * 32;
+    return (float)frames / (float)rate;
 }
 bool kosdec_adx_loader_get_buffer_info(const struct kosdec_adx_loader *l,
     unsigned channels,unsigned rate,struct kosdec_adx_loader_buffer_info *out) {
@@ -138,12 +232,12 @@ bool kosdec_adx_loader_get_buffer_info(const struct kosdec_adx_loader *l,
        kosdec_adx_joint_query(l->joint,&info)!=KOSDEC_ADX_JOINT_OK ||
        info.capacity!=l->capacity) return false;
     size_t bytes=info.available[KOSDEC_ADX_JOINT_DATA];
-    uint32_t frames=(uint32_t)(bytes/(18*channels))*32;
+    size_t limit = effective_flow_limit(l);
     *out=(struct kosdec_adx_loader_buffer_info){
         .queued_bytes=bytes,.held_bytes=info.borrowed[KOSDEC_ADX_JOINT_DATA],
-        .reload_bytes=l->flow_limit,.sectors=(uint32_t)(bytes/SECTOR),
-        .seconds=(float)frames/(float)rate,.sector_policy=l->sector_policy,
-        .safe=bytes>=l->flow_limit
+        .reload_bytes=limit,.sectors=(uint32_t)(bytes/SECTOR),
+        .seconds=media_adx_input_seconds((uint32_t)bytes,channels,rate),.sector_policy=l->sector_policy,
+        .safe=bytes>=limit
     };
     return true;
 }

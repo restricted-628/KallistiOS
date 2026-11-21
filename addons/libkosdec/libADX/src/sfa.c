@@ -1,4 +1,5 @@
 #include <kosdec/adx_sfa.h>
+#include "adx_joint_reader_internal.h"
 #include <string.h>
 #define SFA_MAGIC UINT32_C(0x41445848)
 static bool valid(const struct kosdec_adx_sfa *s) { return s && s->magic==SFA_MAGIC; }
@@ -16,12 +17,37 @@ enum kosdec_adx_status kosdec_adx_sfa_init(struct kosdec_adx_sfa *s,
        i.kind!=KOSDEC_ADX_JOINT_RING || i.capacity<36 || i.sealed ||
        i.available[KOSDEC_ADX_JOINT_FREE]!=i.capacity ||
        i.borrowed[0] || i.borrowed[1]) return KOSDEC_ADX_BAD_ARGUMENT;
-    struct kosdec_adx_sfa next={.magic=SFA_MAGIC,.joint=j,.channels=channels,
+    struct kosdec_adx_sfa next={.magic=SFA_MAGIC,.joint=j,.channels=channels,.length_known=true,
         .groups=(uint32_t)(((uint64_t)frames+31)/32)};
     enum kosdec_adx_status status=kosdec_adx_make_sfa_header(next.header,
         sizeof(next.header),channels,rate,frames);
     if(status!=KOSDEC_ADX_DONE) return status;
     *s=next;return KOSDEC_ADX_DONE;
+}
+enum kosdec_adx_status kosdec_adx_sfa_init_live(struct kosdec_adx_sfa *s,
+    struct kosdec_adx_joint_reader *reader,unsigned channels,uint32_t rate) {
+    if(!s || !reader) return KOSDEC_ADX_BAD_ARGUMENT;
+    struct kosdec_adx_sfa next;
+    enum kosdec_adx_status status=kosdec_adx_sfa_init(&next,reader->joint,channels,rate,
+                                                    KOSDEC_ADX_MAX_FRAMES);
+    if(status!=KOSDEC_ADX_DONE) return status;
+    if(!media_adx_joint_reader_enable_live_sfa(reader)) return KOSDEC_ADX_BAD_ARGUMENT;
+    next.live_reader=reader;
+    next.length_known=false;
+    next.groups=KOSDEC_ADX_MAX_FRAMES/32u;
+    *s=next;
+    return KOSDEC_ADX_DONE;
+}
+enum kosdec_adx_status kosdec_adx_sfa_set_length(struct kosdec_adx_sfa *s,
+    uint32_t frames) {
+    if(!valid(s) || !s->live_reader || s->length_known || s->done ||
+       frames>KOSDEC_ADX_MAX_FRAMES || frames/32u<s->published_groups)
+        return KOSDEC_ADX_BAD_ARGUMENT;
+    if(!media_adx_joint_reader_set_sfa_length(s->live_reader,s->joint,frames))
+        return KOSDEC_ADX_BAD_ARGUMENT;
+    s->groups=(frames+31u)/32u;
+    s->length_known=true;
+    return KOSDEC_ADX_DONE;
 }
 /* The exclusive producer preflight guarantees both wrap admissions can commit;
    ring get/put cannot exhaust nodes or fail after admitted valid prefix spans. */
@@ -50,7 +76,7 @@ enum kosdec_adx_status kosdec_adx_sfa_pump(struct kosdec_adx_sfa *s) {
     if(s->header_used<sizeof(s->header)) {
         p=s->header;used=&s->header_used;limit=sizeof(s->header);
     }
-    else if(s->published_groups<s->groups) return KOSDEC_ADX_MORE;
+    else if(!s->length_known || s->published_groups<s->groups) return KOSDEC_ADX_MORE;
     else { p=footer;used=&s->footer_used;limit=sizeof(footer); }
     size_t bytes=limit-*used;
     if(bytes>i.available[KOSDEC_ADX_JOINT_FREE]) bytes=i.available[KOSDEC_ADX_JOINT_FREE];

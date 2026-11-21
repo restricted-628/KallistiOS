@@ -5,17 +5,33 @@ SH_AR ?= sh-elf-ar
 HOST_CC ?= cc
 HOST_AR ?= ar
 SHZ_INCLUDE ?= ../../libsh4zam/upstream/include
+ADX_RETAINED_CLOCK ?= 0
+ADX_RETAINED_GAIN ?= 0
+RETAINED_PCM_INCLUDE ?= $(KOS_BASE)/kernel/arch/dreamcast/sound
+RETAINED_CLOCK_FLAGS = -DMEDIA_ADX_RETAINED_CLOCK -I"$(RETAINED_PCM_INCLUDE)"
+ifeq ($(ADX_RETAINED_GAIN),1)
+ifneq ($(ADX_RETAINED_CLOCK),1)
+$(error ADX_RETAINED_GAIN requires ADX_RETAINED_CLOCK=1)
+endif
+BUILD ?= .build/retained-gain
+RETAINED_CLOCK_FLAGS += -DMEDIA_ADX_RETAINED_GAIN
+RETAINED_GAIN_DEPS = src/adx_legacy_gain_table.h
+endif
+ifeq ($(ADX_RETAINED_CLOCK),1)
+BUILD ?= .build/retained-clock
+$(BUILD)/sh4/player.o: PRIVATE_PLAYER_FLAGS = $(RETAINED_CLOCK_FLAGS)
+endif
 BUILD ?= .build
 SH_CFLAGS ?= -O2
 HOST_CFLAGS ?= -O2
 SAN_CFLAGS ?= -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 STRICT = -std=gnu17 -Wall -Wextra -Werror -fno-fast-math -ffp-contract=off -fno-lto
 INCLUDES = -Iinclude -isystem $(SHZ_INCLUDE)
-NAMES = sfa source loader spsd aiff au wave request partition amplitude joint joint_reader decoder adx_math adx_setup memory stream index sequence pipe service
+NAMES = sfa source loader spsd aiff au wave request partition amplitude joint joint_reader joint_sector decoder adx_math adx_setup memory stream index sequence pipe service
 SH_OBJS = $(BUILD)/sh4/recovery.o $(BUILD)/sh4/group.o $(BUILD)/sh4/files.o $(BUILD)/sh4/named_file.o $(BUILD)/sh4/player.o $(BUILD)/sh4/disc.o $(BUILD)/sh4/file.o $(addprefix $(BUILD)/sh4/,$(addsuffix .o,$(NAMES)))
 HOST_OBJS = $(addprefix $(BUILD)/host-test/,$(addsuffix .o,$(NAMES)))
 SAN_OBJS = $(addprefix $(BUILD)/sanitize/,$(addsuffix .o,$(NAMES)))
-HEADERS = include/kosdec/adx_sfa.h include/kosdec/adx_recovery.h include/kosdec/adx_group.h include/kosdec/adx_files.h include/kosdec/adx_source.h include/kosdec/adx_named_file.h include/kosdec/adx_loader.h include/kosdec/adx_spsd.h include/kosdec/adx_aiff.h include/kosdec/adx_au.h include/kosdec/adx_partition.h include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_filter.h src/adx_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
+HEADERS = src/adx_decoder_internal.h src/adx_joint_internal.h src/adx_joint_reader_internal.h include/kosdec/adx_sfa.h include/kosdec/adx_recovery.h include/kosdec/adx_group.h include/kosdec/adx_files.h include/kosdec/adx_source.h include/kosdec/adx_named_file.h include/kosdec/adx_loader.h include/kosdec/adx_spsd.h include/kosdec/adx_aiff.h include/kosdec/adx_au.h include/kosdec/adx_partition.h include/kosdec/adx_amplitude.h include/kosdec/adx_joint_reader.h include/kosdec/adx_joint.h include/kosdec/adx_player.h include/kosdec/adx_service.h include/kosdec/adx_pipe.h include/kosdec/adx_sequence.h include/kosdec/adx_index.h include/kosdec/adx_stream.h include/kosdec/adx_memory.h include/kosdec/adx.h src/adx_math.h src/adx_filter.h src/adx_setup_table.h src/adx_rounded_setup_table.h $(SHZ_INCLUDE)/sh4zam/shz_cdefs.h
 
 .PHONY: sh4 test sanitize install clean
 sh4: $(BUILD)/sh4/libADX.a
@@ -134,7 +150,7 @@ sanitize: $(BUILD)/sanitize/recovery_player $(BUILD)/sanitize/sfa $(BUILD)/sanit
 
 $(BUILD)/sh4/%.o: src/%.c $(HEADERS) Makefile
 	mkdir -p $(@D)
-	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) -MMD -MP -c $< -o $@
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) $(PRIVATE_PLAYER_FLAGS) -MMD -MP -c $< -o $@
 $(BUILD)/host-test/%.o: src/%.c $(HEADERS) Makefile
 	mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) $(INCLUDES) -DMEDIA_ADX_MATH_HOST_TEST -MMD -MP -c $< -o $@
@@ -173,6 +189,7 @@ install: sh4
 	install -m 644 $(BUILD)/sh4/libADX.a "$(DESTDIR)$(PREFIX)/lib/dreamcast/libADX.a"
 
 clean:
+	rm -f $(ADX_NATIVE_OBJS) $(ADX_NATIVE_OBJS:.o=.d) $(BUILD)/sh4/adx_native_test.elf
 	rm -f $(BUILD)/host-test/sfa $(BUILD)/sanitize/sfa $(BUILD)/host-test/recovery $(BUILD)/sanitize/recovery $(BUILD)/host-test/recovery_player $(BUILD)/sanitize/recovery_player
 	rm -f $(BUILD)/host-test/linked $(BUILD)/sanitize/linked
 	rm -f $(BUILD)/sanitize/files $(BUILD)/sanitize/group
@@ -269,6 +286,29 @@ $(BUILD)/host-test/disc: tests/disc.c tests/disc_include/dc/cdrom.h tests/stream
 
 $(BUILD)/sanitize/disc: tests/disc.c tests/disc_include/dc/cdrom.h tests/stream_fixture.h tests/memory_vectors.h tests/profile_vectors.h src/disc.c include/kosdec/adx_disc.h $(BUILD)/sanitize/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Itests/disc_include -Iinclude tests/disc.c src/disc.c $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+.PHONY: retained-clock-test retained-clock-sanitize
+retained-clock-test: $(BUILD)/host-test/retained_player
+	$<
+retained-clock-sanitize: $(BUILD)/sanitize/retained_player
+	$<
+$(BUILD)/host-test/retained_player: tests/retained_player.c tests/player.c tests/player_mock.c src/player.c $(BUILD)/host-test/libADX-test.a $(HEADERS) Makefile $(RETAINED_GAIN_DEPS)
+	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) $(RETAINED_CLOCK_FLAGS) -pthread -Itests/player_include -Iinclude $(filter-out tests/player.c,$(filter %.c,$^)) $(BUILD)/host-test/libADX-test.a -lm -o $@
+$(BUILD)/sanitize/retained_player: tests/retained_player.c tests/player.c tests/player_mock.c src/player.c $(BUILD)/sanitize/libADX-test.a $(HEADERS) Makefile $(RETAINED_GAIN_DEPS)
+	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) $(RETAINED_CLOCK_FLAGS) -pthread -Itests/player_include -Iinclude $(filter-out tests/player.c,$(filter %.c,$^)) $(BUILD)/sanitize/libADX-test.a -lm -o $@
+
+# Opt-in target numerical and source-framing fixture. It uses synthetic PCM
+# oracles and exercises the linked SH-4 archive without owning an audio stream.
+ADX_NATIVE_CASES = setup expanded clipped_history loop_metadata profiles sfa joint
+ADX_NATIVE_OBJS = $(addprefix $(BUILD)/sh4/native-,$(addsuffix .o,$(ADX_NATIVE_CASES)))
+.PHONY: native-test-elf
+native-test-elf: $(BUILD)/sh4/adx_native_test.elf
+$(BUILD)/sh4/native-%.o: tests/%.c $(HEADERS) Makefile
+	mkdir -p $(@D)
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) -Isrc -MMD -MP -Dmain=adx_$*_run -c $< -o $@
+$(BUILD)/sh4/adx_native_test.elf: tests/native.c $(ADX_NATIVE_OBJS) $(BUILD)/sh4/libADX.a
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) -o $@ $^ -lm
+-include $(ADX_NATIVE_OBJS:.o=.d)
 
 # Optional fork-native integration exerciser. Supply your own /cd/test.adx.
 # example-object is compile evidence; example-elf also needs this worker's KOS

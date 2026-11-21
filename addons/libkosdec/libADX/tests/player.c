@@ -13,7 +13,7 @@ struct fixture {
     struct kosdec_adx_stream stream;
     struct kosdec_adx_sequence sequence;
     struct kosdec_adx_player_config config;
-    uint8_t *data;size_t bytes;unsigned calls;bool fail,wait;
+    uint8_t *data;size_t bytes, read_limit;unsigned calls;bool fail,wait;
     alignas(32) int16_t pcm[1024],scratch[257];
     alignas(32) uint8_t stack[16384];
 };
@@ -22,12 +22,13 @@ static struct kosdec_adx_input_result input(void *ctx,uint32_t off,uint8_t *dst,
     if(f->fail)return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_ERROR,0};
     if(__atomic_load_n(&f->wait,__ATOMIC_ACQUIRE))return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
     CHECK(off<f->bytes && cap<=f->bytes-off);
-    if(cap>17)cap=17;
+    if(cap>f->read_limit)cap=f->read_limit;
     memcpy(dst,f->data+off,cap);
     return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,cap};
 }
 static void init(struct fixture *f,unsigned channels,bool sequence) {
     memset(f,0,sizeof(*f));mock_reset();f->data=stream(50,18,channels,32,65,&f->bytes);
+    f->read_limit=17;
     memset(f->data+20,0,24);
     kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
     kosdec_adx_sequence_init(&f->sequence,false);
@@ -70,6 +71,42 @@ static void complete(void) {
         CHECK(!mock_callback && !mock_userdata && mock_joins==1 && mock_stops==1);
         CHECK(!kosdec_adx_player_stop(&f.player,1000) && mock_joins==1 && mock_stops==1);
         CHECK(kosdec_adx_player_start(&f.player)<0 && kosdec_adx_player_poll(&f.player)<0);
+        free(f.data);
+    }
+}
+static void staged_input(void) {
+    for(unsigned sequence=0;sequence<2;++sequence) {
+        struct fixture f;
+        init(&f,2,sequence!=0);
+        f.read_limit=512;
+        f.config.capacity=32;
+        f.config.sound_bytes=64;
+        f.config.use_lsc_reload=true;
+        CHECK(!kosdec_adx_player_init(&f.player,sequence?NULL:&f.stream,
+                                     sequence?&f.sequence:NULL,&f.config));
+        struct kosdec_adx_player_input input;
+        CHECK(!kosdec_adx_player_get_input(&f.player,&input) &&
+              !input.joint && !input.queued_bytes && !input.safe);
+        CHECK(!kosdec_adx_player_set_linked_reload_sectors(&f.player,1));
+        CHECK(!kosdec_adx_player_start(&f.player));
+        const uint32_t staged=(uint32_t)f.bytes-50-36;
+        /* No consumer is running. After one group the PCM ring stays full. */
+        for(unsigned i=0;i<1000;++i) {
+            CHECK(!kosdec_adx_player_get_input(&f.player,&input));
+            if(input.queued_bytes==staged) break;
+            mock_pause();
+        }
+        CHECK(info(&f).state==KOSDEC_ADX_PLAYER_PREFILL);
+        CHECK(!input.joint && !input.sectors && input.queued_bytes==staged &&
+              input.seconds==64.0f/44100.0f &&
+              input.safety_limit_bytes==2048 && !input.safe);
+        CHECK(!kosdec_adx_player_set_linked_reload_time(&f.player,1.0f,2,44100));
+        CHECK(!kosdec_adx_player_get_input(&f.player,&input) &&
+              input.queued_bytes==staged && !input.safety_limit_bytes && input.safe);
+        CHECK(!kosdec_adx_player_stop(&f.player,1000));
+        CHECK(f.calls==1);
+        CHECK(!kosdec_adx_player_get_input(&f.player,&input) &&
+              !input.joint && !input.queued_bytes && !input.seconds && !input.safe);
         free(f.data);
     }
 }
@@ -191,6 +228,32 @@ static void reinitialize_source(struct fixture *f,unsigned channels,unsigned rat
         for(unsigned n=0;n<3;++n)CHECK(kosdec_adx_sequence_enqueue(&f->sequence,&src)==KOSDEC_ADX_MORE);
         CHECK(kosdec_adx_sequence_start(&f->sequence)==KOSDEC_ADX_MORE);
     }
+}
+static void filter_settings(void) {
+    struct fixture f;
+    init(&f, 2, false);
+    struct kosdec_adx_filter_settings settings = {19, 31};
+    CHECK(kosdec_adx_player_get_filter_settings(NULL, &settings) < 0 && errno == EINVAL);
+    CHECK(settings.cutoff == 19 && settings.resonance == 31);
+    CHECK(kosdec_adx_player_get_filter_settings(&f.player, NULL) < 0 && errno == EINVAL);
+    CHECK(!kosdec_adx_player_get_filter_settings(&f.player, &settings));
+    CHECK(settings.cutoff == 0 && settings.resonance == 0);
+    CHECK(!kosdec_adx_player_set_filter_settings(&f.player, INT32_MIN, INT32_MAX));
+    CHECK(!mock_allocs && !mock_updates);
+    CHECK(!kosdec_adx_player_start(&f.player));
+    CHECK(!until_sound(&f));
+    CHECK(!kosdec_adx_player_release_source(&f.player));
+    reinitialize_source(&f, 2, 44100, false);
+    CHECK(!kosdec_adx_player_bind_source(&f.player, &f.stream, NULL));
+    CHECK(!until_sound(&f));
+    CHECK(!kosdec_adx_player_get_filter_settings(&f.player, &settings));
+    CHECK(settings.cutoff == INT32_MIN && settings.resonance == INT32_MAX);
+    CHECK(!kosdec_adx_player_set_filter_settings(&f.player, 1234, -2));
+    CHECK(!mock_updates && mock_starts == 1 && mock_frames == 130);
+    CHECK(!kosdec_adx_player_stop(&f.player, 1000));
+    CHECK(!kosdec_adx_player_get_filter_settings(&f.player, &settings));
+    CHECK(settings.cutoff == 1234 && settings.resonance == -2);
+    free(f.data);
 }
 static void reusable_sources(void) {
     for(unsigned channels=1;channels<=2;++channels) {
@@ -444,8 +507,65 @@ static void loop_snapshot(void) {
     CHECK(info(&f).decoded_loops==(uint32_t)f.stream.wraps && info(&f).decoded_loops>=2);
     free(f.data);
 }
+static void running_input_stall(bool enabled) {
+    struct fixture f;
+    init(&f,1,false);
+    free(f.data);
+    f.data=stream(50,18,1,32,65,&f.bytes);
+    kosdec_adx_stream_init(&f.stream,input,&f,(uint32_t)f.bytes,true);
+    f.config.input_stall_timeout_ms=enabled?20:0;
+    CHECK(!kosdec_adx_player_init(&f.player,&f.stream,NULL,&f.config));
+    CHECK(!kosdec_adx_player_start(&f.player) && !until_sound(&f));
+    CHECK(info(&f).state==KOSDEC_ADX_PLAYER_PLAYING);
+
+    /* A paused producer with short refills must never look like blocked input. */
+    struct kosdec_adx_command command={.kind=KOSDEC_ADX_PRODUCTION_PAUSE,.enabled=true};
+    enum kosdec_adx_status receipt=KOSDEC_ADX_BAD_ARGUMENT;
+    CHECK(kosdec_adx_player_post(&f.player,&command)==KOSDEC_ADX_MORE);
+    for(unsigned n=0;n<1000 && !kosdec_adx_player_take(&f.player,&receipt);++n)
+        mock_pause();
+    CHECK(receipt==KOSDEC_ADX_MORE);
+    uint64_t short_before=info(&f).starvations;
+    for(unsigned n=0;n<32;++n) { CHECK(!kosdec_adx_player_poll(&f.player));mock_pause(); }
+    CHECK(info(&f).starvations>short_before && !info(&f).input_stalled);
+
+    __atomic_store_n(&f.wait,true,__ATOMIC_RELEASE);
+    command.enabled=false;
+    CHECK(kosdec_adx_player_post(&f.player,&command)==KOSDEC_ADX_MORE);
+    receipt=KOSDEC_ADX_BAD_ARGUMENT;
+    for(unsigned n=0;n<1000 && !kosdec_adx_player_take(&f.player,&receipt);++n)
+        mock_pause();
+    CHECK(receipt==KOSDEC_ADX_MORE);
+    if(enabled) {
+        for(unsigned n=0;n<1000 && !(__atomic_load_n(&f.player.input_wait_generation,__ATOMIC_ACQUIRE)&1);++n)
+            mock_pause();
+        CHECK(__atomic_load_n(&f.player.input_wait_generation,__ATOMIC_ACQUIRE)&1);
+        /* No owner refill demand yet. The first short refill always arms the timer. */
+        for(unsigned n=0;n<25;++n) mock_pause();
+        CHECK(!kosdec_adx_player_poll(&f.player) && !info(&f).input_stalled);
+    }
+    bool failed=false;
+    for(unsigned n=0;n<(enabled?1000u:32u);++n) {
+        if(kosdec_adx_player_poll(&f.player)<0) { CHECK(errno==ETIMEDOUT);failed=true;break; }
+        mock_pause();
+    }
+    CHECK(failed==enabled && info(&f).input_stalled==enabled);
+    if(enabled) {
+        struct kosdec_adx_player_error error;
+        CHECK(info(&f).state==KOSDEC_ADX_PLAYER_FAILED && info(&f).decoder==KOSDEC_ADX_MORE);
+        CHECK(!kosdec_adx_player_get_error(&f.player,&error) && error.code==ETIMEDOUT);
+    }
+    CHECK(!kosdec_adx_player_stop(&f.player,1000));
+    CHECK(info(&f).retained_sound==7);
+    free(f.data);
+}
+
 int main(void) {
+    staged_input();
+    running_input_stall(false);
+    running_input_stall(true);
     loop_snapshot();
+    filter_settings();
     low_rate_admission();expanded_start_rates();complete();failures();controls();admission();late_errors();reusable_sources();discard_receipt();rebind_failures();cancel_seek_rate();short_sequence_prefill();
     puts("PLAYER_PASS PCM, controls, 48 successive sources, cancel/seek/rate, rebind failures, retained output and joined producers");
     return 0;

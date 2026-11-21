@@ -91,9 +91,10 @@ updates persist on the running output. No CRI semitone/fade mapping is implied.
 Partial pipe space can accept min(free,32) frames; never require a whole group
 of free ring slots when cached partial groups must finish prefill.
 
-Coefficient admission covers integer rates 1..48000 Hz and cutoffs0..floor(rate/2)
-using original certified quantization boundaries; above44.1k is an extension beyond
-baseline ADX Talk. Keep the selector as the single codec rate/cutoff authority.
+Coefficient admission covers integer rates 1..48000 Hz and cutoffs 0..floor(rate/2).
+Version 3 through 44100 Hz uses the rounded Dreamcast setup profile. Higher-rate
+v3 and v5 extensions retain the independently certified exact-real setup. Keep
+profile selection in codec header admission.
 Metadata is valid only after header_ready. Preserve the original float/FMAC
 predictor and regenerate/check setup certificates and independent PCM oracles when
 changing this domain. Native player effective output remains8000..48000Hz; lower
@@ -112,16 +113,22 @@ not establish playback-time amplitude metering or a qualified audible clock.
 
 Byte joints are serialized compressed-input storage, not a concurrent PCM pipe
 or DMA transport. Memory never offers FREE bytes. Ring mirror publication covers
-only committed bytes; do not replace it with whole-prefix copies. Keep one borrow
-per line, token/bounds checks, prefix Put/suffix Unget, and reset/close BUSY gates.
-External providers must be joined separately. Native kind/status and ownership
-restrictions do not imply CRI ABI or full SJ equivalence; see the completion map.
+only committed bytes. `kosdec_adx_joint_get_next_data` admits a second DATA
+loan. Keep one outstanding loan on each other line. Consume DATA prefixes
+oldest first with Put, move or detach. Return DATA suffixes newest first with
+Unget. Keep token and bounds checks and reject reset or close while any loan
+is held. Join external providers separately. See the completion map for the
+remaining SJ conformance work.
 
 Generic byte queues have four lines and caller-owned node workspace. Separate
 mode returns whole heads; Join permits splitting/adjacent merging within one
 backing allocation. Reserve one node per borrow; full rollback must remain
 possible despite pool exhaustion. Partial operations can return LIMIT unchanged.
 Seed rejects overlap; reset drops queued references without freeing buffers.
+Use `kosdec_adx_joint_can_get` for request readiness. Memory/ring report the
+requested bytes capped by contiguous availability. A queue reports its head
+length. The SEPARATE readiness result requires an exact head-size request,
+while Get itself accepts a larger request and borrows the whole head.
 Do not treat an empty queue as EOF or native node counts as proprietary ABI.
 
 Joint readers use the existing strict incremental float decoder; empty input is
@@ -210,12 +217,12 @@ not missing frame bytes. INST/MARK loops and AIFF-C are unsupported. The reader
 uses the same producer/filter/seek ownership and pipe/service/player bindings.
 Rebuild consumers after source-state layout changes; Audio lifetime is unchanged.
 
-SPSD currently admits only the verified contiguous monoPCM16 intersection. Keep
-strict64-byte version, codec/channel/index, rate and extent checks. The SDK's
-unconditional width override and stereo-layout contradiction do not establish
-compressed or common block-interleaved support. Do not widen admission without
-closing the named source/corpus gap. Standard producer/filter/seek and retained
-output contracts apply; loop/config fields are ignored, not implemented.
+SPSD admits the 64-byte contiguous mono PCM16 subset and sample-interleaved
+stereo PCM16 with an exact record extent. The even length field counts bytes
+per channel; stereo requires exactly twice the field value in payload bytes.
+Keep version, codec, channel, index, sample rate and extent checks. Shipped
+stereo corpus evidence remains open. Standard producer/filter/seek and retained
+output contracts apply. Loop/config fields are ignored.
 
 Prepared-start gating belongs to the player owner: producer buffering continues,
 source PCM admission waits, and retained output still polls silence. Readiness
@@ -229,6 +236,26 @@ explicit final joint sealing. Active-sector completion is separate from new
 low-water admission. Pause retains a partial borrow; failed stop cannot release
 storage. Published DATA survives stop and source metadata completion is not DMA
 retirement. Byte loading is not PCM sequence joining or audible seam proof.
+
+The opt-in LSC policy captures the requested byte limit at source setup.
+Only queued DATA counts toward that limit. Zero blocks refill after capture.
+A source can admit a multi-sector request, with at most one bounded provider
+call per owner step. Rebuild loader consumers for the state layout change.
+
+An opt-in linked player caches its reload setting on the control thread.
+Apply it only at start/rebind, before private producer ownership. The next
+record keeps the current loader setting. Use a stopped loader over an empty
+joint and join before re-preparing the source. Rebuild player consumers.
+
+The producer publishes one joint DATA count with its format-ready phase.
+The player input query compares that count to the current player cache.
+Preserve the joint identity through checked ownership and use it only for
+comparison. Rebuild service and player consumers for the snapshot layout.
+
+Resident playback can initialize a sealed memory joint from the exact
+active source loan. Preserve the selected extent and the backing storage
+through join and close. Return the descriptor after both reader and joint
+close. Never admit the stock unsized sentinel as a native allocation bound.
 
 Signed player pan uses per-channel requested -15..15/AUTO settings, resolved at
 source admission or live update. Preserve independent AUTO across bindings and
@@ -252,9 +279,22 @@ Native middleware collections/source/recovery/SFA composition is documented in
 addons/libkosdec/libADX/NATIVE_MIDDLEWARE.md. Keep source loans outstanding through
 all copied consumers, including views that outlive directory metadata. Group/file
 close-all must continue independent slots while preserving failures and consumed
-close reporting. Recovery preparation is after checked software join and retains
-old sound allocations; it is not a device reuse certificate. SFA framing has a
-known finite length and one serialized ring producer; do not reinterpret it as
-unknown-length demux completion. Atomic queue counts and linked-entry counts are
-decode-side observations, not audible clocks. Native scheduling/facade differences
-still need explicit integration disposition, not automatic parity claims.
+close reporting. Recovery preparation follows checked software join and retains
+old sound allocations until Audio permits reuse. Set the optional player config
+field `input_stall_timeout_ms` to zero to disable the running input watchdog.
+
+Keep the paired live SFA writer and joint reader on one serialized producer.
+The SFD demux must determine the authoritative final sample count and supply
+it once through `kosdec_adx_sfa_set_length` before publishing a partial final
+group. Rebuild consumers of the joint, joint reader, SFA writer, and player
+config and state for the public layout changes.
+
+Atomic sequence counts track pending decodes. A linked loader reports pending
+compressed reads and keeps its provider loans across repeated passes. Join the
+producer before closing both sides. Register resolved source loans through the
+mailbox. Buffered linked scan owns two ordered DATA spans until it selects a
+header, stops following, or unwinds on close. Rebuild joint-reader, service
+and player consumers for their state layout changes.
+Integration accepted the native context, event-driven scheduling and namespaced facade
+design on 2026-11-14. Runtime and Audio qualification remain in the completion
+map.

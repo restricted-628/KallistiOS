@@ -1,4 +1,4 @@
-/* Original scalar ADX math; no CRI code/tables or alternate runtime backend. */
+/* Original scalar ADX math. */
 #include "adx_math.h"
 #include <sh4zam/shz_cdefs.h>
 #if !defined(__sh__)
@@ -39,7 +39,7 @@ SHZ_FORCE_INLINE float multiply(float a, float b) {
     return result;
 }
 
-/* Finite domain is established by integer API admission and the 32-step bound.
+/* Finite domain is established by coefficient admission and bounded jobs.
    Test representable endpoints BEFORE the signed conversion. */
 SHZ_FORCE_INLINE int16_t pcm16(float scaled, unsigned *clips) {
     if(scaled >= 0x1p31f) {
@@ -56,40 +56,86 @@ SHZ_FORCE_INLINE int16_t pcm16(float scaled, unsigned *clips) {
     return (int16_t)sample;
 }
 
-int media_adx_channel_group(const uint8_t block[18], unsigned frames,
-                            const int16_t q12[2], int16_t history[2],
-                            int16_t *pcm, unsigned stride) {
-    if(!block || !q12 || !history || !pcm || !frames || frames > 32 ||
-       (stride != 1 && stride != 2))
-        return -1;
-    if((block[0] & 0x80) || q12[0] < 0 || q12[0] > 8192 ||
-       q12[1] < -4096 || q12[1] > 0)
-        return -1;
-    float c0 = (float)q12[0] * 0x1p-12f;
-    float c1 = (float)q12[1] * 0x1p-12f;
-    float h1 = (float)history[0] * 0x1p16f;
-    float h2 = (float)history[1] * 0x1p16f;
-    float scale = (float)((unsigned)block[0] * 256u + block[1] + 1u);
-    unsigned clips = 0;
+struct predictor {
+    float c0, c1;
+    float latest, preceding;
+};
+
+SHZ_FORCE_INLINE void expand_block(struct predictor *p, const uint8_t block[18],
+                                  unsigned frames, unsigned visible, int16_t *pcm,
+                                  unsigned stride, unsigned *clips) {
+    /* Encoding 3 uses 13 scale bits; the high control bit was checked above. */
+    unsigned scale_word = (unsigned)block[0] * 256u + block[1];
+    float scale = (float)((scale_word & 0x1fffu) + 1u);
+    float h1 = p->latest;
+    float h2 = p->preceding;
     for(unsigned i = 0; i < frames; ++i) {
         unsigned packed = block[2 + i / 2];
         int nibble = (int)((packed >> ((i & 1) ? 0 : 4)) & 15);
         if(nibble >= 8) nibble -= 16;
         float residual = (float)nibble * 0x1p16f;
-        float value = multiply(c1, h2);
-        value = multiply_add(c0, h1, value);
+        float value = multiply(p->c1, h2);
+        value = multiply_add(p->c0, h1, value);
         value = multiply_add(scale, residual, value);
-        pcm[i * stride] = pcm16(value, &clips);
+        if(i < visible)
+            pcm[i * stride] = pcm16(value, clips);
         h2 = h1;
-        /* Float-path feedback retains the predictor, even when PCM clips.
-           Quantizing/clamping here changes following samples. Stored history
-           is converted only at the logical group boundary below. */
+        /* The predictor feeds back the float even if the emitted PCM clipped. */
         h1 = value;
     }
+    p->latest = h1;
+    p->preceding = h2;
+}
+
+SHZ_FORCE_INLINE int channel_job(const uint8_t *blocks, unsigned frames,
+                                 unsigned visible, const int16_t q12[2],
+                                 int16_t history[2], int16_t *pcm, unsigned stride,
+                                 unsigned maximum) {
+    if(!blocks || !q12 || !history || (!pcm && visible) || !frames ||
+       frames > maximum || visible > frames || (stride != 1 && stride != 2))
+        return -1;
+    if(q12[0] < 0 || q12[0] > 8192 || q12[1] < -4096 || q12[1] > 0)
+        return -1;
+    /* With the admitted individual bounds, this places both predictor poles
+       at or inside the unit circle for a multi-block job. */
+    if(frames > 32 && q12[0] + q12[1] > 4096)
+        return -1;
+    for(unsigned i = 0; i < frames; i += 32)
+        if(blocks[i / 32 * 18 * stride] & 0x80)
+            return -1;
+
+    struct predictor p = {
+        .c0 = (float)q12[0] * 0x1p-12f,
+        .c1 = (float)q12[1] * 0x1p-12f,
+        .latest = (float)history[0] * 0x1p16f,
+        .preceding = (float)history[1] * 0x1p16f,
+    };
+    unsigned clips = 0;
+    for(unsigned i = 0; i < frames; i += 32) {
+        unsigned count = frames - i < 32 ? frames - i : 32;
+        unsigned copy = i < visible ? visible - i : 0;
+        if(copy > count)
+            copy = count;
+        expand_block(&p, blocks + i / 32 * 18 * stride, count, copy,
+                     copy ? pcm + i * stride : pcm, stride, &clips);
+    }
     unsigned ignored = 0;
-    history[0] = pcm16(h1, &ignored);
-    history[1] = pcm16(h2, &ignored);
+    history[0] = pcm16(p.latest, &ignored);
+    history[1] = pcm16(p.preceding, &ignored);
     return (int)clips;
+}
+
+int media_adx_channel_group(const uint8_t block[18], unsigned frames,
+                            const int16_t q12[2], int16_t history[2],
+                            int16_t *pcm, unsigned stride) {
+    return channel_job(block, frames, frames, q12, history, pcm, stride, 32);
+}
+
+int media_adx_channel_job(const uint8_t *blocks, unsigned decode_frames,
+                         unsigned visible_frames, const int16_t q12[2],
+                         int16_t history[2], int16_t *pcm, unsigned stride) {
+    return channel_job(blocks, decode_frames, visible_frames, q12, history,
+                       pcm, stride, MEDIA_ADX_JOB_MAX_FRAMES);
 }
 
 #ifdef MEDIA_ADX_MATH_TEST_INTERNAL

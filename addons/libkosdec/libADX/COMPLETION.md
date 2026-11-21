@@ -24,22 +24,27 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 
 | ID | Capability | Existing native support | Remaining for baseline parity |
 | --- | --- | --- | --- |
-| H1 | Lifecycle and multi-handle management | player_init/start/stop plus explicit checked player/file collections, fair bounded polling, nonreused IDs and empty-only finish | Native global-reset replacement disposition; actual multi-player output and Audio-qualified device retirement/reuse. No unsafe implicit reset; WinCE initialization is not applicable. |
-| H2 | Playback sources | Common immutable source/range/index loan; ACX/AFS memory/provider selection; owned filename source; existing ADX/container/sequence/joint bindings | Native admission/control composition supplied; complete format conformance remains C1. CRI ABI is not implemented. |
+| H1 | Lifecycle and multi-handle management | player_init/start/stop plus explicit checked player/file collections, fair bounded polling, nonreused IDs and empty-only finish | The two-player retained-clock fixture fails with EPIPE during group poll. Audio-qualified multi-player output and device retirement/reuse remain open. No unsafe implicit reset; WinCE initialization is not applicable. |
+| H2 | Playback sources | Immutable source/range/index loans, ACX/AFS memory/provider selection, owned filename source and ADX/container/sequence/joint bindings. Resident loans can bind finite zero-copy memory joints and expose queued input | Complete format conformance remains C1. The native facade uses explicit extents and ownership. |
 | H3 | Metadata and framing queries | Validated metadata snapshot, strict header/endcode prefix probes and full-file adxcheck; truncation/malformed/unaligned/suffix tests | Admitted-format native queries implemented. CRI recognizer permissiveness and supplied-span endcode sizing are documented differences; complete baseline format conformance remains C1. |
-| H4 | Embedded loop controls | Init-selected v3 repeat, playback-time release, source wraps and atomic decoded-loop query/player snapshot | Release-only while playing matches the baseline manual. Full metadata/history coverage remains C1; exact SDK prefetch/trap batching timing is unqualified. Counter is decode-side, not audible-time. |
-| H5 | Volume and pan | Checked KOS linear 0..255 controls; signed per-channel pan/AUTO and getter, persistent across bindings | Exact attenuation units/defaults/getters and downstream quantization; linear8 cannot represent the full logarithmic range. Pan uses strict argument rejection and immediate AUTO resolution; native/hardware qualification remains. |
-| H6 | Playback clock and completion | Software source/copy counters and source-end state | Qualified output/source clock, audible end, offsets and time modes; source EOF is not PLAYEND. Audio dependency. |
-| H7 | Service and input-buffer policy | Bounded producer service/private fiber, fair group polling, loader sector/time/default refill and safety queries | Integration acceptance of event-driven native equivalence instead of SDK global server/frequency semantics; target scheduling/performance qualification. Input estimates are compressed bytes, not audible time. |
-| H8 | Error reporting and recovery | Independent diagnostic query/clear/owner notification; NOACT/STOP/bounded REPLAY controller with monotonic delay, checked stop retries and explicit replay preparation | Running-stall detection, exact SDK threshold/numeric disposition and Audio-qualified resource reuse. Replay only on terminal input IO_ERROR; no implicit sound reclamation. |
+| H4 | Embedded loop controls | Init-selected v3 repeat, playback-time release, and decoded-wrap query. Memory jobs release at the active trap. Sector-backed jobs apply release at transport EOS, retain prefetched data through the sample trap and floor raw loop offsets to the first compressed group | Tested stock seek and release ordering. Native GD/VFS latency and other loop geometries remain open. |
+| H5 | Volume and pan | Checked KOS linear 0..255 controls; signed pan/AUTO; opt-in stock 2.00J live stereo attenuation with signed cached getter and per-channel acknowledgements | Live retained gain is experimental and disabled by default. The composed fixture fails with EPIPE during polling after an acknowledged first request. Pre-start gain, mono retained gain, fades, transition gain and physical qualification remain open. |
+| H6 | Playback clock and completion | Software source-end and copy counters, qualified per-generation source-output clock, signed offsets, sample-clock centiseconds and qualified active time with per-player source/NTSC/PAL selection and signed centiseconds | Audible end and terminal/pause/discard clock behavior remain open. |
+| H7 | Service and input-buffer policy | Bounded producer service/private fiber, fair group polling, loader sector/time/default refill, cached linked-player reload settings and queued ADX snapshots for joints, direct streams and active sequence entries | Target scheduling and performance qualification remain open. Direct read-at streams report actual staged input with their native 512-byte staging geometry. |
+| H8 | Error reporting and recovery | Independent diagnostic query/clear/owner notification; NOACT/STOP/bounded REPLAY with terminal input errors and opt-in running stall detection; monotonic delay and checked stop/replay preparation | Qualify target thresholds and output failure classification. Audio-qualified retirement and reuse remain open. |
 | H9 | Start gate, pause and stop | Prefill, explicit prepared-start gate/readiness, producer pause and checked software stop | Audible pause/resume and reusable checked stop. Audio dependency; gate is software source admission, not audible pause. |
-| H10 | Native output controls | Requested output Hz only; checked update | Direct/effect levels and routing, filter, transpose/detune units/getters; stereo-coherent live updates. Audio dependency. |
-| H11 | Seamless queue and linked controls | Same-format PCM sequence and repeat/release; atomic queued-entry query; opt-in adjacent compressed-record playback and producer link release | Qualified audible transitions, SDK prefetch/queue timing and linked-format conformance. ReleaseSeamless is empty in the selected archive; native repeat release is explicit. |
-| H12 | Special processing | Unbound seek, SFA prefix, finite live ring framing with shared body/zero-group length budget; producer PCM filter and peak analyzer | Unknown-length SFD and live length-revision contract; Audio-qualified sample discard and playback-clock integration for amplitude. Zero groups preserve history. |
-| F1 | File/partition services | Owned filename collections/loans and close-all; AFS directories/registries/overlays with exact provider-bound resolution; bounded sector requests and explicit flow policy | Native filename/directory/global-lifecycle equivalence disposition and transport/backend qualification. No hidden current-directory/reset; disabled GetFileRange is not a runtime obligation. |
-| J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts | Forward-only live decoding, sealed EOF and producer-owned player binding supplied; broader multi-borrow baseline conformance remains. Native one-borrow-per-line/reserved-node admission and typed identity/status are deliberate differences; no CRI ABI claim. |
-| L1 | Load/sequence controller | Bounded16-entry loader with source IDs/copied labels/status/read sectors/pause/refill and checked stop; filename/source-loan composition; PCM sequence | Exact SDK refill/service disposition and backend retirement qualification; labels are not paths and byte concatenation is not seamless PCM playback. |
-| M1 | Sega middleware facade | Native namespaced lifecycle, source, service, recovery and collection APIs; explicit mapping in NATIVE_MIDDLEWARE.md | Integration disposition of native equivalents versus MWPLY ABI. No facade internals inferred from declarations; no MWPLY vtable supplied. |
+| H10 | Native output controls | Requested output Hz with checked update, and the Dreamcast filter setting round trip | Direct/effect routing, transpose/detune, and stereo-coherent live updates depend on Audio. |
+| H11 | Seamless queue and linked controls | Same-format PCM sequence or linked joint jobs. The linked player can start the loader with cached refill settings. A bound loader supports live registration, rotates at read completion, prefetches while PCM is full, and publishes pending-read count. Exact footer validation, optional two-span padded-header scan, history reset, live follow switch and final producer release | Audible transitions and physical drive timing. ReleaseSeamless is empty in the selected archive. Native loader repeat and finish are explicit. |
+| H12 | Special processing | Unbound seek, SFA prefix, strict and batched paired live SFA with late final length and shared body/zero-group budget; producer PCM filter and peak analyzer selectable by the qualified source clock | SFD demux integration to supply final length and Audio-qualified sample discard. Zero groups preserve history. |
+| F1 | File/partition services | Owned filename collections/loans and close-all; AFS directories/registries/overlays with exact provider-bound resolution; bounded sector requests and explicit flow policy | Transport/backend qualification for the accepted native filename/directory/lifecycle design. No hidden current-directory/reset; disabled GetFileRange is not a runtime obligation. |
+| J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts; two simultaneous DATA loans with ordered return and request-fit queries for each joint kind | The observed two-loan usage is supported. Broader arbitrary SDK loan patterns and target behavior require conformance evidence. |
+| L1 | Load/sequence controller | Bounded 16-entry loader with source IDs, copied labels, read-sector progress, pause and checked stop. The selected 2.00J flow policy captures the limit per source and admits batches from queued-DATA occupancy. File loans and a separate PCM sequence are available. | Exact cvFs completion visibility and physical drive/backend timing and retirement remain open. |
+| M1 | Sega middleware facade | Native namespaced lifecycle, source, service, recovery and collection APIs; explicit mapping in NATIVE_MIDDLEWARE.md | Native facade disposition accepted on 2026-11-14. Runtime qualification is tracked in the underlying rows. |
+
+The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
+The selected Manatee adapter ignores its command selector, and the getter
+reads the cached values. Native filter settings preserve this round trip.
+The producer PCM filter callback is a separate operation.
 
 ## Codec and validation closure
 
@@ -47,19 +52,24 @@ C1. Freeze the exact encoding/block/channel/version/header/history/loop/endcode
 combinations accepted by the 2.00J decoder, then implement or document each
 baseline rejection with tests. Current admission is encoding 3, 18-byte/4-bit,
 mono/stereo v3/v5, zero extensions or the documented supported v3 loop layout
-with 0..31 inserted leading frames and a block-aligned encoded start. Arbitrary
-requested loop starts are aligned by the encoder; raw nonaligned encoded starts
-remain unsupported, pending a distinct baseline runtime contract.
+with 0..31 inserted leading frames. The strict path uses a block-aligned
+encoded start. Memory jobs support independent logical sample positions and
+whole-group byte offsets. Sector jobs accept a subsector raw start when its
+sector floor points to the corresponding compressed group. Nonaligned
+logical starts in this mode also need the logical interval to consume the
+whole encoded loop span. In the stock trace, shorter intervals can leave
+complete groups behind after fixed pad discard and drift on the next repeat.
 Do not assume later ADX variants must be added simply because they exist.
 See [FORMATS.md](FORMATS.md) for the distinction between active decoder behavior,
 shipped corpus coverage and permissive parsing. Runtime WAV PCM16/ADPCM4 is a
 documented middleware obligation. Native bounded PCM WAV8/16 mono/stereo reading
 and seek plus native pipe/service/player bindings are implemented. CRI tag1 packed
 WAV4 now uses software AICA reconstruction through those bindings, with bounded
-history-rebuilding seek. Hardware PCM equivalence remains open. SPSD monoPCM16 contiguous payloads now
-have reader/pipe/service/player support. Other SPSD layouts and encodings remain
-unsupported: the baseline forces16-bit copying and has a stereo-layout contradiction
-with common SPSD. Close that named contract/corpus gap before expanding admission.
+history-rebuilding seek. Hardware PCM equivalence remains open. SPSD PCM16 has
+reader/pipe/service/player support for contiguous mono and exact-length
+sample-interleaved stereo with per-channel length. The selected SDK decoder
+supplies the frame-count and copy rules. Shipped stereo corpus evidence and
+other SPSD layouts remain open.
 AIFF signed8/BE16 mono/stereo has a bounded reader, metadata, seek and filters;
 AIFF pipe/service/player composition is implemented.
 The AU reader now handles mono/stereo signedPCM8/signedPCM16/mu-law8 with exact
@@ -68,10 +78,22 @@ Remaining container conformance is open.
 
 C2. Close native arithmetic conformance: predictor operation order, rounding,
 clipping, initial/carried histories and coefficient setup against the baseline.
-The certified general coefficient domain and independent host vectors are strong
-existing evidence; they do not establish every SDK rounding decision or retail
-hardware result. SH4ZAM/FPU policy must retain exact arithmetic rather than
-substitute an unrelated vector transform.
+Version 3 setup through 44100 Hz now selects Q12 pairs from the rounded
+Dreamcast model. A linked SDK instruction run in the SuperH p-code emulator
+matches the sampled coefficient witnesses. The 13-bit scale and the scalar
+SH4ZAM/FMAC predictor match the SDK's one-group PCM and history on the tested
+mono/stereo witnesses in both BIOS Flycast CPU modes, including FTRC saturation.
+SDK batching retains float history across the groups of a decode job. Its
+input byte consumption can differ from the reported PCM frame count at a trap.
+The opt-in joint reader and player service schedule those jobs on memory,
+mirrored-ring and one-head JOIN/SEPARATE queue input. They publish separate
+byte and PCM counts and quantize the predictor at the end of each job.
+Synthetic memory trap, release, and output
+wrap witnesses match stock output and positions. The normal reader keeps
+fixed group boundaries for fragmentation-independent decoding. Sector-backed
+loop fixtures exercise the provider seek, residual pad discard and release
+with prefetched DATA. Paired live SFA jobs keep late-length, footer and
+sealed-input validation. Retail arithmetic remains open.
 
 V1. For every runtime row: named return/state/error/control tests, supported
 format combinations and numerical/control units; full host/sanitizer and staged
@@ -121,8 +143,11 @@ The three `FSEL_*` declarations belong to a separate file-selector library. Thei
 interface includes drawing, color/font metrics, VBlank and peripheral selection;
 the ADX ELF archives do not reference them. Applications supply selected filenames
 or byte ranges to libADX. Rebuilding the file-picker UI is outside runtime parity.
-These dispositions do not close H1 lifecycle, M1 facade, host authoring, or any
-other remaining runtime behavior.
+
+The three SJUNI Get/Put/Unget callback registration declarations are disabled in
+the 2.00J header and absent from the Dreamcast ADX/Sofdec libraries. The error
+callback and request-fit vtable operations are active.
+The remaining lifecycle and output qualifications are tracked in the matrix above.
 
 The native middleware batch is described in [NATIVE_MIDDLEWARE.md](NATIVE_MIDDLEWARE.md).
 It materially supplies the source/control/lifecycle/recovery/link/framing paths;

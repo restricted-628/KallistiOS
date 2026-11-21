@@ -30,6 +30,47 @@ static size_t decode(struct input *p,bool linked,size_t capacity,int16_t *pcm,
     CHECK(status==expected && stream.linked_entries==entries);
     return frames;
 }
+static void link_control(struct input *p, const int16_t *reference, bool restore) {
+    int16_t actual[196+64];
+    struct kosdec_adx_stream reader;
+    kosdec_adx_stream_init(&reader,read_at,p,p->bytes,false);
+    CHECK(kosdec_adx_stream_set_linked(&reader,true)==KOSDEC_ADX_DONE);
+    struct kosdec_adx_service service;int16_t ring[64];
+    CHECK(kosdec_adx_service_init(&service,&reader,NULL,ring,64,32)==KOSDEC_ADX_MORE);
+    bool enabled=false;
+    CHECK(kosdec_adx_service_get_linked(&service,&enabled) && enabled);
+    struct kosdec_adx_command command={.kind=KOSDEC_ADX_PRODUCTION_PAUSE};
+    CHECK(kosdec_adx_service_post(&service,&command)==KOSDEC_ADX_MORE);
+    kosdec_adx_service_step(&service);enum kosdec_adx_status receipt;
+    CHECK(kosdec_adx_service_take(&service,&receipt) && receipt==KOSDEC_ADX_MORE);
+    size_t frames=0;bool released=false,done=false;
+    for(unsigned n=0;n<10000;++n) {
+        struct kosdec_adx_stream_result made=kosdec_adx_service_step(&service);
+        struct kosdec_adx_pipe_result got=kosdec_adx_pipe_read(&service.pipe,actual+2*frames,32);
+        frames+=got.frames;
+        if(frames && !released) {
+            command.kind=restore ? KOSDEC_ADX_SET_LINK_FOLLOW : KOSDEC_ADX_RELEASE_LINK;
+            command.enabled=false;
+            CHECK(kosdec_adx_service_post(&service,&command)==KOSDEC_ADX_MORE);
+            kosdec_adx_service_step(&service);
+            CHECK(kosdec_adx_service_take(&service,&receipt) && receipt==KOSDEC_ADX_MORE);
+            CHECK(kosdec_adx_service_get_linked(&service,&enabled) && !enabled);
+            command.kind=KOSDEC_ADX_SET_LINK_FOLLOW;
+            command.enabled=true;
+            CHECK(kosdec_adx_service_post(&service,&command)==KOSDEC_ADX_MORE);
+            kosdec_adx_service_step(&service);
+            CHECK(kosdec_adx_service_take(&service,&receipt) &&
+                  receipt==(restore ? KOSDEC_ADX_MORE : KOSDEC_ADX_BAD_ARGUMENT));
+            CHECK(kosdec_adx_service_get_linked(&service,&enabled) && enabled==restore);
+            released=true;
+        }
+        if(made.status>=KOSDEC_ADX_DONE) { CHECK(made.status==KOSDEC_ADX_DONE);done=true;break; }
+    }
+    CHECK(done && released && frames==(restore ? 98u : 65u) &&
+          reader.linked_entries==(restore ? 2u : 1u));
+    CHECK(!memcmp(actual,reference,2*frames*sizeof(int16_t)));
+    CHECK(kosdec_adx_service_post(&service,&command)==KOSDEC_ADX_DONE);
+}
 int main(void) {
     size_t na,nb;
     uint8_t *a=stream(50,18,2,32,65,&na),*b=stream(50,18,2,0,33,&nb);
@@ -69,35 +110,8 @@ int main(void) {
         CHECK(decode(&zero,true,32,actual,KOSDEC_ADX_DONE,2)==33);
         CHECK(!memcmp(actual,reference+130,66*sizeof(int16_t)));
     }
-    /* Producer command release after first PCM; next complete file is ignored. */
-    struct kosdec_adx_stream reader;
-    kosdec_adx_stream_init(&reader,read_at,&p,p.bytes,false);
-    CHECK(kosdec_adx_stream_set_linked(&reader,true)==KOSDEC_ADX_DONE);
-    struct kosdec_adx_service service;int16_t ring[64];
-    CHECK(kosdec_adx_service_init(&service,&reader,NULL,ring,64,32)==KOSDEC_ADX_MORE);
-    bool enabled=false;
-    CHECK(kosdec_adx_service_get_linked(&service,&enabled) && enabled);
-    struct kosdec_adx_command command={.kind=KOSDEC_ADX_PRODUCTION_PAUSE};
-    CHECK(kosdec_adx_service_post(&service,&command)==KOSDEC_ADX_MORE);
-    kosdec_adx_service_step(&service);enum kosdec_adx_status receipt;
-    CHECK(kosdec_adx_service_take(&service,&receipt) && receipt==KOSDEC_ADX_MORE);
-    size_t frames=0;bool released=false,done=false;
-    for(unsigned n=0;n<10000;++n) {
-        struct kosdec_adx_stream_result made=kosdec_adx_service_step(&service);
-        struct kosdec_adx_pipe_result got=kosdec_adx_pipe_read(&service.pipe,actual+2*frames,32);
-        frames+=got.frames;
-        if(frames && !released) {
-            command.kind=KOSDEC_ADX_RELEASE_LINK;
-            CHECK(kosdec_adx_service_post(&service,&command)==KOSDEC_ADX_MORE);
-            kosdec_adx_service_step(&service);
-            CHECK(kosdec_adx_service_take(&service,&receipt) && receipt==KOSDEC_ADX_MORE);
-            CHECK(kosdec_adx_service_get_linked(&service,&enabled) && !enabled);
-            released=true;
-        }
-        if(made.status>=KOSDEC_ADX_DONE) { CHECK(made.status==KOSDEC_ADX_DONE);done=true;break; }
-    }
-    CHECK(done && released && frames==65 && reader.linked_entries==1);
-    CHECK(!memcmp(actual,reference,130*sizeof(int16_t)));
+    link_control(&p,reference,false);
+    link_control(&p,reference,true);
     free(a);free(b);free(data);
     printf("ADX_LINKED checks=%u failures=0\n",checks);
     return 0;

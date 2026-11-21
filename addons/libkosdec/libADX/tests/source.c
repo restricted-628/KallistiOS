@@ -1,4 +1,5 @@
 #include <kosdec/adx_source.h>
+#include <kosdec/adx_joint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +50,23 @@ static void test(bool afs,bool resident,unsigned fragment) {
     CHECK(kosdec_adx_source_select_range(&source,0,size)==KOSDEC_ADX_NEED_OUTPUT);
     struct kosdec_adx_source copied=loan;
     CHECK(kosdec_adx_source_return(&source,&copied)==KOSDEC_ADX_BAD_ARGUMENT);
+    struct kosdec_adx_joint joint = {.capacity=91};
+    CHECK(kosdec_adx_source_init_memory_joint(&source,&copied,&joint)==KOSDEC_ADX_BAD_ARGUMENT &&
+          joint.capacity==91);
+    if(resident) {
+        CHECK(kosdec_adx_source_init_memory_joint(&source,&loan,&joint)==KOSDEC_ADX_DONE);
+        struct kosdec_adx_joint_info info;
+        CHECK(kosdec_adx_joint_query(&joint,&info)==KOSDEC_ADX_JOINT_OK &&
+              info.kind==KOSDEC_ADX_JOINT_MEMORY && info.capacity==bytes && info.sealed);
+        struct kosdec_adx_chunk data;
+        CHECK(kosdec_adx_joint_get(&joint,KOSDEC_ADX_JOINT_DATA,bytes+1,&data)==KOSDEC_ADX_JOINT_OK &&
+              data.bytes==bytes && data.data==archive+29);
+        CHECK(kosdec_adx_joint_close(&joint)==KOSDEC_ADX_JOINT_BUSY);
+        CHECK(kosdec_adx_joint_put(&joint,&data)==KOSDEC_ADX_JOINT_OK);
+        CHECK(kosdec_adx_joint_close(&joint)==KOSDEC_ADX_JOINT_OK);
+    }
+    else CHECK(kosdec_adx_source_init_memory_joint(&source,&loan,&joint)==KOSDEC_ADX_UNSUPPORTED &&
+               joint.capacity==91);
     struct kosdec_adx_stream decoder;
     kosdec_adx_stream_init(&decoder,loan.read_at,loan.context,loan.bytes,false);
     unsigned frames=0;
@@ -62,6 +80,7 @@ static void test(bool afs,bool resident,unsigned fragment) {
     uint8_t guard=0xa5;
     CHECK(loan.read_at(loan.context,loan.bytes,&guard,1).status==KOSDEC_ADX_INPUT_END && guard==0xa5);
     CHECK(kosdec_adx_source_return(&source,&loan)==KOSDEC_ADX_DONE && !loan.read_at);
+    CHECK(kosdec_adx_source_init_memory_joint(&source,&loan,&joint)==KOSDEC_ADX_BAD_ARGUMENT);
     CHECK(copied.read_at(copied.context,0,&guard,1).status==KOSDEC_ADX_INPUT_ERROR);
     CHECK(kosdec_adx_source_index_begin(&source,afs?KOSDEC_ADX_AFS:KOSDEC_ADX_ACX,1)==KOSDEC_ADX_MORE);
     do { status=kosdec_adx_source_index_step(&source); } while(status<KOSDEC_ADX_DONE);
@@ -72,6 +91,7 @@ static void test(bool afs,bool resident,unsigned fragment) {
     CHECK(kosdec_adx_source_index_cancel(&source)==KOSDEC_ADX_DONE);
     CHECK(kosdec_adx_source_select_range(&source,size,0)==KOSDEC_ADX_DONE);
     CHECK(kosdec_adx_source_borrow(&source,&loan,0)==KOSDEC_ADX_DONE && !loan.bytes);
+    CHECK(kosdec_adx_source_init_memory_joint(&source,&loan,&joint)==KOSDEC_ADX_BAD_ARGUMENT);
     CHECK(loan.read_at(loan.context,0,&guard,1).status==KOSDEC_ADX_INPUT_END);
     CHECK(kosdec_adx_source_return(&source,&loan)==KOSDEC_ADX_DONE);
     CHECK(kosdec_adx_source_close(&source)==KOSDEC_ADX_DONE);

@@ -28,13 +28,25 @@ static enum kosdec_adx_status header(struct kosdec_adx_spsd *a) {
     if(status != KOSDEC_ADX_MORE || a->used < 64) return status;
     const uint8_t *p = a->buffer;
     if(memcmp(p, "SPSD", 4) || p[4] > 1 || p[5] != 1 || p[6] || p[7] != 4 ||
-       p[8] || (p[9] & 127u) || p[10] || p[11])
+       p[8] || (p[9] & 0x7eu) || p[10] || p[11])
         return a->terminal = KOSDEC_ADX_UNSUPPORTED;
-    uint32_t bytes = le32(p + 12), rate = (unsigned)p[42] | (unsigned)p[43] << 8;
-    if(!rate || (bytes & 1u) || bytes > a->input_bytes - 64)
+    uint32_t channel_bytes = le32(p + 12);
+    unsigned rate = (unsigned)p[42] | (unsigned)p[43] << 8;
+    unsigned channels = (p[9] & 1u) + 1;
+    uint32_t available = a->input_bytes - 64;
+    if(!rate || (channel_bytes & 1u) || channel_bytes > available / channels)
         return a->terminal = KOSDEC_ADX_INVALID;
-    a->info = (struct kosdec_adx_spsd_info){rate, bytes / 2, 64, bytes, 1, 16};
-    a->frame_bytes = 2; a->offset = 64; a->used = 0; a->header_ready = true;
+    uint32_t bytes = channel_bytes * channels;
+    /* An exact extent distinguishes the supported stereo frame count from
+       aggregate-length records and leaves no room for an undeclared tail. */
+    if(channels == 2 && bytes != available)
+        return a->terminal = KOSDEC_ADX_INVALID;
+    a->info = (struct kosdec_adx_spsd_info){rate, channel_bytes / 2, 64, bytes,
+                                           (uint8_t)channels, 16};
+    a->frame_bytes = 2 * channels;
+    a->offset = 64;
+    a->used = 0;
+    a->header_ready = true;
     return a->terminal = bytes ? KOSDEC_ADX_MORE : KOSDEC_ADX_DONE;
 }
 struct kosdec_adx_spsd_result kosdec_adx_spsd_read(struct kosdec_adx_spsd *a,

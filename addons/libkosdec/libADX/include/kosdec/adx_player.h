@@ -26,18 +26,22 @@ struct kosdec_adx_player_config {
     void *stack;
     size_t stack_bytes, sound_bytes; /* Sound bytes PER CHANNEL. */
     uint32_t transfer_timeout_ms, prefill_timeout_ms;
+    uint32_t input_stall_timeout_ms; /* Zero disables the running input watchdog. */
+    bool use_lsc_reload; /* Carry the player reload setting into each linked start. */
 };
 struct kosdec_adx_player_info {
     enum kosdec_adx_player_state state;
     enum kosdec_adx_status decoder;
     int first_error, stop_error;
     uint32_t sample_rate, output_rate; /* Source Hz and requested playback Hz. */
-    uint32_t queued_sources; /* Sequence decode entries, including active; not audible. */
+    uint32_t queued_sources; /* Pending sequence decodes or linked-loader reads. */
     uint32_t decoded_loops; /* Source rewinds modulo2^32, not audible loops. */
     unsigned channels;
     uint64_t copied_frames, requested_frames, callbacks, starvations;
     uint64_t source_frames, sources_started;
+    uint64_t source_generation; /* Current opt-in retained output generation; otherwise zero. */
     bool production_paused;
+    bool input_stalled; /* A sustained input wait caused short PCM refills. */
     bool linked; /* Requested adjacent-record follow mode, not audible state. */
     bool wait_start, ready_start; /* Owner-thread gate and preparation snapshot. */
     /* On successful stop only, caller owns this retained sound allocation.
@@ -49,6 +53,61 @@ struct kosdec_adx_player_error {
     enum kosdec_adx_status decoder;
     enum kosdec_adx_player_state state; /* State when the failure was observed. */
 };
+struct kosdec_adx_player_input {
+    const struct kosdec_adx_joint *joint; /* Identity only while the producer is bound. */
+    uint32_t queued_bytes, sectors;
+    uint32_t safety_limit_bytes;
+    float seconds; /* Nominal compressed ADX duration. */
+    bool safe;
+};
+struct kosdec_adx_filter_settings {
+    int32_t cutoff, resonance;
+};
+struct kosdec_adx_source_output {
+    uint64_t epoch, generation, output_frames, source_frames, next_source_frame;
+    uint64_t observation_start_ms, observation_end_ms;
+    uint32_t session;
+    int clock_error, output_error, stop_error;
+    bool valid, source_output_end, software_stopped;
+};
+struct kosdec_adx_audio_time {
+    int64_t frames, centiseconds;
+    uint32_t sample_rate;
+};
+enum kosdec_adx_vsync_mode {
+    KOSDEC_ADX_VSYNC_NTSC = 1,
+    KOSDEC_ADX_VSYNC_PAL
+};
+enum kosdec_adx_time_mode {
+    KOSDEC_ADX_TIME_SOURCE,
+    KOSDEC_ADX_TIME_NTSC = KOSDEC_ADX_VSYNC_NTSC,
+    KOSDEC_ADX_TIME_PAL = KOSDEC_ADX_VSYNC_PAL
+};
+struct kosdec_adx_time {
+    int64_t count;
+    uint32_t frequency;
+};
+struct kosdec_adx_vsync_time {
+    int64_t count;
+    uint32_t frequency;
+};
+typedef uint32_t (*kosdec_adx_vsync_ticks)(void *context);
+enum kosdec_adx_attenuation_state {
+    KOSDEC_ADX_ATTENUATION_PENDING,
+    KOSDEC_ADX_ATTENUATION_APPLIED,
+    KOSDEC_ADX_ATTENUATION_FAILED
+};
+#define KOSDEC_ADX_ATTENUATION_LEFT  1u
+#define KOSDEC_ADX_ATTENUATION_RIGHT 2u
+struct kosdec_adx_attenuation_status {
+    uint64_t epoch, request;
+    uint32_t session;
+    enum kosdec_adx_attenuation_state state;
+    unsigned admitted, applied, rejected, unknown, acknowledged;
+    uint8_t requested_tl[2], acknowledged_tl[2];
+    int error;
+};
+struct snd_retained_pcm;
 typedef void (*kosdec_adx_player_error_callback)(void *context,
     const struct kosdec_adx_player_error *error);
 /* Fields are implementation-owned; inspect through get_info, not direct edits. */
@@ -61,7 +120,9 @@ struct kosdec_adx_player {
     fiber_service_t *worker;
     snd_stream_hnd_t sound;
     snd_stream_config_t output;
-    uint64_t prefill_deadline;
+    uint64_t prefill_deadline, input_stall_since;
+    uint32_t input_wait_generation; /* Atomic producer publication. */
+    uint32_t input_stall_generation; /* Serialized owner observation. */
     uint32_t requested_rate; /* Zero follows source rate. */
     int16_t *scratch;
     int16_t requested_pan[2]; /* Signed -15..15 or KOSDEC_ADX_PAN_AUTO. */
@@ -70,6 +131,21 @@ struct kosdec_adx_player {
     kosdec_adx_player_error_callback error_callback;
     void *error_context;
     bool error_pending;
+    struct kosdec_adx_filter_settings filter_settings;
+    uint32_t *retained_offsets;
+    struct snd_retained_pcm *retained_pcm;
+    unsigned retained_admissions;
+    bool retained_sealed, retained_stopped;
+    int32_t time_offset;
+    kosdec_adx_vsync_ticks vsync_ticks;
+    void *vsync_context;
+    uint64_t vsync_generation;
+    int64_t vsync_count;
+    uint32_t vsync_frequency, vsync_last_tick;
+    int16_t requested_attenuation;
+    bool time_uses_vsync;
+    uint32_t linked_reload_sectors;
+    bool linked_reload_clamp;
 };
 /* All player APIs are serialized on one ordinary owner thread, not an IRQ,
    callback or shared fiber carrier. Only the private producer uses the source.
@@ -85,7 +161,12 @@ struct kosdec_adx_player {
    Stack>=16384bytes,32-byte-aligned, size multiple32; this provision is not a
    complete stack bound for arbitrary providers. Nonblocking disc input is suited
    to the fork executor; synchronous providers may block and delay stop/join.
-   Both timeouts nonzero. Invalid init leaves player unchanged. No allocations
+   Transfer and prefill timeouts must be nonzero. The optional running stall
+   timeout uses elapsed monotonic milliseconds. It requires repeated short PCM
+   refills while a live source continuously waits for input. Progress, pause,
+   a full refill and terminal status disarm it. A stalled player fails with
+   ETIMEDOUT and sets input_stalled. Only configure it for providers expected to
+   deliver continuously. A blocked synchronous callback can still delay join. Invalid init leaves player unchanged. No allocations
    until start. One output lifecycle: never reinit/restart a live or retained
    player. Sources may be released/rebound while that output keeps running. */
 int kosdec_adx_player_init(struct kosdec_adx_player *,
@@ -115,7 +196,7 @@ int kosdec_adx_player_init_au(struct kosdec_adx_player *, struct kosdec_adx_au *
    while bound; source completion remains distinct from audible completion. */
 int kosdec_adx_player_init_aiff(struct kosdec_adx_player *, struct kosdec_adx_aiff *,
                               const struct kosdec_adx_player_config *);
-/* SPSD mono PCM16; same source lifetime and output rules. */
+/* SPSD mono/stereo PCM16; same source lifetime and output rules. */
 int kosdec_adx_player_init_spsd(struct kosdec_adx_player *, struct kosdec_adx_spsd *,
                               const struct kosdec_adx_player_config *);
 
@@ -124,6 +205,85 @@ int kosdec_adx_player_init_spsd(struct kosdec_adx_player *, struct kosdec_adx_sp
    low-rate sources need an explicit in-range output override.
    On failure call stop to retire any partially acquired resources. */
 int kosdec_adx_player_start(struct kosdec_adx_player *);
+/* Opt in with config.use_lsc_reload. Pass a fresh linked reader and a stopped
+   loader over an empty joint to start/bind. The player configures and starts
+   that loader before handing it to the producer. Other source types ignore
+   this profile. The default is trunc(binary32(whole sectors)*0.85f).
+   The setters cache the next linked start's setting, including while playing.
+   The current loader keeps its requested limit across linked records. Limits
+   are in 2048-byte sectors, including zero which blocks refill after capture.
+   An explicit count must fit the next joint. The time form uses the ADX
+   seconds conversion and clamps to that joint. Unsupported profile or
+   invalid inputs leave the cache unchanged. Rebuild player consumers. */
+int kosdec_adx_player_set_linked_reload_sectors(struct kosdec_adx_player *, uint32_t sectors);
+int kosdec_adx_player_set_linked_reload_time(struct kosdec_adx_player *,
+    float seconds, unsigned channels, unsigned rate);
+/* Serialized player owner. Latest producer-published compressed ADX input.
+   For joints this is queued DATA excluding held DATA. For a read-at source it
+   is the unconsumed staging interval of the stream or active sequence entry.
+   Sectors are whole 2048-byte units. A direct source stages at most 512 bytes,
+   so it reports zero sectors. Seconds use whole groups and the validated
+   source rate, including format-ready prefill, independent of output pitch.
+   Safe compares queued bytes with the live player cache. Default and time
+   limits use the bound input capacity. An explicit sector limit can exceed
+   staging capacity. This may differ from the active loader refill gate.
+   Identity is for comparison only. Do not inspect or mutate the joint during
+   producer ownership. It is null for a read-at source. Before start, after
+   completed unbind/stop and for direct PCM sources, returns a zero snapshot.
+   Invalid arguments return -1/EINVAL and leave the output unchanged. */
+int kosdec_adx_player_get_input(const struct kosdec_adx_player *, struct kosdec_adx_player_input *);
+/* Optional fixed-rate retained clock profile. Build the archive with
+   ADX_RETAINED_CLOCK=1. Enable before the first start with a disjoint caller
+   buffer of at least config.capacity uint32_t offsets, lent until stop.
+   Sound needs at least 2048 and at most 65536 bytes per channel. Use default
+   gain/pan and a fixed requested rate. Later source binds must match format.
+   A lease supports 16 source generations and 16 spans per Audio fill. A fill
+   that would exceed the span limit fails before consuming source PCM. */
+int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *,
+    uint32_t *source_offsets, size_t offset_count);
+/* Snapshot only. Generation zero queries output time without source attribution.
+   Check valid before using the cursor. End denotes measured traversal of that
+   generation's source spans. Audible end and physical retirement are separate.
+   A successful stop retains the Audio lease. Snapshot access remains valid. */
+int kosdec_adx_player_get_source_output(const struct kosdec_adx_player *,
+    uint64_t generation, struct kosdec_adx_source_output *);
+/* Set a signed display offset in the units of the query, source frames or
+   VSync count units. Starts at zero and persists across source bindings.
+   The VSync drift check uses this value in source frames, as in the SDK. */
+int kosdec_adx_player_set_time_offset(struct kosdec_adx_player *, int32_t offset);
+/* Read cumulative credited source frames plus the display offset for one
+   nonzero generation. Centiseconds use the decoded source rate and truncate
+   toward zero. Requires a qualified retained clock. Failure leaves out intact. */
+int kosdec_adx_player_get_audio_time(const struct kosdec_adx_player *,
+    uint64_t generation, struct kosdec_adx_audio_time *out);
+/* Enable after retained-clock setup and before the first start. The owner
+   supplies a nonblocking counter read with stable cadence in the selected
+   mode. One tick per display VBlank. Wrap at 2^32 is supported. Read it at
+   least once per full counter cycle. The callback runs on the player owner,
+   must not reenter the player, and remains borrowed through stop. */
+int kosdec_adx_player_enable_vsync_clock(struct kosdec_adx_player *,
+    enum kosdec_adx_vsync_mode, kosdec_adx_vsync_ticks, void *context);
+/* Query the current admitted generation during active playback or drain.
+   One tick is 100 units, at frequency 5994 (NTSC) or 5000 (PAL). With
+   more than 60 ms of drift, this query returns the prior estimate and
+   adjusts the next query's anchor. Failed queries leave out untouched.
+   Returns ENOTSUP at source-output end, where the terminal clock depends
+   on a separate Audio completion contract. */
+int kosdec_adx_player_get_vsync_time(struct kosdec_adx_player *,
+    uint64_t generation, struct kosdec_adx_vsync_time *out);
+/* Select the owner's display units. The default is source frames. NTSC/PAL
+   require a configured VSync counter. Change cadence with the display and
+   keep the counter continuous. Mode changes preserve the active VSync anchor,
+   do not read the counter, and persist across source bindings. The explicit
+   audio and VSync query APIs remain available regardless of selection. */
+int kosdec_adx_player_set_time_mode(struct kosdec_adx_player *, enum kosdec_adx_time_mode);
+/* Query the selected qualified time pair, or independently query its signed
+   centiseconds with truncation toward zero. Failed queries leave out intact.
+   Each VSync query may adjust the anchor for the next query. */
+int kosdec_adx_player_get_time(struct kosdec_adx_player *, uint64_t generation,
+    struct kosdec_adx_time *out);
+int kosdec_adx_player_get_time_real(struct kosdec_adx_player *, uint64_t generation,
+    int64_t *centiseconds);
 /* Set before start or during prefill to hold source PCM admission. Producer
    keeps filling the bounded ring; poll reports readiness without allocating or
    starting fresh output. Existing retained output continues polling silence.
@@ -175,7 +335,7 @@ int kosdec_adx_player_bind_wave(struct kosdec_adx_player *, struct kosdec_adx_wa
 int kosdec_adx_player_bind_au(struct kosdec_adx_player *, struct kosdec_adx_au *);
 /* AIFF rebind uses the same source-release and same-format output contract. */
 int kosdec_adx_player_bind_aiff(struct kosdec_adx_player *, struct kosdec_adx_aiff *);
-/* SPSD mono PCM16; same source lifetime and output rules. */
+/* SPSD mono/stereo PCM16; same source lifetime and output rules. */
 int kosdec_adx_player_bind_spsd(struct kosdec_adx_player *, struct kosdec_adx_spsd *);
 
 /* Progress prefill/start or poll output; call regularly, more often than a sound
@@ -184,6 +344,23 @@ int kosdec_adx_player_bind_spsd(struct kosdec_adx_player *, struct kosdec_adx_sp
    polling silence; caller chooses when to stop. No automatic tail-delay rule or
    playback clock. Failures latch first_error; caller must stop/retry stop. */
 int kosdec_adx_player_poll(struct kosdec_adx_player *);
+/* Admit one live attenuation request on a retained stereo pair. Requires the
+   optional ADX_RETAINED_GAIN build and supporting firmware. Uses the stock
+   2.00J zero-fade response; effective request clamps to [-999, 0] tenths dB.
+   Success only issues a request. Call poll and check both applied bits.
+   Maximum TL carries no hard-mute guarantee.
+   Failure leaves the previous cached setting and the request output intact. */
+int kosdec_adx_player_set_attenuation(struct kosdec_adx_player *,
+    int32_t tenths_db, uint64_t *request);
+/* Last locally admitted original setting, interpreted as a signed halfword.
+   Starts at zero. Remains available through stop. */
+int kosdec_adx_player_get_requested_attenuation(const struct kosdec_adx_player *,
+    int16_t *tenths_db);
+/* Latest admitted request only. Acknowledged TL is historical on unknown
+   channels. Poll success can coexist with a pending retry. Terminal failure
+   requires checked stop. Channel acknowledgements do not specify simultaneity. */
+int kosdec_adx_player_get_attenuation_status(const struct kosdec_adx_player *,
+    uint64_t request, struct kosdec_adx_attenuation_status *out);
 /* Checked linear0..255 per-channel gain and pan (0left,128center,255right).
    May set before start or during playback. Default full volume; mono centered,
    stereo separated. Channel1 settings ignored for mono. This is KOS's scale,
@@ -203,6 +380,13 @@ int kosdec_adx_player_set_pan(struct kosdec_adx_player *, unsigned channel, int 
 /* Last successfully configured software setting, including AUTO; not device
    readback. Valid after failure/stop too. Null output or channel>1 is EINVAL. */
 int kosdec_adx_player_get_pan(const struct kosdec_adx_player *, unsigned channel, int *pan);
+/* Dreamcast compatibility settings. The 2.00J player stores these raw values
+   without filtering the output. They start at zero and persist across sources
+   and stop until reinit. This API is separate from the producer PCM callback. */
+int kosdec_adx_player_set_filter_settings(struct kosdec_adx_player *,
+    int32_t cutoff, int32_t resonance);
+int kosdec_adx_player_get_filter_settings(const struct kosdec_adx_player *,
+    struct kosdec_adx_filter_settings *);
 /* Requested output frequency8000..48000Hz; zero restores the source frequency.
    Before first output, store for start; during output, checked frequency update.
    Restoring a source rate below8000Hz during output returns EINVAL unchanged.
@@ -218,6 +402,8 @@ int kosdec_adx_player_set_rate(struct kosdec_adx_player *, uint32_t hz);
 enum kosdec_adx_status kosdec_adx_player_post(struct kosdec_adx_player *,
     const struct kosdec_adx_command *);
 bool kosdec_adx_player_take(struct kosdec_adx_player *, enum kosdec_adx_status *);
+bool kosdec_adx_player_take_receipt(struct kosdec_adx_player *,
+                                   struct kosdec_adx_command_receipt *);
 /* Snapshot owner counters plus synchronized producer status; no hardware query.
    Counters wrap modulo2^64 and count copies/requests, not consumed audio.
    source_frames counts the current (or last released) source; sources_started

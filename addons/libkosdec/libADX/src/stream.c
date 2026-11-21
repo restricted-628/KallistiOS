@@ -31,14 +31,22 @@ enum kosdec_adx_status kosdec_adx_stream_set_linked(struct kosdec_adx_stream *s,
         return KOSDEC_ADX_BAD_ARGUMENT;
     if(enabled && s->repeat) return KOSDEC_ADX_UNSUPPORTED;
     s->linked=s->follow_links=enabled;
+    s->link_released=false;
     return KOSDEC_ADX_DONE;
 }
-enum kosdec_adx_status kosdec_adx_stream_release_link(struct kosdec_adx_stream *s) {
+enum kosdec_adx_status kosdec_adx_stream_set_link_follow(
+    struct kosdec_adx_stream *s, bool enabled) {
     if(!valid(s)) return KOSDEC_ADX_BAD_ARGUMENT;
     if(!s->linked) return KOSDEC_ADX_UNSUPPORTED;
     if(s->terminal) return s->terminal;
-    s->follow_links=false;
+    if(enabled && s->link_released) return KOSDEC_ADX_BAD_ARGUMENT;
+    s->follow_links=enabled;
     return KOSDEC_ADX_MORE;
+}
+enum kosdec_adx_status kosdec_adx_stream_release_link(struct kosdec_adx_stream *s) {
+    enum kosdec_adx_status status=kosdec_adx_stream_set_link_follow(s,false);
+    if(status==KOSDEC_ADX_MORE) s->link_released=true;
+    return status;
 }
 static void consume(struct kosdec_adx_stream *s, size_t bytes) {
     s->input_used += (unsigned)bytes;

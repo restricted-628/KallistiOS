@@ -6,12 +6,14 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+struct kosdec_adx_joint_reader;
 struct kosdec_adx_sfa {
     uint32_t magic, groups, published_groups;
     unsigned channels, header_used, footer_used;
     struct kosdec_adx_joint *joint;
+    struct kosdec_adx_joint_reader *live_reader;
     uint8_t header[KOSDEC_ADX_SFA_HEADER_BYTES];
-    bool done;
+    bool done, length_known;
 };
 /* Initialize before use on an empty, unsealed ring with no borrows and capacity
    >=36. Writer exclusively owns FREE publication; a joint reader may consume
@@ -24,6 +26,24 @@ struct kosdec_adx_sfa {
    This finite contract does not admit unknown-length SFD audio or live rewrites. */
 enum kosdec_adx_status kosdec_adx_sfa_init(struct kosdec_adx_sfa *,
     struct kosdec_adx_joint *, unsigned channels, uint32_t rate, uint32_t total_frames);
+/* Pair a fresh joint reader (before its first read) with a writer on its empty
+   ring. Same serialized producer and backing-storage lifetime as finite SFA.
+   The reader and writer must stay paired until their users are joined. Do not
+   close, reset or reinitialize either side while the producer is active.
+   Supported with or without decode jobs on the reader. Configure both
+   before publication. The ring must meet the reader's job-mode requirements.
+   Publishes an SFA placeholder header. While awaiting length, only whole groups
+   may be submitted, up to floor(KOSDEC_ADX_MAX_FRAMES/32). */
+enum kosdec_adx_status kosdec_adx_sfa_init_live(struct kosdec_adx_sfa *,
+    struct kosdec_adx_joint_reader *, unsigned channels, uint32_t rate);
+/* Set the authoritative final frame count once, including inserted groups.
+   Call on the paired producer BEFORE submitting a partial final group. Rejects
+   counts below the number of already published whole frames and counts above
+   the codec limit. May run before the header is consumed. The writer then
+   requires the exact remaining body groups before emitting footer and seal.
+   DONE on success; invalid arguments leave both objects unchanged. */
+enum kosdec_adx_status kosdec_adx_sfa_set_length(struct kosdec_adx_sfa *,
+    uint32_t total_frames);
 /* Each step publishes <=512 bytes. pump emits remaining prefix, then MORE while
    body groups remain, then the18-byte endcode and checked seal. NEED_OUTPUT is
    backpressure; DONE means validated framing was published, not decoded/played.

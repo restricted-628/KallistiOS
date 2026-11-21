@@ -1,4 +1,5 @@
 #include <kosdec/adx_player.h>
+#include <kosdec/adx_source.h>
 #include "player_mock.h"
 #include <pthread.h>
 #include <stdalign.h>
@@ -75,8 +76,229 @@ static int finish(struct fixture *f) {
     }
     CHECK(0);return -1;
 }
+
 static void close_source(struct fixture *f) {
     OK(kosdec_adx_joint_reader_close(&f->reader));OK(kosdec_adx_joint_close(&f->joint));
+}
+
+static void memory_loan_player(void) {
+    struct fixture f;
+    init(&f,2,false);
+    close_source(&f);
+    memset(f.data+20,0,24);
+    struct kosdec_adx_source_handle source;
+    struct kosdec_adx_source loan = {0};
+    CHECK(kosdec_adx_source_init_memory(&source,f.data,(uint32_t)f.bytes)==KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_source_borrow(&source,&loan,0)==KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_source_init_memory_joint(&source,&loan,&f.joint)==KOSDEC_ADX_DONE);
+    OK(kosdec_adx_joint_reader_init(&f.reader,&f.joint));
+    CHECK(!kosdec_adx_player_init_joint(&f.player,&f.reader,&f.config));
+    CHECK(!kosdec_adx_player_start(&f.player));
+    CHECK(kosdec_adx_source_close(&source)==KOSDEC_ADX_NEED_OUTPUT);
+    CHECK(!finish(&f));
+    struct kosdec_adx_player_input input;
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && input.joint==&f.joint &&
+          !input.queued_bytes && !input.seconds && mock_frames==65);
+    CHECK(!kosdec_adx_player_release_source(&f.player));
+    close_source(&f);
+    CHECK(kosdec_adx_source_return(&source,&loan)==KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_source_close(&source)==KOSDEC_ADX_DONE);
+
+    enum { MEMBER_OFFSET=81, MEMBER_BODY=50+2*36, MEMBER_BYTES=MEMBER_BODY+18 };
+    uint8_t archive[MEMBER_OFFSET+MEMBER_BYTES+7] = {0};
+    put32(archive+4,2);
+    put32(archive+8,32); put32(archive+12,8);
+    put32(archive+16,MEMBER_OFFSET); put32(archive+20,MEMBER_BYTES);
+    memcpy(archive+MEMBER_OFFSET,f.data,MEMBER_BODY);
+    put32(archive+MEMBER_OFFSET+12,33);
+    memcpy(archive+MEMBER_OFFSET+MEMBER_BODY,f.data+f.bytes-18,18);
+    memset(archive+MEMBER_OFFSET+MEMBER_BYTES,0xa5,7);
+    CHECK(kosdec_adx_source_init_memory(&source,archive,sizeof(archive))==KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_source_index_begin(&source,KOSDEC_ADX_ACX,1)==KOSDEC_ADX_MORE);
+    CHECK(kosdec_adx_source_index_step(&source)==KOSDEC_ADX_MORE);
+    CHECK(kosdec_adx_source_index_step(&source)==KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_source_index_begin(&source,KOSDEC_ADX_ACX,2)==KOSDEC_ADX_MORE);
+    CHECK(kosdec_adx_source_index_step(&source)==KOSDEC_ADX_NOT_FOUND);
+    CHECK(kosdec_adx_source_borrow(&source,&loan,0)==KOSDEC_ADX_DONE && loan.bytes==MEMBER_BYTES);
+    CHECK(kosdec_adx_source_init_memory_joint(&source,&loan,&f.joint)==KOSDEC_ADX_DONE);
+    OK(kosdec_adx_joint_reader_init(&f.reader,&f.joint));
+    CHECK(!kosdec_adx_player_bind_joint(&f.player,&f.reader));
+    CHECK(!finish(&f));
+    CHECK(mock_frames==98 && mock_allocs==1 && mock_starts==1);
+    for(unsigned i=0;i<98;++i) for(unsigned channel=0;channel<2;++channel)
+        CHECK(mock_pcm[2*i+channel]==golden[channel][i%65]);
+    CHECK(!kosdec_adx_player_stop(&f.player,1000) && mock_joins==2);
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && !input.joint);
+    close_source(&f);
+    CHECK(kosdec_adx_source_return(&source,&loan)==KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_source_close(&source)==KOSDEC_ADX_DONE);
+    free(f.data);
+}
+
+struct input_gate {
+    unsigned calls, entered, allowed;
+};
+static enum kosdec_adx_joint_feed_status gate_input(void *context, struct kosdec_adx_joint *joint) {
+    (void)joint;
+    struct input_gate *gate = context;
+    unsigned step = ++gate->calls;
+    if(step <= 2) {
+        __atomic_store_n(&gate->entered,step,__ATOMIC_RELEASE);
+        while(__atomic_load_n(&gate->allowed,__ATOMIC_ACQUIRE) < step) mock_pause();
+    }
+    return KOSDEC_ADX_JOINT_FEED_WAIT;
+}
+static void wait_input_gate(struct input_gate *gate, unsigned step) {
+    for(unsigned i = 0; i < 2000 && __atomic_load_n(&gate->entered,__ATOMIC_ACQUIRE) < step; ++i)
+        mock_pause();
+    CHECK(__atomic_load_n(&gate->entered,__ATOMIC_ACQUIRE) == step);
+}
+static void input_snapshot(void) {
+    struct fixture f;
+    struct input_gate gate = {0};
+    uint8_t ring[16384];
+    struct kosdec_adx_player_input input;
+    init(&f,2,false);
+    close_source(&f);
+    put32(f.data + 12,65536);
+    memset(f.data + 20,0,24);
+    OK(kosdec_adx_joint_ring_init(&f.joint,ring,sizeof(ring),0));
+    struct kosdec_adx_chunk chunk;
+    OK(kosdec_adx_joint_get(&f.joint,KOSDEC_ADX_JOINT_FREE,4096,&chunk));
+    CHECK(chunk.bytes == 4096);
+    memset(chunk.data,0,chunk.bytes);
+    memcpy(chunk.data,f.data,50);
+    OK(kosdec_adx_joint_put(&f.joint,&chunk));
+    OK(kosdec_adx_joint_reader_init(&f.reader,&f.joint));
+    CHECK(kosdec_adx_joint_reader_enable_linked(&f.reader) == KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_joint_reader_set_feed(&f.reader,gate_input,&gate) == KOSDEC_ADX_DONE);
+    f.config.use_lsc_reload = true;
+    CHECK(!kosdec_adx_player_init_joint(&f.player,&f.reader,&f.config));
+    input.queued_bytes = 123;
+    CHECK(kosdec_adx_player_get_input(NULL,&input) < 0 && errno == EINVAL && input.queued_bytes == 123);
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && !input.joint && !input.queued_bytes &&
+          !input.sectors && !input.seconds && !input.safe);
+    CHECK(!kosdec_adx_player_set_linked_reload_sectors(&f.player,2));
+    CHECK(!kosdec_adx_player_start(&f.player));
+    wait_input_gate(&gate,1);
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && input.joint == &f.joint &&
+          input.queued_bytes == 4096 && input.sectors == 2 && !input.seconds &&
+          input.safety_limit_bytes == 4096 && input.safe);
+    __atomic_store_n(&gate.allowed,1,__ATOMIC_RELEASE);
+    wait_input_gate(&gate,2);
+    CHECK(info(&f).state == KOSDEC_ADX_PLAYER_PREFILL);
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && input.joint == &f.joint &&
+          input.queued_bytes == 3584 && input.sectors == 1 && input.seconds == 3168.0f / 44100.0f &&
+          input.safety_limit_bytes == 4096 && !input.safe);
+    CHECK(!kosdec_adx_player_set_linked_reload_sectors(&f.player,1));
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && input.queued_bytes == 3584 &&
+          input.safety_limit_bytes == 2048 && input.safe);
+    CHECK(!kosdec_adx_player_set_linked_reload_time(&f.player,0.2f,2,44100));
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && input.queued_bytes == 3584 &&
+          input.safety_limit_bytes == 8192 && !input.safe);
+    __atomic_store_n(&gate.allowed,2,__ATOMIC_RELEASE);
+    CHECK(!kosdec_adx_player_cancel_source(&f.player));
+    CHECK(!kosdec_adx_player_get_input(&f.player,&input) && !input.joint && !input.queued_bytes &&
+          !input.sectors && !input.seconds && !input.safe);
+    CHECK(!kosdec_adx_player_stop(&f.player,1000));
+    close_source(&f);
+    free(f.data);
+}
+
+struct reload_input {
+    struct kosdec_adx_loader *loader;
+    const uint8_t *data;
+    size_t bytes, expected_limit;
+    unsigned entered;
+    bool allow;
+};
+static struct kosdec_adx_input_result reload_read(void *context, uint32_t offset,
+    uint8_t *dst, size_t bytes) {
+    struct reload_input *source = context;
+    struct kosdec_adx_loader_info loader;
+    struct kosdec_adx_loader_buffer_info buffer;
+    WC(kosdec_adx_loader_get_info(source->loader,&loader) && loader.flow_limit == source->expected_limit);
+    WC(kosdec_adx_loader_get_buffer_info(source->loader,2,44100,&buffer) &&
+       buffer.reload_bytes == source->expected_limit);
+    __atomic_store_n(&source->entered,1,__ATOMIC_RELEASE);
+    if(!__atomic_load_n(&source->allow,__ATOMIC_ACQUIRE))
+        return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_WAIT,0};
+    WC(bytes <= 512 && offset < source->bytes && bytes <= source->bytes - offset);
+    memcpy(dst,source->data+offset,bytes);
+    return (struct kosdec_adx_input_result){KOSDEC_ADX_INPUT_DATA,bytes};
+}
+static void prepare_reload(struct fixture *f, struct kosdec_adx_loader *loader,
+                           uint8_t *ring, size_t capacity) {
+    OK(kosdec_adx_joint_ring_init(&f->joint,ring,capacity,0));
+    CHECK(kosdec_adx_loader_init(loader,&f->joint) == KOSDEC_ADX_LOADER_OK);
+    OK(kosdec_adx_joint_reader_init(&f->reader,&f->joint));
+    CHECK(kosdec_adx_joint_reader_enable_linked(&f->reader) == KOSDEC_ADX_DONE);
+    CHECK(kosdec_adx_joint_reader_set_loader(&f->reader,loader,true) == KOSDEC_ADX_DONE);
+}
+static void linked_reload(void) {
+    struct fixture f;
+    struct kosdec_adx_loader loader;
+    uint8_t ring[16384];
+    init(&f,2,false);
+    CHECK(kosdec_adx_player_set_linked_reload_sectors(&f.player,1) < 0 && errno == ENOTSUP);
+    close_source(&f);
+    /* The shared fixture defaults to an embedded loop. Linked records are linear. */
+    memset(f.data + 20,0,24);
+    f.config.use_lsc_reload = true;
+    prepare_reload(&f,&loader,ring,sizeof(ring));
+    CHECK(!kosdec_adx_player_init_joint(&f.player,&f.reader,&f.config));
+    struct kosdec_adx_loader_info status;
+    CHECK(kosdec_adx_loader_start(&loader) == KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_player_start(&f.player) < 0 && errno == EBUSY);
+    CHECK(kosdec_adx_loader_get_info(&loader,&status) &&
+          status.state == KOSDEC_ADX_LOADER_WAIT && status.flow_limit == 13107);
+    CHECK(kosdec_adx_loader_stop(&loader) == KOSDEC_ADX_LOADER_OK);
+    struct reload_input first = {.loader=&loader,.data=f.data,.bytes=f.bytes,.expected_limit=4096};
+    struct reload_input second = first;
+    second.allow = true;
+    uint64_t id;
+    CHECK(kosdec_adx_loader_enqueue(&loader,"first",reload_read,&first,(uint32_t)f.bytes,0,1,&id) == KOSDEC_ADX_LOADER_OK);
+    CHECK(kosdec_adx_loader_enqueue(&loader,"second",reload_read,&second,(uint32_t)f.bytes,0,1,&id) == KOSDEC_ADX_LOADER_OK);
+    CHECK(!kosdec_adx_player_set_linked_reload_sectors(&f.player,9));
+    CHECK(kosdec_adx_player_start(&f.player) < 0 && errno == EINVAL);
+    CHECK(info(&f).state == KOSDEC_ADX_PLAYER_READY && mock_allocs == 0);
+    CHECK(kosdec_adx_loader_get_info(&loader,&status) &&
+          status.state == KOSDEC_ADX_LOADER_STOPPED && status.pending == 2 && status.flow_limit == 13107);
+    CHECK(!kosdec_adx_player_set_linked_reload_sectors(&f.player,2));
+    struct kosdec_adx_chunk old_data;
+    OK(kosdec_adx_joint_get(&f.joint,KOSDEC_ADX_JOINT_FREE,1,&old_data));
+    CHECK(old_data.bytes == 1);
+    OK(kosdec_adx_joint_put(&f.joint,&old_data));
+    CHECK(kosdec_adx_player_start(&f.player) < 0 && errno == EINVAL);
+    OK(kosdec_adx_joint_get(&f.joint,KOSDEC_ADX_JOINT_DATA,1,&old_data));
+    CHECK(old_data.bytes == 1);
+    OK(kosdec_adx_joint_put(&f.joint,&old_data));
+    CHECK(!kosdec_adx_player_start(&f.player));
+    for(unsigned i = 0; i < 2000 && !__atomic_load_n(&first.entered,__ATOMIC_ACQUIRE); ++i)
+        mock_pause();
+    CHECK(__atomic_load_n(&first.entered,__ATOMIC_ACQUIRE));
+    CHECK(!kosdec_adx_player_set_linked_reload_sectors(&f.player,1));
+    CHECK(!kosdec_adx_player_set_linked_reload_time(&f.player,0.2f,2,44100));
+    CHECK(kosdec_adx_player_set_linked_reload_time(&f.player,-1.0f,2,44100) < 0 && errno == EINVAL);
+    __atomic_store_n(&first.allow,true,__ATOMIC_RELEASE);
+    CHECK(!finish(&f));
+    CHECK(!kosdec_adx_player_release_source(&f.player));
+    CHECK(second.entered && mock_frames == 130 && f.reader.linked.completed_records == 2);
+    CHECK(kosdec_adx_loader_get_info(&loader,&status) && status.flow_limit == 4096 && !status.pending);
+    CHECK(kosdec_adx_loader_close(&loader) == KOSDEC_ADX_LOADER_OK);
+    close_source(&f);
+
+    prepare_reload(&f,&loader,ring,6144);
+    struct reload_input restart = {.loader=&loader,.data=f.data,.bytes=f.bytes,
+                                   .expected_limit=6144,.allow=true};
+    CHECK(kosdec_adx_loader_enqueue(&loader,"restart",reload_read,&restart,(uint32_t)f.bytes,0,1,&id) == KOSDEC_ADX_LOADER_OK);
+    CHECK(!kosdec_adx_player_bind_joint(&f.player,&f.reader));
+    CHECK(!finish(&f));
+    CHECK(!kosdec_adx_player_stop(&f.player,1000));
+    CHECK(restart.entered && mock_frames == 195 && mock_allocs == 1 && mock_starts == 1 && mock_joins == 2);
+    CHECK(kosdec_adx_loader_close(&loader) == KOSDEC_ADX_LOADER_OK);
+    close_source(&f);
+    free(f.data);
 }
 static void playback(void) {
     for(unsigned ch=1;ch<=2;++ch) {
@@ -95,6 +317,23 @@ static void playback(void) {
         before=calls(&f);for(unsigned i=0;i<4;++i)mock_pause();CHECK(calls(&f)==before);
         close_source(&f);free(f.data);
     }
+}
+static void job_playback(void) {
+    struct fixture f;
+    int16_t work[256];
+    init(&f, 2, true);
+    CHECK(kosdec_adx_joint_reader_enable_jobs(&f.reader, work, 256, 128, 31, false) ==
+        KOSDEC_ADX_DONE);
+    CHECK(!kosdec_adx_player_start(&f.player));
+    CHECK(!finish(&f));
+    CHECK(info(&f).decoder == KOSDEC_ADX_DONE && mock_frames == 65);
+    for(size_t i = 0; i < 65; ++i)
+        for(unsigned ch = 0; ch < 2; ++ch)
+            CHECK(mock_pcm[i * 2 + ch] == golden[ch][i]);
+    CHECK(!kosdec_adx_player_stop(&f.player, 1000));
+    CHECK(mock_allocs == 1 && mock_starts == 1 && mock_joins == 1);
+    close_source(&f);
+    free(f.data);
 }
 static void failures(void) {
     for(unsigned fail=0;fail<2;++fail) {
@@ -158,7 +397,7 @@ static void service(void) {
     close_source(&f);free(f.data);
 }
 int main(void) {
-    service();playback();failures();
+    service();playback();job_playback();linked_reload();input_snapshot();memory_loan_player();failures();
     printf("joint_player: %u checks passed, PCM/controls/feed ownership/rebind/errors\n",checks);
     return 0;
 }

@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-20 — libADX decoder, input and player backlog
+
+- Correct the ADX scale mask, v3 coefficient rounding and predictor handling;
+  extend stream, loop, container and recovery support. The player can report
+  staged input for direct reads and the active sequence entry. Add ordered
+  joint loans and linked reloads without transferring provider ownership.
+- Add opt-in source-attributed playback time and NTSC/PAL VBlank timing.
+  The default archive does not enable retained output. Rebuild applications
+  against the matching headers and archive; public player and reader state grew.
+- Two composed playback cases remain unqualified: consecutive live stereo
+  gain changes and concurrent retained stereo players can fail with EPIPE.
+  Software stop is not permission to reuse played sound RAM.
+
 ## 2026-11-20 — Live stereo attenuation on retained PCM
 
 - Let the retained stereo PCM owner request raw AICA total-level bytes and

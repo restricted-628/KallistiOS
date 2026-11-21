@@ -101,6 +101,14 @@ int main(void) {
             CHECK(kosdec_adx_recovery_step(&r,1,77)==1 && prepares==1 && stops==2);
         }
     }
+    for(unsigned stall=0;stall<2;++stall) {
+        reset();init(&r,KOSDEC_ADX_RECOVERY_REPLAY,0);
+        CHECK(!kosdec_adx_recovery_step(&r,0,77));
+        players[0].info.input_stalled=stall;
+        poll_error=ETIMEDOUT;
+        CHECK(kosdec_adx_recovery_step(&r,1,77)==(stall?0:1));
+        CHECK(prepares==stall && stops==1);
+    }
     reset();init(&r,KOSDEC_ADX_RECOVERY_STOP,99);start_error=ENOMEM;
     CHECK(!kosdec_adx_recovery_step(&r,UINT64_MAX-10,77) && !stops);
     CHECK(!kosdec_adx_recovery_step(&r,UINT64_MAX-1,77) && !stops);

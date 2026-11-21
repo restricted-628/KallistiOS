@@ -47,12 +47,13 @@ struct kosdec_adx_joint {
     enum kosdec_adx_joint_kind kind;
     uint8_t *buffer;
     size_t capacity, extra, position[4], available[4];
-    struct kosdec_adx_chunk borrowed[4];
+    struct kosdec_adx_chunk borrowed[4], next_data;
     uint64_t next_token;
     kosdec_adx_joint_error error;
     void *error_context;
     enum kosdec_adx_joint_mode mode;
     struct kosdec_adx_joint_node *nodes, *spare, *head[4], *tail[4], *reserved[4];
+    struct kosdec_adx_joint_node *next_data_node;
     size_t node_count, spare_count, chunks[4];
     bool sealed;
 };
@@ -64,10 +65,15 @@ struct kosdec_adx_joint_info {
     enum kosdec_adx_joint_mode mode;
     bool sealed;
 };
+struct kosdec_adx_joint_readiness {
+    size_t bytes;
+    bool fits;
+};
 /* State, workspace, backing storage and output descriptors are disjoint,
    caller-owned, and remain alive until
    successful close. Every call and buffer access is serialized by one owner;
-   this is not a concurrent SPSC queue. At most one outstanding borrow per line.
+   this is not a concurrent SPSC queue. DATA supports an explicit second loan.
+   Other lines support one outstanding borrow each.
    No device/DMA/IRQ ownership, allocation, global init, or scheduler dependency.
    State fields are implementation-owned; do not copy a live joint.
 
@@ -148,6 +154,15 @@ enum kosdec_adx_joint_status kosdec_adx_joint_set_error(
     struct kosdec_adx_joint *, kosdec_adx_joint_error, void *context);
 enum kosdec_adx_joint_status kosdec_adx_joint_query(
     struct kosdec_adx_joint *, struct kosdec_adx_joint_info *);
+/* Check a single request without borrowing. The bytes result is the lesser
+   of request and contiguous availability for memory/ring, or the queue head
+   size. A SEPARATE request fits only when equal to the whole head. An empty
+   queue never fits. A live loan or sealed non-DATA line blocks nonzero
+   requests and reports zero bytes. If a loan needs an unavailable token or
+   spare node, fits is false. Invalid arguments leave out unchanged. */
+enum kosdec_adx_joint_status kosdec_adx_joint_can_get(
+    struct kosdec_adx_joint *, enum kosdec_adx_joint_line, size_t request,
+    struct kosdec_adx_joint_readiness *out);
 /* Get on memory/ring borrows min(request, available contiguous bytes).
    Empty is OK, with a zeroed chunk. Another nonzero get on that line while borrowed returns BUSY.
    Empty DATA is temporary starvation, never an implicit EOF. Output unchanged
@@ -155,9 +170,18 @@ enum kosdec_adx_joint_status kosdec_adx_joint_query(
 enum kosdec_adx_joint_status kosdec_adx_joint_get(
     struct kosdec_adx_joint *, enum kosdec_adx_joint_line, size_t request,
     struct kosdec_adx_chunk *);
+/* Get a second DATA span while the first remains on loan. Same byte limits
+   as get, including SEPARATE whole-head admission and queue node reservation.
+   Requires a live first DATA loan; a third loan returns BUSY. Query reports
+   both loans in borrowed[DATA]. Put/move/detach accept only the oldest prefix;
+   Unget accepts only the newest suffix. Out-of-order valid returns are BUSY
+   and leave ownership intact. Fully consuming the first promotes the second.
+   Fully ungetting the second leaves the first as the sole loan. No copying. */
+enum kosdec_adx_joint_status kosdec_adx_joint_get_next_data(
+    struct kosdec_adx_joint *, size_t request, struct kosdec_adx_chunk *);
 /* Put consumes a prefix of the remaining borrow, publishing it to the opposite
    line (memory DATA is discarded). Unget returns a suffix to its original line.
-   Prefix/suffix may be returned in either order. Empty chunks are no-ops.
+   With one loan on the line, prefix/suffix may be returned in either order. Empty chunks are no-ops.
    Stale/foreign/double/overlapping/out-of-order returns fail unchanged.
    Do not retain copies for later reuse, including across close/reinitialization. */
 enum kosdec_adx_joint_status kosdec_adx_joint_put(

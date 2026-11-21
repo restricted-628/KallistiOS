@@ -1,4 +1,5 @@
 #include <kosdec/adx_source.h>
+#include <kosdec/adx_joint.h>
 #include <string.h>
 #define SOURCE_MAGIC UINT32_C(0x41445842)
 static bool valid(const struct kosdec_adx_source_handle *s) {
@@ -82,10 +83,27 @@ enum kosdec_adx_status kosdec_adx_source_borrow(struct kosdec_adx_source_handle 
     s->loan=out;
     return KOSDEC_ADX_DONE;
 }
+static bool owns_loan(const struct kosdec_adx_source_handle *s,
+                      const struct kosdec_adx_source *loan) {
+    return valid(s) && loan && loan == s->loan && loan->read_at == loan_read &&
+        loan->context == s && loan->bytes == s->selected.bytes;
+}
+enum kosdec_adx_status kosdec_adx_source_init_memory_joint(
+    const struct kosdec_adx_source_handle *s, const struct kosdec_adx_source *loan,
+    struct kosdec_adx_joint *joint) {
+    if(!joint || !owns_loan(s,loan) || !loan->bytes)
+        return KOSDEC_ADX_BAD_ARGUMENT;
+    if(!s->memory) return KOSDEC_ADX_UNSUPPORTED;
+    /* The memory joint offers read-only DATA and never writes the backing. */
+    const uint8_t *data = s->memory + s->selected.offset;
+    if(kosdec_adx_joint_memory_init(joint,(void *)data,loan->bytes) != KOSDEC_ADX_JOINT_OK)
+        return KOSDEC_ADX_BAD_ARGUMENT;
+    (void)kosdec_adx_joint_finish(joint);
+    return KOSDEC_ADX_DONE;
+}
 enum kosdec_adx_status kosdec_adx_source_return(struct kosdec_adx_source_handle *s,
     struct kosdec_adx_source *loan) {
-    if(!valid(s) || !loan || loan!=s->loan || loan->read_at!=loan_read ||
-       loan->context!=s || loan->bytes!=s->selected.bytes) return KOSDEC_ADX_BAD_ARGUMENT;
+    if(!owns_loan(s,loan)) return KOSDEC_ADX_BAD_ARGUMENT;
     s->loan=NULL;
     *loan=(struct kosdec_adx_source){0};
     return KOSDEC_ADX_DONE;

@@ -1,7 +1,8 @@
 /* Independent framing and lifetime policy for incremental ADX decoding. */
-#include <kosdec/adx.h>
+#include "adx_decoder_internal.h"
 #include "adx_math.h"
 #include "adx_filter.h"
+#include <kosdec/adx_request.h>
 #include <string.h>
 #define ADX_MAGIC UINT32_C(0x41445846)
 static uint32_t be16(const uint8_t *p) { return (uint32_t)p[0] * 256u + p[1]; }
@@ -37,17 +38,22 @@ static enum kosdec_adx_status header(struct kosdec_adx_decoder *d) {
         return KOSDEC_ADX_UNSUPPORTED;
     d->total_frames = be32(h + 12);
     if(d->total_frames > KOSDEC_ADX_MAX_FRAMES) return KOSDEC_ADX_UNSUPPORTED;
-    /* One authority for certified profiles; metadata remains private until the
-       complete header/extension passes and header_ready is published. */
-    if(media_adx_coefficients(be32(h + 8), be16(h + 16), d->coefficient))
+    /* Metadata remains private until complete header/extension admission. */
+    unsigned rate = be32(h + 8);
+    unsigned cutoff = be16(h + 16);
+    int coefficient_error = h[18] == 3 && rate <= MEDIA_ADX_ROUNDED_MAX_RATE ?
+        media_adx_rounded_coefficients(rate, cutoff, d->coefficient) :
+        media_adx_coefficients(rate, cutoff, d->coefficient);
+    if(coefficient_error)
         return KOSDEC_ADX_UNSUPPORTED;
-    d->sample_rate = be32(h + 8);
-    d->cutoff = (uint16_t)be16(h + 16);
+    d->sample_rate = rate;
+    d->cutoff = (uint16_t)cutoff;
     d->channels = h[7];
     d->version = h[18];
     return KOSDEC_ADX_MORE;
 }
-static enum kosdec_adx_status extension(struct kosdec_adx_decoder *d) {
+static enum kosdec_adx_status extension(struct kosdec_adx_decoder *d,
+                                        enum media_adx_header_mode mode) {
     const uint8_t *e = d->extension;
     unsigned nonzero = 0;
     for(unsigned i = 0; i < sizeof(d->extension); ++i) nonzero |= e[i];
@@ -58,15 +64,78 @@ static enum kosdec_adx_status extension(struct kosdec_adx_decoder *d) {
     uint32_t start = be32(e + 8), end = be32(e + 16);
     if(start >= end || end > d->total_frames) return KOSDEC_ADX_INVALID;
     if(be16(e) > start) return KOSDEC_ADX_INVALID;
-    if(start % 32u) return KOSDEC_ADX_UNSUPPORTED;
     uint32_t group_bytes = 18u * d->channels;
-    uint32_t start_byte = d->header_bytes + (start / 32u) * group_bytes;
-    uint32_t end_byte = d->header_bytes + ((end + 31u) / 32u) * group_bytes;
-    /* INT32_MAX frame admission bounds these calculations below UINT32_MAX. */
-    if(be32(e + 12) != start_byte || be32(e + 20) != end_byte)
-        return KOSDEC_ADX_INVALID;
+    uint32_t start_byte = be32(e + 12), end_byte = be32(e + 20);
+    if(mode == MEDIA_ADX_HEADER_MEMORY_JOB) {
+        uint32_t body_end = d->header_bytes + ((d->total_frames + 31u) / 32u) * group_bytes;
+        if(start_byte < d->header_bytes || start_byte > body_end - group_bytes ||
+           end_byte < start_byte || end_byte > body_end ||
+           (start_byte - d->header_bytes) % group_bytes ||
+           (end_byte - d->header_bytes) % group_bytes)
+            return KOSDEC_ADX_INVALID;
+    }
+    else {
+        if(mode != MEDIA_ADX_HEADER_SECTOR_JOB && start % 32u)
+            return KOSDEC_ADX_UNSUPPORTED;
+        /* INT32_MAX frame admission bounds these offsets below UINT32_MAX. */
+        uint32_t start_group = start / 32u;
+        uint32_t end_group = (end + 31u) / 32u;
+        uint32_t expected_start = d->header_bytes + start_group * group_bytes;
+        if(end_byte != d->header_bytes + end_group * group_bytes)
+            return KOSDEC_ADX_INVALID;
+        if(mode == MEDIA_ADX_HEADER_SECTOR_JOB) {
+            /* The file service seeks by sector. Retain the original byte
+               field while checking the actual source of the repeated group. */
+            uint32_t sector_start = start_byte - start_byte % KOSDEC_ADX_REQUEST_SECTOR_BYTES;
+            uint32_t loop_groups = (end - start + 31u) / 32u;
+            if(sector_start != expected_start || loop_groups != end_group - start_group)
+                return KOSDEC_ADX_UNSUPPORTED;
+        }
+        else if(start_byte != expected_start) return KOSDEC_ADX_INVALID;
+    }
     d->loop = (struct kosdec_adx_loop){true, start, end, start_byte, end_byte};
     return KOSDEC_ADX_MORE;
+}
+struct kosdec_adx_result media_adx_decode_header(struct kosdec_adx_decoder *d,
+    const uint8_t *input, size_t input_bytes, bool final_input, enum media_adx_header_mode mode) {
+    struct kosdec_adx_result r = {KOSDEC_ADX_MORE, 0, 0};
+    static const uint8_t marker[] = {'(', 'c', ')', 'C', 'R', 'I'};
+    while(d->header_used < d->header_bytes && r.consumed < input_bytes &&
+          r.consumed < KOSDEC_ADX_HEADER_BUDGET) {
+        unsigned n = d->header_used;
+        uint8_t value = input[r.consumed++];
+        if(n < sizeof(d->header)) d->header[n] = value;
+        else if(n < d->header_bytes - sizeof(marker)) {
+            if(n < sizeof(d->header) + sizeof(d->extension))
+                d->extension[n - sizeof(d->header)] = value;
+            else if(value) { r.status = KOSDEC_ADX_UNSUPPORTED; goto fail; }
+        }
+        else if(value != marker[n - (d->header_bytes - sizeof(marker))]) {
+            r.status = KOSDEC_ADX_INVALID; goto fail;
+        }
+        ++d->header_used;
+        if(d->header_used == sizeof(d->header)) {
+            r.status = header(d);
+            if(r.status != KOSDEC_ADX_MORE) goto fail;
+        }
+    }
+    if(d->header_used != d->header_bytes) {
+        if(r.consumed < input_bytes) {
+            r.status = KOSDEC_ADX_MORE;
+            return r;
+        }
+        r.status = final_input ? KOSDEC_ADX_TRUNCATED : KOSDEC_ADX_NEED_INPUT;
+        if(final_input) goto fail;
+        return r;
+    }
+    r.status = extension(d, mode);
+    if(r.status != KOSDEC_ADX_MORE) goto fail;
+    d->header_ready = true;
+    r.status = KOSDEC_ADX_MORE;
+    return r;
+fail:
+    d->terminal = r.status;
+    return r;
 }
 struct kosdec_adx_result kosdec_adx_decode(struct kosdec_adx_decoder *d,
     const uint8_t *input, size_t input_bytes, int16_t *output,
@@ -76,42 +145,8 @@ struct kosdec_adx_result kosdec_adx_decode(struct kosdec_adx_decoder *d,
        (!output && output_frames) ||
        (output && (uintptr_t)output % _Alignof(int16_t))) return r;
     if(d->terminal) { r.status = d->terminal; return r; }
-    if(!d->header_ready) {
-        static const uint8_t marker[] = {'(', 'c', ')', 'C', 'R', 'I'};
-        while(d->header_used < d->header_bytes && r.consumed < input_bytes &&
-              r.consumed < KOSDEC_ADX_HEADER_BUDGET) {
-            unsigned n = d->header_used;
-            uint8_t value = input[r.consumed++];
-            if(n < sizeof(d->header)) d->header[n] = value;
-            else if(n < d->header_bytes - sizeof(marker)) {
-                if(n < sizeof(d->header) + sizeof(d->extension))
-                    d->extension[n - sizeof(d->header)] = value;
-                else if(value) { r.status = KOSDEC_ADX_UNSUPPORTED; goto fail; }
-            }
-            else if(value != marker[n - (d->header_bytes - sizeof(marker))]) {
-                r.status = KOSDEC_ADX_INVALID; goto fail;
-            }
-            ++d->header_used;
-            if(d->header_used == sizeof(d->header)) {
-                r.status = header(d);
-                if(r.status != KOSDEC_ADX_MORE) goto fail;
-            }
-        }
-        if(d->header_used != d->header_bytes) {
-            if(r.consumed < input_bytes) {
-                r.status = KOSDEC_ADX_MORE;
-                return r;
-            }
-            r.status = final_input ? KOSDEC_ADX_TRUNCATED : KOSDEC_ADX_NEED_INPUT;
-            if(final_input) goto fail;
-            return r;
-        }
-        r.status = extension(d);
-        if(r.status != KOSDEC_ADX_MORE) goto fail;
-        d->header_ready = true;
-        r.status = KOSDEC_ADX_MORE;
-        return r;
-    }
+    if(!d->header_ready)
+        return media_adx_decode_header(d, input, input_bytes, final_input, MEDIA_ADX_HEADER_STRICT);
     if(d->frames_done < d->total_frames) {
         size_t frames = d->total_frames - d->frames_done;
         if(frames > 32) frames = 32;

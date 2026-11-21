@@ -14,6 +14,7 @@ struct kosdec_adx_pipe {
     uint32_t magic, capacity, write_cursor, read_cursor;
     uint32_t ready, terminal, cancel_requested, sample_rate, channels, decoded_loops;
     int16_t *pcm;
+    uint32_t *source_offsets; /* Optional player-owned side buffer, capacity frames. */
     struct kosdec_adx_stream *stream;
     struct kosdec_adx_sequence *sequence;
     struct kosdec_adx_joint_reader *joint;
@@ -57,14 +58,17 @@ enum kosdec_adx_status kosdec_adx_pipe_init_au(struct kosdec_adx_pipe *,
    reinit and filter changes require unbinding/join first. No embedded loops. */
 enum kosdec_adx_status kosdec_adx_pipe_init_aiff(struct kosdec_adx_pipe *,
     struct kosdec_adx_aiff *, int16_t *pcm, size_t samples, size_t capacity);
-/* SPSD mono PCM16; same source lifetime and output rules. */
+/* SPSD mono/stereo PCM16; same source lifetime and output rules. */
 enum kosdec_adx_status kosdec_adx_pipe_init_spsd(struct kosdec_adx_pipe *,
     struct kosdec_adx_spsd *, int16_t *pcm, size_t samples, size_t capacity);
 /* One producer, one consumer may run concurrently. Pump is producer-only:
-   at most one bounded source read, one32-frame decode and two PCM copies.
+   at most one bounded source read, one decode and two PCM copies.
    Any configured source PCM filter runs on this producer before publication;
    its work contributes to the pump budget. Consumer reads never invoke it.
-   Requires at least1 free frame; source output is capped to min(free,32). A
+   Ordinary sources require at least1 free frame and emit at most32 frames.
+   Job-enabled joints require at least32 free frames and respect the job budget
+   and the configured wrap extent. An attached sector provider may advance
+   while the PCM ring is full. A
    pending stream seek advances without publishing discarded PCM. NEED_OUTPUT
    means no source advance; NEED_INPUT means retry later. No waiting/spinning.
    May block inside a synchronous source provider. Source terminal is sticky in
@@ -84,8 +88,8 @@ struct kosdec_adx_pipe_result kosdec_adx_pipe_read(
 /* Any thread; false until format published, leaves outputs unchanged on false. */
 bool kosdec_adx_pipe_get_format(const struct kosdec_adx_pipe *,
                               uint32_t *sample_rate, unsigned *channels);
-/* Any thread: completed source rewinds, modulo2^32. Zero before decoding and
-   for sequence/joint/WAV sources (playlist repeats are not embedded ADX loops).
+/* Any thread: completed source rewinds, modulo2^32. Applies to repeating streams
+   and job-enabled memory and sector sources. Playlist repeats do not contribute.
    Published after each producer step, including a rewind followed by input
    WAIT/error. Decode read-ahead may lead playback: not an audible-loop clock.
    Release/pause/cancel/terminal retain the last count; init/rebind resets it.

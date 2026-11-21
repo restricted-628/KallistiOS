@@ -12,7 +12,7 @@ struct fixture {
     struct kosdec_adx_player player;
     struct kosdec_adx_spsd spsd;
     struct kosdec_adx_player_config config;
-    uint8_t data[320];unsigned bytes,channels,bits,calls,filtered;
+    uint8_t data[64+65*4];unsigned bytes,channels,bits,calls,filtered;
     bool wait,fail,worker_only;
     pthread_t controller;
     alignas(32) int16_t pcm[1024],scratch[257];
@@ -42,10 +42,11 @@ static void filter(void *ctx,unsigned channel,int16_t *pcm,size_t frames,unsigne
 }
 static void init(struct fixture *f,unsigned bits,unsigned ch,bool worker) {
     memset(f,0,sizeof(*f));mock_reset();f->bits=bits;f->channels=ch;f->worker_only=worker;f->controller=pthread_self();
-    CHECK(bits==16 && ch==1);f->bytes=64+65*2;
-    memcpy(f->data,"SPSD",4);f->data[4]=f->data[5]=1;f->data[7]=4;
+    CHECK(bits==16 && (ch==1 || ch==2));f->bytes=64+65*2*ch;
+    memcpy(f->data,"SPSD",4);f->data[4]=f->data[5]=1;f->data[7]=4;f->data[9]=(uint8_t)(ch-1);
     put(f->data+12,65*2,4);put(f->data+42,32000,2);
-    for(unsigned i=0;i<65;++i)put(f->data+64+i*2,(uint16_t)sample(i,0,16),2);
+    for(unsigned i=0;i<65;++i)for(unsigned c=0;c<ch;++c)
+        put(f->data+64+(i*ch+c)*2,(uint16_t)sample(i,c,bits),2);
     CHECK(kosdec_adx_spsd_init(&f->spsd,source,f,f->bytes)==KOSDEC_ADX_MORE);
     f->config=(struct kosdec_adx_player_config){.pcm=f->pcm,.scratch=f->scratch,.pcm_samples=1024,.capacity=512,
         .scratch_samples=257,.stack=f->stack,.stack_bytes=sizeof(f->stack),.sound_bytes=512,
@@ -63,7 +64,8 @@ static int finish(struct fixture *f) {
     }CHECK(0);return -1;
 }
 static void playback(void) {
-    for(unsigned bits=16;bits<=16;++bits)for(unsigned ch=1;ch<=1;++ch) {
+    const unsigned bits = 16;
+    for(unsigned ch=1;ch<=2;++ch) {
         struct fixture f;init(&f,bits,ch,true);CHECK(!kosdec_adx_player_start(&f.player));CHECK(!finish(&f));
         CHECK(mock_frames==65 && info(&f).decoder==KOSDEC_ADX_DONE && info(&f).sample_rate==32000);
         uint32_t loops=99;CHECK(kosdec_adx_pipe_get_loop_count(&f.player.producer.pipe,&loops) && !loops);

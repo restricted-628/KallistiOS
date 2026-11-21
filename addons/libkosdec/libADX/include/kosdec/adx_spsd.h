@@ -26,10 +26,11 @@ struct kosdec_adx_spsd_result { enum kosdec_adx_status status; size_t frames; };
    initialize only after all prior users retire. All operations serialized;
    state, source and PCM output disjoint. Provider may not retain destination or
    reenter; backend staging/retirement remains independently owned by provider.
-   SPSD64-byte versions01010004/00010004; codec0, mono, interleave index0.
-   Signed16 little-endian contiguous payload only, even data bytes and nonzero
-   rate. Other codecs/channels/layouts are unsupported. Loop/config fields and
-   trailing bytes are ignored; no embedded repeat. MORE on success;
+   Supports 64-byte SPSD versions 01010004 and 00010004, codec 0, index 0 and
+   mono or sample-interleaved stereo signed16 little-endian PCM. The length
+   field is even bytes per channel. Stereo requires an exact payload extent
+   of twice that value. Mono permits trailing bytes. Sample rate must be
+   nonzero. Loop/config fields are ignored. No embedded repeat. MORE on success;
    extent<64 initializes TRUNCATED; bad arguments unchanged. */
 enum kosdec_adx_status kosdec_adx_spsd_init(struct kosdec_adx_spsd *,
     kosdec_adx_read_at, void *context, uint32_t input_bytes);

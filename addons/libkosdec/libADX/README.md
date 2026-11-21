@@ -235,6 +235,15 @@ The file object is a separate archive member: codec/memory/custom-stream consume
 do not pull in VFS dependencies. Host tests use a FILE-backed VFS signature fixture;
 that fixture is not installed and does not establish real KOS filesystem execution.
 
+## Native decoder verification
+
+With the fork's toolchain configured and its KOS archive built, run
+`gmake native-test-elf` from this directory. Boot `.build/sh4/adx_native_test.elf`
+on a Dreamcast or emulator. The serial console prints `ADX-NATIVE PASS` after
+the coefficient, PCM, clipping, loop, SFA and ordered joint checks finish. The
+fixture uses synthetic vectors and the actual SH-4 archive. Audio output and
+sound-memory retirement have separate validation.
+
 ## File music integration
 
 For a complete ordinary-file music consumer, see
@@ -367,6 +376,14 @@ Thus loop byte offsets remain relative to the selected ADX file; adjacent archiv
 data is never presented as its footer or compressed payload. The provider and
 source must remain immutable/alive through all consumers. The validated member
 may be copied by value; do not reinitialize its storage while a reader borrows it.
+
+For resident data, initialize an immutable memory source and select the
+whole file, a range, or an ACX/AFS member. Borrow its descriptor, then
+pass that exact loan to `kosdec_adx_source_init_memory_joint`. The helper
+seals a read-only joint over the selected bounds without copying the
+compressed bytes. Initialize a joint reader and use the normal player
+start or rebind. Join the player and close the reader and joint before
+returning the descriptor.
 
 For an initialized KOS file binding, pass `file.stream.read_at`,
 `file.stream.context` and `file.stream.input_bytes` into `kosdec_adx_index_init`.
@@ -599,10 +616,99 @@ the admitted format rather than forwarding the sentinel to a lower-level clamp.
 No stereo-atomic or hardware qualification follows from the checked call.
 Rebuild consumers for the expanded implementation-owned player state.
 
-Exact CRI volume remains open: SDK header5.93 documents0..-960 tenthsdB while
-manual5.78 documents0..-999. The current linear8 backend cannot represent every
-logarithmic attenuation step. An approximate conversion is not silently supplied;
-a reviewed raw-attenuation Audio contract is required before claiming parity.
+`kosdec_adx_player_set_filter_settings` stores the raw Dreamcast cutoff and
+resonance values and `kosdec_adx_player_get_filter_settings` reads them back.
+They persist across source rebinds. The SDK's Manatee route leaves playback
+unchanged by this setting. The producer PCM callback remains separate.
+
+### Retained output clock
+
+Build with `ADX_RETAINED_CLOCK=1` against the fork's private retained-PCM
+backend, using a separate build directory. Before the first start, call
+`kosdec_adx_player_enable_retained_clock` with caller-owned offset storage
+of one `uint32_t` per PCM ring frame. This profile requires default gain and
+pan and a fixed PCM16 output rate. The retained ring must have 1024 to 32768
+frames per channel. Keep the offset and player storage alive through
+successful stop.
+
+The retained clock has single-player coverage. Concurrent retained
+players are experimental. The two-player clock-only Flycast fixture
+returns `EPIPE` during group polling.
+
+The player's source generation identifies one binding. Loops and records in
+that binding can reset the media offset. Source and silence spans stay
+distinct, including source samples with value zero. A fill that cannot fit
+the backend's 16 spans fails before consuming input. Up to 16 sources can
+be admitted on a lease. Admission of another source then fails with
+`EOVERFLOW`. Cancellation leaves a partially delivered generation unsealed.
+
+Query `kosdec_adx_player_get_source_output` with the source generation.
+Use the clock only while `valid` is true. `source_output_end` means the
+qualified channel cursor traversed all delivered source spans. CPU
+`SOURCE_END`, audible end and final sample-fetch retirement remain distinct.
+The checked stop retains the played Audio allocation. Audible pause and
+discard still require separate device support.
+
+For a playback display, `kosdec_adx_player_get_audio_time` returns the
+qualified cumulative source frames and centiseconds for a nonzero generation.
+Silence inserted by the player does not advance the count, and a loop does not
+rewind it. Centiseconds use the decoded sample rate, including when an output
+rate override changes speed and pitch. `kosdec_adx_player_set_time_offset`
+applies a signed display offset in source frames across bindings. A stale or
+unavailable clock returns an error and leaves the result untouched. This
+implements the sample clock. Rebuild player consumers with the matching
+header and archive.
+
+For video synchronization, call `kosdec_adx_player_enable_vsync_clock` after
+retained-clock setup and before first start. Supply a callback that reads
+an existing counter with one tick per display VBlank, with NTSC (59.94 Hz)
+or PAL (50 Hz) selected to match the display. The player reads it on its
+owning thread and anchors the count when a new generation first submits
+source PCM. Prepared-start waits and polls with no refill leave it
+unanchored. `kosdec_adx_player_get_vsync_time` returns a signed count and
+frequency for the current generation. One VBlank advances the estimate
+by 100 units. Over 60 ms of difference from the qualified audio clock
+refreshes the anchor for the next query. The display offset adds the same
+signed setting in VSync count units and contributes in source frames to
+the drift comparison, matching the SDK's unit handling.
+
+The VSync query covers active playback and drain. Invalid observations and
+canceled sources leave the result unchanged. At source-output end it reports
+`ENOTSUP` pending Audio qualification for terminal timing, pause and discard.
+The sample-clock query remains available under its own contract.
+
+Use `kosdec_adx_player_set_time_mode` to select source, NTSC or PAL for
+`kosdec_adx_player_get_time` and `kosdec_adx_player_get_time_real`. The
+first returns the count and its frequency. The second reads time
+independently and returns signed centiseconds truncated toward zero.
+Source mode is the default. The owner can switch cadence during
+playback and must keep the VBlank counter continuous across display
+changes. A switch keeps the accumulated VSync count and tick anchor.
+The explicit audio and VSync queries retain their own units. Rebuild
+player consumers with the matching header and archive.
+
+Live retained stereo attenuation is experimental. Keep
+`ADX_RETAINED_GAIN=0` for playback deployments. The unchanged combined
+Flycast fixture returns `EPIPE` during polling after the first stereo
+request was applied. Diagnostic passes leave that failure unresolved.
+For development, this feature requires both `ADX_RETAINED_CLOCK=1` and
+`ADX_RETAINED_GAIN=1` and matching Audio firmware.
+`kosdec_adx_player_set_attenuation` takes signed tenths of a dB and returns
+a request ID on local admission. The effective value clamps to -999 through
+0 and selects the stock 2.00J PCM route's zero-fade response after playback
+starts. The requested getter returns the signed low 16 bits of the accepted
+value before clamping. The setting applies to the retained pair across
+source bindings.
+
+Progress the request with `kosdec_adx_player_poll` and check the exact ID
+with `kosdec_adx_player_get_attenuation_status`. Both applied bits mean
+both channels acknowledged. The hardware may apply them at different
+samples. An unknown channel can still have a historical acknowledged
+value, and poll can succeed with a pending retry. A terminal gain error
+requires checked stop. The source clock rejects invalid observations while
+gain receipts are being refreshed. Firmware without this capability and
+mono output report `ENOTSUP`. Pre-start gain, fades and guaranteed acoustic
+mute require separate support.
 
 `set_rate` selects requested output frequency8000..48000Hz; zero follows the
 source rate again. Set it before first playback or use the existing checked live
@@ -703,12 +809,13 @@ capture and physical-device retirement remain distinct evidence levels.
 The predictor uses float Q16 histories within each fixed logical channel group;
 histories quantize on group return, independently of input fragmentation.
 The single-pass codec never decodes padding; the resident reader uses full groups
-as described above. General coefficient setup uses original certified Q32 decision
-boundaries for all integer rates 1..48000 Hz and cutoffs 0..floor(rate/2).
+as described above. Version 3 through 44100 Hz uses the rounded Dreamcast
+2.00J setup model. Version 5 and higher-rate v3 extensions use the certified
+exact-real setup. All admit integer cutoffs 0..floor(rate/2) within the
+supported sample-rate range.
 The original 500 Hz pairs remain `{7334, -3283}` for 44100 Hz and
 `{6569, -2634}` for 22050 Hz. See [coefficient certification](COEFFICIENTS.md)
-for the exact quantization contract, proof and 46192-byte read-only table cost.
-No approximate target transcendental helper is used.
+for the quantization contracts, tables and validation.
 
 The reviewed scalar math uses SH4ZAM definitions and a narrow native FMAC
 primitive. A generic multiply-add expression is not substituted for one-round
@@ -744,8 +851,8 @@ decoder equivalence. Target execution and hardware checks remain separate.
 The memory suite checks 360 combinations against independent carried-history
 rational vectors, plus lifecycle/error cases. Regenerate its vectors with
 `python3 tests/generate_memory.py`. Whole-block history is supported by the
-inspected SDK block/trap behavior; exact proprietary batching and waveform
-equivalence have not been established.
+inspected SDK block/trap behavior. See the joint job mode below for tested
+2.00J batch boundaries and PCM.
 
 The stream suite covers 576 combinations of loop endpoints, channels, input
 fragmentation, output capacity, padded headers and intermittent waits, plus
@@ -802,7 +909,8 @@ This is compressed-byte storage; it is separate from the interleaved PCM pipe.
 The serialized owner gets a FREE chunk, fills it, splits off the used prefix,
 puts that prefix, and ungets the unused suffix. A consumer does the same on
 DATA, reading rather than writing. Put publishes to the opposite line; memory
-consumption discards bytes. Each line permits one outstanding borrow. Tokens and
+consumption discards bytes. An explicit next-DATA call admits a second ordered
+DATA loan. Other lines allow one loan each. Tokens and
 span bounds reject stale, duplicate, foreign and out-of-order returns. Reset and
 close reject outstanding borrows. Caller joins external users before close;
 software retirement does not retire DMA or a transport provider.
@@ -854,6 +962,49 @@ Cancel stops decoding but retains its input borrow until successful reader close
 Close abandons any unread tail of the held chunk, returns it to FREE (or discards
 it for a memory joint), and never resets/frees the joint or joins an external
 provider. Restarting a file needs a fresh header, not the abandoned cursor.
+
+### 2.00J decode jobs
+
+Call `kosdec_adx_joint_reader_enable_jobs` before starting the producer to use
+the stock batching rules on memory, mirrored-ring or queued input. Supply a separate
+PCM work buffer with two samples per frame of the configured job limit. The
+player and service use this buffer for each job; the PCM pipe keeps its existing
+consumer buffer. Configure 31 frames of output wrap space for arbitrary loop
+positions. Mirrored compressed rings need at least 35 extra bytes to expose
+a complete stereo group across a wrap. A queue job reads one contiguous head.
+Publish complete groups, or append adjacent storage in JOIN mode to complete
+the head. A short head waits while unsealed and reports truncation after seal.
+Provision a spare queue node for a partial return that cannot merge with FREE.
+
+Jobs return unread DATA to the joint and retire only the consumed prefix. The
+published PCM count can differ from the source advance. For example, a
+63-frame stereo trap with a 63-frame job budget can consume 36 bytes and
+publish 31 frames while retaining the full group's predictor history. The
+pipe tags each published frame with its logical position before any rewind.
+Filters still receive chunks of at most 32 frames.
+
+A version-3 memory loop can give its sample position and whole-group
+compressed offset independently. The repeat flag starts enabled when
+requested during setup. During playback, post `KOSDEC_ADX_RELEASE_LOOP` to
+the service to finish the current loop interval and continue from its
+compressed and sample positions. Job playback ends at the start of a
+group-aligned end marker or after the reported sample limit. The strict reader
+and jobs paired with a live SFA writer validate the footer and sealed EOF.
+For live SFA, set the exact final frame count before publishing the last
+partial group. Ring-source repeat uses a sector provider, which owns input
+publication and cannot share a reader with a live SFA writer.
+
+Attach a fixed-extent provider with `kosdec_adx_joint_reader_set_sector_source`
+to schedule streamed-file jobs. The reader publishes completed requests in whole
+2048-byte sectors and can prefetch while PCM output is full. Version-3 loop
+start offsets are floored to sectors. The effective start must point to the
+first compressed group of the loop. The logical interval must use all
+encoded groups before the loop's sector padding. At the sector-end callback the provider either
+seeks to the loop sector or releases the sample trap. The decoder discards
+sector padding when it reaches a live sample trap and plays queued data in
+order. A release after a prefetched seek can therefore allow another rewind.
+The provider is borrowed until checked close. After joining the reader, retire
+any separate file or disc request resources before reclaiming them.
 
 Queue `detach` returns a borrowed prefix to caller ownership without enqueuing it.
 This lets a producer reclaim FREE chunks for reuse elsewhere, or explicitly pass
@@ -925,9 +1076,14 @@ discards incomplete windows and seals input; it does not detach/join a source.
 `status` reports adapter faults even when older records are still available.
 `read` consumes a record; `select` retains the first available start at/after a
 caller-supplied source-frame position, or the latest available record. Selection
-is forward-only as older records are discarded. The caller must supply a qualified
-playback clock for audible synchronization; decoded/copied frames are not one.
-The native record/storage API differs from CRI's raw work-buffer and global pool.
+is forward-only as older records are discarded. With the retained clock enabled,
+query `kosdec_adx_player_get_audio_time` for the analyzer's source generation
+and pass `max(time.frames, 0)` to `select` only on success. Give each generation
+its own analyzer and feed it from the first PCM emitted by the bound source.
+This keeps record positions and the source clock on the same timeline across
+loop rewinds. Keep selecting during playback or provision the queue for the
+whole recording. An offset change can move the request backward, but discarded
+records stay discarded. The native record/storage API uses caller-owned records.
 
 The exact baseline format boundary and remaining container work are recorded in
 [FORMATS.md](FORMATS.md); passing the SDK sample corpus is not full parity.
@@ -1152,14 +1308,14 @@ contracts as WAV/AU. Use `kosdec_adx_player_init_aiff` or, after release/join,
 `kosdec_adx_player_bind_aiff`. Same-format output is retained; mismatched rate or
 channels fail before new PCM admission. Rebuild consumers for added source state.
 
-## SPSD mono PCM16 reader and playback
+## SPSD PCM16 reader and playback
 
-`adx_spsd.h` admits the established contiguous mono signed16 little-endian subset:
-64-byte SPSD versions01010004/00010004, codec0, channel flags0 or0x80 and index0.
-Whole samples, nonzero sample rate and payload bounds are checked. Other codecs,
-channels and layouts return UNSUPPORTED; the baseline's unconditional16-bit copy
-is not a license to reinterpret compressed SPSD as PCM. Loop/config fields and
-trailing bytes are ignored, with no automatic repeat.
+`adx_spsd.h` admits signed 16-bit little-endian PCM from 64-byte SPSD versions
+01010004 and 00010004, codec 0 and index 0. The length field is even bytes per
+channel. Mono allows a trailing span. For sample-interleaved stereo, pass the
+exact record extent with a payload of twice the length field. This check
+excludes aggregate-length and padded stereo records. Other codecs and layouts
+remain unsupported. Loop and configuration fields are ignored.
 
 Read makes at most one512-byte provider call and emits at most32 frames. Partial
 input/WAIT retains state; unbound seek is constant-time, and filters run only on
@@ -1205,6 +1361,36 @@ while queued/borrowed DATA meets that threshold. An active sector finishes under
 normal joint backpressure. A zero threshold disables this admission limit.
 Pause preserves partial requests and prevents source work. Empty ranges finish
 without I/O. Partial final sectors publish exact source bytes, without zero gaps.
+With repeat enabled, a completed read moves its source to the queue tail and
+increments `completed_passes`. The original ID and provider loan persist.
+Disable repeat to let the queued passes finish.
+
+Select `kosdec_adx_loader_set_lsc_flow` before starting for 2.00J
+source-scoped flow control. The requested byte limit is captured when a
+source or repeat pass first enters service. Updates take effect at the next
+source. Reads wait while queued DATA meets the captured limit, excluding
+held DATA loans. Zero blocks a source even with an empty joint. A refill
+admits up to 512 sectors over bounded provider steps. Native joint wrapping,
+exact short tails and incremental byte publication still apply.
+
+For a linked player, choose `config.use_lsc_reload` and leave its loader
+stopped over a fresh empty joint. The player's start or checked source
+rebind starts the loader with the cached reload setting. Use
+`kosdec_adx_player_set_linked_reload_sectors` or
+`kosdec_adx_player_set_linked_reload_time` to change the next linked start.
+For example, 0.2 seconds at stereo 44.1 kHz gives four sectors. During
+playback, the current loader keeps its limit when it advances to the next
+record. The default is 85% of whole input sectors, rounded down.
+
+Use `kosdec_adx_player_get_input` on the player control thread for
+queued ADX bytes and whole sectors. Joints report their identity and
+queued DATA, excluding held loans. A direct read-at stream or the active
+sequence entry reports only unconsumed bytes in its 512-byte staging
+buffer, with a null joint identity and zero whole sectors. Nominal
+buffered seconds become available with the validated source format,
+during preparation or playback. Safety uses the live player setting.
+The active loader keeps the value selected for transport. The identity
+conveys no producer access.
 
 Completed metadata remains queryable until its slot is reused. Stop cancels the
 pending queue only after returning any held FREE span, preserves published DATA,
@@ -1213,11 +1399,31 @@ stop; the caller may then explicitly seal the joint when no more input will be
 supplied. Failure retains ownership until checked stop; the optional error hook
 runs once and must not reenter. No hidden worker/global registry or automatic EOF.
 
-This is a compressed-byte loading service, separate from PCM sequence playback.
-Two complete ADX files cannot simply be concatenated and treated as one ADX file;
-use the sequence/source-transition layer for those. Range entries can split one
-logical ADX file at sector boundaries and feed its existing joint reader. Native
-flow admission is explicitly bounded, without claiming SDK prefetch-batch timing.
+Range entries can split one logical ADX file at sector boundaries and feed the
+strict joint reader. For successive same-format, non-looping ADX files, call
+`kosdec_adx_joint_reader_enable_linked` and bind the loader on the same joint with
+`kosdec_adx_joint_reader_set_loader`. Enqueue each exact file extent before start.
+The job or strict reader validates each footer and resets history at the next
+header. Feed service can prefetch while PCM is full. Choose seal-on-empty for a
+finite list, or use `LOADER_ENQUEUE` to post resolved file or AFS source loans to
+the live producer. Open and borrow them on their ordinary owner thread. A
+`take_receipt` success returns the loader ID. Hold the source loans through
+producer join and backend retirement. `LOADER_FINISH` closes registration,
+disables repeat and seals after pending reads complete. `SEQUENCE_REPEAT`
+controls loader rotation and `RELEASE_LINK` finishes the current record.
+For a reversible linked-follow setting, post `SET_LINK_FOLLOW` with
+`enabled` false or true before the next record decision. The receipt
+publishes the new flag. A final release or terminal cutoff cannot be
+undone. This setting neither alters loader rotation nor changes
+an already selected record. Close the reader and loader after producer
+join, then retire any provider DMA or descriptors separately.
+
+For a padded transport with the 2.00J buffered-header cutoff, enable linked
+scan before binding the joint reader. At each validated footer, it examines
+the two currently available contiguous DATA spans for the next header on
+each span's halfword boundaries. A missing or incomplete header extent ends
+the linked stream. Leave scan disabled when future input should be able to
+complete the next header after a stall.
 
 ### ADX compressed-input policy
 

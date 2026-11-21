@@ -15,6 +15,7 @@ struct kosdec_adx_source_handle {
     struct kosdec_adx_source *loan;
     bool selecting;
 };
+struct kosdec_adx_joint;
 /* Initially/after close only. Immutable provider and disjoint storage survive
    this handle AND all consumers. All control/lookup/consumer calls serialized.
    No allocation, transport retirement or content decoding. Zero extent allowed.
@@ -44,6 +45,15 @@ enum kosdec_adx_status kosdec_adx_source_index_cancel(struct kosdec_adx_source_h
    The callback clamps reads to <=512 bytes and the selected extent. */
 enum kosdec_adx_status kosdec_adx_source_borrow(struct kosdec_adx_source_handle *,
     struct kosdec_adx_source *out, uint32_t tag);
+/* Initialize an unused or closed joint from the exact active descriptor loan
+   of a memory-initialized source. The selected span must be nonempty and fit
+   a memory joint. It becomes sealed, read-only DATA without copying the bytes.
+   Provider-only sources return UNSUPPORTED. Invalid inputs leave joint
+   unchanged. Keep the handle, loan and backing alive until all consumers join
+   and the reader/joint are closed. Then return the original descriptor. */
+enum kosdec_adx_status kosdec_adx_source_init_memory_joint(
+    const struct kosdec_adx_source_handle *, const struct kosdec_adx_source *loan,
+    struct kosdec_adx_joint *);
 /* Return the exact descriptor storage after all consumers join; clears it.
    EOF/cancel/PCM drain is not a join. No provider cancellation or close. */
 enum kosdec_adx_status kosdec_adx_source_return(struct kosdec_adx_source_handle *,

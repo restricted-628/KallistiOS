@@ -48,7 +48,8 @@ int kosdec_adx_recovery_init(struct kosdec_adx_recovery *, struct kosdec_adx_pla
    players or polls active ones. NOACT returns their errors without cleanup.
    STOP schedules then performs checked stop; failures retain resources and retry
    on the next step. REPLAY additionally prepares/starts a replacement ONLY for
-   a terminal source IO_ERROR, up to max_replays. Other errors stop. A successful
+   terminal source IO_ERROR or a qualified player input stall, up to max_replays.
+   Other errors stop. A successful
    replay starts at the position supplied by prepare (owner must rewind for SDK
    file-from-start behavior). Normal SOURCE_END is not a fault or audible end.
    Return0 active/waiting/replayed,1 stopped,-1 operation/preparation error.
