@@ -48,6 +48,16 @@ The producer PCM filter callback is a separate operation.
 
 ## Codec and validation closure
 
+Both installed BIOS Flycast CPU modes passed an ordinary 44.1 kHz stereo
+ADX player at fixed volume through mounted ISO VFS. The synthetic v3 source
+used an 8,192-frame sound ring per channel, a 32,768-frame decoded queue and
+one embedded repeat followed by release. Both channels matched an independent
+PCM reference through loop entry, wrap and the complete release tail. The
+captures matched each other byte for byte across 131,072 frames. The producer
+joined before file close, and checked software stop retained the sound
+allocation. This qualifies that emulator playback profile. Retail disc and
+audio timing and final-fetch retirement remain separate.
+
 C1. Freeze the exact encoding/block/channel/version/header/history/loop/endcode
 combinations accepted by the 2.00J decoder, then implement or document each
 baseline rejection with tests. Current admission is encoding 3, 18-byte/4-bit,

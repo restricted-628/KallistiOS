@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Fixed-volume stereo ADX loop playback
+
+- Verified the ordinary player streaming a mounted 44.1 kHz stereo ADX file
+  with one aligned loop and release. Both Flycast CPU modes produced identical
+  captured audio across all 131,072 frames, including the wrap and final tail.
+  No live gain, firmware change or retail hardware was involved.
+
 ## 2026-11-21 — Stereo position checks after a live volume change
 
 - After a volume-only update, a retained stereo stream can use the last
