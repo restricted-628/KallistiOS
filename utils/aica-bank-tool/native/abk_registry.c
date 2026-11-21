@@ -340,6 +340,48 @@ int abk_bank_pending_release(abk_bank_t *b) {
     if(!b->pending) return leave(fail(b,EINVAL));
     --b->pending;return leave(0);
 }
+int abk_bank_clear_all(uint32_t timeout_ms) {
+    if(!timeout_ms) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    uint64_t deadline = timer_ms_gettime64() + timeout_ms;
+    if(mutex_lock_timed(&lock, timeout_ms) < 0)
+        return -1;
+
+    for(unsigned i = 0; i < AICA_BANK_SLOTS; ++i)
+        if(owners[i])
+            owners[i]->closing = 1;
+
+    int error = 0;
+    int pending = 0;
+    for(unsigned i = 0; i < AICA_BANK_SLOTS; ++i) {
+        if(!owners[i])
+            continue;
+        uint64_t now = timer_ms_gettime64();
+        if(now >= deadline) {
+            if(!error)
+                error = ETIMEDOUT;
+            break;
+        }
+        if(poll_locked(owners[i], (uint32_t)(deadline - now)) < 0 &&
+           errno != EAGAIN && !error)
+            error = errno;
+        if(owners[i])
+            pending = 1;
+    }
+
+    if(error || pending) {
+        errno = error ? error : EAGAIN;
+        return leave(-1);
+    }
+    return leave(0);
+}
+
 int abk_bank_quiesce(void) {
     unsigned i;
     if(irq_inside_int()) { errno=EPERM;return -1; }

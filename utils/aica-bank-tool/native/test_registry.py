@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='abk-registry-') as temp:
     (t/'dc/sound/sound.h').write_text('#include <stdint.h>\n#include <stddef.h>\nuint32_t snd_mem_malloc(size_t);\nvoid snd_mem_free(uint32_t);\n')
     (t/'kos/irq.h').write_text('int irq_inside_int(void);\n')
     (t/'kos/timer.h').write_text('#include <stdint.h>\nuint64_t timer_ms_gettime64(void);\n')
-    (t/'kos/mutex.h').write_text('#include <pthread.h>\ntypedef pthread_mutex_t mutex_t;\n#define MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER\n#define mutex_lock pthread_mutex_lock\n#define mutex_unlock pthread_mutex_unlock\n')
+    (t/'kos/mutex.h').write_text('#include <pthread.h>\ntypedef pthread_mutex_t mutex_t;\n#define MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER\n#define mutex_lock pthread_mutex_lock\n#define mutex_unlock pthread_mutex_unlock\n/* Host tests model ownership but have no KOS timed waits. */\nstatic inline int mutex_lock_timed(mutex_t *mutex, unsigned timeout_ms) {\n    (void)timeout_ms;\n    return pthread_mutex_lock(mutex);\n}\n')
     (t/'snd_iface_internal.h').write_text('#include <stdint.h>\nuint32_t snd_iface_observation_features(void);\nint snd_observation_session(uint32_t *);\nint snd_observation_bind_until(uint64_t,uint32_t *);\nint snd_iface_observation_read(uint32_t,void *,uint32_t);\nint snd_iface_observation_submit(void *,uint32_t,uint64_t);\n')
     (t/'bank.abk').write_bytes(records(3,3,100))
     (t/'max.abk').write_bytes(records(256,1024,1))

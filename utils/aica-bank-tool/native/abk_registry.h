@@ -65,6 +65,13 @@ int abk_bank_close(abk_bank_t *b, uint32_t timeout_ms);
    These functions do not manufacture that receipt/physical retirement proof. */
 int abk_bank_pending_acquire(abk_bank_t *b);
 int abk_bank_pending_release(abk_bank_t *b);
+/* Reset the native bank map through the existing checked close path. A
+   sweep latches closing for all tracked bank owners and shares timeout_ms
+   across progress attempts. Return 0 only when all are CLOSED. EAGAIN
+   means more progress is required. Busy or lost owners keep allocations
+   and report the first error other than EAGAIN. Retry under the same
+   caller ownership. Serialize new admissions with the complete sweep. */
+int abk_bank_clear_all(uint32_t timeout_ms);
 /* Irreversibly stop local bank admission; EBUSY until every bank is CLOSED.
    This is not global sound shutdown and does not disable/reset any device. */
 int abk_bank_quiesce(void);
