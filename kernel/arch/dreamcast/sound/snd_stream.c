@@ -1931,6 +1931,9 @@ void snd_stream_pan(snd_stream_hnd_t hnd, int left_pan, int right_pan) {
 /* The opt-in ordinary renderer has no source attribution ledger. Its title
    clock is slot 0, while each slot constrains writes to its physical ring. */
 #define ORDINARY_PCM16_OBSERVE_MS 100u
+#define ORDINARY_PCM16_RING_MAX 32768u
+#define ORDINARY_PCM16_RATE_START_MAX 48000u
+#define ORDINARY_PCM16_RATE_LIVE_MAX 88200u
 
 typedef struct ordinary_pcm16_cursor {
     uint64_t frames, before_ms, after_ms;
@@ -1945,7 +1948,7 @@ typedef struct ordinary_pcm16_voice {
 
 struct snd_ordinary_pcm16 {
     snd_stream_hnd_t handle;
-    uint32_t session, ring, rate;
+    uint32_t session, ring, rate, motion_rate;
     uint64_t committed;
     snd_ordinary_pcm16_fill_t fill;
     void *context;
@@ -1956,8 +1959,20 @@ struct snd_ordinary_pcm16 {
     ordinary_pcm16_voice_t voice[2];
 };
 
-static bool ordinary_pcm16_rate(uint32_t rate) {
-    return rate >= 8000 && rate <= 48000;
+bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring) {
+    return ring >= 8192 && ring <= ORDINARY_PCM16_RING_MAX && ring % 32 == 0 &&
+        rate >= 8000 && (rate <= ORDINARY_PCM16_RATE_START_MAX ||
+        (ring == ORDINARY_PCM16_RING_MAX && rate <= ORDINARY_PCM16_RATE_LIVE_MAX));
+}
+
+/* High-rate admission spans only OCT=0 and its OCT=1 endpoint. Mirror
+   the ARM integer FNS floor, then round the resulting Hz outward. */
+static uint32_t ordinary_pcm16_motion_rate(uint32_t rate) {
+    if(rate <= ORDINARY_PCM16_RATE_START_MAX)
+        return rate;
+    uint32_t octave_hz = rate == ORDINARY_PCM16_RATE_LIVE_MAX ? 88200 : 44100;
+    uint32_t steps = (rate << 10) / octave_hz;
+    return (octave_hz * steps + 1023) >> 10;
 }
 
 static int ordinary_pcm16_fault(snd_ordinary_pcm16_t *pcm) {
@@ -1972,9 +1987,10 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     const snd_stream_config_t *config, uint32_t ring,
     snd_ordinary_pcm16_fill_t fill, void *context) {
     if(!out || !config || !fill || config->format != SND_STREAM_FORMAT_PCM16 ||
-       config->channels != 2 || !ordinary_pcm16_rate(config->sample_rate) ||
-       config->channel[0].lfo.pitch_depth || config->channel[1].lfo.pitch_depth ||
-       ring < 8192 || ring > 32768 || ring % 32) {
+       config->channels != 2 ||
+       config->sample_rate > ORDINARY_PCM16_RATE_START_MAX ||
+       !snd_ordinary_pcm16_rate_supported(config->sample_rate, ring) ||
+       config->channel[0].lfo.pitch_depth || config->channel[1].lfo.pitch_depth) {
         errno = EINVAL;
         return -1;
     }
@@ -2015,7 +2031,7 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     stream->bitsize = 16;
     stream->frequency = (int)config->sample_rate;
     pcm->ring = ring;
-    pcm->rate = config->sample_rate;
+    pcm->rate = pcm->motion_rate = config->sample_rate;
     pcm->fill = fill;
     pcm->context = context;
     *out = pcm;
@@ -2215,7 +2231,7 @@ static int ordinary_pcm16_leg(snd_ordinary_pcm16_t *pcm, unsigned side,
             errno = ETIMEDOUT;
             return -1;
         }
-        if(pcm->running && !ordinary_pcm16_before(cursor, pcm->rate, now, pcm->committed)) {
+        if(pcm->running && !ordinary_pcm16_before(cursor, pcm->motion_rate, now, pcm->committed)) {
             errno = EPIPE;
             return -1;
         }
@@ -2229,7 +2245,7 @@ static int ordinary_pcm16_leg(snd_ordinary_pcm16_t *pcm, unsigned side,
                 errno = ETIMEDOUT;
                 return -1;
             }
-            if(pcm->running && !ordinary_pcm16_before(cursor, pcm->rate, now, pcm->committed)) {
+            if(pcm->running && !ordinary_pcm16_before(cursor, pcm->motion_rate, now, pcm->committed)) {
                 errno = EPIPE;
                 return -1;
             }
@@ -2295,7 +2311,7 @@ int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm) {
         pcm->voice[i].cursor = (ordinary_pcm16_cursor_t){0, earliest, earliest};
     if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
             0, &stream->config, deadline) < 0 ||
-       ordinary_pcm16_sample(pcm, pcm->rate, deadline) < 0)
+       ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
         goto fail;
 
     pcm->running = true;
@@ -2317,7 +2333,7 @@ int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm) {
     int result = ordinary_pcm16_ready(pcm);
     if(result == 0) {
         uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
-        if(ordinary_pcm16_sample(pcm, pcm->rate, deadline) < 0 ||
+        if(ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0 ||
            (ordinary_pcm16_room(pcm) && ordinary_pcm16_fill(pcm) < 0))
             result = ordinary_pcm16_fault(pcm);
     }
@@ -2325,12 +2341,12 @@ int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm) {
 }
 
 int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
-    if(!ordinary_pcm16_rate(rate)) {
-        errno = EINVAL;
-        return -1;
-    }
     if(ordinary_pcm16_lock(pcm) < 0)
         return -1;
+    if(!snd_ordinary_pcm16_rate_supported(rate, pcm->ring)) {
+        errno = EINVAL;
+        return ordinary_pcm16_unlock(-1);
+    }
     int result = ordinary_pcm16_ready(pcm);
     if(result < 0 || pcm->rate == rate)
         return ordinary_pcm16_unlock(result);
@@ -2339,14 +2355,16 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
     uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
     snd_stream_config_t config = stream->config;
     config.sample_rate = rate;
-    uint32_t upper = pcm->rate > rate ? pcm->rate : rate;
-    if(ordinary_pcm16_sample(pcm, pcm->rate, deadline) < 0 ||
+    uint32_t motion_rate = ordinary_pcm16_motion_rate(rate);
+    uint32_t upper = pcm->motion_rate > motion_rate ? pcm->motion_rate : motion_rate;
+    if(ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0 ||
        ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_FREQUENCY,
                               0, &config, deadline) < 0 ||
        ordinary_pcm16_sample(pcm, upper, deadline) < 0)
         return ordinary_pcm16_unlock(ordinary_pcm16_fault(pcm));
 
     pcm->rate = rate;
+    pcm->motion_rate = motion_rate;
     stream->config = config;
     stream->frequency = (int)rate;
     return ordinary_pcm16_unlock(0);

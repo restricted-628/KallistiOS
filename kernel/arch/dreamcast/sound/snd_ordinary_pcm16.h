@@ -37,6 +37,10 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     snd_ordinary_pcm16_fill_t fill, void *context);
 int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm);
 int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm);
+/* Live native rate admission for this ring geometry. Above 48 kHz,
+   the full 32768-frame ring is required and the maximum is 88.2 kHz.
+   Cadence and producer capacity still govern refill and deadline success. */
+bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring);
 int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate);
 int snd_ordinary_pcm16_status(const snd_ordinary_pcm16_t *pcm,
     snd_ordinary_pcm16_status_t *out);

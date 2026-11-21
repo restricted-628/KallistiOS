@@ -12,6 +12,8 @@ it is a historical index, not evidence that those changes passed tests.
   requested output pitch maps to 8–48 kHz. Both voices must acknowledge
   the update. Sample time stays in source-rate units and excludes padding.
 - A private, opt-in stereo PCM16 stream can change rate during playback.
+  With a 32,768-frame ring per channel it supports live updates up to
+  88.2 kHz; startup and smaller rings retain the 48 kHz ceiling.
   It checks both voices before reusing a buffer and credits a refill only
   after both DMA legs complete. The owner must let those transfers finish
   and stop the stream before sound or G2 teardown. Default streams are unchanged.
