@@ -555,6 +555,22 @@ void snd_sh4_to_aica_stop(void) {
     g2_write_32(SPU_RAM_UNCACHED_BASE + AICA_MEM_CMD_QUEUE + offsetof(aica_queue_t, process_ok), 0);
 }
 
+int snd_command_queue_is_locked(bool *locked) {
+    if(!locked) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    irq_disable_scoped();
+    if(!initted) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    *locked = mutex_is_locked(&queue_proc_mutex);
+    return 0;
+}
+
 int snd_channels_start_sync(uint64_t channels) {
     AICA_CMDSTR_CHANNEL_MASK(tmp, cmd, mask);
 

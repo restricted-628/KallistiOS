@@ -195,6 +195,18 @@ void snd_sh4_to_aica_start(void);
 */
 void snd_sh4_to_aica_stop(void);
 
+/** \brief Snapshot whether the host AICA command mutex has an owner.
+
+    This is an advisory query. Commands still need to check their own
+    submission results. The query does not acquire the mutex.
+
+    \param locked         Receives the current host lock state.
+    \retval 0             On success.
+    \retval -1            On NULL output (EINVAL) or inactive sound (ENODEV).
+                          On failure the output is unchanged.
+*/
+int snd_command_queue_is_locked(bool *locked);
+
 /** \brief Atomically start any selected AICA channels.
 
     The selected channels must first have been configured with delayed key-on.
