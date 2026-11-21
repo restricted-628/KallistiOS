@@ -20,7 +20,10 @@
 
 /****************** Timer *******************************************/
 
-#define timer (*((volatile uint32 *)AICA_MEM_CLOCK))
+#ifndef AICA_DRIVER_TIMER
+#define AICA_DRIVER_TIMER (*((volatile uint32 *)AICA_MEM_CLOCK))
+#endif
+#define timer AICA_DRIVER_TIMER
 
 void timer_wait(uint32 jiffies) {
     uint32 start = timer;
@@ -80,8 +83,10 @@ static aica_music_live_t *const music = (aica_music_live_t *)AICA_MEM_MUSIC_STAT
 static asq_resource_runtime_t *const sequence_resources =
     (asq_resource_runtime_t *)AICA_MEM_SEQUENCE_STATE;
 
-static volatile aica_finite_stop_t *const finite_stops =
-    (volatile aica_finite_stop_t *)AICA_MEM_FINITE_STOPS;
+#ifndef AICA_DRIVER_FINITE_STOPS
+#define AICA_DRIVER_FINITE_STOPS ((volatile aica_finite_stop_t *)AICA_MEM_FINITE_STOPS)
+#endif
+static volatile aica_finite_stop_t *const finite_stops = AICA_DRIVER_FINITE_STOPS;
 _Static_assert(AICA_MEM_FINITE_STOPS >= AICA_MEM_CLOCK + 4 &&
                AICA_MEM_FINITE_STOPS_END <= AICA_MEM_CHANNEL_STATUS,
                "finite stops fit between clock and channel status");

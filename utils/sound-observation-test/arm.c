@@ -4,6 +4,7 @@
 #include <string.h>
 #include "types.h"
 #include "aica_cmd_iface.h"
+#include "aica_observer.h"
 #include "aica_music_live.h"
 #include "aica_sequence_resource.h"
 static asq_resource_runtime_t test_sequence_resources;
@@ -13,8 +14,9 @@ static aica_music_live_t test_music;
 #undef AICA_MEM_MUSIC_STATE
 #define AICA_MEM_MUSIC_STATE ((uintptr_t)&test_music)
 static uint32_t test_clock;
-#undef AICA_MEM_CLOCK
-#define AICA_MEM_CLOCK ((uintptr_t)&test_clock)
+#define AICA_DRIVER_TIMER test_clock
+static aica_finite_stop_t test_finite_stops[64];
+#define AICA_DRIVER_FINITE_STOPS test_finite_stops
 #undef memcpy
 #define memcpy firmware_memcpy
 #include "../../../kernel/arch/dreamcast/sound/arm/main.c"
@@ -53,6 +55,7 @@ void aica_sync_play(uint32 low, uint32 high) {
     selected_low = low; selected_high = high; ++writes;
 }
 void aica_stop(int ch) { touch(ch); }
+void aica_channel_set_fast_release(int ch) { touch(ch); }
 void aica_vol(int ch) { touch(ch); }
 void aica_pan(int ch) { touch(ch); }
 void aica_freq(int ch) { touch(ch); }
@@ -88,6 +91,7 @@ static void ack(uint32_t token, uint32_t slot, uint32_t cookie) {
 static void reset(void) {
     memset(&test_music,0,sizeof(test_music));
     memset(legacy, 0, sizeof(legacy)); memset(statuses, 0, sizeof(statuses));
+    memset(test_finite_stops, 0, sizeof(test_finite_stops));
     chans = legacy; channel_statuses = statuses;
     observer.header = &header; observer.results = results;
     observer.channels = observations;
@@ -325,10 +329,17 @@ int main(void) {
     CHECK(!(completions[0].flags & AICA_COMPLETION_END_SEEN) && lp_bits[1]);
     refresh_channel(1); CHECK(completions[1].flags & AICA_COMPLETION_END_SEEN);
     CHECK(completions[1].first_end_tick == 12 && !lp_bits[1]);
-    /* STOP and legacy invalidation make later LP ineligible, not a completion. */
-    lp_bits[0] = 1; unsigned old_lp = lp_reads;
-    control(130, 0); dispatch(); CHECK(lp_reads == old_lp &&
-        completions[0].state == AICA_COMPLETION_STOPPED && !completions[0].flags);
+    /* STOP takes one last eligible LP sample and preserves a pre-key-off cut.
+       Later refreshes and legacy invalidation have no completion privilege. */
+    lp_bits[0] = 0; unsigned old_lp = lp_reads;
+    control(130, 0); dispatch();
+    CHECK(lp_reads == old_lp + 1 &&
+          completions[0].state == AICA_COMPLETION_STOPPED && !completions[0].flags);
+    CHECK(test_finite_stops[0].session == 7 &&
+          test_finite_stops[0].start_token == 110 &&
+          test_finite_stops[0].position == 123 &&
+          test_finite_stops[0].sequence == 2);
+    old_lp = lp_reads;
     ack(130, 0, 131);
     c = control(132, 0); c->operation = AICA_CHANNEL_OP_START;
     c->config.base = AICA_RAM_START; c->config.length = c->config.loopend = 100;
