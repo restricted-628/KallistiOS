@@ -303,6 +303,7 @@ snd_stream_reinit
 snd_stream_config_init
 snd_stream_config_validate
 snd_stream_start_ex
+snd_stream_start_float
 snd_stream_stop_ex
 snd_stream_poll_ex
 snd_stream_update

@@ -687,6 +687,43 @@ static void stream_reset_progress(strchan_t *stream) {
     stream->dma_error = 0;
 }
 
+int snd_stream_start_float(snd_stream_hnd_t hnd,
+                           const snd_stream_config_t *config, float rate) {
+    const uint32_t max_rate = UINT32_MAX >> 10;
+    if(!config || !(rate >= 44100.0f / 256.0f && rate <= max_rate)) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    /* Normalize the requested rate against the documented AICA octave. */
+    double octave = 44100.0;
+    while(rate < octave)
+        octave /= 2.0;
+    while(rate >= octave * 2.0)
+        octave *= 2.0;
+    uint32_t step = (uint32_t)(rate * 1024.0 / octave);
+
+    /* ARM computes floor(hz * 1024 / wire_octave). Find every integer
+       argument that selects the requested step before applying its mask. */
+    uint32_t wire_octave = (uint32_t)octave;
+    uint32_t first = ((uint64_t)wire_octave * step + 1023) / 1024;
+    uint32_t end = ((uint64_t)wire_octave * (step + 1) + 1023) / 1024;
+    if(first >= end || first > max_rate) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    uint32_t hz = (uint32_t)rate;
+    if(hz < first)
+        hz = first;
+    else if(hz >= end)
+        hz = end - 1;
+
+    snd_stream_config_t start = *config;
+    start.sample_rate = hz;
+    return snd_stream_start_ex(hnd, &start);
+}
+
 int snd_stream_start_ex(snd_stream_hnd_t hnd,
                         const snd_stream_config_t *config) {
     snd_channel_config_t channel_config;

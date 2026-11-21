@@ -463,6 +463,23 @@ void snd_stream_start_adpcm(snd_stream_hnd_t hnd, uint32_t freq, int st);
 int snd_stream_start_ex(snd_stream_hnd_t hnd,
                         const snd_stream_config_t *config);
 
+/** \brief Start an ordinary stream at a floating-point rate.
+
+    The requested Hz selects an AICA octave and fractional step. Playback
+    uses the same integer wire rate as snd_stream_start_ex, selected to
+    produce that step. Status reports the selected wire rate.
+
+    \param hnd             Allocated stream handle.
+    \param config          Start configuration. rate supplies the sample rate.
+    \param rate            Finite Hz within the native AICA and wire limits.
+    \retval 0              On successful start or queued preparation.
+    \retval -1             On start error, invalid rate (EINVAL), or no
+                           integer wire rate for the requested step (ENOTSUP).
+    \sa snd_stream_start_ex
+*/
+int snd_stream_start_float(snd_stream_hnd_t hnd,
+                           const snd_stream_config_t *config, float rate);
+
 /** \brief  Stop a stream.
 
     This function stops a stream, stopping any sound playing from it. This will
