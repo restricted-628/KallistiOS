@@ -33,7 +33,7 @@ static int busy(void) { errno = EBUSY; return -1; }
 static int stop_player(struct kosdec_adx_player *, uint32_t timeout_ms);
 static bool compat_unrecognized_header(const struct kosdec_adx_player *);
 static bool has_output(const struct kosdec_adx_player *p) {
-    return p->retained_pcm || p->sound != SND_STREAM_INVALID;
+    return p->retained_pcm || (p->sound != SND_STREAM_INVALID && !p->ordinary_reprime_pending);
 }
 static bool start_held(const struct kosdec_adx_player *p) {
     return p->compat_paused || (p->info.wait_start && !p->compat_preoutput_playing);
@@ -732,6 +732,7 @@ int kosdec_adx_player_release_source(struct kosdec_adx_player *p) {
 int kosdec_adx_player_cancel_source(struct kosdec_adx_player *p) {
     if(!valid(p) || p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
     if(in_phased_dispatch(p)) return busy();
+    if(p->ordinary_reprime_pending) return busy();
     if(!p->source_bound) return 0;
     p->compat_playend = (struct kosdec_adx_playend){0};
     p->pcm_enabled = false;
@@ -794,6 +795,34 @@ static int bind_source(struct kosdec_adx_player *p,
 int kosdec_adx_player_bind_source(struct kosdec_adx_player *p,
     struct kosdec_adx_stream *stream, struct kosdec_adx_sequence *sequence) {
     return bind_source(p,stream,sequence,NULL,NULL,NULL,NULL,NULL);
+}
+int kosdec_adx_compat_player_reprime(struct kosdec_adx_player *p, struct kosdec_adx_stream *stream) {
+    if(!valid(p) || !stream) return bad();
+    if(p->info.state != KOSDEC_ADX_PLAYER_STOPPED) return busy();
+    if(!p->compat_service || p->compat_phased || p->retained_offsets ||
+       !p->info.sources_started || p->sound == SND_STREAM_INVALID || p->info.channels != 2 ||
+       p->compat_start_pitch || p->requested_rate || !compat_single_title(p))
+        return unsupported();
+    if(p->compat_service->servicing) return busy();
+    if(stream->linked || stream->prepared || stream->seeking || stream->terminal ||
+       stream->staged_error || stream->byte_position || stream->input_count || stream->returned_frames)
+        return bad();
+
+    struct kosdec_adx_service producer;
+    if(kosdec_adx_service_init(&producer,stream,NULL,p->memory.pcm,p->memory.pcm_samples,
+                               p->memory.capacity) != KOSDEC_ADX_MORE)
+        return bad();
+    if(kosdec_adx_service_enable_decode_progress(&producer) < 0)
+        return -1;
+
+    p->producer = producer;
+    p->source_bound = true;
+    p->ordinary_reprime_pending = true;
+    p->callback_failed = false;
+    p->pcm_enabled = false;
+    p->info.retained_sound = SND_STREAM_INVALID;
+    p->info.source_frames = 0;
+    return start_source(p);
 }
 int kosdec_adx_player_bind_joint(struct kosdec_adx_player *p,
     struct kosdec_adx_joint_reader *joint) {
@@ -915,7 +944,7 @@ static int poll_output(struct kosdec_adx_player *p) {
         return errno == EAGAIN ? 0 : -1;
     }
 #endif
-    return p->sound != SND_STREAM_INVALID &&
+    return has_output(p) &&
            snd_stream_poll_ex(p->sound) < 0 && errno != ENODATA ? -1 : 1;
 }
 
@@ -962,6 +991,20 @@ static int start_output(struct kosdec_adx_player *p) {
         return snd_retained_pcm_start(p->retained_pcm) < 0 ? -1 : 1;
     }
 #endif
+    if(p->ordinary_reprime_pending) {
+        /* Checked stop and join preceded binding. From the first START
+           attempt onward, cleanup must use checked stop again. */
+        p->ordinary_reprime_pending = false;
+        snd_stream_set_callback(p->sound,refill);
+        snd_stream_set_userdata(p->sound,p);
+        if(snd_stream_start_ex(p->sound,&p->output) < 0)
+            return -1;
+        if(p->info.source_frames != p->memory.sound_bytes / 2) {
+            errno = p->callback_failed ? EOVERFLOW : EIO;
+            return -1;
+        }
+        return 1;
+    }
     p->sound = snd_stream_alloc(refill,(int)p->memory.sound_bytes);
     if(p->sound == SND_STREAM_INVALID) return -1;
     snd_stream_set_userdata(p->sound,p);
@@ -1024,7 +1067,7 @@ static int poll_player(struct kosdec_adx_player *p) {
             return prefill_wait(p);
         uint32_t rate; unsigned channels;
         if(!kosdec_adx_pipe_get_format(&p->producer.pipe,&rate,&channels)) return failed(p,EPROTO);
-        if(has_output(p) &&
+        if((has_output(p) || p->ordinary_reprime_pending) &&
            (rate != p->info.sample_rate || channels != p->output.channels)) return failed(p,EPROTO);
         if(!has_output(p)) {
             uint32_t output_rate = p->requested_rate ? p->requested_rate : rate;
@@ -1056,7 +1099,10 @@ static int poll_player(struct kosdec_adx_player *p) {
         }
         /* The compatibility gate describes preparation. The native refill
            still needs its startup PCM window to avoid an internal gap. */
-        if(r.queued_frames < sound_frames && !source_done) return prefill_wait(p);
+        if(r.queued_frames < sound_frames) {
+            if(!source_done) return prefill_wait(p);
+            if(p->ordinary_reprime_pending) return failed(p,ENODATA);
+        }
         p->pcm_enabled = true;
         int service = has_output(p) ? poll_title_output(p) : start_output(p);
         if(service <= 0) return service ? failed(p,errno) : 0;
@@ -1792,7 +1838,7 @@ static int set_compat_routing(struct kosdec_adx_player *p, unsigned fields, int3
     for(unsigned channel = 0; channel < 2; ++channel)
         copy_route_fields(&config.channel[channel].routing,&requested,fields);
 
-    bool live = p->sound != SND_STREAM_INVALID && p->info.state != KOSDEC_ADX_PLAYER_STOPPED;
+    bool live = has_output(p) && p->info.state != KOSDEC_ADX_PLAYER_STOPPED;
     int result = live ? snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_ROUTING) : 0;
     if(fields & COMPAT_ROUTE_DIRECT)
         p->compat_controls.direct_db = (int8_t)db;
@@ -1899,7 +1945,7 @@ int kosdec_adx_player_set_output(struct kosdec_adx_player *p,
     snd_stream_config_t config = p->output;
     config.channel[0].volume = (uint8_t)lv; config.channel[1].volume = (uint8_t)rv;
     config.channel[0].pan = (uint8_t)lp; config.channel[1].pan = (uint8_t)rp;
-    if(p->sound != SND_STREAM_INVALID) {
+    if(has_output(p)) {
         if(snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_VOLUME | SND_CHANNEL_UPDATE_PAN) < 0)
             return failed(p,errno);
     }
@@ -1914,7 +1960,7 @@ int kosdec_adx_player_set_pan(struct kosdec_adx_player *p, unsigned channel, int
     if(p->retained_offsets) return unsupported();
     snd_stream_config_t config = p->output;
     config.channel[channel].pan = output_pan(pan,channel,p->info.channels);
-    if(p->sound != SND_STREAM_INVALID &&
+    if(has_output(p) &&
        snd_stream_update(p->sound,&config,SND_CHANNEL_UPDATE_PAN) < 0)
         return failed(p,errno);
     p->output = config;
@@ -1941,7 +1987,7 @@ int kosdec_adx_player_get_filter_settings(const struct kosdec_adx_player *p,
 int kosdec_adx_player_set_rate(struct kosdec_adx_player *p, uint32_t hz) {
     if(!valid(p) || (hz && (hz < 8000 || hz > 48000)) ||
        p->info.state >= KOSDEC_ADX_PLAYER_FAILED) return bad();
-    if(p->retained_pcm) return unsupported();
+    if(p->retained_pcm || p->ordinary_reprime_pending) return unsupported();
     if(p->sound != SND_STREAM_INVALID) {
         uint32_t rate = hz ? hz : p->info.sample_rate;
         if(rate < 8000 || rate > 48000) return bad();
@@ -2045,7 +2091,7 @@ static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
             if(!p->info.first_error) p->info.first_error = EIO;
             report_error(p,EIO);
         }
-        if(p->sound != SND_STREAM_INVALID) {
+        if(p->sound != SND_STREAM_INVALID && !p->ordinary_reprime_pending) {
             snd_stream_status_t status;
             int error = snd_stream_get_status(p->sound,&status) < 0 ? errno : status.last_error;
             if(error && error != ENODATA) {
@@ -2080,13 +2126,14 @@ static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
         p->retained_stopped = true;
     }
 #endif
-    if(p->sound != SND_STREAM_INVALID) {
+    if(p->sound != SND_STREAM_INVALID && !p->ordinary_reprime_pending) {
         if(snd_stream_stop_ex(p->sound,timeout_ms) < 0) goto retain;
         snd_stream_set_callback(p->sound,NULL);
         snd_stream_set_userdata(p->sound,NULL);
     }
     if(p->executor && fiber_service_executor_destroy(p->executor) < 0) goto retain;
     p->executor = NULL; p->worker = NULL;
+    p->ordinary_reprime_pending = false;
     p->info.stop_error = 0;
     p->info.retained_sound = p->sound;
     p->info.state = KOSDEC_ADX_PLAYER_STOPPED;

@@ -177,6 +177,7 @@ struct kosdec_adx_player {
     bool time_uses_vsync;
     uint32_t linked_reload_sectors;
     bool linked_reload_clamp;
+    bool ordinary_reprime_pending;
 };
 /* All player APIs are serialized on one ordinary owner thread, not an IRQ,
    callback or shared fiber carrier. The private producer owns the source
@@ -595,6 +596,17 @@ int kosdec_adx_player_dispatch_error(struct kosdec_adx_player *);
    timeout bounds sound transfer waits, not arbitrary blocking provider or join.
    No final AICA fetch, sound RAM/channel release or restart guarantee. */
 int kosdec_adx_player_stop(struct kosdec_adx_player *, uint32_t timeout_ms);
+/* Begin preparing a fresh direct ADX stream on the same ordinary allocation.
+   The caller must retain exclusive ownership of the stopped handle, ring and
+   player following successful checked stop. For a single nonphased stereo
+   compatibility title at the original source rate, without a rate override.
+   START requires two full halves from the new producer. Zero admits source
+   preparation. Drive the existing compatibility service to start playback.
+   Any failure after the new binding is installed requires checked stop again
+   before releasing the new source. Normal read/cancel lifetimes still apply.
+   A new output starts a new clock interval. This provides no final-fetch or
+   transfer-of-ownership guarantee. */
+int kosdec_adx_compat_player_reprime(struct kosdec_adx_player *, struct kosdec_adx_stream *);
 #ifdef __cplusplus
 }
 #endif

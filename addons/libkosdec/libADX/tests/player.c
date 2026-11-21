@@ -1844,6 +1844,118 @@ static void running_input_stall(bool enabled) {
     free(f.data);
 }
 
+static int until_compat_sound(struct fixture *f, struct kosdec_adx_compat_service *service) {
+    for(unsigned i=0;i<2000;++i) {
+        struct kosdec_adx_compat_result result;
+        if(kosdec_adx_compat_exec_server(service,&result)<0) return -1;
+        if(info(f).state!=KOSDEC_ADX_PLAYER_PREFILL) return 0;
+        mock_pause();
+    }
+    CHECK(false);
+    return -1;
+}
+
+static void compat_reprime(bool fail_start) {
+    struct fixture a,b;
+    init(&b,2,false);
+    init(&a,2,false);
+    a.config.sound_bytes=64; /* Two halves need 32 stereo frames. */
+    CHECK(!kosdec_adx_player_init(&a.player,&a.stream,NULL,&a.config));
+    uint64_t now=0;
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    const struct kosdec_adx_compat_config config={.clock_us=compat_clock,.clock_context=&now};
+    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_bind_player(&service,0,&a.player));
+    CHECK(!kosdec_adx_player_set_time_offset(&a.player,-59));
+    CHECK(!kosdec_adx_player_start(&a.player));
+    CHECK(!until_compat_sound(&a,&service));
+    CHECK(mock_allocs==1 && mock_starts==1 && mock_frames==32);
+    CHECK(kosdec_adx_compat_player_reprime(&a.player,&b.stream)<0 && errno==EBUSY);
+
+    mock_failure=MOCK_STOP_TIMEOUT;
+    CHECK(kosdec_adx_player_stop(&a.player,1)<0 && errno==ETIMEDOUT);
+    CHECK(info(&a).state==KOSDEC_ADX_PLAYER_STOPPING && a.player.producer.pipe.stream==&a.stream);
+    CHECK(mock_userdata==&a.player && mock_callback && !mock_joins);
+    CHECK(kosdec_adx_compat_player_reprime(&a.player,&b.stream)<0 && errno==EBUSY && !b.calls);
+    mock_failure=MOCK_JOIN;
+    CHECK(kosdec_adx_player_stop(&a.player,1000)<0 && errno==EIO);
+    CHECK(info(&a).state==KOSDEC_ADX_PLAYER_STOPPING && !mock_callback && !mock_userdata);
+    CHECK(kosdec_adx_compat_player_reprime(&a.player,&b.stream)<0 && errno==EBUSY && !b.calls);
+    mock_failure=MOCK_OK;
+    CHECK(!kosdec_adx_player_stop(&a.player,1000));
+    CHECK(info(&a).retained_sound==7 && mock_joins==1);
+    struct kosdec_adx_time stopped;
+    CHECK(!kosdec_adx_compat_player_get_time(&a.player,&stopped));
+    CHECK(stopped.count==-59 && stopped.frequency==1);
+    unsigned old_calls=a.calls, old_stops=mock_stops;
+    uint64_t old_callbacks=info(&a).callbacks;
+    size_t old_frames=mock_frames;
+    CHECK(kosdec_adx_compat_player_reprime(&a.player,&a.stream)<0 && errno==EINVAL);
+
+    /* A finite replacement shorter than a ring must never enter START. */
+    const size_t b_extent=b.bytes;
+    put32(b.data+12,16);
+    memmove(b.data+50+36,b.data+b.bytes-18,18);
+    b.bytes=50+36+18;
+    kosdec_adx_stream_init(&b.stream,input,&b,(uint32_t)b.bytes,false);
+    CHECK(!kosdec_adx_compat_player_reprime(&a.player,&b.stream));
+    CHECK(until_compat_sound(&a,&service)<0 && errno==ENODATA);
+    CHECK(mock_starts==1 && mock_frames==old_frames && !mock_userdata);
+    CHECK(!kosdec_adx_player_stop(&a.player,1000) && mock_stops==old_stops);
+    CHECK(info(&a).retained_sound==7);
+
+    free(b.data);
+    b.data=stream(50,18,2,32,65,&b.bytes);
+    CHECK(b.bytes==b_extent);
+    memset(b.data+20,0,24);
+    b.data[51]=63;
+    b.data[69]=43;
+    kosdec_adx_stream_init(&b.stream,input,&b,(uint32_t)b.bytes,false);
+    struct kosdec_adx_stream reader=b.stream;
+    int16_t expected[130];
+    size_t decoded=0;
+    for(unsigned i=0;i<100 && decoded<65;++i) {
+        struct kosdec_adx_stream_result d=kosdec_adx_stream_read(&reader,expected+2*decoded,65-decoded);
+        CHECK(d.status<=KOSDEC_ADX_DONE);
+        decoded+=d.frames;
+    }
+    CHECK(decoded==65);
+    CHECK(memcmp(expected,mock_pcm,4)!=0);
+    CHECK(!kosdec_adx_compat_player_reprime(&a.player,&b.stream));
+    CHECK(info(&a).retained_sound==SND_STREAM_INVALID && !mock_callback);
+    CHECK(!kosdec_adx_player_set_pan(&a.player,0,-12) && !mock_updates);
+    CHECK(kosdec_adx_player_set_rate(&a.player,22050)<0 && errno==ENOTSUP && !mock_updates);
+    CHECK(kosdec_adx_player_cancel_source(&a.player)<0 && errno==EBUSY);
+    if(fail_start) mock_failure=MOCK_SOUND_START;
+    if(fail_start) {
+        CHECK(until_compat_sound(&a,&service)<0 && errno==EIO);
+        CHECK(kosdec_adx_compat_player_reprime(&a.player,&b.stream)<0 && errno==EBUSY);
+        CHECK(info(&a).state==KOSDEC_ADX_PLAYER_FAILED && mock_userdata==&a.player);
+        CHECK(mock_frames==old_frames+16);
+        mock_failure=MOCK_OK;
+    }
+    else {
+        CHECK(!until_compat_sound(&a,&service));
+        CHECK(mock_frames==old_frames+32 && info(&a).source_frames==32);
+        CHECK(info(&a).callbacks==old_callbacks+2);
+        for(unsigned i=0;i<2000 && info(&a).state!=KOSDEC_ADX_PLAYER_SOURCE_END;++i) {
+            struct kosdec_adx_compat_result result;
+            CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+            mock_pause();
+        }
+        CHECK(info(&a).state==KOSDEC_ADX_PLAYER_SOURCE_END && info(&a).source_frames==65);
+        CHECK(mock_frames==old_frames+65);
+        CHECK(!memcmp(mock_pcm+2*old_frames,expected,sizeof(expected)));
+    }
+    CHECK(mock_allocs==1 && mock_starts==2 && a.calls==old_calls);
+    CHECK(!kosdec_adx_player_stop(&a.player,1000) && mock_stops==old_stops+1);
+    CHECK(info(&a).retained_sound==7 && !mock_callback && !mock_userdata);
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(a.data);
+    free(b.data);
+}
+
 int main(void) {
     staged_input();
     compat_start_threshold();compat_prepare_room();compat_ready_lifecycle();compat_delayed_footer();compat_inactive_time();
@@ -1857,6 +1969,8 @@ int main(void) {
     compat_live_pitch(1,44100);compat_live_pitch(1,8000);compat_live_pitch(2,44100);
     puts("ADX_COMPAT_LIVE_MONO_PITCH_PASS admission, unchanged controls, rebind and checked failure");
     compat_short_and_rebind();
+    compat_reprime(false);compat_reprime(true);
+    puts("ADX_COMPAT_REPRIME_PASS checked stop and join, short source, fresh PCM, same handle and failed START");
     compat_rejected_header_state();
     compat_reject_excess_channels();
     compat_transport_fault();

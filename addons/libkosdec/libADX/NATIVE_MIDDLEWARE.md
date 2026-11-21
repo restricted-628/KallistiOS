@@ -171,6 +171,20 @@ wide clock and requires a generation. The compatibility centisecond query
 uses the SH-4 binary32 conversion. Rebuild consumers of the player struct
 with the matching headers and archive.
 
+For an ordinary nonphased stereo compatibility title, a caller that keeps
+the same stream allocation exclusively can prepare another direct ADX
+source with `kosdec_adx_compat_player_reprime` after checked STOP and
+producer join. Bind a fresh reader at frame zero and keep the same source
+rate without a pitch override. Service the title normally. Playback starts
+when both ring halves have new PCM and the start gate is open. If the source
+is too short or its rate or channel count differs, preparation fails before
+START. If preparation or START fails after binding, call checked STOP again
+before retiring that source. A stop timeout keeps the current source and
+allocation under the same owner's control. A successful start resets the
+ordinary stream clock. Keep the ordinary handle reserved for the player
+throughout the operation. Rebuild player consumers with the matching archive
+and headers.
+
 For a final retained source, opt in with
 `kosdec_adx_compat_player_enable_playend` before the first binding starts,
 or after releasing a sealed source in IDLE to mark the next binding final.
