@@ -8,6 +8,9 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The aligned SH-4 PCM16 splitter now preserves left/right channel order and
+  the order of adjacent frames. For a final half cache line it uses ordinary
+  stores so the bytes beyond the requested output are preserved.
 - `snd_stop_all()` stops configured voices, resident MIDI and sequences,
   and completes checked stop for ordinary streams. Stop other playback
   producers and quiesce private stream owners first. A timeout can follow
