@@ -25,6 +25,7 @@ typedef struct playback_state {
     uint32_t start_token, end_reset_token;
     enum pb_control control;
     bool configured, observed, transaction_live;
+    bool fast_release;
     snd_port_transaction_t transaction;
     snd_channel_receipt_t receipt;
     snd_channel_config_t baseline, committed, proposed;
@@ -146,8 +147,10 @@ static int pb_submit_locked(playback_state_t *s, uint32_t operation,
             return result;
         transaction_live = true;
     }
-    result = snd_observation_submit_validated_until(s->channel, operation, config, fields,
-                                         0, &receipt, deadline);
+    uint32_t flags = operation == SND_OBSERVATION_STOP && s->configured &&
+                     s->fast_release ? AICA_OBSERVATION_STOP_FAST_RELEASE : 0;
+    result = snd_observation_submit_validated_until(s->channel, operation, config,
+                                                    fields, flags, &receipt, deadline);
     if(result < 0) {
         int saved = errno;
         if(transaction_live)
@@ -195,6 +198,29 @@ int snd_port_playback_start(snd_port_t port, const snd_channel_config_t *config,
 int snd_port_playback_update(snd_port_t port, const snd_channel_config_t *config,
     uint32_t fields, snd_port_operation_t *operation) {
     return pb_submit(port, SND_OBSERVATION_UPDATE, config, fields, 0, operation);
+}
+
+int snd_port_playback_set_release_mode(snd_port_t port,
+                                        snd_port_playback_release_mode_t mode) {
+    if(mode != SND_PORT_PLAYBACK_RELEASE_NORMAL &&
+       mode != SND_PORT_PLAYBACK_RELEASE_FAST) {
+        errno = EINVAL;
+        return -1;
+    }
+    uint64_t deadline = timer_ms_gettime64() + SND_PLAYBACK_TIMEOUT_MS;
+    if(pb_lock(port, deadline) < 0)
+        return -1;
+    playback_state_t *s = pb_lookup(port);
+    if(!s)
+        return pb_unlock(port, -1);
+
+    if(mode == SND_PORT_PLAYBACK_RELEASE_FAST &&
+       !(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_FAST_RELEASE)) {
+        errno = ENOTSUP;
+        return pb_unlock(port, -1);
+    }
+    s->fast_release = mode == SND_PORT_PLAYBACK_RELEASE_FAST;
+    return pb_unlock(port, 0);
 }
 
 int snd_port_playback_stop(snd_port_t port, snd_port_operation_t *operation) {

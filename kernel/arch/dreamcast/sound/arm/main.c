@@ -266,7 +266,8 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_SEQUENCE_CONTROL |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
     info->features = prior_features | AICA_DRIVER_FEATURE_OBSERVATION_TL |
-                     AICA_DRIVER_FEATURE_FINITE_STOP;
+                     AICA_DRIVER_FEATURE_FINITE_STOP |
+                     AICA_DRIVER_FEATURE_OBSERVATION_FAST_RELEASE;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
     info->commands_rejected = commands_rejected;
@@ -483,12 +484,17 @@ static uint32_t checked_channel_apply(uint32_t channel,
                 return AICA_OBSERVATION_BAD_FLAGS;
             break;
         case AICA_CHANNEL_OP_STOP:
-            if(control->start_flags || control->fields)
+            if(control->fields ||
+               (control->start_flags && (!observed ||
+                control->start_flags != AICA_OBSERVATION_STOP_FAST_RELEASE)))
                 return AICA_OBSERVATION_BAD_FLAGS;
-            /* Ownership and all STOP inputs have already been checked. */
+            if(control->start_flags && !channel_statuses[channel].configured)
+                return AICA_OBSERVATION_UNCONFIGURED;
             if(observed)
                 aica_observer_capture_stop(&observer, channel, timer,
                                            &finite_stops[channel]);
+            if(control->start_flags)
+                aica_channel_set_fast_release(channel);
             channel_apply(channel, AICA_CHANNEL_OP_STOP, NULL, 0, 0);
             return AICA_OBSERVATION_APPLIED;
         case AICA_CHANNEL_OP_UPDATE:

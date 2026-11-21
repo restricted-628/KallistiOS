@@ -188,6 +188,10 @@ void aica_channel_start(int ch, const aica_channel_config_t *config,
         0xc000 | play_control;
 }
 
+void aica_channel_set_fast_release(int ch) {
+    CHNREG32(ch, 0x14) = (CHNREG32(ch, 0x14) & ~0x1fu) | 20u;
+}
+
 void aica_channel_set_tl(int ch, uint8 tl) {
     CHNREG8(ch, 0x29) = tl;
 }

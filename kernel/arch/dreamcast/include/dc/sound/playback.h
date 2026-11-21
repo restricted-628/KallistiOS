@@ -57,6 +57,19 @@ int snd_port_playback_update(snd_port_t port, const snd_channel_config_t *config
     uint32_t fields, snd_port_operation_t *operation);
 int snd_port_playback_stop(snd_port_t port, snd_port_operation_t *operation);
 
+typedef enum snd_port_playback_release_mode {
+    SND_PORT_PLAYBACK_RELEASE_NORMAL = 0,
+    SND_PORT_PLAYBACK_RELEASE_FAST
+} snd_port_playback_release_mode_t;
+
+/** Select the release used by subsequent managed STOP commands. Normal uses
+    the channel envelope and is the attachment default. Fast requires capable
+    firmware and forces the hardware release rate to 20 immediately before
+    key-off. Setting the mode does not change running controls or an already
+    submitted STOP. It does not retire the sample allocation. */
+int snd_port_playback_set_release_mode(snd_port_t port,
+                                        snd_port_playback_release_mode_t mode);
+
 /** Restore frequency, volume, pan and routing from this mono attachment's
     most recent applied START. Uses UPDATE observation and ACK, with the same
     receipt, ownership and timeout rules. The sample region and playback
