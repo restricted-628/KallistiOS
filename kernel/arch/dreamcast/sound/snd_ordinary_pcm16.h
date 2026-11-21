@@ -1,7 +1,7 @@
 /* KallistiOS ##version##
    Copyright (C) 2026 Joseph Black
 
-   Private application-polled stereo PCM16 with independently checked refills.
+   Private application-polled PCM16 with independently checked refills.
 */
 #ifndef SND_ORDINARY_PCM16_H
 #define SND_ORDINARY_PCM16_H
@@ -10,14 +10,17 @@
 
 typedef struct snd_ordinary_pcm16 snd_ordinary_pcm16_t;
 
-/* Interleaved PCM; return the number of frames filled. A short fill is padded
-   with silence. The callback must not reenter this stream. */
+/* Native PCM16, one sample per mono frame or interleaved left/right for
+   stereo. Return frames filled. A short fill is padded with silence.
+   The callback must not reenter this stream. */
 typedef int (*snd_ordinary_pcm16_fill_t)(void *context, int16_t *pcm,
                                         uint32_t frames);
 
 typedef struct snd_ordinary_pcm16_status {
     /* Slot 0 implements the sample-based title clock. Divide by nominal
-       source Hz at the caller. Slot 1 is an independent renderer cursor. */
+       source Hz at the caller. Slot 1 is an independent renderer cursor
+       for stereo and is zero for mono. Cursors include all output, even
+       padding. The caller accounts for source and terminal drain. */
     uint64_t frames[2];
     uint64_t committed_frames;
     uint32_t rate;
@@ -30,20 +33,20 @@ typedef struct snd_ordinary_pcm16_status {
    contract. Join the producer and complete stop before resetting or
    shutting down sound or G2 DMA.
 
-   Config must be stereo PCM16 at 8–48 kHz with pitch LFO off. Ring frames
-   per channel must be 8192–65504 and divisible by 32. */
+   Config must be mono or stereo PCM16 at 8–48 kHz with pitch LFO off.
+   Ring frames per channel must be 8192–65504 and divisible by 32. */
 int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     const snd_stream_config_t *config, uint32_t ring,
     snd_ordinary_pcm16_fill_t fill, void *context);
 int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm);
 int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm);
-/* Live native rate admission for this ring geometry. The range is
-   1889–186736 Hz. Above 48 kHz use at least 32768 frames per channel.
+/* Live stereo native rate admission for this ring geometry. The range
+   is 1889–186736 Hz. Above 48 kHz use at least 32768 frames per channel.
    Above 88.2 kHz use 65504. Cadence and producer capacity still govern
    refill and deadline success. */
 bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring);
-/* When entering or leaving the extended range below 8 kHz or above
-   88.2 kHz, EAGAIN means each voice is still running at its previous rate
+/* Mono admits live rates from 8 through 48 kHz. When stereo enters or
+   leaves the extended range below 8 kHz or above 88.2 kHz, EAGAIN means each voice is still running at its previous rate
    and the deadline window needs more headroom. It submits no pitch
    writes or refills. Service the stream before retrying. Observation or
    transport failure is terminal even if its internal result was EAGAIN. */

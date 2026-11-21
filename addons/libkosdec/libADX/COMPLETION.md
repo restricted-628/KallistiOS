@@ -85,8 +85,8 @@ allocation. Hardware retirement is not established.
 | --- | --- | --- |
 | `ADXT_Pause` | A confirmed stereo cut stops both voices. A timeout followed by retry returns the same cut. | Active mono playback and other stock nominal rates are outside the 44.1 kHz stereo profile. |
 | `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. | Stock-valid titles that cannot yet pause also cannot discard that head. The native count deliberately excludes ring capacity when no frames moved. |
-| `ADXT_GetStat` | A paused title can reach DECEND when the decoder finishes. That is not PLAYEND: logical completion requires a drained source and checked stop. | Check a live-transposed mono title through natural drain. A failed retained group poll does not, by itself, establish a status-getter bug. |
-| `ADXT_GetTime` / `ADXT_GetTimeReal` | Sample time, owner-delivered NTSC/PAL time and centiseconds freeze on the qualified stereo cut and resume from the confirmed source position. | Ordinary mono supports live transpose but lacks the corresponding qualified source cursor. Retained mono has a clock but does not admit live transpose. Neither alone verifies time across that pitch change. |
+| `ADXT_GetStat` | Decoder end is not PLAYEND. On the checked ordinary mono profile, a live-transposed title now reaches PLAYEND after its final real frame and checked stop. | Status during active mono pause is not verified. A failed retained group poll does not, by itself, establish a status-getter bug. |
+| `ADXT_GetTime` / `ADXT_GetTimeReal` | On the checked stereo cut, sample time, NTSC/PAL time and centiseconds freeze and resume. On checked ordinary mono, sample time and centiseconds track source position through live transpose; the terminal sample time in both Flycast modes was 81,920/44,100. | No active mono pause/resume clock is established. The mono witness does not extend the supported live pitch range or qualify other pause rates. |
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
 The selected Manatee adapter ignores its command selector, and the getter

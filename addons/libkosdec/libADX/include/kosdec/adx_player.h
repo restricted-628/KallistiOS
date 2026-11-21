@@ -181,7 +181,7 @@ struct kosdec_adx_player {
     uint32_t linked_reload_sectors;
     bool linked_reload_clamp;
     bool ordinary_reprime_pending;
-    bool ordinary_stereo;
+    bool ordinary_stereo, ordinary_mono_clock;
     struct snd_ordinary_pcm16 *ordinary_pcm;
     struct kosdec_adx_flycast_pause *flycast_pause;
     uint64_t flycast_stopped_epoch;
@@ -300,7 +300,8 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *,
    A successful stop retains the Audio lease. Snapshot access remains valid.
    The Flycast-only pause opt-in also supports source snapshots with one
    generation, slot-zero running credit, and adapter-local epochs. These
-   snapshots have no retained firmware session identity. */
+   snapshots have no retained firmware session identity. The checked
+   ordinary mono profile exposes one source generation on its own lease. */
 int kosdec_adx_player_get_source_output(const struct kosdec_adx_player *,
     uint64_t generation, struct kosdec_adx_source_output *);
 /* Set a signed display offset in the units of the query, source frames or
@@ -534,10 +535,15 @@ int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,
    allocation after stop. Live pan, gain, routing and native rate setters
    are unavailable on this output. */
 int kosdec_adx_compat_player_enable_stereo_transpose(struct kosdec_adx_player *);
+/* Opt a READY compatibility title into checked ordinary mono PCM16, nominal
+   source time and 8–48 kHz live pitch. Use a direct finite mono ADX source and
+   a 16,384-frame sound ring. Requires the fork's ordinary PCM16 backend. */
+int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *);
 /* Request live transpose for a PLAYING ordinary compatibility title.
    Opted-in stereo also accepts a decoded tail while its last qualified
-   slot-zero cursor still has source PCM. Mono success means host queue admission. Opted-in stereo success means
-   both slot updates were acknowledged. The slots can apply separately.
+   slot-zero cursor still has source PCM. Default mono success means host
+   queue admission. With a checked ordinary output, success means every
+   participating slot acknowledged its update. Stereo slots can apply separately.
    Stereo live rates above 48000 Hz through 88200 Hz require the full
    32768-frame ring per channel. Service must keep up with the live rate.
    An eligible player's requested cache updates even when conversion or

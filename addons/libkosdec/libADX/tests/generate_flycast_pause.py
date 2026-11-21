@@ -5,10 +5,12 @@ rate, frames = 44100, 196608
 import sys
 
 name = sys.argv[1]
-assert name in ("proof", "fresh") and len(sys.argv) in (2, 3)
-if len(sys.argv) == 3:
+assert name in ("proof", "fresh") and len(sys.argv) in (2, 3, 4)
+if len(sys.argv) >= 3:
     frames = int(sys.argv[2])
     assert frames > 0 and frames % 32 == 0
+channels = int(sys.argv[3]) if len(sys.argv) == 4 else 2
+assert channels in (1, 2)
 state = 15106 if name == "proof" else 115901
 def step():
     global state
@@ -16,10 +18,10 @@ def step():
     return state >> 16
 
 track = bytearray(32)
-struct.pack_into('>HHBBBBIIHB', track, 0, 0x8000, 28, 3, 18, 4, 2, rate, frames, 500, 3)
+struct.pack_into('>HHBBBBIIHB', track, 0, 0x8000, 28, 3, 18, 4, channels, rate, frames, 500, 3)
 track[-6:] = b'(c)CRI'
 for _ in range(frames // 32):
-    for _ in range(2):
+    for _ in range(channels):
         scale = 440 + step() % 224
         track.extend(struct.pack('>H', scale))
         for _ in range(8):

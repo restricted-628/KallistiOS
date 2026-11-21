@@ -51,8 +51,9 @@ struct kosdec_adx_recovery;
    publish its PLAYEND. Other bound titles continue to be serviced. Release,
    cancellation and explicit STOP disarm it. Timeout preserves STOPPING and
    retries the same decision. An opted-in Flycast pause title can mark its
-   single finite source before start. It verifies the complete source boundary
-   after accounted discard and checked stop. PLAYEND keeps played reservations. */
+   single finite source before start. A checked ordinary mono clock title
+   can also opt in before its first start. Both verify the complete declared
+   source boundary and checked stop. PLAYEND keeps played reservations. */
 int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *, uint32_t stop_timeout_ms);
 /* Owner-only observation. A PLAYING dispatch may publish DECEND after the
    final samples are decoded with under 32 bytes of PCM16 pending per channel.

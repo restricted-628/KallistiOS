@@ -462,7 +462,8 @@ int snd_stream_init_ex(int channels, size_t buffer_size) {
     return 0;
 }
 
-snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
+static snd_stream_hnd_t stream_alloc_channels(snd_stream_callback_t cb, int bufsize,
+                                             int channels) {
     int i, saved_errno;
     snd_stream_hnd_t hnd = SND_STREAM_INVALID;
     uint32_t ram = 0;
@@ -475,6 +476,14 @@ snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
         mutex_unlock(&stream_state_mutex);
         return SND_STREAM_INVALID;
     }
+
+    if(channels > max_channels) {
+        errno = ENOSPC;
+        mutex_unlock(&stream_state_mutex);
+        return SND_STREAM_INVALID;
+    }
+    if(!channels)
+        channels = max_channels;
 
     if(bufsize <= 0 || (bufsize & 31) ||
        (size_t)bufsize > SND_STREAM_BUFFER_MAX_PCM16 ||
@@ -503,13 +512,13 @@ snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
         return SND_STREAM_INVALID;
     }
 
-    ram = snd_mem_malloc((size_t)bufsize * (size_t)max_channels);
+    ram = snd_mem_malloc((size_t)bufsize * (size_t)channels);
 
     if(!ram)
         goto fail;
 
     irq_t old_irq = irq_disable();
-    int admitted = snd_channel_reserve(SND_CHANNEL_CLASS_PCM, max_channels, reserved);
+    int admitted = snd_channel_reserve(SND_CHANNEL_CLASS_PCM, channels, reserved);
     irq_restore(old_irq);
     if(admitted < 0)
         goto fail;
@@ -520,7 +529,7 @@ snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
     streams[hnd].ch[1] = reserved[1];
     streams[hnd].buffer_size = (size_t)bufsize;
     streams[hnd].spu_ram_sch[0] = ram;
-    streams[hnd].spu_ram_sch[1] = max_channels == 2 ? ram + (uint32_t)bufsize : 0;
+    streams[hnd].spu_ram_sch[1] = channels == 2 ? ram + (uint32_t)bufsize : 0;
     streams[hnd].get_data = cb;
     TAILQ_INIT(&streams[hnd].filters);
     snd_stream_config_init(&streams[hnd].config);
@@ -542,6 +551,10 @@ fail:
     mutex_unlock(&stream_state_mutex);
     errno = saved_errno;
     return SND_STREAM_INVALID;
+}
+
+snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize) {
+    return stream_alloc_channels(cb, bufsize, 0);
 }
 
 snd_stream_hnd_t snd_stream_reinit(snd_stream_hnd_t hnd, snd_stream_callback_t cb) {
@@ -1956,7 +1969,7 @@ typedef struct ordinary_pcm16_voice {
 
 struct snd_ordinary_pcm16 {
     snd_stream_hnd_t handle;
-    uint32_t session, ring, rate, motion_rate;
+    uint32_t session, ring, rate, motion_rate, channels;
     uint64_t committed;
     snd_ordinary_pcm16_fill_t fill;
     void *context;
@@ -2023,11 +2036,12 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     const snd_stream_config_t *config, uint32_t ring,
     snd_ordinary_pcm16_fill_t fill, void *context) {
     if(!out || !config || !fill || config->format != SND_STREAM_FORMAT_PCM16 ||
-       config->channels != 2 ||
+       (config->channels != 1 && config->channels != 2) ||
        config->sample_rate < ORDINARY_PCM16_RATE_START_MIN ||
        config->sample_rate > ORDINARY_PCM16_RATE_START_MAX ||
        !snd_ordinary_pcm16_rate_supported(config->sample_rate, ring) ||
-       config->channel[0].lfo.pitch_depth || config->channel[1].lfo.pitch_depth) {
+       config->channel[0].lfo.pitch_depth ||
+       (config->channels == 2 && config->channel[1].lfo.pitch_depth)) {
         errno = EINVAL;
         return -1;
     }
@@ -2045,18 +2059,18 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     snd_ordinary_pcm16_t *pcm = calloc(1, sizeof(*pcm));
     if(!pcm)
         return -1;
-    /* One half-ring interleaved, followed by two separated DMA sources. */
-    pcm->staging = aligned_alloc(32, ring * 4);
+    /* Mono uses one half-ring directly. Stereo also stages the split planes. */
+    pcm->staging = aligned_alloc(32, config->channels == 1 ? ring : ring * 4);
     if(!pcm->staging || mutex_lock(&stream_state_mutex) < 0)
         goto release;
-    if(max_channels != 2) {
+    if(max_channels < (int)config->channels) {
         errno = max_channels ? ENOSPC : ENODEV;
         goto unlock;
     }
     if(snd_observation_bind_until(timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS,
                                   &pcm->session) < 0)
         goto unlock;
-    pcm->handle = snd_stream_alloc(NULL, (int)(ring * 2));
+    pcm->handle = stream_alloc_channels(NULL, (int)(ring * 2), config->channels);
     if(pcm->handle == SND_STREAM_INVALID)
         goto unlock;
     sem_init(&pcm->dma, 0);
@@ -2068,6 +2082,7 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     stream->bitsize = 16;
     stream->frequency = (int)config->sample_rate;
     pcm->ring = ring;
+    pcm->channels = config->channels;
     pcm->rate = pcm->motion_rate = config->sample_rate;
     pcm->fill = fill;
     pcm->context = context;
@@ -2161,7 +2176,7 @@ static int ordinary_pcm16_sample(snd_ordinary_pcm16_t *pcm, uint32_t upper_rate,
                                  uint64_t deadline) {
     const strchan_t *stream = &streams[pcm->handle];
     ordinary_pcm16_cursor_t next[2];
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         aica_completion_channel_t c;
         uint64_t before, after;
         if(snd_observation_completion_until(stream->ch[i], pcm->session, deadline,
@@ -2170,14 +2185,14 @@ static int ordinary_pcm16_sample(snd_ordinary_pcm16_t *pcm, uint32_t upper_rate,
                                  upper_rate, &c, before, after, &next[i]) < 0)
             return -1;
     }
-    for(unsigned i = 0; i < 2; ++i) {
-        if(!ordinary_pcm16_before(&next[i], upper_rate, next[1].after_ms,
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        if(!ordinary_pcm16_before(&next[i], upper_rate, next[pcm->channels - 1].after_ms,
                                   pcm->committed)) {
             errno = EPIPE;
             return -1;
         }
     }
-    for(unsigned i = 0; i < 2; ++i)
+    for(unsigned i = 0; i < pcm->channels; ++i)
         pcm->voice[i].cursor = next[i];
     return 0;
 }
@@ -2202,7 +2217,7 @@ static int ordinary_pcm16_control(snd_ordinary_pcm16_t *pcm, uint32_t op,
     uint32_t fields, uint32_t flags, const snd_stream_config_t *config,
     uint64_t deadline) {
     const strchan_t *stream = &streams[pcm->handle];
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         snd_channel_config_t channel;
         stream_channel_config_pack(&channel, config, i, stream->spu_ram_sch[i],
                                    pcm->ring);
@@ -2210,7 +2225,7 @@ static int ordinary_pcm16_control(snd_ordinary_pcm16_t *pcm, uint32_t op,
                     flags, &pcm->voice[i].receipt, deadline) < 0)
             return -1;
     }
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         ordinary_pcm16_voice_t *voice = &pcm->voice[i];
         snd_channel_observation_t obs;
         if(snd_observation_poll_until(&voice->receipt, deadline, &obs) < 0)
@@ -2261,7 +2276,9 @@ static int ordinary_pcm16_leg(snd_ordinary_pcm16_t *pcm, unsigned side,
     uint32_t offset, uint64_t deadline) {
     const strchan_t *stream = &streams[pcm->handle];
     const ordinary_pcm16_cursor_t *cursor = &pcm->voice[side].cursor;
-    int16_t *plane = pcm->staging + pcm->ring + side * (pcm->ring / 2);
+    int16_t *plane = pcm->staging;
+    if(pcm->channels == 2)
+        plane += pcm->ring + side * (pcm->ring / 2);
     do {
         uint64_t now = timer_ms_gettime64();
         if(now >= deadline) {
@@ -2296,14 +2313,16 @@ static int ordinary_pcm16_leg(snd_ordinary_pcm16_t *pcm, unsigned side,
 
 static int ordinary_pcm16_write(snd_ordinary_pcm16_t *pcm) {
     uint32_t frames = pcm->ring / 2;
-    snd_pcm16_split((void *)pcm->staging, (void *)(pcm->staging + pcm->ring),
-                    (void *)(pcm->staging + pcm->ring + frames), 4 * frames);
+    if(pcm->channels == 2)
+        snd_pcm16_split((void *)pcm->staging, (void *)(pcm->staging + pcm->ring),
+                        (void *)(pcm->staging + pcm->ring + frames), 4 * frames);
     const strchan_t *stream = &streams[pcm->handle];
     uint64_t deadline = timer_ms_gettime64() + stream->config.transfer_timeout_ms;
     uint32_t offset = (uint32_t)(pcm->committed % pcm->ring) * 2;
-    if(ordinary_pcm16_leg(pcm, 0, offset, deadline) < 0 ||
-       ordinary_pcm16_leg(pcm, 1, offset, deadline) < 0)
-        return -1;
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        if(ordinary_pcm16_leg(pcm, i, offset, deadline) < 0)
+            return -1;
+    }
     pcm->committed += frames;
     return 0;
 }
@@ -2323,7 +2342,8 @@ static int ordinary_pcm16_fill(snd_ordinary_pcm16_t *pcm) {
         errno = EOVERFLOW;
         return -1;
     }
-    memset(pcm->staging + 2 * got, 0, 4 * (frames - (uint32_t)got));
+    memset(pcm->staging + pcm->channels * got, 0,
+           sizeof(*pcm->staging) * pcm->channels * (frames - (uint32_t)got));
     return ordinary_pcm16_write(pcm);
 }
 
@@ -2332,11 +2352,13 @@ static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, strchan_t *stream) {
     if(ordinary_pcm16_control(pcm, SND_OBSERVATION_START, 0,
             SND_CHANNEL_START_DELAYED, &stream->config, deadline) < 0)
         return -1;
-    uint64_t mask = (UINT64_C(1) << stream->ch[0]) | (UINT64_C(1) << stream->ch[1]);
+    uint64_t mask = 0;
+    for(unsigned i = 0; i < pcm->channels; ++i)
+        mask |= UINT64_C(1) << stream->ch[i];
     uint64_t earliest = timer_ms_gettime64();
     if(snd_channels_start_sync(mask) < 0)
         return -1;
-    for(unsigned i = 0; i < 2; ++i)
+    for(unsigned i = 0; i < pcm->channels; ++i)
         pcm->voice[i].cursor = (ordinary_pcm16_cursor_t){0, earliest, earliest};
     if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
             0, &stream->config, deadline) < 0 ||
@@ -2358,7 +2380,7 @@ int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm) {
 
     strchan_t *stream = &streams[pcm->handle];
     pcm->attempted = true;
-    stream->channels = 2;
+    stream->channels = (int)pcm->channels;
     if(ordinary_pcm16_fill(pcm) < 0 || ordinary_pcm16_fill(pcm) < 0)
         goto fail;
 
@@ -2371,8 +2393,11 @@ fail:
 
 static bool ordinary_pcm16_room(const snd_ordinary_pcm16_t *pcm) {
     uint64_t old_end = pcm->committed - pcm->ring / 2;
-    return pcm->voice[0].cursor.frames >= old_end &&
-           pcm->voice[1].cursor.frames >= old_end;
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        if(pcm->voice[i].cursor.frames < old_end)
+            return false;
+    }
+    return true;
 }
 
 int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm) {
@@ -2399,7 +2424,9 @@ static int ordinary_pcm16_rate_error(void) {
 int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
     if(ordinary_pcm16_lock(pcm) < 0)
         return ordinary_pcm16_rate_error();
-    if(!snd_ordinary_pcm16_rate_supported(rate, pcm->ring)) {
+    if(!snd_ordinary_pcm16_rate_supported(rate, pcm->ring) ||
+       (pcm->channels == 1 && (rate < ORDINARY_PCM16_RATE_START_MIN ||
+                               rate > ORDINARY_PCM16_RATE_START_MAX))) {
         errno = EINVAL;
         return ordinary_pcm16_unlock(-1);
     }
@@ -2424,7 +2451,7 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
         goto fail;
 
     if(ordinary_pcm16_extended_rate(pcm->rate) || ordinary_pcm16_extended_rate(rate)) {
-        for(unsigned i = 0; i < 2; ++i) {
+        for(unsigned i = 0; i < pcm->channels; ++i) {
             if(!ordinary_pcm16_before(&pcm->voice[i].cursor, upper, deadline,
                                       pcm->committed)) {
                 errno = EAGAIN;
@@ -2484,7 +2511,7 @@ int snd_ordinary_pcm16_stop(snd_ordinary_pcm16_t *pcm, uint32_t timeout) {
         return ordinary_pcm16_unlock(-1);
     if(ordinary_pcm16_wait(pcm, deadline) < 0)
         return ordinary_pcm16_unlock(-1);
-    for(unsigned i = 0; i < 2; ++i)
+    for(unsigned i = 0; i < pcm->channels; ++i)
         if(ordinary_pcm16_retire(&pcm->voice[i], deadline) < 0)
             return ordinary_pcm16_unlock(-1);
 

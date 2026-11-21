@@ -8,6 +8,13 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- A finite mono ADX title can opt into checked live transpose and source
+  time on one PCM16 voice with a 32 KiB sound ring. Both Flycast BIOS CPU
+  modes played a 44.1 → 22.05 → 44.1 kHz transition through ring wraps;
+  time kept the nominal 44.1 kHz denominator. Logical PLAYEND followed
+  real source drain and checked stop, not the submission of padded output.
+  Active mono pause/discard is separate and is not enabled by this change.
+
 - The optional Flycast stereo ADX player can now pause after multiple
   sound-ring wraps, including when the pause request and cut fall on
   opposite sides of a wrap. The SH-4 checks each voice's reported position

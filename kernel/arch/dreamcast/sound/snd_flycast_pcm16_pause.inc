@@ -22,7 +22,7 @@ static bool pause_address_matches(const strchan_t *stream) {
 int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
     if(ordinary_pcm16_lock(pcm) < 0)
         return -1;
-    if(pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || pcm->rate != 44100 ||
+    if(pcm->channels != 2 || pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || pcm->rate != 44100 ||
        pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);

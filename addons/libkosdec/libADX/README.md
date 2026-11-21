@@ -653,6 +653,20 @@ live pan/gain/routing and native frequency overrides use other output
 profiles. The build and player opt-ins leave the existing mono and
 default paths available.
 
+### Ordinary mono clock and live transpose
+
+Use the fork's ordinary PCM16 build and bind a READY title to one finite,
+direct mono ADX source with a 16,384-frame sound ring. Enable
+`kosdec_adx_compat_player_enable_mono_clock` before starting. The live
+transpose setter admits exact representable rates from 8 to 48 kHz and
+requires acknowledgement from the one output slot. Time uses that slot's
+qualified position and the nominal source rate. PCM padding does not count
+toward source time. The optional logical PLAYEND gate uses actual source
+drain and checked stop while keeping the played allocation. Build
+`ordinary-mono-clock-test-elf` with `ADX_ORDINARY_STEREO=1` against the
+matching backend. Generate the mono fixture with
+`tests/generate_flycast_pause.py proof 81920 1`.
+
 ### Flycast active pause
 
 Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against

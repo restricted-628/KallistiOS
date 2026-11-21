@@ -368,6 +368,13 @@ $(ADX_PAUSE_TAIL_ELFS): $(BUILD)/sh4/adx_flycast_pause_tail_%.elf: tests/flycast
 	    -DTEST_CASE=$* -Wl,--wrap=snd_flycast_pcm16_resume -o $@ $^ -lm
 endif
 
+ifeq ($(ADX_ORDINARY_STEREO),1)
+.PHONY: ordinary-mono-clock-test-elf
+ordinary-mono-clock-test-elf: $(BUILD)/sh4/adx_ordinary_mono_clock_test.elf
+$(BUILD)/sh4/adx_ordinary_mono_clock_test.elf: tests/ordinary_mono_clock.c $(BUILD)/sh4/libADX.a
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) -o $@ $^ -lm
+endif
+
 # Optional fork-native integration exerciser. Supply your own /cd/test.adx.
 # example-object is compile evidence; example-elf also needs this worker's KOS
 # libraries built with exactly one fiber provider selected by the fork build.
