@@ -1,5 +1,7 @@
 /* The one private owner retains both banks until the sound runtime ends.
    This reuses wave RAM only on the explicitly opted-in Flycast profile. */
+#include "arm/aica_pitch.h"
+
 static uintptr_t pause_mailbox(void) {
     return SPU_RAM_UNCACHED_BASE + FLYCAST_CUT_ADDR;
 }
@@ -9,26 +11,36 @@ static uint32_t pause_word(size_t member) {
 }
 
 bool snd_flycast_pcm16_pause_rate_supported(uint32_t rate) {
-    return rate >= FLYCAST_CUT_RATE_MIN && rate <= FLYCAST_CUT_RATE_MAX;
+    return rate >= FLYCAST_CUT_LEGACY_MIN_RATE && rate <= FLYCAST_CUT_CLOCK_HZ;
 }
 
-/* This one-octave subset is identical to the ARM START encoder after
-   masking the wire word to the AICA OCT/FNS register bits. */
+bool snd_flycast_pcm16_pause_geometry_supported(uint32_t rate, uint32_t ring) {
+    if(ring == FLYCAST_CUT_LEGACY_RING)
+        return snd_flycast_pcm16_pause_rate_supported(rate);
+    return (ring == FLYCAST_CUT_WIDE_RING || ring == FLYCAST_CUT_MAX_RING) &&
+           snd_ordinary_pcm16_rate_supported(rate, ring);
+}
+
 static uint32_t pause_pitch_word(uint32_t rate) {
-    if(rate == FLYCAST_CUT_RATE_MAX)
-        return 0;
-    uint32_t fns = rate * 1024u / (FLYCAST_CUT_RATE_MAX / 2u);
-    return FLYCAST_CUT_OCTAVE_DOWN | (fns & FLYCAST_CUT_FNS_MASK);
+    return calc_aica_pitch(rate) & FLYCAST_CUT_PITCH_MASK;
 }
 
-/* Flycast discards the half-step bit at OCT=-1. Round the resulting
-   source-frame rate up before applying the existing movement allowance. */
+uint32_t snd_flycast_pcm16_resume_preroll(uint32_t rate) {
+    if(!snd_ordinary_pcm16_rate_supported(rate, FLYCAST_CUT_MAX_RING))
+        return 0;
+    const uint32_t pad = SND_FLYCAST_PCM16_PAUSE_PREROLL;
+    uint32_t step = flycast_cut_phase_step(pause_pitch_word(rate));
+    if(step <= FLYCAST_CUT_PHASE_ONE)
+        return pad;
+    /* The common factor with 1024 is the step's low bit, capped at 1024. */
+    uint32_t factor = step & (0u - step);
+    uint32_t period = step / (factor < FLYCAST_CUT_PHASE_ONE ? factor : FLYCAST_CUT_PHASE_ONE);
+    return ((pad + period - 1) / period) * period;
+}
+
 static uint32_t pause_motion_rate(uint32_t rate) {
-    uint32_t pitch = pause_pitch_word(rate);
-    uint32_t step = 1024u | (pitch & FLYCAST_CUT_FNS_MASK);
-    if(pitch)
-        step >>= 1;
-    return (FLYCAST_CUT_RATE_MAX * step + 1023u) / 1024u;
+    uint32_t step = flycast_cut_phase_step(pause_pitch_word(rate));
+    return (FLYCAST_CUT_CLOCK_HZ * step + FLYCAST_CUT_PHASE_ONE - 1) >> 10;
 }
 
 static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream,
@@ -47,7 +59,7 @@ static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strcha
 int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
     if(ordinary_pcm16_lock(pcm) < 0)
         return -1;
-    if(pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || !snd_flycast_pcm16_pause_rate_supported(pcm->rate) ||
+    if(!snd_flycast_pcm16_pause_geometry_supported(pcm->rate, pcm->ring) ||
        pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);
@@ -77,6 +89,7 @@ static void pause_submit(const snd_ordinary_pcm16_t *pcm, const strchan_t *strea
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, cut), pcm->pause_cut % pcm->ring);
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, channels), pcm->channels);
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, pitch), pause_pitch_word(pcm->rate));
+    g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, ring), pcm->ring);
     for(unsigned i = 0; i < pcm->channels; ++i) {
         uintptr_t slot = box + offsetof(flycast_cut_mailbox_t, slot) +
                          i * sizeof(flycast_cut_slot_t);
@@ -149,7 +162,9 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
         if(pcm->channels == 2 && pcm->voice[1].cursor.frames > furthest)
             furthest = pcm->voice[1].cursor.frames;
 
-        const uint32_t lead = 2048;
+        uint32_t lead = 2048;
+        if(pcm->motion_rate > FLYCAST_CUT_CLOCK_HZ)
+            lead = (lead * pcm->motion_rate + FLYCAST_CUT_CLOCK_HZ - 1) / FLYCAST_CUT_CLOCK_HZ;
         if(furthest > UINT64_MAX - 2 * lead) {
             errno = EOVERFLOW;
             goto fail;
@@ -243,7 +258,7 @@ int snd_flycast_pcm16_stage_resume_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate
         errno = pcm->error ? pcm->error : EBUSY;
         return ordinary_pcm16_unlock(-1);
     }
-    if(pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || !snd_flycast_pcm16_pause_rate_supported(rate)) {
+    if(!snd_flycast_pcm16_pause_geometry_supported(rate, pcm->ring)) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);
     }
@@ -253,7 +268,7 @@ int snd_flycast_pcm16_stage_resume_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate
 
 int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
                             uint32_t frames) {
-    if(!samples || frames != SND_FLYCAST_PCM16_PAUSE_RING - SND_FLYCAST_PCM16_PAUSE_PREROLL) {
+    if(!samples) {
         errno = EINVAL;
         return -1;
     }
@@ -264,8 +279,15 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
         return ordinary_pcm16_unlock(-1);
     }
 
+    uint32_t rate = pcm->pause_resume_rate ? pcm->pause_resume_rate : pcm->rate;
+    uint32_t pad = snd_flycast_pcm16_resume_preroll(rate);
+    if(!pad || pad >= pcm->ring / 2 || frames != pcm->ring - pad) {
+        errno = EINVAL;
+        return ordinary_pcm16_unlock(-1);
+    }
+
     /* A receipt follows the terminal mixer decode in Flycast, including the
-       reset-position PCM reads. The previous replacement START used the
+       final substep PCM reads. The previous replacement START used the
        current bank; only the other owned bank becomes writable here. */
     strchan_t *stream = &streams[pcm->handle];
     uint32_t start[2] = { pcm->voice[0].start, pcm->voice[1].start };
@@ -277,8 +299,7 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
         goto fail;
     }
     snd_stream_config_t config = stream->config;
-    if(pcm->pause_resume_rate)
-        config.sample_rate = pcm->pause_resume_rate;
+    config.sample_rate = rate;
     uint32_t motion_rate = pause_motion_rate(config.sample_rate);
     unsigned bank = pcm->pause_bank ^ 1u;
     uint32_t base = pcm->pause_banks[bank];
@@ -288,7 +309,6 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
     pcm->pause_state = PAUSE_HELD;
     pcm->committed = 0;
     const uint32_t half = pcm->ring / 2;
-    const uint32_t pad = SND_FLYCAST_PCM16_PAUSE_PREROLL;
     const unsigned channels = pcm->channels;
     memset(pcm->staging, 0, sizeof(*samples) * channels * pad);
     memcpy(pcm->staging + channels * pad, samples, sizeof(*samples) * channels * (half - pad));

@@ -15,6 +15,10 @@ KOS_INIT_FLAGS(INIT_DEFAULT);
 #define ADX_TEST_LIVE_TRANSPOSE 0
 #endif
 
+#ifndef ADX_TEST_WIDE_HELD
+#define ADX_TEST_WIDE_HELD 0
+#endif
+
 #ifndef ADX_TEST_PAUSE_RATE
 #define ADX_TEST_PAUSE_RATE 44100
 #endif
@@ -41,12 +45,18 @@ enum { VIDEO_HZ = 0, DISPLAY_OFFSET = 0 };
 enum {
     RATE = ADX_TEST_PAUSE_RATE,
     OUTPUT_RATE = ADX_TEST_LIVE_TRANSPOSE ? 22050 : RATE,
-    RING = 16384, QUEUE = 32768,
-    FRAMES = ADX_TEST_LATE_CUT ? 393216 : 196608,
+    WIDE_ENDPOINT = ADX_TEST_WIDE_HELD == 2,
+    FAST_RATE = WIDE_ENDPOINT ? 186736 : 88200,
+    FAST_PITCH = WIDE_ENDPOINT ? 0x103c : 0x0800,
+    FAST_SEMITONES = WIDE_ENDPOINT ? 25 : 12,
+    FAST_CENTS = WIDE_ENDPOINT ? -1 : 0,
+    RING = WIDE_ENDPOINT ? 65504 : (ADX_TEST_WIDE_HELD ? 32768 : 16384),
+    QUEUE = WIDE_ENDPOINT ? 262144 : (ADX_TEST_WIDE_HELD ? 131072 : 32768),
+    FRAMES = ADX_TEST_WIDE_HELD == 1 ? 262144 : (ADX_TEST_LATE_CUT ? 393216 : 196608),
     CHANNELS = ADX_TEST_PAUSE_MONO ? 1 : 2,
     TRACK_HEADER = 32, TRACK_BLOCK = 18*CHANNELS, TRACK_FOOTER = 18,
     TRACK_SIZE = TRACK_HEADER + FRAMES / 32 * TRACK_BLOCK + TRACK_FOOTER,
-    CYCLES = 5, HOLD_MS = RING * 1000 / OUTPUT_RATE + 40
+    CYCLES = ADX_TEST_WIDE_HELD ? 2 : 5, HOLD_MS = RING * 1000 / OUTPUT_RATE + 40
 };
 
 struct title_snapshot {
@@ -276,11 +286,25 @@ static int stage_held_transpose(struct kosdec_adx_player *p, bool restore) {
     return 0;
 }
 
+static int stage_wide_pitch(struct kosdec_adx_player *p, bool restore, uint32_t old_rate) {
+    const int desired = restore ? 0 : FAST_SEMITONES;
+    const int detune = restore ? 0 : FAST_CENTS;
+    CHECK(!kosdec_adx_compat_player_set_live_transpose(p, desired, detune));
+    int32_t semitones, cents;
+    CHECK(!kosdec_adx_compat_player_get_transpose(p, &semitones, &cents) &&
+          semitones == desired && cents == detune);
+    struct kosdec_adx_player_info info;
+    CHECK(!kosdec_adx_player_get_info(p, &info) && info.output_rate == old_rate);
+    CHECK(device_pitch(restore ? FAST_PITCH : 0x7800));
+    return 0;
+}
+
 static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint64_t target,
                  int32_t request, uint32_t owned, unsigned index) {
     const bool restore = ADX_TEST_LIVE_TRANSPOSE && index == 1;
-    const uint32_t old_rate = ADX_TEST_LIVE_TRANSPOSE && index >= 2 ? RATE : OUTPUT_RATE;
-    const uint32_t new_rate = restore ? RATE : old_rate;
+    const uint32_t old_rate = ADX_TEST_WIDE_HELD && restore ? FAST_RATE :
+        (ADX_TEST_LIVE_TRANSPOSE && index >= 2 ? RATE : OUTPUT_RATE);
+    const uint32_t new_rate = restore ? RATE : (ADX_TEST_WIDE_HELD ? FAST_RATE : old_rate);
     CHECK(!await_source(p, target, &result->before));
     struct kosdec_adx_player_info before;
     CHECK(!kosdec_adx_player_get_info(p, &before) && before.channels == CHANNELS && !before.starvations);
@@ -297,7 +321,8 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
             CHECK(kosdec_adx_compat_player_set_live_transpose(p, 0, 0) < 0 && errno == EBUSY);
             int32_t semitones, cents;
             CHECK(!kosdec_adx_compat_player_get_transpose(p, &semitones, &cents) &&
-                  semitones == -12 && cents == 0);
+                  semitones == (ADX_TEST_WIDE_HELD ? FAST_SEMITONES : -12) &&
+                  cents == (ADX_TEST_WIDE_HELD ? FAST_CENTS : 0));
         }
         if(VIDEO_HZ) CHECK(!deliver_tick());
         else CHECK(!service_title());
@@ -323,7 +348,11 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
     CHECK(!snapshot(p, &result->held) && !check_frozen(&result->cut, &result->held));
     CHECK(result->held.clock.next_source_frame == result->cut.clock.next_source_frame);
     if(ADX_TEST_LIVE_TRANSPOSE && index < 2) {
-        CHECK(!stage_held_transpose(p, restore));
+        if(ADX_TEST_WIDE_HELD) {
+            CHECK(!stage_wide_pitch(p, restore, old_rate));
+        } else {
+            CHECK(!stage_held_transpose(p, restore));
+        }
         CHECK(!snapshot(p, &result->held) && !check_frozen(&result->cut, &result->held));
         CHECK(result->held.clock.output_frames == result->cut.clock.output_frames &&
               result->held.clock.next_source_frame == result->cut.clock.next_source_frame);
@@ -353,7 +382,9 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
     if(ADX_TEST_LIVE_TRANSPOSE) {
         struct kosdec_adx_player_info after;
         CHECK(!kosdec_adx_player_get_info(p, &after) && after.output_rate == new_rate);
-        CHECK(device_pitch(new_rate == RATE ? 0 : 0x7800));
+        CHECK(device_pitch(new_rate == FAST_RATE ? FAST_PITCH : (new_rate == RATE ? 0 : 0x7800)));
+        if(ADX_TEST_WIDE_HELD && !restore)
+            printf("ADX-FIVE held pitch applied at checked %" PRIu32 " Hz START\n", new_rate);
         if(restore) puts("ADX-FIVE held pitch staged at cut and applied at START");
     }
     if(VIDEO_HZ) {
@@ -400,26 +431,31 @@ static int run(void) {
     if(ADX_TEST_LIVE_TRANSPOSE) CHECK(!live_transpose(&players[0]));
     uint32_t owned = snd_mem_available();
     CHECK(initial - owned == 4u * CHANNELS * RING);
-    const int32_t requests[CYCLES] = {0, 128, 256, 0, 128};
+    const int32_t requests[] = {ADX_TEST_WIDE_HELD ? 128 : 0, 128, 256, 0, 128};
     const struct snd_ordinary_pcm16 *lease = players[0].ordinary_pcm;
     CHECK(lease);
     uint64_t target = RING / 2 + 2048;
-    const uint64_t late_targets[CYCLES] = {
-        2*RING+9000, 3*RING-1900, 3*RING+1200, 4*RING-1900, 4*RING+9500
+    const uint64_t late_targets[] = {
+        (WIDE_ENDPOINT ? RING : 2*RING)+9000, 3*RING-1900, 3*RING+1200,
+        4*RING-1900, 4*RING+9500
     };
     for(unsigned i = 0; i < CYCLES; ++i) {
         uint64_t base = i ? cycles[i-1].cut.clock.output_frames : 0;
         if(ADX_TEST_LATE_CUT) {
             uint64_t elapsed = i ? cycles[i-1].cut.clock.source_frames : 0;
-            target = elapsed + late_targets[i] - (i ? SND_FLYCAST_PCM16_PAUSE_PREROLL : 0);
+            uint32_t preroll = i ? SND_FLYCAST_PCM16_PAUSE_PREROLL : 0;
+            if(WIDE_ENDPOINT && i == 1) preroll = snd_flycast_pcm16_resume_preroll(FAST_RATE);
+            target = elapsed + late_targets[i] - preroll;
         }
         lose_cut_once = i == 1;
         CHECK(!cycle(&players[0], &cycles[i], target, requests[i], owned, i));
         if(ADX_TEST_LATE_CUT) {
             uint64_t before = cycles[i].before.clock.output_frames - base;
             uint64_t cut = cycles[i].cut.clock.output_frames - base;
-            CHECK(before >= late_targets[i] && cut > before && cut > 2*RING);
-            CHECK(cut/RING == before/RING + (i == 1 || i == 3));
+            CHECK(before >= late_targets[i] && cut > before &&
+                  cut > ((WIDE_ENDPOINT && i == 0) ? RING : 2*RING));
+            if(!ADX_TEST_WIDE_HELD)
+                CHECK(cut/RING == before/RING + (i == 1 || i == 3));
         }
         struct kosdec_adx_player_info state;
         CHECK(players[0].ordinary_pcm == lease &&
@@ -489,7 +525,10 @@ static int run(void) {
            initial - owned, owned - fresh_owned);
     CHECK(cut_lost && retry_cut == lost_cut && private_pauses == CYCLES + 1);
     if(VIDEO_HZ) printf("ADX-FIVE timing hz=%u delivered=%" PRIu32 "\n", (unsigned)VIDEO_HZ, video_events);
-    puts("ADX-FIVE PASS five pauses, real PCM survivors, checked stop and fresh title");
+    if(ADX_TEST_WIDE_HELD)
+        puts("ADX-FIVE PASS wide held pitch and checked stop");
+    else
+        puts("ADX-FIVE PASS five pauses, real PCM survivors, checked stop and fresh title");
     return 0;
 }
 

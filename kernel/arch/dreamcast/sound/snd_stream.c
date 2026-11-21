@@ -2439,7 +2439,7 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
         return ordinary_pcm16_unlock(-1);
     }
 #ifdef AICA_FLYCAST_PCM16_PAUSE
-    if(pause_owner == pcm && !snd_flycast_pcm16_pause_rate_supported(rate)) {
+    if(pause_owner == pcm && !snd_flycast_pcm16_pause_geometry_supported(rate, pcm->ring)) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);
     }

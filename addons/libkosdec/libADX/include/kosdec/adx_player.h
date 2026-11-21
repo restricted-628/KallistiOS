@@ -377,10 +377,11 @@ int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
    Flycast active-pause opt-in. */
 int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
 /* Experimental Flycast-only pause profile. Enable a READY compatibility
-   title with one finite direct mono or stereo ADX source at 22,050 to
-   44,100 Hz and a 16,384-frame sound ring per channel. Startup output
-   Hz must match the source. Enable checked ordinary output first.
-   Requires matching build-gated Audio and libADX. */
+   title with one finite direct mono or stereo ADX source. Select the
+   16,384-, 32,768- or 65,504-frame ring before starting. The first ring
+   admits 22,050–44,100 Hz, and the others follow checked ordinary rate
+   admission. Startup output Hz must match the source. Enable checked
+   ordinary output first. Requires matching build-gated Audio and libADX. */
 int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *);
 /* With pause clear, return zero discarded without servicing the title.
    With one bound, paused title preparing its first output, a nonpositive
@@ -551,9 +552,9 @@ int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *);
    posting preserves the admitted rate. Service and explicitly retry.
    An eligible player's requested cache updates even when conversion or
    submission fails. get_info reports the last admitted rate, and a hard
-   backend failure requires checked STOP. The Flycast pause profile admits
-   22,050 to 44,100 Hz during playback and at a confirmed cut. A pending
-   cut returns EBUSY. A held request stages the pitch for the next
+   backend failure requires checked STOP. The Flycast pause profile uses
+   the rate bounds for the selected ring. A pending cut returns EBUSY.
+   A held request stages the pitch for the next
    checked START, which publishes the new admitted rate on success.
    Retained playback is excluded. */
 int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *,

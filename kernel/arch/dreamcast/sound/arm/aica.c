@@ -11,6 +11,7 @@
 
 #include "aica_cmd_iface.h"
 #include "aica.h"
+#include "aica_pitch.h"
 
 extern volatile aica_channel_t *chans;
 extern void arm_fiq_enable(void);
@@ -95,20 +96,6 @@ static inline int calc_aica_pan(int x) {
     else {
         return (x - 0x80) >> 3;
     }
-}
-
-static uint32 calc_aica_pitch(uint32 freq) {
-    uint32 freq_lo;
-    uint32 freq_base = 5644800;
-    int freq_hi = 7;
-
-    while(freq < freq_base && freq_hi > -8) {
-        freq_base >>= 1;
-        --freq_hi;
-    }
-
-    freq_lo = (freq << 10) / freq_base;
-    return (((uint32)freq_hi & 0x1f) << 11) | (freq_lo & 1023);
 }
 
 static void write_envelope(int ch, const aica_channel_config_t *config) {

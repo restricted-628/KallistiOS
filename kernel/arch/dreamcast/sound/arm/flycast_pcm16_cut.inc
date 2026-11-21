@@ -9,13 +9,12 @@ _Static_assert(FLYCAST_CUT_ADDR >= AICA_MEM_FINITE_STOPS_END &&
 static volatile flycast_cut_mailbox_t *const flycast_cut =
     (volatile flycast_cut_mailbox_t *)FLYCAST_CUT_ADDR;
 static flycast_cut_mailbox_t cut;
-static uint32_t cut_last, cut_phase, cut_stopped, cut_ended;
+static uint32_t cut_last, cut_phase, cut_stopped, cut_ended, cut_terminal_limit;
 enum { CUT_IDLE, CUT_QUOTED, CUT_ARMED };
 
 static int flycast_cut_identity(void) {
     if(!cut.session || cut.session != observer.header->active_session ||
        cut.request != cut.slot[0].start || (cut.channels != 1 && cut.channels != 2) ||
-       (cut.pitch && (cut.pitch < FLYCAST_CUT_PITCH_MIN || cut.pitch > FLYCAST_CUT_PITCH_MAX)) ||
        (cut.channels == 2 && (cut.slot[0].channel == cut.slot[1].channel ||
                               cut.slot[0].address == cut.slot[1].address)))
         return 0;
@@ -46,7 +45,7 @@ static void flycast_cut_done(uint32_t result) {
 
 static int flycast_cut_looping(unsigned ch) {
     return (CHNREG32(ch, 0) & 0x200u) &&
-           (CHNREG32(ch, 0x0c) & 0xffffu) == FLYCAST_CUT_RING;
+           (CHNREG32(ch, 0x0c) & 0xffffu) == cut.ring;
 }
 
 static int flycast_cut_has_lead(unsigned i) {
@@ -60,7 +59,7 @@ static int flycast_cut_has_lead(unsigned i) {
    looping observations do not consume LP, so any subsequent loop before
    authorization invalidates this quote even if CA returns to the same value. */
 static int flycast_cut_quote(void) {
-    if(!flycast_cut_identity() || cut.cut <= FLYCAST_CUT_LEAD || cut.cut >= FLYCAST_CUT_RING)
+    if(!flycast_cut_identity() || cut.cut <= FLYCAST_CUT_LEAD || cut.cut >= cut.ring)
         return 0;
     for(unsigned i = 0; i < cut.channels; ++i) {
         unsigned ch = cut.slot[i].channel;
@@ -98,6 +97,17 @@ static int flycast_cut_arm(void) {
     return 1;
 }
 
+static int flycast_cut_geometry(uint32_t step) {
+    if(cut.pitch & ~FLYCAST_CUT_PITCH_MASK)
+        return 0;
+    if(cut.ring == FLYCAST_CUT_LEGACY_RING)
+        return step >= 512u && step <= FLYCAST_CUT_PHASE_ONE;
+    if(cut.ring == FLYCAST_CUT_WIDE_RING)
+        return step >= FLYCAST_CUT_WIDE_MIN_STEP && step <= 2048u;
+    return cut.ring == FLYCAST_CUT_MAX_RING &&
+           step >= FLYCAST_CUT_WIDE_MIN_STEP && step <= FLYCAST_CUT_MAX_STEP;
+}
+
 static void flycast_cut_service(void) {
     if(cut_phase == CUT_QUOTED) {
         if(flycast_cut->authorize == cut_last) {
@@ -122,11 +132,14 @@ static void flycast_cut_service(void) {
                 flycast_cut_done(FLYCAST_CUT_FAILED);
                 return;
             }
-            uint32_t before = aica_get_pos(ch);
+            aica_get_pos(ch);
             if(aica_get_loop_end())
                 cut_ended |= 1u << i;
             if(!aica_is_playing(ch) && (cut_ended & (1u << i))) {
-                if(before && aica_get_pos(ch)) {
+                /* A wide Flycast step can advance from CA=0 through its
+                   remaining substeps after disable, within this mixer tick. */
+                uint32_t terminal = aica_get_pos(ch);
+                if(terminal >= cut_terminal_limit || (uint32_t)aica_get_pos(ch) != terminal) {
                     flycast_cut_done(FLYCAST_CUT_FAILED);
                     return;
                 }
@@ -146,7 +159,9 @@ static void flycast_cut_service(void) {
         return;
     cut_last = request;
     cut_ended = cut_stopped = 0;
-    if(flycast_cut_quote())
+    uint32_t step = flycast_cut_phase_step(cut.pitch);
+    cut_terminal_limit = (step + FLYCAST_CUT_PHASE_ONE - 1) >> 10;
+    if(flycast_cut_geometry(step) && flycast_cut_quote())
         cut_phase = CUT_QUOTED;
     else
         flycast_cut_done(FLYCAST_CUT_FAILED);

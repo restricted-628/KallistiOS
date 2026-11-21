@@ -682,19 +682,21 @@ decoder will keep up.
 
 Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against
 the matching build-gated Audio backend. Bind a READY title with one finite,
-direct mono or stereo ADX source at 22,050 to 44,100 Hz. The startup output
-rate must match the source rate. Enable
-its checked ordinary output and then
-`kosdec_adx_compat_player_enable_flycast_pause` before start. This profile
-uses a 16,384-frame/channel sound ring. It requires an owner and a
-producer that can supply a dense continuation. For compatibility NTSC or
+direct mono or stereo ADX source. The startup output rate must match the
+source rate and qualify for ordinary PCM16 startup. Enable checked ordinary
+output and then `kosdec_adx_compat_player_enable_flycast_pause` before start.
+The original 16,384-frame/channel ring admits 22,050–44,100 Hz. Select
+32,768 frames per channel before starting when playback must use up to
+88,200 Hz. The 65,504-frame geometry uses the wider ordinary rate
+admission rules. Each title requires an owner and a producer that can
+supply a dense continuation. For compatibility NTSC or
 PAL time, enable the collection's VBlank clock before binding and then
 select the desired time mode. While paused, VBlank delivery does not advance
 the count. Resume re-anchors to elapsed source time and the current tick. Rebuild with
 matching headers.
 
 During PLAYING, the compatibility live transpose call accepts an output
-rate within the same range. Public sample time still uses the nominal source
+rate supported by the selected bank geometry. Public sample time still uses the nominal source
 rate. If the update returns `EAGAIN` before posting, service the player and
 explicitly retry. A pending cut rejects a new pitch request. After the cut
 is confirmed, a request stages the pitch for the next START. Time, source
@@ -708,16 +710,19 @@ across the ring boundary while the live cursor and committed window
 remain qualified. A pause timeout can leave a selected cut pending, even before
 the channels are armed: retry pause or complete checked stop. In contrast,
 `EAGAIN` before cut selection permits ordinary service and a
-new pause attempt. Resume uses the same reservation and inserts 64 silent
-frames in the PCM ring before the first surviving source frame. At a
-fractional device pitch, the mixer interpolates across that boundary. A finished source
+new pause attempt. Resume uses the same reservation and inserts at least
+64 silent frames in the PCM ring before the first surviving source frame.
+Above unity pitch, Audio aligns the silence length so the first survivor
+is sampled at an integer phase. A finished source
 may resume with a short real tail followed by silence. Use the logical
 PLAYEND opt-in before start to report completion after the tail and checked
 stop. A live producer shortage returns EAGAIN with the previous cut intact.
 Preroll, padding and discarded frames do not accrue elapsed source time. A hard resume failure
 requires checked stop. Retain the played reservation after stop. One pause-enabled title owns
-the two banks for the sound runtime (64 KiB total for mono, 128 KiB for
-stereo). A subsequent fresh ordinary title uses its own allocation.
+the two banks for the sound runtime. For the 16,384-frame ring this is
+64 KiB total for mono and 128 KiB for stereo. The 32,768-frame ring
+doubles that reservation. A subsequent fresh ordinary title uses its own
+allocation.
 
 The synthetic regression builds with `flycast-pause-test-elf`. Run
 `tests/generate_flycast_pause.py` with Python and each of the names `proof`
@@ -739,7 +744,10 @@ count, for example `proof 393216 1 32000` and `fresh 393216 1 32000`.
 The `flycast-pause-live-transpose-test-elf` target uses 44,100 Hz tracks
 of the same lengths. It requests −12 semitones before the first pause,
 then requests unity during a later hold. It checks the admitted pitch
-through each resume and terminal source drain.
+through each resume and terminal source drain. The
+`flycast-pause-wide-held-test-elf` target uses 262144-frame stereo or mono
+tracks at 44,100 Hz. It stages +12 while held, checks 88,200 Hz playback
+across ring wraps, cuts at the higher pitch, and resumes at unity.
 
 ### Retained output clock
 

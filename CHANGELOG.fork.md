@@ -8,6 +8,14 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- A finite Flycast ADX title can now request +12 semitones while paused
+  and resume at 88,200 Hz on the same allocation. Select a 32,768-frame
+  ring per voice before starting. Mono and stereo passed in both BIOS
+  CPU modes: after discarding 128 frames they resumed on the expected
+  source frame, crossed two high-rate wraps, paused again and returned
+  to unity through logical PLAYEND. The 16,384-frame ring retains its
+  previous limits. The larger-ring high endpoint is a separate test.
+
 - A mono or stereo Flycast title paused at a confirmed source frame can
   now request a different pitch for resume (22,050–44,100 Hz). Staging
   the request does not move the clock or change a stopped voice. Resume
