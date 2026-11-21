@@ -1363,13 +1363,101 @@ static int stream_refresh_playback(strchan_t *stream,
     return 0;
 }
 
+/* Plan a contiguous refill in per-channel bytes. stream_refresh_playback()
+   has already checked the cursor against the active ring. */
+static size_t stream_refill_size(snd_stream_hnd_t hnd) {
+    const strchan_t *stream = &streams[hnd];
+    size_t play_pos = stream->play_position;
+    const size_t write_pos = stream->last_write_pos;
+    const size_t half = stream->active_buffer_size / 2;
+    size_t bytes;
+
+    if(samples_to_bytes(hnd, play_pos) & 31)
+        play_pos &= ~(bytes_to_samples(hnd, 32) - 1);
+
+    if(write_pos > play_pos) {
+        /* End this refill at the ring boundary. */
+        size_t end = bytes_to_samples(hnd, stream->active_buffer_size);
+        bytes = samples_to_bytes(hnd, end - write_pos);
+    }
+    else {
+        if(write_pos == play_pos)
+            return 0;
+
+        /* Keep one sample ahead of the producer and retain the existing
+           storage-sector quantum and half-ring request threshold. */
+        size_t count = play_pos - write_pos - 1;
+        count &= ~(bytes_to_samples(hnd, 2048 / stream->channels) - 1);
+        bytes = samples_to_bytes(hnd, count);
+        if(bytes < half)
+            return 0;
+    }
+    return bytes > half ? half : bytes;
+}
+
+int snd_stream_can_refill(snd_stream_hnd_t hnd, size_t bytes_per_channel,
+                          bool *ready) {
+    if(!bytes_per_channel || !ready) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+
+    int result = -1;
+    if(checked_handle(hnd) < 0)
+        goto out;
+
+    strchan_t *stream = &streams[hnd];
+    if(stream->service_owner) {
+        errno = EBUSY;
+        goto out;
+    }
+    if(stream->callback_active) {
+        errno = EDEADLK;
+        goto out;
+    }
+    /* The DMA completion IRQ changes these fields together. */
+    irq_t old_irq = irq_disable();
+    snd_stream_state_t state = stream->state;
+    int last_error = stream->last_error;
+    bool dma_pending = stream->dma_pending;
+    irq_restore(old_irq);
+    if(state == SND_STREAM_STATE_ERROR) {
+        errno = last_error;
+        goto out;
+    }
+
+    bool allowed = false;
+    if((state == SND_STREAM_STATE_PLAYING ||
+        state == SND_STREAM_STATE_UNDERRUN) &&
+       !stream->queue_gate_held && !dma_pending &&
+       (stream->get_data || stream->req_data) &&
+       bytes_per_channel <= stream->active_buffer_size / 2) {
+        bool playing[2];
+        if(stream_refresh_playback(stream, playing) < 0)
+            goto out;
+        allowed = playing[0] && (stream->channels == 1 || playing[1]) &&
+                  bytes_per_channel <= stream_refill_size(hnd);
+    }
+    *ready = allowed;
+    result = 0;
+
+out:
+    mutex_unlock(&stream_state_mutex);
+    return result;
+}
+
 static int snd_stream_poll_internal(snd_stream_hnd_t hnd, bool legacy,
                                     const void *service_owner,
                                     bool *underrun) {
     uint32_t write_pos;
-    uint32_t current_play_pos;
-    int needed_samples = 0;
-    size_t needed_bytes = 0;
+    size_t needed_samples;
+    size_t needed_bytes;
     size_t source_bytes = 0;
     bool playing[2];
     int fill_result;
@@ -1420,49 +1508,12 @@ static int snd_stream_poll_internal(snd_stream_hnd_t hnd, bool legacy,
     /* Get channels position */
     if(stream_refresh_playback(stream, playing) < 0)
         goto fail;
-    current_play_pos = stream->play_position;
     stream->polls++;
-
-    needed_bytes = samples_to_bytes(hnd, current_play_pos);
-
-    if(needed_bytes >= stream->active_buffer_size) {
-        dbglog(DBG_ERROR, "snd_stream_poll: chan0(%d).pos = %lu\n",
-               stream->ch[0], (unsigned long)current_play_pos);
-        errno = EPROTO;
-        goto fail;
-    }
-
-    if(needed_bytes & 31) {
-        /* Aligning for DMA. */
-        current_play_pos &= ~(bytes_to_samples(hnd, 32) - 1);
-    }
-
-    /* Count just till the end of the buffer, so we don't have to
-       handle buffer wraps */
-    if(stream->last_write_pos <= current_play_pos) {
-        needed_samples = current_play_pos - stream->last_write_pos - 1;
-        /* Round it to max sector size of supported storage devices */
-        needed_samples &= ~(bytes_to_samples(hnd, 2048 / stream->channels) - 1);
-        needed_bytes = samples_to_bytes(hnd, needed_samples);
-        /* Reduce data requests */
-        if(needed_bytes < (stream->active_buffer_size / 2)) {
-            result = 0;
-            goto out;
-        }
-    }
-    else {
-        needed_samples = bytes_to_samples(hnd, stream->active_buffer_size);
-        needed_samples -= stream->last_write_pos;
-        needed_bytes = samples_to_bytes(hnd, needed_samples);
-    }
-
-    if(needed_samples <= 0) {
+    needed_bytes = stream_refill_size(hnd);
+    if(!needed_bytes) {
         result = 0;
         goto out;
     }
-
-    if(needed_bytes > stream->active_buffer_size / 2)
-        needed_bytes = stream->active_buffer_size / 2;
 
     write_pos = samples_to_bytes(hnd, stream->last_write_pos);
     fill_result = snd_stream_fill(hnd, write_pos, needed_bytes,

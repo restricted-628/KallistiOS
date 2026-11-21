@@ -543,6 +543,27 @@ int snd_stream_poll(snd_stream_hnd_t hnd);
 */
 int snd_stream_poll_ex(snd_stream_hnd_t hnd);
 
+/** \brief Check whether an ordinary stream is ready for a contiguous refill.
+
+    Reports whether a poll could request at least the given number of bytes
+    per channel at the observed play position. Stereo refills use the same
+    span in both channels. The poll still chooses the callback request size.
+
+    Before start, while queued, after stop, and while the stream's DMA is
+    pending, the result is false. This snapshot does not reserve a region
+    or invoke the data callback. Callers must still poll regularly.
+
+    \param hnd                 Allocated application-polled stream handle.
+    \param bytes_per_channel   Nonzero requested size in bytes per channel.
+    \param ready               Receives the result on success.
+    \retval 0                  On successful observation.
+    \retval -1                 On error with errno set. Service-owned streams
+                               return EBUSY.
+    \sa snd_stream_poll_ex
+*/
+int snd_stream_can_refill(snd_stream_hnd_t hnd, size_t bytes_per_channel,
+                          bool *ready);
+
 /** \brief Update selected live controls on an active stream.
 
     The field mask uses SND_CHANNEL_UPDATE_* values. Frequency is taken from
