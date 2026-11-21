@@ -669,9 +669,16 @@ int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *p,
     if(!p->compat_service) return unsupported();
     if(p->compat_service->servicing) return busy();
     if(p->compat_paused) {
-        if(requested > 0 || !p->source_bound || p->info.state != KOSDEC_ADX_PLAYER_PREFILL ||
+        if(!p->source_bound || p->info.state != KOSDEC_ADX_PLAYER_PREFILL ||
            has_output(p) || p->info.copied_frames || !compat_single_title(p))
             return unsupported();
+        if(requested > 0) {
+            const struct kosdec_adx_stream *stream = p->producer.pipe.stream;
+            /* The stock renderer rounds a PCM16 request to 32 bytes per channel.
+               Before the first output, a smaller request leaves the decoded PCM intact. */
+            if(requested >= 16 || !p->compat_prefill_frames || !stream || stream->linked)
+                return unsupported();
+        }
         struct kosdec_adx_compat_result result;
         if(kosdec_adx_compat_exec_server(p->compat_service,&result) < 0)
             return -1;

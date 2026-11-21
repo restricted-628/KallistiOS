@@ -363,9 +363,10 @@ int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
 /* With pause clear, return zero discarded without servicing the title.
    With one bound, paused title preparing its first output, a nonpositive
    request services the collection once and re-anchors time at zero elapsed
-   frames without consuming PCM or delivering VBlank. Returns the service
-   error on failure. Other paused cases return ENOTSUP. Failure leaves
-   discarded unchanged. */
+   frames. A positive request of 1..15 frames does the same after preparation
+   begins for a direct nonlinked ADX stream. Neither case consumes PCM or
+   delivers VBlank. Other paused requests return ENOTSUP. A service error or
+   rejected request leaves discarded unchanged. */
 int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *,
     int32_t requested, int32_t *discarded);
 /* Owner-thread snapshot, updated by poll or compatibility title dispatch.

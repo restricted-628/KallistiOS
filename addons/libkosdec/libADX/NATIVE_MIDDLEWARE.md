@@ -158,8 +158,12 @@ pause lets the next title visit start output once the normal PCM priming
 condition is met. Checked STOP preserves the pause request. Active-device
 pause is still an Audio dependency. With the pause request clear,
 `kosdec_adx_compat_player_discard_samples` returns zero without service
-or clock changes. A paused discard returns ENOTSUP before touching either
-queue or any clock state.
+or clock changes. A single paused title preparing its first output can
+submit zero or a negative count. For a direct ADX stream in preparation,
+positive requests of 1 to 15 frames also remove zero frames. These calls
+service the collection once and then re-anchor time at zero elapsed
+frames. They keep all decoded PCM and deliver no VBlank. Other paused
+requests return ENOTSUP.
 
 The compatibility time query returns the signed display offset before
 start and after checked STOP. The selected denominator is 1 for source,

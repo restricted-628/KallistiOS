@@ -277,11 +277,14 @@ static void check_prepared(struct fixture *f, bool current, bool latched) {
 struct compat_reload_probe {
     unsigned visits;
     bool fail;
+    const struct kosdec_adx_player *player;
+    int32_t observed_anchor;
 };
 
 static int compat_count_reload(void *context) {
     struct compat_reload_probe *probe = context;
     ++probe->visits;
+    probe->observed_anchor = probe->player->compat_vsync_anchor;
     if(!probe->fail) return 0;
     errno = EIO;
     return -1;
@@ -292,7 +295,7 @@ static void compat_preoutput_pause(bool phased) {
     init(&f,2,false);
     f.read_limit=512;
     uint64_t now=0;
-    struct compat_reload_probe probe = {0};
+    struct compat_reload_probe probe = {.player=&f.player};
     struct kosdec_adx_compat_config config={
         .clock_us=compat_clock,.clock_context=&now,
         .phases[KOSDEC_ADX_COMPAT_RELOAD]={.service=compat_count_reload,.context=&probe}
@@ -339,7 +342,7 @@ static void compat_preoutput_pause(bool phased) {
     uint32_t tick=service.vsync_count;
     unsigned visits=probe.visits;
     removed=-999;
-    CHECK(kosdec_adx_compat_player_discard_samples(&f.player,5,&removed)<0 &&
+    CHECK(kosdec_adx_compat_player_discard_samples(&f.player,16,&removed)<0 &&
           errno==ENOTSUP && removed==-999 && service.vsync_count==tick);
     CHECK(probe.visits==visits);
     CHECK(!kosdec_adx_compat_bind(&service,1,&titles[0].ops,&f.player));
@@ -357,6 +360,23 @@ static void compat_preoutput_pause(bool phased) {
     CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,0,&removed) &&
           !removed && probe.visits==++visits);
     CHECK(!f.player.compat_vsync_anchor && f.player.compat_vsync_anchor_tick==tick);
+    f.player.compat_vsync_anchor=456;
+    probe.fail=true;
+    removed=-999;
+    CHECK(kosdec_adx_compat_player_discard_samples(&f.player,15,&removed)<0 &&
+          errno==EIO && removed==-999 && probe.visits==++visits);
+    CHECK(probe.observed_anchor==456 && f.player.compat_vsync_anchor==456);
+    probe.fail=false;
+    const int32_t subblock[]={1,15};
+    for(size_t i=0;i<sizeof(subblock)/sizeof(subblock[0]);++i) {
+        f.player.compat_vsync_anchor=456;
+        f.player.compat_vsync_anchor_tick=tick-1;
+        removed=-999;
+        CHECK(!kosdec_adx_compat_player_discard_samples(&f.player,subblock[i],&removed) &&
+              !removed && probe.visits==++visits);
+        CHECK(probe.observed_anchor==456 && !f.player.compat_vsync_anchor &&
+              service.vsync_count==tick && f.player.compat_vsync_anchor_tick==tick);
+    }
     CHECK(!kosdec_adx_compat_exec_vsync(&service,&result));
     ++tick;
     ++visits;
