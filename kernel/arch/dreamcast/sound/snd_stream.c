@@ -105,6 +105,7 @@ typedef struct strchan {
 
     /* Checked controls and lifecycle observation. */
     snd_stream_config_t config;
+    snd_stream_config_t base_config;
     snd_stream_state_t state;
     int last_error;
     uint16_t last_play_pos;
@@ -798,6 +799,7 @@ int snd_stream_start_ex(snd_stream_hnd_t hnd,
         stream->state = had_underrun ? SND_STREAM_STATE_UNDERRUN :
                                       SND_STREAM_STATE_PLAYING;
     }
+    stream->base_config = stream->config;
     if(had_underrun) {
         stream->last_error = ENODATA;
     }
@@ -1533,13 +1535,13 @@ int _snd_stream_service_poll(snd_stream_hnd_t hnd, const void *owner,
 
 static void stream_copy_update_fields(snd_stream_config_t *destination,
                                       const snd_stream_config_t *source,
-                                      uint32_t fields) {
+                                      uint32_t fields, int first, int end) {
     int channel;
 
     if(fields & SND_CHANNEL_UPDATE_FREQUENCY)
         destination->sample_rate = source->sample_rate;
 
-    for(channel = 0; channel < destination->channels; ++channel) {
+    for(channel = first; channel < end; ++channel) {
         if(fields & SND_CHANNEL_UPDATE_VOLUME)
             destination->channel[channel].volume =
                 source->channel[channel].volume;
@@ -1559,13 +1561,12 @@ static void stream_copy_update_fields(snd_stream_config_t *destination,
     }
 }
 
-int snd_stream_update(snd_stream_hnd_t hnd,
-                      const snd_stream_config_t *config, uint32_t fields) {
+static int stream_update_channels(snd_stream_hnd_t hnd,
+    const snd_stream_config_t *config, uint32_t fields, int slot) {
     snd_channel_config_t channel_config;
     strchan_t *stream;
     bool acquired_gate = false;
     int saved_errno = 0;
-    int channel;
     int result = -1;
 
     if(mutex_lock(&stream_state_mutex) < 0)
@@ -1579,6 +1580,7 @@ int snd_stream_update(snd_stream_hnd_t hnd,
         goto out;
     }
     if(!fields || (fields & ~SND_CHANNEL_UPDATE_ALL) || !stream->channels ||
+       slot < SND_STREAM_ALL_CHANNELS || slot >= stream->channels ||
        config->format != stream->config.format ||
        config->channels != stream->config.channels ||
        stream->state == SND_STREAM_STATE_ALLOCATED ||
@@ -1593,7 +1595,9 @@ int snd_stream_update(snd_stream_hnd_t hnd,
         acquired_gate = true;
     }
 
-    for(channel = 0; channel < stream->channels; ++channel) {
+    int first = slot < 0 ? 0 : slot;
+    int end = slot < 0 ? stream->channels : slot + 1;
+    for(int channel = first; channel < end; ++channel) {
         stream_channel_config_pack(
             &channel_config, config, (unsigned int)channel,
             stream->spu_ram_sch[channel],
@@ -1614,7 +1618,7 @@ int snd_stream_update(snd_stream_hnd_t hnd,
         goto fail;
     }
 
-    stream_copy_update_fields(&stream->config, config, fields);
+    stream_copy_update_fields(&stream->config, config, fields, first, end);
     stream->frequency = (int)stream->config.sample_rate;
     stream->last_error = 0;
     result = 0;
@@ -1625,6 +1629,99 @@ fail:
 out:
     mutex_unlock(&stream_state_mutex);
     return result;
+}
+
+int snd_stream_update(snd_stream_hnd_t hnd,
+                      const snd_stream_config_t *config, uint32_t fields) {
+    return stream_update_channels(hnd, config, fields, SND_STREAM_ALL_CHANNELS);
+}
+
+static bool stream_resettable(const strchan_t *stream) {
+    return stream->state == SND_STREAM_STATE_QUEUED ||
+           stream->state == SND_STREAM_STATE_PLAYING ||
+           stream->state == SND_STREAM_STATE_UNDERRUN;
+}
+
+int snd_stream_reset_params(snd_stream_hnd_t hnd, int slot) {
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+
+    int result = -1;
+    if(checked_handle(hnd) == 0) {
+        strchan_t *stream = &streams[hnd];
+        if(stream->service_owner || stream->queue_gate_held)
+            errno = EBUSY;
+        else if(!stream_resettable(stream))
+            errno = EINVAL;
+        else {
+            uint32_t fields = SND_CHANNEL_UPDATE_ALL;
+            if(slot >= 0)
+                fields &= ~SND_CHANNEL_UPDATE_FREQUENCY;
+            result = stream_update_channels(hnd, &stream->base_config, fields, slot);
+        }
+    }
+    int error = errno;
+    mutex_unlock(&stream_state_mutex);
+    errno = error;
+    return result;
+}
+
+static bool stream_group_member(const strchan_t *stream, bool reset) {
+    return stream->initted && !stream->service_owner &&
+        (reset ? stream_resettable(stream) : stream->channels &&
+         stream->state != SND_STREAM_STATE_STOPPED);
+}
+
+static int stream_control_all(bool reset, uint32_t timeout_ms) {
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(mutex_lock(&stream_state_mutex) < 0)
+        return -1;
+    int error = 0;
+    for(int i = 0; i < SND_STREAM_MAX; ++i) {
+        if(streams[i].queue_gate_held) {
+            error = EBUSY;
+            goto done;
+        }
+        if(streams[i].callback_active) {
+            error = EDEADLK;
+            goto done;
+        }
+    }
+
+    for(int i = 0; i < SND_STREAM_MAX; ++i) {
+        if(!stream_group_member(&streams[i], reset))
+            continue;
+        int result = reset ? snd_stream_reset_params(i, SND_STREAM_ALL_CHANNELS) :
+                             snd_stream_stop_ex(i, timeout_ms);
+        if(result < 0 && !error)
+            error = errno;
+    }
+done:
+    mutex_unlock(&stream_state_mutex);
+    if(error) {
+        errno = error;
+        return -1;
+    }
+    return 0;
+}
+
+int snd_stream_reset_all_params(void) {
+    return stream_control_all(true, 0);
+}
+
+int snd_stream_stop_all_ex(uint32_t timeout_ms) {
+    if(!timeout_ms) {
+        errno = EINVAL;
+        return -1;
+    }
+    return stream_control_all(false, timeout_ms);
 }
 
 int snd_stream_get_status(snd_stream_hnd_t hnd,

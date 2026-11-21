@@ -485,6 +485,17 @@ void snd_stream_stop(snd_stream_hnd_t hnd);
 */
 int snd_stream_stop_ex(snd_stream_hnd_t hnd, uint32_t timeout_ms);
 
+/** \brief Stop all application-polled streams and keep their handles.
+
+    This visits configured streams, including queued starts. Streams owned
+    by a polling service or retained PCM owner are managed by their owner.
+    The checked stop timeout applies to each stream. A stop failure returns
+    the first errno after visiting the remaining eligible streams.
+    Call in thread context.
+*/
+int snd_stream_stop_all_ex(uint32_t timeout_ms);
+
+
 /** \brief  Poll a stream.
 
     This function polls the specified stream to load more data if necessary. If
@@ -530,6 +541,26 @@ int snd_stream_poll_ex(snd_stream_hnd_t hnd);
 */
 int snd_stream_update(snd_stream_hnd_t hnd,
                       const snd_stream_config_t *config, uint32_t fields);
+
+/** \brief Select all physical channels when resetting stream parameters. */
+#define SND_STREAM_ALL_CHANNELS (-1)
+
+/** \brief Restore startup settings for an application-polled stream.
+
+    Select a physical channel index to restore its per-channel controls.
+    SND_STREAM_ALL_CHANNELS also restores the shared sample rate.
+    The stream must be queued or playing. This uses checked update admission
+    and preserves the stream's buffers and progress. Call in thread context.
+*/
+int snd_stream_reset_params(snd_stream_hnd_t hnd, int slot);
+
+/** \brief Restore startup settings for all queued or playing application-polled streams.
+
+    Each stream is restored independently. Returns the first errno after
+    visiting the remaining eligible streams. Call in thread context.
+*/
+int snd_stream_reset_all_params(void);
+
 
 /** \brief Read one coherent stream lifecycle and progress snapshot.
 

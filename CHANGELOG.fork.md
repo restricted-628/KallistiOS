@@ -8,6 +8,10 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — AICA mixer, command queue, DSP and memory-backed PCM
 
+- Application-polled streams can restore one channel's startup controls
+  without changing the shared rate, restore all streams' startup settings,
+  or stop all eligible streams without freeing their handles. Service-owned
+  and retained streams remain under their owners' control.
 - Read back CD-audio volume and pan and the master output mode. The host
   sound command mutex exposes an advisory lock query, not an ARM busy flag.
 - DSP callers can install identified program and output presets and query

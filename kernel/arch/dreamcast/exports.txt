@@ -306,6 +306,9 @@ snd_stream_start_ex
 snd_stream_stop_ex
 snd_stream_poll_ex
 snd_stream_update
+snd_stream_reset_params
+snd_stream_reset_all_params
+snd_stream_stop_all_ex
 snd_stream_get_status
 snd_stream_destroy_ex
 snd_stream_service_create
