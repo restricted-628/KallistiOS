@@ -301,6 +301,11 @@ int snd_port_playback_consume(const snd_port_operation_t *operation,
     return pb_unlock(operation->port, result);
 }
 
+static bool pb_detachable(const playback_state_t *s) {
+    return !s->receipt.token &&
+           (s->control == PB_EMPTY || s->control == PB_STOPPED);
+}
+
 int snd_port_playback_detach(snd_port_t port) {
     uint64_t deadline = timer_ms_gettime64() + SND_PLAYBACK_TIMEOUT_MS;
     playback_state_t *s;
@@ -310,7 +315,7 @@ int snd_port_playback_detach(snd_port_t port) {
     s = pb_lookup(port);
     if(!s)
         return pb_unlock(port, -1);
-    if(s->receipt.token || (s->control != PB_EMPTY && s->control != PB_STOPPED)) {
+    if(!pb_detachable(s)) {
         errno = EBUSY;
         return pb_unlock(port, -1);
     }
@@ -318,6 +323,61 @@ int snd_port_playback_detach(snd_port_t port) {
     if(result == 0)
         memset(s, 0, sizeof(*s));
     return pb_unlock(port, result);
+}
+
+int snd_port_playback_close_all(uint32_t timeout_ms, size_t *closed) {
+    if(!timeout_ms || !closed) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(!snd_iface_is_initialized()) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    uint64_t deadline = timer_ms_gettime64() + timeout_ms;
+    size_t count = 0;
+    int error = 0;
+    for(unsigned i = 0; i < SND_PORT_SLOT_COUNT; ++i) {
+        if(pb_lock(i, deadline) < 0) {
+            if(!error)
+                error = errno;
+            break;
+        }
+
+        playback_state_t *s = &pb_states[i];
+        int result = 0;
+        if(s->port) {
+            s = pb_lookup(s->port);
+            if(!s)
+                result = -1;
+            else if(!pb_detachable(s)) {
+                errno = EBUSY;
+                result = -1;
+            }
+            else {
+                result = snd_port_playback_close_pinned(s->port);
+                if(result == 0) {
+                    memset(s, 0, sizeof(*s));
+                    ++count;
+                }
+            }
+        }
+        if(result < 0 && !error)
+            error = errno;
+        pb_unlock(i, result);
+    }
+
+    *closed = count;
+    if(error) {
+        errno = error;
+        return -1;
+    }
+    return 0;
 }
 
 static int pb_current(playback_state_t *s, uint64_t deadline,

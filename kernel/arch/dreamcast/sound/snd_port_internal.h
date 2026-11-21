@@ -30,5 +30,6 @@ int snd_port_finish(snd_port_transaction_t transaction, bool succeeded);
 int snd_port_playback_pin(snd_port_t port, unsigned *channel);
 int snd_port_playback_validate(snd_port_t port);
 int snd_port_playback_unpin(snd_port_t port);
+int snd_port_playback_close_pinned(snd_port_t port);
 int snd_port_playback_stopped(snd_port_t port);
 #endif

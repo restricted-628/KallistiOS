@@ -120,5 +120,16 @@ int snd_port_playback_get_state(snd_port_t port, uint32_t timeout_ms,
     lost session. Failure preserves ownership. Success permits snd_port_close,
     which returns the software reservation only; sample retention continues. */
 int snd_port_playback_detach(snd_port_t port);
+
+/** Close empty or observed-stopped mono attachments with consumed receipts.
+    Each eligible close invalidates the port generation and releases the
+    software channel reservation as one transition. Sample ownership and
+    retention remain with the caller. Active or pending ports return EBUSY
+    and retain ownership. Lost and interfered ports also stay attached.
+    One timeout bounds the sweep and concurrent users must serialize with
+    it. After admission, *closed receives the number of successful closes
+    even if the first encountered error is returned. Invalid arguments,
+    IRQ context and an inactive runtime leave the output unchanged. */
+int snd_port_playback_close_all(uint32_t timeout_ms, size_t *closed);
 __END_DECLS
 #endif

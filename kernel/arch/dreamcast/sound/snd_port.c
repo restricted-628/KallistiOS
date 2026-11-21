@@ -81,11 +81,12 @@ int snd_port_query(snd_port_t handle, snd_port_info_t *info) {
     return result;
 }
 
-int snd_port_close(snd_port_t handle) {
+static int port_close(snd_port_t handle, bool attached) {
     int old = irq_disable(), result = -1;
     port_slot_t *slot = lookup(handle);
     if(slot) {
-        if(slot->pending || slot->attached)
+        if(slot->pending || slot->attached != attached ||
+           (attached && slot->active))
             errno = EBUSY;
         else {
             snd_channel_release(slot->info.channel_count, slot->info.channels);
@@ -95,6 +96,14 @@ int snd_port_close(snd_port_t handle) {
     }
     irq_restore(old);
     return result;
+}
+
+int snd_port_close(snd_port_t handle) {
+    return port_close(handle, false);
+}
+
+int snd_port_playback_close_pinned(snd_port_t handle) {
+    return port_close(handle, true);
 }
 
 int snd_port_begin(snd_port_t handle, unsigned priority,
