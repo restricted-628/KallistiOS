@@ -101,6 +101,52 @@ static void reset(void) {
     aica_observer_init(&observer); aica_observer_ready(&observer);
     test_clock = 42; writes = reads = commands_rejected = 0;
 }
+static aica_observation_control_t *loop_start(uint32_t token, uint32_t flags) {
+    aica_observation_control_t *c = control(token, 0);
+    c->operation = AICA_CHANNEL_OP_START;
+    c->config.base = AICA_RAM_START;
+    c->config.length = c->config.loopend = 100;
+    c->config.loop = 1;
+    c->config.freq = 22050;
+    c->start_flags = flags;
+    return c;
+}
+
+static void test_timed_stop(void) {
+    reset(); bind(7, 1);
+    test_clock = UINT32_MAX - 4;
+    loop_start(10, AICA_OBSERVATION_START_TIMED | 9);
+    dispatch(); CHECK(results[0].result == AICA_OBSERVATION_APPLIED);
+    ack(10, 0, 11);
+    test_clock = 0; refresh_channel(0);
+    CHECK(writes == 1 && completions[0].state == AICA_COMPLETION_ACTIVE);
+    test_clock = 4; refresh_channel(0);
+    CHECK(writes == 2 && completions[0].state == AICA_COMPLETION_STOPPED &&
+          completions[0].start_token == 10 && completions[0].command_token == 10);
+    refresh_channel(0); CHECK(writes == 2);
+
+    loop_start(12, AICA_OBSERVATION_START_TIMED);
+    dispatch(); CHECK(results[0].result == AICA_OBSERVATION_BAD_FLAGS && writes == 2);
+    ack(12, 0, 13);
+    loop_start(14, AICA_OBSERVATION_START_TIMED | 5)->config.loop = 0;
+    dispatch(); CHECK(results[0].result == AICA_OBSERVATION_BAD_FLAGS && writes == 2);
+    ack(14, 0, 15);
+
+    loop_start(16, AICA_OBSERVATION_START_TIMED | 5);
+    dispatch(); ack(16, 0, 17);
+    loop_start(18, 0);
+    dispatch(); ack(18, 0, 19);
+    test_clock = 10; refresh_channel(0);
+    CHECK(writes == 4 && completions[0].state == AICA_COMPLETION_ACTIVE &&
+          completions[0].start_token == 18);
+
+    loop_start(20, AICA_OBSERVATION_START_TIMED | 5);
+    dispatch(); ack(20, 0, 21);
+    aica_observer_legacy(&observer, 0);
+    test_clock = 15; refresh_channel(0);
+    CHECK(writes == 5 && completions[0].state == AICA_COMPLETION_INTERFERED);
+}
+
 int main(void) {
     reset(); bind(7, 1); CHECK(header.active_session == 7);
     bind(7, 2); CHECK(header.bind_result == AICA_OBSERVATION_BIND_OK);
@@ -370,6 +416,7 @@ int main(void) {
     control(31, 3); dispatch(); CHECK(results[3].result == AICA_OBSERVATION_APPLIED);
     CHECK(observations[3].sequence == UINT32_MAX); /* execution can precede failed observation */
     header.sequence = UINT32_MAX - 1; bind(7, 32); CHECK(header.sequence == UINT32_MAX);
+    test_timed_stop();
     printf("ARM dispatch: %u checks passed\n", checks);
     return 0;
 }

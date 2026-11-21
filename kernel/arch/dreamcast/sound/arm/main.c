@@ -99,6 +99,7 @@ static uint32 responses_dropped;
 static uint32_t observer_apply(uint32_t channel,
                                 const aica_channel_control_t *control);
 static void observer_read(uint32_t channel, uint32_t *position, uint32_t *key_on);
+static aica_timed_stop_t timed_stops[64];
 static aica_observer_t observer = {
     (volatile aica_observation_header_t *)AICA_MEM_OBSERVATION_HEADER,
     (volatile aica_observation_result_t *)AICA_MEM_OBSERVATION_RESULTS,
@@ -106,7 +107,7 @@ static aica_observer_t observer = {
     observer_apply, observer_read,
     (volatile aica_completion_header_t *)AICA_MEM_COMPLETION_HEADER,
     (volatile aica_completion_channel_t *)AICA_MEM_COMPLETION_CHANNELS,
-    aica_get_loop_end
+    aica_get_loop_end, timed_stops
 };
 static const uint8_t *bank_map(uint32_t address, uint32_t bytes) {
     (void)bytes; /* Registry validates the complete retail extent first. */
@@ -272,7 +273,8 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
     info->features = prior_features | AICA_DRIVER_FEATURE_OBSERVATION_TL |
                      AICA_DRIVER_FEATURE_FINITE_STOP |
-                     AICA_DRIVER_FEATURE_OBSERVATION_FAST_RELEASE;
+                     AICA_DRIVER_FEATURE_OBSERVATION_FAST_RELEASE |
+                     AICA_DRIVER_FEATURE_OBSERVATION_TIMED_STOP;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
     info->commands_rejected = commands_rejected;
@@ -483,9 +485,16 @@ static uint32_t checked_channel_apply(uint32_t channel,
     const aica_channel_control_t *control, int observed) {
     if(channel>=64 || aica_music_live_owned(music,channel))
         return AICA_OBSERVATION_BAD_CONFIG;
+    uint32_t start_flags = control->start_flags;
     switch(control->operation) {
         case AICA_CHANNEL_OP_START:
-            if((control->start_flags&~AICA_CHANNEL_START_DELAYED) || control->fields)
+            if(start_flags & AICA_OBSERVATION_START_TIMED) {
+                if(!observed || !control->config.loop ||
+                   start_flags == AICA_OBSERVATION_START_TIMED)
+                    return AICA_OBSERVATION_BAD_FLAGS;
+                start_flags = 0;
+            }
+            if((start_flags & ~AICA_CHANNEL_START_DELAYED) || control->fields)
                 return AICA_OBSERVATION_BAD_FLAGS;
             break;
         case AICA_CHANNEL_OP_STOP:
@@ -523,7 +532,7 @@ static uint32_t checked_channel_apply(uint32_t channel,
     }
     if(!aica_music_hw_validate(channel,control->operation,&control->config,control->fields))
         return AICA_OBSERVATION_BAD_CONFIG;
-    channel_apply(channel,control->operation,&control->config,control->fields,control->start_flags);
+    channel_apply(channel,control->operation,&control->config,control->fields,start_flags);
     return AICA_OBSERVATION_APPLIED;
 }
 
@@ -835,6 +844,7 @@ void process_cmd_queue(void) {
 /* Reuse the position/key pair collected in this pass. Eligible finite shots
    additionally consume LP until their first end has been latched. */
 static void refresh_channel(uint32 channel) {
+    aica_observer_service_timed_stop(&observer, channel, timer);
     aica_get_pos(channel);
     status_refresh(channel);
     aica_observer_refresh(&observer, channel,

@@ -79,7 +79,7 @@ void aica_observer_capture_stop(aica_observer_t *o, uint32_t channel,
 /* Install identity before the first post-apply destructive sample. ACK and
    rejected/duplicate commands never reach this transition. */
 static void completion_control(aica_observer_t *o,
-                                const aica_observation_control_t *p) {
+                                const aica_observation_control_t *p, uint32_t tick) {
     volatile aica_completion_channel_t *c;
     if(!o->completions) return;
     c = &o->completions[p->channel];
@@ -94,13 +94,47 @@ static void completion_control(aica_observer_t *o,
             c->flags = AICA_COMPLETION_ELIGIBLE;
         c->first_end_tick = c->challenge_cookie = 0;
         c->format = p->config.type; c->loop_enabled = p->config.loop;
+        if(o->timed_stops) {
+            aica_timed_stop_t *timed = &o->timed_stops[p->channel];
+            timed->start_token = 0;
+            if(p->start_flags & AICA_OBSERVATION_START_TIMED) {
+                timed->deadline = tick + (p->start_flags & ~AICA_OBSERVATION_START_TIMED);
+                timed->start_token = p->token;
+            }
+        }
     }
     else if(p->operation == AICA_CHANNEL_OP_STOP) {
         c->state = AICA_COMPLETION_STOPPED;
         c->flags &= ~AICA_COMPLETION_ELIGIBLE;
+        if(o->timed_stops)
+            o->timed_stops[p->channel].start_token = 0;
     }
     /* UPDATE preserves START identity and end history, including interference. */
     end(&c->sequence);
+}
+
+void aica_observer_service_timed_stop(aica_observer_t *o,
+                                      uint32_t channel, uint32_t tick) {
+    if(!o->timed_stops || channel >= 64)
+        return;
+    aica_timed_stop_t *timed = &o->timed_stops[channel];
+    if(!timed->start_token || tick - timed->deadline > INT32_MAX)
+        return;
+
+    volatile aica_completion_channel_t *c = &o->completions[channel];
+    uint32_t start_token = timed->start_token;
+    timed->start_token = 0;
+    if(c->sequence >= UINT32_MAX - 1 || (c->sequence & 1) ||
+       c->session != o->header->active_session || c->start_token != start_token ||
+       c->attribution_kind != AICA_OBSERVATION_ATTR_MANAGED ||
+       c->state != AICA_COMPLETION_ACTIVE || !c->loop_enabled)
+        return;
+
+    static const aica_channel_control_t stop = { .operation = AICA_CHANNEL_OP_STOP };
+    if(o->apply(channel, &stop) == AICA_OBSERVATION_APPLIED && begin(&c->sequence)) {
+        c->state = AICA_COMPLETION_STOPPED;
+        end(&c->sequence);
+    }
 }
 
 static int reject(aica_observer_t *o, uint32_t reason, uint32_t tick) {
@@ -127,6 +161,8 @@ void aica_observer_init(aica_observer_t *o) {
                     64 * sizeof(*o->completions) / 4);
         o->completion_header->layout_version = AICA_COMPLETION_LAYOUT_VERSION;
     }
+    if(o->timed_stops)
+        clear_words((uint32_t *)o->timed_stops, 64 * sizeof(*o->timed_stops) / 4);
 }
 
 void aica_observer_ready(aica_observer_t *o) {
@@ -252,7 +288,7 @@ static int control(aica_observer_t *o, const aica_observation_control_t *p,
             c.config = p->config;
             outcome = o->apply(p->channel, &c);
             if(outcome == AICA_OBSERVATION_APPLIED) {
-                completion_control(o, p);
+                completion_control(o, p, tick);
                 sample(o, p->channel, tick, 0, 0,
                        AICA_OBSERVATION_ATTR_MANAGED, p->token, 1);
             }

@@ -5,6 +5,11 @@
 #include <dc/sound/aica_observation.h>
 #include <dc/sound/aica_completion.h>
 
+typedef struct aica_timed_stop {
+    uint32_t start_token;
+    uint32_t deadline;
+} aica_timed_stop_t;
+
 typedef struct aica_observer {
     volatile aica_observation_header_t *header;
     volatile aica_observation_result_t *results;
@@ -14,6 +19,7 @@ typedef struct aica_observer {
     volatile aica_completion_header_t *completion_header;
     volatile aica_completion_channel_t *completions;
     uint32_t (*loop_end)(void); /* Selected channel; destructive LP read. */
+    aica_timed_stop_t *timed_stops;
 } aica_observer_t;
 
 void aica_observer_init(aica_observer_t *observer);
@@ -24,6 +30,8 @@ int aica_observer_command(aica_observer_t *observer, const aica_cmd_t *packet,
                           uint32_t tick);
 void aica_observer_refresh(aica_observer_t *observer, uint32_t channel,
                           uint32_t position, uint32_t key_on, uint32_t tick, uint32_t lp);
+void aica_observer_service_timed_stop(aica_observer_t *observer,
+                                      uint32_t channel, uint32_t tick);
 int aica_observer_needs_lp(const aica_observer_t *observer, uint32_t channel);
 /* Accepted managed STOP only, immediately before applying key-off. */
 void aica_observer_capture_stop(aica_observer_t *observer, uint32_t channel,

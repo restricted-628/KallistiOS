@@ -57,6 +57,13 @@ int snd_port_playback_update(snd_port_t port, const snd_channel_config_t *config
     uint32_t fields, snd_port_operation_t *operation);
 int snd_port_playback_stop(snd_port_t port, snd_port_operation_t *operation);
 
+/** Set the absolute duration of subsequent managed looped STARTs on this
+    attachment. Zero disables the limit. Positive values must fit in a
+    half-range of the 4410 Hz ARM clock and require capable firmware. Deadline
+    service uses the channel service cadence. The current shot stays unchanged. Check playback
+    state to observe timed key-off. Sample ownership follows ordinary STOP. */
+int snd_port_playback_set_play_time_ms(snd_port_t port, uint32_t duration_ms);
+
 typedef enum snd_port_playback_release_mode {
     SND_PORT_PLAYBACK_RELEASE_NORMAL = 0,
     SND_PORT_PLAYBACK_RELEASE_FAST

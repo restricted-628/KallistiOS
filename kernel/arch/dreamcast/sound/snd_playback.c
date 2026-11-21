@@ -26,6 +26,7 @@ typedef struct playback_state {
     enum pb_control control;
     bool configured, observed, transaction_live;
     bool fast_release;
+    uint32_t play_time_ticks;
     snd_port_transaction_t transaction;
     snd_channel_receipt_t receipt;
     snd_channel_config_t baseline, committed, proposed;
@@ -132,7 +133,12 @@ static int pb_submit_locked(playback_state_t *s, uint32_t operation,
         errno = EINVAL;
         return -1;
     }
+    uint32_t flags = 0;
+    if(operation == SND_OBSERVATION_STOP && s->configured && s->fast_release)
+        flags = AICA_OBSERVATION_STOP_FAST_RELEASE;
     if(operation == SND_OBSERVATION_START) {
+        if(config->loop_enabled && s->play_time_ticks)
+            flags = AICA_OBSERVATION_START_TIMED | s->play_time_ticks;
         if(s->start_token && s->control == PB_ACTIVE &&
            (snd_iface_observation_features() & SND_DRIVER_FEATURE_COMPLETION)) {
             snd_port_playback_state_t current;
@@ -147,8 +153,6 @@ static int pb_submit_locked(playback_state_t *s, uint32_t operation,
             return result;
         transaction_live = true;
     }
-    uint32_t flags = operation == SND_OBSERVATION_STOP && s->configured &&
-                     s->fast_release ? AICA_OBSERVATION_STOP_FAST_RELEASE : 0;
     result = snd_observation_submit_validated_until(s->channel, operation, config,
                                                     fields, flags, &receipt, deadline);
     if(result < 0) {
@@ -198,6 +202,29 @@ int snd_port_playback_start(snd_port_t port, const snd_channel_config_t *config,
 int snd_port_playback_update(snd_port_t port, const snd_channel_config_t *config,
     uint32_t fields, snd_port_operation_t *operation) {
     return pb_submit(port, SND_OBSERVATION_UPDATE, config, fields, 0, operation);
+}
+
+int snd_port_playback_set_play_time_ms(snd_port_t port, uint32_t duration_ms) {
+    /* The ARM timer advances once per ten 44.1 kHz samples. Round up. */
+    uint64_t ticks = ((uint64_t)duration_ms * 441 + 99) / 100;
+    if(ticks > AICA_OBSERVATION_TIMED_TICKS_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    uint64_t deadline = timer_ms_gettime64() + SND_PLAYBACK_TIMEOUT_MS;
+    if(pb_lock(port, deadline) < 0)
+        return -1;
+    playback_state_t *s = pb_lookup(port);
+    if(!s)
+        return pb_unlock(port, -1);
+
+    if(duration_ms &&
+       !(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TIMED_STOP)) {
+        errno = ENOTSUP;
+        return pb_unlock(port, -1);
+    }
+    s->play_time_ticks = (uint32_t)ticks;
+    return pb_unlock(port, 0);
 }
 
 int snd_port_playback_set_release_mode(snd_port_t port,
@@ -515,6 +542,16 @@ static int pb_current(playback_state_t *s, uint64_t deadline,
            c.state != AICA_COMPLETION_INTERFERED) {
             errno = EBUSY; return -1;
         }
+    }
+    if(s->control == PB_ACTIVE && c.state == AICA_COMPLETION_STOPPED &&
+       c.loop_enabled &&
+       (snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TIMED_STOP)) {
+        if(snd_port_playback_stopped(s->port) < 0) {
+            s->control = PB_LOST;
+            errno = EPROTO;
+            return -1;
+        }
+        s->control = PB_STOPPED;
     }
     if(s->control == PB_ACTIVE && c.state == AICA_COMPLETION_ACTIVE &&
        (c.flags & AICA_COMPLETION_END_SEEN) && s->end_reset_token != s->start_token) {

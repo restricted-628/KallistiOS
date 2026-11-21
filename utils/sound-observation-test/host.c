@@ -85,7 +85,7 @@ static void sample(uint32_t ch, uint32_t *pos, uint32_t *key) {
     assert(ch < 64); selected_channel = ch; *pos = 123; *key = 0;
 }
 static aica_observer_t arm = {&header, results, channels, apply, sample,
-    &completion_header, completions, loop_end};
+    &completion_header, completions, loop_end, NULL};
 static struct { uint32_t words[64]; uint64_t ready; } queue[1024];
 static unsigned head, tail, packets;
 static unsigned delay_ms, publish_delay_ms;
