@@ -46,11 +46,11 @@ struct kosdec_adx_recovery;
 
 /* Mark the next binding final on a retained-clock compatibility player.
    Call before first start or after releasing a sealed source, while IDLE.
-   With one occupied title, owner service requires natural decoder DONE and
-   a qualified sealed drain for every generation on the lease before checked
-   stop/join can publish PLAYEND. Release, cancellation and explicit STOP
-   disarm it. Timeout preserves STOPPING and retries the same decision.
-   PLAYEND does not authorize output resource reuse. */
+   Owner service requires natural decoder DONE and a qualified sealed drain
+   for every generation on the title's lease before checked stop/join can
+   publish its PLAYEND. Other bound titles continue to be serviced. Release,
+   cancellation and explicit STOP disarm it. Timeout preserves STOPPING and
+   retries the same decision. PLAYEND does not authorize output resource reuse. */
 int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *, uint32_t stop_timeout_ms);
 /* Owner-only observation. A PLAYING dispatch may publish DECEND after the
    final samples are decoded with under 32 bytes of PCM16 pending per channel.

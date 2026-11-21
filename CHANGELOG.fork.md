@@ -8,6 +8,8 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Concurrent libADX titles can now report natural completion independently.
+  Each title still requires its own confirmed output drain and checked stop.
 - libADX no longer reports decode completion when phased playback encounters
   an output error while the decoder is still active. The compatibility state
   stays PLAYING; the native player still reports the error and requires stop.

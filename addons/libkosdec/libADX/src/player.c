@@ -1259,8 +1259,6 @@ static bool latch_playend(struct kosdec_adx_player *p) {
        p->info.first_error || p->callback_failed ||
        p->compat_service->titles[p->compat_slot].faults)
         return false;
-    if(!compat_single_title(p))
-        return false;
 
     struct kosdec_adx_pipe_result pipe = kosdec_adx_pipe_read(&p->producer.pipe,NULL,0);
     uint32_t queued;

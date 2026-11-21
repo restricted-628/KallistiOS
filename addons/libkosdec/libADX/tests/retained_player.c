@@ -1075,7 +1075,24 @@ static void make_empty_source(struct fixture *f) {
     kosdec_adx_stream_init(&f->stream,input,f,(uint32_t)f->bytes,false);
 }
 
-static void compat_playend_case(enum playend_case scenario) {
+static enum kosdec_adx_compat_state playend_peer_state(void *context) {
+    (void)context;
+    return KOSDEC_ADX_COMPAT_PLAYING;
+}
+
+static int playend_peer_dispatch(void *context, enum kosdec_adx_compat_state state) {
+    CHECK(state == KOSDEC_ADX_COMPAT_PLAYING);
+    ++*(unsigned *)context;
+    return 0;
+}
+
+static int playend_peer_observe(void *context, struct kosdec_adx_compat_observation *out) {
+    (void)context;
+    (void)out;
+    return 1; /* Peer service stays active without a watchdog snapshot. */
+}
+
+static void compat_playend_case(enum playend_case scenario, unsigned slot, bool with_peer) {
     struct retained_fixture t;
     retained_init(&t,false);
     struct fixture *f = &t.f;
@@ -1084,7 +1101,9 @@ static void compat_playend_case(enum playend_case scenario) {
     uint64_t now = 0;
     const struct kosdec_adx_compat_config config = {.clock_us = compat_clock, .clock_context = &now};
     struct kosdec_adx_compat_service service;
-    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_title titles[2];
+    unsigned peer_dispatches = 0;
+    unsigned peer_slot = 1 - slot;
     struct kosdec_adx_compat_result result;
     enum kosdec_adx_compat_state state;
     bool completed = true;
@@ -1094,11 +1113,18 @@ static void compat_playend_case(enum playend_case scenario) {
         make_empty_source(f);
     }
     CHECK(!kosdec_adx_player_enable_vsync_clock(p,KOSDEC_ADX_VSYNC_NTSC,read_ticks,&clock));
-    CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+    CHECK(!kosdec_adx_compat_service_init(&service,titles,with_peer ? 2 : 1,&config));
+    if(with_peer) {
+        static const struct kosdec_adx_compat_title_ops peer = {
+            .state = playend_peer_state, .dispatch = playend_peer_dispatch,
+            .observe = playend_peer_observe
+        };
+        CHECK(!kosdec_adx_compat_bind(&service,peer_slot,&peer,&peer_dispatches));
+    }
     if(scenario == PLAYEND_FIBER)
-        CHECK(!kosdec_adx_compat_bind_player(&service,0,p));
+        CHECK(!kosdec_adx_compat_bind_player(&service,slot,p));
     else
-        CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,p));
+        CHECK(!kosdec_adx_compat_bind_phased_player(&service,slot,p));
     CHECK(!kosdec_adx_compat_player_enable_playend(p,1000));
     CHECK(!kosdec_adx_player_start(p));
     for(unsigned pass = 0; pass < 2000 && info(f).state != KOSDEC_ADX_PLAYER_SOURCE_END; ++pass) {
@@ -1167,7 +1193,7 @@ static void compat_playend_case(enum playend_case scenario) {
                   time.frequency == 44100);
         }
         CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 1);
-        CHECK(!kosdec_adx_compat_unbind(&service,0));
+        CHECK(!kosdec_adx_compat_unbind(&service,slot));
         free(f->data);
         return;
     }
@@ -1211,20 +1237,25 @@ static void compat_playend_case(enum playend_case scenario) {
     else {
         CHECK(!kosdec_adx_player_set_time_offset(p,-15));
         backend.stop_fails = true;
+        unsigned prior_dispatches = peer_dispatches;
         CHECK(kosdec_adx_compat_exec_server(&service,&result)<0 && errno==ETIMEDOUT);
         CHECK(info(f).state == KOSDEC_ADX_PLAYER_STOPPING && backend.stops == 1);
+        CHECK(!with_peer || peer_dispatches == prior_dispatches + 1);
         CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
         CHECK(kosdec_adx_compat_player_get_time(p,&time)<0 && errno==ENODATA && time.count==8000);
         backend.stop_fails = false;
+        prior_dispatches = peer_dispatches;
         backend.valid = false;
         if(scenario == PLAYEND_LOST_EPOCH) {
             backend.reported_epoch = 91;
             CHECK(kosdec_adx_compat_exec_server(&service,&result)<0 && errno==ESTALE);
+            CHECK(!with_peer || peer_dispatches == prior_dispatches + 1);
             CHECK(info(f).state == KOSDEC_ADX_PLAYER_STOPPING && backend.stops == 1);
             CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 2);
         }
         else {
             CHECK(!kosdec_adx_compat_exec_server(&service,&result) && backend.stops == 2);
+            CHECK(!with_peer || peer_dispatches == prior_dispatches + 1);
             CHECK(info(f).state == KOSDEC_ADX_PLAYER_STOPPED && backend.stopped);
             CHECK(!kosdec_adx_compat_player_get_state(p,&state) && state == KOSDEC_ADX_COMPAT_PLAYEND);
             CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && completed);
@@ -1237,27 +1268,34 @@ static void compat_playend_case(enum playend_case scenario) {
             int64_t cents;
             CHECK(!kosdec_adx_compat_player_get_time_real(p,&cents) && cents == 0);
             CHECK(clock.reads == reads);
+            prior_dispatches = peer_dispatches;
             CHECK(!kosdec_adx_compat_exec_server(&service,&result) && backend.stops == 2);
+            CHECK(!with_peer || peer_dispatches == prior_dispatches + 1);
             CHECK(!kosdec_adx_player_stop(p,1000) && backend.stops == 2);
         }
     }
     CHECK(!kosdec_adx_compat_player_get_state(p,&state) && state == KOSDEC_ADX_COMPAT_STOP);
     CHECK(!kosdec_adx_compat_player_is_completed(p,&completed) && !completed);
-    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    CHECK(!kosdec_adx_compat_unbind(&service,slot));
+    if(with_peer)
+        CHECK(!kosdec_adx_compat_unbind(&service,peer_slot));
     free(f->data);
 }
 
 static void compat_playend(void) {
-    compat_playend_case(PLAYEND_RETRY);
-    compat_playend_case(PLAYEND_EXPLICIT);
-    compat_playend_case(PLAYEND_LOST_EPOCH);
-    compat_playend_case(PLAYEND_CANCEL);
-    compat_playend_case(PLAYEND_EMPTY);
-    compat_playend_case(PLAYEND_REBOUND_EMPTY);
-    compat_playend_case(PLAYEND_FINAL_EMPTY);
-    compat_playend_case(PLAYEND_FINAL_PCM);
-    compat_playend_case(PLAYEND_FATAL_STOP);
-    compat_playend_case(PLAYEND_FIBER);
+    compat_playend_case(PLAYEND_RETRY,0,false);
+    compat_playend_case(PLAYEND_EXPLICIT,0,false);
+    compat_playend_case(PLAYEND_LOST_EPOCH,0,false);
+    compat_playend_case(PLAYEND_CANCEL,0,false);
+    compat_playend_case(PLAYEND_EMPTY,0,false);
+    compat_playend_case(PLAYEND_REBOUND_EMPTY,0,false);
+    compat_playend_case(PLAYEND_FINAL_EMPTY,0,false);
+    compat_playend_case(PLAYEND_FINAL_PCM,0,false);
+    compat_playend_case(PLAYEND_FATAL_STOP,0,false);
+    compat_playend_case(PLAYEND_FIBER,0,false);
+    compat_playend_case(PLAYEND_RETRY,0,true);
+    compat_playend_case(PLAYEND_RETRY,1,true);
+    compat_playend_case(PLAYEND_LOST_EPOCH,1,true);
     puts("ADX_COMPAT_PLAYEND_PASS sealed drain, stale/wrong epoch, timeout retry, stop/join, cancel, empty and rebind");
 }
 
