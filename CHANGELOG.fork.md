@@ -8,6 +8,13 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The opt-in Flycast pause profile now accepts fixed source and playback
+  rates from 32,000 through 44,100 Hz. At 32 kHz, mono and stereo titles
+  passed five post-wrap pause/discard/resume cycles and reached natural
+  PLAYEND in both BIOS CPU modes. Public time uses the nominal source
+  rate; the firmware checks the programmed pitch of each active voice.
+  This does not enable pause after a live transpose.
+
 - The optional Flycast player can now pause a finite 44.1 kHz **mono**
   title after a ring wrap, discard unread samples and resume on the same
   voice. It owns two 32 KiB banks. The public sample-time and PAL-clock

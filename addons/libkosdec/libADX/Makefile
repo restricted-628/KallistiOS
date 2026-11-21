@@ -355,12 +355,18 @@ $(BUILD)/sh4/adx_flycast_pause_late.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_L
 flycast-pause-mono-test-elf: $(BUILD)/sh4/adx_flycast_pause_mono.elf $(BUILD)/sh4/adx_flycast_pause_mono_pal.elf
 $(BUILD)/sh4/adx_flycast_pause_mono.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_LATE_CUT=1 -DADX_TEST_PAUSE_MONO=1
 $(BUILD)/sh4/adx_flycast_pause_mono_pal.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_LATE_CUT=1 -DADX_TEST_PAUSE_MONO=1 -DADX_TEST_VSYNC_MODE=2
+.PHONY: flycast-pause-32k-test-elf
+ADX_PAUSE_32K_ELFS = $(BUILD)/sh4/adx_flycast_pause_stereo_32k.elf $(BUILD)/sh4/adx_flycast_pause_mono_32k.elf
+flycast-pause-32k-test-elf: $(ADX_PAUSE_32K_ELFS)
+$(BUILD)/sh4/adx_flycast_pause_stereo_32k.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_LATE_CUT=1 -DADX_TEST_PAUSE_RATE=32000
+$(BUILD)/sh4/adx_flycast_pause_mono_32k.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_LATE_CUT=1 -DADX_TEST_PAUSE_RATE=32000 -DADX_TEST_PAUSE_MONO=1
 flycast-pause-vsync-test-elf: $(BUILD)/sh4/adx_flycast_pause_ntsc.elf $(BUILD)/sh4/adx_flycast_pause_pal.elf
 $(BUILD)/sh4/adx_flycast_pause_ntsc.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_VSYNC_MODE=1
 $(BUILD)/sh4/adx_flycast_pause_pal.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_VSYNC_MODE=2
 $(BUILD)/sh4/adx_flycast_pause_test.elf $(BUILD)/sh4/adx_flycast_pause_ntsc.elf \
 $(BUILD)/sh4/adx_flycast_pause_pal.elf $(BUILD)/sh4/adx_flycast_pause_late.elf \
-$(BUILD)/sh4/adx_flycast_pause_mono.elf $(BUILD)/sh4/adx_flycast_pause_mono_pal.elf: tests/flycast_pause.c $(BUILD)/sh4/libADX.a
+$(BUILD)/sh4/adx_flycast_pause_mono.elf $(BUILD)/sh4/adx_flycast_pause_mono_pal.elf \
+$(ADX_PAUSE_32K_ELFS): tests/flycast_pause.c $(BUILD)/sh4/libADX.a
 	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) $(PRIVATE_PAUSE_TEST_FLAGS) -I"$(FLYCAST_PAUSE_INCLUDE)" -I"$(ORDINARY_PCM16_INCLUDE)" \
 	    -DADX_TEST_ENABLE_ACTIVE_PAUSE=kosdec_adx_compat_player_enable_flycast_pause \
 	    -Wl,--wrap=snd_flycast_pcm16_pause -o $@ $^ -lm

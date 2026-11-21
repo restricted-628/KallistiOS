@@ -671,9 +671,10 @@ matching backend. Generate the mono fixture with
 
 Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against
 the matching build-gated Audio backend. Bind a READY title with one finite,
-direct mono or stereo ADX source at 44,100 Hz. Enable its checked ordinary
-output and then `kosdec_adx_compat_player_enable_flycast_pause` before
-start. This profile
+direct mono or stereo ADX source at 32,000 to 44,100 Hz. The startup output
+rate must match the source rate and stay fixed during playback. Enable
+its checked ordinary output and then
+`kosdec_adx_compat_player_enable_flycast_pause` before start. This profile
 uses a 16,384-frame/channel sound ring. It requires an owner and a
 producer that can supply a dense continuation. For compatibility NTSC or
 PAL time, enable the collection's VBlank clock before binding and then
@@ -688,7 +689,8 @@ remain qualified. A pause timeout can leave a selected cut pending, even before
 the channels are armed: retry pause or complete checked stop. In contrast,
 `EAGAIN` before cut selection permits ordinary service and a
 new pause attempt. Resume uses the same reservation and inserts 64 silent
-output frames before the first surviving source frame. A finished source
+frames in the PCM ring before the first surviving source frame. At a
+fractional device pitch, the mixer interpolates across that boundary. A finished source
 may resume with a short real tail followed by silence. Use the logical
 PLAYEND opt-in before start to report completion after the tail and checked
 stop. A live producer shortage returns EAGAIN with the previous cut intact.
@@ -710,7 +712,10 @@ finite tails, build
 `flycast-pause-tail-test-elf`. Use `proof 22016` with the generator for
 case 0 and `proof 26048` for cases 1–3. The
 `flycast-pause-mono-test-elf` target uses mono tracks generated with
-`proof 393216 1` and `fresh 393216 1` for sample and PAL time.
+`proof 393216 1` and `fresh 393216 1` for sample and PAL time. The
+`flycast-pause-32k-test-elf` target builds mono and stereo post-wrap
+fixtures at 32,000 Hz. Generate both tracks with the matching channel
+count, for example `proof 393216 1 32000` and `fresh 393216 1 32000`.
 
 ### Retained output clock
 

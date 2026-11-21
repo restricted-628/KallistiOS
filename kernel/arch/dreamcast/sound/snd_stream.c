@@ -1987,6 +1987,7 @@ struct snd_ordinary_pcm16 {
 };
 #ifdef AICA_FLYCAST_PCM16_PAUSE
 static snd_ordinary_pcm16_t *pause_owner;
+static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream);
 #endif
 
 bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring) {
@@ -2364,6 +2365,12 @@ static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, strchan_t *stream) {
             0, &stream->config, deadline) < 0 ||
        ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
         return -1;
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    if(pause_owner == pcm && !pause_identity_matches(pcm, stream)) {
+        errno = ESTALE;
+        return -1;
+    }
+#endif
 
     pcm->running = true;
     stream->state = SND_STREAM_STATE_PLAYING;
@@ -2431,7 +2438,7 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
         return ordinary_pcm16_unlock(-1);
     }
 #ifdef AICA_FLYCAST_PCM16_PAUSE
-    if(pause_owner == pcm && rate != 44100) {
+    if(pause_owner == pcm && rate != pcm->rate) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);
     }

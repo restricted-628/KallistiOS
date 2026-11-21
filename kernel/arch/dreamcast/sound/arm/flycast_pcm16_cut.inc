@@ -15,6 +15,7 @@ enum { CUT_IDLE, CUT_QUOTED, CUT_ARMED };
 static int flycast_cut_identity(void) {
     if(!cut.session || cut.session != observer.header->active_session ||
        cut.request != cut.slot[0].start || (cut.channels != 1 && cut.channels != 2) ||
+       (cut.pitch && (cut.pitch < FLYCAST_CUT_PITCH_MIN || cut.pitch > FLYCAST_CUT_PITCH_MAX)) ||
        (cut.channels == 2 && (cut.slot[0].channel == cut.slot[1].channel ||
                               cut.slot[0].address == cut.slot[1].address)))
         return 0;
@@ -31,7 +32,7 @@ static int flycast_cut_identity(void) {
         uint32_t control = CHNREG32(ch, 0);
         uint32_t address = ((control & 0x7fu) << 16) | (CHNREG32(ch, 4) & 0xffffu);
         if(address != slot->address || (control & 0x180u) ||
-           (CHNREG32(ch, 8) & 0xffffu) || (CHNREG32(ch, 0x18) & 0x7fffu))
+           (CHNREG32(ch, 8) & 0xffffu) || (CHNREG32(ch, 0x18) & 0x7fffu) != cut.pitch)
             return 0;
     }
     return 1;

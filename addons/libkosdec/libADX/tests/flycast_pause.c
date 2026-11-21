@@ -10,6 +10,10 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
+#ifndef ADX_TEST_PAUSE_RATE
+#define ADX_TEST_PAUSE_RATE 44100
+#endif
+
 #ifndef ADX_TEST_PAUSE_MONO
 #define ADX_TEST_PAUSE_MONO 0
 #endif
@@ -30,7 +34,7 @@ enum { VIDEO_HZ = 0, DISPLAY_OFFSET = 0 };
 #endif
 
 enum {
-    RATE = 44100, RING = 16384, QUEUE = 32768,
+    RATE = ADX_TEST_PAUSE_RATE, RING = 16384, QUEUE = 32768,
     FRAMES = ADX_TEST_LATE_CUT ? 393216 : 196608,
     CHANNELS = ADX_TEST_PAUSE_MONO ? 1 : 2,
     TRACK_HEADER = 32, TRACK_BLOCK = 18*CHANNELS, TRACK_FOOTER = 18,
@@ -49,6 +53,7 @@ struct cycle_result {
     struct title_snapshot before, cut, held, resumed;
     int32_t requested, removed;
     uint32_t memory_free;
+    uint64_t committed;
 };
 
 static struct kosdec_adx_player players[2];
@@ -138,7 +143,11 @@ static int play(unsigned lane) {
         CHECK(!kosdec_adx_compat_player_enable_stereo_transpose(p));
     }
 #ifdef ADX_TEST_ENABLE_ACTIVE_PAUSE
-    if(!lane) { CHECK(!ADX_TEST_ENABLE_ACTIVE_PAUSE(p)); }
+    if(!lane) {
+        CHECK(!ADX_TEST_ENABLE_ACTIVE_PAUSE(p));
+        if(RATE == 32000)
+            CHECK(!kosdec_adx_compat_player_enable_playend(p, 1000));
+    }
 #endif
     CHECK(!kosdec_adx_player_start(p));
     return 0;
@@ -207,6 +216,7 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
     CHECK(!await_source(p, target, &result->before));
     struct kosdec_adx_player_info before;
     CHECK(!kosdec_adx_player_get_info(p, &before) && before.channels == CHANNELS && !before.starvations);
+    CHECK(before.sample_rate == RATE && before.output_rate == RATE);
     if(VIDEO_HZ) CHECK(!snapshot(p, &result->before));
     uint32_t pause_anchor_tick = p->compat_vsync_anchor_tick;
     if(lose_cut_once) {
@@ -223,6 +233,11 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
         CHECK(!kosdec_adx_compat_player_pause(p, true));
     }
     CHECK(!snapshot(p, &result->cut));
+    if(RATE != 44100) {
+        snd_ordinary_pcm16_status_t status;
+        CHECK(!snd_ordinary_pcm16_status(p->ordinary_pcm, &status));
+        result->committed = status.committed_frames;
+    }
     CHECK(result->cut.clock.source_frames >= result->before.clock.source_frames);
     if(VIDEO_HZ) {
         CHECK(result->cut.time.count == video_anchor(result->cut.clock.source_frames));
@@ -325,6 +340,26 @@ static int run(void) {
         target = cycles[i].cut.clock.source_frames + RING / 2 + 2048 + 257 * (i % 2);
     }
     uint32_t video_events = service.vsync_count - (UINT32_MAX - 4);
+    if(RATE == 32000) {
+        bool completed = false;
+        const uint64_t deadline = timer_ms_gettime64() + 4000;
+        do {
+            CHECK(timer_ms_gettime64() < deadline && !service_title());
+            CHECK(!kosdec_adx_compat_player_is_completed(&players[0], &completed));
+            if(!completed) thd_sleep(1);
+        } while(!completed);
+
+        enum kosdec_adx_compat_state terminal;
+        struct kosdec_adx_time elapsed;
+        int64_t real;
+        CHECK(!kosdec_adx_compat_player_get_state(&players[0], &terminal) &&
+              terminal == KOSDEC_ADX_COMPAT_PLAYEND);
+        CHECK(!kosdec_adx_compat_player_get_time(&players[0], &elapsed) &&
+              elapsed.count == FRAMES && elapsed.frequency == RATE);
+        CHECK(!kosdec_adx_compat_player_get_time_real(&players[0], &real) &&
+              real == (int64_t)(((float)FRAMES / RATE) * 100.0f));
+        puts("ADX-FIVE terminal PLAYEND at nominal source duration");
+    }
     CHECK(!checked_stop(0, owned));
 
     /* A fresh title is deliberately outside the same-lease resume loop. */
@@ -352,6 +387,9 @@ static int run(void) {
             printf("ADX-FIVE late=%u local-before=%" PRIu64 " local-cut=%" PRIu64 "\n",
                    i+1, r->before.clock.output_frames-base, r->cut.clock.output_frames-base);
         }
+        if(RATE != 44100)
+            printf("ADX-FIVE rate=%u cycle=%u committed=%" PRIu64 "\n",
+                   (unsigned)RATE, i+1, r->committed);
         printf("ADX-FIVE cycle=%u session=%" PRIu32 " pre=%" PRIu64 " cut=%" PRIu64
                " first-unread=%" PRIu64 " discard-result=%" PRId32 " resumed-next=%" PRIu64
                " resumed-count=%" PRIu64 " epoch=%" PRIu64 " aram=%" PRIu32 "\n",

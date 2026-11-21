@@ -8,12 +8,36 @@ static uint32_t pause_word(size_t member) {
     return g2_read_32(pause_mailbox() + member);
 }
 
-static bool pause_address_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream) {
+bool snd_flycast_pcm16_pause_rate_supported(uint32_t rate) {
+    return rate >= FLYCAST_CUT_RATE_MIN && rate <= FLYCAST_CUT_RATE_MAX;
+}
+
+/* This one-octave subset is identical to the ARM START encoder after
+   masking the wire word to the AICA OCT/FNS register bits. */
+static uint32_t pause_pitch_word(uint32_t rate) {
+    if(rate == FLYCAST_CUT_RATE_MAX)
+        return 0;
+    uint32_t fns = rate * 1024u / (FLYCAST_CUT_RATE_MAX / 2u);
+    return FLYCAST_CUT_OCTAVE_DOWN | (fns & FLYCAST_CUT_FNS_MASK);
+}
+
+/* Flycast discards the half-step bit at OCT=-1. Round the resulting
+   source-frame rate up before applying the existing movement allowance. */
+static uint32_t pause_motion_rate(uint32_t rate) {
+    uint32_t pitch = pause_pitch_word(rate);
+    uint32_t step = 1024u | (pitch & FLYCAST_CUT_FNS_MASK);
+    if(pitch)
+        step >>= 1;
+    return (FLYCAST_CUT_RATE_MAX * step + 1023u) / 1024u;
+}
+
+static bool pause_identity_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream) {
+    uint32_t pitch = pause_pitch_word(pcm->rate);
     for(unsigned i = 0; i < pcm->channels; ++i) {
         uintptr_t reg = UINT32_C(0xa0700000) + stream->ch[i] * 0x80u;
         uint32_t address = ((g2_read_32(reg) & 0x7fu) << 16) |
                            (g2_read_32(reg + 4) & 0xffffu);
-        if(address != stream->spu_ram_sch[i])
+        if(address != stream->spu_ram_sch[i] || (g2_read_32(reg + 0x18) & 0x7fffu) != pitch)
             return false;
     }
     return true;
@@ -22,7 +46,7 @@ static bool pause_address_matches(const snd_ordinary_pcm16_t *pcm, const strchan
 int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
     if(ordinary_pcm16_lock(pcm) < 0)
         return -1;
-    if(pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || pcm->rate != 44100 ||
+    if(pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || !snd_flycast_pcm16_pause_rate_supported(pcm->rate) ||
        pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);
@@ -37,6 +61,7 @@ int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
         return ordinary_pcm16_unlock(-1);
     pcm->pause_banks[0] = streams[pcm->handle].spu_ram_sch[0];
     pcm->pause_banks[1] = alternate;
+    pcm->motion_rate = pause_motion_rate(pcm->rate);
     pause_owner = pcm;
     return ordinary_pcm16_unlock(0);
 }
@@ -50,6 +75,7 @@ static void pause_submit(const snd_ordinary_pcm16_t *pcm, const strchan_t *strea
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, session), pcm->session);
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, cut), pcm->pause_cut % pcm->ring);
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, channels), pcm->channels);
+    g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, pitch), pause_pitch_word(pcm->rate));
     for(unsigned i = 0; i < pcm->channels; ++i) {
         uintptr_t slot = box + offsetof(flycast_cut_mailbox_t, slot) +
                          i * sizeof(flycast_cut_slot_t);
@@ -174,7 +200,7 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
         if(pause_word(offsetof(flycast_cut_mailbox_t, done)) == start) {
             if(pcm->pause_state != PAUSE_AUTHORIZED ||
                pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
-               !pause_address_matches(pcm, stream)) {
+               !pause_identity_matches(pcm, stream)) {
                 errno = EPROTO;
                 goto fail;
             }
@@ -230,7 +256,7 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
     if(pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC ||
        pause_word(offsetof(flycast_cut_mailbox_t, done)) != start[0] ||
        pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
-       !pause_address_matches(pcm, stream)) {
+       !pause_identity_matches(pcm, stream)) {
         errno = ESTALE;
         goto fail;
     }
@@ -256,10 +282,6 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
             errno = ESTALE;
             goto fail;
         }
-    }
-    if(!pause_address_matches(pcm, stream)) {
-        errno = ESTALE;
-        goto fail;
     }
     pcm->pause_bank = bank;
     pcm->pause_state = PAUSE_LIVE;

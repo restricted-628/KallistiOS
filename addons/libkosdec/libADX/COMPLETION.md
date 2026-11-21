@@ -86,20 +86,28 @@ CPU modes passed five post-wrap pauses. The recorded output resumed at
 the first unread source frame plus the actual discard count on each
 cycle. A fresh ordinary title used a separate allocation.
 
-Two stock use cases still fall outside that opt-in: pause/discard on a
-32 kHz title, and pause on a 44.1 kHz title after a live −12-semitone
-change. In the latter case the source is still nominally 44.1 kHz but
-the output voice is running at 22.05 kHz. Passing a fixed-rate pause
-test and a separate live-transpose test does not cover that sequence.
+The fixed-rate profile admits matching source and startup output rates from
+32,000 to 44,100 Hz. Public mono and stereo runs at 32,000 Hz cover five
+post-wrap cuts, the actual discard count, a frozen sample clock, exact
+resume phase and natural PLAYEND. Time uses the nominal 32,000 Hz source
+denominator. Flycast advances the device phase by 743/1024 per mixer
+tick. The waveform check accounts for interpolation at the cut and from
+the silent preroll into the first surviving sample.
+
+Pause after a live pitch change remains outside this profile. For example,
+a 44.1 kHz source transposed down 12 semitones continues to use 44.1 kHz
+for public time while the output voice runs near 22.05 kHz. That sequence
+requires a cut qualified against the admitted live device rate. The
+fixed-rate tests cover the 32 and 44.1 kHz endpoints.
 
 ### Which player functions share a blocker?
 
 | 2.00J entry | What the public tests distinguish | What still needs a native implementation or test |
 | --- | --- | --- |
-| `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. | Active pause at nominal rates other than 44.1 kHz is not supported by this profile. |
+| `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. | Native rates below 32,000 Hz and a live transpose before pause remain open. |
 | `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. | Stock-valid titles that cannot yet pause also cannot discard that head. The native count deliberately excludes ring capacity when no frames moved. |
-| `ADXT_GetStat` | A running mono title can remain logically PLAYING while paused. Decoder end is not PLAYEND; the natural mono drain test requires the final real frame and checked stop. | The pause profile excludes other nominal rates. A failed retained group poll does not, by itself, establish a status-getter bug. |
-| `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo pause covers sample and NTSC/PAL clocks. Mono pause covers sample and PAL clocks, including centisecond readback. Separate mono live-transpose tests track source position at nominal Hz. | The pause tests do not cover other nominal rates, or a pause and live pitch change on the same title. |
+| `ADXT_GetStat` | A running mono title can remain logically PLAYING while paused. Decoder end is not PLAYEND; the natural mono drain test requires the final real frame and checked stop. | Status during a stock-valid pause outside the fixed-rate profile remains open. The retained group-poll failure remains a separate case. |
+| `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo pause covers sample and NTSC/PAL clocks. Mono pause covers sample and PAL clocks, including centisecond readback. The 32 kHz tests cover sample and centisecond clocks through paused hold and terminal completion. | A pause and live pitch change on the same title remains open. NTSC/PAL testing at 32 kHz is separate from sample-time coverage. |
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
 The selected Manatee adapter ignores its command selector, and the getter

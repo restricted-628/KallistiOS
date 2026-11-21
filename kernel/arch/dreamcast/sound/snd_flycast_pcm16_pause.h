@@ -9,8 +9,12 @@
 #define SND_FLYCAST_PCM16_PAUSE_RING 16384u
 #define SND_FLYCAST_PCM16_PAUSE_PREROLL 64u
 
-/* One explicitly opted-in 44.1 kHz mono or stereo PCM16 lease. Enable before
-   start. The caller serializes service, pause, resume and stop. */
+/* Native source/start rates supported by the fixed-rate pause profile. */
+bool snd_flycast_pcm16_pause_rate_supported(uint32_t rate);
+
+/* One explicitly opted-in 32–44.1 kHz mono or stereo PCM16 lease.
+   Enable before start. The admitted rate stays fixed for the lease.
+   The caller serializes service, pause, resume and stop. */
 int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm);
 
 /* Success freezes the active voices at one exclusive local output boundary.

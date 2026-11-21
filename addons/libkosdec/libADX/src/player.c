@@ -1388,7 +1388,8 @@ static int start_output(struct kosdec_adx_player *p) {
             return unsupported();
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
         if(p->flycast_pause_enabled &&
-           (p->info.sample_rate != 44100 || p->output.sample_rate != 44100))
+           (p->info.sample_rate != p->output.sample_rate ||
+            !snd_flycast_pcm16_pause_rate_supported(p->info.sample_rate)))
             return unsupported();
 #endif
         if(snd_ordinary_pcm16_open(&p->ordinary_pcm,&p->output,p->memory.sound_bytes / 2,

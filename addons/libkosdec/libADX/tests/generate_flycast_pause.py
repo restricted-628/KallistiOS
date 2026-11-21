@@ -5,12 +5,15 @@ rate, frames = 44100, 196608
 import sys
 
 name = sys.argv[1]
-assert name in ("proof", "fresh") and len(sys.argv) in (2, 3, 4)
+assert name in ("proof", "fresh") and 2 <= len(sys.argv) <= 5
 if len(sys.argv) >= 3:
     frames = int(sys.argv[2])
     assert frames > 0 and frames % 32 == 0
-channels = int(sys.argv[3]) if len(sys.argv) == 4 else 2
+channels = int(sys.argv[3]) if len(sys.argv) >= 4 else 2
 assert channels in (1, 2)
+if len(sys.argv) == 5:
+    rate = int(sys.argv[4])
+    assert 32000 <= rate <= 44100
 state = 15106 if name == "proof" else 115901
 def step():
     global state
