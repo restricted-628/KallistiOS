@@ -522,7 +522,11 @@ int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *, int
    request, with the exact output rate resolved when the source format becomes
    known. Prefill fails with ENOTSUP before output allocation if the source
    rate is outside 8000..48000 Hz or the exact pitch word has no representative
-   in 8000..88200 Hz for ordinary output or 8000..48000 Hz for retained output.
+   on the selected output. Generic ordinary output supports 8000..88200 Hz
+   and retained output 8000..48000 Hz. Checked ordinary output uses the live
+   rate and sound-ring limits for initial pitch as well. Above 88200 Hz
+   it requires PCM queue capacity for two sound rings and waits for that
+   reserve before START, unless the source is already fully decoded.
    Retained clock and transpose can be enabled in either order. An explicit
    nonzero native rate takes precedence.
    Source rate and requested output Hz remain separate in get_info.

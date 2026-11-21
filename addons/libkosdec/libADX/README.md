@@ -635,9 +635,16 @@ ordinary PCM16 backend. Bind a READY compatibility title to a direct
 unlinked stereo ADX stream, then call
 `kosdec_adx_compat_player_enable_stereo_transpose` before starting.
 Use 8192–65504 sound frames per channel in multiples of 32 and source
-and initial output rates in 8000–48000 Hz. Initialize the KOS stream pool for
-two channels. Keep the player and its provider storage through checked
-stop and producer shutdown. Rebuild consumers with the matching headers.
+rates in 8000–48000 Hz. Initialize the KOS stream pool for two channels.
+Stage an initial transpose with `kosdec_adx_compat_player_set_initial_transpose`
+before START. The startup output rate follows the checked renderer's live
+rate and geometry rules below. Above 88.2 kHz, use at least 131072 producer
+queue frames and 262144 PCM samples for stereo. Before key-on the player
+decodes two sound rings or reaches source EOF, so filling the first two
+DMA halves leaves decoded PCM available for the first refills. This reserve
+is separate from the compatibility PREP ready state. Keep the player and
+its provider storage through checked stop and producer shutdown. Rebuild
+consumers with the matching headers.
 
 Use `kosdec_adx_compat_player_set_live_transpose` to apply the cached
 semitone/cents request through separately acknowledged slot updates.

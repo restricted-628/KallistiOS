@@ -1398,7 +1398,7 @@ static int start_output(struct kosdec_adx_player *p) {
         unsigned channels = p->ordinary_mono_clock ? 1 : 2;
         const uint32_t ring = p->memory.sound_bytes / 2;
         if(p->output.channels != channels || p->info.sample_rate < 8000 ||
-           p->info.sample_rate > 48000 || p->output.sample_rate > 48000)
+           p->info.sample_rate > 48000)
             return unsupported();
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
         if(p->flycast_pause_enabled &&
@@ -1557,8 +1557,18 @@ static int poll_player(struct kosdec_adx_player *p) {
             uint32_t output_rate = p->requested_rate ? p->requested_rate : rate;
             if(output_rate < 8000 || output_rate > 48000) return failed(p,ENOTSUP);
             if(p->compat_start_pitch && !p->requested_rate) {
-                if(!p->compat_start_rate)
-                    p->compat_start_rate = media_adx_initial_pitch_rate(rate,p->compat_start_pitch_units);
+                if(!p->compat_start_rate) {
+                    uint32_t pitch = media_adx_initial_pitch_rate(rate,p->compat_start_pitch_units);
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+                    if(p->ordinary_stereo || p->ordinary_mono_clock) {
+                        if(!pitch) pitch = media_adx_live_pitch_rate(rate,p->compat_start_pitch_units);
+                        if(!snd_ordinary_pcm16_rate_supported(pitch,sound_frames) ||
+                           (pitch > 88200 && p->memory.capacity < 2 * sound_frames))
+                            return failed(p,ENOTSUP);
+                    }
+#endif
+                    p->compat_start_rate = pitch;
+                }
                 if(!p->compat_start_rate || (p->retained_offsets && p->compat_start_rate > 48000))
                     return failed(p,ENOTSUP);
                 output_rate = p->compat_start_rate;
@@ -1587,7 +1597,14 @@ static int poll_player(struct kosdec_adx_player *p) {
         }
         /* The compatibility gate describes preparation. The native refill
            still needs its startup PCM window to avoid an internal gap. */
-        if(r.queued_frames < sound_frames) {
+        size_t startup_frames = sound_frames;
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+        /* Keep a decoded ring in reserve when the first START is above
+           88.2 kHz. Compatibility PREP readiness still uses its own gate. */
+        if((p->ordinary_stereo || p->ordinary_mono_clock) && p->output.sample_rate > 88200)
+            startup_frames += sound_frames;
+#endif
+        if(r.queued_frames < startup_frames) {
             if(!source_done) return prefill_wait(p);
             if(p->ordinary_reprime_pending) return failed(p,ENODATA);
         }

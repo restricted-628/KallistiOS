@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- A checked stereo ADX title can start two octaves up and return to
+  normal pitch during playback on the same allocation. Above 88.2 kHz,
+  libADX waits for two rings of decoded PCM or finite EOF before starting.
+  Both Flycast CPU modes reproduced the +24-to-unity stereo waveform.
+
 - The private checked PCM16 player can start at the same rates it can
   switch to during playback. Rates above 88.2 kHz require 65,504 frames
   per channel. Startup still checks both stereo cursors independently;
