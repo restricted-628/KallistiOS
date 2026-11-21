@@ -38,6 +38,7 @@
 #include "snd_iface_internal.h"
 #include "snd_retained_pcm.h"
 #include "snd_retained_gain.h"
+#include "snd_retained_memory.h"
 #include "snd_retained_start_tl.h"
 #include "snd_stream_split.h"
 
@@ -1747,6 +1748,9 @@ struct snd_retained_pcm {
     snd_retained_pcm_fill_t fill;
     void *context;
     int16_t *scratch;
+    const int16_t *memory_data;
+    uint32_t memory_frames;
+    bool memory, memory_repeat;
     bool attempted, stopping, stopped, valid;
     int first_error, stop_error;
     unsigned source_count, first, count;
@@ -1768,6 +1772,39 @@ static retained_source_t *retained_source(retained_source_t *sources,
         if(sources[i].generation == generation)
             return &sources[i];
     return NULL;
+}
+
+static int retained_memory_fill(void *context, int16_t *data, uint32_t frames,
+    snd_retained_pcm_span_t *spans, unsigned capacity) {
+    snd_retained_pcm_t *pcm = context;
+    uint64_t written = pcm->source_count ? pcm->sources[0].written : 0;
+    uint32_t offset = (uint32_t)(pcm->memory_repeat ? written % pcm->memory_frames : written);
+    uint32_t copied = 0;
+    int count = 0;
+    (void)capacity; /* A fill has at most one rewind or one silence tail. */
+
+    while(copied < frames) {
+        uint32_t take = pcm->memory_frames - offset;
+        if(!take) {
+            spans[count++] = (snd_retained_pcm_span_t){
+                0, 0, frames - copied, SND_RETAINED_PCM_TERMINAL_SILENCE
+            };
+            break;
+        }
+        if(take > frames - copied)
+            take = frames - copied;
+        memcpy(data + copied * pcm->channels,
+               pcm->memory_data + (size_t)offset * pcm->channels,
+               take * pcm->channels * sizeof(*data));
+        spans[count++] = (snd_retained_pcm_span_t){
+            SND_RETAINED_MEMORY_GENERATION, offset, take, SND_RETAINED_PCM_SOURCE
+        };
+        copied += take;
+        offset += take;
+        if(pcm->memory_repeat && offset == pcm->memory_frames)
+            offset = 0;
+    }
+    return count;
 }
 
 static int retained_error(snd_retained_pcm_t *pcm) {
@@ -1833,6 +1870,51 @@ free_pcm:
     free(pcm->scratch);
     free(pcm);
     return -1;
+}
+
+int snd_retained_pcm_open_memory(snd_retained_pcm_t **out, unsigned channels,
+    uint32_t rate, uint32_t ring) {
+    if(snd_retained_pcm_open(out, channels, rate, ring, retained_memory_fill, NULL) < 0)
+        return -1;
+    (*out)->memory = true;
+    (*out)->context = *out;
+    return 0;
+}
+
+int snd_retained_pcm_memory_bind(snd_retained_pcm_t *pcm, const int16_t *data,
+    uint32_t frames, bool repeat) {
+    if(!pcm || !pcm->memory || !data || !frames ||
+       frames > SIZE_MAX / pcm->channels / sizeof(*data) ||
+       (repeat && frames < pcm->ring / 2)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pcm->attempted || pcm->stopping) {
+        errno = EBUSY;
+        return -1;
+    }
+    pcm->memory_data = data;
+    pcm->memory_frames = frames;
+    pcm->memory_repeat = repeat;
+    return 0;
+}
+
+int snd_retained_pcm_memory_position(const snd_retained_pcm_t *pcm,
+    snd_retained_memory_position_t *position) {
+    if(!pcm || !pcm->memory || !position) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!pcm->memory_frames) {
+        errno = ENODATA;
+        return -1;
+    }
+    uint64_t written = pcm->source_count ? pcm->sources[0].written : 0;
+    *position = (snd_retained_memory_position_t){
+        .submitted_frames = written,
+        .next_frame = (uint32_t)(pcm->memory_repeat ? written % pcm->memory_frames : written),
+    };
+    return 0;
 }
 
 static int retained_session(const snd_retained_pcm_t *pcm, uint64_t deadline) {
@@ -2103,6 +2185,9 @@ static int retained_write(snd_retained_pcm_t *pcm, bool running) {
         }
     }
 
+    if(pcm->memory && !pcm->memory_repeat && source_count &&
+       sources[0].written == pcm->memory_frames)
+        sources[0].sealed = true;
     memcpy(pcm->sources, sources, sizeof(pcm->sources));
     pcm->source_count = source_count;
     for(int i = 0; i < spans; ++i) {
@@ -2193,7 +2278,7 @@ static int retained_key_on(snd_retained_pcm_t *pcm, strchan_t *stream,
 }
 
 static int retained_start(snd_retained_pcm_t *pcm, const unsigned *initial_tl) {
-    if(!pcm || pcm->attempted || pcm->stopping) {
+    if(!pcm || pcm->attempted || pcm->stopping || (pcm->memory && !pcm->memory_data)) {
         errno = EINVAL;
         return -1;
     }
@@ -2420,7 +2505,7 @@ done:
 }
 
 int snd_retained_pcm_seal(snd_retained_pcm_t *pcm, uint64_t generation, uint64_t total) {
-    if(!pcm || !generation || pcm->stopping || pcm->first_error) {
+    if(!pcm || !generation || pcm->memory || pcm->stopping || pcm->first_error) {
         errno = EINVAL;
         return -1;
     }
@@ -2583,6 +2668,7 @@ int snd_retained_pcm_stop(snd_retained_pcm_t *pcm, uint32_t timeout) {
     pcm->scratch = NULL;
     pcm->fill = NULL;
     pcm->context = NULL;
+    pcm->memory_data = NULL;
     pcm->stopped = true;
     pcm->stop_error = 0;
     return 0;

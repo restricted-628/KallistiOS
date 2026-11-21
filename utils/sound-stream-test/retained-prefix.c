@@ -7,6 +7,7 @@
 #include <errno.h>
 #include "snd_retained_pcm.h"
 #include "snd_retained_gain.h"
+#include "snd_retained_memory.h"
 #include "snd_retained_start_tl.h"
 #include <dc/sound/aica_observation.h>
 

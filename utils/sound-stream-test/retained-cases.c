@@ -581,7 +581,75 @@ static void test_gain(void) {
     puts("RETAINED GAIN HOST PASS: validation, stereo handover, split failure, stale, retry and checked stop");
 }
 
+static int16_t memory_sample(unsigned frame, unsigned side) {
+    return side == 0 ? (int16_t)(2048 + frame * 3) : (int16_t)(-1024 - (int)frame * 7);
+}
+
+static int16_t memory_ring_sample(unsigned frame, unsigned side) {
+    int16_t value;
+    memcpy(&value, sound_ram[side] + frame * sizeof(value), sizeof(value));
+    return value;
+}
+
+static void test_retained_memory(void) {
+    int16_t samples[701 * 2];
+    for(unsigned i = 0; i < 701; ++i) {
+        samples[2 * i] = memory_sample(i, 0);
+        samples[2 * i + 1] = memory_sample(i, 1);
+    }
+    for(unsigned repeat = 0; repeat < 2; ++repeat) {
+        snd_retained_pcm_t *pcm = open_case(SILENCE);
+        assert(!snd_retained_pcm_close(pcm));
+        frees = 0;
+        assert(!snd_retained_pcm_open_memory(&pcm, 2, 44100, 1024));
+        snd_retained_memory_position_t next = { UINT64_MAX, UINT32_MAX };
+        assert(snd_retained_pcm_memory_position(pcm, &next) == -1 && errno == ENODATA);
+        assert(next.submitted_frames == UINT64_MAX && next.next_frame == UINT32_MAX);
+        assert(snd_retained_pcm_start(pcm) == -1 && errno == EINVAL && !pcm->attempted);
+        assert(snd_retained_pcm_memory_bind(pcm, samples, 511, true) == -1 && errno == EINVAL);
+        assert(!snd_retained_pcm_memory_bind(pcm, samples, 701, repeat));
+        assert(!snd_retained_pcm_memory_position(pcm, &next) &&
+               !next.submitted_frames && !next.next_frame);
+        assert(snd_retained_pcm_seal(pcm, SND_RETAINED_MEMORY_GENERATION, 0) == -1 &&
+               errno == EINVAL);
+        assert(!snd_retained_pcm_start(pcm));
+        assert(snd_retained_pcm_memory_bind(pcm, samples, 701, repeat) == -1 && errno == EBUSY);
+        assert(!snd_retained_pcm_memory_position(pcm, &next));
+        assert(next.submitted_frames == (repeat ? 1024 : 701) &&
+               next.next_frame == (repeat ? 323 : 701));
+        for(unsigned side = 0; side < 2; ++side) {
+            assert(memory_ring_sample(700, side) == memory_sample(700, side));
+            assert(memory_ring_sample(701, side) == (repeat ? memory_sample(0, side) : 0));
+            assert(memory_ring_sample(702, side) == (repeat ? memory_sample(1, side) : 0));
+        }
+        poll_at(pcm, 14, 550, 550);
+        assert(!snd_retained_pcm_memory_position(pcm, &next));
+        assert(next.submitted_frames == (repeat ? 1536 : 701));
+        if(repeat) {
+            assert(next.next_frame == 134);
+            now += 11;
+            position[0] = position[1] = 6;
+            fail_dma_channel = 1;
+            assert(snd_retained_pcm_poll(pcm) == -1 && errno == EIO);
+            assert(!snd_retained_pcm_memory_position(pcm, &next) &&
+                   next.submitted_frames == 1536 && next.next_frame == 134);
+            assert(snd_retained_pcm_poll(pcm) == -1 && errno == EIO && dmas == 8);
+        } else {
+            poll_at(pcm, 4, 701, 701);
+            assert(query(pcm, SND_RETAINED_MEMORY_GENERATION).source_output_end);
+        }
+        assert(!snd_retained_pcm_stop(pcm, 100) && query(pcm, 0).software_stopped);
+        assert(snd_retained_pcm_close(pcm) == -1 && errno == EBUSY && !frees);
+        assert(streams[0].service_owner == pcm);
+        assert(!snd_retained_pcm_memory_position(pcm, &next));
+        assert(next.submitted_frames == (repeat ? 1536 : 701));
+        free(pcm); /* The test model discards its retained lease. */
+    }
+    puts("RETAINED MEMORY HOST PASS: tail, rewind, paired commit, error, lease");
+}
+
 int main(void) {
+    test_retained_memory();
     snd_retained_pcm_t *pcm = open_case(TWO_SOURCES);
     assert(!snd_retained_pcm_start(pcm) && dmas == 4);
     assert(!snd_retained_pcm_seal(pcm, 1, 128));

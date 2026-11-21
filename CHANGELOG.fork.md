@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — AICA mixer, command queue, DSP and memory-backed PCM
+
+- Read back CD-audio volume and pan and the master output mode. The host
+  sound command mutex exposes an advisory lock query, not an ARM busy flag.
+- DSP callers can install identified program and output presets and query
+  the selected IDs. A single return adjustment preserves the output ID.
+- Private retained PCM16 streams can play a finite or repeating in-memory
+  source. The transfer cursor counts committed source frames, not played
+  frames. Software stop does not release a played channel or its sound RAM.
+
 ## 2026-11-21 — Fixed-volume stereo ADX loop playback
 
 - Verified the ordinary player streaming a mounted 44.1 kHz stereo ADX file
