@@ -180,8 +180,69 @@ static void sequence_controls(void) {
     asql_service(&sequence_resources->control,11);
     CHECK(control_receipt.result==0 && !control_receipt.bound && !music->wire.protected_ports);
 }
+static void input_mode(uint32_t cookie, uint32_t generation, uint32_t enable) {
+    init_packet(AICA_MUSIC_WIRE_COMMAND,16,cookie);
+    data[8]=7;data[9]=AICA_MUSIC_WIRE_INPUT_MODE;data[11]=generation;data[12]=enable;
+    dispatch();
+}
+
+static void input_words(const uint32_t *words, unsigned count) {
+    CHECK(count <= sizeof(midi_words)/sizeof(*midi_words));
+    memcpy(midi_words, words, count*sizeof(*words));
+    midi_head=0;midi_end=count;
+    aica_music_wire_service_input(&music->wire,aica_midi_input_read);
+}
+
+static void external_midi(void) {
+    fresh();
+    registry_header.session=7;
+    registry_records[0]=(aica_bank_record_t){.session=7,.generation=1,.state=AICA_BANK_ACTIVE};
+    request(AICA_MUSIC_WIRE_CLAIM,1,1,0);
+    request(AICA_MUSIC_WIRE_OPEN,2,0,1);
+    CHECK(music_receipt.result==0 && music->music.ports[0].generation==1);
+    aica_music_live_service(music,10);
+    CHECK(!midi_reads);
+
+    input_mode(3,2,1);
+    CHECK(music_receipt.result==AICA_MUSIC_INVALID && !music->wire.input_generation);
+    input_mode(4,1,2);
+    CHECK(music_receipt.result==AICA_MUSIC_INVALID && !music->wire.input_generation);
+    input_mode(5,1,1);
+    CHECK(music_receipt.result==0 && music->wire.input_generation==1);
+    input_words((const uint32_t[]){0x90,60,100},3);
+    CHECK(midi_reads==4 && !music->music.count);
+
+    input_words((const uint32_t[]){0x92,61,0xf8},3);
+    CHECK(!music->music.count && music->wire.input_partial);
+    input_words((const uint32_t[]){100,62,101,0xc2,18,19},6);
+    CHECK(music->music.count==4);
+    const aica_music_event_t *e=music->music.queue;
+    CHECK(e[0].port==0 && e[0].generation==1 && e[0].channel==2 &&
+          e[0].status==0x90 && e[0].a==61 && e[0].b==100);
+    CHECK(e[1].status==0x90 && e[1].a==62 && e[1].b==101);
+    CHECK(e[2].status==0xc0 && e[2].a==18 && e[2].b==0);
+    CHECK(e[3].status==0xc0 && e[3].a==19 && e[3].b==0);
+
+    input_words((const uint32_t[]){0x490,63,100,0xc0,21},5);
+    CHECK(music->music.count==4 && !music->wire.input_status);
+    input_words((const uint32_t[]){72,90,0xf0,10,11,0xf7},6);
+    CHECK(music->music.count==4);
+    input_words((const uint32_t[]){0x80,61,0},3);
+    CHECK(music->music.count==5 && e[4].status==0x80);
+
+    input_mode(6,1,0);
+    unsigned before=midi_reads;
+    input_words((const uint32_t[]){0x90,64,100},3);
+    CHECK(music_receipt.result==0 && midi_reads==before && !music->wire.input_generation);
+    input_mode(7,1,1);
+    music->wire.protected_ports=1;
+    aica_music_wire_service_input(&music->wire,aica_midi_input_read);
+    CHECK(midi_reads==before && !music->wire.input_generation);
+}
+
 int main(void) {
     observation_regression();clocks();claims();backend_and_guards();sequence_publication();sequence_controls();
+    external_midi();
     printf("LIVE music: %u actual-C checks passed; no hardware/retirement proof\n",checks);
     return 0;
 }

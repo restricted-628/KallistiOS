@@ -366,6 +366,10 @@ int aica_is_playing(int ch) {
     return (CHNREG32(ch, 0) & AICA_CHANNEL_KEYONB) != 0;
 }
 
+uint32 aica_midi_input_read(void) {
+    return SNDREG32(0x2808);
+}
+
 uint32 aica_get_loop_end(void) {
     return (SNDREG32(0x2810) >> 15) & 1;
 }

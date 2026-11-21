@@ -25,6 +25,14 @@ static aica_observation_header_t header;
 static aica_completion_header_t completion_header;
 static aica_completion_channel_t completions[64];
 static unsigned lp_reads, selected_channel;
+static unsigned midi_reads;
+static uint32_t midi_words[32];
+static unsigned midi_head, midi_end;
+
+uint32 aica_midi_input_read(void) {
+    ++midi_reads;
+    return midi_head < midi_end ? midi_words[midi_head++] : 0x100u;
+}
 static uint32_t lp_bits[64], lp_on_start;
 uint32 aica_get_loop_end(void) {
     ++lp_reads; uint32_t v = lp_bits[selected_channel]; lp_bits[selected_channel] = 0; return v;
@@ -98,6 +106,7 @@ static void reset(void) {
     observer.completion_header = &completion_header;
     observer.completions = completions;
     lp_reads = 0; memset(lp_bits, 0, sizeof(lp_bits));
+    midi_reads = midi_head = midi_end = 0;
     aica_observer_init(&observer); aica_observer_ready(&observer);
     test_clock = 42; writes = reads = commands_rejected = 0;
 }

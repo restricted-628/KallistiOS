@@ -26,6 +26,7 @@ void aica_freq(int ch);
 int aica_get_pos(int ch);
 /* Destructive LP read for the channel selected by aica_get_pos. */
 uint32 aica_get_loop_end(void);
+uint32 aica_midi_input_read(void);
 int aica_is_playing(int ch);
 void aica_channel_start(int ch, const aica_channel_config_t *config,
                         int delayed);

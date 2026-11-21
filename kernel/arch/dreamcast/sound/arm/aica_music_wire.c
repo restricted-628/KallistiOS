@@ -104,6 +104,22 @@ static int apply(aica_music_wire_t *w) {
     }
     if(!(w->bank_pins&(1u<<p))) return AICA_MUSIC_INVALID;
     switch(op) {
+        case AICA_MUSIC_WIRE_INPUT_MODE:
+            if(a[0] > 1 || !blank(a+1,3) || !m->ports[p].open ||
+               m->ports[p].generation != g)
+                return AICA_MUSIC_INVALID;
+            if(!a[0]) {
+                if(w->input_generation == g && w->input_port == p)
+                    w->input_generation = 0;
+                return 0;
+            }
+            if(w->input_generation != g || w->input_port != p) {
+                w->input_generation = g;
+                w->input_port = (uint8_t)p;
+                w->input_sync = 1;
+                w->input_status = w->input_partial = 0;
+            }
+            return 0;
         case AICA_MUSIC_WIRE_MESSAGE:return aica_music_message(m,p,g,a[0],a[1],a[2],a[3]);
         case AICA_MUSIC_WIRE_MUTE:
             return blank(a+1,3)?aica_music_mute(m,p,g,a[0]):AICA_MUSIC_INVALID;
@@ -153,6 +169,59 @@ int aica_music_wire_command(aica_music_wire_t *w,const aica_cmd_t *packet,uint32
     }
     return publish(w,apply(w));
 }
+static void input_byte(aica_music_wire_t *w, uint8_t byte) {
+    if(byte >= 0xf8)
+        return; /* Realtime messages leave channel running status intact. */
+    if(byte & 0x80) {
+        w->input_status = byte < 0xf0 ? byte : 0;
+        w->input_partial = 0;
+        return;
+    }
+    if(!w->input_status)
+        return;
+    uint8_t operation = w->input_status & 0xf0;
+    if(operation == 0xc0 || operation == 0xd0) {
+        aica_music_message(w->music, w->input_port, w->input_generation,
+                           w->input_status, byte, 0, 0);
+    }
+    else if(w->input_partial) {
+        aica_music_message(w->music, w->input_port, w->input_generation,
+                           w->input_status, w->input_first, byte, 0);
+        w->input_partial = 0;
+    }
+    else {
+        w->input_first = byte;
+        w->input_partial = 1;
+    }
+}
+
+void aica_music_wire_service_input(aica_music_wire_t *w, uint32_t (*read_fifo)(void)) {
+    if(!w->input_generation || w->pending)
+        return;
+    const aica_music_port_t *port = &w->music->ports[w->input_port];
+    if(!port->open || port->generation != w->input_generation ||
+       (w->protected_ports & (1u << w->input_port)) || w->faulted ||
+       w->music->faulted || w->music->quiescing) {
+        w->input_generation = 0;
+        return;
+    }
+
+    enum { MIDI_EMPTY = 0x100, MIDI_OVERFLOW = 0x400 };
+    for(unsigned int n = 0; n < 16; ++n) {
+        uint32_t word = read_fifo();
+        if(word & MIDI_OVERFLOW) {
+            w->input_status = w->input_partial = 0;
+            w->input_sync = 1;
+        }
+        if(word & MIDI_EMPTY) {
+            w->input_sync = 0;
+            return;
+        }
+        if(!w->input_sync)
+            input_byte(w, (uint8_t)word);
+    }
+}
+
 void aica_music_wire_service(aica_music_wire_t *w) {
     if(!w || !w->pending || (w->music->count && !w->music->faulted)) return;
     w->pending=0;publish(w,apply(w));

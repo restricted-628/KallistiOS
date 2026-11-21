@@ -114,6 +114,21 @@ int aica_music_owner_command(aica_music_owner_t *o, unsigned operation, unsigned
         return -1;
     return aica_music_client_begin(&o->client,operation,port,generation,arguments);
 }
+int aica_music_owner_set_input_mode(aica_music_owner_t *o, unsigned port,
+    uint32_t generation, unsigned enabled) {
+    if(!valid(o) || port >= 8 || !generation || enabled > 1) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!(snd_iface_observation_features() & AICA_DRIVER_FEATURE_MIDI_INPUT)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    const uint32_t args[4] = {enabled,0,0,0};
+    return aica_music_client_begin(&o->client,AICA_MUSIC_WIRE_INPUT_MODE,
+                                  port,generation,args);
+}
+
 int aica_music_owner_quiesce(aica_music_owner_t *o) {
     if(!valid(o)) return -1;
     return aica_music_client_quiesce(&o->client);

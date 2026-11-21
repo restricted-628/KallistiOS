@@ -18,6 +18,7 @@
 #define AICA_MUSIC_WIRE_QUIESCE 11u
 #define AICA_MUSIC_WIRE_RESET_ALL 12u
 #define AICA_MUSIC_WIRE_CLOSE_ALL 13u
+#define AICA_MUSIC_WIRE_INPUT_MODE 14u
 /* Payload words: session, operation, port, generation, four operation arguments.
    Packet timestamp/misc are zero, size16 words, cmd_id is a nonzero increasing
    cookie. One pending host request globally; retries must be byte-identical. */
@@ -47,6 +48,8 @@ typedef struct {
     uint32_t session,cookie,cancelled_cookie,request[8];
     uint8_t claimed,pending,faulted,bank_pins;
     uint32_t protected_ports; /* Bound sequence ports; external mutators excluded. */
+    uint32_t input_generation;
+    uint8_t input_port, input_sync, input_status, input_first, input_partial;
 } aica_music_wire_t;
 /* First initialization only. Memory placement/firmware activation and host
    ownership are integration gates; this core assigns no absolute RAM address. */
@@ -59,4 +62,5 @@ int aica_music_wire_init(aica_music_wire_t *,aica_music_t *,
 int aica_music_wire_command(aica_music_wire_t *,const aica_cmd_t *,uint32_t active_session);
 /* Call after bounded MIDI service. Completes at most one pending control. */
 void aica_music_wire_service(aica_music_wire_t *);
+void aica_music_wire_service_input(aica_music_wire_t *, uint32_t (*read_fifo)(void));
 #endif

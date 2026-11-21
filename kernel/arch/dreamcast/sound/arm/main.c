@@ -267,7 +267,7 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_POSITION |
                      AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
                      AICA_DRIVER_FEATURE_BANK_REGISTRY | AICA_DRIVER_FEATURE_BANK_LAYERS |
-                     AICA_DRIVER_FEATURE_MUSIC |
+                     AICA_DRIVER_FEATURE_MUSIC | AICA_DRIVER_FEATURE_MIDI_INPUT |
                      AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE |
                      AICA_DRIVER_FEATURE_SEQUENCE_CONTROL |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;

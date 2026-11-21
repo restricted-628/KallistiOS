@@ -44,7 +44,7 @@ _Static_assert(sizeof(aica_music_receipt_t)==256, "receipt size");
 _Static_assert(AICA_MEM_MUSIC_RECEIPT_END<=AICA_MEM_MUSIC_STATE, "state separation");
 _Static_assert(AICA_MEM_MUSIC_STATE+sizeof(aica_music_live_t)<=AICA_MEM_MUSIC_LIMIT, "state extent");
 #if defined(__arm__)
-_Static_assert(sizeof(aica_music_live_t)==19728, "complete ARM state");
+_Static_assert(sizeof(aica_music_live_t)==19744, "complete ARM state");
 _Static_assert(AICA_MEM_MUSIC_STATE % _Alignof(aica_music_live_t)==0, "state alignment");
 #endif
 #endif

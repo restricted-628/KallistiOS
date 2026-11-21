@@ -24,9 +24,10 @@ io:c->error=AICA_MC_IO;return 0;
 }
 static int valid_request(unsigned op,unsigned p,uint32_t g,const uint32_t *a) {
     int32_t value;
-    if(!a || op<1 || op>13 || p>=8) return 0;
+    if(!a || op<1 || op>AICA_MUSIC_WIRE_INPUT_MODE || p>=8) return 0;
     if(op==AICA_MUSIC_WIRE_CLAIM) return !p && !g && (a[0] || a[1]) && !a[2] && !a[3];
-    if(op>=AICA_MUSIC_WIRE_QUIESCE) return !p && !g && zeros(a,4);
+    if(op>=AICA_MUSIC_WIRE_QUIESCE && op<=AICA_MUSIC_WIRE_CLOSE_ALL)
+        return !p && !g && zeros(a,4);
     if(op==AICA_MUSIC_WIRE_OPEN) return !g && a[0]<128 && a[1] && !a[2] && !a[3];
     if(op==AICA_MUSIC_WIRE_QUERY) return zeros(a,4);
     if(!g) return 0;
@@ -34,7 +35,7 @@ static int valid_request(unsigned op,unsigned p,uint32_t g,const uint32_t *a) {
         case AICA_MUSIC_WIRE_CLOSE:case AICA_MUSIC_WIRE_RESET:return zeros(a,4);
         case AICA_MUSIC_WIRE_MESSAGE:return a[0]>=0x80 && a[0]<0xf0 && a[1]<=127 && a[2]<=127 && a[3]<=31;
         case AICA_MUSIC_WIRE_MUTE:return a[0]<=65535 && zeros(a+1,3);
-        case AICA_MUSIC_WIRE_GM:case AICA_MUSIC_WIRE_RELEASE:return a[0]<=1 && zeros(a+1,3);
+        case AICA_MUSIC_WIRE_GM:case AICA_MUSIC_WIRE_RELEASE:case AICA_MUSIC_WIRE_INPUT_MODE:return a[0]<=1 && zeros(a+1,3);
         case AICA_MUSIC_WIRE_PARAMETER:
             memcpy(&value,a+1,sizeof(value));
             return a[0]<=4 && (a[0]==2?(value>=-32768 && value<=32767):(value>=-127 && value<=127)) &&

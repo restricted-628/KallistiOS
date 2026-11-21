@@ -27,6 +27,12 @@ int aica_music_owner_open(aica_music_owner_t *, unsigned port, abk_bank_t *);
    existing client rules. MESSAGE result is queue admission, not audible output. */
 int aica_music_owner_command(aica_music_owner_t *, unsigned operation, unsigned port,
     uint32_t generation, const uint32_t arguments[4]);
+/* Optional bounded AICA MIDI FIFO receive into a direct, open music port.
+   Enable begins at an empty FIFO boundary. Poll/consume the mode receipt.
+   Running status and channel voice input are supported. The source must
+   fit the service cadence. Port reuse, protection and faults disable input. */
+int aica_music_owner_set_input_mode(aica_music_owner_t *, unsigned port,
+    uint32_t generation, unsigned enabled);
 int aica_music_owner_quiesce(aica_music_owner_t *);
 int aica_music_owner_consume(aica_music_owner_t *);
 /* No natural completion in this live slice. Logical QUIESCE never frees ports,

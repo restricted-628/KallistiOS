@@ -1,4 +1,5 @@
 #include "aica_music_live.h"
+#include "aica.h"
 static void clear(void *p, unsigned n) {
     uint8_t *b=p; while(n--) *b++=0;
 }
@@ -61,7 +62,10 @@ static int prepare(aica_music_live_t *s, unsigned voice, unsigned op,
     if(s->music.faulted) return 0;
     if(!s->backend.claimed || voice>=s->backend.voices) { fault(s);return 0; }
     physical=s->backend.physical[voice];
-    if(!aica_music_hw_validate(physical,op,c,fields) ||
+    /* STOP has no config fields. Check it here before invalidation so it does
+       not go through the shared ARM boolean-result validator. */
+    if((op==AICA_CHANNEL_OP_STOP ? fields!=0 :
+        !aica_music_hw_validate(physical,op,c,fields)) ||
        !aica_music_hw_invalidate(physical<32?1u<<physical:0,
                                  physical>=32?1u<<(physical-32):0)) {
         fault(s);return 0;
@@ -121,6 +125,7 @@ int aica_music_live_command(aica_music_live_t *s, const aica_cmd_t *p, uint32_t 
 void aica_music_live_service(aica_music_live_t *s, uint32_t tick) {
     uint32_t elapsed=aica_music_clock_step(&s->backend,tick);
     if(s->wire.faulted) fault(s);
+    aica_music_wire_service_input(&s->wire, aica_midi_input_read);
     aica_music_service(&s->music,elapsed);
     aica_music_wire_service(&s->wire);
     s->backend.quiesced=s->music.quiescing;
