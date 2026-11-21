@@ -29,7 +29,7 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 | H3 | Metadata and framing queries | Validated metadata snapshot, strict header/endcode prefix probes and full-file adxcheck; truncation/malformed/unaligned/suffix tests | Admitted-format native queries implemented. CRI recognizer permissiveness and supplied-span endcode sizing are documented differences; complete baseline format conformance remains C1. |
 | H4 | Embedded loop controls | Init-selected v3 repeat, playback-time release, and decoded-wrap query. Memory jobs release at the active trap. Sector-backed jobs apply release at transport EOS, retain prefetched data through the sample trap and floor raw loop offsets to the first compressed group | Stock seek and release ordering and one mounted-VFS loop/release of the shipped sector-aligned sample passed in both BIOS Flycast CPU modes. Physical GD-ROM latency and additional loop geometries remain open. |
 | H5 | Volume and pan | Checked KOS linear 0..255 controls; signed pan/AUTO; opt-in stock 2.00J retained initial attenuation and live gain with signed cache and acknowledgements. One 44.1 kHz mono player passed live gain at 8,192 frames per ring in both Flycast CPU modes. | Live gain is disabled by default. The stereo composition remains held after EPIPE during polling after an acknowledged first request. Transition gain, fades and physical qualification remain open. |
-| H6 | Playback clock and completion | Qualified source-output clock and signed offsets in sample, NTSC and PAL modes. Healthy concurrent titles independently reach logical PLAYEND. A failed output transfer preserves the compatibility status while native diagnostics report failure. | Sample time freezes on the Flycast active-pause profile below. Paused NTSC/PAL time and device-audible end remain open. |
+| H6 | Playback clock and completion | Qualified source-output clock and signed offsets in sample, NTSC and PAL modes. Healthy concurrent titles independently reach logical PLAYEND. A failed output transfer preserves the compatibility status while native diagnostics report failure. | Sample, NTSC and PAL compatibility clocks freeze on the Flycast active-pause profile below. Device-audible end remains distinct from logical PLAYEND. |
 | H7 | Service and input-buffer policy | Opt-in owner-driven service and direct title dispatch use one collection cadence latch. Phased ADX, WAVE, AIFF, AU and SPSD bindings preserve DECODER/RENDERER/FILE/STREAM/title/RELOAD order. Compatibility preparation uses admitted block geometry. Typed faults support checked STOP and caller-prepared REPLAY. Native fiber and group polling remain available. | Both Flycast CPU modes exercise live default stereo WAVE at NTSC and PAL with a 16,384-byte/channel sound buffer. Live default ADX REPLAY uses the same geometry. Other Audio compositions, exact physical storage timing and hardware output qualification remain open. |
 | H8 | Error reporting and recovery | Independent diagnostic query/clear/owner notification; NOACT/STOP/bounded REPLAY with terminal input errors and opt-in running stall detection; monotonic delay and checked stop/replay preparation | Qualify target thresholds and output failure classification. Audio-qualified retirement and reuse remain open. |
 | H9 | Start gate, pause and stop | Prefill, prepared-start gate, pre-output pause and checked software stop. An opt-in ordinary stereo title can stop and re-prime its own allocation with a new source. | The Flycast profile below supports five active pauses and resumes on one title. General active pause and repeatable retained restart remain open. A successful software stop is not permission to release sound RAM. |
@@ -51,14 +51,19 @@ it would resume at the wrong frame. Neither implements a pause.
 The [Flycast active pause profile](README.md#flycast-active-pause) passed
 five cycles on one finite 44.1 kHz stereo title in both BIOS CPU modes.
 The title kept one handle and 128 KiB of sound RAM. Its sample and
-centisecond clocks froze at the cut. After discards of 0, 128, 256, 0 and
+centisecond clocks froze at the cut. Separate NTSC and PAL runs used
+owner-delivered VBlank events: advancing the event counter while paused
+did not advance title time. Resume set the clock from the running source
+position; the next event added 100 ticks at a denominator of 5994 (NTSC)
+or 5000 (PAL). These runs test clock arithmetic, not physical video timing.
+After discards of 0, 128, 256, 0 and
 128 frames, both channels resumed at the expected source frame. Retrying
 a withheld cut result did not advance the cut or discard twice.
 
 This covers only a cut in the first traversal of each 16,384-frame bank.
 It requires enough source data to re-prime the bank. A fresh ordinary
 title after checked stop used a separate allocation; the test did not
-release or recycle the played allocation. Paused NTSC/PAL time, arbitrary
+release or recycle the played allocation. Arbitrary
 late cuts, short end-of-source resumes and hardware retirement remain open.
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.

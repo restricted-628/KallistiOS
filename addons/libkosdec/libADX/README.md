@@ -659,8 +659,11 @@ Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against
 the matching build-gated Audio backend. Bind a READY title with one finite,
 direct stereo ADX source at 44,100 Hz. Enable ordinary stereo and then
 `kosdec_adx_compat_player_enable_flycast_pause` before start. This profile
-uses sample time and a 16,384-frame/channel sound ring. It requires an
-owner and a producer that can supply a dense continuation. Rebuild with
+uses a 16,384-frame/channel sound ring. It requires an owner and a
+producer that can supply a dense continuation. For compatibility NTSC or
+PAL time, enable the collection's VBlank clock before binding and then
+select the desired time mode. While paused, VBlank delivery does not advance
+the count. Resume re-anchors to elapsed source time and the current tick. Rebuild with
 matching headers.
 
 Call the normal compatibility pause and discard APIs. A pending cut must
@@ -679,7 +682,9 @@ The synthetic regression builds with `flycast-pause-test-elf`. Run
 `tests/generate_flycast_pause.py` with Python and each of the names `proof`
 and `fresh`. Mount the generated `disc` tree alongside the test ELF. It
 exercises five cycles, a withheld cut result retried on the same lease,
-a checked stop and an independent fresh title.
+a checked stop and an independent fresh title. The
+`flycast-pause-vsync-test-elf` target also exercises NTSC and PAL time
+with explicit owner-delivered VBlank events.
 
 ### Retained output clock
 

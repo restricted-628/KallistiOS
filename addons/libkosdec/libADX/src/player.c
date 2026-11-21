@@ -21,7 +21,7 @@ enum { FLYCAST_RING = SND_FLYCAST_PCM16_PAUSE_RING,
 struct kosdec_adx_flycast_pause {
     uint64_t elapsed, source_first, output_first, written, real_end, cut;
     uint64_t epoch;
-    uint32_t discarded;
+    uint32_t discarded, pending_vsync_count;
     bool pending;
     int16_t history[2 * FLYCAST_RING];
     int16_t staged[2 * FLYCAST_PREFILL];
@@ -555,7 +555,8 @@ int kosdec_adx_compat_player_set_time_mode(struct kosdec_adx_player *p,
     if(!valid(p) || !valid_time_mode(mode) ||
        (p->info.state >= KOSDEC_ADX_PLAYER_RELEASING && p->info.state != KOSDEC_ADX_PLAYER_STOPPED))
         return bad();
-    if(!p->compat_service || (p->flycast_pause_enabled && mode != KOSDEC_ADX_TIME_SOURCE))
+    if(!p->compat_service || (p->flycast_pause_enabled && mode != KOSDEC_ADX_TIME_SOURCE &&
+                              !p->compat_service->use_vsync_clock))
         return unsupported();
     select_time_mode(p,mode);
     return 0;
@@ -639,7 +640,18 @@ static int compat_live_time(struct kosdec_adx_player *p, struct kosdec_adx_time 
     if(at_end) return unsupported();
 
     uint32_t tick = collection_clock ? p->compat_service->vsync_count : p->vsync_ticks(p->vsync_context);
-    uint32_t estimate = (uint32_t)p->compat_vsync_anchor + (tick - p->compat_vsync_anchor_tick) * 100u;
+    uint32_t estimate = (uint32_t)p->compat_vsync_anchor;
+#ifdef MEDIA_ADX_FLYCAST_PAUSE
+    if(p->flycast_pause && p->flycast_pause->pending) {
+        *out = (struct kosdec_adx_time){
+            .count = compat_signed_count(p->flycast_pause->pending_vsync_count + bias),
+            .frequency = p->vsync_frequency
+        };
+        return 0;
+    }
+    if(!p->flycast_pause || !p->compat_paused)
+#endif
+        estimate += (tick - p->compat_vsync_anchor_tick) * 100u;
     float frequency = (float)p->vsync_frequency;
     float sample_seconds = (float)compat_signed_count(frames + bias) / (float)rate;
     float vsync_seconds = (float)compat_signed_count(estimate) / frequency;
@@ -1115,6 +1127,17 @@ static int flycast_snapshot(const struct kosdec_adx_player *p, uint64_t generati
     return 0;
 }
 
+static int flycast_reanchor(struct kosdec_adx_player *p, bool include_tick) {
+    if(!p->time_uses_vsync) return 0;
+    struct kosdec_adx_source_output clock;
+    if(qualified_clock(p,p->info.source_generation,&clock) < 0) return failed(p,errno);
+    float seconds = (float)compat_signed_count((uint32_t)clock.source_frames) /
+        (float)p->info.sample_rate;
+    p->compat_vsync_anchor = compat_truncate(seconds * (float)p->vsync_frequency);
+    if(include_tick) p->compat_vsync_anchor_tick = p->compat_service->vsync_count;
+    return 0;
+}
+
 static uint32_t flycast_available(const struct kosdec_adx_pipe *pipe, uint32_t *tail) {
     *tail = __atomic_load_n(&pipe->read_cursor,__ATOMIC_RELAXED);
     uint32_t front = __atomic_load_n(&pipe->write_cursor,__ATOMIC_ACQUIRE);
@@ -1163,7 +1186,7 @@ static int flycast_resume(struct kosdec_adx_player *p) {
     p->info.copied_frames += continuation;
     p->info.source_frames += continuation;
     if(continuation && wake_producer(p) < 0) return failed(p,errno);
-    return 0;
+    return flycast_reanchor(p,true);
 }
 
 static int flycast_player_pause(struct kosdec_adx_player *p, bool paused) {
@@ -1187,6 +1210,8 @@ static int flycast_player_pause(struct kosdec_adx_player *p, bool paused) {
             return -1;
         }
         f->cut = status.frames[0];
+        f->pending_vsync_count = (uint32_t)p->compat_vsync_anchor +
+            (p->compat_service->vsync_count - p->compat_vsync_anchor_tick) * 100u;
     }
     uint64_t cut;
     if(snd_flycast_pcm16_pause(p->ordinary_pcm,p->memory.transfer_timeout_ms,&cut) < 0) {
@@ -1200,7 +1225,7 @@ static int flycast_player_pause(struct kosdec_adx_player *p, bool paused) {
     f->cut = cut;
     f->pending = false;
     p->compat_paused = true;
-    return 0;
+    return flycast_reanchor(p,false);
 }
 
 static int flycast_discard(struct kosdec_adx_player *p, int32_t requested, int32_t *discarded) {
@@ -1219,6 +1244,7 @@ static int flycast_discard(struct kosdec_adx_player *p, int32_t requested, int32
     if(!p->compat_paused || p->flycast_pause != f || !p->source_bound ||
        (p->info.state != KOSDEC_ADX_PLAYER_PLAYING && p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END))
         return unsupported();
+    if(flycast_reanchor(p,true) < 0) return -1;
     uint32_t removed = 0;
     if(requested > 0) {
         uint64_t head = f->cut+f->discarded;
@@ -1247,7 +1273,8 @@ int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *p) {
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
     if(!p->ordinary_stereo || !p->compat_service || p->compat_service->servicing ||
        p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound ||
-       p->compat_phased || p->time_uses_vsync || p->requested_rate || p->compat_start_pitch ||
+       p->compat_phased || (p->time_uses_vsync && !p->compat_service->use_vsync_clock) ||
+       p->requested_rate || p->compat_start_pitch ||
        !p->producer.pipe.stream || p->producer.pipe.stream->linked || p->producer.pipe.stream->repeat ||
        p->memory.sound_bytes != FLYCAST_RING*2 || p->memory.capacity < FLYCAST_RING)
         return unsupported();

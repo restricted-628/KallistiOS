@@ -8,6 +8,12 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The Flycast active-pause profile now supports NTSC and PAL compatibility
+  clocks as well as sample time. Pause freezes the displayed time; discard
+  re-anchors it without charging discarded frames, and resume starts from
+  the confirmed running position. The regression exercises a signed display
+  offset, counter wrap and a withheld pause result in both BIOS CPU modes.
+
 - The optional Flycast libADX player now exposes active pause, sample
   discard and resume for finite 44.1 kHz stereo ADX. Five cycles through the
   public API passed in both BIOS CPU modes: source time froze while paused,

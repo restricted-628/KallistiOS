@@ -10,6 +10,17 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
+#ifndef ADX_TEST_VSYNC_MODE
+#define ADX_TEST_VSYNC_MODE 0
+#endif
+#if ADX_TEST_VSYNC_MODE == 1
+enum { VIDEO_HZ = 5994, DISPLAY_OFFSET = -17 };
+#elif ADX_TEST_VSYNC_MODE == 2
+enum { VIDEO_HZ = 5000, DISPLAY_OFFSET = -17 };
+#else
+enum { VIDEO_HZ = 0, DISPLAY_OFFSET = 0 };
+#endif
+
 enum {
     RATE = 44100, RING = 16384, QUEUE = 32768, FRAMES = 196608,
     TRACK_HEADER = 32, TRACK_BLOCK = 36, TRACK_FOOTER = 18,
@@ -102,7 +113,15 @@ static int play(unsigned lane) {
     kosdec_adx_stream_init(&streams[lane], provide, track[lane], TRACK_SIZE, false);
     CHECK(!kosdec_adx_player_init(p, &streams[lane], NULL, &config));
     CHECK(!kosdec_adx_compat_service_init(&service, &title, 1, &pacing));
+    if(VIDEO_HZ && !lane) {
+        CHECK(!kosdec_adx_compat_enable_vsync_clock(&service));
+        service.vsync_count = UINT32_MAX - 4;
+    }
     CHECK(!kosdec_adx_compat_bind_player(&service, 0, p));
+    if(VIDEO_HZ && !lane) {
+        CHECK(!kosdec_adx_compat_player_set_time_mode(p, ADX_TEST_VSYNC_MODE));
+        CHECK(!kosdec_adx_player_set_time_offset(p, DISPLAY_OFFSET));
+    }
     CHECK(!kosdec_adx_compat_player_enable_stereo_transpose(p));
 #ifdef ADX_TEST_ENABLE_ACTIVE_PAUSE
     if(!lane) { CHECK(!ADX_TEST_ENABLE_ACTIVE_PAUSE(p)); }
@@ -118,6 +137,17 @@ static int service_title(void) {
     return 0;
 }
 
+static int deliver_tick(void) {
+    struct kosdec_adx_compat_result pass;
+    CHECK(!kosdec_adx_compat_exec_vsync(&service, &pass));
+    CHECK(!pass.failed_titles && !pass.failed_phases);
+    return 0;
+}
+
+static int64_t video_anchor(uint64_t source) {
+    return (int64_t)(((float)source / RATE) * VIDEO_HZ) + DISPLAY_OFFSET;
+}
+
 static int snapshot(struct kosdec_adx_player *p, struct title_snapshot *out) {
     CHECK(!kosdec_adx_player_get_source_output(p, 1, &out->clock));
     CHECK(out->clock.valid && !out->clock.source_output_end && !out->clock.software_stopped);
@@ -126,10 +156,15 @@ static int snapshot(struct kosdec_adx_player *p, struct title_snapshot *out) {
     bool completed = true;
     CHECK(!kosdec_adx_compat_player_is_completed(p, &completed) && !completed);
     CHECK(!kosdec_adx_compat_player_get_time(p, &out->time));
-    CHECK(out->time.frequency == RATE && out->time.count >= 0 &&
-          (uint64_t)out->time.count == out->clock.source_frames);
+    if(VIDEO_HZ) {
+        CHECK(!kosdec_adx_compat_player_get_time(p, &out->time));
+        CHECK(out->time.frequency == VIDEO_HZ);
+    } else {
+        CHECK(out->time.frequency == RATE && out->time.count >= 0 &&
+              (uint64_t)out->time.count == out->clock.source_frames);
+    }
     CHECK(!kosdec_adx_compat_player_get_time_real(p, &out->real));
-    CHECK(out->real == (int64_t)(((float)out->time.count / RATE) * 100.0f));
+    CHECK(out->real == (int64_t)(((float)out->time.count / out->time.frequency) * 100.0f));
     return 0;
 }
 
@@ -158,20 +193,28 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
     CHECK(!await_source(p, target, &result->before));
     struct kosdec_adx_player_info before;
     CHECK(!kosdec_adx_player_get_info(p, &before) && before.channels == 2 && !before.starvations);
+    if(VIDEO_HZ) CHECK(!snapshot(p, &result->before));
+    uint32_t pause_anchor_tick = p->compat_vsync_anchor_tick;
     if(lose_cut_once) {
         CHECK(kosdec_adx_compat_player_pause(p, true) < 0 && errno == ETIMEDOUT && cut_lost);
         int32_t rejected = -123;
         CHECK(kosdec_adx_compat_player_discard_samples(p, 128, &rejected) < 0 &&
               errno == EBUSY && rejected == -123);
         CHECK(kosdec_adx_compat_player_pause(p, false) < 0 && errno == EBUSY);
-        CHECK(!service_title() && !snapshot(p, &result->held));
-        CHECK(!check_frozen(&result->before, &result->held));
+        if(VIDEO_HZ) CHECK(!deliver_tick());
+        else CHECK(!service_title());
+        CHECK(!snapshot(p, &result->held) && !check_frozen(&result->before, &result->held));
         CHECK(!kosdec_adx_compat_player_pause(p, true) && retry_cut == lost_cut);
     } else {
         CHECK(!kosdec_adx_compat_player_pause(p, true));
     }
     CHECK(!snapshot(p, &result->cut));
     CHECK(result->cut.clock.source_frames >= result->before.clock.source_frames);
+    if(VIDEO_HZ) {
+        CHECK(result->cut.time.count == video_anchor(result->cut.clock.source_frames));
+        CHECK(p->compat_vsync_anchor_tick == pause_anchor_tick);
+        CHECK(!deliver_tick());
+    }
     unsigned cut_queries = private_pauses;
     CHECK(!kosdec_adx_compat_player_pause(p, true) && private_pauses == cut_queries);
     CHECK(!snapshot(p, &result->held) && !check_frozen(&result->cut, &result->held));
@@ -180,15 +223,33 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
     result->removed = -1;
     CHECK(!kosdec_adx_compat_player_discard_samples(p, request, &result->removed));
     CHECK(result->removed == request);
+    if(VIDEO_HZ) CHECK(p->compat_vsync_anchor_tick == service.vsync_count);
     const uint64_t deadline = timer_ms_gettime64() + HOLD_MS;
+    uint64_t next_tick = timer_us_gettime64();
+    uint32_t before_hold = service.vsync_count;
     do {
-        CHECK(!service_title() && !snapshot(p, &result->held));
+        if(VIDEO_HZ && timer_us_gettime64() >= next_tick) {
+            CHECK(!deliver_tick());
+            next_tick += UINT64_C(100000000) / (VIDEO_HZ ? VIDEO_HZ : 1);
+        } else {
+            CHECK(!service_title());
+        }
+        CHECK(!snapshot(p, &result->held));
         CHECK(!check_frozen(&result->cut, &result->held));
         CHECK(snd_mem_available() == owned);
         thd_sleep(1);
     } while(timer_ms_gettime64() < deadline);
 
     CHECK(!kosdec_adx_compat_player_pause(p, false));
+    if(VIDEO_HZ) {
+        struct title_snapshot restarted, next;
+        CHECK(service.vsync_count - before_hold > 4 &&
+              p->compat_vsync_anchor_tick == service.vsync_count);
+        CHECK(!snapshot(p, &restarted) &&
+              restarted.time.count == video_anchor(restarted.clock.source_frames));
+        CHECK(!deliver_tick() && !snapshot(p, &next));
+        CHECK(next.time.count == restarted.time.count + 100);
+    }
     CHECK(!await_source(p, result->cut.clock.source_frames + 256, &result->resumed));
     CHECK(result->resumed.clock.epoch == result->cut.clock.epoch + 1);
     const uint64_t advanced = result->resumed.clock.source_frames - result->cut.clock.source_frames;
@@ -235,6 +296,7 @@ static int run(void) {
               !kosdec_adx_player_get_info(&players[0], &state) && state.sources_started == 1);
         target = cycles[i].cut.clock.source_frames + RING / 2 + 2048 + 257 * (i % 2);
     }
+    uint32_t video_events = service.vsync_count - (UINT32_MAX - 4);
     CHECK(!checked_stop(0, owned));
 
     /* A fresh title is deliberately outside the same-lease resume loop. */
@@ -268,6 +330,7 @@ static int run(void) {
            " fresh-title-aram=%" PRIu32 "\n", (uint64_t)fresh.count,
            initial - owned, owned - fresh_owned);
     CHECK(cut_lost && retry_cut == lost_cut && private_pauses == CYCLES + 1);
+    if(VIDEO_HZ) printf("ADX-FIVE timing hz=%u delivered=%" PRIu32 "\n", (unsigned)VIDEO_HZ, video_events);
     puts("ADX-FIVE PASS five pauses, real PCM survivors, checked stop and fresh title");
     return 0;
 }
