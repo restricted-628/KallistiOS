@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Retained PCM initial channel gain
+
+- Private retained PCM callers can start mono or stereo playback at an exact
+  AICA total level. The opt-in path checks support before filling the ring
+  and confirms each channel's setting before synchronized start. Default
+  linear-volume startup is unchanged.
+
 ## 2026-11-20 — AICA effects-send routing
 
 - On channel start and routing updates, pack the DSP send level and input bus

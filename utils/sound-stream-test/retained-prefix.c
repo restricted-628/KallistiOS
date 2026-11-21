@@ -7,6 +7,7 @@
 #include <errno.h>
 #include "snd_retained_pcm.h"
 #include "snd_retained_gain.h"
+#include "snd_retained_start_tl.h"
 #include <dc/sound/aica_observation.h>
 
 typedef int snd_stream_hnd_t;
@@ -56,10 +57,13 @@ static uint8_t sound_ram[2][4096];
 static uint32_t operations[2];
 static uint32_t gain_tokens[2], gain_features;
 static unsigned gain_submissions[2], gain_tl[2];
+static unsigned linear_anchors, key_off_tl_acks, tl_at_sync[2];
 static int gain_submit_error, gain_reject_channel, gain_stale_channel;
 static int gain_timeout_channel, gain_unattributed_channel;
+static int delayed_start_key_on, delayed_tl_key_on;
+static bool in_irq;
 
-static bool irq_inside_int(void) { return false; }
+static bool irq_inside_int(void) { return in_irq; }
 static int irq_disable(void) { return 0; }
 static void irq_restore(int old) { (void)old; }
 static int mutex_lock(int *lock) { ++*lock; return 0; }
@@ -155,6 +159,10 @@ static int snd_observation_submit_until(unsigned channel, uint32_t operation,
         assert(operation == SND_OBSERVATION_START ?
                flags == SND_CHANNEL_START_DELAYED && !fields :
                !flags && fields == SND_CHANNEL_UPDATE_VOLUME && syncs);
+        if(operation == SND_OBSERVATION_UPDATE) {
+            ++linear_anchors;
+            gain_tl[channel] = 0;
+        }
     }
     operations[channel] = operation;
     *receipt = (snd_channel_receipt_t){session, ++token, channel};
@@ -206,7 +214,10 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
         .operation = operations[ch], .result = SND_OBSERVATION_APPLIED,
         .attribution_kind = SND_OBSERVATION_ATTR_MANAGED,
         .attribution_token = receipt->token - (update && (int)ch == bad_channel),
-        .position = position[ch], .key_on = update || (stop && (int)ch == held_stop_channel),
+        .position = position[ch],
+        .key_on = (update && (syncs || (gain && (int)ch == delayed_tl_key_on))) ||
+                  (operations[ch] == SND_OBSERVATION_START && (int)ch == delayed_start_key_on) ||
+                  (stop && (int)ch == held_stop_channel),
         .host_challenge_started_ms = challenge_started, .host_observed_ms = now
     };
     if(gain && (int)ch == gain_reject_channel)
@@ -226,10 +237,16 @@ static int snd_observation_consume_until(const snd_channel_receipt_t *receipt,
         errno = ETIMEDOUT;
         return -1;
     }
+    if(!syncs && receipt->token == gain_tokens[receipt->channel])
+        key_off_tl_acks |= 1u << receipt->channel;
     return 0;
 }
 static int snd_channels_start_sync(uint64_t channels) {
     assert(channels == 1 || channels == 3);
+    if(gain_submissions[0] || gain_submissions[1])
+        assert(key_off_tl_acks == channels);
+    tl_at_sync[0] = gain_tl[0];
+    tl_at_sync[1] = gain_tl[1];
     ++syncs;
     now += first_delay;
     return 0;

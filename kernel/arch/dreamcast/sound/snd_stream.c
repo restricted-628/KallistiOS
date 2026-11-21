@@ -38,6 +38,7 @@
 #include "snd_iface_internal.h"
 #include "snd_retained_pcm.h"
 #include "snd_retained_gain.h"
+#include "snd_retained_start_tl.h"
 #include "snd_stream_split.h"
 
 /*
@@ -2110,55 +2111,83 @@ static int retained_consume(snd_retained_pcm_t *pcm, unsigned i, uint64_t deadli
     return 0;
 }
 
-static int retained_key_on(snd_retained_pcm_t *pcm, strchan_t *stream) {
+static int retained_confirm_key_off(snd_retained_pcm_t *pcm, unsigned i,
+    uint32_t operation, uint64_t deadline) {
+    const snd_channel_receipt_t *receipt = &pcm->receipt[i];
+    snd_channel_observation_t obs;
+    if(snd_observation_poll_until(receipt, deadline, &obs) < 0)
+        return -1;
+    pcm->receipt_polled[i] = true;
+    if(obs.session != pcm->session || obs.token != receipt->token ||
+       obs.channel != receipt->channel || obs.operation != operation ||
+       obs.result != SND_OBSERVATION_APPLIED ||
+       obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
+       obs.attribution_token != receipt->token || obs.key_on) {
+        errno = EPROTO;
+        return -1;
+    }
+    return retained_consume(pcm, i, deadline);
+}
+
+static int retained_key_on(snd_retained_pcm_t *pcm, strchan_t *stream,
+    const unsigned *initial_tl) {
     snd_channel_config_t config[2];
     uint64_t mask = 0;
 
     for(unsigned i = 0; i < pcm->channels; ++i) {
-        snd_channel_observation_t obs;
         unsigned channel = (unsigned)stream->ch[i];
         uint64_t deadline = timer_ms_gettime64() + RETAINED_OBSERVE_MS;
         stream_channel_config_pack(&config[i], &stream->config, i,
                                    stream->spu_ram_sch[i], pcm->ring);
         if(snd_observation_submit_until(channel, SND_OBSERVATION_START, &config[i],
-                0, SND_CHANNEL_START_DELAYED, &pcm->receipt[i], deadline) < 0)
+                0, SND_CHANNEL_START_DELAYED, &pcm->receipt[i], deadline) < 0 ||
+           retained_confirm_key_off(pcm, i, SND_OBSERVATION_START, deadline) < 0)
             return -1;
-        if(snd_observation_poll_until(&pcm->receipt[i], deadline, &obs) < 0)
-            return -1;
-        pcm->receipt_polled[i] = true;
-        if(obs.session != pcm->session || obs.result != SND_OBSERVATION_APPLIED ||
-           obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
-           obs.attribution_token != pcm->receipt[i].token || obs.key_on) {
-            errno = EPROTO;
-            return -1;
+        if(initial_tl) {
+            deadline = timer_ms_gettime64() + RETAINED_OBSERVE_MS;
+            if(snd_observation_submit_tl_until(channel, initial_tl[i],
+                    &pcm->receipt[i], deadline) < 0 ||
+               retained_confirm_key_off(pcm, i, SND_OBSERVATION_UPDATE, deadline) < 0)
+                return -1;
         }
-        if(retained_consume(pcm, i, deadline) < 0)
-            return -1;
         mask |= UINT64_C(1) << channel;
     }
 
-    /* Measure from the earliest possible key-on, not the first receipt.
-       SYNC deliberately marks the channels legacy. A volume-preserving
-       UPDATE, ordered after it, establishes managed attribution while
-       leaving the position and the paired start untouched. */
+    /* Measure from the earliest possible key-on. SYNC marks the slots legacy.
+       An UPDATE with the same linear volume or raw TL establishes the managed
+       anchor without changing the level, position or paired start. */
     pcm->key_on_not_before = timer_ms_gettime64();
     if(snd_channels_start_sync(mask) < 0)
         return -1;
     for(unsigned i = 0; i < pcm->channels; ++i) {
         pcm->cursor[i].before_ms = pcm->key_on_not_before;
         pcm->cursor[i].after_ms = pcm->key_on_not_before;
-        if(snd_observation_submit_until((unsigned)stream->ch[i], SND_OBSERVATION_UPDATE,
-                &config[i], SND_CHANNEL_UPDATE_VOLUME, 0, &pcm->receipt[i],
-                timer_ms_gettime64() + RETAINED_OBSERVE_MS) < 0)
+        unsigned channel = (unsigned)stream->ch[i];
+        uint64_t deadline = timer_ms_gettime64() + RETAINED_OBSERVE_MS;
+        int result = initial_tl ?
+            snd_observation_submit_tl_until(channel, initial_tl[i], &pcm->receipt[i], deadline) :
+            snd_observation_submit_until(channel, SND_OBSERVATION_UPDATE, &config[i],
+                SND_CHANNEL_UPDATE_VOLUME, 0, &pcm->receipt[i], deadline);
+        if(result < 0)
             return -1;
     }
     return 0;
 }
 
-int snd_retained_pcm_start(snd_retained_pcm_t *pcm) {
+static int retained_start(snd_retained_pcm_t *pcm, const unsigned *initial_tl) {
     if(!pcm || pcm->attempted || pcm->stopping) {
         errno = EINVAL;
         return -1;
+    }
+    if(initial_tl) {
+        if(irq_inside_int()) {
+            errno = EPERM;
+            return -1;
+        }
+        if(!(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TL)) {
+            errno = ENOTSUP;
+            return -1;
+        }
     }
     if(mutex_lock(&stream_state_mutex) < 0)
         return -1;
@@ -2178,17 +2207,36 @@ int snd_retained_pcm_start(snd_retained_pcm_t *pcm) {
     uint64_t output;
     if(retained_session(pcm, timer_ms_gettime64() + RETAINED_OBSERVE_MS) == 0 &&
        retained_write(pcm, false) == 0 &&
-       retained_write(pcm, false) == 0 && retained_key_on(pcm, stream) == 0 &&
+       retained_write(pcm, false) == 0 && retained_key_on(pcm, stream, initial_tl) == 0 &&
        retained_sample(pcm, next, &output) == 0) {
         retained_credit(pcm, next, output);
-        if(pcm->channels == 2)
+        if(pcm->channels == 2) {
             pcm->gain.acknowledged = RETAINED_GAIN_PAIR;
+            if(initial_tl) {
+                pcm->gain.acknowledged_tl[0] = (uint8_t)initial_tl[0];
+                pcm->gain.acknowledged_tl[1] = (uint8_t)initial_tl[1];
+            }
+        }
         result = 0;
     }
     else
         retained_error(pcm);
     mutex_unlock(&stream_state_mutex);
     return result;
+}
+
+int snd_retained_pcm_start(snd_retained_pcm_t *pcm) {
+    return retained_start(pcm, NULL);
+}
+
+int snd_retained_pcm_start_with_tl(snd_retained_pcm_t *pcm, unsigned left_tl,
+    unsigned right_tl) {
+    if(left_tl > UINT8_MAX || right_tl > UINT8_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    const unsigned initial_tl[2] = {left_tl, right_tl};
+    return retained_start(pcm, initial_tl);
 }
 
 static bool retained_gain_pending(const snd_retained_pcm_t *pcm) {

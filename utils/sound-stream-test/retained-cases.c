@@ -39,7 +39,7 @@ static int fill(void *context, int16_t *samples, uint32_t frames,
     return 1;
 }
 
-static snd_retained_pcm_t *open_case(enum fill_mode next_mode) {
+static snd_retained_pcm_t *open_case_with_channels(enum fill_mode next_mode, unsigned channels) {
     snd_retained_pcm_t *pcm = NULL;
     memset(streams, 0, sizeof(streams));
     retire_callback = true;
@@ -47,6 +47,11 @@ static snd_retained_pcm_t *open_case(enum fill_mode next_mode) {
     held_stop_channel = timeout_ack_channel = -1;
     stop_submissions[0] = stop_submissions[1] = 0;
     gain_submissions[0] = gain_submissions[1] = 0;
+    gain_tl[0] = gain_tl[1] = 0;
+    tl_at_sync[0] = tl_at_sync[1] = 0;
+    linear_anchors = key_off_tl_acks = 0;
+    delayed_start_key_on = delayed_tl_key_on = -1;
+    in_irq = false;
     gain_features = AICA_DRIVER_FEATURE_OBSERVATION_TL;
     gain_submit_error = 0;
     gain_reject_channel = gain_stale_channel = gain_timeout_channel = -1;
@@ -59,8 +64,12 @@ static snd_retained_pcm_t *open_case(enum fill_mode next_mode) {
     first_delay = right_dma_delay = right_observation_delay = 0;
     bad_channel = fail_dma_channel = -1;
     mode = next_mode;
-    assert(!snd_retained_pcm_open(&pcm, 2, 44100, 1024, fill, &calls));
+    assert(!snd_retained_pcm_open(&pcm, channels, 44100, 1024, fill, &calls));
     return pcm;
+}
+
+static snd_retained_pcm_t *open_case(enum fill_mode next_mode) {
+    return open_case_with_channels(next_mode, 2);
 }
 
 static void poll_at(snd_retained_pcm_t *pcm, unsigned gap, unsigned left, unsigned right) {
@@ -90,6 +99,68 @@ static snd_retained_gain_status_t gain_status(snd_retained_pcm_t *pcm, uint64_t 
     snd_retained_gain_status_t status;
     assert(!snd_retained_pcm_gain_status(pcm, id, &status));
     return status;
+}
+
+static void test_initial_tl(void) {
+    snd_retained_pcm_t *pcm = open_case(TWO_SOURCES);
+    gain_features = 0;
+    assert(snd_retained_pcm_start_with_tl(pcm, 60, 0) == -1 && errno == ENOTSUP);
+    gain_features = AICA_DRIVER_FEATURE_OBSERVATION_TL;
+    assert(snd_retained_pcm_start_with_tl(pcm, 60, 256) == -1 && errno == EINVAL);
+    in_irq = true;
+    assert(snd_retained_pcm_start_with_tl(pcm, 60, 0) == -1 && errno == EPERM);
+    in_irq = false;
+    assert(!pcm->attempted && !calls && !dmas && !syncs && !gain_submissions[0]);
+    assert(!snd_retained_pcm_close(pcm) && frees == 1);
+
+    pcm = open_case(TWO_SOURCES);
+    assert(!snd_retained_pcm_start_with_tl(pcm, 60, 0));
+    assert(syncs == 1 && key_off_tl_acks == 3 && !linear_anchors);
+    assert(gain_submissions[0] == 2 && gain_submissions[1] == 2);
+    assert(tl_at_sync[0] == 60 && tl_at_sync[1] == 0 &&
+           gain_tl[0] == 60 && gain_tl[1] == 0);
+    assert(!pcm->gain.request && pcm->gain.acknowledged == 3 &&
+           pcm->gain.acknowledged_tl[0] == 60 && pcm->gain.acknowledged_tl[1] == 0);
+    poll_at(pcm, 14, 521, 521);
+    assert(calls == 3 && dmas == 6 && query(pcm, 2).valid && query(pcm, 2).source_frames == 261);
+    assert(gain_tl[0] == 60 && gain_tl[1] == 0 && !linear_anchors);
+    stop_case(pcm);
+
+    pcm = open_case_with_channels(SILENCE, 1);
+    assert(!snd_retained_pcm_start_with_tl(pcm, 60, 255));
+    assert(syncs == 1 && key_off_tl_acks == 1 && !linear_anchors &&
+           gain_submissions[0] == 2 && !gain_submissions[1] &&
+           tl_at_sync[0] == 60 && gain_tl[0] == 60 && query(pcm, 0).valid);
+    stop_case(pcm);
+
+    for(unsigned fault = 0; fault < 4; ++fault) {
+        pcm = open_case(TWO_SOURCES);
+        if(fault == 0)
+            delayed_start_key_on = 1;
+        else if(fault == 1)
+            delayed_tl_key_on = 1;
+        else if(fault == 2)
+            gain_reject_channel = 1;
+        else
+            gain_timeout_channel = 1;
+        assert(snd_retained_pcm_start_with_tl(pcm, 60, 61) == -1 &&
+               errno == (fault == 3 ? ETIMEDOUT : EPROTO));
+        assert(!syncs && key_off_tl_acks == 1 && gain_submissions[0] == 1 &&
+               gain_submissions[1] == (fault != 0) && pcm->receipt[1].token);
+        assert(!query(pcm, 1).valid && !query(pcm, 1).source_frames);
+        assert(snd_retained_pcm_start_with_tl(pcm, 60, 61) == -1 && errno == EINVAL);
+        gain_timeout_channel = -1;
+        stop_case(pcm);
+    }
+
+    pcm = open_case(TWO_SOURCES);
+    first_delay = 30;
+    assert(snd_retained_pcm_start_with_tl(pcm, 60, 61) == -1 && errno == EOVERFLOW);
+    assert(syncs == 1 && key_off_tl_acks == 3 && !linear_anchors &&
+           gain_submissions[0] == 2 && gain_submissions[1] == 2);
+    assert(!query(pcm, 1).valid && !query(pcm, 1).source_frames);
+    stop_case(pcm);
+    puts("RETAINED INITIAL TL HOST PASS: mono/stereo preflight, staging, handover, refill and checked stop");
 }
 
 static void test_gain(void) {
@@ -360,5 +431,6 @@ int main(void) {
     stop_case(pcm);
     puts("RETAINED PCM HOST PASS: spans, wrap, skew, stereo acknowledgement, DMA loss, capacity, lease retention");
     test_gain();
+    test_initial_tl();
     return 0;
 }
