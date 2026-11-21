@@ -555,6 +555,10 @@ static void observer_read(uint32_t channel, uint32_t *position, uint32_t *key_on
     *key_on = aica_is_playing(channel);
 }
 
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+#include "flycast_pcm16_cut.inc"
+#endif
+
 /* Process a CHAN command */
 int process_chn(uint32 chn, aica_channel_t *chndat) {
     switch(chndat->cmd & AICA_CH_CMD_MASK) {
@@ -939,6 +943,10 @@ int arm_main(void) {
     /* Initialize the AICA part of the SPU */
     aica_init();
     aica_observer_ready(&observer);
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    flycast_cut->request = flycast_cut->done = 0;
+    flycast_cut->ready = FLYCAST_CUT_MAGIC;
+#endif
 
     /* Wait for a command */
     for(; ;) {
@@ -955,6 +963,10 @@ int arm_main(void) {
         aica_music_live_service(music,timer);
         asq_wire_service(&sequence_resources->wire);
         asql_service(&sequence_resources->control,timer);
+
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+        flycast_cut_service();
+#endif
 
         /* Little delay to prevent memory lock */
         timer_wait(10);

@@ -697,6 +697,13 @@ of consecutive live-gain updates and concurrent retained stereo playback:
 both compositions have returned EPIPE. Passing an isolated backend test does
 not qualify either composition, audible completion, or sound-RAM reuse.
 
+**Flycast-only active pause, 2026-11-21:** The optional ordinary PCM16
+profile may rewrite the other bank of the same reserved stereo stream
+after a qualified paired cut. Emulator traces establish that the previous
+bank's terminal reads precede its next write. This is not allocator
+release, a retail AICA read-drain guarantee, or permission to change the
+default or retained stream paths.
+
 ## D22 — SH4DER/SH4DOW integration and strip partition default
 
 **Owner direction, 2026-11-13:** Fully integrate the pinned SH4DER and bundled

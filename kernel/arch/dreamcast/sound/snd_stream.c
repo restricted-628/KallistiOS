@@ -38,6 +38,10 @@
 #include "snd_channel.h"
 #include "snd_iface_internal.h"
 #include "snd_ordinary_pcm16.h"
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+#include "snd_flycast_pcm16_pause.h"
+#include "arm/flycast_pcm16_cut.h"
+#endif
 #include "snd_retained_pcm.h"
 #include "snd_retained_gain.h"
 #include "snd_retained_memory.h"
@@ -1961,7 +1965,15 @@ struct snd_ordinary_pcm16 {
     bool pending, attempted, running, in_callback, stopped;
     int error;
     ordinary_pcm16_voice_t voice[2];
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    enum { PAUSE_LIVE, PAUSE_POSTED, PAUSE_CUT, PAUSE_HELD } pause_state;
+    uint32_t pause_banks[2], pause_cut;
+    unsigned pause_bank;
+#endif
 };
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+static snd_ordinary_pcm16_t *pause_owner;
+#endif
 
 bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring) {
     if(ring < 8192 || ring > ORDINARY_PCM16_RING_MAX || ring % 32 ||
@@ -2281,6 +2293,20 @@ static int ordinary_pcm16_leg(snd_ordinary_pcm16_t *pcm, unsigned side,
     } while(1);
 }
 
+static int ordinary_pcm16_write(snd_ordinary_pcm16_t *pcm) {
+    uint32_t frames = pcm->ring / 2;
+    snd_pcm16_split((void *)pcm->staging, (void *)(pcm->staging + pcm->ring),
+                    (void *)(pcm->staging + pcm->ring + frames), 4 * frames);
+    const strchan_t *stream = &streams[pcm->handle];
+    uint64_t deadline = timer_ms_gettime64() + stream->config.transfer_timeout_ms;
+    uint32_t offset = (uint32_t)(pcm->committed % pcm->ring) * 2;
+    if(ordinary_pcm16_leg(pcm, 0, offset, deadline) < 0 ||
+       ordinary_pcm16_leg(pcm, 1, offset, deadline) < 0)
+        return -1;
+    pcm->committed += frames;
+    return 0;
+}
+
 static int ordinary_pcm16_fill(snd_ordinary_pcm16_t *pcm) {
     uint32_t frames = pcm->ring / 2;
     if(pcm->committed > UINT64_MAX - frames) {
@@ -2297,15 +2323,27 @@ static int ordinary_pcm16_fill(snd_ordinary_pcm16_t *pcm) {
         return -1;
     }
     memset(pcm->staging + 2 * got, 0, 4 * (frames - (uint32_t)got));
-    snd_pcm16_split((void *)pcm->staging, (void *)(pcm->staging + pcm->ring),
-                    (void *)(pcm->staging + pcm->ring + frames), 4 * frames);
-    const strchan_t *stream = &streams[pcm->handle];
-    uint64_t deadline = timer_ms_gettime64() + stream->config.transfer_timeout_ms;
-    uint32_t offset = (uint32_t)(pcm->committed % pcm->ring) * 2;
-    if(ordinary_pcm16_leg(pcm, 0, offset, deadline) < 0 ||
-       ordinary_pcm16_leg(pcm, 1, offset, deadline) < 0)
+    return ordinary_pcm16_write(pcm);
+}
+
+static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, strchan_t *stream) {
+    uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
+    if(ordinary_pcm16_control(pcm, SND_OBSERVATION_START, 0,
+            SND_CHANNEL_START_DELAYED, &stream->config, deadline) < 0)
         return -1;
-    pcm->committed += frames;
+    uint64_t mask = (UINT64_C(1) << stream->ch[0]) | (UINT64_C(1) << stream->ch[1]);
+    uint64_t earliest = timer_ms_gettime64();
+    if(snd_channels_start_sync(mask) < 0)
+        return -1;
+    for(unsigned i = 0; i < 2; ++i)
+        pcm->voice[i].cursor = (ordinary_pcm16_cursor_t){0, earliest, earliest};
+    if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
+            0, &stream->config, deadline) < 0 ||
+       ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
+        return -1;
+
+    pcm->running = true;
+    stream->state = SND_STREAM_STATE_PLAYING;
     return 0;
 }
 
@@ -2323,23 +2361,8 @@ int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm) {
     if(ordinary_pcm16_fill(pcm) < 0 || ordinary_pcm16_fill(pcm) < 0)
         goto fail;
 
-    uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
-    if(ordinary_pcm16_control(pcm, SND_OBSERVATION_START, 0,
-            SND_CHANNEL_START_DELAYED, &stream->config, deadline) < 0)
+    if(ordinary_pcm16_key_on(pcm, stream) < 0)
         goto fail;
-    uint64_t mask = (UINT64_C(1) << stream->ch[0]) | (UINT64_C(1) << stream->ch[1]);
-    uint64_t earliest = timer_ms_gettime64();
-    if(snd_channels_start_sync(mask) < 0)
-        goto fail;
-    for(unsigned i = 0; i < 2; ++i)
-        pcm->voice[i].cursor = (ordinary_pcm16_cursor_t){0, earliest, earliest};
-    if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
-            0, &stream->config, deadline) < 0 ||
-       ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
-        goto fail;
-
-    pcm->running = true;
-    stream->state = SND_STREAM_STATE_PLAYING;
     return ordinary_pcm16_unlock(0);
 fail:
     return ordinary_pcm16_unlock(ordinary_pcm16_fault(pcm));
@@ -2379,6 +2402,12 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
         errno = EINVAL;
         return ordinary_pcm16_unlock(-1);
     }
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    if(pause_owner == pcm && rate != 44100) {
+        errno = ENOTSUP;
+        return ordinary_pcm16_unlock(-1);
+    }
+#endif
     if(ordinary_pcm16_ready(pcm) < 0)
         return ordinary_pcm16_unlock(ordinary_pcm16_rate_error());
     if(pcm->rate == rate)
@@ -2444,6 +2473,10 @@ int snd_ordinary_pcm16_stop(snd_ordinary_pcm16_t *pcm, uint32_t timeout) {
     if(pcm->stopped)
         return ordinary_pcm16_unlock(0);
 
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    if(pause_owner == pcm)
+        pcm->pause_state = PAUSE_HELD;
+#endif
     pcm->running = false;
     uint64_t deadline = timer_ms_gettime64() + timeout;
     if(pcm->attempted && snd_stream_stop_ex(pcm->handle, timeout) < 0)
@@ -2474,6 +2507,12 @@ int snd_ordinary_pcm16_close(snd_ordinary_pcm16_t *pcm) {
     stream->service_owner = NULL;
     int result = snd_stream_destroy_ex(pcm->handle, SND_STREAM_TRANSFER_TIMEOUT_DEFAULT);
     if(result == 0) {
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+        if(pause_owner == pcm) {
+            snd_mem_free(pcm->pause_banks[1]);
+            pause_owner = NULL;
+        }
+#endif
         sem_destroy(&pcm->dma);
         free(pcm->staging);
         free(pcm);
@@ -2482,6 +2521,10 @@ int snd_ordinary_pcm16_close(snd_ordinary_pcm16_t *pcm) {
         stream->service_owner = pcm;
     return ordinary_pcm16_unlock(result);
 }
+
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+#include "snd_flycast_pcm16_pause.inc"
+#endif
 
 /* Retained PCM uses the existing stream allocator, PCM splitter and two-stage
    DMA. Its handle is private and permanently pinned once start is attempted. */

@@ -8,6 +8,13 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- A Flycast-only build of the ordinary PCM16 backend can pause and resume one
+  44.1 kHz stereo stream on the same two channels. It alternates between two
+  reserved banks (128 KiB total); resume inserts 64 silent frames before the
+  caller's first surviving frame. The cut is limited to the first traversal
+  of each bank. Both processors must opt in at build time and the caller
+  must enable the profile before startup. Default firmware is unchanged.
+
 - Ordinary opt-in stereo ADX playback accepts a live transpose after decoding
   ends while slot 0 still has real source frames to play. An all-padding
   tail, a right-only tail, or a stopped player does not qualify.
