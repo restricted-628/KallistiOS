@@ -2433,9 +2433,7 @@ static int ordinary_pcm16_rate_error(void) {
 int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
     if(ordinary_pcm16_lock(pcm) < 0)
         return ordinary_pcm16_rate_error();
-    if(!snd_ordinary_pcm16_rate_supported(rate, pcm->ring) ||
-       (pcm->channels == 1 && (rate < ORDINARY_PCM16_RATE_START_MIN ||
-                               rate > ORDINARY_PCM16_RATE_START_MAX))) {
+    if(!snd_ordinary_pcm16_rate_supported(rate, pcm->ring)) {
         errno = EINVAL;
         return ordinary_pcm16_unlock(-1);
     }

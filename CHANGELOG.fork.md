@@ -8,6 +8,15 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The private ordinary PCM16 renderer now uses the same live-rate check
+  for one voice as for stereo. Both Flycast BIOS CPU modes passed mono
+  playback at 3,997 Hz with an 8,192-frame ring and at 176,400 and
+  186,736 Hz with a 65,504-frame ring. An extended-range update that
+  needs another refill first returns `EAGAIN` without posting;
+  the stream can be serviced and the update retried. This does not
+  change START rates, the separate Flycast pause limits, or public
+  libADX transpose admission.
+
 - A pause-enabled ADX title can now change pitch while playing, then
   pause, discard and resume on the same voice or voice pair. In the
   Flycast regression a 44.1 kHz source changed to 22.05 kHz; source
