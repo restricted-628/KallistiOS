@@ -3,6 +3,7 @@
 #include <kosdec/adx.h>
 enum media_adx_header_mode {
     MEDIA_ADX_HEADER_STRICT,
+    MEDIA_ADX_HEADER_PHASED_DIRECT,
     MEDIA_ADX_HEADER_MEMORY_JOB,
     MEDIA_ADX_HEADER_SECTOR_JOB
 };

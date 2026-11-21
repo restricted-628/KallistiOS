@@ -7,7 +7,9 @@
 
 enum kosdec_adx_status media_adx_stream_step_file(struct kosdec_adx_stream *);
 struct kosdec_adx_stream_result media_adx_stream_read(
-    struct kosdec_adx_stream *, int16_t *, size_t, bool separate_transport);
+    struct kosdec_adx_stream *, int16_t *, size_t, bool separate_transport,
+    bool classify_channel_limit);
+bool media_adx_stream_exceeds_channel_limit(const struct kosdec_adx_stream *);
 enum kosdec_adx_status media_adx_stream_seek_step(struct kosdec_adx_stream *,
                                                 bool separate_transport);
 enum kosdec_adx_status media_adx_sequence_step_file(struct kosdec_adx_sequence *);

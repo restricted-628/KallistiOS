@@ -130,7 +130,8 @@ struct kosdec_adx_stream_result media_adx_pipe_pump_limited(
             if(r.status == KOSDEC_ADX_DONE && !p->stream->seeking)
                 r.status = KOSDEC_ADX_MORE; /* Positioned; no PCM emitted yet. */
         }
-        else if(p->stream) r = media_adx_stream_read(p->stream,pcm,room,separate_transport);
+        else if(p->stream) r = media_adx_stream_read(p->stream,pcm,room,separate_transport,
+                                                    separate_transport);
         else if(p->joint) {
             struct kosdec_adx_joint_read_result s = kosdec_adx_joint_reader_read(p->joint, pcm, room);
             r.status = s.status; r.frames = s.frames;

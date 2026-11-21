@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — libADX channel-limit rejection before playback
+
+- The phased player now stops and drops its unused direct input when a
+  recognized plain v3 ADX stream exceeds the player's two-channel capacity.
+  It keeps the unsupported-format diagnosis and the stopped time offset.
+  Malformed headers do not take this compatibility path.
+
 ## 2026-11-21 — AICA mixer, command queue, DSP and memory-backed PCM
 
 - Application-polled streams can restore one channel's startup controls

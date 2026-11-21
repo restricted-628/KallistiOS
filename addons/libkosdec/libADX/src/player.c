@@ -4,6 +4,7 @@
 #include "adx_loader_internal.h"
 #include "adx_recovery_internal.h"
 #include "adx_service_internal.h"
+#include "adx_stream_internal.h"
 #include "adx_container_internal.h"
 #ifdef MEDIA_ADX_RETAINED_CLOCK
 #include "snd_retained_pcm.h"
@@ -1241,6 +1242,12 @@ static int finish_playend(struct kosdec_adx_player *p) {
     return 0;
 }
 
+static bool compat_channel_limit_rejected(const struct kosdec_adx_player *p) {
+    return p->compat_phased && p->source_bound && !has_output(p) &&
+        p->info.state == KOSDEC_ADX_PLAYER_PREFILL && !p->compat_prefill_frames &&
+        media_adx_stream_exceeds_channel_limit(p->producer.pipe.stream);
+}
+
 static int compat_dispatch(void *context, enum kosdec_adx_compat_state state) {
     struct kosdec_adx_player *p = context;
     if(state == KOSDEC_ADX_COMPAT_PLAYEND)
@@ -1269,6 +1276,17 @@ static int compat_dispatch(void *context, enum kosdec_adx_compat_state state) {
         }
         return state == KOSDEC_ADX_COMPAT_DECEND &&
             p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END && latch_playend(p) ? finish_playend(p) : 0;
+    }
+
+    if(compat_channel_limit_rejected(p)) {
+        /* Stock DECINFO reports the channel error and stops the title.
+           Preserve the native rejection and release the unused binding. */
+        if(media_adx_player_stop_compat_in_service(p,p->memory.transfer_timeout_ms) < 0)
+            return -1;
+        p->info.decoder = KOSDEC_ADX_UNSUPPORTED;
+        p->source_bound = false;
+        errno = EIO;
+        return -1;
     }
 
     struct kosdec_adx_decode_progress progress;
@@ -1386,6 +1404,8 @@ static int compat_player_phase(void *context, enum kosdec_adx_compat_phase phase
     switch(phase) {
     case KOSDEC_ADX_COMPAT_DECODER:
         status = compat_decode(p);
+        if(status == KOSDEC_ADX_UNSUPPORTED && compat_channel_limit_rejected(p))
+            return 1; /* DECINFO handles this rejection in the title phase. */
         break;
     case KOSDEC_ADX_COMPAT_FILES:
     case KOSDEC_ADX_COMPAT_STREAMS:

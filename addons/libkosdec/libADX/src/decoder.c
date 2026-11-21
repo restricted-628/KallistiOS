@@ -28,13 +28,19 @@ enum kosdec_adx_status kosdec_adx_set_filter(struct kosdec_adx_decoder *d,
     d->filter_context = filter ? context : NULL;
     return KOSDEC_ADX_DONE;
 }
-static enum kosdec_adx_status header(struct kosdec_adx_decoder *d) {
+static enum kosdec_adx_status header(struct kosdec_adx_decoder *d,
+                                    enum media_adx_header_mode mode) {
     const uint8_t *h = d->header;
     if(be16(h) != 0x8000) return KOSDEC_ADX_INVALID;
     d->header_bytes = be16(h + 2) + 4u;
     if(d->header_bytes < 26) return KOSDEC_ADX_INVALID;
+    /* A phased direct title can classify a valid plain v3 header whose
+       positive signed channel count exceeds its two-channel capacity. */
+    bool check_channel_limit = mode == MEDIA_ADX_HEADER_PHASED_DIRECT &&
+        h[18] == 3 && h[7] > 2 && h[7] <= INT8_MAX;
     if(h[4] != 3 || h[5] != 18 || h[6] != 4 ||
-       (h[7] != 1 && h[7] != 2) || (h[18] != 3 && h[18] != 5) || h[19] != 0)
+       (!check_channel_limit && (h[7] != 1 && h[7] != 2)) ||
+       (h[18] != 3 && h[18] != 5) || h[19] != 0)
         return KOSDEC_ADX_UNSUPPORTED;
     d->total_frames = be32(h + 12);
     if(d->total_frames > KOSDEC_ADX_MAX_FRAMES) return KOSDEC_ADX_UNSUPPORTED;
@@ -48,7 +54,7 @@ static enum kosdec_adx_status header(struct kosdec_adx_decoder *d) {
         return KOSDEC_ADX_UNSUPPORTED;
     d->sample_rate = rate;
     d->cutoff = (uint16_t)cutoff;
-    d->channels = h[7];
+    d->channels = check_channel_limit ? 0 : h[7];
     d->version = h[18];
     return KOSDEC_ADX_MORE;
 }
@@ -58,7 +64,7 @@ static enum kosdec_adx_status extension(struct kosdec_adx_decoder *d,
     unsigned nonzero = 0;
     for(unsigned i = 0; i < sizeof(d->extension); ++i) nonzero |= e[i];
     if(!nonzero) return KOSDEC_ADX_MORE;
-    if(d->version != 3 || d->header_bytes < 50 || be16(e) >= 32 ||
+    if(!d->channels || d->version != 3 || d->header_bytes < 50 || be16(e) >= 32 ||
        be16(e + 2) != 1 || be32(e + 4) != 1)
         return KOSDEC_ADX_UNSUPPORTED;
     uint32_t start = be32(e + 8), end = be32(e + 16);
@@ -115,7 +121,7 @@ struct kosdec_adx_result media_adx_decode_header(struct kosdec_adx_decoder *d,
         }
         ++d->header_used;
         if(d->header_used == sizeof(d->header)) {
-            r.status = header(d);
+            r.status = header(d,mode);
             if(r.status != KOSDEC_ADX_MORE) goto fail;
         }
     }
@@ -130,6 +136,13 @@ struct kosdec_adx_result media_adx_decode_header(struct kosdec_adx_decoder *d,
     }
     r.status = extension(d, mode);
     if(r.status != KOSDEC_ADX_MORE) goto fail;
+    if(!d->channels) {
+        /* Complete plain v3 header. Record its channel count for the title
+           without publishing usable metadata or entering PCM decode. */
+        d->channels = d->header[7];
+        r.status = KOSDEC_ADX_UNSUPPORTED;
+        goto fail;
+    }
     d->header_ready = true;
     r.status = KOSDEC_ADX_MORE;
     return r;

@@ -769,6 +769,85 @@ static void compat_rejected_time(struct kosdec_adx_player *player, enum kosdec_a
     }
 }
 
+static void compat_reject_excess_channels(void) {
+    enum {VALID, SHORT_BODY, BAD_MARKER, OTHER_VERSION, LOOP_EXTENSION, CONTROL_COUNT};
+    const enum kosdec_adx_status failures[] = {
+        KOSDEC_ADX_UNSUPPORTED, KOSDEC_ADX_UNSUPPORTED, KOSDEC_ADX_INVALID,
+        KOSDEC_ADX_UNSUPPORTED, KOSDEC_ADX_UNSUPPORTED
+    };
+    struct fixture f;
+    uint64_t now = 0;
+    const struct kosdec_adx_compat_config config = {.clock_us=compat_clock,.clock_context=&now};
+    struct kosdec_adx_compat_service service;
+    struct kosdec_adx_compat_title title;
+    struct kosdec_adx_compat_result result;
+    enum kosdec_adx_compat_state state;
+
+    for(unsigned i=0; i<CONTROL_COUNT+2; ++i) {
+        unsigned control = i<3 ? VALID : i-2;
+        enum kosdec_adx_time_mode mode = i<3 ? (enum kosdec_adx_time_mode)i : KOSDEC_ADX_TIME_SOURCE;
+        init(&f,1,false);
+        free(f.data);
+        f.data=stream(50,18,3,32,65,&f.bytes);
+        if(control != LOOP_EXTENSION)
+            memset(f.data+20,0,24);
+        if(control == SHORT_BODY) --f.bytes;
+        if(control == BAD_MARKER) f.data[44] ^= 1u;
+        if(control == OTHER_VERSION) f.data[18]=4;
+        struct kosdec_adx_decoder decoder;
+        kosdec_adx_init(&decoder);
+        struct kosdec_adx_result plain=kosdec_adx_decode(&decoder,f.data,20,NULL,0,false);
+        CHECK(plain.status==KOSDEC_ADX_UNSUPPORTED && plain.consumed==20 && !plain.frames);
+        f.read_limit = i==1 ? 512 : 3;
+        kosdec_adx_stream_init(&f.stream,input,&f,(uint32_t)f.bytes,false);
+        CHECK(!kosdec_adx_compat_service_init(&service,&title,1,&config));
+        CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,&f.player));
+        CHECK(!kosdec_adx_compat_player_set_time_mode(&f.player,mode));
+        CHECK(!kosdec_adx_player_set_time_offset(&f.player,-59));
+        CHECK(!kosdec_adx_player_start(&f.player));
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state) && state==KOSDEC_ADX_COMPAT_DECINFO);
+        int status=0;
+        for(unsigned step=0; step<1000 && !status; ++step)
+            status=kosdec_adx_compat_exec_server(&service,&result);
+        CHECK(status<0 && errno==EIO && result.failed_titles==1);
+        struct kosdec_adx_player_error diagnostic;
+        CHECK(!kosdec_adx_player_get_error(&f.player,&diagnostic));
+        CHECK(diagnostic.code==EIO && diagnostic.decoder==failures[control]);
+        CHECK(!mock_allocs && !mock_starts && !mock_stops && !mock_frames);
+        CHECK(info(&f).decoder==failures[control] && !info(&f).copied_frames);
+        CHECK(!kosdec_adx_compat_player_get_state(&f.player,&state));
+        if(control==VALID) {
+            CHECK(state==KOSDEC_ADX_COMPAT_STOP && info(&f).state==KOSDEC_ADX_PLAYER_STOPPED);
+            CHECK(!f.player.source_bound && !f.player.executor && !info(&f).stop_error);
+            unsigned calls=f.calls;
+            CHECK(!kosdec_adx_compat_exec_server(&service,&result) && f.calls==calls);
+            compat_rejected_time(&f.player,mode,true);
+            bool completed=true;
+            CHECK(!kosdec_adx_compat_player_is_completed(&f.player,&completed) && !completed);
+        } else {
+            CHECK(state==KOSDEC_ADX_COMPAT_DECEND && info(&f).state==KOSDEC_ADX_PLAYER_FAILED);
+            compat_rejected_time(&f.player,mode,false);
+        }
+        CHECK(!kosdec_adx_player_stop(&f.player,1000));
+        CHECK(!kosdec_adx_compat_unbind(&service,0));
+        free(f.data);
+    }
+
+    init(&f,2,false);
+    CHECK(!kosdec_adx_compat_bind_phased_player(&service,0,&f.player));
+    CHECK(!kosdec_adx_player_start(&f.player));
+    for(unsigned step=0; step<100 && info(&f).state!=KOSDEC_ADX_PLAYER_SOURCE_END; ++step)
+        CHECK(!kosdec_adx_compat_exec_server(&service,&result));
+    CHECK(info(&f).state==KOSDEC_ADX_PLAYER_SOURCE_END && mock_starts==1 && mock_frames==65);
+    for(unsigned i=0; i<65; ++i)
+        for(unsigned ch=0; ch<2; ++ch)
+            CHECK(mock_pcm[i*2+ch]==golden[ch][i]);
+    CHECK(!kosdec_adx_player_stop(&f.player,1000));
+    CHECK(!kosdec_adx_compat_unbind(&service,0));
+    free(f.data);
+    puts("ADX_COMPAT_CHANNEL_LIMIT_PASS checked pre-output STOP, timing, controls and fresh stereo");
+}
+
 static void compat_rejected_header_state(void) {
     static const struct {
         const char *prefix;
@@ -1779,6 +1858,7 @@ int main(void) {
     puts("ADX_COMPAT_LIVE_MONO_PITCH_PASS admission, unchanged controls, rebind and checked failure");
     compat_short_and_rebind();
     compat_rejected_header_state();
+    compat_reject_excess_channels();
     compat_transport_fault();
     finite_phased(PHASED_SEEK); finite_phased(PHASED_LOOP);
     finite_phased(PHASED_SEQUENCE); finite_phased(PHASED_ERROR);

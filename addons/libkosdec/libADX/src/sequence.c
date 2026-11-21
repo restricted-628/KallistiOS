@@ -77,7 +77,7 @@ struct kosdec_adx_sequence_result media_adx_sequence_read(
         s->active = true;
     }
     struct kosdec_adx_stream_result step = media_adx_stream_read(
-        &s->reader, output, capacity, separate_transport);
+        &s->reader, output, capacity, separate_transport, false);
     r.status = step.status;
     r.frames = step.frames;
     if(!s->admitted && s->reader.prepared && r.status < KOSDEC_ADX_DONE) {

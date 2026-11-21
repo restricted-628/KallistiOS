@@ -1,5 +1,6 @@
 /* Independent short-read staging and PCM cursor; no device ownership. */
 #include "adx_stream_internal.h"
+#include "adx_decoder_internal.h"
 #include "adx_math.h"
 #include "adx_filter.h"
 #include <string.h>
@@ -107,7 +108,8 @@ enum kosdec_adx_status media_adx_stream_step_file(struct kosdec_adx_stream *s) {
 }
 
 static struct kosdec_adx_stream_result read_step(
-    struct kosdec_adx_stream *s, int16_t *output, size_t capacity, bool separate_transport) {
+    struct kosdec_adx_stream *s, int16_t *output, size_t capacity, bool separate_transport,
+    bool classify_channel_limit) {
     struct kosdec_adx_stream_result result = {KOSDEC_ADX_BAD_ARGUMENT, 0};
     if(!valid(s) || (!output && capacity) ||
        (output && (uintptr_t)output % _Alignof(int16_t))) return result;
@@ -152,8 +154,10 @@ static struct kosdec_adx_stream_result read_step(
             size_t remaining=s->prepared?d->footer_bytes-d->footer_used:d->header_bytes-d->header_used;
             if(take>remaining) take=remaining;
         }
-        struct kosdec_adx_result parsed = kosdec_adx_decode(d, input, take,
-            NULL, 0, final && take==available);
+        bool final_header_input = final && take == available;
+        struct kosdec_adx_result parsed = classify_channel_limit && !s->prepared && !s->linked ?
+            media_adx_decode_header(d,input,take,final_header_input,MEDIA_ADX_HEADER_PHASED_DIRECT) :
+            kosdec_adx_decode(d,input,take,NULL,0,final_header_input);
         consume(s, parsed.consumed);
         result.status = parsed.status;
         if(s->linked && s->prepared &&
@@ -234,14 +238,25 @@ terminal:
     return result;
 }
 struct kosdec_adx_stream_result media_adx_stream_read(
-    struct kosdec_adx_stream *s, int16_t *output, size_t capacity, bool separate_transport) {
+    struct kosdec_adx_stream *s, int16_t *output, size_t capacity, bool separate_transport,
+    bool classify_channel_limit) {
     if(valid(s) && s->seeking)
         return (struct kosdec_adx_stream_result){KOSDEC_ADX_BAD_ARGUMENT,0};
-    return read_step(s,output,capacity,separate_transport);
+    return read_step(s,output,capacity,separate_transport,classify_channel_limit);
 }
+
+bool media_adx_stream_exceeds_channel_limit(const struct kosdec_adx_stream *s) {
+    if(!s || s->prepared || s->staged_error || s->terminal != KOSDEC_ADX_UNSUPPORTED ||
+       s->decoder.channels <= 2)
+        return false;
+    const struct kosdec_adx_decoder *d = &s->decoder;
+    uint64_t blocks = ((uint64_t)d->total_frames + 31u) / 32u;
+    return d->header_bytes + blocks * (18u * d->channels) + 18u <= s->input_bytes;
+}
+
 struct kosdec_adx_stream_result kosdec_adx_stream_read(
     struct kosdec_adx_stream *s, int16_t *output, size_t capacity) {
-    return media_adx_stream_read(s,output,capacity,false);
+    return media_adx_stream_read(s,output,capacity,false,false);
 }
 enum kosdec_adx_status kosdec_adx_stream_seek_begin(struct kosdec_adx_stream *s, uint32_t frame) {
     if(!valid(s) || !s->read_at || frame > KOSDEC_ADX_MAX_FRAMES ||
@@ -263,7 +278,7 @@ enum kosdec_adx_status media_adx_stream_seek_step(struct kosdec_adx_stream *s,
     int16_t discarded[64];
     size_t frames = s->prepared ? s->seek_frame - s->source_frame : 32;
     if(frames > 32) frames = 32;
-    struct kosdec_adx_stream_result r = read_step(s,discarded,frames,separate_transport);
+    struct kosdec_adx_stream_result r = read_step(s,discarded,frames,separate_transport,false);
     s->returned_frames = 0;
     if(r.status >= KOSDEC_ADX_DONE) return r.status;
     if(s->prepared) {
