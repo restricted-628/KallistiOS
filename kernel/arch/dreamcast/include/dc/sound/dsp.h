@@ -180,6 +180,25 @@ int snd_dsp_output_get(unsigned int channel, snd_dsp_output_t *output);
 */
 int snd_dsp_get_status(snd_dsp_status_t *status);
 
+/** Position coefficient layout for one module of an authored spatial program. */
+typedef struct snd_dsp_spatial_module {
+    unsigned int first_coefficient; /**< First register in this module's span. */
+    unsigned int coefficient_count; /**< Number of consecutive registers. */
+    unsigned int authored_position; /**< Neutral reference in 0..127. */
+    const uint16_t *position_coefficients; /**< Row-major, 128 rows of raw COEF values. */
+} snd_dsp_spatial_module_t;
+
+/** Update positions of four or eight spatial modules in the current program.
+    Bit 7 selects modules to update. The lower seven bits describe a relative
+    offset from 64, added to each authored position and clamped to 0..127.
+    Spans are disjoint. Keep the layout and table data stable during the call.
+    Use the generation from snd_dsp_get_status() within the current sound
+    lifetime. ESTALE indicates that the loaded program changed. Invalid input
+    changes no registers. The DSP may observe coefficient writes individually. */
+int snd_dsp_set_spatial_positions(uint32_t generation,
+    const snd_dsp_spatial_module_t *modules, const uint8_t *positions,
+    unsigned int count, uint32_t timeout_ms);
+
 /** \brief No identified preset selected for the corresponding component. */
 #define SND_DSP_PRESET_NONE (-1)
 

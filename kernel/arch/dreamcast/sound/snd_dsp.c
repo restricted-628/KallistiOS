@@ -378,6 +378,80 @@ fail_mutex:
     return -1;
 }
 
+int snd_dsp_set_spatial_positions(uint32_t generation,
+    const snd_dsp_spatial_module_t *modules, const uint8_t *positions,
+    unsigned int count, uint32_t timeout_ms) {
+    enum { UNUSED, UNCHANGED, UPDATE };
+    uint8_t action[SND_DSP_COEFFICIENT_COUNT] = {0};
+    uint16_t values[SND_DSP_COEFFICIENT_COUNT];
+
+    if(!modules || !positions || !generation || !timeout_ms ||
+       (count != 4 && count != 8)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(!snd_iface_is_initialized()) {
+        errno = ENODEV;
+        return -1;
+    }
+
+    for(unsigned int m = 0; m < count; ++m) {
+        const snd_dsp_spatial_module_t *module = &modules[m];
+        unsigned int first = module->first_coefficient;
+        unsigned int length = module->coefficient_count;
+        if(first >= SND_DSP_COEFFICIENT_COUNT || !length ||
+           length > SND_DSP_COEFFICIENT_COUNT - first ||
+           module->authored_position > 127 || !module->position_coefficients) {
+            errno = EINVAL;
+            return -1;
+        }
+
+        const uint16_t *row = NULL;
+        if(positions[m] & 0x80u) {
+            int position = (int)module->authored_position + (positions[m] & 0x7f) - 64;
+            if(position < 0)
+                position = 0;
+            if(position > 127)
+                position = 127;
+            row = module->position_coefficients + (size_t)position * length;
+        }
+
+        for(unsigned int i = 0; i < length; ++i) {
+            if(action[first + i] != UNUSED || (row && (row[i] & 7u))) {
+                errno = EINVAL;
+                return -1;
+            }
+            action[first + i] = row ? UPDATE : UNCHANGED;
+            if(row)
+                values[first + i] = row[i];
+        }
+    }
+
+    if(mutex_lock_timed(&dsp_mutex, timeout_ms) < 0)
+        return -1;
+    if(!dsp_status.loaded || dsp_status.generation != generation) {
+        mutex_unlock(&dsp_mutex);
+        errno = ESTALE;
+        return -1;
+    }
+    {
+        g2_lock_scoped();
+        size_t writes = 0;
+        for(unsigned int i = 0; i < SND_DSP_COEFFICIENT_COUNT; ++i) {
+            if(action[i] == UPDATE) {
+                fifo_step(&writes);
+                g2_write_32_raw(dsp_register(DSP_COEFFICIENT_BASE + i * 4u), values[i]);
+            }
+        }
+    }
+    mutex_unlock(&dsp_mutex);
+    return 0;
+}
+
 static int outputs_set(const snd_dsp_output_t *output, int output_id) {
     if(!outputs_valid(output)) {
         errno = EINVAL;
