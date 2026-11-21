@@ -81,6 +81,14 @@ static void failure(void) {
         init(&f,65,1,30);f.wait=mode==0;f.fail=mode==1;
         if(mode==2){put(f.bytes+24,1,4);put(f.bytes+28,2,4);}
         CHECK(!kosdec_adx_player_set_wait_start(&f.player,true));CHECK(!kosdec_adx_player_start(&f.player));
+        /* The stalled provider exercises the prefill deadline. For the other
+           two cases, wait for the asynchronous producer to publish the event
+           under test before polling the player. */
+        if(mode!=0) {
+            for(unsigned i=0;i<3000 && info(&f).decoder<KOSDEC_ADX_DONE;++i)
+                mock_pause();
+            CHECK(info(&f).decoder==(mode==1?KOSDEC_ADX_IO_ERROR:KOSDEC_ADX_DONE));
+        }
         int result=0;for(unsigned i=0;i<3000 && result==0;++i){result=kosdec_adx_player_poll(&f.player);mock_pause();}
         CHECK(result<0 && !ready(&f) && !mock_allocs);
         CHECK(info(&f).first_error==(mode==0?ETIMEDOUT:mode==1?EIO:ENOTSUP));
