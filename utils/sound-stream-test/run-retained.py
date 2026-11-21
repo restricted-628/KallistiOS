@@ -23,6 +23,8 @@ with tempfile.TemporaryDirectory(prefix="kos-retained-pcm-") as temp:
     target = Path(temp) / "test"
     command = [*shlex.split(os.environ.get("HOST_CC", "cc")),
                "-std=gnu17", "-Wall", "-Wextra", "-Werror",
-               *shlex.split(flags), "-I", str(audio), str(unit), "-o", str(target)]
+               *shlex.split(flags), "-I", str(audio),
+               "-include", str(here.parent / "sound-observation-test/stubs/types.h"),
+               "-I", str(audio.parent / "include"), str(unit), "-o", str(target)]
     subprocess.run(command, check=True, timeout=60)
     subprocess.run([target], check=True, timeout=60)

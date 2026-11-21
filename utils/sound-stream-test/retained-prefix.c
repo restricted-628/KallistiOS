@@ -6,6 +6,8 @@
 #include <string.h>
 #include <errno.h>
 #include "snd_retained_pcm.h"
+#include "snd_retained_gain.h"
+#include <dc/sound/aica_observation.h>
 
 typedef int snd_stream_hnd_t;
 typedef int irq_t;
@@ -52,6 +54,10 @@ static unsigned stop_submissions[2];
 static unsigned dmas, frees, syncs;
 static uint8_t sound_ram[2][4096];
 static uint32_t operations[2];
+static uint32_t gain_tokens[2], gain_features;
+static unsigned gain_submissions[2], gain_tl[2];
+static int gain_submit_error, gain_reject_channel, gain_stale_channel;
+static int gain_timeout_channel, gain_unattributed_channel;
 
 static bool irq_inside_int(void) { return false; }
 static int irq_disable(void) { return 0; }
@@ -154,10 +160,30 @@ static int snd_observation_submit_until(unsigned channel, uint32_t operation,
     *receipt = (snd_channel_receipt_t){session, ++token, channel};
     return 0;
 }
+static uint32_t snd_iface_observation_features(void) {
+    return gain_features;
+}
+static int snd_observation_submit_tl_until(unsigned channel, unsigned tl,
+    snd_channel_receipt_t *receipt, uint64_t deadline) {
+    assert(channel < 2 && tl <= UINT8_MAX && deadline > now);
+    assert(gain_features & AICA_DRIVER_FEATURE_OBSERVATION_TL);
+    if(channel == 1 && gain_submit_error) {
+        errno = gain_submit_error;
+        gain_submit_error = 0;
+        return -1;
+    }
+    operations[channel] = SND_OBSERVATION_UPDATE;
+    gain_tokens[channel] = ++token;
+    gain_tl[channel] = tl;
+    ++gain_submissions[channel];
+    *receipt = (snd_channel_receipt_t){session, token, channel};
+    return 0;
+}
 static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
     uint64_t deadline, snd_channel_observation_t *obs) {
     assert(receipt->token && receipt->channel < 2);
     unsigned ch = receipt->channel;
+    bool gain = receipt->token == gain_tokens[ch];
     bool update = operations[ch] == SND_OBSERVATION_UPDATE;
     bool stop = operations[ch] == SND_OBSERVATION_STOP;
     uint64_t challenge_started = now;
@@ -169,6 +195,8 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
         ++now;
     if(update && ch == 1)
         now += right_observation_delay;
+    if(gain && (int)ch == gain_timeout_channel)
+        now = deadline;
     if(receipt->session != session || now >= deadline) {
         errno = receipt->session != session ? ENODEV : ETIMEDOUT;
         return -1;
@@ -181,6 +209,12 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
         .position = position[ch], .key_on = update || (stop && (int)ch == held_stop_channel),
         .host_challenge_started_ms = challenge_started, .host_observed_ms = now
     };
+    if(gain && (int)ch == gain_reject_channel)
+        obs->result = AICA_OBSERVATION_BAD_FLAGS;
+    if(gain && (int)ch == gain_stale_channel)
+        --obs->token;
+    if(gain && (int)ch == gain_unattributed_channel)
+        obs->attribution_kind = AICA_OBSERVATION_ATTR_LEGACY;
     return 0;
 }
 static int snd_observation_consume_until(const snd_channel_receipt_t *receipt,

@@ -9,6 +9,12 @@
 
 #define AICA_OBSERVATION_LAYOUT_VERSION 1u
 #define AICA_DRIVER_FEATURE_OBSERVATION 0x00000010u
+
+/* Checked UPDATE only, with fields equal to this bit and start_flags zero.
+   config.vol carries the raw TL byte. Existing linear volume and packet
+   layout are unchanged. Unchecked channel control does not accept this field. */
+#define AICA_DRIVER_FEATURE_OBSERVATION_TL 0x00000800u
+#define AICA_OBSERVATION_UPDATE_TL         0x00000080u
 #define AICA_CMD_OBSERVATION_BIND       0x00000007u
 #define AICA_CMD_OBSERVATION_CONTROL    0x00000008u
 #define AICA_CMD_OBSERVATION_SAMPLE     0x00000009u

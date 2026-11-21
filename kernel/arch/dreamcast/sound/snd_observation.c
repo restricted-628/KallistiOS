@@ -402,6 +402,24 @@ done:
     return unlock_result(&channel_mutex[r->channel], result);
 }
 
+int snd_observation_submit_tl_until(unsigned channel, unsigned tl,
+    snd_channel_receipt_t *receipt, uint64_t deadline) {
+    if(tl > UINT8_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(available() < 0)
+        return -1;
+    if(!(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TL)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+
+    snd_channel_config_t config = { .volume = (uint8_t)tl };
+    return snd_observation_submit_validated_until(channel, SND_OBSERVATION_UPDATE,
+        &config, AICA_OBSERVATION_UPDATE_TL, 0, receipt, deadline);
+}
+
 int snd_observation_submit_until(unsigned channel, uint32_t operation,
     const snd_channel_config_t *config, uint32_t fields, uint32_t flags,
     snd_channel_receipt_t *receipt, uint64_t deadline) {

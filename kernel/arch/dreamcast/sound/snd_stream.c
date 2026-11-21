@@ -37,6 +37,7 @@
 #include "snd_stream_internal.h"
 #include "snd_iface_internal.h"
 #include "snd_retained_pcm.h"
+#include "snd_retained_gain.h"
 #include "snd_stream_split.h"
 
 /*
@@ -1721,6 +1722,8 @@ void snd_stream_pan(snd_stream_hnd_t hnd, int left_pan, int right_pan) {
    DMA. Its handle is private and permanently pinned once start is attempted. */
 #define RETAINED_SPANS (4 * SND_RETAINED_PCM_FILL_SPANS)
 #define RETAINED_OBSERVE_MS 100u
+#define RETAINED_GAIN_STEP_MS 20u
+#define RETAINED_GAIN_PAIR (SND_RETAINED_GAIN_LEFT | SND_RETAINED_GAIN_RIGHT)
 
 typedef struct retained_span {
     snd_retained_pcm_span_t tag;
@@ -1748,6 +1751,8 @@ struct snd_retained_pcm {
     int first_error, stop_error;
     unsigned source_count, first, count;
     unsigned stop_submitted, stop_observed;
+    snd_retained_gain_status_t gain;
+    bool gain_rotating;
     retained_source_t sources[SND_RETAINED_PCM_GENERATIONS];
     retained_span_t spans[RETAINED_SPANS];
     retained_cursor_t cursor[2];
@@ -1850,10 +1855,8 @@ static uint64_t retained_movement(const snd_retained_pcm_t *pcm, uint64_t ms) {
     return (pcm->rate + pcm->rate / 100u + 1) * (ms + 1) / 1000 + 2;
 }
 
-static int retained_sample(snd_retained_pcm_t *pcm, retained_cursor_t *next,
-                           uint64_t *output) {
-    uint64_t deadline = timer_ms_gettime64() + RETAINED_OBSERVE_MS;
-
+static int retained_sample_until(snd_retained_pcm_t *pcm, retained_cursor_t *next,
+    uint64_t *output, uint64_t deadline, bool gain) {
     for(unsigned i = 0; i < pcm->channels; ++i) {
         snd_channel_observation_t obs;
         const retained_cursor_t *prev = &pcm->cursor[i];
@@ -1863,10 +1866,31 @@ static int retained_sample(snd_retained_pcm_t *pcm, retained_cursor_t *next,
         pcm->receipt_polled[i] = true;
         if(obs.session != pcm->session || obs.token != pcm->receipt[i].token ||
            obs.channel != pcm->receipt[i].channel ||
-           obs.operation != SND_OBSERVATION_UPDATE ||
-           obs.result != SND_OBSERVATION_APPLIED || obs.key_on != 1 ||
-           obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
-           obs.attribution_token != obs.token || obs.position >= pcm->ring ||
+           obs.operation != SND_OBSERVATION_UPDATE) {
+            errno = EPROTO;
+            return -1;
+        }
+        if(obs.result != SND_OBSERVATION_APPLIED) {
+            if(gain) {
+                unsigned bit = 1u << i;
+                pcm->gain.rejected |= bit;
+                pcm->gain.unknown &= ~bit;
+            }
+            errno = EPROTO;
+            return -1;
+        }
+        /* The immutable result classifies the command independently of
+           whether the live channel sample can still qualify the clock. */
+        if(gain) {
+            unsigned bit = 1u << i;
+            pcm->gain.applied |= bit;
+            pcm->gain.unknown &= ~bit;
+            pcm->gain.acknowledged |= bit;
+            pcm->gain.acknowledged_tl[i] = pcm->gain.requested_tl[i];
+        }
+        if(obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
+           obs.attribution_token != obs.token || obs.key_on != 1 ||
+           obs.position >= pcm->ring ||
            obs.host_challenge_started_ms < prev->after_ms ||
            obs.host_observed_ms < obs.host_challenge_started_ms ||
            obs.host_observed_ms < prev->before_ms) {
@@ -1916,6 +1940,12 @@ static int retained_sample(snd_retained_pcm_t *pcm, retained_cursor_t *next,
         }
     }
     return 0;
+}
+
+static int retained_sample(snd_retained_pcm_t *pcm, retained_cursor_t *next,
+                           uint64_t *output) {
+    return retained_sample_until(pcm, next, output,
+        timer_ms_gettime64() + RETAINED_OBSERVE_MS, false);
 }
 
 static void retained_credit(snd_retained_pcm_t *pcm, const retained_cursor_t *next,
@@ -2151,12 +2181,142 @@ int snd_retained_pcm_start(snd_retained_pcm_t *pcm) {
        retained_write(pcm, false) == 0 && retained_key_on(pcm, stream) == 0 &&
        retained_sample(pcm, next, &output) == 0) {
         retained_credit(pcm, next, output);
+        if(pcm->channels == 2)
+            pcm->gain.acknowledged = RETAINED_GAIN_PAIR;
         result = 0;
     }
     else
         retained_error(pcm);
     mutex_unlock(&stream_state_mutex);
     return result;
+}
+
+static bool retained_gain_pending(const snd_retained_pcm_t *pcm) {
+    return pcm->gain.request && pcm->gain.state == SND_RETAINED_GAIN_PENDING;
+}
+
+/* From a previously qualified sample, do not cross a possible wrap or the
+   old committed ring frontier while the two observation anchors rotate. */
+static bool retained_gain_room(const snd_retained_pcm_t *pcm, uint64_t at) {
+    for(unsigned i = 0; i < 2; ++i) {
+        const retained_cursor_t *prev = &pcm->cursor[i];
+        if(at < prev->after_ms || prev->frames >= pcm->written)
+            return false;
+        uint64_t advance = retained_movement(pcm, at - prev->before_ms);
+        if(advance >= pcm->ring || advance >= pcm->written - prev->frames)
+            return false;
+    }
+    return true;
+}
+
+int snd_retained_pcm_gain_begin(snd_retained_pcm_t *pcm, unsigned left,
+    unsigned right, uint64_t *request) {
+    if(!pcm || !request || left > UINT8_MAX || right > UINT8_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(irq_inside_int()) {
+        errno = EPERM;
+        return -1;
+    }
+    if(pcm->channels != 2 ||
+       !(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TL)) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if(retained_gain_pending(pcm)) {
+        errno = EBUSY;
+        return -1;
+    }
+    if(!pcm->attempted || !pcm->valid || pcm->stopping || pcm->first_error) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(pcm->gain.request == UINT64_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    uint64_t now = timer_ms_gettime64();
+    if(!retained_gain_room(pcm, now + 1)) {
+        errno = EAGAIN;
+        return -1;
+    }
+
+    ++pcm->gain.request;
+    pcm->gain.epoch = pcm->epoch;
+    pcm->gain.session = pcm->session;
+    pcm->gain.state = SND_RETAINED_GAIN_PENDING;
+    pcm->gain.admitted = pcm->gain.applied = pcm->gain.rejected = pcm->gain.unknown = 0;
+    pcm->gain.requested_tl[0] = (uint8_t)left;
+    pcm->gain.requested_tl[1] = (uint8_t)right;
+    pcm->gain.error = 0;
+    pcm->gain_rotating = false;
+    *request = pcm->gain.request;
+    return 0;
+}
+
+int snd_retained_pcm_gain_status(const snd_retained_pcm_t *pcm, uint64_t request,
+    snd_retained_gain_status_t *out) {
+    if(!pcm || !request || !out) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(request != pcm->gain.request) {
+        errno = ENOENT;
+        return -1;
+    }
+    *out = pcm->gain;
+    return 0;
+}
+
+/* The lease serializes gain and refill. Advance with the same tokens after a
+   timeout. The old cursor stays intact until both replacement anchors qualify. */
+static int retained_gain_step(snd_retained_pcm_t *pcm, strchan_t *stream) {
+    uint64_t now = timer_ms_gettime64();
+    uint64_t deadline = now + RETAINED_GAIN_STEP_MS;
+    while(deadline > now && !retained_gain_room(pcm, deadline))
+        --deadline;
+    if(deadline == now) {
+        errno = ETIMEDOUT;
+        goto failed;
+    }
+
+    retained_cursor_t next[2];
+    uint64_t output;
+    if(!pcm->gain_rotating) {
+        if(retained_sample_until(pcm, next, &output, deadline, false) < 0)
+            goto failed;
+        retained_credit(pcm, next, output);
+        pcm->gain_rotating = true;
+    }
+
+    for(unsigned i = 0; i < 2; ++i) {
+        unsigned bit = 1u << i;
+        if(pcm->gain.admitted & bit)
+            continue;
+        if(retained_consume(pcm, i, deadline) < 0 ||
+           snd_observation_submit_tl_until((unsigned)stream->ch[i],
+                    pcm->gain.requested_tl[i], &pcm->receipt[i], deadline) < 0)
+            goto failed;
+        pcm->gain.admitted |= bit;
+        pcm->gain.unknown |= bit;
+    }
+    if(retained_sample_until(pcm, next, &output, deadline, true) < 0)
+        goto failed;
+
+    retained_credit(pcm, next, output);
+    pcm->gain.state = SND_RETAINED_GAIN_APPLIED;
+    pcm->gain.error = 0;
+    return 1;
+
+failed:
+    pcm->gain.error = errno ? errno : EIO;
+    if((errno == EAGAIN || errno == ETIMEDOUT || errno == EBUSY) &&
+       retained_gain_room(pcm, timer_ms_gettime64() + 1))
+        return 0;
+
+    pcm->gain.state = SND_RETAINED_GAIN_FAILED;
+    return retained_error(pcm);
 }
 
 int snd_retained_pcm_poll(snd_retained_pcm_t *pcm) {
@@ -2170,18 +2330,28 @@ int snd_retained_pcm_poll(snd_retained_pcm_t *pcm) {
     }
     if(mutex_lock(&stream_state_mutex) < 0)
         return -1;
-    retained_cursor_t next[2];
-    uint64_t output;
-    int result = retained_sample(pcm, next, &output);
-    if(result == 0) {
-        retained_credit(pcm, next, output);
-        /* Leave the current sample and the immediately preceding frame
-           alone at the reuse boundary. Write a complete old half. */
-        if(pcm->written - output <= pcm->ring / 2 - 2)
-            result = retained_write(pcm, true);
+    int result;
+    if(retained_gain_pending(pcm)) {
+        result = retained_gain_step(pcm, &streams[pcm->handle]);
+        if(result <= 0)
+            goto done;
     }
-    else
-        retained_error(pcm);
+    else {
+        retained_cursor_t next[2];
+        uint64_t output;
+        if(retained_sample(pcm, next, &output) < 0) {
+            result = retained_error(pcm);
+            goto done;
+        }
+        retained_credit(pcm, next, output);
+    }
+    /* Leave the current sample and the immediately preceding frame alone at
+       the reuse boundary. Write a complete old half. */
+    result = 0;
+    if(pcm->written - pcm->output <= pcm->ring / 2 - 2)
+        result = retained_write(pcm, true);
+
+done:
     mutex_unlock(&stream_state_mutex);
     return result;
 }
@@ -2231,7 +2401,8 @@ int snd_retained_pcm_query(const snd_retained_pcm_t *pcm, uint64_t generation,
     uint64_t before = pcm->cursor[0].before_ms;
     bool fresh = now >= before &&
         retained_movement(pcm, now - before) < pcm->ring;
-    bool valid = pcm->valid && fresh;
+    bool rotating = retained_gain_pending(pcm);
+    bool valid = pcm->valid && fresh && !rotating;
     *out = (snd_retained_pcm_snapshot_t){
         .epoch = pcm->epoch, .session = pcm->session,
         .output_frames = pcm->output, .generation = generation,
@@ -2240,7 +2411,8 @@ int snd_retained_pcm_query(const snd_retained_pcm_t *pcm, uint64_t generation,
         .observation_start_ms = before,
         .observation_end_ms = pcm->cursor[pcm->channels - 1].after_ms,
         .clock_error = valid ? 0 : pcm->first_error ? pcm->first_error :
-            pcm->stopping ? ECANCELED : pcm->valid ? ETIMEDOUT : EAGAIN,
+            pcm->stopping ? ECANCELED : rotating ? EAGAIN :
+            pcm->valid ? ETIMEDOUT : EAGAIN,
         .first_error = pcm->first_error, .stop_error = pcm->stop_error,
         .valid = valid, .software_stopped = pcm->stopped,
         .source_output_end = valid && source && source->sealed &&
@@ -2335,6 +2507,10 @@ int snd_retained_pcm_stop(snd_retained_pcm_t *pcm, uint32_t timeout) {
     if(pcm->stopped)
         return 0;
 
+    if(retained_gain_pending(pcm)) {
+        pcm->gain.state = SND_RETAINED_GAIN_FAILED;
+        pcm->gain.error = ECANCELED;
+    }
     pcm->stopping = true;
     pcm->valid = false;
     uint64_t deadline = timer_ms_gettime64() + timeout;

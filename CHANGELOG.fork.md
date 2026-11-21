@@ -6,6 +6,16 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-20 — Live stereo attenuation on retained PCM
+
+- Let the retained stereo PCM owner request raw AICA total-level bytes and
+  distinguish each channel's acknowledgement from local request admission.
+  Qualified playback accounting resumes after both replacement observations;
+  stopping still retains played sound RAM. No same-sample or hard-mute guarantee.
+- This requires a negotiated feature in the source-built firmware. Existing
+  linear-volume controls, the prebuilt fallback and the libADX conversion from
+  requested dB to register values are unchanged.
+
 ## 2026-11-20 — Retained PCM playback for libADX integration
 
 - Add a private fixed-rate PCM16 stream that tracks each source separately,

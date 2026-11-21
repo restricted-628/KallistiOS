@@ -233,6 +233,16 @@ static void respond_to_ping(uint32 command_id) {
     queue_response(response);
 }
 
+_Static_assert(!(AICA_OBSERVATION_UPDATE_TL & AICA_CHANNEL_UPDATE_ALL),
+               "raw TL is a distinct observation field");
+_Static_assert(!(AICA_DRIVER_FEATURE_OBSERVATION_TL &
+    (AICA_DRIVER_FEATURE_SYNC_CHANNELS | AICA_DRIVER_FEATURE_VALIDATION |
+     AICA_DRIVER_FEATURE_POSITION | AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
+     AICA_DRIVER_FEATURE_BANK_REGISTRY | AICA_DRIVER_FEATURE_BANK_LAYERS |
+     AICA_DRIVER_FEATURE_MUSIC | AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE |
+     AICA_DRIVER_FEATURE_SEQUENCE_CONTROL | AICA_DRIVER_FEATURE_OBSERVATION |
+     AICA_DRIVER_FEATURE_COMPLETION)), "distinct raw TL capability");
+
 static void respond_with_driver_info(uint32 command_id) {
     AICA_CMDSTR_DRIVER_INFO(packet, response, info);
 
@@ -240,7 +250,7 @@ static void respond_with_driver_info(uint32 command_id) {
                         AICA_RESP_DRIVER_INFO, command_id);
     info->protocol_version = AICA_DRIVER_PROTOCOL_VERSION;
     info->firmware_version = AICA_DRIVER_FIRMWARE_VERSION;
-    info->features = AICA_DRIVER_FEATURE_SYNC_CHANNELS |
+    const uint32 prior_features = AICA_DRIVER_FEATURE_SYNC_CHANNELS |
                      AICA_DRIVER_FEATURE_VALIDATION |
                      AICA_DRIVER_FEATURE_POSITION |
                      AICA_DRIVER_FEATURE_CHANNEL_CONTROL |
@@ -249,6 +259,7 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE |
                      AICA_DRIVER_FEATURE_SEQUENCE_CONTROL |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
+    info->features = prior_features | AICA_DRIVER_FEATURE_OBSERVATION_TL;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
     info->commands_rejected = commands_rejected;
@@ -471,6 +482,18 @@ static uint32_t observer_apply(uint32_t channel,
             channel_apply(channel, AICA_CHANNEL_OP_STOP, NULL, 0, 0);
             return AICA_OBSERVATION_APPLIED;
         case AICA_CHANNEL_OP_UPDATE:
+            if(control->fields & AICA_OBSERVATION_UPDATE_TL) {
+                if(control->fields != AICA_OBSERVATION_UPDATE_TL || control->start_flags)
+                    return AICA_OBSERVATION_BAD_FLAGS;
+                if(!channel_statuses[channel].configured)
+                    return AICA_OBSERVATION_UNCONFIGURED;
+                if(control->config.vol > 255)
+                    return AICA_OBSERVATION_BAD_CONFIG;
+                aica_channel_set_tl(channel, (uint8)control->config.vol);
+                /* The public configuration continues to describe linear volume. */
+                status_refresh(channel);
+                return AICA_OBSERVATION_APPLIED;
+            }
             if(control->start_flags || !control->fields || (control->fields&~AICA_CHANNEL_UPDATE_ALL))
                 return AICA_OBSERVATION_BAD_FLAGS;
             if(!channel_statuses[channel].configured) return AICA_OBSERVATION_UNCONFIGURED;
@@ -485,6 +508,8 @@ static uint32_t observer_apply(uint32_t channel,
 
 static int process_channel_control(uint32 channel,
                                    const aica_channel_control_t *control) {
+    if(control->fields & AICA_OBSERVATION_UPDATE_TL)
+        return 0;
     return observer_apply(channel, control) == AICA_OBSERVATION_APPLIED;
 }
 

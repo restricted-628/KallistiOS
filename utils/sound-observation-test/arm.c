@@ -33,6 +33,7 @@ static aica_channel_t legacy[64];
 static aica_channel_status_ext_t statuses[64];
 static unsigned writes, reads, checks, position_reads, key_reads;
 static unsigned full_validations, field_validations;
+static uint8_t tl_writes[64];
 /* Compiler entry hooks count the actual production validators, including
    inlined entries, without adding test instrumentation to production source. */
 void __cyg_profile_func_enter(void *, void *) __attribute__((no_instrument_function));
@@ -55,6 +56,7 @@ void aica_stop(int ch) { touch(ch); }
 void aica_vol(int ch) { touch(ch); }
 void aica_pan(int ch) { touch(ch); }
 void aica_freq(int ch) { touch(ch); }
+void aica_channel_set_tl(int ch, uint8 tl) { touch(ch); tl_writes[ch] = tl; }
 int aica_get_pos(int ch) { assert(ch >= 0 && ch < 64); ++reads; ++position_reads; selected_channel = ch; chans[ch].pos = 123; return 123; }
 int aica_is_playing(int ch) { assert(ch >= 0 && ch < 64); ++reads; ++key_reads; return 0; }
 void aica_channel_start(int ch, const aica_channel_config_t *c, int d) {
@@ -229,6 +231,39 @@ int main(void) {
               commands_rejected == rejected + 1);
         if(observed) CHECK(results[ch].result == AICA_OBSERVATION_BAD_CONFIG);
     }
+    /* Checked TL-only commands preserve the legacy control configuration. */
+    const uint32_t tl_values[] = {127, 128, 254, 255, 256, 19, 20};
+    const unsigned tl_ch = 6;
+    ack(44, tl_ch, 45);
+    aica_channel_config_t baseline = statuses[tl_ch].config;
+    for(unsigned i = 0; i < sizeof(tl_values) / sizeof(tl_values[0]); ++i) {
+        uint32_t token = 46 + i * 2;
+        c = control(token, tl_ch);
+        c->operation = AICA_CHANNEL_OP_UPDATE;
+        c->fields = AICA_OBSERVATION_UPDATE_TL;
+        c->config.vol = tl_values[i];
+        if(i == 5) c->fields |= AICA_CHANNEL_UPDATE_FREQUENCY;
+        if(i == 6) c->start_flags = AICA_CHANNEL_START_DELAYED;
+        before = writes; dispatch();
+        if(i < 4) {
+            CHECK(writes == before + 1 && tl_writes[tl_ch] == tl_values[i]);
+            CHECK(results[tl_ch].result == AICA_OBSERVATION_APPLIED);
+        }
+        else {
+            CHECK(writes == before && tl_writes[tl_ch] == 255);
+            CHECK(results[tl_ch].result == (i == 4 ?
+                  AICA_OBSERVATION_BAD_CONFIG : AICA_OBSERVATION_BAD_FLAGS));
+        }
+        CHECK(!memcmp(&baseline, &statuses[tl_ch].config, sizeof(baseline)));
+        ack(token, tl_ch, token + 1);
+    }
+    init_packet(AICA_CMD_CHANNEL_CONTROL, AICA_CMDSTR_CHANNEL_CONTROL_SIZE, tl_ch);
+    aica_channel_control_t *raw_tl = (void *)packet()->cmd_data;
+    raw_tl->operation = AICA_CHANNEL_OP_UPDATE;
+    raw_tl->fields = AICA_OBSERVATION_UPDATE_TL;
+    raw_tl->config.vol = 30;
+    before = writes; rejected = commands_rejected; dispatch();
+    CHECK(writes == before && commands_rejected == rejected + 1 && tl_writes[tl_ch] == 255);
     /* R2: one position/key read per periodic sweep, regardless of binding. */
     for(unsigned bound_session = 0; bound_session < 2; ++bound_session) {
         header.active_session = bound_session ? 7 : 0;

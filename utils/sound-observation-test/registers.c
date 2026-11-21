@@ -55,6 +55,13 @@ int main(void) {
         aica_channel_start(0, &config, mode == 0);
         CHECK(lp_reads == before && pending[0]);
     }
+    uint8_t expected[sizeof(registers)];
+    memcpy(expected, registers, sizeof(expected));
+    aica_channel_set_tl(0, 128);
+    aica_channel_set_tl(63, 255);
+    expected[0x29] = 128;
+    expected[63 * 0x80 + 0x29] = 255;
+    CHECK(!memcmp(registers, expected, sizeof(expected)));
     printf("ARM register sequencing: %u checks passed\n", checks);
     return 0;
 }

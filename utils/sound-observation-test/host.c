@@ -73,9 +73,10 @@ static uint32_t loop_end(void) {
 static aica_observation_result_t results[64];
 static aica_observation_channel_t channels[64];
 static unsigned applied;
+static aica_channel_control_t last_applied;
 static uint32_t apply_result = AICA_OBSERVATION_APPLIED;
 static uint32_t apply(uint32_t ch, const aica_channel_control_t *c) {
-    assert(ch < 64); ++applied;
+    assert(ch < 64); ++applied; last_applied = *c;
     if(apply_result == AICA_OBSERVATION_APPLIED && c->operation == AICA_CHANNEL_OP_START)
         lp_bits[ch] = lp_on_start;
     return apply_result;
@@ -262,6 +263,28 @@ int main(void) {
     driver_features = SND_DRIVER_FEATURE_OBSERVATION; initted = false;
     CHECK(submit(0, &r) == -1 && errno == ENODEV); initted = true;
     in_irq = 1; CHECK(submit(0, &r) == -1 && errno == EPERM); in_irq = 0;
+    /* Capability gates the actual SH-4 command path before FIFO/slot mutation. */
+    r = (snd_channel_receipt_t){0};
+    uint64_t tl_deadline = timer_ms_gettime64() + 100;
+    CHECK(snd_observation_submit_tl_until(0, 255, &r, tl_deadline) == -1 &&
+          errno == ENOTSUP && !packets && !r.token && !slots[0].token);
+    driver_features = 0;
+    CHECK(snd_observation_submit_tl_until(0, 255, &r, tl_deadline) == -1 &&
+          errno == ENOTSUP && !packets && !r.token && !slots[0].token);
+    driver_features = SND_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_OBSERVATION_TL;
+    CHECK(snd_observation_submit_tl_until(0, 256, &r, tl_deadline) == -1 &&
+          errno == EINVAL && !packets && !r.token && !slots[0].token);
+    snd_channel_config_t config = {.volume = 127};
+    CHECK(snd_observation_submit_until(0, SND_OBSERVATION_UPDATE, &config,
+          AICA_OBSERVATION_UPDATE_TL, 0, &r, tl_deadline) == -1 &&
+          errno == EINVAL && !packets && !slots[0].token);
+    CHECK(snd_observation_submit_tl_until(0, 255, &r, tl_deadline) == 0);
+    CHECK(snd_channel_observed_poll(&r, 50, &o) == 0);
+    CHECK(last_applied.operation == SND_OBSERVATION_UPDATE &&
+          last_applied.fields == AICA_OBSERVATION_UPDATE_TL &&
+          !last_applied.start_flags && last_applied.config.vol == 255);
+    CHECK(snd_channel_observed_consume(&r, 50) == 0);
+    reset();
     /* Timed-out first BIND can be retried without resetting the session. */
     paused = true; CHECK(submit(0, &r) == -1 && errno == ETIMEDOUT && !slots[0].token);
     uint32_t same_session = session; paused = false;

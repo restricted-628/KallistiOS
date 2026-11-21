@@ -46,6 +46,11 @@ static snd_retained_pcm_t *open_case(enum fill_mode next_mode) {
     stream_sem = 1;
     held_stop_channel = timeout_ack_channel = -1;
     stop_submissions[0] = stop_submissions[1] = 0;
+    gain_submissions[0] = gain_submissions[1] = 0;
+    gain_features = AICA_DRIVER_FEATURE_OBSERVATION_TL;
+    gain_submit_error = 0;
+    gain_reject_channel = gain_stale_channel = gain_timeout_channel = -1;
+    gain_unattributed_channel = -1;
     calls = dmas = syncs = frees = 0;
     position[0] = position[1] = 0;
     now = 100;
@@ -79,6 +84,114 @@ static void stop_case(snd_retained_pcm_t *pcm) {
     /* End of the model instance. Its retained hardware lease is never reused
        through the tested API. Only the host fixture allocation is disposed. */
     free(pcm);
+}
+
+static snd_retained_gain_status_t gain_status(snd_retained_pcm_t *pcm, uint64_t id) {
+    snd_retained_gain_status_t status;
+    assert(!snd_retained_pcm_gain_status(pcm, id, &status));
+    return status;
+}
+
+static void test_gain(void) {
+    snd_retained_pcm_t *pcm = open_case(TWO_SOURCES);
+    assert(!snd_retained_pcm_start(pcm));
+    uint64_t id = 0;
+    gain_features = 0;
+    assert(snd_retained_pcm_gain_begin(pcm, 127, 128, &id) == -1 && errno == ENOTSUP);
+    gain_features = AICA_DRIVER_FEATURE_OBSERVATION_TL;
+    assert(snd_retained_pcm_gain_begin(pcm, 127, 256, &id) == -1 && errno == EINVAL);
+    assert(!id && !gain_submissions[0] && !gain_submissions[1]);
+    poll_at(pcm, 2, 60, 60);
+    snd_retained_pcm_snapshot_t before = query(pcm, 1);
+    assert(!snd_retained_pcm_gain_begin(pcm, 127, 128, &id));
+    assert(!query(pcm, 1).valid && query(pcm, 1).output_frames == 60);
+    assert(!gain_submissions[0] && !gain_submissions[1]);
+    gain_submit_error = EAGAIN;
+    poll_at(pcm, 1, 70, 70);
+    snd_retained_gain_status_t status = gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_PENDING && status.error == EAGAIN &&
+           status.admitted == SND_RETAINED_GAIN_LEFT && status.unknown == status.admitted &&
+           !status.applied && status.acknowledged_tl[0] == 0);
+    assert(!query(pcm, 1).valid && query(pcm, 1).source_frames == 70);
+    assert(snd_retained_pcm_gain_begin(pcm, 0, 0, &id) == -1 && errno == EBUSY);
+    poll_at(pcm, 2, 95, 95);
+    status = gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_APPLIED && status.admitted == 3 &&
+           status.applied == 3 && !status.unknown && !status.rejected && !status.error);
+    assert(status.epoch == before.epoch && status.session == before.session &&
+           status.acknowledged_tl[0] == 127 && status.acknowledged_tl[1] == 128);
+    assert(query(pcm, 1).valid && query(pcm, 1).source_frames == 95);
+    assert(gain_submissions[0] == 1 && gain_submissions[1] == 1);
+    uint64_t previous = id;
+    assert(!snd_retained_pcm_gain_begin(pcm, 254, 255, &id) && id == previous + 1);
+    assert(snd_retained_pcm_gain_status(pcm, previous, &status) == -1 && errno == ENOENT);
+    poll_at(pcm, 2, 110, 110);
+    status = gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_APPLIED && status.applied == 3 &&
+           status.acknowledged_tl[0] == 254 && status.acknowledged_tl[1] == 255);
+    assert(gain_tl[0] == 254 && gain_tl[1] == 255 && query(pcm, 1).output_frames == 110);
+    stop_case(pcm);
+
+    for(unsigned fault = 0; fault < 3; ++fault) {
+        pcm = open_case(TWO_SOURCES);
+        assert(!snd_retained_pcm_start(pcm));
+        assert(!snd_retained_pcm_gain_begin(pcm, 127, 128, &id));
+        if(fault == 0)
+            gain_reject_channel = 1;
+        else if(fault == 1)
+            gain_stale_channel = 1;
+        else
+            gain_unattributed_channel = 1;
+        assert(snd_retained_pcm_poll(pcm) == -1 && errno == EPROTO);
+        status = gain_status(pcm, id);
+        assert(status.state == SND_RETAINED_GAIN_FAILED && status.admitted == 3 &&
+               status.applied == (fault == 2 ? 3 : 1) &&
+               status.rejected == (fault == 0 ? 2 : 0) &&
+               status.unknown == (fault == 1 ? 2 : 0) && status.error == EPROTO);
+        assert(!query(pcm, 1).valid && !query(pcm, 1).source_frames);
+        stop_case(pcm);
+    }
+
+    for(unsigned cancel = 0; cancel < 2; ++cancel) {
+        pcm = open_case(TWO_SOURCES);
+        assert(!snd_retained_pcm_start(pcm));
+        assert(!snd_retained_pcm_gain_begin(pcm, 127, 128, &id));
+        gain_timeout_channel = 1;
+        assert(!snd_retained_pcm_poll(pcm));
+        status = gain_status(pcm, id);
+        assert(status.state == SND_RETAINED_GAIN_PENDING && status.admitted == 3 &&
+               status.applied == 1 && status.unknown == 2 && status.error == ETIMEDOUT);
+        gain_timeout_channel = -1;
+        if(cancel) {
+            assert(!snd_retained_pcm_stop(pcm, 100));
+            status = gain_status(pcm, id);
+            assert(status.state == SND_RETAINED_GAIN_FAILED && status.error == ECANCELED &&
+                   status.applied == 1 && status.unknown == 2);
+            assert(stop_submissions[0] == 1 && stop_submissions[1] == 1);
+        }
+        else {
+            poll_at(pcm, 0, 800, 800);
+            status = gain_status(pcm, id);
+            assert(status.state == SND_RETAINED_GAIN_APPLIED && status.applied == 3 &&
+                   query(pcm, 1).output_frames == 800);
+        }
+        assert(gain_submissions[0] == 1 && gain_submissions[1] == 1);
+        stop_case(pcm);
+    }
+
+    pcm = open_case(TWO_SOURCES);
+    assert(!snd_retained_pcm_start(pcm));
+    assert(!snd_retained_pcm_gain_begin(pcm, 127, 128, &id));
+    gain_submit_error = EAGAIN;
+    poll_at(pcm, 1, 40, 40);
+    now += 30;
+    assert(snd_retained_pcm_poll(pcm) == -1 && errno == ETIMEDOUT);
+    status = gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_FAILED && status.admitted == 1 &&
+           status.unknown == 1 && !status.applied && !gain_submissions[1]);
+    assert(!query(pcm, 1).valid && query(pcm, 1).source_frames == 40);
+    stop_case(pcm);
+    puts("RETAINED GAIN HOST PASS: validation, stereo handover, split failure, stale, retry and checked stop");
 }
 
 int main(void) {
@@ -246,5 +359,6 @@ int main(void) {
     frees = 0;
     stop_case(pcm);
     puts("RETAINED PCM HOST PASS: spans, wrap, skew, stereo acknowledgement, DMA loss, capacity, lease retention");
+    test_gain();
     return 0;
 }

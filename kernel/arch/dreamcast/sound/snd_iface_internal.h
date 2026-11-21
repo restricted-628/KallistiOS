@@ -44,6 +44,8 @@ int snd_observation_submit_until(unsigned channel, uint32_t operation,
 int snd_observation_submit_validated_until(unsigned channel, uint32_t operation,
     const snd_channel_config_t *config, uint32_t fields, uint32_t flags,
     snd_channel_receipt_t *receipt, uint64_t deadline);
+int snd_observation_submit_tl_until(unsigned channel, unsigned tl,
+    snd_channel_receipt_t *receipt, uint64_t deadline);
 int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
     uint64_t deadline, snd_channel_observation_t *observation);
 int snd_observation_consume_until(const snd_channel_receipt_t *receipt,
