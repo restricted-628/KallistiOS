@@ -31,16 +31,22 @@ typedef struct snd_ordinary_pcm16_status {
    shutting down sound or G2 DMA.
 
    Config must be stereo PCM16 at 8–48 kHz with pitch LFO off. Ring frames
-   per channel must be 8192–32768 and divisible by 32. */
+   per channel must be 8192–65504 and divisible by 32. */
 int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     const snd_stream_config_t *config, uint32_t ring,
     snd_ordinary_pcm16_fill_t fill, void *context);
 int snd_ordinary_pcm16_start(snd_ordinary_pcm16_t *pcm);
 int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm);
-/* Live native rate admission for this ring geometry. Above 48 kHz,
-   the full 32768-frame ring is required and the maximum is 88.2 kHz.
-   Cadence and producer capacity still govern refill and deadline success. */
+/* Live native rate admission for this ring geometry. The range is
+   1889–186736 Hz. Above 48 kHz use at least 32768 frames per channel.
+   Above 88.2 kHz use 65504. Cadence and producer capacity still govern
+   refill and deadline success. */
 bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring);
+/* When entering or leaving the extended range below 8 kHz or above
+   88.2 kHz, EAGAIN means each voice is still running at its previous rate
+   and the deadline window needs more headroom. It submits no pitch
+   writes or refills. Service the stream before retrying. Observation or
+   transport failure is terminal even if its internal result was EAGAIN. */
 int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate);
 int snd_ordinary_pcm16_status(const snd_ordinary_pcm16_t *pcm,
     snd_ordinary_pcm16_status_t *out);
