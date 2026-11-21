@@ -26,25 +26,28 @@ typedef struct snd_retained_gain_status {
     int error;
 } snd_retained_gain_status_t;
 
-/* Local admission for one playing fixed-rate retained stereo pair. TL is the
+/* Local admission for a playing fixed-rate retained mono or stereo lease. TL is the
    raw 0..255 hardware attenuation byte (0 = unity setting, 255 = maximum
    attenuation setting). This is neither linear gain nor a hard-mute promise.
-   Validate the full pair before admitting it. Success issues a nonzero lease-
-   local request and changes no hardware. Retry work by calling the existing
+   Validate both arguments before admission. Mono uses left_tl and ignores
+   the valid right_tl. Success issues a nonzero lease-local request and
+   changes no hardware. Retry work by calling the existing
    snd_retained_pcm_poll; it services this request before normal refill.
    A pending retry can return poll success with error in the gain snapshot.
    Source-clock queries during rotation report the last qualified prefix as
-   invalid until both fresh observations qualify. Terminal errors require stop.
-   Paired completion means both channels acknowledged, potentially at different
-   samples. No newer request while pending (EBUSY). ENOTSUP for mono or absent
-   firmware capability. Failure leaves *request and prior status unchanged.
+   invalid until all active channels' fresh observations qualify. Terminal
+   errors require stop. Stereo completion means both channels acknowledged,
+   potentially at different samples. No newer request while pending (EBUSY).
+   ENOTSUP without firmware capability. Failure leaves *request and prior
+   status unchanged.
    Same serialized ordinary owner and non-reentrant contract as the PCM API. */
 int snd_retained_pcm_gain_begin(snd_retained_pcm_t *pcm, unsigned left_tl,
     unsigned right_tl, uint64_t *request);
 
 /* No I/O. Only the latest admitted request is retained. Zero is EINVAL and a
-   different request is ENOENT. Masks are left bit 0 and right bit 1. Applied
-   and rejected are classified ARM outcomes; unknown covers admitted commands
+   different request is ENOENT. Masks are left bit 0 and right bit 1. For mono
+   the right mask bits and both right TL bytes are zero. Applied and rejected
+   classify ARM outcomes; unknown covers admitted commands
    without a qualified outcome. Acknowledged values are historical and may be
    obsolete on unknown channels. error is zero, a retryable pending reason,
    or the terminal failure. Stop cancels further gain admission and settles

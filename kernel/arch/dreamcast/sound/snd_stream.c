@@ -1724,7 +1724,6 @@ void snd_stream_pan(snd_stream_hnd_t hnd, int left_pan, int right_pan) {
 #define RETAINED_SPANS (4 * SND_RETAINED_PCM_FILL_SPANS)
 #define RETAINED_OBSERVE_MS 100u
 #define RETAINED_GAIN_STEP_MS 20u
-#define RETAINED_GAIN_PAIR (SND_RETAINED_GAIN_LEFT | SND_RETAINED_GAIN_RIGHT)
 
 typedef struct retained_span {
     snd_retained_pcm_span_t tag;
@@ -2220,12 +2219,10 @@ static int retained_start(snd_retained_pcm_t *pcm, const unsigned *initial_tl) {
        retained_write(pcm, false) == 0 && retained_key_on(pcm, stream, initial_tl) == 0 &&
        retained_sample(pcm, next, &output) == 0) {
         retained_credit(pcm, next, output);
-        if(pcm->channels == 2) {
-            pcm->gain.acknowledged = RETAINED_GAIN_PAIR;
-            if(initial_tl) {
-                pcm->gain.acknowledged_tl[0] = (uint8_t)initial_tl[0];
-                pcm->gain.acknowledged_tl[1] = (uint8_t)initial_tl[1];
-            }
+        for(unsigned i = 0; i < pcm->channels; ++i) {
+            pcm->gain.acknowledged |= 1u << i;
+            if(initial_tl)
+                pcm->gain.acknowledged_tl[i] = (uint8_t)initial_tl[i];
         }
         result = 0;
     }
@@ -2254,9 +2251,9 @@ static bool retained_gain_pending(const snd_retained_pcm_t *pcm) {
 }
 
 /* From a previously qualified sample, do not cross a possible wrap or the
-   old committed ring frontier while the two observation anchors rotate. */
+   old committed ring frontier while the active observation anchors rotate. */
 static bool retained_gain_room(const snd_retained_pcm_t *pcm, uint64_t at) {
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         const retained_cursor_t *prev = &pcm->cursor[i];
         if(at < prev->after_ms || prev->frames >= pcm->written)
             return false;
@@ -2277,8 +2274,7 @@ int snd_retained_pcm_gain_begin(snd_retained_pcm_t *pcm, unsigned left,
         errno = EPERM;
         return -1;
     }
-    if(pcm->channels != 2 ||
-       !(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TL)) {
+    if(!(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TL)) {
         errno = ENOTSUP;
         return -1;
     }
@@ -2306,7 +2302,7 @@ int snd_retained_pcm_gain_begin(snd_retained_pcm_t *pcm, unsigned left,
     pcm->gain.state = SND_RETAINED_GAIN_PENDING;
     pcm->gain.admitted = pcm->gain.applied = pcm->gain.rejected = pcm->gain.unknown = 0;
     pcm->gain.requested_tl[0] = (uint8_t)left;
-    pcm->gain.requested_tl[1] = (uint8_t)right;
+    pcm->gain.requested_tl[1] = pcm->channels == 2 ? (uint8_t)right : 0;
     pcm->gain.error = 0;
     pcm->gain_rotating = false;
     *request = pcm->gain.request;
@@ -2328,7 +2324,7 @@ int snd_retained_pcm_gain_status(const snd_retained_pcm_t *pcm, uint64_t request
 }
 
 /* The lease serializes gain and refill. Advance with the same tokens after a
-   timeout. The old cursor stays intact until both replacement anchors qualify. */
+   timeout. The old cursor stays intact until all active anchors qualify. */
 static int retained_gain_step(snd_retained_pcm_t *pcm, strchan_t *stream) {
     uint64_t now = timer_ms_gettime64();
     uint64_t deadline = now + RETAINED_GAIN_STEP_MS;
@@ -2348,7 +2344,7 @@ static int retained_gain_step(snd_retained_pcm_t *pcm, strchan_t *stream) {
         pcm->gain_rotating = true;
     }
 
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         unsigned bit = 1u << i;
         if(pcm->gain.admitted & bit)
             continue;

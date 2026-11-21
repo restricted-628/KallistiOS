@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Live attenuation for retained mono PCM
+
+- A playing mono stream can change its AICA attenuation through the optional
+  retained PCM interface. Only its active channel receives a command or reports
+  an acknowledgement. Source progress resumes after a fresh playback position
+  is confirmed. The stereo path and the ordinary stream API keep their behavior.
+
 ## 2026-11-21 — libADX starting volume during preparation
 
 - For a new retained stream that opts into initial attenuation, decoder setup

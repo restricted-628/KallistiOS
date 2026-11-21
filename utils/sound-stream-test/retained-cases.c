@@ -9,7 +9,7 @@ static int fill(void *context, int16_t *samples, uint32_t frames,
     for(unsigned i = 0; i < frames * streams[0].channels; ++i)
         samples[i] = i % 2 ? -2345 : 1234;
     if(mode == TWO_SOURCES && calls == 1) {
-        memset(samples, 0, 100 * 4);
+        memset(samples, 0, 100 * streams[0].channels * sizeof(*samples));
         spans[0] = (snd_retained_pcm_span_t){1, 20, 100, SND_RETAINED_PCM_SOURCE};
         spans[1] = (snd_retained_pcm_span_t){0, 0, 128, SND_RETAINED_PCM_STARVATION};
         spans[2] = (snd_retained_pcm_span_t){1, 120, 28, SND_RETAINED_PCM_SOURCE};
@@ -161,6 +161,93 @@ static snd_retained_gain_status_t gain_status(snd_retained_pcm_t *pcm, uint64_t 
     snd_retained_gain_status_t status;
     assert(!snd_retained_pcm_gain_status(pcm, id, &status));
     return status;
+}
+
+static snd_retained_gain_status_t mono_gain_status(snd_retained_pcm_t *pcm, uint64_t id) {
+    snd_retained_gain_status_t status = gain_status(pcm, id);
+    assert(!((status.admitted | status.applied | status.rejected |
+              status.unknown | status.acknowledged) & ~SND_RETAINED_GAIN_LEFT));
+    assert(!status.requested_tl[1] && !status.acknowledged_tl[1] && !gain_submissions[1]);
+    return status;
+}
+
+static void test_mono_gain(void) {
+    snd_retained_pcm_t *pcm = open_case_with_channels(TWO_SOURCES, 1);
+    assert(!snd_retained_pcm_start(pcm));
+    uint64_t id = 0;
+    gain_features = 0;
+    assert(snd_retained_pcm_gain_begin(pcm, 60, 88, &id) == -1 && errno == ENOTSUP);
+    gain_features = AICA_DRIVER_FEATURE_OBSERVATION_TL;
+    assert(snd_retained_pcm_gain_begin(pcm, 60, 256, &id) == -1 && errno == EINVAL);
+    assert(!id && !gain_submissions[0]);
+    assert(!snd_retained_pcm_gain_begin(pcm, 60, 88, &id) && id == 1);
+    snd_retained_gain_status_t status = mono_gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_PENDING && !status.admitted &&
+           status.acknowledged == 1 && status.acknowledged_tl[0] == 0);
+    assert(!query(pcm, 1).valid);
+    gain_timeout_channel = 0;
+    assert(!snd_retained_pcm_poll(pcm));
+    status = mono_gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_PENDING && status.error == ETIMEDOUT &&
+           status.admitted == 1 && status.unknown == 1 && !status.applied);
+    assert(snd_retained_pcm_gain_begin(pcm, 31, 99, &id) == -1 && errno == EBUSY && id == 1);
+    gain_timeout_channel = -1;
+    poll_at(pcm, 0, 800, 0);
+    status = mono_gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_APPLIED && status.admitted == 1 &&
+           status.applied == 1 && !status.rejected && !status.unknown && !status.error);
+    assert(status.acknowledged_tl[0] == 60 && gain_tl[0] == 60 && gain_submissions[0] == 1);
+    assert(query(pcm, 2).valid && query(pcm, 2).source_frames == 261 && dmas == 3);
+
+    assert(!snd_retained_pcm_gain_begin(pcm, 0, 201, &id) && id == 2);
+    poll_at(pcm, 2, 890, 0);
+    status = mono_gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_APPLIED && status.applied == 1 &&
+           status.acknowledged_tl[0] == 0 && gain_submissions[0] == 2);
+    assert(snd_retained_pcm_gain_status(pcm, 1, &status) == -1 && errno == ENOENT);
+    stop_case(pcm);
+    assert(stop_submissions[0] == 1 && !stop_submissions[1]);
+
+    pcm = open_case_with_channels(TWO_SOURCES, 1);
+    assert(!snd_retained_pcm_start_with_tl(pcm, 127, 255));
+    assert(!snd_retained_pcm_gain_begin(pcm, 60, 88, &id));
+    status = mono_gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_PENDING && !status.admitted &&
+           status.acknowledged == 1 && status.acknowledged_tl[0] == 127);
+    assert(!snd_retained_pcm_poll(pcm));
+    status = mono_gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_APPLIED && status.acknowledged_tl[0] == 60 &&
+           gain_submissions[0] == 3);
+    stop_case(pcm);
+
+    for(unsigned fault = 0; fault < 3; ++fault) {
+        pcm = open_case_with_channels(TWO_SOURCES, 1);
+        assert(!snd_retained_pcm_start(pcm));
+        assert(!snd_retained_pcm_gain_begin(pcm, 60, 255, &id));
+        if(fault < 2) {
+            if(fault == 0)
+                gain_reject_channel = 0;
+            else
+                gain_stale_channel = 0;
+            assert(snd_retained_pcm_poll(pcm) == -1 && errno == EPROTO);
+        }
+        else {
+            gain_timeout_channel = 0;
+            assert(!snd_retained_pcm_poll(pcm));
+            gain_timeout_channel = -1;
+            assert(!snd_retained_pcm_stop(pcm, 100));
+        }
+        status = mono_gain_status(pcm, id);
+        assert(status.state == SND_RETAINED_GAIN_FAILED && status.admitted == 1 &&
+               !status.applied && status.rejected == (fault == 0) &&
+               status.unknown == (fault != 0) &&
+               status.error == (fault == 2 ? ECANCELED : EPROTO));
+        assert(status.acknowledged == 1 && status.acknowledged_tl[0] == 0 &&
+               !query(pcm, 1).valid && !query(pcm, 1).source_frames);
+        stop_case(pcm);
+        assert(stop_submissions[0] == 1 && !stop_submissions[1]);
+    }
+    puts("RETAINED MONO GAIN HOST PASS: active masks, retry, rejection, unknown and checked stop");
 }
 
 static void test_initial_tl(void) {
@@ -493,6 +580,7 @@ int main(void) {
     stop_case(pcm);
     puts("RETAINED PCM HOST PASS: spans, wrap, skew, stereo acknowledgement, DMA loss, capacity, lease retention");
     test_gain();
+    test_mono_gain();
     test_initial_tl();
     test_mono_frontier();
     return 0;

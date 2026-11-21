@@ -151,7 +151,7 @@ static int snd_observation_bind_until(uint64_t deadline, uint32_t *out) {
 static int snd_observation_submit_until(unsigned channel, uint32_t operation,
     const snd_channel_config_t *config, uint32_t fields, uint32_t flags,
     snd_channel_receipt_t *receipt, uint64_t deadline) {
-    assert(channel < 2 && deadline > now);
+    assert(channel < (unsigned)streams[0].channels && deadline > now);
     if(operation == SND_OBSERVATION_STOP) {
         assert(!config && !flags && !fields);
         ++stop_submissions[channel];
@@ -175,7 +175,7 @@ static uint32_t snd_iface_observation_features(void) {
 }
 static int snd_observation_submit_tl_until(unsigned channel, unsigned tl,
     snd_channel_receipt_t *receipt, uint64_t deadline) {
-    assert(channel < 2 && tl <= UINT8_MAX && deadline > now);
+    assert(channel < (unsigned)streams[0].channels && tl <= UINT8_MAX && deadline > now);
     assert(gain_features & AICA_DRIVER_FEATURE_OBSERVATION_TL);
     if(channel == 1 && gain_submit_error) {
         errno = gain_submit_error;
@@ -191,7 +191,7 @@ static int snd_observation_submit_tl_until(unsigned channel, unsigned tl,
 }
 static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
     uint64_t deadline, snd_channel_observation_t *obs) {
-    assert(receipt->token && receipt->channel < 2);
+    assert(receipt->token && receipt->channel < (unsigned)streams[0].channels);
     unsigned ch = receipt->channel;
     bool gain = receipt->token == gain_tokens[ch];
     bool update = operations[ch] == SND_OBSERVATION_UPDATE;
@@ -232,7 +232,7 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
 }
 static int snd_observation_consume_until(const snd_channel_receipt_t *receipt,
     uint64_t deadline) {
-    assert(receipt->token && deadline > now);
+    assert(receipt->token && receipt->channel < (unsigned)streams[0].channels && deadline > now);
     if(operations[receipt->channel] == SND_OBSERVATION_STOP &&
        (int)receipt->channel == timeout_ack_channel) {
         now = deadline;
