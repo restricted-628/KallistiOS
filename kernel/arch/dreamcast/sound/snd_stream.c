@@ -1855,8 +1855,15 @@ static uint64_t retained_movement(const snd_retained_pcm_t *pcm, uint64_t ms) {
     return (pcm->rate + pcm->rate / 100u + 1) * (ms + 1) / 1000 + 2;
 }
 
+enum retained_sample_phase {
+    RETAINED_SAMPLE_NORMAL,
+    RETAINED_SAMPLE_GAIN_OLD,
+    RETAINED_SAMPLE_GAIN_NEW,
+};
+
 static int retained_sample_until(snd_retained_pcm_t *pcm, retained_cursor_t *next,
-    uint64_t *output, uint64_t deadline, bool gain) {
+    uint64_t *output, uint64_t deadline, enum retained_sample_phase phase) {
+    bool gain = phase == RETAINED_SAMPLE_GAIN_NEW;
     for(unsigned i = 0; i < pcm->channels; ++i) {
         snd_channel_observation_t obs;
         const retained_cursor_t *prev = &pcm->cursor[i];
@@ -1921,11 +1928,13 @@ static int retained_sample_until(snd_retained_pcm_t *pcm, retained_cursor_t *nex
            hide stale replay at the previous write frontier. */
         bool before_frontier = next[i].frames < pcm->written;
         if(before_frontier && possible >= pcm->written - next[i].frames) {
-            /* For an already qualified mono stream, the prior sample also
-               bounds the same cursor at latest. Either bound can prove the
-               interval safe. The new sample alone still determines credit. */
+            /* A qualified prior sample also bounds the same slot at latest.
+               On the stereo gain path this is valid before any old receipt
+               is retired or any gain command is sent. The new samples
+               alone still determine credit. */
             const retained_cursor_t *prev = &pcm->cursor[i];
-            before_frontier = pcm->channels == 1 && pcm->valid &&
+            before_frontier = (pcm->channels == 1 || phase == RETAINED_SAMPLE_GAIN_OLD) &&
+                pcm->valid &&
                 prev->frames < pcm->written &&
                 retained_movement(pcm, latest - prev->before_ms) < pcm->written - prev->frames;
         }
@@ -1955,7 +1964,7 @@ static int retained_sample_until(snd_retained_pcm_t *pcm, retained_cursor_t *nex
 static int retained_sample(snd_retained_pcm_t *pcm, retained_cursor_t *next,
                            uint64_t *output) {
     return retained_sample_until(pcm, next, output,
-        timer_ms_gettime64() + RETAINED_OBSERVE_MS, false);
+        timer_ms_gettime64() + RETAINED_OBSERVE_MS, RETAINED_SAMPLE_NORMAL);
 }
 
 static void retained_credit(snd_retained_pcm_t *pcm, const retained_cursor_t *next,
@@ -2338,7 +2347,7 @@ static int retained_gain_step(snd_retained_pcm_t *pcm, strchan_t *stream) {
     retained_cursor_t next[2];
     uint64_t output;
     if(!pcm->gain_rotating) {
-        if(retained_sample_until(pcm, next, &output, deadline, false) < 0)
+        if(retained_sample_until(pcm, next, &output, deadline, RETAINED_SAMPLE_GAIN_OLD) < 0)
             goto failed;
         retained_credit(pcm, next, output);
         pcm->gain_rotating = true;
@@ -2355,7 +2364,7 @@ static int retained_gain_step(snd_retained_pcm_t *pcm, strchan_t *stream) {
         pcm->gain.admitted |= bit;
         pcm->gain.unknown |= bit;
     }
-    if(retained_sample_until(pcm, next, &output, deadline, true) < 0)
+    if(retained_sample_until(pcm, next, &output, deadline, RETAINED_SAMPLE_GAIN_NEW) < 0)
         goto failed;
 
     retained_credit(pcm, next, output);

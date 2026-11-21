@@ -43,10 +43,14 @@ typedef struct {
 
 static int stream_state_mutex, stream_sem = 1, max_channels = 2;
 static strchan_t streams[1];
-static _Alignas(32) uint32_t separation[2][1024];
+enum { TEST_SLOT_BYTES = 16384 };
+static _Alignas(32) uint32_t separation[2][TEST_SLOT_BYTES / sizeof(uint32_t)];
 static uint32_t *sep_buffer[2] = { separation[0], separation[1] };
 static uint64_t now, first_delay, right_dma_delay, right_observation_delay;
 static uint64_t left_dma_delay, left_observation_delay;
+static uint64_t stereo_model_origin;
+static unsigned stereo_model_ring;
+static bool overlap_right_observation;
 static uint32_t delayed_position;
 static uint32_t position[2], session = 1, token;
 static int bad_channel = -1, fail_dma_channel = -1, stop_errno;
@@ -54,7 +58,7 @@ static bool retire_callback;
 static int held_stop_channel = -1, timeout_ack_channel = -1;
 static unsigned stop_submissions[2];
 static unsigned dmas, frees, syncs;
-static uint8_t sound_ram[2][4096];
+static uint8_t sound_ram[2][TEST_SLOT_BYTES];
 static uint32_t operations[2];
 static uint32_t gain_tokens[2], gain_features;
 static unsigned gain_submissions[2], gain_tl[2];
@@ -90,12 +94,13 @@ static int sem_wait_timed(int *sem, uint32_t timeout) {
 static void sem_signal(int *sem) { assert(!(*sem)++); }
 static void dcache_purge_range(uintptr_t p, size_t n) { (void)p; (void)n; }
 static void spu_memload_sq(uintptr_t dst, const void *p, size_t n) {
-    assert(dst >= 4096 && dst + n <= 3 * 4096);
-    memcpy(sound_ram[(dst / 4096) - 1] + dst % 4096, p, n);
+    assert(dst >= TEST_SLOT_BYTES && dst < 3 * TEST_SLOT_BYTES &&
+           n <= TEST_SLOT_BYTES - dst % TEST_SLOT_BYTES);
+    memcpy(sound_ram[dst / TEST_SLOT_BYTES - 1] + dst % TEST_SLOT_BYTES, p, n);
 }
 static int spu_dma_transfer(const void *p, uintptr_t dst, size_t n, int block,
                             void (*done)(void *), void *context) {
-    unsigned channel = dst / 4096 - 1;
+    unsigned channel = dst / TEST_SLOT_BYTES - 1;
     assert(!block && channel < 2 && __is_aligned(p, 32));
     ++dmas;
     if((int)channel == fail_dma_channel) {
@@ -115,8 +120,8 @@ static int spu_dma_transfer(const void *p, uintptr_t dst, size_t n, int block,
 static void stream_set_error(strchan_t *stream, int error) { stream->dma_error = error; }
 
 static int snd_stream_alloc(void *callback, int size) {
-    assert(!callback && size <= 4096 && !streams[0].service_owner);
-    streams[0] = (strchan_t){ .ch = {0, 1}, .spu_ram_sch = {4096, 8192} };
+    assert(!callback && size <= TEST_SLOT_BYTES && !streams[0].service_owner);
+    streams[0] = (strchan_t){ .ch = {0, 1}, .spu_ram_sch = {TEST_SLOT_BYTES, 2 * TEST_SLOT_BYTES} };
     return 0;
 }
 static int snd_stream_destroy_ex(int handle, uint32_t timeout) {
@@ -203,8 +208,14 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
     }
     if(stop && (int)ch == held_stop_channel)
         ++now;
-    if(update)
-        now += ch == 0 ? left_observation_delay : right_observation_delay;
+    if(update) {
+        uint64_t *delay = ch == 0 ? &left_observation_delay : &right_observation_delay;
+        now += *delay;
+        if(stereo_model_ring)
+            *delay = 0;
+        if(ch == 1 && overlap_right_observation)
+            --challenge_started;
+    }
     if(gain && (int)ch == gain_timeout_channel)
         now = deadline;
     if(receipt->session != session || now >= deadline) {
@@ -216,7 +227,8 @@ static int snd_observation_poll_until(const snd_channel_receipt_t *receipt,
         .operation = operations[ch], .result = SND_OBSERVATION_APPLIED,
         .attribution_kind = SND_OBSERVATION_ATTR_MANAGED,
         .attribution_token = receipt->token - (update && (int)ch == bad_channel),
-        .position = position[ch],
+        .position = update && stereo_model_ring ?
+            (44100u * (now - stereo_model_origin) / 1000u) % stereo_model_ring : position[ch],
         .key_on = (update && (syncs || (gain && (int)ch == delayed_tl_key_on))) ||
                   (operations[ch] == SND_OBSERVATION_START && (int)ch == delayed_start_key_on) ||
                   (stop && (int)ch == held_stop_channel),

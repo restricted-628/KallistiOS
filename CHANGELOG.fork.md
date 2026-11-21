@@ -6,6 +6,14 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-21 — Stereo position checks before a live volume change
+
+- Before sending a retained stereo volume change, the driver can use each
+  channel's previous qualified position to prove that playback stayed behind
+  committed audio. This avoids a false EPIPE when the latest observation is
+  less precise. Both channels must pass independently; an observed crossing
+  or equality still fails. Ordinary polling and refill checks are unchanged.
+
 ## 2026-11-21 — libADX time after an unrecognized header
 
 - When a rejected header leaves a phased direct stream in the legacy DECINFO

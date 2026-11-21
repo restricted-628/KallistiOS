@@ -63,6 +63,8 @@ static snd_retained_pcm_t *open_case_with_channels(enum fill_mode next_mode, uns
     stop_errno = 0;
     first_delay = right_dma_delay = right_observation_delay = 0;
     left_dma_delay = left_observation_delay = 0;
+    overlap_right_observation = false;
+    stereo_model_ring = 0;
     bad_channel = fail_dma_channel = -1;
     mode = next_mode;
     assert(!snd_retained_pcm_open(&pcm, channels, 44100, 1024, fill, &calls));
@@ -161,6 +163,95 @@ static snd_retained_gain_status_t gain_status(snd_retained_pcm_t *pcm, uint64_t 
     snd_retained_gain_status_t status;
     assert(!snd_retained_pcm_gain_status(pcm, id, &status));
     return status;
+}
+
+static void test_stereo_gain_witness(unsigned ring, bool long_window) {
+    snd_retained_pcm_t *pcm = open_case(SILENCE);
+    if(ring != 1024) {
+        assert(!snd_retained_pcm_close(pcm));
+        frees = 0;
+        assert(!snd_retained_pcm_open(&pcm, 2, 44100, ring, fill, &calls));
+    }
+    stereo_model_ring = ring;
+    stereo_model_origin = now;
+    assert(!snd_retained_pcm_start(pcm));
+    now = stereo_model_origin + (ring == 1024 ? 10 : 90);
+    uint64_t id = 0;
+    assert(!snd_retained_pcm_gain_begin(pcm, 15, 15, &id) && id == 1);
+    assert(!snd_retained_pcm_poll(pcm));
+    assert(gain_status(pcm, id).applied == 3 && pcm->written == ring && dmas == 4);
+
+    const retained_cursor_t prior = pcm->cursor[0];
+    assert(prior.frames == (ring == 1024 ? 441 : 3969) &&
+           prior.frames == pcm->cursor[1].frames);
+    now = stereo_model_origin + (ring == 1024 ? 13 : 166);
+    left_observation_delay = long_window ? (ring == 1024 ? 7 : 15) : 0;
+    right_observation_delay = 1;
+    uint64_t left_end = now + left_observation_delay;
+    uint64_t latest = left_end + right_observation_delay;
+    uint64_t left = 44100 * (left_end - stereo_model_origin) / 1000;
+    uint64_t right = 44100 * (latest - stereo_model_origin) / 1000;
+    assert(prior.frames + retained_movement(pcm, latest - prior.before_ms) < ring);
+    assert((left + retained_movement(pcm, latest - now) >= ring) == long_window);
+    assert(right + retained_movement(pcm, latest - left_end) < ring);
+    assert(!snd_retained_pcm_gain_begin(pcm, 255, 255, &id) && id == 2);
+    /* Replay the frozen old samples. Subsequent reads of the new anchors
+       are prompt, while the modeled slots still share the same timeline. */
+    assert(!snd_retained_pcm_poll(pcm));
+    snd_retained_gain_status_t status = gain_status(pcm, id);
+    assert(status.state == SND_RETAINED_GAIN_APPLIED && status.admitted == 3 &&
+           status.applied == 3 && !status.error && !status.unknown);
+    assert(query(pcm, 0).valid && query(pcm, 0).output_frames == right);
+    assert(gain_submissions[0] == 2 && gain_submissions[1] == 2);
+    printf("STEREO GAIN FRONTIER HOST PASS: ring=%u long_window=%u, resume=%u\n",
+           ring, (unsigned)long_window, (unsigned)right);
+    stop_case(pcm);
+}
+
+static void test_stereo_gain_frontier_guards(void) {
+    const struct {
+        unsigned prior_right, left, right, gap;
+        bool overlap, invalid_receipt;
+        enum retained_sample_phase phase;
+        int error;
+    } cases[] = {
+        {440, 930, 945, 11, false, false, RETAINED_SAMPLE_GAIN_OLD, 0}, /* Right prior proof. */
+        {440, 930, 945, 11, false, false, RETAINED_SAMPLE_NORMAL, EPIPE},
+        {440, 930, 945, 11, false, false, RETAINED_SAMPLE_GAIN_NEW, EPIPE},
+        {443, 930, 933, 11, false, false, RETAINED_SAMPLE_GAIN_OLD, EPIPE}, /* Both right bounds equal. */
+        {480, 940, 978, 11, false, false, RETAINED_SAMPLE_GAIN_OLD, EPIPE}, /* Only left is provable. */
+        {480, 940, 1024, 11, false, false, RETAINED_SAMPLE_GAIN_OLD, EPIPE},
+        {480, 940, 1025, 11, false, false, RETAINED_SAMPLE_GAIN_OLD, EPIPE},
+        {440, 940, 930, 11, false, false, RETAINED_SAMPLE_GAIN_OLD, EPROTO}, /* Reverse order. */
+        {440, 910, 1005, 11, false, false, RETAINED_SAMPLE_GAIN_OLD, EPROTO}, /* Excess skew. */
+        {440, 930, 945, 11, true, false, RETAINED_SAMPLE_GAIN_OLD, EPROTO},
+        {440, 930, 945, 11, false, true, RETAINED_SAMPLE_GAIN_OLD, EPROTO},
+        {440, 930, 945, 23, false, false, RETAINED_SAMPLE_GAIN_OLD, EOVERFLOW},
+    };
+    for(unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        snd_retained_pcm_t *pcm = open_case(SILENCE);
+        assert(!snd_retained_pcm_start(pcm));
+        poll_at(pcm, 10, 440, cases[i].prior_right);
+        assert(pcm->written == 1024 && dmas == 4);
+        /* Directly exercise the proof independently of gain deadline admission. */
+        now += cases[i].gap;
+        position[0] = cases[i].left;
+        position[1] = cases[i].right % 1024;
+        right_observation_delay = 1;
+        overlap_right_observation = cases[i].overlap;
+        bad_channel = cases[i].invalid_receipt ? 1 : -1;
+        retained_cursor_t next[2];
+        uint64_t output = UINT64_MAX;
+        int result = retained_sample_until(pcm, next, &output, now + 100, cases[i].phase);
+        if(cases[i].error)
+            assert(result == -1 && errno == cases[i].error);
+        else
+            assert(!result && output == cases[i].left);
+        assert(pcm->output == 440 && pcm->written == 1024 && dmas == 4 &&
+               !gain_submissions[0] && !gain_submissions[1]);
+        stop_case(pcm);
+    }
+    puts("STEREO GAIN FRONTIER GUARDS HOST PASS: independent proof, phase, equality, pairing and wrap");
 }
 
 static snd_retained_gain_status_t mono_gain_status(snd_retained_pcm_t *pcm, uint64_t id) {
@@ -583,5 +674,10 @@ int main(void) {
     test_mono_gain();
     test_initial_tl();
     test_mono_frontier();
+    test_stereo_gain_witness(1024, false);
+    test_stereo_gain_witness(1024, true);
+    test_stereo_gain_witness(8192, false);
+    test_stereo_gain_witness(8192, true);
+    test_stereo_gain_frontier_guards();
     return 0;
 }
