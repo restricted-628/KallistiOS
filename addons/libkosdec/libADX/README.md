@@ -671,8 +671,9 @@ matching backend. Generate the mono fixture with
 
 Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against
 the matching build-gated Audio backend. Bind a READY title with one finite,
-direct stereo ADX source at 44,100 Hz. Enable ordinary stereo and then
-`kosdec_adx_compat_player_enable_flycast_pause` before start. This profile
+direct mono or stereo ADX source at 44,100 Hz. Enable its checked ordinary
+output and then `kosdec_adx_compat_player_enable_flycast_pause` before
+start. This profile
 uses a 16,384-frame/channel sound ring. It requires an owner and a
 producer that can supply a dense continuation. For compatibility NTSC or
 PAL time, enable the collection's VBlank clock before binding and then
@@ -693,8 +694,8 @@ PLAYEND opt-in before start to report completion after the tail and checked
 stop. A live producer shortage returns EAGAIN with the previous cut intact.
 Preroll, padding and discarded frames do not accrue elapsed source time. A hard resume failure
 requires checked stop. Retain the played reservation after stop. One pause-enabled title owns
-the two banks for the sound runtime. A subsequent fresh title can use
-ordinary stereo on its own allocation.
+the two banks for the sound runtime (64 KiB total for mono, 128 KiB for
+stereo). A subsequent fresh ordinary title uses its own allocation.
 
 The synthetic regression builds with `flycast-pause-test-elf`. Run
 `tests/generate_flycast_pause.py` with Python and each of the names `proof`
@@ -707,7 +708,9 @@ with explicit owner-delivered VBlank events. Build
 to exercise post-wrap cuts and cuts that cross the ring boundary. For
 finite tails, build
 `flycast-pause-tail-test-elf`. Use `proof 22016` with the generator for
-case 0 and `proof 26048` for cases 1–3.
+case 0 and `proof 26048` for cases 1–3. The
+`flycast-pause-mono-test-elf` target uses mono tracks generated with
+`proof 393216 1` and `fresh 393216 1` for sample and PAL time.
 
 ### Retained output clock
 

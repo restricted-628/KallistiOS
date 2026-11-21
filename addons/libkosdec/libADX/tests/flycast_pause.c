@@ -10,6 +10,10 @@
 
 KOS_INIT_FLAGS(INIT_DEFAULT);
 
+#ifndef ADX_TEST_PAUSE_MONO
+#define ADX_TEST_PAUSE_MONO 0
+#endif
+
 #ifndef ADX_TEST_LATE_CUT
 #define ADX_TEST_LATE_CUT 0
 #endif
@@ -28,7 +32,8 @@ enum { VIDEO_HZ = 0, DISPLAY_OFFSET = 0 };
 enum {
     RATE = 44100, RING = 16384, QUEUE = 32768,
     FRAMES = ADX_TEST_LATE_CUT ? 393216 : 196608,
-    TRACK_HEADER = 32, TRACK_BLOCK = 36, TRACK_FOOTER = 18,
+    CHANNELS = ADX_TEST_PAUSE_MONO ? 1 : 2,
+    TRACK_HEADER = 32, TRACK_BLOCK = 18*CHANNELS, TRACK_FOOTER = 18,
     TRACK_SIZE = TRACK_HEADER + FRAMES / 32 * TRACK_BLOCK + TRACK_FOOTER,
     CYCLES = 5, HOLD_MS = RING * 1000 / RATE + 40
 };
@@ -127,7 +132,11 @@ static int play(unsigned lane) {
         CHECK(!kosdec_adx_compat_player_set_time_mode(p, ADX_TEST_VSYNC_MODE));
         CHECK(!kosdec_adx_player_set_time_offset(p, DISPLAY_OFFSET));
     }
-    CHECK(!kosdec_adx_compat_player_enable_stereo_transpose(p));
+    if(ADX_TEST_PAUSE_MONO) {
+        CHECK(!kosdec_adx_compat_player_enable_mono_clock(p));
+    } else {
+        CHECK(!kosdec_adx_compat_player_enable_stereo_transpose(p));
+    }
 #ifdef ADX_TEST_ENABLE_ACTIVE_PAUSE
     if(!lane) { CHECK(!ADX_TEST_ENABLE_ACTIVE_PAUSE(p)); }
 #endif
@@ -197,7 +206,7 @@ static int cycle(struct kosdec_adx_player *p, struct cycle_result *result, uint6
                  int32_t request, uint32_t owned) {
     CHECK(!await_source(p, target, &result->before));
     struct kosdec_adx_player_info before;
-    CHECK(!kosdec_adx_player_get_info(p, &before) && before.channels == 2 && !before.starvations);
+    CHECK(!kosdec_adx_player_get_info(p, &before) && before.channels == CHANNELS && !before.starvations);
     if(VIDEO_HZ) CHECK(!snapshot(p, &result->before));
     uint32_t pause_anchor_tick = p->compat_vsync_anchor_tick;
     if(lose_cut_once) {
@@ -288,7 +297,7 @@ static int run(void) {
     struct title_snapshot started;
     CHECK(!await_source(&players[0], RING / 2, &started));
     uint32_t owned = snd_mem_available();
-    CHECK(initial - owned == 8u * RING);
+    CHECK(initial - owned == 4u * CHANNELS * RING);
     const int32_t requests[CYCLES] = {0, 128, 256, 0, 128};
     const struct snd_ordinary_pcm16 *lease = players[0].ordinary_pcm;
     CHECK(lease);
@@ -335,7 +344,7 @@ static int run(void) {
     CHECK(fresh.frequency == RATE && fresh.count < RING / 2 &&
           players[1].ordinary_pcm != lease);
     uint32_t fresh_owned = snd_mem_available();
-    CHECK(owned - fresh_owned == 4u * RING && !checked_stop(1, fresh_owned));
+    CHECK(owned - fresh_owned == 2u * CHANNELS * RING && !checked_stop(1, fresh_owned));
     for(unsigned i = 0; i < CYCLES; ++i) {
         const struct cycle_result *r = &cycles[i];
         if(ADX_TEST_LATE_CUT) {

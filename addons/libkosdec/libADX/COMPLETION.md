@@ -79,14 +79,27 @@ ordinary title after checked stop used a
 separate allocation; these tests did not release or recycle the played
 allocation. Hardware retirement is not established.
 
+The same public pause and discard calls now work on one finite 44.1 kHz
+mono title. One voice uses two 32 KiB banks, which stay reserved after
+checked stop. In each of the sample-time and PAL-clock tests, both BIOS
+CPU modes passed five post-wrap pauses. The recorded output resumed at
+the first unread source frame plus the actual discard count on each
+cycle. A fresh ordinary title used a separate allocation.
+
+Two stock use cases still fall outside that opt-in: pause/discard on a
+32 kHz title, and pause on a 44.1 kHz title after a live −12-semitone
+change. In the latter case the source is still nominally 44.1 kHz but
+the output voice is running at 22.05 kHz. Passing a fixed-rate pause
+test and a separate live-transpose test does not cover that sequence.
+
 ### Which player functions share a blocker?
 
 | 2.00J entry | What the public tests distinguish | What still needs a native implementation or test |
 | --- | --- | --- |
-| `ADXT_Pause` | A confirmed stereo cut stops both voices. A timeout followed by retry returns the same cut. | Active mono playback and other stock nominal rates are outside the 44.1 kHz stereo profile. |
+| `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. | Active pause at nominal rates other than 44.1 kHz is not supported by this profile. |
 | `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. | Stock-valid titles that cannot yet pause also cannot discard that head. The native count deliberately excludes ring capacity when no frames moved. |
-| `ADXT_GetStat` | Decoder end is not PLAYEND. On the checked ordinary mono profile, a live-transposed title now reaches PLAYEND after its final real frame and checked stop. | Status during active mono pause is not verified. A failed retained group poll does not, by itself, establish a status-getter bug. |
-| `ADXT_GetTime` / `ADXT_GetTimeReal` | On the checked stereo cut, sample time, NTSC/PAL time and centiseconds freeze and resume. On checked ordinary mono, sample time and centiseconds track source position through live transpose; the terminal sample time in both Flycast modes was 81,920/44,100. | No active mono pause/resume clock is established. The mono witness does not extend the supported live pitch range or qualify other pause rates. |
+| `ADXT_GetStat` | A running mono title can remain logically PLAYING while paused. Decoder end is not PLAYEND; the natural mono drain test requires the final real frame and checked stop. | The pause profile excludes other nominal rates. A failed retained group poll does not, by itself, establish a status-getter bug. |
+| `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo pause covers sample and NTSC/PAL clocks. Mono pause covers sample and PAL clocks, including centisecond readback. Separate mono live-transpose tests track source position at nominal Hz. | The pause tests do not cover other nominal rates, or a pause and live pitch change on the same title. |
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
 The selected Manatee adapter ignores its command selector, and the getter

@@ -377,8 +377,9 @@ int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
    Flycast active-pause opt-in. */
 int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
 /* Experimental Flycast-only pause profile. Enable a READY compatibility
-   title with one finite 44.1 kHz direct stereo ADX source and a 16,384-frame
-   sound ring per channel. Requires matching build-gated Audio and libADX. */
+   title with one finite 44.1 kHz direct mono or stereo ADX source and a
+   16,384-frame sound ring per channel. Enable its checked ordinary output
+   profile first. Requires matching build-gated Audio and libADX. */
 int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *);
 /* With pause clear, return zero discarded without servicing the title.
    With one bound, paused title preparing its first output, a nonpositive

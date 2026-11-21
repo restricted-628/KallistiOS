@@ -8,6 +8,13 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The optional Flycast player can now pause a finite 44.1 kHz **mono**
+  title after a ring wrap, discard unread samples and resume on the same
+  voice. It owns two 32 KiB banks. The public sample-time and PAL-clock
+  tests each check five cuts, including a retry, against decoded PCM in
+  both BIOS CPU modes. The default firmware and ordinary playback path
+  do not enable this feature.
+
 - A finite mono ADX title can opt into checked live transpose and source
   time on one PCM16 voice with a 32 KiB sound ring. Both Flycast BIOS CPU
   modes played a 44.1 → 22.05 → 44.1 kHz transition through ring wraps;

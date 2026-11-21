@@ -14,11 +14,11 @@ enum { CUT_IDLE, CUT_QUOTED, CUT_ARMED };
 
 static int flycast_cut_identity(void) {
     if(!cut.session || cut.session != observer.header->active_session ||
-       cut.request != cut.slot[0].start ||
-       cut.slot[0].channel == cut.slot[1].channel ||
-       cut.slot[0].address == cut.slot[1].address)
+       cut.request != cut.slot[0].start || (cut.channels != 1 && cut.channels != 2) ||
+       (cut.channels == 2 && (cut.slot[0].channel == cut.slot[1].channel ||
+                              cut.slot[0].address == cut.slot[1].address)))
         return 0;
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < cut.channels; ++i) {
         const flycast_cut_slot_t *slot = &cut.slot[i];
         unsigned ch = slot->channel;
         if(ch >= 64 || !slot->start || !slot->command || aica_music_live_owned(music, ch) ||
@@ -61,7 +61,7 @@ static int flycast_cut_has_lead(unsigned i) {
 static int flycast_cut_quote(void) {
     if(!flycast_cut_identity() || cut.cut <= FLYCAST_CUT_LEAD || cut.cut >= FLYCAST_CUT_RING)
         return 0;
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < cut.channels; ++i) {
         unsigned ch = cut.slot[i].channel;
         if(!flycast_cut_looping(ch))
             return 0;
@@ -79,15 +79,15 @@ static int flycast_cut_quote(void) {
 static int flycast_cut_arm(void) {
     if(!flycast_cut_identity())
         return 0;
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < cut.channels; ++i) {
         if(!flycast_cut_looping(cut.slot[i].channel) || !flycast_cut_has_lead(i))
             return 0;
     }
-    for(unsigned i = 0; i < 2; ++i)
+    for(unsigned i = 0; i < cut.channels; ++i)
         CHNREG32(cut.slot[i].channel, 0x0c) = cut.cut;
-    for(unsigned i = 0; i < 2; ++i)
+    for(unsigned i = 0; i < cut.channels; ++i)
         CHNREG32(cut.slot[i].channel, 0) &= ~0x8200u;
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < cut.channels; ++i) {
         unsigned ch = cut.slot[i].channel;
         if((CHNREG32(ch, 0) & 0x8200u) ||
            (CHNREG32(ch, 0x0c) & 0xffffu) != cut.cut ||
@@ -114,7 +114,7 @@ static void flycast_cut_service(void) {
             flycast_cut_done(FLYCAST_CUT_FAILED);
             return;
         }
-        for(unsigned i = 0; i < 2; ++i) {
+        for(unsigned i = 0; i < cut.channels; ++i) {
             unsigned ch = cut.slot[i].channel;
             if((CHNREG32(ch, 0) & 0x200u) ||
                (CHNREG32(ch, 0x0c) & 0xffffu) != cut.cut) {
@@ -132,7 +132,7 @@ static void flycast_cut_service(void) {
                 cut_stopped |= 1u << i;
             }
         }
-        if(cut_stopped == 3)
+        if(cut_stopped == (cut.channels == 2 ? 3u : 1u))
             flycast_cut_done(FLYCAST_CUT_NATURAL);
         return;
     }

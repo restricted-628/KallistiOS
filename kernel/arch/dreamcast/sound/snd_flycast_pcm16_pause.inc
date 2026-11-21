@@ -8,8 +8,8 @@ static uint32_t pause_word(size_t member) {
     return g2_read_32(pause_mailbox() + member);
 }
 
-static bool pause_address_matches(const strchan_t *stream) {
-    for(unsigned i = 0; i < 2; ++i) {
+static bool pause_address_matches(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         uintptr_t reg = UINT32_C(0xa0700000) + stream->ch[i] * 0x80u;
         uint32_t address = ((g2_read_32(reg) & 0x7fu) << 16) |
                            (g2_read_32(reg + 4) & 0xffffu);
@@ -22,7 +22,7 @@ static bool pause_address_matches(const strchan_t *stream) {
 int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
     if(ordinary_pcm16_lock(pcm) < 0)
         return -1;
-    if(pcm->channels != 2 || pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || pcm->rate != 44100 ||
+    if(pcm->ring != SND_FLYCAST_PCM16_PAUSE_RING || pcm->rate != 44100 ||
        pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC) {
         errno = ENOTSUP;
         return ordinary_pcm16_unlock(-1);
@@ -32,7 +32,7 @@ int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
         return ordinary_pcm16_unlock(-1);
     }
 
-    uint32_t alternate = snd_mem_malloc(4u * pcm->ring);
+    uint32_t alternate = snd_mem_malloc(2u * pcm->channels * pcm->ring);
     if(!alternate)
         return ordinary_pcm16_unlock(-1);
     pcm->pause_banks[0] = streams[pcm->handle].spu_ram_sch[0];
@@ -41,7 +41,7 @@ int snd_flycast_pcm16_pause_enable(snd_ordinary_pcm16_t *pcm) {
     return ordinary_pcm16_unlock(0);
 }
 
-/* The request is the already-qualified left START token. Publish it last
+/* The request is the already-qualified slot 0 START token. Publish it last
    under the G2 fence. The ARM keeps its result immutable until a newer START
    posts its own cut, so repeated pause after a timeout only reads the result. */
 static void pause_submit(const snd_ordinary_pcm16_t *pcm, const strchan_t *stream) {
@@ -49,7 +49,8 @@ static void pause_submit(const snd_ordinary_pcm16_t *pcm, const strchan_t *strea
     g2_lock_scoped();
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, session), pcm->session);
     g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, cut), pcm->pause_cut % pcm->ring);
-    for(unsigned i = 0; i < 2; ++i) {
+    g2_write_32_raw(box + offsetof(flycast_cut_mailbox_t, channels), pcm->channels);
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         uintptr_t slot = box + offsetof(flycast_cut_mailbox_t, slot) +
                          i * sizeof(flycast_cut_slot_t);
         g2_fifo_wait();
@@ -68,12 +69,12 @@ static void pause_submit(const snd_ordinary_pcm16_t *pcm, const strchan_t *strea
    Then the residue has only one possible forward mapping from that anchor. */
 static bool pause_quote_matches(const snd_ordinary_pcm16_t *pcm) {
     uint32_t position[2];
-    for(unsigned i = 0; i < 2; ++i)
+    for(unsigned i = 0; i < pcm->channels; ++i)
         position[i] = pause_word(offsetof(flycast_cut_mailbox_t, position) + i * sizeof(uint32_t));
 
     uint64_t now = timer_ms_gettime64();
     uint64_t lap = pcm->pause_cut - pcm->pause_cut % pcm->ring;
-    for(unsigned i = 0; i < 2; ++i) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
         const ordinary_pcm16_cursor_t *anchor = &pcm->voice[i].cursor;
         uint64_t bound = ordinary_pcm16_movement(pcm->motion_rate, now - anchor->before_ms);
         if(now < anchor->after_ms || bound >= pcm->ring || position[i] >= pcm->ring)
@@ -117,9 +118,9 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
         if(ordinary_pcm16_ready(pcm) < 0 ||
            ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0)
             goto fail;
-        uint64_t first = pcm->voice[0].cursor.frames;
-        uint64_t second = pcm->voice[1].cursor.frames;
-        uint64_t furthest = first > second ? first : second;
+        uint64_t furthest = pcm->voice[0].cursor.frames;
+        if(pcm->channels == 2 && pcm->voice[1].cursor.frames > furthest)
+            furthest = pcm->voice[1].cursor.frames;
 
         const uint32_t lead = 2048;
         if(furthest > UINT64_MAX - 2 * lead) {
@@ -141,11 +142,12 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
         pcm->running = false;
     }
 
-    /* Let both cursors enter the target traversal with the original LEA.
+    /* Let the active cursors enter the target traversal with the original LEA.
        Keep the same absolute cut and stop refilling throughout the wait. */
     if(pcm->pause_state == PAUSE_PLANNED) {
         uint64_t lap = pcm->pause_cut - pcm->pause_cut % pcm->ring;
-        while(pcm->voice[0].cursor.frames < lap || pcm->voice[1].cursor.frames < lap) {
+        while(pcm->voice[0].cursor.frames < lap ||
+              (pcm->channels == 2 && pcm->voice[1].cursor.frames < lap)) {
             if(!stream_time_remaining(deadline))
                 goto timeout;
             if(ordinary_pcm16_sample(pcm, pcm->motion_rate, deadline) < 0) {
@@ -154,7 +156,7 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
                 goto fail;
             }
         }
-        for(unsigned i = 0; i < 2; ++i) {
+        for(unsigned i = 0; i < pcm->channels; ++i) {
             if(pcm->voice[i].cursor.frames >= pcm->pause_cut ||
                pcm->pause_cut - pcm->voice[i].cursor.frames <= FLYCAST_CUT_LEAD) {
                 errno = EPROTO;
@@ -172,12 +174,13 @@ int snd_flycast_pcm16_pause(snd_ordinary_pcm16_t *pcm, uint32_t timeout,
         if(pause_word(offsetof(flycast_cut_mailbox_t, done)) == start) {
             if(pcm->pause_state != PAUSE_AUTHORIZED ||
                pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
-               !pause_address_matches(stream)) {
+               !pause_address_matches(pcm, stream)) {
                 errno = EPROTO;
                 goto fail;
             }
             pcm->pause_state = PAUSE_CUT;
-            pcm->voice[0].cursor.frames = pcm->voice[1].cursor.frames = pcm->pause_cut;
+            for(unsigned i = 0; i < pcm->channels; ++i)
+                pcm->voice[i].cursor.frames = pcm->pause_cut;
             *exclusive_cut = pcm->pause_cut;
             return ordinary_pcm16_unlock(0);
         }
@@ -206,9 +209,9 @@ fail:
     return ordinary_pcm16_unlock(-1);
 }
 
-int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *interleaved,
+int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *samples,
                             uint32_t frames) {
-    if(!interleaved || frames != SND_FLYCAST_PCM16_PAUSE_RING - SND_FLYCAST_PCM16_PAUSE_PREROLL) {
+    if(!samples || frames != SND_FLYCAST_PCM16_PAUSE_RING - SND_FLYCAST_PCM16_PAUSE_PREROLL) {
         errno = EINVAL;
         return -1;
     }
@@ -227,27 +230,34 @@ int snd_flycast_pcm16_resume(snd_ordinary_pcm16_t *pcm, const int16_t *interleav
     if(pause_word(offsetof(flycast_cut_mailbox_t, ready)) != FLYCAST_CUT_MAGIC ||
        pause_word(offsetof(flycast_cut_mailbox_t, done)) != start[0] ||
        pause_word(offsetof(flycast_cut_mailbox_t, result)) != FLYCAST_CUT_NATURAL ||
-       !pause_address_matches(stream)) {
+       !pause_address_matches(pcm, stream)) {
         errno = ESTALE;
         goto fail;
     }
     unsigned bank = pcm->pause_bank ^ 1u;
     uint32_t base = pcm->pause_banks[bank];
     stream->spu_ram_sch[0] = base;
-    stream->spu_ram_sch[1] = base + 2u * pcm->ring;
+    if(pcm->channels == 2)
+        stream->spu_ram_sch[1] = base + 2u * pcm->ring;
     pcm->pause_state = PAUSE_HELD;
     pcm->committed = 0;
     const uint32_t half = pcm->ring / 2;
     const uint32_t pad = SND_FLYCAST_PCM16_PAUSE_PREROLL;
-    memset(pcm->staging, 0, 4u * pad);
-    memcpy(pcm->staging + 2u * pad, interleaved, 4u * (half - pad));
+    const unsigned channels = pcm->channels;
+    memset(pcm->staging, 0, sizeof(*samples) * channels * pad);
+    memcpy(pcm->staging + channels * pad, samples, sizeof(*samples) * channels * (half - pad));
     if(ordinary_pcm16_write(pcm) < 0)
         goto fail;
-    memcpy(pcm->staging, interleaved + 2u * (half - pad), 4u * half);
+    memcpy(pcm->staging, samples + channels * (half - pad), sizeof(*samples) * channels * half);
     if(ordinary_pcm16_write(pcm) < 0 || ordinary_pcm16_key_on(pcm, stream) < 0)
         goto fail;
-    if(pcm->voice[0].start <= start[0] || pcm->voice[1].start <= start[1] ||
-       !pause_address_matches(stream)) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        if(pcm->voice[i].start <= start[i]) {
+            errno = ESTALE;
+            goto fail;
+        }
+    }
+    if(!pause_address_matches(pcm, stream)) {
         errno = ESTALE;
         goto fail;
     }

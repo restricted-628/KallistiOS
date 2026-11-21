@@ -373,11 +373,11 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *p,
 int kosdec_adx_player_get_source_output(const struct kosdec_adx_player *p,
     uint64_t generation, struct kosdec_adx_source_output *out) {
     if(!valid(p) || !out) return bad();
-#ifdef MEDIA_ADX_ORDINARY_STEREO
-    if(p->ordinary_mono_clock) return ordinary_mono_snapshot(p,generation,out);
-#endif
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
     if(p->flycast_pause_enabled) return flycast_snapshot(p,generation,out);
+#endif
+#ifdef MEDIA_ADX_ORDINARY_STEREO
+    if(p->ordinary_mono_clock) return ordinary_mono_snapshot(p,generation,out);
 #endif
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(!p->retained_offsets) return unsupported();
@@ -1105,7 +1105,8 @@ static int ordinary_pcm16_fill(void *context, int16_t *pcm, uint32_t frames) {
         struct kosdec_adx_flycast_pause *f = p->flycast_pause;
         if(read.starved) { errno = EPIPE; return -1; }
         uint32_t index = (uint32_t)f->written & (FLYCAST_RING - 1);
-        memcpy(f->history + 2 * index,pcm,2 * read.frames * sizeof(*pcm));
+        unsigned channels = p->info.channels;
+        memcpy(f->history + channels*index,pcm,channels*read.frames*sizeof(*pcm));
         if(read.frames) f->real_end = f->written + read.frames;
         f->written += frames;
     }
@@ -1158,7 +1159,8 @@ static int flycast_snapshot(const struct kosdec_adx_player *p, uint64_t generati
                                    p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END),
         .source_output_end = !status.error && !f->pending && !p->compat_paused &&
             p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END &&
-            (f->exhausted || (status.frames[0] >= f->real_end && status.frames[1] >= f->real_end))
+            (f->exhausted || (status.frames[0] >= f->real_end &&
+                              (p->info.channels == 1 || status.frames[1] >= f->real_end)))
     };
     return 0;
 }
@@ -1181,13 +1183,13 @@ static uint32_t flycast_available(const struct kosdec_adx_pipe *pipe, uint32_t *
 }
 
 static void flycast_copy_pcm(int16_t *out, const int16_t *ring, uint32_t capacity,
-    uint64_t at, uint32_t frames) {
+    uint64_t at, uint32_t frames, unsigned channels) {
     uint32_t index = (uint32_t)at & (capacity-1);
     uint32_t first = capacity-index;
     if(first > frames) first = frames;
-    memcpy(out,ring+2*index,2*first*sizeof(*out));
+    memcpy(out,ring+channels*index,channels*first*sizeof(*out));
     if(first < frames)
-        memcpy(out+2*first,ring,2*(frames-first)*sizeof(*out));
+        memcpy(out+channels*first,ring,channels*(frames-first)*sizeof(*out));
 }
 
 static int flycast_resume(struct kosdec_adx_player *p) {
@@ -1214,14 +1216,17 @@ static int flycast_resume(struct kosdec_adx_player *p) {
 
     /* No source consumption before the synchronous, checked resume. The
        sole pipe consumer is this owner and the producer only appends. */
-    flycast_copy_pcm(f->staged,f->history,FLYCAST_RING,survivor,captured);
-    flycast_copy_pcm(f->staged+2*captured,pipe->pcm,pipe->capacity,tail,continuation);
-    memset(f->staged+2*real,0,2*(FLYCAST_PREFILL-real)*sizeof(*f->staged));
+    unsigned channels = p->info.channels;
+    flycast_copy_pcm(f->staged,f->history,FLYCAST_RING,survivor,captured,channels);
+    flycast_copy_pcm(f->staged+channels*captured,pipe->pcm,pipe->capacity,tail,
+                     continuation,channels);
+    memset(f->staged+channels*real,0,channels*(FLYCAST_PREFILL-real)*sizeof(*f->staged));
     if(snd_flycast_pcm16_resume(p->ordinary_pcm,f->staged,FLYCAST_PREFILL) < 0)
         return failed(p,errno);
 
     __atomic_store_n(&pipe->read_cursor,tail+continuation,__ATOMIC_RELEASE);
-    memcpy(f->history+2*FLYCAST_PREROLL,f->staged,sizeof(f->staged));
+    memcpy(f->history+channels*FLYCAST_PREROLL,f->staged,
+           channels*FLYCAST_PREFILL*sizeof(*f->staged));
     unsigned lead = f->epoch > 1 ? FLYCAST_PREROLL : 0;
     uint64_t source_cut = f->cut < f->real_end ? f->cut : f->real_end;
     f->elapsed += source_cut-lead;
@@ -1322,7 +1327,8 @@ static int flycast_discard(struct kosdec_adx_player *p, int32_t requested, int32
 int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *p) {
     if(!valid(p)) return bad();
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
-    if(!p->ordinary_stereo || !p->compat_service || p->compat_service->servicing ||
+    if((!p->ordinary_stereo && !p->ordinary_mono_clock) ||
+       !p->compat_service || p->compat_service->servicing ||
        p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound ||
        p->compat_phased || (p->time_uses_vsync && !p->compat_service->use_vsync_clock) ||
        p->requested_rate || p->compat_start_pitch ||
