@@ -80,6 +80,12 @@ static aica_music_live_t *const music = (aica_music_live_t *)AICA_MEM_MUSIC_STAT
 static asq_resource_runtime_t *const sequence_resources =
     (asq_resource_runtime_t *)AICA_MEM_SEQUENCE_STATE;
 
+static volatile aica_finite_stop_t *const finite_stops =
+    (volatile aica_finite_stop_t *)AICA_MEM_FINITE_STOPS;
+_Static_assert(AICA_MEM_FINITE_STOPS >= AICA_MEM_CLOCK + 4 &&
+               AICA_MEM_FINITE_STOPS_END <= AICA_MEM_CHANNEL_STATUS,
+               "finite stops fit between clock and channel status");
+
 static uint32 commands_processed;
 static uint32 commands_rejected;
 static uint32 malformed_packets;
@@ -259,7 +265,8 @@ static void respond_with_driver_info(uint32 command_id) {
                      AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE |
                      AICA_DRIVER_FEATURE_SEQUENCE_CONTROL |
                      AICA_DRIVER_FEATURE_OBSERVATION | AICA_DRIVER_FEATURE_COMPLETION;
-    info->features = prior_features | AICA_DRIVER_FEATURE_OBSERVATION_TL;
+    info->features = prior_features | AICA_DRIVER_FEATURE_OBSERVATION_TL |
+                     AICA_DRIVER_FEATURE_FINITE_STOP;
     info->uptime_ms = timer;
     info->commands_processed = commands_processed;
     info->commands_rejected = commands_rejected;
@@ -466,8 +473,8 @@ void aica_music_hw_apply(unsigned channel, unsigned operation,
 int aica_music_hw_invalidate(uint32_t low, uint32_t high) {
     return aica_observer_external(&observer,low,high);
 }
-static uint32_t observer_apply(uint32_t channel,
-                               const aica_channel_control_t *control) {
+static uint32_t checked_channel_apply(uint32_t channel,
+    const aica_channel_control_t *control, int observed) {
     if(channel>=64 || aica_music_live_owned(music,channel))
         return AICA_OBSERVATION_BAD_CONFIG;
     switch(control->operation) {
@@ -479,6 +486,9 @@ static uint32_t observer_apply(uint32_t channel,
             if(control->start_flags || control->fields)
                 return AICA_OBSERVATION_BAD_FLAGS;
             /* Ownership and all STOP inputs have already been checked. */
+            if(observed)
+                aica_observer_capture_stop(&observer, channel, timer,
+                                           &finite_stops[channel]);
             channel_apply(channel, AICA_CHANNEL_OP_STOP, NULL, 0, 0);
             return AICA_OBSERVATION_APPLIED;
         case AICA_CHANNEL_OP_UPDATE:
@@ -506,11 +516,16 @@ static uint32_t observer_apply(uint32_t channel,
     return AICA_OBSERVATION_APPLIED;
 }
 
+static uint32_t observer_apply(uint32_t channel,
+                               const aica_channel_control_t *control) {
+    return checked_channel_apply(channel, control, 1);
+}
+
 static int process_channel_control(uint32 channel,
                                    const aica_channel_control_t *control) {
     if(control->fields & AICA_OBSERVATION_UPDATE_TL)
         return 0;
-    return observer_apply(channel, control) == AICA_OBSERVATION_APPLIED;
+    return checked_channel_apply(channel, control, 0) == AICA_OBSERVATION_APPLIED;
 }
 
 static void observer_read(uint32_t channel, uint32_t *position, uint32_t *key_on) {
@@ -853,6 +868,10 @@ int arm_main(void) {
     q_resp->valid = 1;
 
     for(i = 0; i < 64; ++i) {
+        finite_stops[i].sequence = 0;
+        finite_stops[i].session = 0;
+        finite_stops[i].start_token = 0;
+        finite_stops[i].position = 0;
         volatile uint32 *status =
             (volatile uint32 *)&channel_statuses[i];
 

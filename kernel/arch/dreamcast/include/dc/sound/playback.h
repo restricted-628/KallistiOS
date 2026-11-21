@@ -87,6 +87,18 @@ typedef struct snd_port_playback_state {
     uint64_t host_challenge_started_ms, host_observed_ms;
 } snd_port_playback_state_t;
 
+/** Observe the current generation's total source frames for finite mono PCM16.
+    The live count is the attributed sample position. Natural end reports the
+    programmed end frame. An observed STOP keeps the firmware's final pre-key-off
+    sample position until the next applied START. The result describes the
+    driver cursor and keeps sample ownership with the caller.
+
+    Requires capable firmware and an applied finite START. Wrong format or
+    loops return ENOTSUP. An outstanding receipt or lost attribution gives
+    EBUSY. Missing qualified cut returns ENODATA. Error leaves *frames intact. */
+int snd_port_playback_get_total_frames(snd_port_t port, uint32_t timeout_ms,
+                                       uint32_t *frames);
+
 /** Experimental current-generation query, independent of consumed command ACK.
     Returns 0, or -1 with output unchanged. EAGAIN until this attachment owns a
     classified APPLIED START (never adopts a prior port's channel history).

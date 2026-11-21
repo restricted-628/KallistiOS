@@ -376,3 +376,63 @@ int snd_port_playback_get_state(snd_port_t port, uint32_t timeout,
     result = pb_current(s, deadline, out);
     return pb_unlock(port, result);
 }
+
+int snd_port_playback_get_total_frames(snd_port_t port, uint32_t timeout_ms,
+                                       uint32_t *frames) {
+    if(!timeout_ms || !frames) {
+        errno = EINVAL;
+        return -1;
+    }
+    uint64_t deadline = timer_ms_gettime64() + timeout_ms;
+    if(pb_lock(port, deadline) < 0)
+        return -1;
+    playback_state_t *s = pb_lookup(port);
+    if(!s)
+        return pb_unlock(port, -1);
+    if(!(snd_iface_observation_features() & AICA_DRIVER_FEATURE_FINITE_STOP) ||
+       (s->configured && (s->committed.loop_enabled ||
+                         s->committed.format != SND_CHANNEL_SAMPLE_PCM16))) {
+        errno = ENOTSUP;
+        return pb_unlock(port, -1);
+    }
+
+    snd_port_playback_state_t state;
+    if(pb_current(s, deadline, &state) < 0)
+        return pb_unlock(port, -1);
+    if(state.state == SND_PLAYBACK_INTERFERED) {
+        errno = EBUSY;
+        return pb_unlock(port, -1);
+    }
+
+    uint32_t position;
+    if(state.flags & SND_PLAYBACK_END_SEEN)
+        position = s->committed.loop_end;
+    else if(state.state == SND_PLAYBACK_ACTIVE && (state.flags & SND_PLAYBACK_END_ELIGIBLE))
+        position = state.position;
+    else if(state.state == SND_PLAYBACK_STOPPED) {
+        aica_finite_stop_t stopped;
+        uint32_t address = AICA_MEM_FINITE_STOPS + s->channel * sizeof(stopped);
+        if(snd_iface_observation_read(address, &stopped, sizeof(stopped)) < 0)
+            return pb_unlock(port, -1);
+        if(timer_ms_gettime64() >= deadline) {
+            errno = ETIMEDOUT;
+            return pb_unlock(port, -1);
+        }
+        if(stopped.session != s->session || stopped.start_token != s->start_token) {
+            errno = ENODATA;
+            return pb_unlock(port, -1);
+        }
+        position = stopped.position;
+    }
+    else {
+        errno = ENODATA;
+        return pb_unlock(port, -1);
+    }
+
+    if(position > s->committed.loop_end) {
+        errno = EPROTO;
+        return pb_unlock(port, -1);
+    }
+    *frames = position;
+    return pb_unlock(port, 0);
+}

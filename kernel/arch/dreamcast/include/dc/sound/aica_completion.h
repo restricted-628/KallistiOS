@@ -7,6 +7,9 @@
 #include <stddef.h>
 #include <dc/sound/aica_observation.h>
 #define AICA_DRIVER_FEATURE_COMPLETION 0x00000020u
+#define AICA_DRIVER_FEATURE_FINITE_STOP 0x00001000u
+#define AICA_MEM_FINITE_STOPS 0x021100u
+#define AICA_MEM_FINITE_STOPS_END 0x021500u
 #define AICA_COMPLETION_LAYOUT_VERSION 1u
 #define AICA_MEM_COMPLETION_HEADER 0x026900u
 #define AICA_MEM_COMPLETION_CHANNELS 0x026a00u
@@ -20,6 +23,10 @@
 typedef struct aica_completion_header {
     uint32_t sequence, layout_version, ready, active_session, reserved[12];
 } aica_completion_header_t;
+/* Optional extension. The original completion records retain their ABI. */
+typedef struct aica_finite_stop {
+    uint32_t sequence, session, start_token, position;
+} aica_finite_stop_t;
 typedef struct aica_completion_channel {
     uint32_t sequence, session, start_token, command_token;
     uint32_t attribution_kind, state, flags, first_end_tick;
@@ -31,6 +38,9 @@ typedef struct aica_completion_channel {
 #else
 #define AICA_C_ASSERT _Static_assert
 #endif
+AICA_C_ASSERT(sizeof(aica_finite_stop_t) == 16, "finite stop record");
+AICA_C_ASSERT(AICA_MEM_FINITE_STOPS + 64 * sizeof(aica_finite_stop_t) ==
+              AICA_MEM_FINITE_STOPS_END, "finite stop record extent");
 AICA_C_ASSERT(sizeof(aica_completion_header_t) == 64, "completion header");
 AICA_C_ASSERT(sizeof(aica_completion_channel_t) == 64, "completion channel");
 AICA_C_ASSERT(offsetof(aica_completion_channel_t, start_token) == 8, "start identity");

@@ -775,6 +775,10 @@ int snd_iface_observation_read(uint32_t offset, void *record, uint32_t bytes) {
         (offset == AICA_MEM_COMPLETION_HEADER && bytes == 64) ||
         (offset >= AICA_MEM_COMPLETION_CHANNELS && offset < AICA_MEM_COMPLETION_END &&
          (offset - AICA_MEM_COMPLETION_CHANNELS) % 64 == 0 && bytes == 64) ||
+        (offset >= AICA_MEM_FINITE_STOPS && offset < AICA_MEM_FINITE_STOPS_END &&
+         (offset - AICA_MEM_FINITE_STOPS) % sizeof(aica_finite_stop_t) == 0 &&
+         bytes == sizeof(aica_finite_stop_t) &&
+         (driver_features & AICA_DRIVER_FEATURE_FINITE_STOP)) ||
         (offset == AICA_MEM_BANK_HEADER && bytes == 64) ||
         (offset == AICA_MEM_SEQUENCE_RECEIPT && (bytes == 4 || bytes == 256) &&
          (driver_features & AICA_DRIVER_FEATURE_SEQUENCE_RESOURCE)) ||

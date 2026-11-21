@@ -58,6 +58,24 @@ static void completion_sample(aica_observer_t *o, uint32_t channel,
     }
 }
 
+void aica_observer_capture_stop(aica_observer_t *o, uint32_t channel,
+    uint32_t tick, volatile aica_finite_stop_t *record) {
+    if(!aica_observer_needs_lp(o, channel))
+        return;
+
+    const volatile aica_completion_channel_t *c = &o->completions[channel];
+    uint32_t position, key;
+    o->read(channel, &position, &key);
+    uint32_t lp = o->loop_end();
+    completion_sample(o, channel, position, key, tick, lp, 0, 0);
+    if(lp || !begin(&record->sequence))
+        return;
+    record->session = c->session;
+    record->start_token = c->start_token;
+    record->position = position;
+    end(&record->sequence);
+}
+
 /* Install identity before the first post-apply destructive sample. ACK and
    rejected/duplicate commands never reach this transition. */
 static void completion_control(aica_observer_t *o,
@@ -71,8 +89,9 @@ static void completion_control(aica_observer_t *o,
     if(p->operation == AICA_CHANNEL_OP_START) {
         c->start_token = p->token;
         c->state = AICA_COMPLETION_ACTIVE;
-        c->flags = !p->start_flags && !p->config.loop &&
-                   p->config.type == AICA_SM_16BIT ? AICA_COMPLETION_ELIGIBLE : 0;
+        c->flags = 0;
+        if(!p->start_flags && !p->config.loop && p->config.type == AICA_SM_16BIT)
+            c->flags = AICA_COMPLETION_ELIGIBLE;
         c->first_end_tick = c->challenge_cookie = 0;
         c->format = p->config.type; c->loop_enabled = p->config.loop;
     }

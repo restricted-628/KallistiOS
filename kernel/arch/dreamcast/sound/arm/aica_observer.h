@@ -25,6 +25,9 @@ int aica_observer_command(aica_observer_t *observer, const aica_cmd_t *packet,
 void aica_observer_refresh(aica_observer_t *observer, uint32_t channel,
                           uint32_t position, uint32_t key_on, uint32_t tick, uint32_t lp);
 int aica_observer_needs_lp(const aica_observer_t *observer, uint32_t channel);
+/* Accepted managed STOP only, immediately before applying key-off. */
+void aica_observer_capture_stop(aica_observer_t *observer, uint32_t channel,
+    uint32_t tick, volatile aica_finite_stop_t *record);
 /* Serialized owner only: preflight every selected record, then invalidate all.
    Failure changes no selected record and performs no hardware reads/writes. */
 int aica_observer_external(aica_observer_t *, uint32_t low, uint32_t high);
