@@ -628,6 +628,20 @@ Repeating re-prime uses the same staged setting. An out-of-device-domain
 request remains in the requested cache and the next START uses neutral
 pitch, matching reset and replay on the allocated stock port.
 
+For same-title replay with checked mono or stereo live transpose, build
+libADX with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ORDINARY_RESTART=1` against
+a kernel built with `AICA_FLYCAST_PCM16_RESTART`. Use the qualified
+Flycast mixer with Timer B available. After checked STOP and producer
+join, stage the next pitch and pass a fresh direct ADX stream to
+`kosdec_adx_compat_player_reprime`. Keep the same source format, ring
+and title, and use the ordinary RR=31 configuration. No active-pause
+lease is eligible for this restart. The last admitted output rate stays
+visible until the new START is confirmed. Sample time starts a fresh
+interval, and the latest applied live transpose supplies the next Play
+when there is no new request. The kernel retains the same reservation
+and allocates no additional sound RAM per replay. Rebuild consumers for
+the new player layout.
+
 ### Ordinary stereo live transpose
 
 Build a separate archive with `ADX_ORDINARY_STEREO=1` against the fork's

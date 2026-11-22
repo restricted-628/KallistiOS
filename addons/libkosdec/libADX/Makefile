@@ -12,6 +12,13 @@ RETAINED_PCM_INCLUDE ?= $(KOS_BASE)/kernel/arch/dreamcast/sound
 RETAINED_CLOCK_FLAGS = -DMEDIA_ADX_RETAINED_CLOCK -I"$(RETAINED_PCM_INCLUDE)"
 ADX_ORDINARY_STEREO ?= 0
 ADX_FLYCAST_ACTIVE_PAUSE ?= 0
+ADX_FLYCAST_ORDINARY_RESTART ?= 0
+FLYCAST_RESTART_SUFFIX = $(if $(filter 1,$(ADX_FLYCAST_ORDINARY_RESTART)),-flycast-restart)
+ifeq ($(ADX_FLYCAST_ORDINARY_RESTART),1)
+ifneq ($(ADX_ORDINARY_STEREO),1)
+$(error ADX_FLYCAST_ORDINARY_RESTART requires ADX_ORDINARY_STEREO=1)
+endif
+endif
 FLYCAST_PAUSE_INCLUDE ?= $(KOS_BASE)/kernel/arch/dreamcast/sound
 ifeq ($(ADX_FLYCAST_ACTIVE_PAUSE),1)
 ifneq ($(ADX_ORDINARY_STEREO),1)
@@ -20,12 +27,16 @@ endif
 ifneq ($(filter 1,$(ADX_RETAINED_CLOCK) $(ADX_RETAINED_GAIN) $(ADX_RETAINED_START_TL)),)
 $(error ADX_FLYCAST_ACTIVE_PAUSE is incompatible with retained playback options)
 endif
-BUILD ?= .build/flycast-active-pause
+BUILD ?= .build/flycast-active-pause$(FLYCAST_RESTART_SUFFIX)
 endif
 ORDINARY_PCM16_INCLUDE ?= $(KOS_BASE)/kernel/arch/dreamcast/sound
 ifeq ($(ADX_ORDINARY_STEREO),1)
-BUILD ?= .build/ordinary-stereo$(if $(filter 1,$(ADX_RETAINED_CLOCK)),-retained$(if $(filter 1,$(ADX_RETAINED_START_TL)),-start-tl)$(if $(filter 1,$(ADX_RETAINED_GAIN)),-gain))
+BUILD ?= .build/ordinary-stereo$(FLYCAST_RESTART_SUFFIX)$(if $(filter 1,$(ADX_RETAINED_CLOCK)),-retained$(if $(filter 1,$(ADX_RETAINED_START_TL)),-start-tl)$(if $(filter 1,$(ADX_RETAINED_GAIN)),-gain))
 $(BUILD)/sh4/player.o: PRIVATE_ORDINARY_FLAGS = -DMEDIA_ADX_ORDINARY_STEREO -I"$(ORDINARY_PCM16_INCLUDE)"
+ifeq ($(ADX_FLYCAST_ORDINARY_RESTART),1)
+$(BUILD)/sh4/player.o: PRIVATE_ORDINARY_FLAGS += -DMEDIA_ADX_FLYCAST_RESTART
+$(BUILD)/sh4/player.o: $(ORDINARY_PCM16_INCLUDE)/snd_flycast_pcm16_restart.h
+endif
 ifeq ($(ADX_FLYCAST_ACTIVE_PAUSE),1)
 $(BUILD)/sh4/player.o: PRIVATE_ORDINARY_FLAGS += -DMEDIA_ADX_FLYCAST_PAUSE -I"$(FLYCAST_PAUSE_INCLUDE)"
 $(BUILD)/sh4/player.o: $(FLYCAST_PAUSE_INCLUDE)/snd_flycast_pcm16_pause.h

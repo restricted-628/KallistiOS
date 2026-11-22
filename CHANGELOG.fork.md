@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- With Flycast checked restart enabled, a stopped ADX title can play a
+  new source on the same sound allocation and change pitch during playback.
+  Both Flycast CPU modes played a stereo A → B → A sequence, with B
+  starting two octaves up and returning to unity without a restart.
+
 - The opt-in Flycast PCM16 restart path can reuse a stopped stream's
   channels and sound RAM for a new producer. Before overwriting the ring,
   it verifies the old slots, counts 160 mixer ticks with Timer B, and

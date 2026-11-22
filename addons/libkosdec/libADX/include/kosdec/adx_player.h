@@ -186,6 +186,7 @@ struct kosdec_adx_player {
     struct kosdec_adx_flycast_pause *flycast_pause;
     uint64_t flycast_stopped_epoch;
     bool flycast_pause_enabled, flycast_pause_unstarted;
+    uint64_t ordinary_requested_base; /* Start of the current device clock interval. */
     struct {
         uint64_t source_first;
         uint32_t source_frames;
@@ -651,14 +652,14 @@ int kosdec_adx_player_dispatch_error(struct kosdec_adx_player *);
 int kosdec_adx_player_stop(struct kosdec_adx_player *, uint32_t timeout_ms);
 /* Begin preparing a fresh direct ADX stream on the same ordinary allocation.
    The caller must retain exclusive ownership of the stopped handle, ring and
-   player following successful checked stop. For a single nonphased stereo
-   compatibility title at the original source rate, without a rate override.
-   START requires two full halves from the new producer. Zero admits source
-   preparation. Drive the existing compatibility service to start playback.
-   Any failure after the new binding is installed requires checked stop again
-   before releasing the new source. Normal read/cancel lifetimes still apply.
-   A new output starts a new clock interval. This provides no final-fetch or
-   transfer-of-ownership guarantee. */
+   player following successful checked stop. For a single nonphased title
+   at the original source rate and channel count, without a rate override.
+   The generic stereo path needs two full PCM halves. The checked ordinary
+   mono/stereo path requires the opt-in Flycast restart build and uses the
+   original owned reservation, with fresh clock anchors. A zero result only
+   admits preparation. Drive the compatibility service to start playback.
+   Any failure after binding requires checked stop before releasing the
+   source. Normal provider lifetimes still apply. No allocation is released. */
 int kosdec_adx_compat_player_reprime(struct kosdec_adx_player *, struct kosdec_adx_stream *);
 #ifdef __cplusplus
 }
