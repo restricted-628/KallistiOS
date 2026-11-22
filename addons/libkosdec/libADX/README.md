@@ -776,6 +776,10 @@ The `flycast-pause-live-transpose-test-elf` target uses 44,100 Hz tracks
 of the same lengths. It requests −12 semitones before the first pause,
 then requests unity during a later hold. It checks the admitted pitch
 through each resume and terminal source drain. The
+`flycast-pause-live-vsync-test-elf` target uses the same stereo inputs
+with delivered NTSC and PAL clock events. It checks the drift call and
+next read after live transpose, pause and discard re-anchors, and the
+terminal count and signed centisecond result. The
 `flycast-pause-wide-held-test-elf` target uses 262144-frame stereo or mono
 tracks at 44,100 Hz. It stages +12 while held, checks 88,200 Hz playback
 across ring wraps, cuts at the higher pitch, and resumes at unity.

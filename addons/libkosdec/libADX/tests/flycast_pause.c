@@ -261,6 +261,32 @@ static int live_transpose(struct kosdec_adx_player *p) {
           semitones == -12 && cents == 0);
     struct title_snapshot transposed;
     CHECK(!snapshot(p, &transposed));
+    if(VIDEO_HZ) {
+        /* Deliver events without changing the admitted pitch. Verify the
+           stock drift call returns its old estimate, then uses a correction
+           based on nominal source time on the next read. */
+        struct kosdec_adx_source_output clock;
+        int64_t estimate;
+        float drift;
+        unsigned events = 0;
+        do {
+            CHECK(++events <= 32 && !deliver_tick());
+            CHECK(!kosdec_adx_player_get_source_output(p, 1, &clock) && clock.valid);
+            estimate = p->compat_vsync_anchor +
+                (int64_t)(service.vsync_count - p->compat_vsync_anchor_tick) * 100;
+            const float source = (float)((int64_t)clock.source_frames + DISPLAY_OFFSET) / RATE;
+            drift = (source - (float)estimate / (float)VIDEO_HZ) * 1000.0f;
+        } while(drift <= 60.0f && drift >= -60.0f);
+        struct kosdec_adx_time time;
+        int64_t real;
+        CHECK(!kosdec_adx_compat_player_get_time(p, &time) &&
+              time.count == estimate + DISPLAY_OFFSET && time.frequency == VIDEO_HZ);
+        const int64_t corrected = video_anchor(clock.source_frames);
+        CHECK(!kosdec_adx_compat_player_get_time(p, &time) &&
+              time.count == corrected && time.frequency == VIDEO_HZ);
+        CHECK(!kosdec_adx_compat_player_get_time_real(p, &real) &&
+              real == (int64_t)(((float)corrected / (float)VIDEO_HZ) * 100.0f));
+    }
     printf("ADX-FIVE update before=%" PRIu64 "/%" PRIu64
            " after=%" PRIu64 "/%" PRIu64 " pitch=7800\n",
            before.frames[0], before.frames[1], after.frames[0], after.frames[1]);
@@ -477,11 +503,21 @@ static int run(void) {
         int64_t real;
         CHECK(!kosdec_adx_compat_player_get_state(&players[0], &terminal) &&
               terminal == KOSDEC_ADX_COMPAT_PLAYEND);
-        CHECK(!kosdec_adx_compat_player_get_time(&players[0], &elapsed) &&
-              elapsed.count == FRAMES && elapsed.frequency == RATE);
-        CHECK(!kosdec_adx_compat_player_get_time_real(&players[0], &real) &&
-              real == (int64_t)(((float)FRAMES / RATE) * 100.0f));
-        puts("ADX-FIVE terminal PLAYEND at nominal source duration");
+        uint32_t frequency = VIDEO_HZ ? VIDEO_HZ : RATE;
+        int64_t expected = VIDEO_HZ ? video_anchor(FRAMES) +
+            players[0].compat_playend.anchor + 1 : FRAMES;
+        for(unsigned read = 0; read < 2; ++read) {
+            CHECK(!kosdec_adx_compat_player_get_time(&players[0], &elapsed) &&
+                  elapsed.count == expected && elapsed.frequency == frequency);
+            CHECK(!kosdec_adx_compat_player_get_time_real(&players[0], &real) &&
+                  real == (int64_t)(((float)expected / frequency) * 100.0f));
+        }
+        if(VIDEO_HZ) {
+            printf("ADX-FIVE terminal PLAYEND count=%" PRId64 "/%" PRIu32
+                   " centiseconds=%" PRId64 "\n", elapsed.count, elapsed.frequency, real);
+        } else {
+            puts("ADX-FIVE terminal PLAYEND at nominal source duration");
+        }
     }
     CHECK(!checked_stop(0, owned));
 

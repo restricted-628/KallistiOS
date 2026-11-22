@@ -376,6 +376,13 @@ ADX_PAUSE_LIVE_ELFS = $(BUILD)/sh4/adx_flycast_pause_stereo_live.elf $(BUILD)/sh
 flycast-pause-live-transpose-test-elf: $(ADX_PAUSE_LIVE_ELFS)
 $(ADX_PAUSE_LIVE_ELFS): PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_LATE_CUT=1 -DADX_TEST_LIVE_TRANSPOSE=1
 $(BUILD)/sh4/adx_flycast_pause_mono_live.elf: PRIVATE_PAUSE_TEST_FLAGS += -DADX_TEST_PAUSE_MONO=1
+
+.PHONY: flycast-pause-live-vsync-test-elf
+ADX_PAUSE_LIVE_VSYNC_ELFS = $(BUILD)/sh4/adx_flycast_pause_live_ntsc.elf $(BUILD)/sh4/adx_flycast_pause_live_pal.elf
+flycast-pause-live-vsync-test-elf: $(ADX_PAUSE_LIVE_VSYNC_ELFS)
+$(ADX_PAUSE_LIVE_VSYNC_ELFS): PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_LATE_CUT=1 -DADX_TEST_LIVE_TRANSPOSE=1
+$(BUILD)/sh4/adx_flycast_pause_live_ntsc.elf: PRIVATE_PAUSE_TEST_FLAGS += -DADX_TEST_VSYNC_MODE=1
+$(BUILD)/sh4/adx_flycast_pause_live_pal.elf: PRIVATE_PAUSE_TEST_FLAGS += -DADX_TEST_VSYNC_MODE=2
 .PHONY: flycast-pause-wide-held-test-elf
 ADX_PAUSE_WIDE_ELFS = $(BUILD)/sh4/adx_flycast_pause_stereo_wide.elf $(BUILD)/sh4/adx_flycast_pause_mono_wide.elf
 flycast-pause-wide-held-test-elf: $(ADX_PAUSE_WIDE_ELFS)
@@ -391,7 +398,8 @@ $(BUILD)/sh4/adx_flycast_pause_pal.elf: PRIVATE_PAUSE_TEST_FLAGS = -DADX_TEST_VS
 $(BUILD)/sh4/adx_flycast_pause_test.elf $(BUILD)/sh4/adx_flycast_pause_ntsc.elf \
 $(BUILD)/sh4/adx_flycast_pause_pal.elf $(BUILD)/sh4/adx_flycast_pause_late.elf \
 $(BUILD)/sh4/adx_flycast_pause_mono.elf $(BUILD)/sh4/adx_flycast_pause_mono_pal.elf \
-$(ADX_PAUSE_32K_ELFS) $(ADX_PAUSE_LIVE_ELFS) $(ADX_PAUSE_WIDE_ELFS) $(ADX_PAUSE_ENDPOINT_ELF): tests/flycast_pause.c $(BUILD)/sh4/libADX.a
+$(ADX_PAUSE_32K_ELFS) $(ADX_PAUSE_LIVE_ELFS) $(ADX_PAUSE_LIVE_VSYNC_ELFS) \
+$(ADX_PAUSE_WIDE_ELFS) $(ADX_PAUSE_ENDPOINT_ELF): tests/flycast_pause.c $(BUILD)/sh4/libADX.a
 	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) $(PRIVATE_PAUSE_TEST_FLAGS) -I"$(FLYCAST_PAUSE_INCLUDE)" -I"$(ORDINARY_PCM16_INCLUDE)" \
 	    -DADX_TEST_ENABLE_ACTIVE_PAUSE=kosdec_adx_compat_player_enable_flycast_pause \
 	    -Wl,--wrap=snd_flycast_pcm16_pause -o $@ $^ -lm

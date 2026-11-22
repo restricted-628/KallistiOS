@@ -106,8 +106,8 @@ sample-time mode.
 ### Which player functions share a blocker?
 
 The applicable 2.00J function tally for the qualified Flycast profiles is
-135 of 142 after closing `ADXT_SetTranspose`. Seven entries remain:
-`GetStat`, `GetTime`, `GetTimeReal`, `Pause`, `DiscardSmpl`, `Stop` and
+137 of 142 after qualifying `ADXT_GetTime` and `ADXT_GetTimeReal`.
+Five entries remain: `GetStat`, `Pause`, `DiscardSmpl`, `Stop` and
 `SetOutVol`. This counts functions, not the fraction of work completed.
 
 | 2.00J entry | What the public tests distinguish | What still needs a native implementation or test |
@@ -115,7 +115,7 @@ The applicable 2.00J function tally for the qualified Flycast profiles is
 | `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. | Rates outside the checked pause range and repeating sources still cannot take this path. |
 | `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. | Stock-valid titles that cannot yet pause also cannot discard that head. The native count deliberately excludes ring capacity when no frames moved. |
 | `ADXT_GetStat` | A running mono title can remain logically PLAYING while paused. Decoder end is not PLAYEND; the natural mono drain test requires the final real frame and checked stop. | Status during a stock-valid pause outside the fixed-rate profile remains open. The retained group-poll failure remains a separate case. |
-| `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo pause covers sample and NTSC/PAL clocks. Mono pause covers sample and PAL clocks, including centisecond readback. The 32 kHz tests cover sample and centisecond clocks through paused hold and terminal completion. | Combined NTSC/PAL time after live transpose and unavailable transport states remain separate from the verified sample clocks. |
+| `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo covers sample, NTSC and PAL clocks after live transpose through pause, discard, resume and PLAYEND. Mono pause covers sample and PAL clocks, and 32 kHz covers sample and centisecond clocks through hold and completion. | Time in unavailable pause or replay states depends on qualifying those transport states. |
 
 The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
 The selected Manatee adapter ignores its command selector, and the getter

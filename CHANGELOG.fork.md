@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Qualified both libADX compatibility time getters through live transpose,
+  pause, discard, resume and logical playback end. Delivered NTSC and PAL
+  clock events passed in both Flycast CPU modes with matching stereo PCM.
+  No production clock code changed.
+
 - Closed `ADXT_SetTranspose` for checked fixed-width Flycast playback.
   A title can change pitch before playback starts and replay a source with
   a different nominal rate on the same allocation. Both Flycast modes
