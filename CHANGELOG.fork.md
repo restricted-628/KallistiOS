@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Closed `ADXT_SetTranspose` for checked fixed-width Flycast playback.
+  A title can change pitch before playback starts and replay a source with
+  a different nominal rate on the same allocation. Both Flycast modes
+  matched stereo PCM for a 44.1 → 22.05 → 44.1 kHz source sequence.
+
 - With Flycast checked restart enabled, a stopped ADX title can play a
   new source on the same sound allocation and change pitch during playback.
   Both Flycast CPU modes played a stereo A → B → A sequence, with B

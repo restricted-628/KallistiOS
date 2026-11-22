@@ -516,9 +516,10 @@ int kosdec_adx_compat_player_get_fx(const struct kosdec_adx_player *, int32_t *b
    +/-99 respectively. This cache does not submit a pitch change. */
 int kosdec_adx_compat_player_cache_transpose(struct kosdec_adx_player *, int32_t semitones, int32_t cents);
 int kosdec_adx_compat_player_get_transpose(const struct kosdec_adx_player *, int32_t *semitones, int32_t *cents);
-/* Stage initial pitch on a READY compatibility player or a checked
-   STOPPED stereo player eligible for ordinary re-prime. Cache the requested
-   values. ERANGE preserves earlier READY staging. On an eligible stopped
+/* Stage initial pitch on a READY compatibility player, during PREFILL
+   before an output attempt, or on a STOPPED player eligible for ordinary
+   re-prime. Cache the requested values. ERANGE preserves earlier READY
+   or PREFILL staging. On an eligible stopped
    port it leaves the next START neutral after reset. Successful staging confirms a
    request, with the exact output rate resolved when the source format becomes
    known. Prefill fails with ENOTSUP before output allocation if the source
@@ -653,8 +654,10 @@ int kosdec_adx_player_stop(struct kosdec_adx_player *, uint32_t timeout_ms);
 /* Begin preparing a fresh direct ADX stream on the same ordinary allocation.
    The caller must retain exclusive ownership of the stopped handle, ring and
    player following successful checked stop. For a single nonphased title
-   at the original source rate and channel count, without a rate override.
-   The generic stereo path needs two full PCM halves. The checked ordinary
+   with the original channel count and no rate override. Generic stereo
+   requires the original source Hz and two full PCM halves. Checked ordinary
+   can resolve a new nominal source Hz in the supported 8000..48000 range.
+   The checked ordinary
    mono/stereo path requires the opt-in Flycast restart build and uses the
    original owned reservation, with fresh clock anchors. A zero result only
    admits preparation. Drive the compatibility service to start playback.

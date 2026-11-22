@@ -1622,8 +1622,10 @@ static int poll_player(struct kosdec_adx_player *p) {
             return prefill_wait(p);
         uint32_t rate; unsigned channels;
         if(!kosdec_adx_pipe_get_format(&p->producer.pipe,&rate,&channels)) return failed(p,EPROTO);
+        const bool checked_restart = p->ordinary_pcm && p->ordinary_reprime_pending;
         if((has_output(p) || p->ordinary_reprime_pending) &&
-           (rate != p->info.sample_rate || channels != p->output.channels)) return failed(p,EPROTO);
+           (channels != p->output.channels || (!checked_restart && rate != p->info.sample_rate)))
+            return failed(p,EPROTO);
         if(!has_output(p) && !p->ordinary_reprime_pending) {
             uint32_t output_rate = p->requested_rate ? p->requested_rate : rate;
             if(output_rate < 8000 || output_rate > 48000) return failed(p,ENOTSUP);
@@ -1638,6 +1640,7 @@ static int poll_player(struct kosdec_adx_player *p) {
         }
         uint32_t start_rate = p->output.sample_rate;
         if(p->ordinary_reprime_pending) {
+            if(rate < 8000 || rate > 48000) return failed(p,ENOTSUP);
             start_rate = rate;
             if(p->compat_start_pitch) {
                 start_rate = initial_pitch_rate(p,rate,p->compat_start_pitch_units);
@@ -2503,8 +2506,10 @@ int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *p,
     int32_t semitones, int32_t cents) {
     if(!valid(p)) return bad();
     const bool stopped = p->info.state == KOSDEC_ADX_PLAYER_STOPPED && compat_reprime_port(p);
-    if(!stopped && (p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound))
+    const bool preparing = p->info.state == KOSDEC_ADX_PLAYER_PREFILL && !has_output(p);
+    if(!stopped && (!p->source_bound || (p->info.state != KOSDEC_ADX_PLAYER_READY && !preparing)))
         return unsupported();
+    if(p->compat_service && p->compat_service->servicing) return busy();
     int units;
     if(cache_pitch_units(p,semitones,cents,&units) < 0) {
         if(stopped && errno == ERANGE) {
@@ -2514,8 +2519,9 @@ int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *p,
         }
         return -1;
     }
-    uint32_t rate = stopped ? initial_pitch_rate(p,p->info.sample_rate,units) : 0;
-    if(stopped && !rate) return unsupported();
+    const bool fixed_rate = stopped && !p->ordinary_pcm;
+    uint32_t rate = fixed_rate ? initial_pitch_rate(p,p->info.sample_rate,units) : 0;
+    if(fixed_rate && !rate) return unsupported();
     p->compat_start_pitch_units = (int16_t)units;
     p->compat_start_pitch = true;
     p->compat_start_rate = rate;

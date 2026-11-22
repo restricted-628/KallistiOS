@@ -633,8 +633,9 @@ libADX with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ORDINARY_RESTART=1` against
 a kernel built with `AICA_FLYCAST_PCM16_RESTART`. Use the qualified
 Flycast mixer with Timer B available. After checked STOP and producer
 join, stage the next pitch and pass a fresh direct ADX stream to
-`kosdec_adx_compat_player_reprime`. Keep the same source format, ring
-and title, and use the ordinary RR=31 configuration. No active-pause
+`kosdec_adx_compat_player_reprime`. Keep the original channel count, ring and title and use the ordinary
+RR=31 configuration. A new nominal source rate is resolved from the new
+header, then the staged relative pitch is converted at that rate. No active-pause
 lease is eligible for this restart. The last admitted output rate stays
 visible until the new START is confirmed. Sample time starts a fresh
 interval, and the latest applied live transpose supplies the next Play
@@ -651,8 +652,10 @@ unlinked stereo ADX stream, then call
 Use 8192–65504 sound frames per channel in multiples of 32 and source
 rates in 8000–48000 Hz. Initialize the KOS stream pool for two channels.
 Stage an initial transpose with `kosdec_adx_compat_player_set_initial_transpose`
-before START. The startup output rate follows the checked renderer's live
-rate and geometry rules below. Above 88.2 kHz, use at least 131072 producer
+before START, including while the title is waiting in PREP. The final
+request before an output attempt selects the rate and prefill requirement.
+The startup output rate follows the checked renderer's live rate and
+geometry rules below. Above 88.2 kHz, use at least 131072 producer
 queue frames and 262144 PCM samples for stereo. Before key-on the player
 decodes two sound rings or reaches source EOF, so filling the first two
 DMA halves leaves decoded PCM available for the first refills. This reserve
