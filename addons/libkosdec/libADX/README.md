@@ -678,6 +678,16 @@ checked stop, retrying it after a timeout. Keep the played reservation.
 Complete stop before shutting down sound or resetting G2. The private
 output owns its DMA through callback retirement.
 
+Build with `ADX_ORDINARY_TL=1` and enable initial attenuation on a
+READY checked ordinary title to use the exact 2.00J raw TL conversion.
+The compatibility setter caches the requested signed level separately
+from playback. During live playback, a successful call acknowledges
+each active slot and returns a zero request ID. Service and explicitly
+retry if admission returns `EAGAIN`. Playback timing stays on the
+nominal source clock. A confirmed pause or checked STOP/replay stages
+the setting for the next START. A failed partial update requires
+checked STOP. The paired writes can take effect on separate mixer ticks.
+
 Live transpose can also apply after decoding ends while the last
 qualified slot-0 cursor still has real source PCM. A right-only remainder
 or padded silence does not keep the title eligible. The compatibility

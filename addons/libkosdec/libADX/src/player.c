@@ -40,7 +40,7 @@ static int flycast_discard(struct kosdec_adx_player *, int32_t, int32_t *);
 #ifdef MEDIA_ADX_RETAINED_START_TL
 #include "snd_retained_start_tl.h"
 #endif
-#if defined(MEDIA_ADX_RETAINED_GAIN) || defined(MEDIA_ADX_RETAINED_START_TL)
+#if defined(MEDIA_ADX_RETAINED_GAIN) || defined(MEDIA_ADX_RETAINED_START_TL) || defined(MEDIA_ADX_ORDINARY_TL)
 #include "adx_legacy_gain_table.h"
 static uint8_t legacy_gain_tl(int32_t requested);
 #endif
@@ -1168,7 +1168,7 @@ static int flycast_snapshot(const struct kosdec_adx_player *p, uint64_t generati
         return 0;
     }
     const struct kosdec_adx_flycast_pause *f = p->flycast_pause;
-    if(!f || p->flycast_pause_unstarted) { errno = ENODATA; return -1; }
+    if(!f || p->ordinary_unstarted) { errno = ENODATA; return -1; }
     if(!status.error && status.committed_frames != f->written) { errno = EPROTO; return -1; }
 
     /* Running time uses the ordinary slot-zero sample clock. Only Pause
@@ -1448,6 +1448,11 @@ static int restart_checked_output(struct kosdec_adx_player *p, uint32_t rate) {
     if(remaining < timeout) timeout = (uint32_t)remaining;
     snd_stream_config_t config = p->output;
     config.sample_rate = rate;
+#ifdef MEDIA_ADX_ORDINARY_TL
+    if(p->compat_initial_attenuation &&
+       snd_ordinary_pcm16_set_tl(p->ordinary_pcm,p->compat_initial_tl,p->compat_initial_tl) < 0)
+        return -1;
+#endif
     bool attempted;
     if(snd_flycast_pcm16_restart(p->ordinary_pcm,&config,ordinary_pcm16_fill,p,
                                 timeout,&attempted) < 0) {
@@ -1490,9 +1495,14 @@ static int start_output(struct kosdec_adx_player *p, uint32_t start_rate) {
             if(snd_ordinary_pcm16_open(&p->ordinary_pcm,&p->output,ring,
                                        ordinary_pcm16_fill,p) < 0)
                 return -1;
+            p->ordinary_unstarted = true;
+#ifdef MEDIA_ADX_ORDINARY_TL
+            if(p->compat_initial_attenuation &&
+               snd_ordinary_pcm16_set_tl(p->ordinary_pcm,p->compat_initial_tl,p->compat_initial_tl) < 0)
+                return -1;
+#endif
 #ifdef MEDIA_ADX_FLYCAST_PAUSE
             if(p->flycast_pause_enabled) {
-                p->flycast_pause_unstarted = true;
                 const size_t samples = channels*(2u*ring-FLYCAST_PREROLL);
                 struct kosdec_adx_flycast_pause *f = calloc(1,sizeof(*f)+samples*sizeof(*f->history));
                 p->flycast_pause = f;
@@ -1502,9 +1512,9 @@ static int start_output(struct kosdec_adx_player *p, uint32_t start_rate) {
                 f->staged = f->history+channels*ring;
                 f->epoch = 1;
                 p->info.source_generation = 1;
-                p->flycast_pause_unstarted = false;
             }
 #endif
+            p->ordinary_unstarted = false;
             if(snd_ordinary_pcm16_start(p->ordinary_pcm) < 0)
                 return -1;
         }
@@ -1956,7 +1966,7 @@ static int compat_dispatch(void *context, enum kosdec_adx_compat_state state) {
         return failed(p,errno);
     if(p->callback_failed)
         return failed(p,p->info.first_error);
-#ifdef MEDIA_ADX_RETAINED_START_TL
+#if defined(MEDIA_ADX_RETAINED_START_TL) || defined(MEDIA_ADX_ORDINARY_TL)
     if(p->compat_initial_attenuation && !has_output(p))
         p->compat_initial_tl = legacy_gain_tl(p->compat_requested_attenuation);
 #endif
@@ -2293,7 +2303,7 @@ int media_adx_player_start_compat_in_service(struct kosdec_adx_player *p) {
     return start_source(p);
 }
 
-#if defined(MEDIA_ADX_RETAINED_GAIN) || defined(MEDIA_ADX_RETAINED_START_TL)
+#if defined(MEDIA_ADX_RETAINED_GAIN) || defined(MEDIA_ADX_RETAINED_START_TL) || defined(MEDIA_ADX_ORDINARY_TL)
 static uint8_t legacy_gain_tl(int32_t requested) {
     const unsigned magnitude = requested < -999 ? 999 : requested < 0 ? (unsigned)-requested : 0;
     size_t lo = 0, hi = sizeof(legacy_gain_ranges) / sizeof(legacy_gain_ranges[0]);
@@ -2346,7 +2356,7 @@ int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *p,
     p->compat_requested_attenuation = attenuation_halfword(tenths_db);
     if(p->info.state == KOSDEC_ADX_PLAYER_READY || p->info.state == KOSDEC_ADX_PLAYER_PREFILL ||
        p->info.state == KOSDEC_ADX_PLAYER_STOPPED) {
-#ifdef MEDIA_ADX_RETAINED_START_TL
+#if defined(MEDIA_ADX_RETAINED_START_TL) || defined(MEDIA_ADX_ORDINARY_TL)
         if(p->compat_initial_attenuation && p->info.state == KOSDEC_ADX_PLAYER_PREFILL &&
            p->compat_prefill_frames && !has_output(p))
             p->compat_initial_tl = legacy_gain_tl(tenths_db);
@@ -2354,6 +2364,22 @@ int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *p,
         *request = 0;
         return 0;
     }
+#ifdef MEDIA_ADX_ORDINARY_TL
+    if(p->compat_initial_attenuation && p->ordinary_pcm) {
+        if(p->info.state != KOSDEC_ADX_PLAYER_PLAYING && p->info.state != KOSDEC_ADX_PLAYER_SOURCE_END)
+            return unsupported();
+#ifdef MEDIA_ADX_FLYCAST_PAUSE
+        if(p->flycast_pause && p->flycast_pause->pending) return busy();
+#endif
+        uint8_t tl = legacy_gain_tl(tenths_db);
+        if(snd_ordinary_pcm16_set_tl(p->ordinary_pcm,tl,tl) < 0) {
+            if(errno == EAGAIN) return -1;
+            return failed(p,errno);
+        }
+        *request = 0;
+        return 0;
+    }
+#endif
     return kosdec_adx_player_set_attenuation(p,tenths_db,request);
 }
 
@@ -2367,15 +2393,18 @@ int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_p
 
 int kosdec_adx_compat_player_enable_initial_attenuation(struct kosdec_adx_player *p) {
     if(!valid(p)) return bad();
+    bool supported = false;
 #ifdef MEDIA_ADX_RETAINED_START_TL
-    if(!p->compat_service || !p->retained_offsets) return unsupported();
+    supported = p->retained_offsets != NULL;
+#endif
+#ifdef MEDIA_ADX_ORDINARY_TL
+    supported = supported || p->ordinary_stereo || p->ordinary_mono_clock;
+#endif
+    if(!p->compat_service || !supported) return unsupported();
     if(p->compat_service->servicing) return busy();
     if(p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound) return bad();
     p->compat_initial_attenuation = true;
     return 0;
-#else
-    return unsupported();
-#endif
 }
 
 int kosdec_adx_player_get_attenuation_status(const struct kosdec_adx_player *p,
@@ -2848,13 +2877,11 @@ static int stop_player(struct kosdec_adx_player *p, uint32_t timeout_ms) {
     }
 #endif
 #ifdef MEDIA_ADX_ORDINARY_STEREO
-#ifdef MEDIA_ADX_FLYCAST_PAUSE
-    if(p->flycast_pause_unstarted) {
+    if(p->ordinary_unstarted) {
         if(snd_ordinary_pcm16_close(p->ordinary_pcm) < 0) goto retain;
         p->ordinary_pcm = NULL;
-        p->flycast_pause_unstarted = false;
+        p->ordinary_unstarted = false;
     }
-#endif
     if(p->ordinary_pcm && snd_ordinary_pcm16_stop(p->ordinary_pcm,timeout_ms) < 0)
         goto retain;
 #endif

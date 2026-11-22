@@ -185,7 +185,7 @@ struct kosdec_adx_player {
     struct snd_ordinary_pcm16 *ordinary_pcm;
     struct kosdec_adx_flycast_pause *flycast_pause;
     uint64_t flycast_stopped_epoch;
-    bool flycast_pause_enabled, flycast_pause_unstarted;
+    bool flycast_pause_enabled, ordinary_unstarted;
     uint64_t ordinary_requested_base; /* Start of the current device clock interval. */
     struct {
         uint64_t source_first;
@@ -485,13 +485,16 @@ int kosdec_adx_compat_player_set_attenuation(struct kosdec_adx_player *,
    admission. Starts at zero and persists through checked STOP. */
 int kosdec_adx_compat_player_get_requested_attenuation(const struct kosdec_adx_player *,
     int16_t *tenths_db);
-/* READY compatibility owner with retained clock selected. Enable exact stock
+/* READY compatibility owner with an eligible checked output. Enable exact stock
    initial device attenuation on the first new mono or stereo output lease.
    DECINFO stages the cached signed volume. A subsequent request before
    lease admission replaces that setting using its full signed argument.
-   Requires ADX_RETAINED_START_TL and supporting firmware. There is no live
-   request ID. If START fails after attempting hardware, complete checked STOP.
-   Reusing an active output does not apply an initial setting again. */
+   Requires ADX_RETAINED_START_TL or the checked ordinary ADX_ORDINARY_TL
+   build, and supporting firmware. On the checked ordinary path the same
+   opt-in enables synchronous live gain and staged replay gain. Use the
+   compatibility setter and a zero request ID on success. Service and
+   explicitly retry on a no-post EAGAIN. If a hardware attempt fails,
+   complete checked STOP. */
 int kosdec_adx_compat_player_enable_initial_attenuation(struct kosdec_adx_player *);
 /* Latest admitted request only. Mono leaves the right-side masks and TL bytes
    zero. Acknowledged TL is historical on unknown channels.

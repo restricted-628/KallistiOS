@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Checked ordinary libADX playback can apply stock attenuation before
+  START, repeatedly during a stereo track, and on same-title replay.
+  Both Flycast CPU modes matched the expected PCM through five live
+  changes without gaps or another sound allocation.
+
 - The private checked PCM16 player can stage exact per-channel attenuation
   before playback and apply it live without restarting. Stereo updates are
   sequential; a partial update requires checked stop. The default linear
