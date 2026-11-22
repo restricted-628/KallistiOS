@@ -52,6 +52,17 @@ bool snd_ordinary_pcm16_rate_supported(uint32_t rate, uint32_t ring);
    writes or refills. Service the stream before retrying. Observation or
    transport failure is terminal even if its internal result was EAGAIN. */
 int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate);
+/* Set exact AICA TL bytes. Use left for mono and pass equal bytes for a
+   title-wide level. Requires the negotiated observed TL feature.
+
+   Before START, after a healthy replayable STOP, or at a confirmed Flycast
+   pause cut, success stages the bytes for the next key-on. A live success
+   confirms every active slot and its continuing cursor. Stereo writes are
+   ordered per slot. EAGAIN defers before any update or refill; service the
+   running stream before retrying. A failed live observation or transport
+   transaction after admission leaves the lease owned for checked STOP. */
+int snd_ordinary_pcm16_set_tl(snd_ordinary_pcm16_t *pcm,
+    unsigned left_tl, unsigned right_tl);
 int snd_ordinary_pcm16_status(const snd_ordinary_pcm16_t *pcm,
     snd_ordinary_pcm16_status_t *out);
 /* Stop can be retried after a timeout while the owner keeps the runtimes

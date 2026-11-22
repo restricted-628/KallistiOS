@@ -1975,7 +1975,8 @@ struct snd_ordinary_pcm16 {
     void *context;
     int16_t *staging;
     semaphore_t dma;
-    bool pending, attempted, running, in_callback, stopped;
+    bool pending, attempted, running, in_callback, stopped, tl_set;
+    uint8_t tl[2];
     int error;
     ordinary_pcm16_voice_t voice[2];
 #ifdef AICA_FLYCAST_PCM16_PAUSE
@@ -2219,6 +2220,33 @@ static int ordinary_pcm16_retire(ordinary_pcm16_voice_t *voice, uint64_t deadlin
     return 0;
 }
 
+static int ordinary_pcm16_confirm_controls(snd_ordinary_pcm16_t *pcm,
+    uint32_t op, bool key_on, uint64_t deadline) {
+    const strchan_t *stream = &streams[pcm->handle];
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        ordinary_pcm16_voice_t *voice = &pcm->voice[i];
+        snd_channel_observation_t obs;
+        if(snd_observation_poll_until(&voice->receipt, deadline, &obs) < 0)
+            return -1;
+        voice->polled = true;
+        if(obs.session != pcm->session || obs.token != voice->receipt.token ||
+           obs.channel != (unsigned)stream->ch[i] || obs.operation != op ||
+           obs.result != SND_OBSERVATION_APPLIED ||
+           obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
+           obs.attribution_token != obs.token ||
+           obs.key_on != key_on) {
+            errno = ESTALE;
+            return -1;
+        }
+        if(op == SND_OBSERVATION_START)
+            voice->start = obs.token;
+        voice->command = obs.token;
+        if(ordinary_pcm16_retire(voice, deadline) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 static int ordinary_pcm16_control(snd_ordinary_pcm16_t *pcm, uint32_t op,
     uint32_t fields, uint32_t flags, const snd_stream_config_t *config,
     uint64_t deadline) {
@@ -2231,28 +2259,18 @@ static int ordinary_pcm16_control(snd_ordinary_pcm16_t *pcm, uint32_t op,
                     flags, &pcm->voice[i].receipt, deadline) < 0)
             return -1;
     }
+    return ordinary_pcm16_confirm_controls(pcm, op, op == SND_OBSERVATION_UPDATE, deadline);
+}
+
+static int ordinary_pcm16_control_tl(snd_ordinary_pcm16_t *pcm,
+    const uint8_t tl[2], bool key_on, uint64_t deadline) {
+    const strchan_t *stream = &streams[pcm->handle];
     for(unsigned i = 0; i < pcm->channels; ++i) {
-        ordinary_pcm16_voice_t *voice = &pcm->voice[i];
-        snd_channel_observation_t obs;
-        if(snd_observation_poll_until(&voice->receipt, deadline, &obs) < 0)
-            return -1;
-        voice->polled = true;
-        if(obs.session != pcm->session || obs.token != voice->receipt.token ||
-           obs.channel != (unsigned)stream->ch[i] || obs.operation != op ||
-           obs.result != SND_OBSERVATION_APPLIED ||
-           obs.attribution_kind != SND_OBSERVATION_ATTR_MANAGED ||
-           obs.attribution_token != obs.token ||
-           obs.key_on != (op == SND_OBSERVATION_UPDATE)) {
-            errno = ESTALE;
-            return -1;
-        }
-        if(op == SND_OBSERVATION_START)
-            voice->start = obs.token;
-        voice->command = obs.token;
-        if(ordinary_pcm16_retire(voice, deadline) < 0)
+        if(snd_observation_submit_tl_until(stream->ch[i], tl[i],
+                                         &pcm->voice[i].receipt, deadline) < 0)
             return -1;
     }
-    return 0;
+    return ordinary_pcm16_confirm_controls(pcm, SND_OBSERVATION_UPDATE, key_on, deadline);
 }
 
 static void ordinary_pcm16_dma_done(void *data) {
@@ -2355,10 +2373,21 @@ static int ordinary_pcm16_fill(snd_ordinary_pcm16_t *pcm) {
 
 static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, const strchan_t *stream,
                                  const snd_stream_config_t *config, uint32_t motion_rate) {
+    if(pcm->tl_set && !(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TL)) {
+        errno = ENOTSUP;
+        return -1;
+    }
     uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
     if(ordinary_pcm16_control(pcm, SND_OBSERVATION_START, 0,
             SND_CHANNEL_START_DELAYED, config, deadline) < 0)
         return -1;
+    if(pcm->tl_set) {
+        deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
+        if(ordinary_pcm16_control_tl(pcm, pcm->tl, false, deadline) < 0)
+            return -1;
+        deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
+    }
+
     uint64_t mask = 0;
     for(unsigned i = 0; i < pcm->channels; ++i)
         mask |= UINT64_C(1) << stream->ch[i];
@@ -2367,9 +2396,11 @@ static int ordinary_pcm16_key_on(snd_ordinary_pcm16_t *pcm, const strchan_t *str
         return -1;
     for(unsigned i = 0; i < pcm->channels; ++i)
         pcm->voice[i].cursor = (ordinary_pcm16_cursor_t){0, earliest, earliest};
-    if(ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
-            0, config, deadline) < 0 ||
-       ordinary_pcm16_sample(pcm, motion_rate, deadline) < 0)
+    /* SYNC invalidates managed attribution but leaves the slot's level intact. */
+    int result = pcm->tl_set ? ordinary_pcm16_control_tl(pcm, pcm->tl, true, deadline) :
+        ordinary_pcm16_control(pcm, SND_OBSERVATION_UPDATE, SND_CHANNEL_UPDATE_VOLUME,
+                               0, config, deadline);
+    if(result < 0 || ordinary_pcm16_sample(pcm, motion_rate, deadline) < 0)
         return -1;
 #ifdef AICA_FLYCAST_PCM16_PAUSE
     if(pause_owner == pcm && !pause_identity_matches(pcm, stream, config->sample_rate)) {
@@ -2426,17 +2457,26 @@ int snd_ordinary_pcm16_poll(snd_ordinary_pcm16_t *pcm) {
     return ordinary_pcm16_unlock(result);
 }
 
-/* EAGAIN on the rate API is reserved for a live preflight deferral.
+/* EAGAIN on live controls is reserved for a preflight deferral.
    Raw observation/transport EAGAIN is a failure, including after a post. */
-static int ordinary_pcm16_rate_error(void) {
+static int ordinary_pcm16_control_error(void) {
     if(errno == EAGAIN)
         errno = EIO;
     return -1;
 }
 
+static bool ordinary_pcm16_control_window(const snd_ordinary_pcm16_t *pcm,
+                                          uint32_t rate, uint64_t deadline) {
+    for(unsigned i = 0; i < pcm->channels; ++i) {
+        if(!ordinary_pcm16_before(&pcm->voice[i].cursor, rate, deadline, pcm->committed))
+            return false;
+    }
+    return true;
+}
+
 int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
     if(ordinary_pcm16_lock(pcm) < 0)
-        return ordinary_pcm16_rate_error();
+        return ordinary_pcm16_control_error();
     if(!snd_ordinary_pcm16_rate_supported(rate, pcm->ring)) {
         errno = EINVAL;
         return ordinary_pcm16_unlock(-1);
@@ -2448,7 +2488,7 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
     }
 #endif
     if(ordinary_pcm16_ready(pcm) < 0)
-        return ordinary_pcm16_unlock(ordinary_pcm16_rate_error());
+        return ordinary_pcm16_unlock(ordinary_pcm16_control_error());
     if(pcm->rate == rate)
         return ordinary_pcm16_unlock(0);
 
@@ -2469,14 +2509,9 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
 #ifdef AICA_FLYCAST_PCM16_PAUSE
     check_window |= pause_owner == pcm;
 #endif
-    if(check_window) {
-        for(unsigned i = 0; i < pcm->channels; ++i) {
-            if(!ordinary_pcm16_before(&pcm->voice[i].cursor, upper, deadline,
-                                      pcm->committed)) {
-                errno = EAGAIN;
-                return ordinary_pcm16_unlock(-1);
-            }
-        }
+    if(check_window && !ordinary_pcm16_control_window(pcm, upper, deadline)) {
+        errno = EAGAIN;
+        return ordinary_pcm16_unlock(-1);
     }
 
 #ifdef AICA_FLYCAST_PCM16_PAUSE
@@ -2503,7 +2538,64 @@ int snd_ordinary_pcm16_set_rate(snd_ordinary_pcm16_t *pcm, uint32_t rate) {
     return ordinary_pcm16_unlock(0);
 
 fail:
-    ordinary_pcm16_rate_error();
+    ordinary_pcm16_control_error();
+    return ordinary_pcm16_unlock(ordinary_pcm16_fault(pcm));
+}
+
+static bool ordinary_pcm16_can_stage_tl(const snd_ordinary_pcm16_t *pcm) {
+    if(!pcm->attempted)
+        return !pcm->stopped;
+#ifdef AICA_FLYCAST_PCM16_PAUSE
+    if(pause_owner == pcm)
+        return pcm->pause_state == PAUSE_CUT;
+#endif
+#ifdef AICA_FLYCAST_PCM16_RESTART
+    return pcm->stopped;
+#else
+    return false;
+#endif
+}
+
+int snd_ordinary_pcm16_set_tl(snd_ordinary_pcm16_t *pcm,
+    unsigned left_tl, unsigned right_tl) {
+    if(left_tl > UINT8_MAX || right_tl > UINT8_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(ordinary_pcm16_lock(pcm) < 0)
+        return ordinary_pcm16_control_error();
+    if(pcm->error) {
+        errno = pcm->error;
+        return ordinary_pcm16_unlock(ordinary_pcm16_control_error());
+    }
+    if(!(snd_iface_observation_features() & AICA_DRIVER_FEATURE_OBSERVATION_TL)) {
+        errno = ENOTSUP;
+        return ordinary_pcm16_unlock(-1);
+    }
+
+    const uint8_t tl[2] = {(uint8_t)left_tl, (uint8_t)right_tl};
+    if(!ordinary_pcm16_can_stage_tl(pcm)) {
+        if(ordinary_pcm16_ready(pcm) < 0)
+            return ordinary_pcm16_unlock(ordinary_pcm16_control_error());
+
+        const uint32_t rate = pcm->motion_rate;
+        const uint64_t deadline = timer_ms_gettime64() + ORDINARY_PCM16_OBSERVE_MS;
+        if(ordinary_pcm16_sample(pcm, rate, deadline) < 0)
+            goto fail;
+        if(!ordinary_pcm16_control_window(pcm, rate, deadline)) {
+            errno = EAGAIN;
+            return ordinary_pcm16_unlock(-1);
+        }
+        if(ordinary_pcm16_control_tl(pcm, tl, true, deadline) < 0 ||
+           ordinary_pcm16_sample(pcm, rate, deadline) < 0)
+            goto fail;
+    }
+    memcpy(pcm->tl, tl, sizeof(tl));
+    pcm->tl_set = true;
+    return ordinary_pcm16_unlock(0);
+
+fail:
+    ordinary_pcm16_control_error();
     return ordinary_pcm16_unlock(ordinary_pcm16_fault(pcm));
 }
 

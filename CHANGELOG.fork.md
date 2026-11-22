@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The private checked PCM16 player can stage exact per-channel attenuation
+  before playback and apply it live without restarting. Stereo updates are
+  sequential; a partial update requires checked stop. The default linear
+  volume path and AICA firmware are unchanged.
+
 - Checked stereo libADX playback now reports logical PLAYEND only after
   both channels pass the last real source frame and checked stop succeeds.
   Stopping a replacement track early reports STOP, not natural completion.
