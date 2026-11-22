@@ -2035,6 +2035,11 @@ static int ordinary_pcm16_fault(snd_ordinary_pcm16_t *pcm) {
     return -1;
 }
 
+/* Mono uses one half-ring directly. Stereo also stages the split planes. */
+static int16_t *ordinary_pcm16_alloc_staging(unsigned channels, uint32_t ring) {
+    return aligned_alloc(32, channels == 1 ? ring : ring * 4);
+}
+
 int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     const snd_stream_config_t *config, uint32_t ring,
     snd_ordinary_pcm16_fill_t fill, void *context) {
@@ -2060,8 +2065,7 @@ int snd_ordinary_pcm16_open(snd_ordinary_pcm16_t **out,
     snd_ordinary_pcm16_t *pcm = calloc(1, sizeof(*pcm));
     if(!pcm)
         return -1;
-    /* Mono uses one half-ring directly. Stereo also stages the split planes. */
-    pcm->staging = aligned_alloc(32, config->channels == 1 ? ring : ring * 4);
+    pcm->staging = ordinary_pcm16_alloc_staging(config->channels, ring);
     if(!pcm->staging || mutex_lock(&stream_state_mutex) < 0)
         goto release;
     if(max_channels < (int)config->channels) {
@@ -2579,6 +2583,10 @@ int snd_ordinary_pcm16_close(snd_ordinary_pcm16_t *pcm) {
 
 #ifdef AICA_FLYCAST_PCM16_PAUSE
 #include "snd_flycast_pcm16_pause.inc"
+#endif
+
+#ifdef AICA_FLYCAST_PCM16_RESTART
+#include "snd_flycast_pcm16_restart.inc"
 #endif
 
 /* Retained PCM uses the existing stream allocator, PCM splitter and two-stage

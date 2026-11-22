@@ -8,6 +8,12 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The opt-in Flycast PCM16 restart path can reuse a stopped stream's
+  channels and sound RAM for a new producer. Before overwriting the ring,
+  it verifies the old slots, counts 160 mixer ticks with Timer B, and
+  checks that both stopped cursors are zero. This is specific to the
+  qualified Flycast mixer; it does not authorize reuse on retail hardware.
+
 - A checked stereo ADX title can start two octaves up and return to
   normal pitch during playback on the same allocation. Above 88.2 kHz,
   libADX waits for two rings of decoded PCM or finite EOF before starting.

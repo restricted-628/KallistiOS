@@ -36,6 +36,7 @@ arm/stream.drv: subdirs
 snd_iface.o: snd_stream_drv.c
 
 snd_stream.o: snd_flycast_pcm16_pause.h snd_flycast_pcm16_pause.inc \
+	snd_flycast_pcm16_restart.h snd_flycast_pcm16_restart.inc \
 	arm/aica_pitch.h arm/flycast_pcm16_cut.h
 
 snd_stream_drv.c: arm/stream.drv $(KOS_BASE)/utils/bin2c/bin2c
