@@ -1,6 +1,24 @@
 # Audio capability audit
 
-## Scope
+## Published status
+
+**122 of 122 named Sega Library 2.00J AICA/Manatee functions have published
+native KOS implementations within the agreed profiles.** Coordinated
+stop completed the function inventory in `462212d2282b`, with its
+ownership contract recorded in `f7fde2fca6a1`. The coordinated-stop
+fixture passed in both BIOS Flycast CPU modes.
+
+Each function is counted for its documented native behavior. The scope
+uses KOS interfaces and native content formats. Played reservations
+remain owned after coordinated stop. Retail fetch retirement and broader
+backend combinations require separate evidence. libADX has its own
+[completion record](../addons/libkosdec/libADX/COMPLETION.md).
+
+## Original audit scope
+
+The sections below preserve the earlier base-driver audit and its
+recommendations. Use the published status above for the named 2.00J
+function inventory.
 
 This audit compares the Dreamcast audio facilities expected by complete game
 runtimes with KOS's existing AICA driver, sound-RAM allocator, effect manager,

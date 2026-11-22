@@ -2,9 +2,10 @@
 
 These interfaces implement original KOS behavior against the fixed Dreamcast
 baseline. They are not CRI/MWPLY ABI replacements. Rebuild consumers: source,
-service and player state layouts have changed. Runtime completion remains tracked
-in COMPLETION.md. Integration accepted the explicit-context, native scheduling
-and facade dispositions below on 2026-11-14; this is not full runtime parity.
+service and player state layouts have changed. Integration accepted the
+explicit-context, native scheduling and facade designs on 2026-11-14.
+The [completion map](COMPLETION.md) records the published 142-entry milestone
+and the scope of its runtime evidence.
 
 ## Sources and filenames
 

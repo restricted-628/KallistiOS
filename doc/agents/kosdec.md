@@ -1,15 +1,18 @@
 # KOSdec media addon
 
 KOSdec owns `addons/libkosdec`: independent `libADX`, `libSFD`, `libAHX`
-components and host tools. Full Dreamcast-era ADX middleware parity is the first
-milestone, targeting KOS Experimental before stock KOS. Full SFD and AHX development follows ADX. The original bounded SFD video-only
-prototype is preserved under `addons/libkosdec/libSFD`; its explicit archive,
+components and host tools. libADX covers all 142 applicable Sega Library
+2.00J entries through original implementations or accepted native equivalents.
+Playback qualification applies to the documented Flycast profiles on KOS
+Experimental. The [completion map](../../addons/libkosdec/libADX/COMPLETION.md)
+records applicability, published evidence and remaining qualification. Stock KOS
+is a separate target. The original bounded SFD video-only prototype is preserved
+under `addons/libkosdec/libSFD`. Its explicit archive,
 standalone OIX/AMX example and host fixture tests are opt-in. The example owns
 startup cache/MMU state; the archive does not. Preserve the documented profile,
 float math, dependency provenance and separate hardware/runtime gates.
-The owner's full-scope requirement is tracked in `addons/libkosdec/libADX/PARITY.md`;
-asset-specific priorities do not narrow that objective. Keep unknown and incomplete
-capabilities explicit, including the outstanding function-by-function baseline map.
+The [release scope](../../addons/libkosdec/libADX/PARITY.md) also tracks
+SA2-derived work, host authoring and the native interface boundary.
 
 The optional host `tools/adxcheck` validates standalone assets with the unchanged
 decoder's explicit host math model. Its declared fields are not admitted metadata;
@@ -17,16 +20,14 @@ compatibility requires the full body/footer and physical file EOF. Keep it read-
 bounded in memory and separate from target playback/SH-4 equivalence claims.
 Run the addon `tools-test` and `tools-sanitize` targets for checker changes.
 
-The current libADX archive is a bounded float decoder, memory/stream PCM readers and
-a synchronous KOS file adapter, asynchronous direct-disc source and bounded ACX/AFS
-member lookup, plus a bounded 16-entry PCM sequence queue and a caller-owned SPSC PCM pipe. A separate native fiber/disc exerciser demonstrates cooperative
-scheduling. An optional native audio player uses existing fork stream APIs and a private
-fiber executor, with caller-owned buffers and source. It supports one output start,
-source prefill, poll, live volume/pan and checked software stop/join, retaining
-sound allocations, same-format source release/rebind or early cancellation,
-bounded source seeking and checked output-frequency changes. Its README and public header define the limits. Do not claim
-full middleware parity, audible completion or stopped sound-allocation reuse. Keep individually linkable decoder and
-service layers; no success-returning stubs for unimplemented parity capabilities.
+The libADX archive provides a bounded float decoder, memory and stream readers,
+synchronous KOS file input, asynchronous direct-disc input, ACX/AFS lookup, a
+bounded PCM sequence queue and a caller-owned SPSC PCM pipe. An optional
+fiber-fed player uses the fork's stream APIs. Its README and public headers
+describe default and checked output profiles, including same-title restart,
+active pause, discard and logical PLAYEND. Played sound RAM stays reserved.
+Retail audible completion and allocator reuse require separate evidence.
+Keep decoder and service layers individually linkable.
 
 Use the root source-evidence gate before changing format/math or SDK behavior.
 Preserve exact float ordering, history boundaries, conversion and FPU-state
@@ -59,11 +60,10 @@ Terminal publication and software drain do not join users or retire providers.
 Keep ring/output memory separate from DMA staging and preserve immutable format
 publication. No scheduler or device dependencies belong in the pipe object.
 
-Audio is explicitly in scope per owner clarification. The standalone audio
-example leaves shared sound code unchanged, uses exact splitting to avoid the
-existing aligned PCM16 ASM permutation, and retains sound allocations after
-software stop. Runtime/source-copy success is not final-fetch or natural-end
-qualification. Audio owns the underlying splitter correction and retirement.
+The standalone audio example retains sound allocations after software stop.
+Audio owns the shared PCM16 splitter and device retirement. The checked
+player's logical PLAYEND follows real source drain and checked stop.
+Physical final fetch remains a separate gate.
 
 The producer control service wraps the pipe with one copied command/receipt slot.
 Only its producer step mutates source state; one controller posts/takes receipts.
@@ -86,8 +86,9 @@ Source seek is serialized while unbound: decode from zero to rebuild full-group
 history, with at most one provider call/32 discarded frames per step. The pipe
 advances pending seeks on its producer, never emitting skipped PCM. Loop-repeat
 seek is excluded; no audible-time or constant-time seek claim. Source and output
-rates are separate: rebind compares source format, while checked playback-rate
-updates persist on the running output. No CRI semitone/fade mapping is implied.
+rates are separate. Native rebind checks source format and checked output-rate
+updates persist on the running output. The compatibility transpose API has
+its own signed pitch mapping and documented checked profiles.
 Partial pipe space can accept min(free,32) frames; never require a whole group
 of free ring slots when cached partial groups must finish prefill.
 
@@ -259,11 +260,12 @@ close. Never admit the stock unsized sentinel as a native allocation bound.
 
 Signed player pan uses per-channel requested -15..15/AUTO settings, resolved at
 source admission or live update. Preserve independent AUTO across bindings and
-legacy set_output bytes; its getter reports equivalent signed positions after a
+legacy set_output bytes. Its getter reports equivalent signed positions after a
 legacy call. Checked update failure retains the previous requested snapshot but
 may partially affect hardware, so FAILED/stop is mandatory. Discrete pan encoding
-needs no FPU transform. Full-range logarithmic volume requires a separate reviewed
-Audio interface; linear8 approximation does not close attenuation parity.
+needs no FPU transform. Checked ordinary playback applies stock attenuation
+through Audio's confirmed raw TL path. Default KOS linear volume remains a
+separate control. See the completion map for qualified gain combinations.
 
 Owned filename input is opt-in through `adx_named_file.h`. Its opaque private fd
 is restricted to synchronous stable sources and the creating ordinary owner
@@ -271,9 +273,9 @@ thread. Borrow/return is one explicit source loan: require actual user join
 before return; EOF/cancel does not prove it. Precondition rejection retains
 ownership, while admitted close clears the handle and reports cleanup errno
 separately. Never retry/probe a consumed fd. Preserve constructor primary errno.
-No global drain, forced wait interruption or hidden asynchronous provider is
-admitted. These restrictions reuse the existing VFS contract; they do not change
-borrowed file adapters or certify sound-memory/device retirement.
+Raw paths at or above KOS `PATH_MAX` fail with `ENAMETOOLONG` before allocation
+or provider admission. Keep the existing VFS lifetime restrictions and the
+separate sound-memory retirement contract.
 
 Native middleware collections/source/recovery/SFA composition is documented in
 addons/libkosdec/libADX/NATIVE_MIDDLEWARE.md. Keep source loans outstanding through

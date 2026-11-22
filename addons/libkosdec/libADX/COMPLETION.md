@@ -1,28 +1,26 @@
 # libADX completion boundary
 
-The fixed runtime baseline is Dreamcast ADX shipped in Sega Library 2.00J, not
-later CRI products. Independent KOS-native behavior is the goal; matching a name
-or adding a success-returning wrapper does not establish parity. The frozen
-source inventory is [BASELINE_API.csv](BASELINE_API.csv). No percentage complete
-is assigned: declarations differ greatly in complexity and share implementation.
+All **142 applicable entries** in the Sega Library 2.00J Dreamcast ADX
+inventory have native implementations or accepted native equivalents for
+KOS Experimental. The target is ADXT 5.93 and the companion libraries in that
+SDK. The milestone is published at `07515908`. Playback qualification applies
+to the documented Flycast profiles. The matrix records additional format,
+backend, and hardware qualification separately.
 
-The inventory contains 75 ADXT declarations (header version 5.93), 27 ADXF declarations (26 active and one disabled),
-19 LSC, 12 active standalone SJ functions plus three disabled declarations,
-and 12 SJ interface slots (three reserved, nine operations). It also records
-three Sega MWPLY ADX facade functions and three ancillary file-selector helpers.
-The ADX player manual is revision 5.78; header/manual version differences must
-be reconciled, not silently treated as one identical specification. InitWce is a
-Windows CE/DirectSound entry, not applicable to KOS; the three FSEL functions are
-optional application file-picker UI from a separate library, outside runtime parity. The CSV is an
-exhaustive declaration inventory of these named headers, not an assertion that
-all SDK behavior or format combinations have already been reverse engineered.
+[BASELINE_API.csv](BASELINE_API.csv) contains 154 distinct entries. The
+applicable count includes 73 ADXT, 26 ADXF, 21 SJ, 19 LSC, and three native
+MWPLY facade equivalents. The 12 exclusions are the Windows CE initializer,
+the verified empty `ADXT_ReleaseSeamless` return, four disabled declarations,
+three reserved SJ interface slots, and three application file-selector
+helpers. The ADX player manual revision is 5.78. Where it differs from the
+5.93 header and shipped archive, the matrix uses the checked binary evidence.
 
 ## Runtime completion groups
 
-Each entry in the API inventory maps to one row below. Present native facilities
-are reusable foundations; remaining work is not closed merely by those facilities.
+Applicable runtime entries in the API inventory map to the capabilities
+below. The final column lists limits of their current qualification.
 
-| ID | Capability | Existing native support | Remaining for baseline parity |
+| ID | Capability | Existing native support | Qualification and limits |
 | --- | --- | --- | --- |
 | H1 | Lifecycle and multi-handle management | player_init/start/stop plus explicit checked player/file collections, fair bounded polling, nonreused IDs and empty-only finish | The two-player retained-clock fixture fails with EPIPE during group poll. Audio-qualified multi-player output and device retirement/reuse remain open. No unsafe implicit reset; WinCE initialization is not applicable. |
 | H2 | Playback sources | Immutable source/range/index loans, ACX/AFS memory/provider selection, owned filename source and ADX/container/sequence/joint bindings. Resident loans can bind finite zero-copy memory joints and expose queued input | Complete format conformance remains C1. The native facade uses explicit extents and ownership. |
@@ -32,10 +30,10 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 | H6 | Playback clock and completion | Qualified source-output clock and signed offsets in sample, NTSC and PAL modes. Healthy concurrent titles independently reach logical PLAYEND. A failed output transfer preserves the compatibility status while native diagnostics report failure. | Sample, NTSC and PAL compatibility clocks freeze on the Flycast active-pause profile below. Device-audible end remains distinct from logical PLAYEND. |
 | H7 | Service and input-buffer policy | Opt-in owner-driven service and direct title dispatch use one collection cadence latch. Phased ADX, WAVE, AIFF, AU and SPSD bindings preserve DECODER/RENDERER/FILE/STREAM/title/RELOAD order. Compatibility preparation uses admitted block geometry. Typed faults support checked STOP and caller-prepared REPLAY. Native fiber and group polling remain available. | Both Flycast CPU modes exercise live default stereo WAVE at NTSC and PAL with a 16,384-byte/channel sound buffer. Live default ADX REPLAY uses the same geometry. Other Audio compositions, exact physical storage timing and hardware output qualification remain open. |
 | H8 | Error reporting and recovery | Independent diagnostic query/clear/owner notification; NOACT/STOP/bounded REPLAY with terminal input errors and opt-in running stall detection; monotonic delay and checked stop/replay preparation | Qualify target thresholds and output failure classification. Audio-qualified retirement and reuse remain open. |
-| H9 | Start gate, pause and stop | Prefill, prepared-start gate, pre-output pause and checked software stop. An opt-in ordinary stereo title can stop and re-prime its own allocation with a new source. | The Flycast profile below supports five active pauses and resumes on one title. General active pause and repeatable retained restart remain open. A successful software stop is not permission to release sound RAM. |
+| H9 | Start gate, pause and stop | Prefill, prepared-start gate, pre-output pause and checked software stop. Checked ordinary playback supports same-title replay. The Flycast pause profile supports active cuts on direct mono and stereo sources, including an embedded repeat. | Active pause requires qualified ring/rate settings and an unlinked source. Retail active pause and repeatable retained restart remain open. Checked stop keeps played sound RAM reserved. |
 | H10 | Native output controls | Ordinary routing, filter readback and relative pitch. For the checked fixed-width Flycast profile, `ADXT_SetTranspose` is complete: requests during preparation select startup pitch, including on a new source with a different nominal rate. Live changes cover queued source tails. Confirmed pause stages pitch for resume within the selected geometry; checked restart preserves the sound reservation. | Use the required ring and decoded reserve for the selected rate. This does not qualify mixed-width replay, fixed-phase retained live pitch, retained routing or retail hardware. |
 | H11 | Seamless queue and linked controls | Same-format PCM sequence or linked joint jobs. The linked player can start the loader with cached refill settings. A bound loader supports live registration, rotates at read completion, prefetches while PCM is full, and publishes pending-read count. Exact footer validation, optional two-span padded-header scan, history reset, live follow switch and final producer release | Audible transitions and physical drive timing. ReleaseSeamless is empty in the selected archive. Native loader repeat and finish are explicit. |
-| H12 | Special processing | Unbound seek, SFA prefix, strict and batched paired live SFA with late final length and shared body/zero-group budget; producer PCM filter and peak analyzer selectable by the qualified source clock | Submitted stereo and decoded PCM discard are supported on the bounded Flycast profile below. General active discard and SFD demux integration to supply final length remain open. Zero groups preserve history. |
+| H12 | Special processing | Unbound seek, SFA prefix, strict and batched paired live SFA with late final length and shared body/zero-group budget; producer PCM filter and peak analyzer selectable by the qualified source clock. Checked active discard consumes the common submitted and decoded prefix. | Active discard uses the checked Flycast pause profile. SFD demux integration to supply final length remains open. Zero groups preserve history. |
 | F1 | File/partition services | Owned filename collections/loans and close-all; AFS directories/registries/overlays with exact provider-bound resolution; bounded sector requests and explicit flow policy | Transport/backend qualification for the accepted native filename/directory/lifecycle design. No hidden current-directory/reset; disabled GetFileRange is not a runtime obligation. |
 | J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts; two simultaneous DATA loans with ordered return and request-fit queries for each joint kind | The observed two-loan usage is supported. Broader arbitrary SDK loan patterns and target behavior require conformance evidence. |
 | L1 | Load/sequence controller | Bounded 16-entry loader with source IDs, copied labels, read-sector progress, pause and checked stop. The selected 2.00J flow policy captures the limit per source and admits batches from queued-DATA occupancy. File loans and a separate PCM sequence are available. | Exact cvFs completion visibility and physical drive/backend timing and retirement remain open. |
@@ -114,7 +112,7 @@ all 131,072 emitted frames; terminal time used the 81,920-frame file length.
 This tally applies to the documented native profiles, not every combination
 of backend, file format and hardware.
 
-| 2.00J entry | What the public tests distinguish | What still needs a native implementation or test |
+| 2.00J entry | What the public tests distinguish | Profile limits |
 | --- | --- | --- |
 | `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. A direct embedded repeat can be released while held. | Direct unlinked sources and qualified ring/rate combinations only. No general hardware pause claim. |
 | `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. Both stereo voices resumed at the first surviving frame after a loop wrap. | The native count deliberately excludes unused ring capacity. Post-admission discard requires the checked pause profile. |
@@ -219,10 +217,11 @@ facade is not a decoder operation; assess it under authoring rather than silentl
 expanding playback work. SFD, AHX and newer CRI codecs are outside this libADX
 runtime completion boundary.
 
-The definitive finish condition is closure of C1/C2, each applicable runtime row,
-and V1/V2/V4 with recorded evidence and no hidden unimplemented paths. V3 and host
-authoring are separately visible project milestones. This is a finite backlog,
-not a claim that all remaining entries are small or already specified completely.
+The published milestone closes the applicable entry inventory for the
+documented profiles. C1/C2 and V1/V2 track broader format, arithmetic, transport
+and device conformance. V3 (stock KOS) and host authoring remain separate
+milestones. V4 records the published implementation and staged build/link
+evidence for the covered scope.
 
 ## Resolved applicability
 
@@ -241,11 +240,7 @@ the 2.00J header and absent from the Dreamcast ADX/Sofdec libraries. The error
 callback and request-fit vtable operations are active.
 The remaining lifecycle and output qualifications are tracked in the matrix above.
 
-The native middleware batch is described in [NATIVE_MIDDLEWARE.md](NATIVE_MIDDLEWARE.md).
-It materially supplies the source/control/lifecycle/recovery/link/framing paths;
-it does not by itself close the remaining Audio, conformance or applicability
-gates. Integration accepted its explicit contexts/native paths, event-driven
-service and namespaced facade design on 2026-11-14. The design-disposition items
-in H1/H7/F1/L1/M1 are resolved by that acceptance; their runtime, timing, backend
-and physical-output qualifications remain open. This is not full MWPLY ABI or
-SDK scheduling equivalence.
+Integration accepted the explicit contexts, native paths, event-driven service
+and namespaced facade design on 2026-11-14. See
+[NATIVE_MIDDLEWARE.md](NATIVE_MIDDLEWARE.md) for that contract. H1, H7, F1, L1
+and M1 record the corresponding runtime, timing and backend qualifications.

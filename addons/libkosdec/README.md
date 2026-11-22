@@ -2,24 +2,19 @@
 
 KOSdec groups independently linkable Dreamcast media components:
 
-- `libADX`: active ADX codec and middleware development.
+- `libADX`: ADX codec and Dreamcast middleware for KOS Experimental.
 - `libSFD`: preserved bounded video-only prototype and standalone OIX/AMX player.
 - `libAHX`: reserved for AHX audio.
 - `tools`: host asset compatibility checker; authoring tools remain pending.
 
-The first milestone is full ADX middleware parity with the Dreamcast-era SDK.
-The current delivery supports incremental one-pass mono/stereo float decoding at integer rates 1..48000 Hz (cutoff 0..floor(rate/2)),
-including validated loop-bearing files and padded end records, plus an optional
-resident-input PCM reader and a bounded stream reader with a separate KOS file
-adapter, an asynchronous direct-disc source, bounded ACX/AFS member lookup, and
-an ordered 16-entry PCM sequence service, supporting repeat, release, pause
-and cancellation, plus a bounded producer/consumer PCM pipe and acknowledged producer controls;
-an optional fork-native audio player now adds prefill/start, polling, volume/pan
-and checked software stop with retained sound allocations. Successive same-format
-sources share one running output through explicit source release/rebind or early
-cancellation. Bounded stream seeking rebuilds predictor history on the producer,
-and checked output-rate changes keep source-format accounting separate. Full middleware parity
-and sound-resource reuse remain unfinished. KOS Experimental is the first target. Stock KOS adapters follow later.
+The KOS Experimental libADX milestone covers all **142 applicable Sega Library
+2.00J Dreamcast middleware entries** through native implementations or accepted
+native equivalents. Playback qualification applies to the documented Flycast
+profiles. libADX provides incremental float decoding, repeat and release,
+buffered file and direct-disc input, ACX/AFS lookup, stream joints, and a
+fiber-fed player. See the [completion map](libADX/COMPLETION.md) for the
+entry count, known backend failures, and remaining qualifications. Stock KOS
+integration and retail device behavior remain unverified.
 
 ## Build the current component
 

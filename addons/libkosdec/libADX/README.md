@@ -1,4 +1,10 @@
-# libADX foundation
+# libADX
+
+The KOS Experimental milestone covers all **142 applicable Sega Library 2.00J
+Dreamcast middleware entries** through native implementations or accepted
+native equivalents. Playback qualification applies to the documented Flycast
+profiles. See [COMPLETION.md](COMPLETION.md) for the count and its exclusions,
+and [PARITY.md](PARITY.md) for release scope and remaining work.
 
 This is an independently written, incremental float ADX decoder. It accepts
 encoding 3, versions 3 and 5, 18-byte channel blocks, 4-bit residuals, mono/stereo
@@ -12,7 +18,7 @@ Headers may have zero extensions or a validated version-3 loop record:
 bounds and matching absolute byte offsets. Other extensions remain unsupported.
 48 kHz is our extension beyond the baseline ADX Talk header's 44.1 kHz maximum.
 Out-of-domain rates/cutoffs, other versions/encodings and nonzero footer payloads
-remain unsupported. This is not complete ADX middleware parity.
+remain unsupported.
 The native player accepts effective output rates 8000..48000 Hz; lower-rate
 codec sources require an explicit in-range playback-rate override (changing pitch
 and duration). Default low-rate output fails with ENOTSUP before sound allocation.
@@ -1034,18 +1040,13 @@ Host primitive emulation supports regression tests only. The separate native
 FMAC underflow discrepancy between the architectural reference and Flycast is
 unresolved; fixture success is not full arithmetic or hardware certification.
 
-## Remaining middleware work
+## Qualification and tests
 
-See [the parity checklist](PARITY.md) for the full completion scope. Current port
-asset requirements prioritize work without removing other baseline capabilities.
-
-Additional formats and out-of-domain coefficient setup, broader ACX/AFS partition/metadata services,
-SJ-compatible services, device stop/restart and allocation retirement, audible pause
-and seamless playback, multi-stream scheduling, qualified playback timing,
-CRI-unit volume/pitch and fades, errors/recovery and host tools remain; signed
-pan/AUTO setters and getters now have native equivalents. The native player exercises output and software stop/join but does not provide
-safe sound-memory reuse, audible completion or unlimited restart.
-There are no success-returning placeholder APIs for these capabilities.
+[COMPLETION.md](COMPLETION.md) records backend, timing, format and lifecycle
+limits by capability. Checked playback provides logical PLAYEND and retains
+played sound allocations. Retail audio timing and safe allocator reuse remain
+unverified. The checked ordinary playback profile and the retained backend
+have separate evidence.
 
 The synthetic suites cover fragmentation, truncated input, backpressure,
 reset/cancellation, terminal behavior, mono/stereo admission, padded final groups,
@@ -1697,6 +1698,10 @@ consumers for the extended implementation-owned player state.
 existing synchronous VFS reader. Open does not validate codec content; the first
 decode does. It optionally uses the same caller-supplied 512..32768-byte compressed
 cache. No extra PCM predecode, global file table or asynchronous I/O is introduced.
+Raw paths of `PATH_MAX` bytes or more return `ENAMETOOLONG` before allocation
+or file open, preserving the caller's file and cleanup outputs. Shorter paths
+go through normal VFS checks. The separate filename collection uses its own
+256-byte storage limit.
 
 Initialize a handle and stream pointer to NULL, then call `named_file_open` and
 `named_file_borrow`. Pass the borrowed stream to the existing decoder, service or
