@@ -11,7 +11,7 @@
 #endif
 #ifdef MEDIA_ADX_ORDINARY_STEREO
 #include "snd_ordinary_pcm16.h"
-static int ordinary_mono_snapshot(const struct kosdec_adx_player *, uint64_t,
+static int ordinary_snapshot(const struct kosdec_adx_player *, uint64_t,
     struct kosdec_adx_source_output *);
 #endif
 #ifdef MEDIA_ADX_FLYCAST_RESTART
@@ -378,7 +378,7 @@ int kosdec_adx_player_get_source_output(const struct kosdec_adx_player *p,
     if(p->flycast_pause_enabled) return flycast_snapshot(p,generation,out);
 #endif
 #ifdef MEDIA_ADX_ORDINARY_STEREO
-    if(p->ordinary_mono_clock) return ordinary_mono_snapshot(p,generation,out);
+    if(p->ordinary_mono_clock || p->ordinary_stereo) return ordinary_snapshot(p,generation,out);
 #endif
 #ifdef MEDIA_ADX_RETAINED_CLOCK
     if(!p->retained_offsets) return unsupported();
@@ -596,16 +596,16 @@ static bool compat_single_title(const struct kosdec_adx_player *p) {
 
 #ifdef MEDIA_ADX_ORDINARY_STEREO
 static int ordinary_source_position(const struct kosdec_adx_player *p,
-    const snd_ordinary_pcm16_status_t *status, uint64_t *frames) {
+    const snd_ordinary_pcm16_status_t *status, unsigned slot, uint64_t *frames) {
     const uint32_t half = p->memory.sound_bytes / 4;
+    const uint64_t cursor = status->frames[slot];
     if(status->committed_frames != p->info.requested_frames - p->ordinary_requested_base ||
-       status->frames[0] >= status->committed_frames ||
-       status->committed_frames - status->frames[0] > 2u * half) {
+       cursor >= status->committed_frames || status->committed_frames - cursor > 2u * half) {
         errno = EPROTO;
         return -1;
     }
-    unsigned index = (unsigned)(status->frames[0] / half) % 2;
-    uint32_t within = status->frames[0] % half;
+    unsigned index = (unsigned)(cursor / half) % 2;
+    uint32_t within = cursor % half;
     uint32_t available = p->ordinary_halves[index].source_frames;
     *frames = p->ordinary_halves[index].source_first +
         (within < available ? within : available);
@@ -616,10 +616,10 @@ static int ordinary_source_frames(const struct kosdec_adx_player *p, uint64_t *f
     snd_ordinary_pcm16_status_t status;
     if(snd_ordinary_pcm16_status(p->ordinary_pcm,&status) < 0) return -1;
     if(status.error) { errno = status.error; return -1; }
-    return ordinary_source_position(p,&status,frames);
+    return ordinary_source_position(p,&status,0,frames);
 }
 
-static int ordinary_mono_snapshot(const struct kosdec_adx_player *p,
+static int ordinary_snapshot(const struct kosdec_adx_player *p,
     uint64_t generation, struct kosdec_adx_source_output *out) {
     uint64_t epoch = p->info.source_generation ? p->info.source_generation : 1;
     if(generation && generation != epoch) {
@@ -629,21 +629,27 @@ static int ordinary_mono_snapshot(const struct kosdec_adx_player *p,
     if(!p->ordinary_pcm || p->ordinary_reprime_pending) { errno = ENODATA; return -1; }
     snd_ordinary_pcm16_status_t status;
     if(snd_ordinary_pcm16_status(p->ordinary_pcm,&status) < 0) return -1;
-    if(status.frames[1]) { errno = EPROTO; return -1; }
+    if(p->ordinary_mono_clock && status.frames[1]) { errno = EPROTO; return -1; }
     bool stopped = p->info.state == KOSDEC_ADX_PLAYER_STOPPED;
     bool live = p->info.state == KOSDEC_ADX_PLAYER_PLAYING ||
                 p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END;
     uint64_t source = 0;
-    if(live && !status.error && ordinary_source_position(p,&status,&source) < 0)
+    if(live && !status.error && ordinary_source_position(p,&status,0,&source) < 0)
         return -1;
+    bool ended = !status.error && p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END &&
+        source == p->info.source_frames;
+    if(ended && p->ordinary_stereo) {
+        uint64_t right;
+        if(ordinary_source_position(p,&status,1,&right) < 0) return -1;
+        ended = right == p->info.source_frames;
+    }
     *out = (struct kosdec_adx_source_output){
         .epoch = epoch, .generation = generation,
         .output_frames = status.frames[0],
         .source_frames = source, .next_source_frame = source,
         .clock_error = status.error, .output_error = status.error,
         .stop_error = p->info.stop_error, .valid = live && !status.error,
-        .source_output_end = !status.error && p->info.state == KOSDEC_ADX_PLAYER_SOURCE_END &&
-            source == p->info.source_frames,
+        .source_output_end = ended,
         .software_stopped = stopped
     };
     return 0;
@@ -1502,7 +1508,7 @@ static int start_output(struct kosdec_adx_player *p, uint32_t start_rate) {
             if(snd_ordinary_pcm16_start(p->ordinary_pcm) < 0)
                 return -1;
         }
-        if(p->ordinary_mono_clock) p->info.source_generation = p->info.sources_started + 1;
+        p->info.source_generation = p->info.sources_started + 1;
 #ifndef MEDIA_ADX_RETAINED_CLOCK
         bool collection_clock = compat_collection_vsync(p);
         if(collection_clock || p->vsync_ticks) {
@@ -1795,7 +1801,7 @@ static bool earlier_sources_drained(const struct kosdec_adx_player *p,
 
 static bool latch_playend(struct kosdec_adx_player *p) {
     struct kosdec_adx_playend *end = &p->compat_playend;
-    bool single = p->flycast_pause_enabled || p->ordinary_mono_clock;
+    bool single = p->flycast_pause_enabled || p->ordinary_mono_clock || p->ordinary_stereo;
     if(!end->stop_timeout_ms || !p->source_bound ||
        p->info.first_error || p->callback_failed ||
        p->compat_service->titles[p->compat_slot].faults)
@@ -2181,7 +2187,7 @@ int kosdec_adx_compat_player_enable_playend(struct kosdec_adx_player *p, uint32_
         p->info.source_generation == p->retained_admissions;
     if(!first && !released) return bad();
     if(!p->compat_service || (!p->retained_offsets && !p->flycast_pause_enabled &&
-                              !p->ordinary_mono_clock))
+                              !p->ordinary_mono_clock && !p->ordinary_stereo))
         return unsupported();
     if(p->compat_service->servicing) return busy();
     p->compat_playend.stop_timeout_ms = timeout_ms;

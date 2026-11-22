@@ -301,8 +301,10 @@ int kosdec_adx_player_enable_retained_clock(struct kosdec_adx_player *,
    A successful stop retains the Audio lease. Snapshot access remains valid.
    The Flycast-only pause opt-in also supports source snapshots with one
    generation, slot-zero running credit, and adapter-local epochs. These
-   snapshots have no retained firmware session identity. The checked
-   ordinary mono profile exposes one source generation on its own lease. */
+   snapshots have no retained firmware session identity. Checked ordinary
+   mono and stereo use slot-zero source time and a fresh generation per
+   successful START. End requires every active channel to traverse its
+   real tail. */
 int kosdec_adx_player_get_source_output(const struct kosdec_adx_player *,
     uint64_t generation, struct kosdec_adx_source_output *);
 /* Set a signed display offset in the units of the query, source frames or

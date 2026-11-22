@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Checked stereo libADX playback now reports logical PLAYEND only after
+  both channels pass the last real source frame and checked stop succeeds.
+  Stopping a replacement track early reports STOP, not natural completion.
+  Both Flycast CPU modes verified the distinction on the same reservation.
+
 - Qualified both libADX compatibility time getters through live transpose,
   pause, discard, resume and logical playback end. Delivered NTSC and PAL
   clock events passed in both Flycast CPU modes with matching stereo PCM.
