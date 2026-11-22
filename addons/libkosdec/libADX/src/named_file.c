@@ -5,7 +5,9 @@
 #include <kos/thread.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct kosdec_adx_named_file {
     struct kosdec_adx_file input;
@@ -40,6 +42,8 @@ int kosdec_adx_named_file_open(struct kosdec_adx_named_file **out,
     if(!out || *out || !path || !*path || !cleanup_error ||
        (cache ? cache_bytes < 512 || cache_bytes > 32768 : cache_bytes != 0))
         return error(EINVAL);
+    if(strnlen(path, PATH_MAX) == PATH_MAX)
+        return error(ENAMETOOLONG);
     *cleanup_error = 0;
     struct kosdec_adx_named_file *f = calloc(1, sizeof(*f));
     if(!f) return error(ENOMEM);

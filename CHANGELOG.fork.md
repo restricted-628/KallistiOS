@@ -8,6 +8,11 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- The libADX named-file opener rejects raw paths of `PATH_MAX` bytes or
+  longer with `ENAMETOOLONG` before allocating state or calling the
+  filesystem. On this error the caller's file and cleanup outputs are
+  unchanged. Shorter paths still go through normal filesystem checks.
+
 - Completed the applicable Dreamcast ADX 2.00J inventory: 142 of 142
   functions on the documented Flycast profiles. Pause and discard now
   support a direct source with an embedded repeat. Releasing the loop

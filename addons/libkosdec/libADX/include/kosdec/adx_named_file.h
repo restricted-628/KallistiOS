@@ -20,6 +20,9 @@ struct kosdec_adx_named_file;
    Independent opens must have independent cursors. No hidden async providers.
    Control calls may block without a timeout; they do not cancel VFS waits.
 
+   Raw paths of PATH_MAX bytes or more, excluding the terminator, fail with
+   ENAMETOOLONG before allocation or VFS admission. VFS normalizes shorter
+   paths and applies mount-specific limits.
    Open O_RDONLY, allocate private state, query extent (<=UINT32_MAX). Does not
    validate ADX content until decoding. Optional cache is NULL/0 or 512..32768
    caller-owned bytes, disjoint from live objects/buffers, retained through close.

@@ -5,6 +5,7 @@
 #include <kos/thread.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@ static uint8_t *asset;
 static size_t length, cursor;
 static int64_t reported_size;
 static struct kosdec_adx_named_file *closing_alias;
+static const char *expected_path = "/cd/music.adx";
 kthread_t *thd_get_current(void) { return current; }
 int irq_inside_int(void) { return irq; }
 uint32_t kosdec_adx_named_test_sr(void) { return sr; }
@@ -29,7 +31,7 @@ void *named_test_calloc(size_t n, size_t bytes) {
 }
 void named_test_free(void *p) { ++frees; free(p); errno=EDOM; }
 file_t fs_open(const char *path,int mode) {
-    CHECK(!strcmp(path,"/cd/music.adx") && mode==O_RDONLY && !live);
+    CHECK(!strcmp(path,expected_path) && mode==O_RDONLY && !live);
     ++opens;
     if(open_error) { errno=open_error; return FILEHND_INVALID; }
     live=true; cursor=0; return 7;
@@ -162,6 +164,27 @@ int main(void) {
         CHECK(!kosdec_adx_named_file_return(f,&stream_loan));
         CHECK(!kosdec_adx_named_file_close(&f,&cleanup) && !f && !cleanup);
     }
+    char long_path[PATH_MAX + 1];
+    memset(long_path, 'a', PATH_MAX);
+    long_path[0] = '/';
+    long_path[PATH_MAX] = '\0';
+    unsigned previous_opens = opens, previous_allocations = allocations;
+    cleanup = 123;
+    alloc_error = true;
+    CHECK(kosdec_adx_named_file_open(&f,long_path,false,NULL,0,&cleanup)<0);
+    CHECK(errno==ENAMETOOLONG && !f && cleanup==123);
+    alloc_error = false;
+    CHECK(kosdec_adx_named_file_open(&f,long_path,false,NULL,0,&cleanup)<0);
+    CHECK(errno==ENAMETOOLONG && !f && cleanup==123);
+    CHECK(opens==previous_opens && allocations==previous_allocations);
+
+    long_path[PATH_MAX - 1] = '\0';
+    expected_path = long_path;
+    open_error = ENOENT;
+    CHECK(kosdec_adx_named_file_open(&f,long_path,false,NULL,0,&cleanup)<0);
+    CHECK(errno==ENOENT && !f && cleanup==0 && opens==previous_opens+1);
+    CHECK(allocations==previous_allocations+1 && allocations==frees);
+
     free(asset);
     printf("ADX_NAMED_FILE checks=%u failures=0\n",checks);
     return 0;
