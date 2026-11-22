@@ -41,7 +41,7 @@ are reusable foundations; remaining work is not closed merely by those facilitie
 | L1 | Load/sequence controller | Bounded 16-entry loader with source IDs, copied labels, read-sector progress, pause and checked stop. The selected 2.00J flow policy captures the limit per source and admits batches from queued-DATA occupancy. File loans and a separate PCM sequence are available. | Exact cvFs completion visibility and physical drive/backend timing and retirement remain open. |
 | M1 | Sega middleware facade | Native namespaced lifecycle, source, service, recovery and collection APIs; explicit mapping in NATIVE_MIDDLEWARE.md | Native facade disposition accepted on 2026-11-14. Runtime qualification is tracked in the underlying rows. |
 
-### Active pause and discard: what remains
+### Active pause and discard: qualified behavior
 
 A paused title can discard eligible decoded frames before it has submitted
 audio. Once playback has started, part of the unread stereo data is already
@@ -103,17 +103,21 @@ resume uses the admitted pitch with a new phase from START. The public
 regression checks both widths through five cuts and natural PLAYEND in
 sample-time mode.
 
-### Which player functions share a blocker?
+### Applicable function inventory and profile limits
 
 The applicable 2.00J function tally for the qualified Flycast profiles is
-140 of 142 after qualifying `ADXT_SetOutVol` on checked ordinary playback.
-Two entries remain: `Pause` and `DiscardSmpl`.
-This counts functions, not the fraction of work completed.
+**142 of 142.** The final entries, `ADXT_Pause` and `ADXT_DiscardSmpl`,
+passed on a direct stereo ADX source with an embedded repeat. Both Flycast
+CPU modes cut at playback frame 59,814, discarded 4,096 frames per channel,
+and resumed at frame 63,910. After releasing the loop, PLAYEND waited for
+all 131,072 emitted frames; terminal time used the 81,920-frame file length.
+This tally applies to the documented native profiles, not every combination
+of backend, file format and hardware.
 
 | 2.00J entry | What the public tests distinguish | What still needs a native implementation or test |
 | --- | --- | --- |
-| `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. | Rates outside the checked pause range and repeating sources still cannot take this path. |
-| `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. | Stock-valid titles that cannot yet pause also cannot discard that head. The native count deliberately excludes ring capacity when no frames moved. |
+| `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. A direct embedded repeat can be released while held. | Direct unlinked sources and qualified ring/rate combinations only. No general hardware pause claim. |
+| `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. Both stereo voices resumed at the first surviving frame after a loop wrap. | The native count deliberately excludes unused ring capacity. Post-admission discard requires the checked pause profile. |
 | `ADXT_GetStat` / `ADXT_Stop` | Checked playback distinguishes natural PLAYEND from explicit STOP. Stereo waits for both real source tails and checked stop/join. Stopping the replacement source early leaves completion false. | An unavailable pause transport and the separate retained group-poll failure are not evidence of natural completion. Played sound allocations remain owned. |
 | `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo covers sample, NTSC and PAL clocks after live transpose through pause, discard, resume and PLAYEND. Mono pause covers sample and PAL clocks, and 32 kHz covers sample and centisecond clocks through hold and completion. | Time in unavailable pause or replay states depends on qualifying those transport states. |
 

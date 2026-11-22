@@ -1372,7 +1372,7 @@ int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *p) {
        p->info.state != KOSDEC_ADX_PLAYER_READY || !p->source_bound ||
        p->compat_phased || (p->time_uses_vsync && !p->compat_service->use_vsync_clock) ||
        p->requested_rate || p->compat_start_pitch ||
-       !p->producer.pipe.stream || p->producer.pipe.stream->linked || p->producer.pipe.stream->repeat ||
+       !p->producer.pipe.stream || p->producer.pipe.stream->linked ||
        !snd_flycast_pcm16_pause_geometry_supported(44100,ring) || p->memory.capacity < ring)
         return unsupported();
     p->flycast_pause_enabled = true;
@@ -1832,8 +1832,13 @@ static bool latch_playend(struct kosdec_adx_player *p) {
         return false;
     struct kosdec_adx_source_output clock;
     if(single) {
-        if(!drained_source(p,p->info.source_generation,&clock) ||
-           clock.next_source_frame != progress.declared_frames)
+        /* The producer has published DONE and cannot mutate its terminal
+           stream. Its emitted count includes any complete repeat traversals.
+           Keep the declared media length for the stock PLAYEND time. */
+        const struct kosdec_adx_stream *stream = p->producer.pipe.stream;
+        if(!stream || progress.source_frame != progress.declared_frames ||
+           !drained_source(p,p->info.source_generation,&clock) ||
+           clock.next_source_frame != stream->returned_frames)
             return false;
         end->generation = clock.generation;
         end->epoch = clock.epoch;
@@ -2596,7 +2601,7 @@ int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *p) {
     if(!p->compat_service || p->retained_offsets || p->requested_rate || p->ordinary_stereo ||
        !p->source_bound || p->info.state != KOSDEC_ADX_PLAYER_READY ||
        !p->producer.pipe.stream || p->producer.pipe.stream->linked ||
-       p->producer.pipe.stream->repeat || p->memory.sound_bytes < 16384)
+       p->memory.sound_bytes < 16384)
         return unsupported();
     if(p->compat_service->servicing) return busy();
     p->ordinary_mono_clock = true;

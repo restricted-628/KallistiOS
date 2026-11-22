@@ -8,6 +8,12 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
+- Completed the applicable Dreamcast ADX 2.00J inventory: 142 of 142
+  functions on the documented Flycast profiles. Pause and discard now
+  support a direct source with an embedded repeat. Releasing the loop
+  while paused preserves the first surviving frame and drains the full
+  output before PLAYEND. Retail hardware was not part of this milestone.
+
 - Checked ordinary libADX playback can apply stock attenuation before
   START, repeatedly during a stereo track, and on same-title replay.
   Both Flycast CPU modes matched the expected PCM through five live

@@ -704,8 +704,8 @@ default paths available.
 
 ### Ordinary mono clock and live transpose
 
-Use the fork's ordinary PCM16 build and bind a READY title to one finite,
-direct mono ADX source. Enable `kosdec_adx_compat_player_enable_mono_clock`
+Use the fork's ordinary PCM16 build and bind a READY title to one direct,
+unlinked mono ADX source. Enable `kosdec_adx_compat_player_enable_mono_clock`
 before starting. Ring geometry and live rate admission follow the checked
 ordinary profile above. A live change requires acknowledgement from the
 one output slot. Time uses that slot's
@@ -726,8 +726,8 @@ decoder will keep up.
 ### Flycast active pause
 
 Build with `ADX_ORDINARY_STEREO=1 ADX_FLYCAST_ACTIVE_PAUSE=1` against
-the matching build-gated Audio backend. Bind a READY title with one finite,
-direct mono or stereo ADX source. The startup output rate must match the
+the matching build-gated Audio backend. Bind a READY title with one direct,
+unlinked mono or stereo ADX source. The startup output rate must match the
 source rate and qualify for ordinary PCM16 startup. Enable checked ordinary
 output and then `kosdec_adx_compat_player_enable_flycast_pause` before start.
 The original 16,384-frame/channel ring admits 22,050–44,100 Hz. Select
@@ -768,6 +768,15 @@ the two banks for the sound runtime. For the 16,384-frame ring this is
 64 KiB total for mono and 128 KiB for stereo. The 32,768-frame ring
 doubles that reservation. A subsequent fresh ordinary title uses its own
 allocation.
+
+An ADX source with an embedded repeat can pause after a loop wrap. The
+source output cursor counts PCM frames in playback order across the repeat.
+Discard reports the actual common frames removed and advances that cursor
+without advancing elapsed playback time. The owner can send
+`KOSDEC_ADX_RELEASE_LOOP` while held and check its receipt. Resume continues
+at the first surviving frame. Logical PLAYEND waits for the actual emitted
+tail to drain and for checked stop, then reports time from the declared
+ADX length.
 
 The synthetic regression builds with `flycast-pause-test-elf`. Run
 `tests/generate_flycast_pause.py` with Python and each of the names `proof`

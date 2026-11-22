@@ -380,7 +380,7 @@ int kosdec_adx_player_set_wait_start(struct kosdec_adx_player *, bool wait);
    Flycast active-pause opt-in. */
 int kosdec_adx_compat_player_pause(struct kosdec_adx_player *, bool paused);
 /* Experimental Flycast-only pause profile. Enable a READY compatibility
-   title with one finite direct mono or stereo ADX source. Select the
+   title with one direct, unlinked mono or stereo ADX source. Select the
    16,384-, 32,768- or 65,504-frame ring before starting. The first ring
    admits 22,050–44,100 Hz, and the others follow checked ordinary rate
    admission. Startup output Hz must match the source. Enable checked
@@ -396,7 +396,9 @@ int kosdec_adx_compat_player_enable_flycast_pause(struct kosdec_adx_player *);
    successful service, and the result is the actual count per channel.
    No VBlank is delivered and discarded frames do not advance playback
    time. Releasing an entirely discarded source ends decode without
-   allocating Audio. Other paused requests return ENOTSUP. Service failure
+   allocating Audio. With a confirmed Flycast cut, discard reports the
+   common PCM removed from the paused output and decoded queue. Other
+   paused requests return ENOTSUP. Service failure
    or a rejected request leaves the cursor and discarded unchanged. */
 int kosdec_adx_compat_player_discard_samples(struct kosdec_adx_player *,
     int32_t requested, int32_t *discarded);
@@ -552,7 +554,7 @@ int kosdec_adx_compat_player_set_initial_transpose(struct kosdec_adx_player *,
    are unavailable on this output. */
 int kosdec_adx_compat_player_enable_stereo_transpose(struct kosdec_adx_player *);
 /* Opt a READY compatibility title into checked ordinary mono PCM16 and
-   nominal source time. Use a direct finite mono ADX source with the
+   nominal source time. Use a direct, unlinked mono ADX source with the
    same ring geometry as checked stereo. */
 int kosdec_adx_compat_player_enable_mono_clock(struct kosdec_adx_player *);
 /* Request live transpose for a PLAYING ordinary compatibility title.
