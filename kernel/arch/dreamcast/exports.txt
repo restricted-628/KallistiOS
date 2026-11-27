@@ -981,6 +981,7 @@ pvr_fog_table_custom
 pvr_init
 pvr_init_multipass
 pvr_init_multipass_depth
+pvr_init_multipass_ex
 pvr_shutdown
 pvr_mem_malloc
 pvr_mem_reservation_alloc
@@ -1028,6 +1029,8 @@ pvr_list_finish
 pvr_prim
 pvr_list_prim
 pvr_list_flush
+pvr_list_flush_async
+pvr_list_flush_wait
 pvr_user_clip_compile
 pvr_user_clip_submit
 pvr_scene_finish

@@ -123,7 +123,7 @@ typedef struct {
     uint32_t  opb, opb_size;                  /* Object pointer buffers, size */
     uint32_t  opb_addresses[PVR_OPB_COUNT];        /* Object pointer buffers (of each type) */
     uint32_t  tile_matrix, tile_matrix_size;  /* Tile matrix, size */
-    uint32_t  opb_overflow_count;             /* Extra OPB space after opb_size for TA overflow */
+    uint32_t  opb_end;                        /* Exclusive end of allocated initial and overflow bins */
 } pvr_ta_buffers_t;
 
 // DMA buffers structure: we have two sets of these
@@ -132,8 +132,13 @@ typedef struct {
     uint32_t    ptr[PVR_OPB_COUNT];    // DMA buffer write pointer, if used
     uint32_t    size[PVR_OPB_COUNT];   // DMA buffer sizes, or zero if none
     uint32_t    flushed;               // Lists already transferred to the TA
+    uint32_t    sealed;                // Staging already contains its delimiter
     int         ready;                 // >0 if these buffers are ready to be DMAed
 } pvr_dma_buffers_t;
+
+bool pvr_flush_blocks_transfer(pvr_dma_callback_t callback);
+bool pvr_flush_borrowed(void);
+void pvr_flush_reset_scene(void);
 
 // Frame buffers structure: we have two sets of these
 typedef struct {
@@ -143,6 +148,7 @@ typedef struct {
 /* Per-use multipass state. The fixed one-pass API leaves this unallocated. */
 typedef struct {
     pvr_ta_layout_t layout;
+    bool largest_overflow;
     pvr_ta_pass_layout_t passes[PVR_MULTIPASS_MAX_PASSES];
     pvr_dma_buffers_t *dma_buffers;
     uint32_t lists_enabled[PVR_MULTIPASS_MAX_PASSES];

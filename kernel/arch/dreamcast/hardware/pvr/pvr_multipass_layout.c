@@ -84,6 +84,15 @@ int pvr_ta_layout_calculate(pvr_ta_layout_t *layout, uint32_t tile_width,
 
         layout->pass_opb_offset[pass] = total_opb_size;
 
+        /* Region-pointer reuse only: never silently discard a separately
+           allocated TR modifier list or apply it in presort mode. */
+        if(passes[pass].share_modifier && (passes[pass].presort ||
+                !passes[pass].opb_size[1] || !passes[pass].opb_size[2] ||
+                passes[pass].opb_size[3])) {
+            errno = EINVAL;
+            return -1;
+        }
+
         for(list = 0; list < 5; ++list) {
             uint32_t list_opb_size;
 
@@ -110,6 +119,10 @@ int pvr_ta_layout_calculate(pvr_ta_layout_t *layout, uint32_t tile_width,
         }
 
         layout->pass_opb_size[pass] = pass_opb_size;
+        /* Daniel Fairchild (KallistiOS PR #1594) budgets overflow in units
+           of the largest pass, independently of the sum of initial bins. */
+        if(pass_opb_size > layout->largest_pass_opb_size)
+            layout->largest_pass_opb_size = pass_opb_size;
 
         if(!add_u32(total_opb_size, pass_opb_size, &total_opb_size)) {
             errno = EOVERFLOW;
@@ -201,6 +214,9 @@ int pvr_ta_layout_build_regions(uint32_t *regions, size_t capacity_words,
                     }
                 }
 
+                if(passes[pass].share_modifier)
+                    cursor[4] = cursor[2]; /* TR modifier -> same tile's OP modifier */
+
                 cursor += PVR_REGION_WORDS_PER_ENTRY;
             }
         }
@@ -213,16 +229,18 @@ int pvr_ta_frame_layout_calculate(pvr_ta_frame_layout_t *frame_layout,
                                   uint32_t bank_base, uint32_t bank_size,
                                   uint32_t vertex_size,
                                   uint32_t total_opb_size,
+                                  uint32_t overflow_unit,
                                   uint32_t opb_overflow_count,
                                   size_t region_words,
                                   uint32_t frame_size) {
     uint32_t bank_limit;
-    uint32_t opb_copies;
+    uint32_t overflow_bytes;
     uint32_t opb_allocation;
     uint32_t region_bytes;
     uint32_t cursor;
 
     if(!frame_layout || !bank_size || !vertex_size || !total_opb_size ||
+            !overflow_unit || overflow_unit > total_opb_size ||
             !region_words || !frame_size ||
             region_words > UINT32_MAX / sizeof(uint32_t)) {
         errno = EINVAL;
@@ -230,8 +248,8 @@ int pvr_ta_frame_layout_calculate(pvr_ta_frame_layout_t *frame_layout,
     }
 
     if(!add_u32(bank_base, bank_size, &bank_limit) ||
-            !add_u32(opb_overflow_count, 1u, &opb_copies) ||
-            !multiply_u32(total_opb_size, opb_copies, &opb_allocation)) {
+            !multiply_u32(overflow_unit, opb_overflow_count, &overflow_bytes) ||
+            !add_u32(total_opb_size, overflow_bytes, &opb_allocation)) {
         errno = EOVERFLOW;
         return -1;
     }

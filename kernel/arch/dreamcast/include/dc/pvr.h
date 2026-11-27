@@ -692,6 +692,23 @@ typedef enum pvr_pass_depth {
     PVR_PASS_DEPTH_PRESERVE   /**< Retain depth from the preceding pass. */
 } pvr_pass_depth_t;
 
+/** \brief Unit multiplied by opb_overflow_count for a multipass TA bank. */
+typedef enum pvr_pass_overflow {
+    PVR_PASS_OVERFLOW_SUM = 0,  /**< All passes' initial bins (legacy policy). */
+    PVR_PASS_OVERFLOW_LARGEST   /**< Only the largest pass's initial bins. */
+} pvr_pass_overflow_t;
+
+/** \brief Optional region and allocation policy for pvr_init_multipass_ex().
+    A zero-initialized value preserves the original multipass behavior. */
+typedef struct pvr_multipass_options {
+    const pvr_pass_depth_t *depth; /**< Optional array of pass_count policies. */
+    pvr_pass_overflow_t overflow;  /**< Shared overflow budget unit. */
+    /** Bit p reuses pass p's opaque modifier list for translucent polygons
+        in the same tile and pass. Requires autosort, opaque modifier and
+        translucent polygon bins, and no translucent modifier bin. */
+    uint32_t shared_modifier_passes;
+} pvr_multipass_options_t;
+
 /** \brief   PVR initialization structure
     \ingroup pvr_init
 
@@ -799,15 +816,11 @@ int pvr_init(const pvr_init_params_t *params);
     boundaries. Applications advance between passes with
     pvr_scene_next_pass().
 
-    Both direct store-queue and buffered DMA submission are supported. Buffered
-    mode requires pvr_set_pass_vertbuf_checked() for every enabled list in
-    every pass. The interrupt chain preserves pass ownership and prevents
-    unrelated PVR DMA from interleaving between continuation boundaries.
-
-    Early list flushing is also supported. The first flush must occur in pass
-    zero; subsequent pass boundaries run in lockstep with the TA so later-pass
-    flushes retain an unambiguous hardware owner. A scene that never flushes
-    early retains fully asynchronous buffered construction.
+    In DMA mode, assign a buffer to each list that should be staged in RAM.
+    An enabled list without a staging buffer is submitted via store queues.
+    The first direct or explicitly flushed list brings the TA up to that
+    pass; later boundaries advance in lockstep. A fully buffered scene with
+    no explicit flush retains deferred, IRQ-driven submission.
 
     The pass configuration is copied during initialization. No multipass
     control allocation is made by pvr_init(), so applications that keep the
@@ -855,6 +868,22 @@ int pvr_init_multipass(const pvr_init_params_t *params,
 int pvr_init_multipass_depth(const pvr_init_params_t *params,
                              const pvr_pass_config_t *passes,
                              const pvr_pass_depth_t *depth, size_t pass_count);
+
+/** \brief Initialize hardware multipass with optional checked layout policies.
+    \ingroup pvr_init
+
+    NULL options or all-zero options are equivalent to pvr_init_multipass().
+    The caller need not retain the options or depth array after initialization.
+    Changing the overflow unit reduces reserved VRAM, not worst-case geometry
+    demand. Initial bins for every pass are always disjoint. A reused modifier
+    list is submitted only once, as opaque modifier geometry; it does not
+    enable translucent modifier submission or change list-completion events.
+    Global presort cannot be enabled while a sharing configuration is active.
+    \return 0 on success, -1 on failure as for pvr_init_multipass_depth().
+    Invalid overflow, depth, mask or sharing combinations give EINVAL. */
+int pvr_init_multipass_ex(const pvr_init_params_t *params,
+                          const pvr_pass_config_t *passes, size_t pass_count,
+                          const pvr_multipass_options_t *options);
 
 /** \brief   Simple PVR initialization.
     \ingroup pvr_init
@@ -1088,16 +1117,16 @@ void pvr_scene_begin(void);
     closed, waits for the tile accelerator to consume their end markers, and
     performs the hardware continuation sequence. In buffered mode, it closes
     the current pass in its pass-owned staging buffers; the IRQ-driven DMA
-    chain performs continuation after pvr_scene_finish(). Neither path resets
+    chain performs continuation after pvr_scene_finish(). In a mixed scene
+    the call drains remaining lists and waits for TA acceptance before
+    continuing. An outstanding async flush must be retired first. No path resets
     the shared parameter or overflow cursors or starts rendering early.
 
-    The call is valid only for a scene started after pvr_init_multipass() or
-    pvr_init_multipass_depth(), and
-    only before the configured final pass.
+    The call is valid only in a multipass scene before the configured final pass.
 
     \retval 0               The next pass is ready for list submission.
     \retval -1              On error, with errno set to `ENODEV`, `ENOTSUP`,
-                            `EPERM`, `EALREADY`, `ETIMEDOUT`, or `EIO`.
+                            `EPERM`, `EBUSY`, `EALREADY`, `ETIMEDOUT`, or `EIO`.
 */
 int pvr_scene_next_pass(void);
 
@@ -1380,12 +1409,11 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
     engine has accepted the complete list, but it does not wait for rendering or
     display.
 
-    In a multipass scene, early flushing must begin in pass zero. Once enabled,
-    pvr_scene_next_pass() synchronously drains the remaining buffered lists in
-    that pass, waits for TA acceptance, and performs continuation. This keeps
-    later pass construction aligned with the hardware pass. Calling this for
-    the first time after construction has advanced beyond pass zero fails with
-    `ENOTSUP`.
+    In a multipass scene the first flush or direct list can occur in a later
+    pass. Earlier buffered passes are fed to the TA in order. Thereafter
+    pvr_scene_next_pass() drains remaining lists and waits for TA acceptance
+    before continuation. On a hardware fault, stop building the scene and keep
+    its buffers until pvr_shutdown() succeeds.
 
     The scene API is not thread-safe. List construction, flushing, and scene
     completion must be serialized by the application.
@@ -1399,6 +1427,24 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size);
                             layer.
 */
 int pvr_list_flush(pvr_list_t list);
+
+/** Receipt for one explicitly flushed vertex DMA. Zero is never issued. */
+typedef struct { uint64_t id; } pvr_list_flush_ticket_t;
+
+/** Close a buffered list and start its final DMA without waiting for that
+    transfer. Earlier TA groups, if any, are submitted synchronously first.
+    On success the driver borrows the entire list source until wait retires the
+    ticket. The application may build other non-overlapping RAM lists, but must
+    serialize scene calls and not use raw SQ, DMA channel 2 or the borrowed
+    storage (including previously acquired pointers). One outstanding ticket.
+    Thread context with interrupts enabled only. Output unchanged on error. */
+int pvr_list_flush_async(pvr_list_t list, pvr_list_flush_ticket_t *ticket);
+
+/** Wait for list DMA retirement, not TA registration or rendering. ETIMEDOUT
+    leaves the ticket and source borrowed; retry the same wait. Success or EIO
+    consumes it; EIO requires shutting down the faulted scene. Stale receipts
+    fail with ENOENT. Finish, continuation and shutdown refuse a live ticket. */
+int pvr_list_flush_wait(const pvr_list_flush_ticket_t *ticket);
 
 /** \brief   Call this after you have finished submitting all data for a frame.
     \ingroup pvr_scene_mgmt

@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <arch/irq.h>
+#include <arch/dmac.h>
 #include <kos/dbglog.h>
 #include <kos/genwait.h>
 #include <kos/regfield.h>
@@ -35,7 +36,83 @@
 
 static volatile pvr_dma_buffers_t *current_build_buffer(void);
 static int finish_buffered_pass(void);
-static int flush_buffered_pass_to_ta(void);
+static int flush_buffered_pass_to_ta(size_t pass);
+static int catch_up_to_build(void);
+static int hybrid_error;
+/* Earlier sealed groups have no public receipt. On a failed blocking drain
+   their storage remains scene-owned until a checked shutdown can retire it. */
+static bool sync_owned, sync_quarantined, sync_irq;
+static uint32_t sync_detail;
+static struct {
+    uint64_t serial;
+    bool borrowed, complete;
+    uint32_t fault_sequence, detail;
+} flush_slot;
+
+static void flush_dma_complete(void *unused) {
+    (void)unused;
+    flush_slot.detail = pvr_dma_completion_detail();
+    flush_slot.complete = true;
+    genwait_wake_all(&flush_slot);
+}
+
+static void sync_dma_complete(void *unused) {
+    (void)unused;
+    sync_detail = pvr_dma_completion_detail();
+    sync_irq = true;
+}
+
+bool pvr_flush_blocks_transfer(pvr_dma_callback_t callback) {
+    return (flush_slot.borrowed && callback != flush_dma_complete) ||
+           (sync_owned && callback != sync_dma_complete);
+}
+
+bool pvr_flush_borrowed(void) {
+    if(sync_quarantined && sync_irq && pvr_dma_ready() && !dma_is_running(DMA_CHANNEL_2))
+        sync_quarantined = sync_owned = false;
+    return flush_slot.borrowed || sync_owned;
+}
+
+void pvr_flush_reset_scene(void) {
+    hybrid_error = 0;
+}
+
+static int port_available(void) {
+    if(flush_slot.borrowed || hybrid_error) {
+        errno = flush_slot.borrowed ? EBUSY : hybrid_error;
+        return -1;
+    }
+    return 0;
+}
+
+static bool flush_thread_context(void) {
+    int sr = irq_disable();
+    irq_restore(sr);
+    return !irq_inside_int() && !(sr & 0x100000f0);
+}
+
+/* Caller holds the vertex DMA semaphore. A short transfer is not an excuse
+   to overwrite memory the SH-4 is still reading. Capture THIS IRQ's result. */
+static int flush_blocking_dma(void *base, size_t bytes) {
+    uint32_t fault = pvr_state.fault_status.sequence;
+    sync_owned = true;
+    sync_irq = false;
+    if(pvr_dma_load_ta(base, bytes, true, sync_dma_complete, NULL) < 0) {
+        sync_owned = false;
+        return -1;
+    }
+    if(!sync_irq || !pvr_dma_ready() || dma_is_running(DMA_CHANNEL_2)) {
+        sync_quarantined = true;
+        hybrid_error = errno = EIO;
+        return -1;
+    }
+    sync_owned = false;
+    if(sync_detail || fault != pvr_state.fault_status.sequence) {
+        hybrid_error = errno = EIO;
+        return -1;
+    }
+    return 0;
+}
 
 /*
 
@@ -108,6 +185,11 @@ void *pvr_set_vertbuf(pvr_list_t list, void *buffer, size_t len) {
     assert(len >= 128 && !(len & 63));
 
     old_irq = irq_disable();
+    if(flush_slot.borrowed || hybrid_error) {
+        irq_restore(old_irq);
+        errno = EBUSY;
+        return NULL;
+    }
     oldbuf = set_vertbuf_unchecked(0, list, buffer, len);
     irq_restore(old_irq);
 
@@ -200,6 +282,10 @@ int pvr_set_pass_vertbuf_checked(size_t pass, pvr_list_t list, void *buffer,
 
 void *pvr_vertbuf_tail(pvr_list_t list) {
     uint8_t *bufbase;
+    if(hybrid_error || ((current_build_buffer()->flushed | current_build_buffer()->sealed) & BIT(list))) {
+        errno = EALREADY;
+        return NULL;
+    }
 
     // Check the validity of the request.
     assert(pvr_state.dma_mode);
@@ -226,6 +312,10 @@ void pvr_vertbuf_written(pvr_list_t list, size_t amt) {
         pvr_state.multipass ? pvr_state.multipass->build_pass : 0);
 
     val = buffer->ptr[list];
+    if(hybrid_error || ((buffer->flushed | buffer->sealed) & BIT(list))) {
+        errno = EALREADY;
+        return;
+    }
     val += amt;
     assert(val < buffer->size[list]);
     buffer->ptr[list] = val;
@@ -275,8 +365,24 @@ static int pvr_start_ta_rendering(void) {
 
 /* Begin collecting data for a frame of 3D output to the off-screen
    frame buffer */
-void pvr_scene_begin(void) {
+static int begin_scene(void) {
     int i;
+
+    if(port_available() < 0)
+        return -1;
+    if(pvr_state.scene_active) {
+        errno = EBUSY;
+        return -1;
+    }
+    /* Build and TA registration share the pass masks. Don't replace the
+       previous bank's final mask before it has actually launched its render. */
+    if(pvr_state.multipass && pvr_state.ta_busy) {
+        uint32_t sequence = pvr_state.fault_status.sequence;
+        if(pvr_wait_ready() < 0 || pvr_state.ta_busy) {
+            errno = sequence != pvr_state.fault_status.sequence ? EIO : ETIMEDOUT;
+            return -1;
+        }
+    }
 
     ++pvr_state.next_render_id;
 
@@ -317,6 +423,7 @@ void pvr_scene_begin(void) {
                 pvr_pass_dma_buffer(pvr_state.ram_target, pass);
 
             buffer->flushed = 0;
+            buffer->sealed = 0;
 
             for(i = 0; i < PVR_OPB_COUNT; ++i)
                 buffer->ptr[i] = 0;
@@ -330,6 +437,11 @@ void pvr_scene_begin(void) {
     }
 
     pvr_status_advance();
+    return 0;
+}
+
+void pvr_scene_begin(void) {
+    (void)begin_scene();
 }
 
 static int finish_direct_pass_lists(void) {
@@ -362,6 +474,9 @@ int pvr_scene_next_pass(void) {
     int old_irq;
     int wait_result = 0;
 
+    if(port_available() < 0)
+        return -1;
+
     if(!pvr_state.valid) {
         errno = ENODEV;
         return -1;
@@ -392,7 +507,7 @@ int pvr_scene_next_pass(void) {
            the hardware TA on the same pass. This makes later-pass flushes
            unambiguous while the fully buffered path remains asynchronous. */
         if(multipass->dma_hybrid_active) {
-            if(flush_buffered_pass_to_ta() < 0)
+            if(flush_buffered_pass_to_ta(multipass->ta_pass) < 0)
                 return -1;
 
             old_irq = irq_disable();
@@ -403,13 +518,14 @@ int pvr_scene_next_pass(void) {
                     "PVR multipass DMA boundary", 100);
             }
 
-            if(wait_result < 0 || multipass->fault_sequence !=
+            if(wait_result < 0 || pvr_state.lists_transferred != pvr_state.lists_enabled ||
+                    multipass->fault_sequence !=
                     pvr_state.fault_status.sequence) {
                 bool faulted = multipass->fault_sequence !=
                     pvr_state.fault_status.sequence;
 
                 irq_restore(old_irq);
-                errno = faulted ? EIO : ETIMEDOUT;
+                hybrid_error = errno = faulted ? EIO : ETIMEDOUT;
                 return -1;
             }
 
@@ -528,6 +644,9 @@ int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
         return -1;
     }
 
+    if(begin_scene() < 0)
+        return -1;
+
     /* The existing render-to-texture path programs a 16-bit render pitch in
        64-bit units. Keep that behavior explicit for the sized RTT API. */
     pvr_state.next_to_txr_rp = (int)(row_bytes / 8u);
@@ -535,8 +654,6 @@ int pvr_scene_begin_rtt(pvr_ptr_t txr, uint32_t render_w,
     pvr_state.next_to_txr_h = render_h;
     pvr_state.next_to_txr_stride_px = stride_px;
     pvr_state.next_to_txr_addr = (uint32_t)(address - PVR_RAM_INT_BASE);
-
-    pvr_scene_begin();
 
     pvr_state.next_to_texture = 1;
     set_next_full_pixel_clip(render_w, render_h);
@@ -791,14 +908,14 @@ int pvr_list_begin(pvr_list_t list) {
 
     b = current_build_buffer();
 
-    /* Until hybrid pass ownership lands, a buffered multipass list cannot
-       silently fall through to direct TA submission. */
-    if(pvr_state.multipass && pvr_state.dma_mode && !b->base[list]) {
-        errno = ENODEV;
+    if(!b->base[list] && port_available() < 0)
+        return -1;
+    if(hybrid_error) {
+        errno = hybrid_error;
         return -1;
     }
 
-    if(pvr_state.dma_mode && b->flushed & BIT(list)) {
+    if(pvr_state.dma_mode && (b->flushed | b->sealed) & BIT(list)) {
         errno = EALREADY;
         return -1;
     }
@@ -814,14 +931,18 @@ int pvr_list_begin(pvr_list_t list) {
             pvr_state.list_reg_open != list && pvr_list_finish() < 0)
         return -1;
 
+    if(pvr_state.list_reg_open == list)
+        return 0;
     pvr_list_dma = pvr_list_uses_dma(list);
 
     if(!pvr_list_dma) {
-        if(pvr_start_ta_rendering() < 0)
+        if(catch_up_to_build() < 0)
             return -1;
 
         if(!sq_lock((void *)PVR_TA_INPUT))
             return -1;
+        if(pvr_state.dma_mode && pvr_state.multipass)
+            pvr_state.multipass->dma_hybrid_active = true;
     }
 
     /* Ok, set the flag */
@@ -838,8 +959,13 @@ int pvr_list_begin(pvr_list_t list) {
    a list but do not submit any primitives, this causes a hardware error. For
    simplicity we just always submit a blank primitive. */
 int pvr_list_finish(void) {
+    if(hybrid_error) {
+        errno = hybrid_error;
+        return -1;
+    }
     /* Check to make sure we can do this */
-    if(PVR_DEBUG && !pvr_state.dma_mode && pvr_state.list_reg_open == PVR_LIST_NONE) {
+    if(pvr_state.list_reg_open == PVR_LIST_NONE) {
+        errno = EPERM;
         dbglog(DBG_WARNING, "pvr_list_finish: attempt to close unopened list\n");
         return -1;
     }
@@ -858,6 +984,8 @@ int pvr_list_finish(void) {
 
         /* Set the flags */
         pvr_state.lists_closed |= BIT(pvr_state.list_reg_open);
+        if(pvr_state.dma_mode && pvr_state.multipass)
+            current_build_buffer()->flushed |= BIT(pvr_state.list_reg_open);
 
         /* Send an EOL marker */
         pvr_sq_set32((void *)0, 0, 32, PVR_DMA_TA);
@@ -870,6 +998,10 @@ int pvr_list_finish(void) {
 }
 
 int pvr_prim(const void *data, size_t size) {
+    if(hybrid_error) {
+        errno = hybrid_error;
+        return -1;
+    }
     /* Check to make sure we can do this */
     if(PVR_DEBUG && pvr_state.list_reg_open == PVR_LIST_NONE) {
         dbglog(DBG_WARNING, "pvr_prim: attempt to submit to unopened list\n");
@@ -913,7 +1045,11 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
         return -1;
     }
 
-    if(b->flushed & BIT(list)) {
+    if(hybrid_error) {
+        errno = hybrid_error;
+        return -1;
+    }
+    if((b->flushed | b->sealed) & BIT(list)) {
         errno = EALREADY;
         return -1;
     }
@@ -935,11 +1071,18 @@ int pvr_list_prim(pvr_list_t list, const void *data, size_t size) {
     return 0;
 }
 
-int pvr_list_flush(pvr_list_t list) {
+static int submit_list_flush(pvr_list_t list, pvr_list_flush_ticket_t *ticket) {
     volatile pvr_dma_buffers_t *b;
     uint32_t old_ptr;
     size_t transfer_size;
     int rv;
+
+    if(port_available() < 0)
+        return -1;
+    if(ticket && !flush_thread_context()) {
+        errno = EPERM;
+        return -1;
+    }
 
     if(list < PVR_LIST_OP_POLY || list > PVR_LIST_PT_POLY) {
         errno = EINVAL;
@@ -958,22 +1101,12 @@ int pvr_list_flush(pvr_list_t list) {
 
     b = current_build_buffer();
 
-    /* A fully buffered scene may build ahead of the active TA pass. Early
-       flushing deliberately switches to lockstep operation and therefore has
-       to begin while both cursors still identify pass zero. */
-    if(pvr_state.multipass &&
-            pvr_state.multipass->build_pass !=
-            pvr_state.multipass->ta_pass) {
-        errno = ENOTSUP;
-        return -1;
-    }
-
     if(!b->base[list]) {
         errno = ENODEV;
         return -1;
     }
 
-    if(b->flushed & BIT(list)) {
+    if((b->flushed | b->sealed) & BIT(list)) {
         errno = EALREADY;
         return -1;
     }
@@ -1010,15 +1143,39 @@ int pvr_list_flush(pvr_list_t list) {
     b->ptr[list] += 32;
     transfer_size = b->ptr[list];
 
-    pvr_state.list_reg_open = PVR_LIST_NONE;
-    if(pvr_start_ta_rendering() < 0) {
+    if(catch_up_to_build() < 0) {
         b->ptr[list] = old_ptr;
         return -1;
     }
 
-    sem_wait((semaphore_t *)&pvr_state.dma_lock);
-    rv = pvr_dma_load_ta(b->base[list], transfer_size, true, NULL, NULL);
-    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+    if(ticket) {
+        if(flush_slot.serial == UINT64_MAX) {
+            b->ptr[list] = old_ptr;
+            errno = EOVERFLOW;
+            return -1;
+        }
+        if(sem_trywait((semaphore_t *)&pvr_state.dma_lock) < 0) {
+            b->ptr[list] = old_ptr;
+            errno = EBUSY;
+            return -1;
+        }
+        flush_slot.complete = false;
+        flush_slot.fault_sequence = pvr_state.fault_status.sequence;
+        flush_slot.borrowed = true;
+        rv = pvr_dma_load_ta(b->base[list], transfer_size, false,
+                             flush_dma_complete, NULL);
+        if(rv < 0) {
+            flush_slot.borrowed = false;
+            sem_signal((semaphore_t *)&pvr_state.dma_lock);
+        }
+        else
+            ticket->id = ++flush_slot.serial;
+    }
+    else {
+        sem_wait((semaphore_t *)&pvr_state.dma_lock);
+        rv = flush_blocking_dma(b->base[list], transfer_size);
+        sem_signal((semaphore_t *)&pvr_state.dma_lock);
+    }
 
     if(rv < 0) {
         b->ptr[list] = old_ptr;
@@ -1028,6 +1185,7 @@ int pvr_list_flush(pvr_list_t list) {
     /* This state belongs to the RAM frame, not the global scene. The next
        scene may begin while this frame is still progressing through the TA. */
     b->flushed |= BIT(list);
+    pvr_state.list_reg_open = PVR_LIST_NONE;
     pvr_state.lists_closed |= BIT(list);
 
     if(pvr_state.multipass)
@@ -1035,6 +1193,53 @@ int pvr_list_flush(pvr_list_t list) {
 
     pvr_status_advance();
 
+    return 0;
+}
+
+int pvr_list_flush(pvr_list_t list) {
+    return submit_list_flush(list, NULL);
+}
+
+int pvr_list_flush_async(pvr_list_t list, pvr_list_flush_ticket_t *ticket) {
+    if(!ticket) {
+        errno = EINVAL;
+        return -1;
+    }
+    return submit_list_flush(list, ticket);
+}
+
+int pvr_list_flush_wait(const pvr_list_flush_ticket_t *ticket) {
+    if(!ticket || !ticket->id) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(!flush_thread_context()) {
+        errno = EPERM;
+        return -1;
+    }
+    irq_disable_scoped();
+    uint64_t deadline = timer_ms_gettime64() + 100;
+    for(;;) {
+        if(!flush_slot.borrowed || ticket->id != flush_slot.serial) {
+            errno = ENOENT;
+            return -1;
+        }
+        if(flush_slot.complete && pvr_dma_ready() && !dma_is_running(DMA_CHANNEL_2))
+            break;
+        uint64_t now = timer_ms_gettime64();
+        if(now >= deadline) {
+            errno = ETIMEDOUT;
+            return -1;
+        }
+        genwait_wait(&flush_slot, "PVR list DMA", flush_slot.complete ?
+                     1u : (unsigned)(deadline - now));
+    }
+    flush_slot.borrowed = false;
+    sem_signal((semaphore_t *)&pvr_state.dma_lock);
+    if(flush_slot.detail || flush_slot.fault_sequence != pvr_state.fault_status.sequence) {
+        hybrid_error = errno = EIO;
+        return -1;
+    }
     return 0;
 }
 
@@ -1052,13 +1257,11 @@ static int finish_buffered_pass(void) {
         size_t required;
 
         if(!(pvr_state.lists_enabled & BIT(list)) ||
-                (buffer->flushed & BIT(list)))
+                ((buffer->sealed | buffer->flushed) & BIT(list)))
             continue;
 
-        if(!buffer->base[list]) {
-            errno = ENODEV;
-            return -1;
-        }
+        if(!buffer->base[list])
+            continue;
 
         required = buffer->ptr[list] ? 32u : 64u;
 
@@ -1073,8 +1276,14 @@ static int finish_buffered_pass(void) {
         if(!(pvr_state.lists_enabled & BIT(list)))
             continue;
 
-        if(buffer->flushed & BIT(list))
+        if((buffer->flushed | buffer->sealed) & BIT(list))
             continue;
+
+        if(!buffer->base[list]) {
+            if(pvr_list_begin(list) < 0 || pvr_list_finish() < 0)
+                return -1;
+            continue;
+        }
 
         if(!buffer->ptr[list]) {
             pvr_blank_polyhdr_buf(list,
@@ -1084,13 +1293,14 @@ static int finish_buffered_pass(void) {
 
         memset(buffer->base[list] + buffer->ptr[list], 0, 32);
         buffer->ptr[list] += 32;
+        buffer->sealed |= BIT(list);
     }
 
     return 0;
 }
 
-static int flush_buffered_pass_to_ta(void) {
-    volatile pvr_dma_buffers_t *buffer = current_build_buffer();
+static int flush_buffered_pass_to_ta(size_t pass) {
+    volatile pvr_dma_buffers_t *buffer = pvr_pass_dma_buffer(pvr_state.ram_target, pass);
     int list;
 
     if(pvr_start_ta_rendering() < 0)
@@ -1102,9 +1312,14 @@ static int flush_buffered_pass_to_ta(void) {
                 (buffer->flushed & BIT(list)))
             continue;
 
-        if(pvr_dma_load_ta(buffer->base[list], buffer->ptr[list], true,
-                           NULL, NULL) < 0) {
+        if(flush_blocking_dma(buffer->base[list], buffer->ptr[list]) < 0) {
             sem_signal((semaphore_t *)&pvr_state.dma_lock);
+            return -1;
+        }
+        if(pvr_state.multipass->fault_sequence !=
+                pvr_state.fault_status.sequence) {
+            sem_signal((semaphore_t *)&pvr_state.dma_lock);
+            hybrid_error = errno = EIO;
             return -1;
         }
 
@@ -1117,6 +1332,44 @@ static int flush_buffered_pass_to_ta(void) {
     return 0;
 }
 
+/* Adapted from Daniel Fairchild's mixed list-group submission: register
+   sealed earlier passes in order before the first direct or flushed list. */
+static int catch_up_to_build(void) {
+    pvr_multipass_state_t *mp = pvr_state.multipass;
+    if(pvr_start_ta_rendering() < 0)
+        return -1;
+    if(!pvr_state.dma_mode || !mp || mp->ta_pass == mp->build_pass)
+        return 0;
+    pvr_list_t saved_open = pvr_state.list_reg_open;
+    pvr_activate_pass(mp->ta_pass);
+    while(mp->ta_pass < mp->build_pass) {
+        if(flush_buffered_pass_to_ta(mp->ta_pass) < 0) {
+            hybrid_error = errno;
+            return -1;
+        }
+        irq_disable_scoped();
+        uint64_t deadline = timer_ms_gettime64() + 100;
+        while(pvr_state.lists_transferred != pvr_state.lists_enabled &&
+              mp->fault_sequence == pvr_state.fault_status.sequence) {
+            uint64_t now = timer_ms_gettime64();
+            if(now >= deadline)
+                break;
+            genwait_wait((void *)&pvr_state.lists_transferred,
+                         "PVR earlier DMA group", (unsigned)(deadline - now));
+        }
+        if(mp->fault_sequence != pvr_state.fault_status.sequence ||
+           pvr_state.lists_transferred != pvr_state.lists_enabled) {
+            hybrid_error = errno = mp->fault_sequence != pvr_state.fault_status.sequence ?
+                                  EIO : ETIMEDOUT;
+            return -1;
+        }
+        pvr_continue_ta_pass(mp->ta_pass + 1);
+    }
+    pvr_state.list_reg_open = saved_open;
+    mp->dma_hybrid_active = true;
+    return 0;
+}
+
 /* Call this after you have finished submitting all data for a frame; once
    this has been called, you can not submit any more data until one of the
    pvr_scene_begin() functions is called again. An error (-1) is returned if
@@ -1126,6 +1379,9 @@ static int pvr_scene_finish_internal(pvr_render_ticket_t *ticket) {
     volatile pvr_dma_buffers_t *b;
     pvr_render_ticket_t completed_ticket;
     pvr_render_id_t render_id;
+
+    if(port_available() < 0)
+        return -1;
 
     if(!pvr_state.scene_active) {
         errno = EPERM;

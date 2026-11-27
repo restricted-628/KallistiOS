@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Mixed tile passes and explicit async list flush
+
+- A scene can first use direct store queues or flush a buffered list after
+  earlier groups have been built. The driver submits those groups in order.
+  This adapts Daniel Fairchild's mixed list-group follow-up.
+- `pvr_list_flush_async()` issues a DMA receipt; `pvr_list_flush_wait()`
+  retires it. Existing `pvr_list_flush()` remains synchronous. A timed-out
+  receipt still owns the source buffer.
+- `pvr_init_multipass_ex()` can opt into Daniel's largest-pass overflow
+  budget or share opaque modifier bins with translucent polygons in the
+  same autosorted pass. Existing initializers keep their original layout.
+- Add a five-aperture example comparing buffered, direct/mixed, synchronous
+  and asynchronous submission across both frame banks.
+
 ## 2026-11-27 — Demand-page reclaim and standalone AHX/AFS
 
 - Opt-in disc-page admission can now reclaim enough idle read-only pages of

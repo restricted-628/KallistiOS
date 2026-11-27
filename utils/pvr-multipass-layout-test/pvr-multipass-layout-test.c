@@ -143,7 +143,7 @@ static void test_frame_layout(void) {
     pvr_ta_frame_layout_t frame;
 
     assert(pvr_ta_frame_layout_calculate(&frame, 0, 0x00400000,
-                                         0x1000, 0x200, 1, 30,
+                                         0x1000, 0x200, 0x200, 1, 30,
                                          0x1000) == 0);
     assert(frame.vertex == 0);
     assert(frame.vertex_size == 0x1000);
@@ -158,7 +158,7 @@ static void test_frame_layout(void) {
 
     assert(pvr_ta_frame_layout_calculate(&frame, 0x00400000,
                                          0x00400000, 0x1000,
-                                         0x200, 1, 30, 0x1000) == 0);
+                                         0x200, 0x200, 1, 30, 0x1000) == 0);
     assert(frame.vertex == 0x00400000);
     assert(frame.opb == 0x00401000);
     assert(frame.tile_matrix == 0x00401448);
@@ -199,6 +199,71 @@ static void test_depth_and_writeout_control_bits(void) {
             }
         }
     }
+}
+
+static void test_shared_modifiers_and_compact_budget(void) {
+    pvr_ta_pass_layout_t passes[2] = {
+        { .opb_size = {32, 32, 64, 0, 0} },
+        { .opb_size = {0, 0, 0, 0, 32}, .presort = true }
+    };
+    pvr_ta_layout_t original, shared;
+    uint32_t a[54], b[54];
+    assert(pvr_ta_layout_calculate(&original, 2, 2, passes, 2) == 0);
+    passes[0].share_modifier = true;
+    assert(pvr_ta_layout_calculate(&shared, 2, 2, passes, 2) == 0);
+    assert(shared.total_opb_size == 640 && shared.largest_pass_opb_size == 512);
+    assert(shared.region_words == 54);
+    assert(!memcmp(shared.pass_opb_offset, original.pass_opb_offset,
+                   sizeof(shared.pass_opb_offset)));
+    for(unsigned bank = 0; bank <= 0x400000; bank += 0x400000) {
+        pvr_ta_frame_layout_t f, compact;
+        assert(pvr_ta_frame_layout_calculate(&f, bank, 0x400000, 4096,
+                   640, 640, 3, 54, 4096) == 0);
+        assert(pvr_ta_frame_layout_calculate(&compact, bank, 0x400000, 4096,
+                   640, 512, 3, 54, 4096) == 0);
+        assert(compact.opb == f.opb && f.opb_size == compact.opb_size);
+        assert(compact.opb_end == compact.opb + 640 + 3 * 512);
+        assert(f.opb_end == f.opb + 640 + 3 * 640);
+        assert(compact.bank_end + 384 == f.bank_end);
+        assert(compact.tile_matrix - PVR_REGION_HEADER_BYTES == compact.opb_end);
+
+        const uint32_t limit = compact.bank_end - bank;
+        assert(pvr_ta_frame_layout_calculate(&f, bank, limit, 4096,
+                   640, 640, 3, 54, 4096) == -1 && errno == ENOSPC);
+        assert(pvr_ta_frame_layout_calculate(&f, bank, limit, 4096,
+                   640, 512, 3, 54, 4096) == 0);
+        assert(pvr_ta_frame_layout_calculate(&f, bank, limit - 1, 4096,
+                   640, 512, 3, 54, 4096) == -1 && errno == ENOSPC);
+
+        passes[0].share_modifier = false;
+        assert(pvr_ta_layout_build_regions(a, 54, compact.opb, &original, passes) == 0);
+        passes[0].share_modifier = true;
+        assert(pvr_ta_layout_build_regions(b, 54, compact.opb, &shared, passes) == 0);
+        for(unsigned i = 0; i < 54; ++i) {
+            if(i >= 6 && (i - 6) % 12 == 4) {
+                assert(a[i] == EMPTY && b[i] == a[i-2] && b[i] != EMPTY);
+            }
+            else
+                assert(b[i] == a[i]);
+        }
+    }
+    for(unsigned i = 0; i < 4; ++i) {
+        pvr_ta_pass_layout_t bad = passes[0];
+        if(i == 0) bad.presort = true;
+        if(i == 1) bad.opb_size[1] = 0;
+        if(i == 2) bad.opb_size[2] = 0;
+        if(i == 3) bad.opb_size[3] = 32;
+        assert(pvr_ta_layout_calculate(&shared, 2, 2, &bad, 1) == -1 && errno == EINVAL);
+    }
+    pvr_ta_frame_layout_t f;
+    assert(pvr_ta_frame_layout_calculate(&f, 0, 0x400000, 4096, 640, 0,
+               0, 54, 4096) == -1 && errno == EINVAL);
+    assert(pvr_ta_frame_layout_calculate(&f, 0, 0x400000, 4096, 640, 641,
+               1, 54, 4096) == -1 && errno == EINVAL);
+    assert(pvr_ta_frame_layout_calculate(&f, 0, 0x400000, 4096, 640, 512,
+               UINT32_MAX, 54, 4096) == -1 && errno == EOVERFLOW);
+    assert(pvr_ta_frame_layout_calculate(&f, 0, 0x400000, 4096, 640, 512,
+               0, 54, 4096) == 0 && f.opb_end == f.opb + 640);
 }
 
 static void test_rejections(void) {
@@ -247,19 +312,19 @@ static void test_rejections(void) {
 
     errno = 0;
     assert(pvr_ta_frame_layout_calculate(NULL, 0, 0x400000,
-                                         0x1000, 0x200, 1, 12,
+                                         0x1000, 0x200, 0x200, 1, 12,
                                          0x1000) == -1);
     assert(errno == EINVAL);
 
     errno = 0;
     assert(pvr_ta_frame_layout_calculate(&frame, 0, 0x1000,
-                                         0x1000, 0x200, 1,
+                                         0x1000, 0x200, 0x200, 1,
                                          12, 0x1000) == -1);
     assert(errno == ENOSPC);
 
     errno = 0;
     assert(pvr_ta_frame_layout_calculate(&frame, UINT32_MAX - 0x100, 0x200,
-                                         0x1000, 0x200, 1, 12,
+                                         0x1000, 0x200, 0x200, 1, 12,
                                          0x1000) == -1);
     assert(errno == EOVERFLOW);
 }
@@ -271,6 +336,7 @@ int main(void) {
     test_maximum_pass_count();
     test_frame_layout();
     test_depth_and_writeout_control_bits();
+    test_shared_modifiers_and_compact_budget();
     test_rejections();
     puts("pvr multipass layout tests passed");
     return 0;

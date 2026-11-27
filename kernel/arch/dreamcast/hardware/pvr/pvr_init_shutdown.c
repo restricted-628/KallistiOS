@@ -41,10 +41,12 @@ int pvr_init(const pvr_init_params_t *params) {
     return pvr_init_common(params, NULL);
 }
 
-static int init_multipass(const pvr_init_params_t *params,
-                          const pvr_pass_config_t *passes,
-                          const pvr_pass_depth_t *depth, size_t pass_count) {
+int pvr_init_multipass_ex(const pvr_init_params_t *params,
+                          const pvr_pass_config_t *passes, size_t pass_count,
+                          const pvr_multipass_options_t *options) {
     pvr_multipass_state_t *multipass;
+    const pvr_pass_depth_t *depth = options ? options->depth : NULL;
+    uint32_t share = options ? options->shared_modifier_passes : 0;
     size_t pass;
 
     if(!params || !passes || !pass_count ||
@@ -55,6 +57,13 @@ static int init_multipass(const pvr_init_params_t *params,
 
     if(irq_inside_int()) {
         errno = EPERM;
+        return -1;
+    }
+
+    if((options && options->overflow != PVR_PASS_OVERFLOW_SUM &&
+            options->overflow != PVR_PASS_OVERFLOW_LARGEST) ||
+            (share >> pass_count)) {
+        errno = EINVAL;
         return -1;
     }
 
@@ -79,6 +88,8 @@ static int init_multipass(const pvr_init_params_t *params,
     }
 
     multipass->pass_count = pass_count;
+    multipass->largest_overflow = options &&
+        options->overflow == PVR_PASS_OVERFLOW_LARGEST;
 
     if(params->dma_enabled) {
         multipass->dma_buffers = calloc(2u * pass_count,
@@ -113,6 +124,7 @@ static int init_multipass(const pvr_init_params_t *params,
 
         multipass->passes[pass].presort =
             !!passes[pass].autosort_disabled;
+        multipass->passes[pass].share_modifier = (share & (1u << pass)) != 0;
         multipass->passes[pass].clear_depth =
             depth && depth[pass] == PVR_PASS_DEPTH_CLEAR;
     }
@@ -131,7 +143,7 @@ static int init_multipass(const pvr_init_params_t *params,
 
 int pvr_init_multipass(const pvr_init_params_t *params,
                        const pvr_pass_config_t *passes, size_t pass_count) {
-    return init_multipass(params, passes, NULL, pass_count);
+    return pvr_init_multipass_ex(params, passes, pass_count, NULL);
 }
 
 int pvr_init_multipass_depth(const pvr_init_params_t *params,
@@ -142,7 +154,8 @@ int pvr_init_multipass_depth(const pvr_init_params_t *params,
         return -1;
     }
 
-    return init_multipass(params, passes, depth, pass_count);
+    const pvr_multipass_options_t options = { .depth = depth };
+    return pvr_init_multipass_ex(params, passes, pass_count, &options);
 }
 
 /* Initialize the PVR chip to ready status, enabling the specified lists
@@ -345,10 +358,16 @@ int pvr_shutdown(void) {
         return -1;
     }
 
-    multipass = pvr_state.multipass;
-
-    /* Set us invalid */
-    pvr_state.valid = 0;
+    {
+        irq_disable_scoped();
+        if(pvr_flush_borrowed()) {
+            errno = EBUSY;
+            return -1;
+        }
+        multipass = pvr_state.multipass;
+        pvr_state.valid = 0;
+        pvr_flush_reset_scene();
+    }
 
     /* Identity-specific waits must not survive subsystem shutdown. */
     genwait_wake_all((void *)&pvr_state.queued_render_id);

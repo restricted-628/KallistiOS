@@ -39,7 +39,7 @@
 static void pvr_init_tile_matrix(int which, bool presort) {
     volatile pvr_ta_buffers_t   *buf;
     uint32_t      *vr;  /* Note: We're working in 4-byte pointer maths in this function */
-    pvr_ta_pass_layout_t pass;
+    pvr_ta_pass_layout_t pass = { 0 };
     pvr_ta_layout_t layout;
     const pvr_ta_pass_layout_t *passes;
     const pvr_ta_layout_t *active_layout;
@@ -105,6 +105,15 @@ void pvr_set_presort_mode(bool presort) {
     size_t pass_count = pvr_state.multipass ?
         pvr_state.multipass->pass_count : 1;
     int x, y;
+
+    if(presort && pvr_state.multipass) {
+        for(size_t p = 0; p < pass_count; ++p) {
+            if(pvr_state.multipass->passes[p].share_modifier) {
+                errno = ENOTSUP;
+                return;
+            }
+        }
+    }
 
     if(__predict_false(!pvr_state.vbuf_doublebuf))
 	    pvr_wait_render_done();
@@ -271,6 +280,7 @@ static int calculate_buffer_plan(const pvr_init_params_t *params,
 
         pass->presort = !!params->autosort_disabled;
         pass->clear_depth = false;
+        pass->share_modifier = false;
         passes = pass;
         pass_count = 1;
     }
@@ -295,6 +305,8 @@ static int calculate_buffer_plan(const pvr_init_params_t *params,
     return pvr_ta_frame_layout_calculate(
         frame_layout, 0, PVR_FRAME_BANK_SIZE,
         (uint32_t)params->vertex_buf_size, layout->total_opb_size,
+        multipass && multipass->largest_overflow ?
+            layout->largest_pass_opb_size : layout->total_opb_size,
         (uint32_t)params->opb_overflow_count, layout->region_words,
         frame_size);
 }
@@ -383,6 +395,8 @@ int pvr_allocate_buffers(const pvr_init_params_t *params,
         if(pvr_ta_frame_layout_calculate(
                 &frame_layout, bank_base, PVR_FRAME_BANK_SIZE,
                 (uint32_t)params->vertex_buf_size, layout.total_opb_size,
+                multipass && multipass->largest_overflow ?
+                    layout.largest_pass_opb_size : layout.total_opb_size,
                 (uint32_t)params->opb_overflow_count, layout.region_words,
                 frame_layout.frame_size) < 0)
             return -1;
@@ -401,8 +415,8 @@ int pvr_allocate_buffers(const pvr_init_params_t *params,
         buf->opb = frame_layout.opb;
         buf->opb_size = frame_layout.opb_size;
 
-        /* Allocate extra space for overflow (when one OPB isn't big enough) */
-        buf->opb_overflow_count = params->opb_overflow_count;
+        /* Match the programmed limit to this bank's checked allocation. */
+        buf->opb_end = frame_layout.opb_end;
 
         /* Set up the opb pointers to each section */
         for(j = 0; j < PVR_OPB_COUNT; j++) {

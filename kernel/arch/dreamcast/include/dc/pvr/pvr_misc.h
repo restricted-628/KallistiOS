@@ -268,6 +268,10 @@ int pvr_set_vertical_scale(float factor);
     function to change the mode that you should set it each frame to ensure that
     the mode is set properly.
 
+    If any pass is configured to reuse opaque modifiers for translucent
+    polygons, requesting presort leaves all passes unchanged and sets
+    errno to ENOTSUP. That region-pointer route requires autosort.
+
     \param  presort         Set to true to set the presort mode for translucent
                             polygons, set to false to use autosort mode.
 */

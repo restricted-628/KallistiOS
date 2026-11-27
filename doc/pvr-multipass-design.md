@@ -99,9 +99,9 @@ registration boundary, and admits the next pass. It fails on the configured
 final pass. `pvr_scene_finish()` closes the final pass and queues the one
 renderer submission.
 
-Directly submitted lists need no main-RAM vertex buffer. Buffered and hybrid
-submission require a pass-specific allocation for each enabled list. The
-established checked vertex-buffer operation continues to address pass zero.
+Directly submitted lists need no main-RAM vertex buffer. Assign a
+pass-specific allocation only to lists staged in RAM. The established
+one-pass checked buffer setter continues to address pass zero.
 
 The API does not expose pass objects, copied context structures, or foreign
 work-area conventions. Higher-level scene systems can build over this state
@@ -130,7 +130,22 @@ combined initial area. Daniel Fairchild's [#1594](https://github.com/KallistiOS/
 instead uses the largest single pass as the overflow unit. That saves VRAM
 but reduces the capacity of an already configured fork scene: two equally
 sized passes and one overflow unit would get half as much overflow space.
-The fork does not silently change that budget.
+Existing initializers keep that budget. To opt into Fairchild's smaller
+layout use `pvr_init_multipass_ex()` with
+`options.overflow = PVR_PASS_OVERFLOW_LARGEST`. The bank contains the sum of
+all initial bins followed by `opb_overflow_count * largest_pass_initial_bytes`;
+both the allocator and the programmed TA limit use that exact end. Smaller
+overflow capacity may be exhausted by valid geometry; this is a VRAM tradeoff,
+not a rendering speed claim. The vertex parameter buffer is unaffected.
+
+For an autosorted pass `p`, set bit `p` of `options.shared_modifier_passes`
+to point each tile's translucent modifier slot at that **same region entry's**
+opaque modifier bin. Submit opaque
+modifier geometry once, enable a translucent polygon bin, and leave the
+translucent modifier bin disabled. No second submission, bin or completion
+interrupt is requested. Region-array remapping is read-only with respect to
+the original binned list. A global switch to presort is refused before
+changing either bank while a sharing configuration is active.
 
 The parameter buffer remains shared because continuation preserves the TA
 parameter cursor. It therefore keeps the established `vertex_buf_size`
@@ -211,19 +226,30 @@ first DMA for the next pass begins.
 
 ### Hybrid
 
-The first early list flush must occur in pass zero. That switches the scene from
-build-ahead DMA to lockstep continuation: a pass boundary drains the other
-current-pass lists, waits for TA acceptance, then advances both the build and
-hardware pass. Later passes can therefore flush lists against a known active
-TA pass. A list that was flushed early is never replayed at scene completion.
+The first direct SQ list or explicit flush may occur in any pass. The driver
+feeds sealed earlier groups in order, waits for each group's enabled list IRQs,
+then continues the TA. From that point pass boundaries run in lockstep. Lists
+already sent directly or flushed are not replayed when the scene is queued.
+This sequencing adapts Daniel Fairchild's
+[mixed-group follow-up](https://github.com/dfchil/KallistiOS/commit/5ca51d2f5e67c9a53dc3d699dcfe38059c28b2a0).
 
-Daniel Fairchild's [#1595](https://github.com/KallistiOS/KallistiOS/pull/1595)
-starts vertex DMA and lets the CPU continue until the next operation that
-needs the TA. Our checked flush remains synchronous. Returning earlier would
-change when the caller can reuse staging memory and when a DMA failure can
-be reported. Direct SQ lists mixed with flushed lists across groups are in
-Daniel's [separate follow-up](https://github.com/dfchil/KallistiOS/commit/5ca51d2f5e67c9a53dc3d699dcfe38059c28b2a0),
-not in either numbered PR on its own.
+`pvr_list_flush()` still waits for the transfer. To overlap CPU work with
+the final list DMA, call `pvr_list_flush_async(list, &ticket)`, build disjoint
+RAM lists or do other CPU work, then call `pvr_list_flush_wait(&ticket)`.
+The earlier-group catch-up is synchronous in both cases. The overlap follows
+the use case in Daniel's [#1595](https://github.com/KallistiOS/KallistiOS/pull/1595);
+the explicit one-transfer receipt and recovery rules are fork-specific.
+
+Keep the source unchanged through a successful wait or a retired error.
+A timed-out wait **does not** release the source: retry with the same receipt.
+An IRQ alone, hardware-idle alone, and list registration alone are not DMA
+retirement. A consumed receipt cannot be reused, including after reinit.
+Retiring the source does not reopen the list: use the checked buffer setters
+between scenes, not a legacy rebind to send an already closed list again.
+On a device error stop the scene and retain its buffers until shutdown succeeds.
+Shutdown refuses a borrowed async source or an earlier synchronous transfer
+whose source is not yet safe. Application code must serialize raw SQ, channel-2
+DMA, staging-buffer aliases and scene lifecycle with these APIs.
 
 ## Compatibility and failure rules
 
@@ -237,8 +263,7 @@ not in either numbered PR on its own.
   registration boundary.
 - A fault during an intermediate pass makes continuation fail with `EIO`.
   Rendering a partial pass chain is not permitted.
-- Shutdown cancels an unfinished multipass scene before freeing its small
-  control allocation.
+- Shutdown refuses an outstanding flush ticket; it is not a DMA cancel.
 
 ## Validation plan
 
@@ -292,7 +317,7 @@ enabled, or pixel reads can return stale memory rather than rendered colors.
 
 ## Deferred features
 
-Per-pass tile clip rectangles, modifier-list remapping, and alternate list
+Per-pass tile clip rectangles, cross-pass modifier inheritance, and alternate list
 routing require separate checked contracts. They must not be inferred from a
 compatibility surface or added as untyped flag words. The core implementation
 above provides the registration-bank foundation they need.

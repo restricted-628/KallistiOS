@@ -107,6 +107,13 @@ void pvr_start_dma(void) {
 }
 
 static void pvr_render_lists(void) {
+    /* Early final EOL (including VBlank after EOL) must not render an
+       unfinished mixed frame or outrun the last queued DMA callback. */
+    if(pvr_state.dma_mode && ((pvr_state.scene_active &&
+       pvr_state.ta_checked_ready && pvr_state.registration_render_id ==
+       pvr_state.scene_render_id) || (pvr_state.multipass &&
+       pvr_state.multipass->dma_chain_active)))
+        return;
     if(pvr_state.ta_busy
        && !pvr_state.render_busy
        && (!pvr_state.render_completed || pvr_state.curr_to_texture)
@@ -167,6 +174,10 @@ static void registration_complete(void) {
     if(multipass && pvr_state.dma_mode) {
         size_t next_pass;
 
+        if(!multipass->dma_chain_active) {
+            genwait_wake_all((void *)&pvr_state.lists_transferred);
+            return;
+        }
         if(!multipass->dma_pass_fed)
             return;
 

@@ -816,6 +816,17 @@ halo feedback correction remains an estimate when filtering/clipping loses data.
 Fresh host/sanitizer, GCC16.2 build/link and fourteen fixtures in both Flycast
 modes pass. This accepts source integration, not hardware/performance parity.
 
+## D23 — TMMP flush ownership and layout options
+
+Keep the existing list flush synchronous. Explicit async submission borrows
+one list's caller-owned source until its matching receipt retires. Timeout
+does not return ownership. This is a DMA boundary, not a render ticket.
+Earlier sealed passes catch up in order; mixed submission does not require
+an early flush in pass zero. Smaller overflow budgets and modifier-bin
+sharing are opt-in, not changes to existing scenes. See
+[`doc/pvr-multipass-design.md`](doc/pvr-multipass-design.md) for attribution,
+configuration and the separate hardware-validation limits.
+
 ## Updating this register
 
 Use a stable decision ID. Record the decision, reason/tradeoff, user authority,

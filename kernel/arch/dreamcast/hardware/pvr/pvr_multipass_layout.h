@@ -22,6 +22,7 @@ typedef struct pvr_ta_pass_layout {
     bool presort;
     /* False preserves legacy clear-first/preserve-later behavior. */
     bool clear_depth;
+    bool share_modifier;
 } pvr_ta_pass_layout_t;
 
 typedef struct pvr_ta_layout {
@@ -33,6 +34,7 @@ typedef struct pvr_ta_layout {
     uint32_t pass_opb_size[PVR_MULTIPASS_MAX_PASSES];
     uint32_t list_opb_offset[PVR_MULTIPASS_MAX_PASSES][5];
     uint32_t total_opb_size;
+    uint32_t largest_pass_opb_size;
     size_t region_words;
 } pvr_ta_layout_t;
 
@@ -63,6 +65,7 @@ int pvr_ta_frame_layout_calculate(pvr_ta_frame_layout_t *frame_layout,
                                   uint32_t bank_base, uint32_t bank_size,
                                   uint32_t vertex_size,
                                   uint32_t total_opb_size,
+                                  uint32_t overflow_unit,
                                   uint32_t opb_overflow_count,
                                   size_t region_words,
                                   uint32_t frame_size);

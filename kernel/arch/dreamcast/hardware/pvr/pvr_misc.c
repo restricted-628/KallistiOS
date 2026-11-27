@@ -454,7 +454,7 @@ void pvr_sync_reg_buffer(void) {
     PVR_SET(PVR_OPB_CFG,            pvr_state.list_reg_mask);   /* List enables */
     PVR_SET(PVR_TA_INIT,            PVR_TA_INIT_GO);            /* Confirm settings */
     (void)PVR_GET(PVR_TA_INIT);
-    PVR_SET(PVR_TA_OPB_END,         buf->opb + buf->opb_size * (1 + buf->opb_overflow_count));
+    PVR_SET(PVR_TA_OPB_END,         buf->opb_end);
 
 #if 0
     printf("== SYNC REG BUFFER:\n");

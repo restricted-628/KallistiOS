@@ -28,6 +28,8 @@
 static semaphore_t dma_done;
 static pvr_dma_callback_t dma_callback;
 static void *dma_cbdata;
+/* DST can fall before the Holly completion interrupt is delivered. */
+static bool dma_irq_pending;
 static size_t dma_last_remaining;
 static uint32_t dma_last_detail;
 
@@ -48,6 +50,8 @@ static void pvr_dma_irq_hnd(uint32_t code, void *data) {
     (void)code;
     (void)data;
 
+    if(!dma_irq_pending)
+        return;
     remaining = dma_transfer_get_remaining(DMA_CHANNEL_2);
     if(remaining != 0) {
         dbglog(DBG_INFO, "pvr_dma: The dma did not complete successfully\n");
@@ -64,6 +68,7 @@ static void pvr_dma_irq_hnd(uint32_t code, void *data) {
     pvr_event_dispatch(PVR_EVENT_DMA_COMPLETE, detail);
 
     /* Call the callback, if any. */
+    dma_irq_pending = false;
     if(dma_callback) {
         /* This song and dance is necessary because the handler
            could chain to itself. */
@@ -138,7 +143,8 @@ int pvr_dma_transfer(const void *src, uintptr_t dest, size_t count,
     irq_disable_scoped();
 
     /* Make sure we're not already DMA'ing */
-    if(pvr_dma[PVR_DST] != 0) {
+    if(dma_irq_pending || pvr_dma[PVR_DST] != 0 ||
+       pvr_flush_blocks_transfer(callback)) {
         dbglog(DBG_ERROR, "pvr_dma: Previous DMA has not finished\n");
         errno = EINPROGRESS;
         return -1;
@@ -148,6 +154,7 @@ int pvr_dma_transfer(const void *src, uintptr_t dest, size_t count,
         return -1;
 
     dma_callback = callback;
+    dma_irq_pending = true;
     dma_cbdata = cbdata;
     dma_last_remaining = count;
     dma_last_detail = 0;
@@ -196,6 +203,7 @@ uint32_t pvr_dma_completion_detail(void) {
 void pvr_dma_init(void) {
     /* Create an initially blocked semaphore */
     sem_init(&dma_done, 0);
+    dma_irq_pending = false;
     dma_callback = NULL;
     dma_cbdata = 0;
     dma_last_remaining = 0;
