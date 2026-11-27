@@ -1150,6 +1150,24 @@ int vm_file_prefetch(vm_file_t *f, size_t page) {
     return error ? vm_error(error) : 0;
 }
 
+/* Called with the VM space locked. */
+static bool vm_file_page_busy(vm_file_t *f, size_t page) {
+    vm_page_t *p = &f->region->pages[page];
+    return p->pins ||
+#ifdef KOS_VM_DP1_PRIVATE
+           p->demand_refs ||
+#endif
+           (f->info.loading_pages && f->loading_page == page);
+}
+
+static void vm_file_evict_locked(vm_file_t *f, size_t page) {
+    vm_page_t *p = &f->region->pages[page];
+    vm_unmap(f->space, f->region->base + page * VM_PAGE_BYTES, VM_PAGE_BYTES);
+    vm_free_pages(p, 1);
+    --f->info.resident_pages;
+    f->info.charged_bytes -= VM_PAGE_BYTES;
+}
+
 int vm_file_evict(vm_file_t *f, size_t page) {
     if(vm_caller() < 0)
         return -1;
@@ -1158,21 +1176,12 @@ int vm_file_evict(vm_file_t *f, size_t page) {
     vm_space_t *s = f->space;
     if(mutex_lock(&s->mutex) < 0)
         return -1;
-    vm_page_t *p = &f->region->pages[page];
-    if((f->info.loading_pages && f->loading_page == page) || p->pins
-#ifdef KOS_VM_DP1_PRIVATE
-       || p->demand_refs
-#endif
-      ) {
+    if(vm_file_page_busy(f, page)) {
         mutex_unlock(&s->mutex);
         return vm_error(EBUSY);
     }
-    if(p->protection) {
-        vm_unmap(s, f->region->base + page * VM_PAGE_BYTES, VM_PAGE_BYTES);
-        vm_free_pages(p, 1);
-        --f->info.resident_pages;
-        f->info.charged_bytes -= VM_PAGE_BYTES;
-    }
+    if(f->region->pages[page].protection)
+        vm_file_evict_locked(f, page);
     mutex_unlock(&s->mutex);
     return 0;
 }

@@ -54,13 +54,41 @@ static void demand_complete(vm_file_t *f) {
     genwait_wake_all(&f->demand_generation);
 }
 /* Called with space locked. Count each reserved/ready/loading page once. */
+static bool demand_page_occupied(vm_file_t *f, size_t page) {
+    vm_page_t *p = &f->region->pages[page];
+    return p->protection || p->demand_refs ||
+           (f->info.loading_pages && f->loading_page == page);
+}
+
 static size_t demand_occupied(vm_file_t *f) {
     size_t occupied = 0;
     for(size_t i = 0; i < f->info.pages; ++i)
-        if(f->region->pages[i].protection || f->region->pages[i].demand_refs ||
-           (f->info.loading_pages && f->loading_page == i)) ++occupied;
+        if(demand_page_occupied(f, i))
+            ++occupied;
     return occupied;
 }
+
+static bool demand_page_reclaimable(vm_file_t *f, size_t page) {
+    return f->region->pages[page].protection == VM_READ &&
+           !vm_file_page_busy(f, page);
+}
+
+static bool demand_plan_reclaim(vm_file_t *f, size_t first, size_t count,
+                                size_t *reclaim) {
+    size_t occupied = count;
+    size_t available = 0;
+    for(size_t i = 0; i < f->info.pages; ++i) {
+        if((i >= first && i < first + count) || !demand_page_occupied(f, i))
+            continue;
+        ++occupied;
+        if(demand_page_reclaimable(f, i))
+            ++available;
+    }
+    size_t limit = f->info.resident_limit;
+    *reclaim = occupied > limit ? occupied - limit : 0;
+    return available >= *reclaim;
+}
+
 int vm_demand_begin(vm_file_t *f, size_t first, size_t count,
                     const vm_demand_profile_t *profile, vm_demand_t **result) {
     if(vm_caller() < 0) return -1;
@@ -97,17 +125,12 @@ int vm_demand_begin(vm_file_t *f, size_t first, size_t count,
     u->fpscr=demand_fpscr(); u->errno_location=&errno; u->state=VM_DP1_IDLE;
     if(mutex_lock(&f->space->mutex) < 0) { free(u); return -1; }
     error = demand_admission_error(f);
-    size_t occupied = demand_occupied(f);
-    for(size_t i=first; i<first+count; ++i) {
-        vm_page_t *p=&f->region->pages[i];
-        if(!p->protection && !p->demand_refs &&
-           !(f->info.loading_pages && f->loading_page==i)) ++occupied;
-    }
+    size_t reclaim = 0;
     size_t reserve = f->info.fixed_bytes + f->info.table_reserve_bytes +
                      f->info.resident_limit * VM_PAGE_BYTES;
-    if(!error && (occupied > f->info.resident_limit ||
-       f->demand_bytes > f->info.budget_bytes-reserve ||
-       sizeof(*u) > f->info.budget_bytes-reserve-f->demand_bytes)) error=EAGAIN;
+    if(!error && (f->demand_bytes > f->info.budget_bytes-reserve ||
+       sizeof(*u) > f->info.budget_bytes-reserve-f->demand_bytes ||
+       !demand_plan_reclaim(f, first, count, &reclaim))) error=EAGAIN;
     {
         irq_disable_scoped();
         if(f->demand_error) error=f->demand_error;
@@ -123,6 +146,18 @@ int vm_demand_begin(vm_file_t *f, size_t first, size_t count,
             ++f->demand_uses; f->demand_bytes+=sizeof(*u);
             f->info.charged_bytes+=sizeof(*u); demand_slots[slot]=u;
         }
+    }
+    /* Admission is committed. The space lock keeps the plan stable and the
+       new references exclude the requested range. Retire each victim before
+       unlocking, with no outer IRQ mask across the cache/TLB work. */
+    if(!error) {
+        for(size_t i = 0; reclaim && i < f->info.pages; ++i) {
+            if(demand_page_reclaimable(f, i)) {
+                vm_file_evict_locked(f, i);
+                --reclaim;
+            }
+        }
+        assert(!reclaim);
     }
     mutex_unlock(&f->space->mutex);
     if(error) { free(u); return vm_error(error); }

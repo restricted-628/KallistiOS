@@ -16,15 +16,19 @@
 __BEGIN_DECLS
 typedef struct vm_demand vm_file_demand_t;
 /** Reserve count file pages starting at first, without reading a page.
-    The first read faults and retries transparently after recovery. The
-    output is unchanged on failure. The caller must have at least 8192
+    The first read faults and retries transparently after recovery.
+    Admission may evict idle read-only pages of the same file outside the
+    requested range to fit its resident limit. It returns EAGAIN if existing
+    demands, pins or loads leave too little capacity. The output is unchanged
+    on failure. The caller must have at least 8192
     bytes of available directly mapped stack, including at each fault.
     An unrecoverable admitted fault is fail-stop, not a recoverable signal.
     Each carrier can have at most one outstanding use. */
 int vm_file_demand_begin(vm_file_t *file, size_t first, size_t count,
                          vm_file_demand_t **out);
 /** End the quiescent use on the admitting thread. Pages can then be evicted
-    unless retained by another owner. Never use a handle after success. */
+    explicitly or by another admission unless retained by another owner.
+    Never use a handle after success. */
 int vm_file_demand_end(vm_file_demand_t *use);
 __END_DECLS
 #endif

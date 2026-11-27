@@ -17,8 +17,12 @@ saves the CPU context. It does no I/O or scheduling. Recovery on that carrier
 loads the backing page via the retained direct ISO file, zero-fills past the
 declared end, publishes a read-only mapping, and retries the original
 instruction with its registers and errno restored. End each use before
-eviction/close. Uses reserve capacity; this is not an automatic replacement
-policy. File reads can block indefinitely if the drive does not retire.
+eviction or close. A new admission reclaims idle read-only pages of the same
+file as needed to stay within its resident limit. The requested and existing
+live ranges, VM pins and active loads retain their pages. If too few pages can
+be reclaimed, admission returns `EAGAIN` without eviction. A later admission
+can fault a reclaimed page back in. Explicit prefetch still returns `EAGAIN`
+at capacity. File reads can block indefinitely if the drive does not retire.
 
 This profile requires ordinary directly mapped kernel-thread stacks, at
 least 8192 bytes of spare stack at admission **and the faulting instruction**,

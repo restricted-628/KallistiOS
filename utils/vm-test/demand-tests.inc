@@ -110,6 +110,12 @@ static void demand_success(unsigned mode) {
     if(!demand_gap) {
         while(atomic_load(&demand_waits)==waits) sched_yield();
         demand_refusal(f,a);demand_refusal(f,b);
+        if(different) {
+            vm_file_demand_t *out = NULL;
+            demand_select(2);
+            CHECK(vm_file_demand_begin(f, 2, 1, &out) < 0 && errno == EAGAIN && !out);
+            CHECK(f->info.loading_pages == 1 && f->loading_page == 0);
+        }
         {irq_disable_scoped();genwait_wake_all(&f->demand_generation);}
         while(atomic_load(&demand_waits)==waits+1) sched_yield();
         CHECK(source_reads==reads+(mode==3?0u:1u) && f->info.loading_pages==1);
@@ -141,6 +147,69 @@ static void demand_success(unsigned mode) {
     int reused=fs_open("/source/data",O_RDONLY);CHECK(reused==fd);CHECK(!fs_close(reused));
     file_end(NULL);file_under_test=NULL;
 }
+static void demand_reclaim(void) {
+    vm_file_t *f = demand_setup();
+    int close_error;
+    CHECK(!vm_file_close(f, &close_error) && !close_error);
+    vm_file_options_t o = file_options();
+    o.bytes += 4096;
+    f = file_under_test = file_open_options(o);
+    size_t fixed_charge = f->info.charged_bytes;
+    CHECK(!vm_file_prefetch(f, 0) && !vm_file_prefetch(f, 1));
+    CHECK(f->info.resident_pages == 2);
+    unsigned reads = source_reads;
+    unsigned retired = invalidations;
+    vm_pin_t *pin = NULL;
+    CHECK(!vm_pin_acquire(file_space, f->info.address, 4096, VM_PIN_READ, &pin));
+    vm_file_demand_t *use = NULL;
+    /* A partial reclaim plan must leave both pages resident. */
+    CHECK(vm_file_demand_begin(f, 2, 2, &use) < 0 && errno == EAGAIN && !use);
+    CHECK(vm_file_demand_begin(f, 1, 2, &use) < 0 && errno == EAGAIN && !use);
+    CHECK(f->info.resident_pages == 2 && source_reads == reads && invalidations == retired);
+    CHECK(!vm_pin_release(pin));
+
+    CHECK(!vm_file_demand_begin(f, 1, 2, &use));
+    CHECK(f->info.resident_pages == 1 && !f->info.loading_pages);
+    CHECK(f->info.charged_bytes == fixed_charge + 4096 + sizeof(*use));
+    vm_file_page_info_t info;
+    CHECK(!vm_file_page_query(f, 0, &info) && info.state == VM_FILE_ABSENT);
+    CHECK(!vm_file_page_query(f, 1, &info) && info.state == VM_FILE_READY);
+    CHECK(!vm_file_page_query(f, 2, &info) && info.state == VM_FILE_ABSENT);
+    CHECK(source_reads == reads && invalidations > retired);
+
+    vm_file_demand_t *other = NULL;
+    demand_select(1);
+    CHECK(vm_file_demand_begin(f, 0, 1, &other) < 0 && errno == EAGAIN && !other);
+    demand_save(use, 0, 2);
+    CHECK(!vm_demand_prepare(use));
+    demand_retry(use, 0);
+    CHECK(!vm_file_demand_end(use) && f->info.resident_pages == 2);
+
+    CHECK(!vm_file_demand_begin(f, 2, 1, &use));
+    retired = invalidations;
+    CHECK(vm_file_demand_begin(f, 0, 1, &other) < 0 && errno == EBUSY && !other);
+    CHECK(f->info.resident_pages == 2 && invalidations == retired);
+    CHECK(!vm_file_demand_end(use));
+    CHECK(!vm_file_demand_begin(f, 0, 1, &use));
+    CHECK(!vm_file_page_query(f, 0, &info) && info.state == VM_FILE_ABSENT);
+    CHECK(source_reads == reads + 1);
+    demand_save(use, 0, 0);
+    CHECK(!vm_demand_prepare(use));
+    demand_retry(use, 0);
+    CHECK(source_reads == reads + 2 && f->info.resident_pages == 2);
+    CHECK(!vm_file_demand_end(use));
+    CHECK(f->info.charged_bytes == fixed_charge + 2 * 4096);
+    CHECK(!vm_file_evict(f, 2));
+    CHECK(!vm_file_prefetch(f, 1));
+    CHECK(!vm_file_demand_begin(f, 2, 2, &use));
+    CHECK(!f->info.resident_pages && !f->info.loading_pages);
+    CHECK(f->info.charged_bytes == fixed_charge + sizeof(*use));
+    CHECK(!vm_file_demand_end(use));
+    CHECK(f->info.charged_bytes == fixed_charge);
+    file_end(f);
+    file_under_test = NULL;
+}
+
 static void demand_admission(void) {
     vm_file_t *f=demand_setup();vm_demand_t *u[8],*out=(void *)1;
     demand_select(0);
@@ -258,6 +327,7 @@ static void demand_failure(unsigned mode) {
 static void demand_tests(void) {
     alarm(45);
     demand_admission();
+    demand_reclaim();
     for(unsigned mode=0;mode<4;++mode) demand_success(mode);
     for(unsigned mode=0;mode<13;++mode) {
         pid_t pid=fork();CHECK(pid>=0);
@@ -265,5 +335,5 @@ static void demand_tests(void) {
         int status;CHECK(waitpid(pid,&status,0)==pid && WIFEXITED(status) && WEXITSTATUS(status)==0);
     }
     alarm(0);
-    puts("DP1 actual VM/VFS ownership, sharing, serialization, failure/cancel/retention PASS");
+    puts("DP1 actual VM/VFS ownership, reclaim, sharing, serialization, failure/cancel/retention PASS");
 }

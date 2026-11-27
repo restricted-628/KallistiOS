@@ -66,12 +66,13 @@ static int check_cold_page(vm_file_t *file, size_t page) {
     if(vm_file_demand_begin(file, page, 1, &use) < 0)
         return -1;
 
+    bool cold = !vm_file_page_query(file, page, &info) && info.state == VM_FILE_ABSENT;
     volatile const unsigned char *bytes =
         (const unsigned char *)(arena + page * PAGE_BYTES);
     const size_t start = page * PAGE_BYTES;
     errno = EDOM;
     unsigned char first = *bytes;
-    bool matched = first == source_byte(SOURCE_OFFSET + start) && errno == EDOM;
+    bool matched = cold && first == source_byte(SOURCE_OFFSET + start) && errno == EDOM;
     for(size_t i = 1; i < PAGE_BYTES; ++i) {
         const unsigned char expected =
             start + i < SOURCE_BYTES ? source_byte(SOURCE_OFFSET + start + i) : 0;
@@ -83,8 +84,6 @@ static int check_cold_page(vm_file_t *file, size_t page) {
     const bool retained = vm_file_evict(file, page) < 0 && errno == EBUSY;
     if(vm_file_demand_end(use) < 0)
         arch_panic("DP1 fixture could not end its use");
-    if(vm_file_evict(file, page) < 0)
-        return -1;
     return matched && ready && retained ? 0 : -1;
 }
 
@@ -112,13 +111,17 @@ static void *run_test(void *data) {
         goto done;
     const vm_file_options_t options = {
         .requested = (void *)arena, .offset = SOURCE_OFFSET, .bytes = SOURCE_BYTES,
-        .resident_limit = 2, .budget_bytes = 40000
+        .resident_limit = 1, .budget_bytes = 40000
     };
     if(vm_file_open(space, "/cd/VM4DATA.BIN", &options, &file) < 0)
         goto done;
 
     if(check_cold_page(file, 0) || check_cold_page(file, 2)
             || check_cold_page(file, 0))
+        goto done;
+    vm_file_page_info_t tail;
+    if(vm_file_page_query(file, 2, &tail) < 0 || tail.state != VM_FILE_ABSENT ||
+            vm_file_evict(file, 0) < 0)
         goto done;
     *result = EXIT_SUCCESS;
 
@@ -157,6 +160,6 @@ int main(void) {
     if(untouched < 8192)
         result = EXIT_FAILURE;
     dbgio_write_str(result == EXIT_SUCCESS
-        ? "DP1DISC PASS cold=3 tail=1 reload=1\n" : "DP1DISC FAIL\n");
+        ? "DP1DISC PASS cold=3 tail=1 reload=1 reclaim=2\n" : "DP1DISC FAIL\n");
     return result;
 }
