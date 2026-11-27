@@ -187,6 +187,27 @@ static bool verify_release_alignment(void) {
     return passed;
 }
 
+static bool verify_fill(void) {
+    uint64_t buf[24] __attribute__((aligned(32)));
+    const uint64_t word = UINT64_C(0xbadc0ffee0123456);
+    for(size_t start = 4; start < 8; ++start) {
+        for(size_t n = 0; n <= 12; ++n) {
+            memset(buf, 0, sizeof(buf));
+            if(shz_memset8(buf + start, word, n * sizeof(*buf)) != buf + start)
+                return false;
+            for(size_t i = 0; i < sizeof(buf)/sizeof(*buf); ++i) {
+                if(buf[i] != (i >= start && i < start + n ? word : 0)) {
+                    printf("SH4ZAM fill mismatch: offset=%u words=%u at=%u got=%08lx:%08lx\n",
+                           (unsigned)start, (unsigned)n, (unsigned)i,
+                           (unsigned long)(buf[i] >> 32), (unsigned long)(uint32_t)buf[i]);
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 static bool verify_release_memory(void) {
     uint8_t source[256] __attribute__((aligned(32)));
     uint8_t destination[256] __attribute__((aligned(32)));
@@ -221,7 +242,7 @@ static bool verify_release_memory(void) {
             }
         }
     }
-    return true;
+    return verify_fill();
 }
 
 static bool verify_release_math(void) {
@@ -284,6 +305,20 @@ static bool verify_release_math(void) {
               close_enough(vector.z, 12);
     shz_xmtrx_store_4x4(&observed);
     passed &= memcmp(&matrix, &observed, sizeof(matrix)) == 0;
+    /* Camera at +X looking at the origin: eye-space Z becomes clip W.
+       An affine projection would hide a clobber of the fourth row. */
+    const shz_mat4x4_t projection = { .elem = {
+        2,0,0,0, 0,3,0,0, 0,0,0,-1, 0,0,1,0
+    } };
+    const float projected_view[] = {
+        0,0,0,-1, 0,3,0,0, -2,0,0,0, 0,0,1,2
+    };
+    shz_xmtrx_load_4x4(&projection);
+    shz_xmtrx_lookat(shz_vec3_init(2,0,0), shz_vec3_init(0,0,0),
+                     shz_vec3_init(0,1,0));
+    shz_xmtrx_store_4x4(&observed);
+    for(unsigned i = 0; i < 16; ++i)
+        passed &= close_enough(observed.elem[i], projected_view[i]);
     shz_xmtrx_load_4x4(&saved);
     return passed;
 }

@@ -1,8 +1,11 @@
 # SH4DER-PVR for KOS Experimental
 
 Pinned dependency: [JiltedValkyrie/SH4DER-PVR](https://github.com/JiltedValkyrie/SH4DER-PVR)
-at `32912914e28fbc523d8f560995bf6eb19dc4b0a5`. The upstream checkout is
+at `63e686b339ded85732d850e8efcc1a898d4933a5`. The upstream checkout is
 unmodified. Initialize it with `git submodule update --init --recursive`.
+When upgrading a built checkout from `32912914`, clean this addon before
+rebuilding: old dependency files name sources under `sh4dow-dc/src/` that
+now live in `src/`. Recompile consumers of the inline headers as well.
 
 This addon supplies effect computations to the existing KOS Experimental
 renderer. It does not install a renderer, acquire PVR ownership, begin scenes,
@@ -20,8 +23,9 @@ For reflections, water, transmission, heightfield shadows, light pools and
 sparks use `<sh4der_kos_world.h>`. The [Compact world example](../../examples/dreamcast/pvr/sh4der_world/)
 shows the two KOS passes and their resource lifetimes. With the fork environment
 sourced, build `addons/libsh4der` and then the example with make.
-The new upstream planar target and spark submission backends are not linked;
-the vendored SH4ZAM-DCE is not installed as a second math provider.
+The upstream planar, spark, bolt, mote and PVRX submission or device backends
+are not linked. Use the fork's PVR interfaces for scene and device ownership.
+The vendored SH4ZAM-DCE is not installed as a second math provider.
 
 The accepted build profile is the fork's ordinary `-O2` without fast-math.
 Inline helpers also inherit their application's flags. The bundled foot-shadow
@@ -80,6 +84,6 @@ of the original or substantially similar derivatives as standalone libraries,
 plugins or software packages. Their stated permission for incorporation in
 larger personal/commercial products does not remove those conditions.
 
-Preserve credits for Jilted Valkyrie (SH4DER-PVR), Emerald May (SH4DOW-DC),
+Preserve credits for Jilted Valkyrie (SH4DER-PVR and SH4DOW-DC),
 and Falco Girgis and contributors (SH4ZAM, separately MIT licensed). This
 adapter does not relicense any dependency under KOS's license.

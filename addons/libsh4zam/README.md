@@ -9,13 +9,16 @@ adapter and integration documentation; separate KOS helpers live under
 ## Source ownership and initialization
 
 `upstream/` is a Git submodule pinned to
-`2d32eebb94c2278332df066e1fc5d442e6383c04`, upstream **v0.10 update**, from
+`9c2d0d77f581b831fc683ee13ca9b8c85faf2326`, upstream **v0.10 update**, from
 `https://github.com/gyrovorbis/sh4zam.git`. Upstream history, author notices,
 and license are retained; no local source patches are applied. Updating
 the dependency remains a separate reviewed change, not an automatic checkout
 of a moving branch.
 
-This advances `5b7dfc22`. It corrects dense matrix inverse/determinant and
+This advances `2d32eebb` with revised matrix initializers, perspective look-at,
+16-bit rotation helpers and 64-bit pattern fill. Rebuild inline consumers.
+
+The previous update advanced `5b7dfc22`. It corrects dense matrix inverse/determinant and
 XMTRX add/subtract, revises SH-4 stack and copy code, and adds billboard and
 direction-rotation helpers. Rebuild consumers: much of this code is inline.
 The pin alone does not opt the renderer into a new effect or change its owner.

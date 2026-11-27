@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Graphics dependency refresh
+
+- Official KOS `master` at `9926b70a` was already included; no kernel merge.
+- SH4ZAM advances from `2d32eebb` to `9c2d0d77` without a fork patch.
+  Regression fixtures now check perspective look-at composition and 64-bit
+  fills across cache-line boundaries, including empty and guarded spans.
+- SH4DER advances from `32912914` to `63e686b3`. The public SH4DOW header
+  and the addon/host builds use the consolidated upstream layout. This
+  preserves the existing KOS renderer; it does not enable upstream PVR
+  backends or make a hardware performance claim.
+
 ## 2026-11-21 — Ordinary ADX playback and checked AICA operations
 
 - The libADX named-file opener rejects raw paths of `PATH_MAX` bytes or

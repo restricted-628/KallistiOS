@@ -5,7 +5,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 SUBMODULE = "addons/libsh4der/upstream"
-PIN = "32912914e28fbc523d8f560995bf6eb19dc4b0a5"
+PIN = "63e686b339ded85732d850e8efcc1a898d4933a5"
 URL = "https://github.com/JiltedValkyrie/SH4DER-PVR.git"
 
 
@@ -26,9 +26,9 @@ def verify():
     if git(vendor, "rev-parse", "HEAD") != PIN or git(vendor, "status", "--porcelain", "--untracked-files=all"):
         raise ValueError("vendor checkout is not the clean reviewed pin")
     for name, target in (("sh4der", "include"),
-                         ("sh4dow_dc.h", "sh4dow-dc/include/sh4dow_dc.h")):
+                         ("sh4dow_dc.h", "include/sh4dow_dc.h")):
         link = ROOT / "addons/include" / name
-        if not link.is_symlink() or link.resolve() != vendor / target:
+        if not link.is_symlink() or link.resolve(strict=True) != vendor / target:
             raise ValueError(f"unexpected public header link: {name}")
     for license_path in ("LICENSE", "sh4dow-dc/LICENSE"):
         if not (vendor / license_path).is_file():

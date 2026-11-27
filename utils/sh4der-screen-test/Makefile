@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O2
 include ../Makefile.host-test
-CPPFLAGS += -Iinclude -I../../addons/libsh4der/upstream/sh4dow-dc/include
+CPPFLAGS += -Iinclude -I../../addons/libsh4der/upstream/include
 TARGET = sh4der-screen-test
 SOURCES = test.c ../../addons/libsh4der/kos/screen.c
 all: $(TARGET)

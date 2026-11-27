@@ -13,11 +13,11 @@ $(error SH4DER-PVR is missing. Run git submodule update --init --recursive)
 endif
 endif
 
-KOS_CFLAGS += -Iupstream/include -Iupstream/sh4dow-dc/include
+KOS_CFLAGS += -Iupstream/include
 KOS_CFLAGS += -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT
 
 OBJS += .build/world.o
-$(OBJS): $(wildcard upstream/include/*.h upstream/sh4dow-dc/include/*.h)
+$(OBJS): $(wildcard upstream/include/*.h)
 
 .build/world.o: kos/world.c ../include/sh4der_kos_world.h
 	@mkdir -p $(@D)
@@ -96,10 +96,6 @@ $(OBJS): $(wildcard upstream/include/*.h upstream/sh4dow-dc/include/*.h)
 	kos-cc $(CFLAGS) $(CPPFLAGS) -MMD -MP -c $< -o $@
 
 .build/%.o: upstream/src/%.c
-	mkdir -p $(@D)
-	kos-cc $(CFLAGS) $(CPPFLAGS) -MMD -MP -c $< -o $@
-
-.build/%.o: upstream/sh4dow-dc/src/%.c
 	mkdir -p $(@D)
 	kos-cc $(CFLAGS) $(CPPFLAGS) -MMD -MP -c $< -o $@
 

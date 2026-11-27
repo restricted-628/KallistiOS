@@ -718,6 +718,13 @@ source Hz. The libADX completion matrix records the qualified rate range.
 
 ## D22 — SH4DER/SH4DOW integration and strip partition default
 
+**Dependency refresh, 2026-11-27:** Track the reviewed SH4DER main tree
+`63e686b3` and pristine SH4ZAM `9c2d0d77`. SH4DER's previous pin and new
+main have no common Git ancestor; this is a submodule replacement, not
+a merge of those histories. SH4DOW is now built from the upstream root
+source directory. Keep the native KOS render path, strip default of six,
+ordinary floating-point flags and exclusive fiber providers unchanged.
+
 **Owner direction, 2026-11-13:** Fully integrate the pinned SH4DER and bundled
 SH4DOW capabilities with the fork and Compact chunk models. KOS remains the sole
 PVR scene/submission/resource owner; adapting effects does not authorize linking

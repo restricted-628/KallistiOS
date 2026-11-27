@@ -1,7 +1,8 @@
 # SH4DER and SH4DOW integration coverage
 
-Pinned source: SH4DER `32912914`, including bundled SH4DOW. This inventory tracks
-the full integration request; available math headers alone do not close a row.
+Pinned source: SH4DER `63e686b3`, including SH4DOW in the main source tree.
+The rows below cover the fork adapters, not every upstream demo or header.
+Availability of a math header alone does not establish renderer integration.
 
 | Capability | Native integration | Remaining work |
 | --- | --- | --- |

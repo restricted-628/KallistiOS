@@ -22,6 +22,6 @@ camera must use the existing clipping path and budget its expansion. This is
 an integration example, not evidence of hardware visual/performance parity.
 No new global shader registry, scheduler or per-vertex admission is necessary.
 
-Credits: SH4DER-PVR by Jilted Valkyrie, SH4DOW-DC by Emerald May, SH4ZAM by
+Credits: SH4DER-PVR and SH4DOW-DC by Jilted Valkyrie, SH4ZAM by
 Falco Girgis and contributors. Read the two custom dependency licenses and
 SH4ZAM's MIT license via `addons/libsh4der/README.md` before redistribution.
