@@ -15,6 +15,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "vm-internal.h"
+#ifdef KOS_VM_DP1_PRIVATE
+#include "vm-demand-private.h"
+#include <kos/vm_demand.h>
+#ifndef KOS_VM_DP1_HOST_TEST
+#include "vm-demand-source-private.h"
+#endif
+#endif
 
 #define VM_PAGE_BYTES 4096u
 #define VM_ARENA_END 0x7c000000u
@@ -24,6 +31,9 @@ typedef struct vm_page {
     unsigned protection;
     vm_fault_t *ticket;
     uint32_t pins;
+#ifdef KOS_VM_DP1_PRIVATE
+    uint32_t demand_refs;
+#endif
 } vm_page_t;
 
 typedef struct vm_region {
@@ -60,7 +70,20 @@ struct vm_file {
     void *staging;
     vm_file_info_t info;
     size_t loading_page;
+#ifdef KOS_VM_DP1_PRIVATE
+    unsigned demand_uses;
+    size_t demand_bytes;
+    int demand_error;
+    uint32_t demand_generation;
+#endif
 };
+
+#ifdef KOS_VM_DP1_PRIVATE
+static void demand_error(vm_file_t *, int);
+static int demand_error_value(vm_file_t *);
+static size_t demand_occupied(vm_file_t *);
+static void demand_complete(vm_file_t *);
+#endif
 
 struct vm_pin {
     vm_space_t *space;
@@ -990,6 +1013,10 @@ int vm_file_prefetch(vm_file_t *f, size_t page) {
     if(mutex_lock(&s->mutex) < 0)
         return -1;
     int error = 0;
+#ifdef KOS_VM_DP1_PRIVATE
+    error = demand_error_value(f);
+    if(!error) {
+#endif
     if(f->info.cancelled)
         error = ECANCELED;
     else if(f->info.loading_pages)
@@ -998,16 +1025,37 @@ int vm_file_prefetch(vm_file_t *f, size_t page) {
         mutex_unlock(&s->mutex);
         return 0;
     }
-    else if(f->info.resident_pages == f->info.resident_limit)
+    else if(
+#ifdef KOS_VM_DP1_PRIVATE
+            !f->region->pages[page].demand_refs &&
+            demand_occupied(f) == f->info.resident_limit
+#else
+            f->info.resident_pages == f->info.resident_limit
+#endif
+           )
         error = EAGAIN;
+#ifdef KOS_VM_DP1_PRIVATE
+    }
+#endif
     if(error) {
         mutex_unlock(&s->mutex);
         return vm_error(error);
     }
-    f->loading_page = page;
-    f->info.loading_pages = 1;
-    f->info.charged_bytes += VM_PAGE_BYTES;
+    {
+#ifdef KOS_VM_DP1_PRIVATE
+        irq_disable_scoped();
+        error = f->demand_error;
+        if(!error) {
+#endif
+        f->loading_page = page;
+        f->info.loading_pages = 1;
+        f->info.charged_bytes += VM_PAGE_BYTES;
+#ifdef KOS_VM_DP1_PRIVATE
+        }
+#endif
+    }
     mutex_unlock(&s->mutex);
+    if(error) return vm_error(error);
 
     vm_page_t candidate = {0};
     candidate.backing = aligned_alloc(VM_PAGE_BYTES, VM_PAGE_BYTES);
@@ -1034,27 +1082,70 @@ int vm_file_prefetch(vm_file_t *f, size_t page) {
             }
         }
     }
+#ifdef KOS_VM_DP1_PRIVATE
+    if(error) demand_error(f, error);
+#endif
     /* The normal untimed mutex cannot fail under the live-owner/no-foreign-
        error-wake contract. The active claim survives all unlocked cleanup. */
     int locked = mutex_lock(&s->mutex);
     assert(locked == 0);
     (void)locked;
+#ifdef KOS_VM_DP1_PRIVATE
+    int retained_error = demand_error_value(f);
+    if(retained_error)
+        error = retained_error;
+    else
+#endif
     if(f->info.cancelled)
         error = ECANCELED;
-    if(!error && vm_map_page(s, f->region->base + page * VM_PAGE_BYTES,
-                            &candidate, VM_READ) < 0)
-        error = errno;
+#ifdef KOS_VM_DP1_PRIVATE
+    bool mapped = false;
+#endif
     if(!error) {
+        if(vm_map_page(s, f->region->base + page * VM_PAGE_BYTES,
+                       &candidate, VM_READ) < 0)
+            error = errno;
+#ifdef KOS_VM_DP1_PRIVATE
+        else mapped = true;
+#endif
+    }
+    if(!error) {
+#ifdef KOS_VM_DP1_PRIVATE
+        irq_disable_scoped();
+        error = f->demand_error;
+        if(!error) {
+#endif
         candidate.protection = VM_READ;
+#ifdef KOS_VM_DP1_PRIVATE
+        candidate.demand_refs = f->region->pages[page].demand_refs;
+#endif
         f->region->pages[page] = candidate;
         ++f->info.resident_pages;
+#ifdef KOS_VM_DP1_PRIVATE
+        }
+#endif
     }
-    else {
+    if(error) {
+#ifdef KOS_VM_DP1_PRIVATE
+        /* A concurrent profile/retry failure may arrive while map allocates.
+           Retire any unpublished mapping before candidate backing is freed. */
+        if(mapped)
+            vm_unmap(s, f->region->base + page * VM_PAGE_BYTES, VM_PAGE_BYTES);
+        demand_error(f, error);
+#endif
         free(candidate.backing);
         f->info.charged_bytes -= VM_PAGE_BYTES;
     }
     /* No operation can still access unpublished backing once LOADING clears. */
-    f->info.loading_pages = 0;
+    {
+#ifdef KOS_VM_DP1_PRIVATE
+        irq_disable_scoped();
+#endif
+        f->info.loading_pages = 0;
+#ifdef KOS_VM_DP1_PRIVATE
+        demand_complete(f);
+#endif
+    }
     mutex_unlock(&s->mutex);
     return error ? vm_error(error) : 0;
 }
@@ -1068,7 +1159,11 @@ int vm_file_evict(vm_file_t *f, size_t page) {
     if(mutex_lock(&s->mutex) < 0)
         return -1;
     vm_page_t *p = &f->region->pages[page];
-    if((f->info.loading_pages && f->loading_page == page) || p->pins) {
+    if((f->info.loading_pages && f->loading_page == page) || p->pins
+#ifdef KOS_VM_DP1_PRIVATE
+       || p->demand_refs
+#endif
+      ) {
         mutex_unlock(&s->mutex);
         return vm_error(EBUSY);
     }
@@ -1089,7 +1184,16 @@ int vm_file_cancel(vm_file_t *f) {
         return vm_error(EINVAL);
     if(mutex_lock(&f->space->mutex) < 0)
         return -1;
-    f->info.cancelled = 1;
+    {
+#ifdef KOS_VM_DP1_PRIVATE
+        irq_disable_scoped();
+#endif
+        f->info.cancelled = 1;
+#ifdef KOS_VM_DP1_PRIVATE
+        demand_error(f, ECANCELED);
+        demand_complete(f);
+#endif
+    }
     mutex_unlock(&f->space->mutex);
     return 0;
 }
@@ -1102,7 +1206,11 @@ int vm_file_close(vm_file_t *f, int *source_close_error) {
     vm_space_t *s = f->space;
     if(mutex_lock(&s->mutex) < 0)
         return -1;
-    if(f->info.loading_pages) {
+    if(f->info.loading_pages
+#ifdef KOS_VM_DP1_PRIVATE
+       || f->demand_uses
+#endif
+      ) {
         mutex_unlock(&s->mutex);
         return vm_error(EBUSY);
     }
@@ -1127,6 +1235,10 @@ int vm_file_close(vm_file_t *f, int *source_close_error) {
     *source_close_error = error;
     return 0;
 }
+
+#ifdef KOS_VM_DP1_PRIVATE
+#include "vm-demand-private.inc"
+#endif
 
 /* Executable regions share this registry, never the ordinary-data API. A
    region operation claim spans unlocked allocation/copy/free. Short IRQ fences

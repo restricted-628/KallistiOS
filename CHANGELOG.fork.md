@@ -6,6 +6,20 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Automatic read faults on disc-backed data
+
+- Added the opt-in `libvmdemand` archive. A normal read of an admitted,
+  absent page now loads it from immutable direct ISO9660 media and retries
+  the faulting SH-4 instruction. Applications do not call prefetch on this
+  path. The default kernel and explicit prefetch API remain available.
+- The Dreamcast example checks cold reads, a partial final page and refault
+  after eviction. Flycast interpreter and dynarec passed with both supported
+  fiber-provider builds. Concurrent reads of the same page shared one load;
+  distinct missing pages were loaded separately.
+- Host tests cover read errors and cancellation. The final fail-stop state
+  after an optical error or cancellation has not been independently observed
+  in the current Flycast guest; physical media have not been tested.
+
 ## 2026-11-27 — Direct optical DMA
 
 - Added `gdrom_direct_load_aica()`: allocate an unpublished retail sound-RAM

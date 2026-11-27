@@ -9,6 +9,7 @@ p = argparse.ArgumentParser()
 p.add_argument('--cc', default='cc')
 p.add_argument('--cflags', default='-std=gnu17 -O2 -Wall -Wextra -Werror')
 p.add_argument('--vm-source', type=Path, help='Alternate source for negative controls')
+p.add_argument('--demand', action='store_true', help='Explicit private DP1 actual-code tests')
 a = p.parse_args()
 here = Path(__file__).resolve().parent
 root = here.parents[1]
@@ -51,6 +52,7 @@ with tempfile.TemporaryDirectory(prefix='kos-vm-test.') as td:
     tmp = Path(td)
     (tmp / 'kos').mkdir()
     (tmp / 'kos/vm.h').symlink_to(root / 'include/kos/vm.h')
+    (tmp / 'kos/vm_demand.h').symlink_to(root / 'include/kos/vm_demand.h')
     (tmp / 'kos/vm_exec.h').symlink_to(root / 'include/kos/vm_exec.h')
     (tmp / 'kos/fs.h').write_text('''#pragma once
 #include <sys/types.h>
@@ -88,12 +90,41 @@ int fs_fstat(file_t, struct stat *);
     (tmp / 'kos/cdefs.h').write_text('#include <sys/cdefs.h>\n')
     (tmp / 'kos/irq.h').write_text('''#pragma once
 typedef uint32_t irq_t;
-typedef struct irq_context { uint32_t r[16], pc, sr; } irq_context_t;
+typedef struct irq_context { uint32_t r[16], pc, sr, fpscr; } irq_context_t;
+typedef unsigned irq_mask_t;
+static inline irq_mask_t irq_disable(void) { return disable_irq(); }
+static inline void irq_restore(irq_mask_t m) { restore_irq(&m); }
 #define EXC_DTLB_MISS_READ 0x40u
 #define EXC_DTLB_MISS_WRITE 0x60u
 static inline int irq_inside_int(void) { return test_irq; }
 ''')
     (tmp / 'vm-internal.h').symlink_to(root / 'kernel/mm/vm-internal.h')
+    if a.demand:
+        for name in ['vm-demand-private.h', 'vm-demand-private.inc']:
+            (tmp / name).symlink_to(root / 'kernel/mm' / name)
+        (tmp / 'kos/thread.h').write_text('''#pragma once
+typedef struct { void *stack; size_t stack_size; irq_context_t context; } kthread_t;
+static _Thread_local kthread_t *thd_current;
+static _Thread_local uintptr_t test_demand_sp;
+static _Thread_local bool test_child_stack;
+static bool _thd_continuation_stack_bounds(const kthread_t *t, uintptr_t sp, uintptr_t *b, size_t *n) {
+    if(!test_child_stack || !t || sp<(uintptr_t)t->stack || sp-(uintptr_t)t->stack>t->stack_size) return false;
+    if(b) *b=(uintptr_t)t->stack;
+    if(n) *n=t->stack_size;
+    return true;
+}
+''')
+        (tmp / 'kos/genwait.h').write_text('''#pragma once
+static atomic_uint demand_waits;
+static int genwait_wait(void *obj, const char *msg, int timeout) {
+    (void)obj; (void)msg; CHECK(!timeout && irq_depth==1);
+    atomic_fetch_add(&demand_waits,1);
+    return pthread_cond_wait(&demand_condition,&host_irq_mutex);
+}
+static void genwait_wake_all(void *obj) {
+    (void)obj; CHECK(irq_depth); pthread_cond_broadcast(&demand_condition);
+}
+''')
     (tmp / 'kos/cache.h').write_text('#pragma once\nvoid dcache_purge_range(uintptr_t, size_t);\nvoid icache_inval_range(uintptr_t, size_t);\n')
     (tmp / 'kos/mutex.h').write_text('''#pragma once
 #include <pthread.h>
@@ -106,7 +137,13 @@ static int mutex_lock(mutex_t *m) {
     if(m == watched_mutex) atomic_fetch_add(&mutex_waiters, 1);
     return pthread_mutex_lock(m);
 }
-static int mutex_unlock(mutex_t *m) { return pthread_mutex_unlock(m); }
+static int mutex_unlock(mutex_t *m) {
+    int rc=pthread_mutex_unlock(m);
+#ifdef KOS_VM_DP1_PRIVATE
+    if(mutex_unlock_inject) mutex_unlock_inject(m);
+#endif
+    return rc;
+}
 static int mutex_destroy(mutex_t *m) { return pthread_mutex_destroy(m); }
 ''')
     (tmp / 'mmu.inc').write_text(production)
@@ -117,6 +154,8 @@ static int mutex_destroy(mutex_t *m) { return pthread_mutex_destroy(m); }
         '-I' + str(tmp),
         '-I' + str(root / 'kernel/arch/dreamcast/include'),
         str(here / 'test.c'), '-o', str(exe)]
+    if a.demand:
+        command += ['-DKOS_VM_DP1_PRIVATE', '-DKOS_VM_DP1_HOST_TEST']
     print('COMPILE:', shlex.join(command), flush=True)
     subprocess.run(command, check=True)
     subprocess.run([str(exe)], check=True)

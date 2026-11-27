@@ -23,6 +23,10 @@
 #include <kos/thread.h>
 #include "../../../mm/vm-internal.h"
 
+#ifdef KOS_VM_DP1_PRIVATE
+#include "../../../mm/vm-demand-private.h"
+#endif
+
 #define MMU_IND_BITS 12                         /**< \brief Index bits */
 #define MMU_VIRTUAL_PAGES (MMU_PAGES * MMU_SUB_PAGES)
 #define MMU_PHYSICAL_PAGES (0x20000000u >> MMU_IND_BITS)
@@ -1005,6 +1009,15 @@ void mmu_gen_tlb_miss(const char *what, irq_t source, irq_context_t *context) {
     if(!page && map_func == map_virt)
         page = vm_fault_resolve(mmu_cxt_current, source, context, addr,
                                 *pteh, *mmucr, (uintptr_t)thd_current);
+
+#ifdef KOS_VM_DP1_PRIVATE
+    /* A deferred read has no PTE to load. Existing exception return enters
+       the private recovery code after the IRQ context has been left. */
+    if(!page && map_func == map_virt
+            && vm_demand_defer(mmu_cxt_current, source, context, addr,
+                               *pteh, *mmucr))
+        return;
+#endif
 
     if(!page) {
         dbgio_printf("%s: cannot map virtual address %08lx\n", what, addr);

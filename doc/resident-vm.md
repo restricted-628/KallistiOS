@@ -339,7 +339,11 @@ ordinary IRQ-enabled callers only, with no enclosing SQ ownership, allocator
 lock, provider hook or masked TLS destructor. Calls from a child may block its
 whole carrier; they never cooperatively dispatch siblings. There is no VM
 worker, callback, queue, timeout, storage scheduler or implicit fault I/O.
-Accessing an ABSENT/LOADING page remains an unarmed fatal access. Existing TLB
+With the default kernel, accessing an ABSENT/LOADING page remains an unarmed
+fatal access. To load on first read instead of prefetching, link the separate
+[`libvmdemand` archive](../addons/libvmdemand/README.md) and admit the range
+with `vm_file_demand_begin()` on each reading carrier. That profile supports
+read-only ordinary data on immutable direct ISO9660 media. Existing TLB
 refill and VM2 tickets for other reservations are unchanged.
 
 Successful prefetch and query snapshots grant no use lease. Acquire a VM3

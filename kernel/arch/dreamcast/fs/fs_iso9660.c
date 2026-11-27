@@ -1083,6 +1083,32 @@ static mutex_t fh_mutex;
 static iso_fd_t *stream_fd = NULL;
 static vfs_handler_t vh;
 
+#ifdef KOS_VM_DP1_PRIVATE
+#include "../../../mm/vm-demand-source-private.h"
+
+int fs_iso9660_validate_demand_source(file_t fd) {
+    /* Caller owns this private open descriptor across validation and use.
+       It must exclude global VFS and ISO shutdown. */
+    vfs_handler_t *handler = fs_get_handler(fd);
+    if(!handler)
+        return -1;
+    if(handler != &vh) {
+        errno = EXDEV;
+        return -1;
+    }
+    if(mutex_lock(&backend_mutex) < 0)
+        return -1;
+    const bool direct = iso_backend_locked
+        && iso_backend == FS_ISO9660_BACKEND_DIRECT;
+    mutex_unlock(&backend_mutex);
+    if(!direct) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    return 0;
+}
+#endif
+
 static inline bool iso_fd_async_busy(const iso_fd_t *fd) {
     return fd->sync_busy || fd->async_request || fd->stream_session;
 }

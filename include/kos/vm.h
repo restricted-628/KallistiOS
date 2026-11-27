@@ -118,7 +118,8 @@ int vm_file_page_query(vm_file_t *file, size_t page,
 /** Load at most one page using exact seek/read and complete initialization.
     ECANCELED for stopped admission, EBUSY for another load, EAGAIN for capacity.
     Prefetch grants no lease: acquire a VM3 READ pin before use and retry if
-    eviction won the gap. ABSENT/LOADING CPU accesses retain fatal fault policy. */
+    eviction won the gap. ABSENT/LOADING accesses are fatal by default; for
+    opt-in fault-driven reads from direct ISO media, see kos/vm_demand.h. */
 int vm_file_prefetch(vm_file_t *file, size_t page);
 /** Evict one unpinned page; EBUSY for LOADING or pins. ABSENT is a no-op. */
 int vm_file_evict(vm_file_t *file, size_t page);

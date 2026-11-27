@@ -18,6 +18,12 @@ static atomic_uint checks;
 static _Thread_local uint32_t test_sr;
 static _Thread_local int test_irq, fail_lock;
 static _Thread_local unsigned irq_depth;
+#ifdef KOS_VM_DP1_PRIVATE
+static pthread_mutex_t host_irq_mutex=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t demand_condition=PTHREAD_COND_INITIALIZER;
+static void (*free_inject)(void *);
+static _Thread_local void (*mutex_unlock_inject)(void *);
+#endif
 static unsigned attempts, fail_at, live, map_calls, purges, invalidations;
 static void *watched_mutex;
 static atomic_uint mutex_waiters;
@@ -86,6 +92,9 @@ static void *test_aligned_alloc(size_t align, size_t n) {
 static void test_free(void *p) {
     CHECK(!irq_depth);
     if(!p) return;
+#ifdef KOS_VM_DP1_PRIVATE
+    if(free_inject) free_inject(p);
+#endif
     allocation_t *a = allocation(p);
     if(a->backing) verify_free(a);
     *a = (allocation_t){0};
@@ -105,9 +114,17 @@ static unsigned disable_irq(void) {
         irq_inject = NULL;
         fn();
     }
+#ifdef KOS_VM_DP1_PRIVATE
+    if(!irq_depth) CHECK(!pthread_mutex_lock(&host_irq_mutex));
+#endif
     return irq_depth++;
 }
-static void restore_irq(unsigned *old) { irq_depth = *old; }
+static void restore_irq(unsigned *old) {
+    irq_depth = *old;
+#ifdef KOS_VM_DP1_PRIVATE
+    if(!irq_depth) CHECK(!pthread_mutex_unlock(&host_irq_mutex));
+#endif
+}
 #define irq_disable_scoped() unsigned old_irq __attribute__((cleanup(restore_irq))) = disable_irq()
 static mmupage_t *map_virt(mmucontext_t *, int);
 void mmu_purge_phys_page(uint32_t p) {
@@ -774,6 +791,9 @@ static void fault_retirement(void) {
 #include "pin-tests.inc"
 #include "file-tests.inc"
 
+#ifdef KOS_VM_DP1_PRIVATE
+#include "demand-tests.inc"
+#endif
 int main(void) {
     bounds(); lifetime(); failures(); callers(); ranges_and_runs();
     rollback_preserves_neighbor(); separation(); preexisting_mapping(); serialization();
@@ -781,6 +801,9 @@ int main(void) {
     exec_tests();
     pin_tests();
     file_tests();
+#ifdef KOS_VM_DP1_PRIVATE
+    demand_tests();
+#endif
     printf("VM production PASS: %u checks; cache purges=%u TLB retirements=%u\n",
            atomic_load(&checks), purges, invalidations);
     return 0;

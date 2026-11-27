@@ -496,6 +496,23 @@ This is explicit residency, not transparent page-fault I/O, compressed paging,
 writeback, managed stacks or executable overlays. Ordinary allocation, P1
 access, provider defaults and the physical-drive scheduler remain unchanged.
 
+### D19 milestone — opt-in automatic read faults on direct ISO files
+
+**Accepted, 2026-11-27:** Link the matching `libvmdemand` archive and use
+`vm_file_demand_begin` to reserve an immutable data range on its reading
+kernel thread. The exception handler captures an eligible SH-4 read miss;
+the thread performs disc I/O outside the handler and retries the instruction
+only after publishing a read-only mapping. Overlapping admitted threads may
+share a page. End their uses before evicting it or closing the file.
+
+This is an opt-in alternative to explicit prefetch, not a change to normal
+KOS fault policy. It does not select eviction victims, swap writable memory,
+or page code or stacks. The carrier, stack headroom, selected address space,
+debug path and immutable direct ISO source have explicit lifetime constraints.
+A terminal backing error stops the admitted fault after I/O cleanup. Use
+explicit prefetch for recoverable media errors. See
+[`libvmdemand`](addons/libvmdemand/README.md) for build and admission details.
+
 ## D20 — Overlay build foundation and runtime boundary
 
 **Accepted build-time slice, 2026-10-20:** `utils/kos-overlay` describes a linked
