@@ -60,10 +60,27 @@ the images. Retail/development board type continues to govern VRAM capacity;
 adding main RAM does not increase VRAM. Software bounds tests do not establish
 physical upper-bank GD-ROM DMA correctness on a modified console.
 
-- Direct DMA destinations must be 32-byte aligned system RAM, PVR RAM, or a
+- Ordinary direct DMA destinations must be 32-byte aligned system RAM, PVR RAM, or a
   range inside an explicitly supplied bridge-SRAM lease.
-- System RAM receives cache invalidation before and after DMA. PVR RAM and
-  bridge SRAM do not pass through the SH-4 data cache.
+- For retail AICA assets, `gdrom_direct_load_aica` **allocates** the entire
+  unpublished destination, DMA-loads it without staging and returns the
+  sound offset only on success. This loading-phase operation is not a
+  general pointer target or an upload into an existing sound allocation.
+  Exclude allocator reset/shutdown, raw G2 initiators and latency-sensitive
+  service. Do not use it for streaming, live playback or DSP-owned assets.
+  One deadline of 1–500 ms covers all direct commands; each masks normal
+  IRQs for its GD data phase, then checks GDST and the SH-4/G2/AICA write
+  buffers before restoring IRQs. A stuck engine or posted write takes the
+  nonreturning DMA halt path. See the direct-aica example.
+- System RAM receives cache invalidation before and after DMA. For PVR RAM
+  and bridge SRAM, use uncached CPU aliases and keep the span free of cached
+  lines through other aliases.
+- The documented 8 MiB PVR images at physical `0x06000000` and `0x07000000`
+  resolve to the corresponding 64-bit and 32-bit canonical DMA apertures.
+  The entire destination span must fit within one image. Images and canonical
+  addresses share the same allocation, and the two access layouts can touch
+  overlapping bytes. Retain the underlying PVR allocation through completion
+  and any callback that uses it.
 - With the MMU enabled, destinations must use a direct P1/P2 alias; translated
   P0/P3 mappings are rejected rather than masked into an unrelated range.
 - A bridge-SRAM lease is claimed during execution through GD-DMA retirement;

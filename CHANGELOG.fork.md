@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Direct optical DMA
+
+- Added `gdrom_direct_load_aica()`: allocate an unpublished retail sound-RAM
+  block, DMA sectors directly from disc, and return its offset only on success.
+  Flycast interpreter and dynarec read back 17 sectors (34,816 bytes), checked
+  the adjacent guards and verified GDSTAR pointed into sound RAM. This is a
+  synchronous loading operation, not a live-playback or queued stream API.
+- Direct one-shot DMA recognizes both lower texture-memory mirrors without
+  changing their 32/64-bit layouts. Queued reads validate the entire span
+  before submission. Core routing stays direct by default with no BIOS fallback.
+
 ## 2026-11-27 — Graphics dependency refresh
 
 - Official KOS `master` at `9926b70a` was already included; no kernel merge.

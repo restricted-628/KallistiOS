@@ -15,7 +15,7 @@ WRAPPED = g1_bus_lock_timed g1_bus_unlock g1_bus_select_device_timed \
 all: $(TARGET)
 include $(KOS_BASE)/Makefile.rules
 
-gdrom_direct_probe.o: $(DRIVER) mmio-shim.h
+gdrom_direct_probe.o: $(DRIVER) mmio-shim.h $(addprefix $(dir $(DRIVER)),gdrom_aica_load.inc gdrom_aica_poll.h gdrom_dma_destination.h)
 	kos-cc $(CFLAGS) -include mmio-shim.h -c $(DRIVER) -o $@
 
 $(TARGET): $(OBJS)

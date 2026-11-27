@@ -683,6 +683,32 @@ int gdrom_direct_read_sectors_dma(
     gdrom_direct_sector_type_t sector_type, uint32_t timeout,
     gdrom_direct_result_t *result);
 
+/** \brief Allocate an unpublished retail sound-RAM block and load it from disc.
+
+    Direct G1 DMA into the block; no main-RAM staging or BIOS fallback.
+    Uses an initialized normal sound allocator and returns its 32-byte-aligned
+    offset in *sound_offset only on success. The caller then owns the block:
+    use snd_mem_free() after all later users have retired. No playback is
+    started. On error the output offset is unchanged and no allocation is
+    transferred, even if the optional transport result reports partial DMA.
+
+    Loading phase only, from an IRQ-enabled thread. Exclude allocator/sound
+    reset and shutdown, out-of-band G1/G2 access (including debug/NMI),
+    nonstandard DMAC initiators and services requiring bounded IRQ latency.
+    An active watchdog, armed G2 DMA or busy FIFOs can cause EBUSY. The
+    operation can mask IRQs for up to the transfer deadline (1..500 ms) plus
+    a 100 ms drain; failure to retire is a nonreturning hardware fault.
+    Command recovery may take additional time outside the mask. Normal
+    G1 serialization and single-deadline segmentation apply. FAD and sector
+    formats are as for gdrom_direct_read_sectors_dma(); raw counts must be even.
+
+    \retval 0  The entire allocation is loaded and its sound offset returned.
+    \retval -1 Failure, errno set; no allocation is published.
+*/
+int gdrom_direct_load_aica(uint32_t *sound_offset, uint32_t fad, size_t sectors,
+                           gdrom_direct_sector_type_t sector_type,
+                           uint32_t timeout, gdrom_direct_result_t *result);
+
 /** \brief Queue a cooked or raw read through the direct GD-DMA transport.
 
     This is the asynchronous form of the experimental direct DMA operation.

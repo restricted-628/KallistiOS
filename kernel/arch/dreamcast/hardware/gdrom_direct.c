@@ -12,11 +12,14 @@
 #include <string.h>
 
 #include <arch/arch.h>
+#include <arch/dmac.h>
 #include <arch/mmu.h>
 #include <dc/asic.h>
 #include <dc/gaps.h>
 #include <dc/gdrom_direct.h>
 #include <dc/memory.h>
+#include <dc/spu.h>
+#include <dc/sound/sound.h>
 #include <dc/wdt.h>
 
 #include <kos/cache.h>
@@ -31,6 +34,7 @@
 #include "gdrom_spi.h"
 #include "gaps_internal.h"
 #include "dma_memory.h"
+#include "../sound/arm/aica_cmd_iface.h"
 
 /* Register ordering in this file is a load-bearing part of the transport.
 
@@ -102,13 +106,6 @@ typedef struct gdrom_direct_async_read {
     uint32_t timeout;
     gdrom_direct_result_t *result;
 } gdrom_direct_async_read_t;
-
-typedef enum gdrom_dma_destination {
-    GDROM_DMA_DESTINATION_INVALID = 0,
-    GDROM_DMA_DESTINATION_SYSTEM_RAM,
-    GDROM_DMA_DESTINATION_VRAM,
-    GDROM_DMA_DESTINATION_GAPS_SRAM
-} gdrom_dma_destination_t;
 
 typedef struct gdrom_direct_async_seek {
     uint32_t fad;
@@ -1896,6 +1893,8 @@ static int wait_dma_inactive(uint64_t deadline) {
 #define G1_DMA_HALT() do { for(;;) arch_sleep(); } while(0)
 #endif
 
+#include "gdrom_aica_poll.h"
+
 static void stop_dma_or_halt(void) {
     int saved_errno = errno;
 
@@ -1918,56 +1917,7 @@ static void stop_dma_or_halt(void) {
     errno = saved_errno;
 }
 
-static bool dma_range_contains(uint32_t address, size_t size,
-                               uint32_t lower, uint32_t upper) {
-    return address >= lower && address < upper && size <= upper - address;
-}
-
-static bool dma_destination_alias_valid(uintptr_t address) {
-    uintptr_t area = address & ~MEM_AREA_CACHE_MASK;
-
-    if(area == MEM_AREA_P1_BASE || area == MEM_AREA_P2_BASE)
-        return true;
-    if(area == MEM_AREA_P0_BASE || area == MEM_AREA_P3_BASE)
-        return !mmu_enabled();
-    return false;
-}
-
-static gdrom_dma_destination_t dma_destination_classify(
-        uintptr_t virtual_address, size_t size, bool gaps_authorized) {
-    uint32_t physical = (uint32_t)(virtual_address & MEM_AREA_CACHE_MASK);
-    uint32_t vram_size = hardware_sys_mode(NULL) == HW_TYPE_RETAIL
-        ? 0x00800000u : 0x01000000u;
-
-    if(!dma_destination_alias_valid(virtual_address))
-        return GDROM_DMA_DESTINATION_INVALID;
-
-    /* Main RAM size is independent of retail/development VRAM capacity.
-       Preserve the existing index-mirror policy without truncating the
-       canonical upper bank on 32 MiB systems. */
-    if(dc_dma_main_ram_contains(physical, size, HW_MEMSIZE, true))
-        return GDROM_DMA_DESTINATION_SYSTEM_RAM;
-
-    if(dma_range_contains(physical, size,
-                          0x04000000u, 0x04000000u + vram_size)
-            || dma_range_contains(physical, size,
-                                  0x05000000u,
-                                  0x05000000u + vram_size))
-        return GDROM_DMA_DESTINATION_VRAM;
-
-    if(gaps_authorized
-            && dma_range_contains(physical, size, GAPS_SRAM_PHYS_BASE,
-                                   GAPS_SRAM_PHYS_BASE + GAPS_SRAM_SIZE))
-        return GDROM_DMA_DESTINATION_GAPS_SRAM;
-
-    return GDROM_DMA_DESTINATION_INVALID;
-}
-
-static bool dma_destination_cacheable(uintptr_t virtual_address,
-                                      gdrom_dma_destination_t destination) {
-    return destination == GDROM_DMA_DESTINATION_SYSTEM_RAM
-        && (virtual_address & ~MEM_AREA_CACHE_MASK) != MEM_AREA_P2_BASE;
-}
+#include "gdrom_dma_destination.h"
 
 static uint32_t dma_protection_value(uint32_t address, size_t size) {
     uint32_t first = (address >> 20) & 0x7fu;
@@ -2026,7 +1976,8 @@ static int read_sectors_dma_deadline(
         gdrom_direct_result_t *result,
         gdrom_direct_dma_test_mode_t test_mode, semaphore_t *external_event,
         gdrom_direct_cancel_t cancel, gdrom_direct_progress_t progress,
-        void *hook_data, bool gaps_authorized, uint64_t deadline) {
+        void *hook_data, gdrom_dma_destination_t special_destination,
+        uint64_t deadline) {
     gdrom_direct_dma_operation_t operation;
     semaphore_t local_event;
     gdrom_spi_packet_t packet;
@@ -2046,6 +1997,7 @@ static int read_sectors_dma_deadline(
     bool command_active = false;
     bool bus_faulted = false;
     bool cacheable = false;
+    bool aica = special_destination == GDROM_DMA_DESTINATION_AICA;
     gdrom_dma_destination_t destination;
     int saved_errno = 0;
     int rv = -1;
@@ -2063,8 +2015,17 @@ static int read_sectors_dma_deadline(
     }
 
     physical_address = (uint32_t)(buffer_address & MEM_AREA_CACHE_MASK);
-    destination = dma_destination_classify(buffer_address, expected_bytes,
-                                           gaps_authorized);
+    if(aica && buffer_address == (MEM_AREA_P2_BASE | physical_address)
+            && dma_range_contains(physical_address, expected_bytes,
+                                  SPU_RAM_BASE + AICA_RAM_START,
+                                  SPU_RAM_BASE + SPU_RAM_SIZE_2MB))
+        destination = GDROM_DMA_DESTINATION_AICA;
+    else if(aica)
+        destination = GDROM_DMA_DESTINATION_INVALID;
+    else
+        destination = dma_destination_classify(buffer_address, expected_bytes,
+                    special_destination == GDROM_DMA_DESTINATION_GAPS_SRAM,
+                    &physical_address);
     if(destination == GDROM_DMA_DESTINATION_INVALID) {
         errno = EFAULT;
         return -1;
@@ -2089,7 +2050,7 @@ static int read_sectors_dma_deadline(
         while(sem_trywait(operation.event) == 0) {
         }
     }
-    else {
+    else if(!aica) {
         if(sem_init(&local_event, 0) < 0)
             return -1;
         local_event_ready = true;
@@ -2132,32 +2093,39 @@ static int read_sectors_dma_deadline(
         goto out_stop_dma;
     command_active = false;
 
-    dma_client = g1_bus_dma_client_register(direct_dma_irq, &operation);
-    if(dma_client == G1_BUS_DMA_CLIENT_INVALID)
-        goto out_restore_ctl;
-    operation.active = true;
-    if(g1_bus_gd_command_client_register(direct_command_irq,
-                                         &operation) < 0)
-        goto out_deactivate;
-    command_client = true;
+    if(!aica) {
+        dma_client = g1_bus_dma_client_register(direct_dma_irq, &operation);
+        if(dma_client == G1_BUS_DMA_CLIENT_INVALID)
+            goto out_restore_ctl;
+        operation.active = true;
+        if(g1_bus_gd_command_client_register(direct_command_irq,
+                                             &operation) < 0)
+            goto out_deactivate;
+        command_client = true;
+    }
 
     cacheable = dma_destination_cacheable(buffer_address, destination);
     if(cacheable)
         dcache_inval_range(buffer_address, expected_bytes);
 
-    /* Program every Holly DMA parameter before enabling the channel. GDST is
-       intentionally still clear here; it starts only after packet delivery. */
-    G1_OUT32(G1_ATA_DMA_PROTECTION_P2,
-             test_mode == GDROM_DIRECT_DMA_TEST_EXCLUDED_PROTECTION
-                 ? excluded_dma_protection_value(physical_address)
-                 : dma_protection_value(physical_address, expected_bytes));
+    /* The AICA path programs the destination in the polled window.
+       GDAPRO protects system memory and is unchanged for wave RAM. */
+    if(!aica) {
+        G1_OUT32(G1_ATA_DMA_PROTECTION_P2,
+                 test_mode == GDROM_DIRECT_DMA_TEST_EXCLUDED_PROTECTION
+                     ? excluded_dma_protection_value(physical_address)
+                     : dma_protection_value(physical_address, expected_bytes));
+    }
     G1_OUT32(G1_ATA_DMA_RACCESS_WAIT, G1_ACCESS_WDMA_MODE2);
-    G1_OUT32(G1_ATA_DMA_ADDRESS, physical_address);
-    G1_OUT32(G1_ATA_DMA_LENGTH, expected_bytes);
-    G1_OUT32(G1_ATA_DMA_DIRECTION, G1_DMA_TO_MEMORY);
-    G1_OUT32(G1_ATA_DMA_ENABLE, 1);
+    if(!aica) {
+        G1_OUT32(G1_ATA_DMA_ADDRESS, physical_address);
+        G1_OUT32(G1_ATA_DMA_LENGTH, expected_bytes);
+        G1_OUT32(G1_ATA_DMA_DIRECTION, G1_DMA_TO_MEMORY);
+        G1_OUT32(G1_ATA_DMA_ENABLE, 1);
+    }
 
-    G1_OUT8(G1_ATA_CTL, GDROM_CTL_INTERRUPTS_ON);
+    G1_OUT8(G1_ATA_CTL, aica ? GDROM_CTL_INTERRUPTS_OFF
+                            : GDROM_CTL_INTERRUPTS_ON);
     G1_OUT8(G1_ATA_FEATURES, G1_ATA_FEATURE_DMA);
     G1_OUT8(G1_ATA_LBA_LOW, 0);
     G1_OUT8(G1_ATA_LBA_MID, 0);
@@ -2182,7 +2150,8 @@ static int read_sectors_dma_deadline(
 
     /* PACKET request itself raises command INTRQ. It has just been
        acknowledged and is not the terminal command event paired with DMA. */
-    rearm_command_irq(&operation);
+    if(!aica)
+        rearm_command_irq(&operation);
 
     write_packet(&packet);
     ata_400ns_delay();
@@ -2193,6 +2162,17 @@ static int read_sectors_dma_deadline(
     }
 
     observed->phase = GDROM_DIRECT_PHASE_WAIT_DMA;
+    if(aica) {
+        if(poll_aica_dma(physical_address, expected_bytes, deadline, observed) < 0)
+            goto out_stop_dma;
+        /* The drive can finish its command after Holly drains the data.
+           The taskfile is safe to poll again once GDST is clear. */
+        if(deadline_timeout(deadline, &remaining) < 0
+                || g1_bus_wait_status(0, G1_ATA_SR_BSY | G1_ATA_SR_DRQ,
+                                      remaining, NULL) < 0)
+            goto out_stop_dma;
+        goto check_dma_result;
+    }
     {
         irq_mask_t irq_state = irq_disable();
 
@@ -2233,9 +2213,11 @@ static int read_sectors_dma_deadline(
     if(wait_dma_inactive(deadline) < 0)
         goto out_stop_dma;
 
-    observed->dma_current_address =
-        G1_IN32(G1_ATA_DMA_CURRENT_ADDR);
-    observed->dma_transferred = G1_IN32(G1_ATA_DMA_CURRENT_LEN);
+check_dma_result:
+    if(!aica) {
+        observed->dma_current_address = G1_IN32(G1_ATA_DMA_CURRENT_ADDR);
+        observed->dma_transferred = G1_IN32(G1_ATA_DMA_CURRENT_LEN);
+    }
     if(progress)
         progress(observed->dma_transferred, hook_data);
     if(observed->dma_transferred != expected_bytes) {
@@ -2289,11 +2271,13 @@ out_stop_dma:
         bus_faulted = true;
     }
 
-    observed->command_event = operation.command_event;
-    observed->dma_event_seen = operation.dma_event;
-    observed->dma_event = operation.dma_code;
-    observed->dma_current_address = G1_IN32(G1_ATA_DMA_CURRENT_ADDR);
-    observed->dma_transferred = G1_IN32(G1_ATA_DMA_CURRENT_LEN);
+    if(!aica) {
+        observed->command_event = operation.command_event;
+        observed->dma_event_seen = operation.dma_event;
+        observed->dma_event = operation.dma_code;
+        observed->dma_current_address = G1_IN32(G1_ATA_DMA_CURRENT_ADDR);
+        observed->dma_transferred = G1_IN32(G1_ATA_DMA_CURRENT_LEN);
+    }
     if(rv < 0)
         observed->transferred = observed->dma_transferred < expected_bytes
             ? observed->dma_transferred : expected_bytes;
@@ -2342,36 +2326,19 @@ static int read_sectors_dma_internal(
         void *hook_data, bool gaps_authorized) {
     return read_sectors_dma_deadline(buffer, fad, sectors, sector_type,
         timeout, result, test_mode, external_event, cancel, progress,
-        hook_data, gaps_authorized, 0);
+        hook_data, gaps_authorized ? GDROM_DMA_DESTINATION_GAPS_SRAM
+                                   : GDROM_DMA_DESTINATION_INVALID, 0);
 }
 
-int gdrom_direct_read_sectors_dma(
-        void *buffer, uint32_t fad, size_t sectors,
+/* Both entry points validate the whole destination and FAD span first. */
+static int read_sectors_dma_range(
+        uintptr_t buffer, uint32_t fad, size_t sectors,
         gdrom_direct_sector_type_t sector_type, uint32_t timeout,
-        gdrom_direct_result_t *result) {
-    gdrom_direct_result_t local_result;
-    gdrom_direct_result_t *observed = result ? result : &local_result;
-    size_t bytes = dma_range_bytes(sectors, sector_type);
+        gdrom_direct_result_t *observed, gdrom_dma_destination_t destination) {
     size_t sector_size = sector_type == GDROM_DIRECT_SECTOR_RAW2352
         ? GDROM_DIRECT_RAW_SECTOR_SIZE : GDROM_DIRECT_SECTOR_SIZE;
     size_t completed = 0;
-    uint64_t deadline;
-
-    memset(observed, 0, sizeof(*observed));
-    if(!buffer || ((uintptr_t)buffer & 31u) || fad < 150u
-            || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
-            || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
-        errno = EINVAL;
-        return -1;
-    }
-    if(bytes > UINTPTR_MAX - (uintptr_t)buffer
-            || dma_destination_classify((uintptr_t)buffer, bytes, false)
-                == GDROM_DMA_DESTINATION_INVALID) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    deadline = timer_ms_gettime64() + timeout;
+    uint64_t deadline = timer_ms_gettime64() + timeout;
     while(completed < sectors) {
         size_t chunk = sectors - completed;
         size_t prior_bytes = completed * sector_size;
@@ -2381,9 +2348,10 @@ int gdrom_direct_read_sectors_dma(
             chunk = GDROM_DIRECT_DMA_MAX_SECTORS;
         /* Preserve the absolute deadline across preemption and G1 reacquisition.
            The bounded transport owns cache/IRQ/recovery for each command. */
-        rv = read_sectors_dma_deadline((uint8_t *)buffer + prior_bytes,
+        rv = read_sectors_dma_deadline((void *)(buffer + prior_bytes),
             fad + (uint32_t)completed, chunk, sector_type, timeout, observed,
-            GDROM_DIRECT_DMA_TEST_NONE, NULL, NULL, NULL, NULL, false, deadline);
+            GDROM_DIRECT_DMA_TEST_NONE, NULL, NULL, NULL, NULL, destination,
+            deadline);
         observed->transferred += prior_bytes;
         if(rv < 0)
             return -1;
@@ -2391,6 +2359,88 @@ int gdrom_direct_read_sectors_dma(
     }
     return 0;
 }
+
+int gdrom_direct_read_sectors_dma(
+        void *buffer, uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result) {
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *observed = result ? result : &local_result;
+    size_t bytes = dma_range_bytes(sectors, sector_type);
+
+    memset(observed, 0, sizeof(*observed));
+    if(!buffer || ((uintptr_t)buffer & 31u) || fad < 150u
+            || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
+            || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
+        errno = EINVAL;
+        return -1;
+    }
+    if(bytes > UINTPTR_MAX - (uintptr_t)buffer
+            || dma_destination_classify((uintptr_t)buffer, bytes, false, NULL)
+                == GDROM_DMA_DESTINATION_INVALID) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    return read_sectors_dma_range((uintptr_t)buffer, fad, sectors, sector_type,
+                                  timeout, observed, GDROM_DMA_DESTINATION_INVALID);
+}
+
+static int aica_read_args(uint32_t fad, size_t sectors, size_t bytes,
+                          uint32_t timeout) {
+    irq_mask_t irq_state;
+
+    irq_state = irq_disable();
+    irq_restore(irq_state);
+    if(irq_inside_int() || (irq_state & GDROM_AICA_SR_MASK)) {
+        errno = EPERM;
+        return -1;
+    }
+    if(hardware_sys_mode(NULL) != HW_TYPE_RETAIL) {
+        errno = ENOTSUP;
+        return -1;
+    }
+    if(!bytes || !timeout || timeout > GDROM_AICA_MAX_POLL_MS
+            || fad < 150u || fad > GDROM_SPI_MAX_U24
+            || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
+        errno = EINVAL;
+        return -1;
+    }
+    return 0;
+}
+
+int gdrom_direct_read_sectors_dma_aica(
+        uintptr_t sound_destination, uint32_t fad, size_t sectors,
+        gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+        gdrom_direct_result_t *result) {
+    const uintptr_t sound_image = SPU_RAM_UNCACHED_BASE + 0x02000000u;
+    uintptr_t sound_offset = sound_destination;
+    gdrom_direct_result_t local_result;
+    gdrom_direct_result_t *observed = result ? result : &local_result;
+    size_t bytes = dma_range_bytes(sectors, sector_type);
+
+    memset(observed, 0, sizeof(*observed));
+    if(aica_read_args(fad, sectors, bytes, timeout) < 0)
+        return -1;
+    /* An uncached CPU pointer into either view names the same allocation.
+       Program the canonical GDSTAR address in both cases. */
+    if(sound_destination >= sound_image)
+        sound_offset -= sound_image;
+    else if(sound_destination >= SPU_RAM_UNCACHED_BASE)
+        sound_offset -= SPU_RAM_UNCACHED_BASE;
+    if((sound_offset & 31u) || sound_offset < AICA_RAM_START
+            || sound_offset >= SPU_RAM_SIZE_2MB
+            || bytes > SPU_RAM_SIZE_2MB - sound_offset) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    return read_sectors_dma_range(SPU_RAM_UNCACHED_BASE + sound_offset, fad,
+                                  sectors, sector_type, timeout, observed,
+                                  GDROM_DMA_DESTINATION_AICA);
+}
+
+#include "gdrom_aica_load.inc"
 
 int gdrom_direct_read_sectors_dma_gaps(
         gaps_sram_lease_t lease, size_t offset, uint32_t fad, size_t sectors,
@@ -2920,8 +2970,8 @@ int gdrom_direct_stream_transfer(
         return -1;
     }
 
-    physical_address = (uint32_t)(buffer_address & MEM_AREA_CACHE_MASK);
-    destination = dma_destination_classify(buffer_address, bytes, false);
+    destination = dma_destination_classify(buffer_address, bytes, false,
+                                           &physical_address);
     /* The common stream request object currently models cacheability as a
        system-RAM alias property. Keep streams in system RAM until that layer
        can represent PVR destinations explicitly; one-shot direct DMA is the
@@ -3117,7 +3167,7 @@ static void direct_dma_chain_finalize(cdrom_request_t *request,
     free(data);
 }
 
-/* Admission has already fixed the complete format/FAD span and byte count. */
+/* Admission has already validated the complete source and destination spans. */
 static cdrom_request_t *direct_dma_chain_submit(
         void *buffer, uint32_t fad, size_t sectors, size_t bytes,
         gdrom_direct_sector_type_t sector_type, uint32_t timeout,
@@ -3128,12 +3178,6 @@ static cdrom_request_t *direct_dma_chain_submit(
     cdrom_request_t *request;
     int saved_errno;
 
-    if(bytes > UINTPTR_MAX - (uintptr_t)buffer
-            || dma_destination_classify((uintptr_t)buffer, bytes, false)
-                == GDROM_DMA_DESTINATION_INVALID) {
-        errno = EFAULT;
-        return NULL;
-    }
     chain = malloc(sizeof(*chain));
     if(!chain)
         return NULL;
@@ -3180,6 +3224,12 @@ cdrom_request_t *gdrom_direct_read_sectors_dma_async(
             || fad > GDROM_SPI_MAX_U24 || !bytes || !timeout
             || sectors - 1u > GDROM_SPI_MAX_U24 - fad) {
         errno = EINVAL;
+        return NULL;
+    }
+    if(bytes > UINTPTR_MAX - (uintptr_t)buffer
+            || dma_destination_classify((uintptr_t)buffer, bytes, false, NULL)
+                == GDROM_DMA_DESTINATION_INVALID) {
+        errno = EFAULT;
         return NULL;
     }
 

@@ -46,3 +46,5 @@ ifneq ($(KOS_SUBARCH), naomi)
 endif
 
 include $(KOS_BASE)/Makefile.prefab
+
+gdrom_direct.o: gdrom_aica_load.inc gdrom_aica_poll.h gdrom_dma_destination.h

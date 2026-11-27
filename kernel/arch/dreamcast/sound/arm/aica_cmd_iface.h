@@ -11,7 +11,7 @@
 #ifndef __ARM_AICA_CMD_IFACE_H
 #define __ARM_AICA_CMD_IFACE_H
 
-#include "aica_comm.h"
+#include <dc/sound/aica_comm.h>
 
 /* This is where our SH-4/AICA comm variables go... */
 

@@ -23,6 +23,7 @@ static bool testing, held, packet_phase, done, masked, cancelled;
 static uint8_t packet[12], control, feature, mode;
 static uint32_t address, length, protection, direction, enabled, transferred;
 static uintptr_t wanted_address;
+static uint32_t wanted_bus_address;
 static size_t wanted_bytes, progress_bytes, lease_size;
 static int transfer_delta;
 static bool reverse_events, fail_claim;
@@ -128,7 +129,7 @@ void dma_probe_out32(uintptr_t reg, uint32_t value) {
         case G1_ATA_DMA_STATUS:
             CHECK(value == 1 && enabled == 1 && direction == G1_DMA_TO_MEMORY);
             CHECK(packet_bytes == 12 && dma_handler && command_handler);
-            CHECK(address == (wanted_address & 0x1fffffffu) && length == wanted_bytes);
+            CHECK(address == wanted_bus_address && length == wanted_bytes);
             CHECK(protection == (0x88430000u | (((address >> 20) & 127u) << 8)
                                  | (((address + length - 1) >> 20) & 127u)));
             ++starts;
@@ -165,7 +166,10 @@ int __wrap_g1_bus_lock_timed(uint32_t timeout) {
         if(chunk > 16) chunk = 16;
         CHECK(locks < 8 && completed < total_sectors);
         if(locks < 8) budgets[locks] = timeout;
-        if(locks) wanted_address += wanted_bytes;
+        if(locks) {
+            wanted_address += wanted_bytes;
+            wanted_bus_address += wanted_bytes;
+        }
         wanted_bytes = chunk * wire_size;
         if(locks < 8) destinations[locks] = wanted_address;
         packet_bytes = 0;
@@ -287,6 +291,7 @@ void __wrap_gaps_sram_dma_release(gaps_sram_lease_t lease, gaps_sram_dma_owner_t
 static void prepare(uintptr_t dest, size_t bytes) {
     CHECK(!held && !dma_handler && !command_handler);
     wanted_address = dest; wanted_bytes = bytes;
+    wanted_bus_address = (uint32_t)(dest & 0x1fffffffu);
     locks = unlocks = starts = invalidations = submissions = claims = releases = 0;
     packet_bytes = 0; memset(packet, 0, sizeof(packet));
     address = length = protection = direction = enabled = transferred = 0;
@@ -499,6 +504,32 @@ int main(void) {
     CHECK(gdrom_direct_read_sectors_dma((void *)(0x8c000000u + HW_MEMSIZE - 4096),
           150, 2, GDROM_DIRECT_SECTOR_RAW2352, 1000, &result) == -1 && errno == EFAULT);
     CHECK(!locks && result.transferred == 0);
+
+    /* Register destinations and unowned G2 memory must fail before I/O or
+       queue submission, even when a DMA request fits and is aligned. */
+    const uintptr_t forbidden_destinations[] = {
+        0xa05f7800u, /* G2 control */
+        0xa0600000u, /* Modem */
+        0xa0700000u, /* AICA registers */
+        0xa2700000u, /* AICA register image */
+        0xa0710000u, /* AICA RTC */
+        0xa0840000u, /* Wave RAM without explicit AICA ownership */
+        0xa2840000u, /* Wave RAM image without explicit AICA ownership */
+        0xa0000000u + GAPS_SRAM_PHYS_BASE,
+        0xa2000000u + GAPS_SRAM_PHYS_BASE, /* GAPS image without a lease */
+        0xb4000000u, /* Unowned expansion */
+        0xb0000000u, /* TA FIFO */
+    };
+    for(size_t i = 0; i < sizeof(forbidden_destinations) /
+                          sizeof(forbidden_destinations[0]); ++i) {
+        void *dest = (void *)forbidden_destinations[i];
+        CHECK(gdrom_direct_read_sectors_dma(dest, 150, 1,
+              GDROM_DIRECT_SECTOR_MODE1, 1000, &result) == -1 && errno == EFAULT);
+        CHECK(!gdrom_direct_read_sectors_dma_async(dest, 150, 1,
+              GDROM_DIRECT_SECTOR_MODE1, 1000, &result, NULL, NULL) && errno == EFAULT);
+    }
+    CHECK(!locks && !starts && !invalidations && !submissions && result.transferred == 0);
+
     /* Deferred execution uses the copied format and byte counts. */
     prepare(0x8c200000, 4704);
     CHECK(gdrom_direct_read_sectors_dma_async((void *)wanted_address, 150, 2,
@@ -533,6 +564,25 @@ int main(void) {
           GDROM_DIRECT_SECTOR_RAW2352, 1000, &result, NULL, NULL) == request);
     fail_claim = true;
     CHECK(execute(request, captured) == ERR_BUSY && !locks && !releases);
+
+    /* Exercise the real GDSTAR write for both image apertures. */
+    for(unsigned i = 0; i < 2; ++i) {
+        uintptr_t image = i ? 0xa7120020u : 0xa6120020u;
+        uint32_t canonical = i ? 0x05120020u : 0x04120020u;
+        prepare(image, 2048);
+        wanted_bus_address = canonical;
+        CHECK(gdrom_direct_read_sectors_dma((void *)image, 150, 1,
+              GDROM_DIRECT_SECTOR_MODE1, 1000, &result) == 0);
+        CHECK(result.dma_current_address == canonical + 2048);
+        verify(GDROM_DIRECT_SECTOR_MODE1, 1, 0);
+        prepare(image, 2048);
+        wanted_bus_address = canonical;
+        CHECK(gdrom_direct_read_sectors_dma_async((void *)image, 150, 1,
+              GDROM_DIRECT_SECTOR_MODE1, 1000, &result, NULL, NULL) == request);
+        CHECK(submissions == 1 && execute && execute(request, captured) == ERR_OK);
+        CHECK(result.dma_current_address == canonical + 2048);
+        verify(GDROM_DIRECT_SECTOR_MODE1, 1, 0);
+    }
 
     chain_case(0x8c200000, 17, GDROM_DIRECT_SECTOR_MODE1, 0, 10, 1000, 0);
     chain_case(0x8c200000, 33, GDROM_DIRECT_SECTOR_MODE2_FORM1, 0, 10, 1000, 0);

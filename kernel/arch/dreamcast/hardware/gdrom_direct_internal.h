@@ -15,6 +15,19 @@
 
 typedef struct gdrom_direct_stream gdrom_direct_stream_t;
 
+/* Private retail GD-to-wave-RAM read. Accepts a sound offset or a P2
+   address in either wave RAM view. The caller owns an aligned,
+   unpublished sample allocation above the AICA firmware and shared state
+   and excludes ARM/DSP/playback access to those bytes until return. Call in
+   ordinary IRQ-enabled thread context. Transfers use commands of at most
+   sixteen sectors and a whole-read timeout of at most 500 ms. Refuses
+   active/armed DMA, watchdog use or undrained FIFOs with EBUSY. Failure can
+   leave a partially written range. */
+int gdrom_direct_read_sectors_dma_aica(
+    uintptr_t sound_destination, uint32_t fad, size_t sectors,
+    gdrom_direct_sector_type_t sector_type, uint32_t timeout,
+    gdrom_direct_result_t *result);
+
 /* Translate a failed direct operation to the common ERR_* vocabulary.
    Shared by direct request executors and legacy convenience wrappers. */
 int gdrom_direct_failure_result_internal(

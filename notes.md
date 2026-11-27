@@ -48,6 +48,12 @@ Anchor: `doc/gaps-ownership.md`; current research is outside this repository.
 
 ## D05 — Failure must not release a live DMA destination
 
+**Retail wave-RAM loading (2026-11-27):** The synchronous direct GD loader
+owns a fresh sound allocation until the entire transfer succeeds. Retired
+failures can release that unpublished allocation; an unretired DMA or pending
+destination write cannot. The API is for a cooperative loading phase, not
+arbitrary caller addresses, AICA registers, or real-time stream refills.
+
 **Accepted:** Prefer the agreed halt behavior if a direct-disc DMA engine cannot
 relinquish its destination. Do not introduce the rejected cross-system quarantine
 design as a cleanup or recovery improvement without reopening the decision.
