@@ -6,7 +6,7 @@ TARGETS = driver-test network-test platform-test
 .NOTPARALLEL:
 .SECONDARY:
 
-platform-test: hardware.inc scif.inc
+platform-test: hardware.inc scif.inc exit.inc
 
 test: $(TARGETS)
 	./driver-test
@@ -15,7 +15,7 @@ test: $(TARGETS)
 	python3 callers.py
 	python3 linkage.py
 
-%.inc: extract.py ../../kernel/arch/dreamcast/hardware/network/broadband_adapter.c ../../kernel/net/net_core.c ../../kernel/arch/dreamcast/kernel/init.c ../../kernel/arch/dreamcast/hardware/hardware.c ../../kernel/arch/dreamcast/hardware/scif.c
+%.inc: extract.py ../../kernel/arch/dreamcast/hardware/network/broadband_adapter.c ../../kernel/net/net_core.c ../../kernel/arch/dreamcast/kernel/init.c ../../kernel/arch/dreamcast/hardware/hardware.c ../../kernel/arch/dreamcast/hardware/scif.c ../../kernel/libc/newlib/newlib_exit.c
 	python3 extract.py
 
 %-test: %-test.c %.inc test-shim.h

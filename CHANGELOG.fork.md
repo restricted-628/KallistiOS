@@ -6,6 +6,15 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Wave-RAM reservation and orderly shutdown
+
+- The sound allocator can privately reserve an unpublished wave-RAM span
+  across successive fills. Only its current writer can finish a fill, and
+  adoption requires the full range. This is not a public repeat-load API.
+- Sound and SPU reconfiguration refuse live reservations. Orderly platform
+  exit and exec close reservation admission before teardown; stock shutdown
+  retires SPU workers and checks G2 shutdown before clearing wave RAM.
+
 ## 2026-11-27 — Mixed tile passes and explicit async list flush
 
 - A scene can first use direct store queues or flush a buffered list after

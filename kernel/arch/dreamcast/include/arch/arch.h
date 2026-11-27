@@ -210,9 +210,12 @@ int hardware_sys_init(void);
     \ingroup arch
 
     This will be done automatically for you on start by the default arch_main(),
-    so you shouldn't have to deal with this yourself.
+    so you shouldn't have to deal with this yourself. A runtime caller must
+    be in ordinary thread context with IRQs enabled and own the peripherals
+    being reinitialized.
 
-    \retval 0               On success (no error conditions defined).
+    \retval 0               On success.
+    \retval -1              On SPU reconfiguration refusal, with errno set.
 */
 int hardware_periph_init(void);
 
@@ -221,7 +224,9 @@ int hardware_periph_init(void);
 
     This function will shut down anything initted with hardware_sys_init() and
     hardware_periph_init(). This will be done for you automatically by the
-    various exit points, so you shouldn't have to do this yourself.
+    various exit points. Call from the IRQ-enabled kernel/main thread after
+    releasing unpublished wave reservations. If teardown is refused, this
+    void entry waits without continuing platform teardown.
 */
 void hardware_shutdown(void);
 

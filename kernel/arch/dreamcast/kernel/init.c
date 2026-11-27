@@ -38,6 +38,9 @@
 #include <dc/dcload.h>
 
 #include "initall_hdrs.h"
+#include "shutdown_internal.h"
+#include "../hardware/spu_internal.h"
+#include "../sound/snd_mem_reservation.h"
 
 /* ctor/dtor stuff from libgcc. */
 extern void _init(void);
@@ -123,6 +126,10 @@ extern void (*eth_shutdown_weak)(void);
 static bool net_shutdown_runtime_live;
 volatile int arch_net_shutdown_error;
 volatile enum net_shutdown_stage arch_net_shutdown_stage;
+volatile int arch_wave_shutdown_error;
+static kthread_t *platform_shutdown_owner;
+static bool platform_shutdown_started;
+static bool auto_shutdown_started;
 
 bool arch_net_shutdown_can_wait(void) {
     irq_mask_t sr = irq_disable();
@@ -133,16 +140,11 @@ bool arch_net_shutdown_can_wait(void) {
     return ready;
 }
 
-void arch_net_shutdown_wait(int error, enum net_shutdown_stage stage) {
-    irq_mask_t sr = irq_disable();
-    arch_net_shutdown_error = error;
-    arch_net_shutdown_stage = stage;
-    irq_restore(sr);
-
+static void arch_shutdown_wait(const char *message) __noreturn;
+static void arch_shutdown_wait(const char *message) {
     if(arch_net_shutdown_can_wait()) {
-        static const char message[] = "KOS: network shutdown refused; resources retained.\r\n";
-        for(size_t i = 0; i < sizeof(message) - 1; ++i)
-            if(scif_try_write(message[i]) != 1)
+        while(*message)
+            if(scif_try_write(*message++) != 1)
                 break;
         for(;;)
             thd_sleep(1000);
@@ -151,6 +153,47 @@ void arch_net_shutdown_wait(int error, enum net_shutdown_stage stage) {
     /* Unsupported entry context: never force-enable IRQs or enter genwait. */
     for(;;)
         arch_sleep();
+}
+
+void arch_net_shutdown_wait(int error, enum net_shutdown_stage stage) {
+    irq_mask_t sr = irq_disable();
+    arch_net_shutdown_error = error;
+    arch_net_shutdown_stage = stage;
+    irq_restore(sr);
+    arch_shutdown_wait("KOS: network shutdown refused; resources retained.\r\n");
+}
+
+void arch_wave_shutdown_wait(int error) {
+    irq_mask_t sr = irq_disable();
+    arch_wave_shutdown_error = error;
+    irq_restore(sr);
+    arch_shutdown_wait("KOS: wave/platform shutdown refused; resources retained.\r\n");
+}
+
+int arch_shutdown_require_main_thread(void) {
+    kthread_t *thread = thd_get_current();
+
+    /* thd_shutdown destroys every carrier except the kernel thread. The
+       kernel thread is also outside the device workers it must join. */
+    if(!thread || thread->tid != 1 || thread->state != STATE_RUNNING) {
+        errno = EPERM;
+        return -1;
+    }
+    return 0;
+}
+
+bool arch_shutdown_owns_wave_gate(void) {
+    return platform_shutdown_owner && platform_shutdown_owner == thd_get_current();
+}
+
+void arch_shutdown_prepare(void) {
+    if(arch_shutdown_owns_wave_gate())
+        return;
+
+    if(arch_shutdown_require_main_thread() < 0 || snd_mem_reconfigure_begin() < 0)
+        arch_wave_shutdown_wait(errno);
+
+    platform_shutdown_owner = thd_get_current();
 }
 
 int arch_net_shutdown_preflight(void) {
@@ -313,7 +356,7 @@ int  __weak_symbol arch_auto_init(void) {
     KOS_INIT_FLAG_CALL(fs_romdisk_init);  /* Romdisk */
     KOS_INIT_FLAG_CALL(fs_rnd_init);      /* /dev/urandom etc. */
 
-    hardware_periph_init();     /* DC peripheral init */
+    hardware_periph_init_boot(); /* DC peripheral init before IRQ enable */
 
     if(!KOS_INIT_FLAG_CALL(fs_romdisk_mount_builtin))
         KOS_INIT_FLAG_CALL(fs_romdisk_mount_builtin_legacy);
@@ -341,8 +384,19 @@ int  __weak_symbol arch_auto_init(void) {
 }
 
 void  __weak_symbol arch_auto_shutdown(void) {
+    arch_shutdown_prepare();
+    if(auto_shutdown_started)
+        arch_wave_shutdown_wait(EALREADY);
+    auto_shutdown_started = true;
+
     if(arch_net_shutdown_preflight() < 0)
         arch_net_shutdown_wait(errno, NET_SHUTDOWN_PLATFORM);
+
+    /* Retire completion callbacks while their VFS and module dependencies
+       are still available. The request system stays closed through reset. */
+    if(spu_transfer_system_shutdown() < 0)
+        arch_wave_shutdown_wait(errno);
+
     /* Restore the default transport before it is torn down below. */
     dcload_syscall_net_shutdown();
 
@@ -380,9 +434,8 @@ void  __weak_symbol arch_auto_shutdown(void) {
     nmmgr_shutdown();
 
     /* Hardware cleanup can wait for workers and use interrupts here. */
-    snd_shutdown();
     pvr_shutdown();
-    hardware_shutdown();
+    hardware_shutdown_after_spu_retired();
 
     net_shutdown_runtime_live = false;
     thd_shutdown();
@@ -451,6 +504,11 @@ void arch_set_exit_path(int path) {
 
 /* Does the actual shutdown stuff for a proper shutdown */
 void arch_shutdown(void) {
+    arch_shutdown_prepare();
+    if(platform_shutdown_started || auto_shutdown_started)
+        arch_wave_shutdown_wait(EALREADY);
+    platform_shutdown_started = true;
+
     if(arch_net_shutdown_preflight() < 0)
         arch_net_shutdown_wait(errno, NET_SHUTDOWN_PLATFORM);
     /* Run dtors */
@@ -464,20 +522,9 @@ void arch_shutdown(void) {
     /* Turn off UBC breakpoints, if any */
     ubc_shutdown();
 
-    /* Do auto-shutdown... or use the "light weight" version underneath */
-#if 1
+    /* The weak hook runs with reservation admission closed. */
     arch_auto_shutdown();
-#else
-    /* Ensure that interrupts are disabled */
-    irq_disable();
-
-    /* Make sure that PVR and Maple are shut down */
-    pvr_shutdown();
-    maple_shutdown();
-
-    /* Shut down any other hardware things */
-    hardware_shutdown();
-#endif
+    net_shutdown_runtime_live = false;
 
     if(__kos_init_flags & INIT_MALLOCSTATS) {
         malloc_stats();
@@ -497,6 +544,7 @@ void arch_exit(void) {
 
 /* Return point from newlib's _exit() (configurable) */
 void arch_exit_handler(int ret_code) {
+    arch_shutdown_prepare();
     if(arch_net_shutdown_preflight() < 0)
         arch_net_shutdown_wait(errno, NET_SHUTDOWN_PLATFORM);
     dbglog(DBG_INFO, "\narch: exit return code %d\n", ret_code);

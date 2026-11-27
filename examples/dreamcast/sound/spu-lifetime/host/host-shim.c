@@ -4,6 +4,7 @@
 #include <dc/spu.h>
 #include <stdio.h>
 #include <sched.h>
+#include <stdatomic.h>
 #include <unistd.h>
 
 static pthread_mutex_t irq_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -143,6 +144,32 @@ void spu_memread(void *to, uintptr_t from, size_t length) {
 }
 static unsigned disabled, cleared;
 void spu_disable(void) { ++disabled; }
+
+/* Model the allocator barrier while running the real request workers. */
+static _Atomic(kthread_t *) wave_gate;
+int snd_mem_reconfigure_begin(void) {
+    kthread_t *none = NULL;
+    if(atomic_compare_exchange_strong(&wave_gate, &none, thd_get_current()))
+        return 0;
+    errno = EBUSY;
+    return -1;
+}
+int snd_mem_reconfigure_require_owner(void) {
+    if(atomic_load(&wave_gate) == thd_get_current())
+        return 0;
+    errno = EPERM;
+    return -1;
+}
+int snd_mem_reconfigure_shutdown(void) { return snd_mem_reconfigure_require_owner(); }
+int snd_shutdown_in_transition(void) { return snd_mem_reconfigure_require_owner(); }
+bool arch_shutdown_owns_wave_gate(void) { return false; }
+int snd_mem_reconfigure_end(void) {
+    if(snd_mem_reconfigure_require_owner() < 0)
+        return -1;
+    atomic_store(&wave_gate, NULL);
+    return 0;
+}
+
 void spu_memset_sq(uintptr_t dst, uint32_t value, size_t length) {
     assert(!dst && !value && length == SPU_RAM_SIZE_2MB); ++cleared;
 }

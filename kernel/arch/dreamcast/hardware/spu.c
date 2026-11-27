@@ -19,6 +19,9 @@
 #include <sys/cdefs.h>
 
 #include "spu_internal.h"
+#include "../kernel/shutdown_internal.h"
+#include "../sound/snd_iface_internal.h"
+#include "../sound/snd_mem_reservation.h"
 
 /*
 
@@ -443,9 +446,7 @@ int spu_mixer_get_status(spu_mixer_status_t *status) {
 
 /* Initialize the SPU; by default it will be left in a state of
    reset until you upload a program. */
-int spu_init(void) {
-    spu_transfer_system_init();
-
+static void spu_init_hardware(void) {
     /* Set the RAM mode (2MB or 8MB) and default to stereo/min volume */
     g2_write_32(SNDREGADDR(0x2800), spu_ram_mode());
 
@@ -468,17 +469,69 @@ int spu_init(void) {
 
     /* Initialize CDDA channels */
     spu_cdda_init();
+}
 
+void spu_init_boot(void) {
+    spu_transfer_system_init();
+    spu_init_hardware();
+}
+
+int spu_sound_shutdown_in_transition(void) {
+    if(snd_shutdown_in_transition() < 0)
+        return -1;
+    /* A standalone allocator may exist without the KOS sound driver. */
+    return snd_mem_reconfigure_shutdown();
+}
+
+int spu_init_in_transition(void) {
+    if(snd_mem_reconfigure_require_owner() < 0
+            || spu_transfer_system_shutdown() < 0
+            || spu_sound_shutdown_in_transition() < 0)
+        return -1;
+    spu_init_hardware();
+    /* Runtime admission stays closed until the reset and RAM clear finish. */
+    spu_transfer_system_init();
     return 0;
 }
 
-/* Shutdown SPU */
-int spu_shutdown(void) {
-    if(spu_transfer_system_shutdown() < 0)
-        return -1;
+void spu_clear_retired(void) {
     spu_disable();
     spu_memset_sq(0, 0, SPU_RAM_SIZE);
+}
+
+static int spu_finish_transition(int result) {
+    int error = errno;
+    int end_result = snd_mem_reconfigure_end();
+
+    if(result < 0) {
+        errno = error;
+        return -1;
+    }
+    return end_result;
+}
+
+int spu_init(void) {
+    if(snd_mem_reconfigure_begin() < 0)
+        return -1;
+    return spu_finish_transition(spu_init_in_transition());
+}
+
+static int spu_shutdown_in_transition(void) {
+    if(snd_mem_reconfigure_require_owner() < 0
+            || spu_transfer_system_shutdown() < 0
+            || spu_sound_shutdown_in_transition() < 0)
+        return -1;
+    spu_clear_retired();
     return 0;
+}
+
+int spu_shutdown(void) {
+    if(arch_shutdown_owns_wave_gate())
+        return spu_shutdown_in_transition();
+
+    if(snd_mem_reconfigure_begin() < 0)
+        return -1;
+    return spu_finish_transition(spu_shutdown_in_transition());
 }
 
 int spu_dma_transfer(void *from, uintptr_t dest, size_t length, int block,

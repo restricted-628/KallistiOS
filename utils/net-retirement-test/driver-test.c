@@ -146,7 +146,7 @@ int bba_shutdown_preflight(void);
 #include "driver.inc"
 
 static uint8_t packet[32];
-static kthread_t other_thread={STATE_RUNNING};
+static kthread_t other_thread={.state=STATE_RUNNING};
 static void input(uint8_t *p,int n) { CHECK(p==packet&&n==12);++delivered; }
 static void reset(void) {
     mask=0;in_irq=false;current=&main_thread;bba_if.flags=NETIF_INITIALIZED|NETIF_RUNNING;

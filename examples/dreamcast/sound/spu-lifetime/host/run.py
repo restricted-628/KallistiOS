@@ -41,8 +41,20 @@ g2 = g2.replace('#include <dc/fifo.h>', '') + '\n__END_DECLS\n#endif\n'
 (OUT / 'dc/g2bus.h').write_text(g2)
 source('kernel/arch/dreamcast/include/dc/spu.h')
 spu = source('kernel/arch/dreamcast/hardware/spu.c')
-(OUT / 'shutdown.c').write_text('#include <dc/spu.h>\nint spu_transfer_system_shutdown(void);\n' +
-                              extract_function(spu, 'int spu_shutdown(void)'))
+shutdown_calls = ['int spu_sound_shutdown_in_transition(void)',
+                  'void spu_clear_retired(void)',
+                  'static int spu_finish_transition(int result)',
+                  'static int spu_shutdown_in_transition(void)',
+                  'int spu_shutdown(void)']
+(OUT / 'shutdown.c').write_text('''#include <dc/spu.h>
+int spu_transfer_system_shutdown(void);
+int snd_shutdown_in_transition(void);
+int snd_mem_reconfigure_begin(void);
+int snd_mem_reconfigure_require_owner(void);
+int snd_mem_reconfigure_shutdown(void);
+int snd_mem_reconfigure_end(void);
+bool arch_shutdown_owns_wave_gate(void);
+''' + '\n'.join(extract_function(spu, sig) for sig in shutdown_calls))
 paths = ['kernel/arch/dreamcast/hardware/spu_request.c',
          'examples/dreamcast/sound/spu-lifetime/main.c']
 for p in paths:

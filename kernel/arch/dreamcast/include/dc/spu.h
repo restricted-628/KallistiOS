@@ -393,17 +393,25 @@ int spu_mixer_get_status(spu_mixer_status_t *status);
 /** \brief  Initialize the SPU.
 
     This function will reset the SPU, clear the sound RAM, reinit the CDDA
-    support and run an infinite loop on the ARM.
+    support and run an infinite loop on the ARM. It retires queued SPU
+    transfers and callbacks, and releases the KOS sound driver and its pool.
+    Use an ordinary IRQ-enabled thread. Retire application-owned playback,
+    raw SPU accesses and raw DMA before calling.
 
-    \retval 0               On success (no error conditions defined).
+    \retval 0               On success.
+    \retval -1              On refusal, with errno set.
 */
 int spu_init(void);
 
 /** \brief  Shutdown the SPU.
 
-    This function disables the SPU and clears sound RAM.
+    This function retires queued SPU transfers and callbacks, releases the
+    KOS sound driver and its pool, then disables the SPU and clears sound RAM.
+    Use an ordinary IRQ-enabled thread. Retire application-owned playback,
+    raw SPU accesses and raw DMA before calling.
 
-    \retval 0               On success (no error conditions defined).
+    \retval 0               On success.
+    \retval -1              On refusal, with errno set.
 */
 int spu_shutdown(void);
 

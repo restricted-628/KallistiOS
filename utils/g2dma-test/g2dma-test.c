@@ -9,6 +9,7 @@
 #include <arch/arch.h>
 #include <kos/sem.h>
 #include "gaps_internal.h"
+#include "../../kernel/arch/dreamcast/kernel/shutdown_internal.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -637,7 +638,7 @@ static void shutdown_while_waiting(void) {
     CHECK(g2_dma_init() == 0);
     invoke_completion(0);
     errno = 0;
-    g2_dma_shutdown();
+    CHECK(g2_dma_shutdown_checked() == -1);
     CHECK(errno == EBUSY); /* signaled is not the same as consumed */
     CHECK(semaphore_destroys == destroyed && release_count == released);
 }
@@ -723,7 +724,7 @@ static void test_init_failure_and_shutdown(void) {
                           (void *)(uintptr_t)UINT32_C(0x00800120), 32, 0,
                           count_callback, &callback_count, G2_DMA_TO_G2, 0,
                           G2_DMA_CHAN_CH2, 0) == 0);
-    g2_dma_shutdown();
+    CHECK(g2_dma_shutdown_checked() == 0);
     CHECK(callback_count == callback_before);
     CHECK(registers()->protection == PROTECTION_ENABLED);
     for(channel = 0; channel < 4; ++channel)

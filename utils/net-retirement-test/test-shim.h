@@ -15,9 +15,9 @@ static void irq_restore(irq_mask_t old) { mask=old; }
 static __attribute__((unused)) void scoped_restore(irq_mask_t *old) { irq_restore(*old); }
 #define irq_disable_scoped() irq_mask_t saved_irq __attribute__((cleanup(scoped_restore))) = irq_disable()
 static __attribute__((unused)) bool irq_inside_int(void) { return in_irq; }
-typedef struct { int state; } kthread_t;
+typedef struct { int state, tid; } kthread_t;
 #define STATE_RUNNING 1
-static kthread_t main_thread={STATE_RUNNING}, worker_thread={STATE_RUNNING};
+static kthread_t main_thread={STATE_RUNNING, 1}, worker_thread={STATE_RUNNING, 2};
 static kthread_t *current=&main_thread;
 static kthread_t *thd_get_current(void) { return current; }
 #define CHECK(x) do { if(!(x)) { fprintf(stderr,"%s:%d: %s\n",__FILE__,__LINE__,#x); assert(x); } } while(0)

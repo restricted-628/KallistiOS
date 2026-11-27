@@ -23,6 +23,7 @@
 #include <kos/timer.h>
 
 #include "dma_memory.h"
+#include "../kernel/shutdown_internal.h"
 
 #if !defined(__NAOMI__) && !defined(G2DMA_NO_GAPS)
 #include "gaps_internal.h"
@@ -845,13 +846,14 @@ fail:
     return -1;
 }
 
-void g2_dma_shutdown(void) {
+int g2_dma_shutdown_checked(void) {
     irq_mask_t irq_state;
+    int result = -1;
     int i;
 
     if(irq_inside_int()) {
         errno = EPERM;
-        return;
+        return -1;
     }
 
     irq_state = irq_disable();
@@ -862,7 +864,7 @@ void g2_dma_shutdown(void) {
     }
 
     if(!dma_init)
-        goto out;
+        goto success;
 
     /* A signaled thread may not have consumed its result yet. Never destroy
        or reinitialize its semaphore/state underneath it. */
@@ -915,6 +917,13 @@ void g2_dma_shutdown(void) {
     g2_dma->protection = ENABLE_SYS_MEM_PROTECTION;
     dma_lifecycle_busy = false;
 
+success:
+    result = 0;
 out:
     irq_restore(irq_state);
+    return result;
+}
+
+void g2_dma_shutdown(void) {
+    (void)g2_dma_shutdown_checked();
 }

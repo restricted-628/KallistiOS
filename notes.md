@@ -395,6 +395,10 @@ implementation holds, unresolved policy decisions, unrelated branch updates,
 force-pushes, published-history rewrites or upstream PR creation. Helpers still
 deliver to Integration unless separately authorized to publish.
 
+**Owner clarification, 2026-11-27:** A local fork commit is not the stopping
+point. Publish accepted changes to the GitHub fork in the same workflow and
+verify its head and tree; report explicitly if publication is blocked.
+
 ## D19 — Selective KOS-native virtual memory
 
 **Accepted direction, 2026-10-14:** Add useful memory-management capabilities

@@ -21,6 +21,12 @@ void snd_iface_exclusive_end(void);
 void snd_dsp_system_reset(void);
 void snd_dsp_system_shutdown(void);
 
+/* Normal thread-context sound teardown, serialized with wave reservations.
+   The in-transition entry requires the current thread's allocator gate and
+   leaves it held for the enclosing platform teardown. */
+int snd_shutdown_checked(void);
+int snd_shutdown_in_transition(void);
+
 /* Audio-private observation bridges. Caller observes exclusive sound lifecycle.
    Absolute deadlines bound software waits, not wedged hardware/G2 accesses. */
 void snd_observation_load_begin(void);

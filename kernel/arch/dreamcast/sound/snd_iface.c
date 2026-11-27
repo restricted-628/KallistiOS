@@ -28,6 +28,7 @@
 
 #include "arm/aica_cmd_iface.h"
 #include "snd_iface_internal.h"
+#include "snd_mem_reservation.h"
 
 /* Include the default firmware blob */
 #include "snd_stream_drv.c"
@@ -401,7 +402,7 @@ static uint32_t remaining_timeout(uint64_t deadline) {
 
 /* Initialize driver; note that this replaces the AICA program so that
    if you had anything else going on, it's gone now! */
-int snd_init(void) {
+static int snd_driver_init_in_transition(void) {
     size_t amt;
     snd_driver_status_t status;
     int status_result;
@@ -428,8 +429,11 @@ int snd_init(void) {
 
         /* Initialize the RAM allocator. Do not publish a usable driver when
            its sample-memory pool could not be created. */
-        if(snd_mem_init(AICA_RAM_START) < 0) {
+        if(snd_mem_reconfigure_init(AICA_RAM_START) < 0) {
+            int saved_errno = errno;
+
             spu_disable();
+            errno = saved_errno;
             return -1;
         }
 
@@ -484,7 +488,7 @@ int snd_init(void) {
                        status.features);
             }
 
-            snd_shutdown();
+            (void)snd_shutdown_in_transition();
             errno = saved_errno;
             return -1;
         }
@@ -497,8 +501,26 @@ int snd_init(void) {
     return 0;
 }
 
-/* Shut everything down and free mem */
-void snd_shutdown(void) {
+static int snd_finish_reconfiguration(int result) {
+    int saved_errno = errno;
+    int end_result = snd_mem_reconfigure_end();
+    if(result < 0) {
+        errno = saved_errno;
+        return -1;
+    }
+    return end_result;
+}
+
+int snd_init(void) {
+    if(snd_mem_reconfigure_begin() < 0)
+        return -1;
+    return snd_finish_reconfiguration(snd_driver_init_in_transition());
+}
+
+int snd_shutdown_in_transition(void) {
+    if(snd_mem_reconfigure_require_owner() < 0)
+        return -1;
+
     {
         irq_disable_scoped();
         driver_error_callback = NULL;
@@ -507,10 +529,22 @@ void snd_shutdown(void) {
     if(initted) {
         spu_disable();
         snd_dsp_system_shutdown();
-        snd_mem_shutdown();
         initted = 0;
         driver_features = 0;
+        return snd_mem_reconfigure_shutdown();
     }
+    return 0;
+}
+
+int snd_shutdown_checked(void) {
+    if(snd_mem_reconfigure_begin() < 0)
+        return -1;
+    return snd_finish_reconfiguration(snd_shutdown_in_transition());
+}
+
+/* The legacy void entry leaves Audio intact if a transition is refused. */
+void snd_shutdown(void) {
+    (void)snd_shutdown_checked();
 }
 
 /* Submit a request to the SH4->AICA queue; size is in uint32's */

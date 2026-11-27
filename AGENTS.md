@@ -104,8 +104,11 @@ new standing policy from an implementation convenience.
 - No private research reports, host paths, credentials, SDK/disc binaries,
   personal correspondence or raw session dumps belong in publication. Check the
   exact staged/API-created diff and new filenames; never stage the whole tree.
-- Use the GitHub plugin for publication when requested. If unavailable, report
-  that limitation instead of silently choosing another publishing route.
+- Publish each accepted local fork commit to this fork's GitHub master in the
+  same workflow. Verify the remote head and tree against the reviewed local
+  tree before calling it published. Use the GitHub plugin; if it is unavailable
+  or master diverged, report that instead of silently leaving a local-only
+  commit, switching transports, or overwriting the remote.
 - No force-push, published-history rewrite, PR creation or unrelated branch
   updates without explicit authorization. A local review is not authorization.
 - Upstream work is deliberately paced: one justified, minimal topic, a useful

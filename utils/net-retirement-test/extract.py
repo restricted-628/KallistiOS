@@ -12,10 +12,16 @@ units = {
     'network': ('kernel/net/net_core.c', ['net_shutdown_admission_closed',
         'net_init', 'net_quiesce_checked', 'net_shutdown_checked', 'net_shutdown']),
     'platform': ('kernel/arch/dreamcast/kernel/init.c', [
-        'arch_net_shutdown_can_wait', 'arch_net_shutdown_wait',
+        'arch_net_shutdown_can_wait', 'arch_shutdown_wait', 'arch_net_shutdown_wait',
+        'arch_wave_shutdown_wait', 'arch_shutdown_require_main_thread',
+        'arch_shutdown_owns_wave_gate', 'arch_shutdown_prepare',
         'arch_net_shutdown_preflight', 'arch_auto_shutdown', 'arch_shutdown', 'arch_exit_handler']),
     'scif': ('kernel/arch/dreamcast/hardware/scif.c', ['byte_access_available', 'scif_try_write']),
-    'hardware': ('kernel/arch/dreamcast/hardware/hardware.c', ['eth_shutdown', 'hardware_shutdown']),
+    'hardware': ('kernel/arch/dreamcast/hardware/hardware.c', [
+        'eth_shutdown', 'hardware_periph_init_rest', 'hardware_periph_init_boot',
+        'hardware_periph_init', 'hardware_shutdown_common', 'hardware_shutdown',
+        'hardware_shutdown_after_spu_retired']),
+    'exit': ('kernel/libc/newlib/newlib_exit.c', ['exit']),
 }
 for unit, (path, names) in units.items():
     text = (root/path).read_text()

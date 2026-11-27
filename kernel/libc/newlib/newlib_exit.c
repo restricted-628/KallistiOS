@@ -8,6 +8,13 @@
 #include <arch/arch.h>
 #include <kos/init_base.h>
 
+#ifdef __DREAMCAST__
+#include <reent.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include "../../arch/dreamcast/kernel/shutdown_internal.h"
+#endif
+
 extern void arch_exit_handler(int ret_code) __noreturn;
 
 static int ret_code;
@@ -19,6 +26,30 @@ void kos_shutdown(void) {
 }
 
 KOS_INIT_FLAG_WEAK(kos_shutdown, true);
+
+#ifdef __DREAMCAST__
+/* Newlib 4.6's callback order, with the platform barrier before atexit. */
+#ifdef _LITE_EXIT
+extern void __call_exitprocs(int code, void *dso) __weak_symbol;
+#else
+extern void __call_exitprocs(int code, void *dso);
+#endif
+
+void exit(int code) {
+    if(kos_shutdown_weak)
+        arch_shutdown_prepare();
+
+#ifdef _LITE_EXIT
+    if(__call_exitprocs)
+#endif
+        __call_exitprocs(code, NULL);
+
+    if(__stdio_exit_handler)
+        __stdio_exit_handler();
+
+    _exit(code);
+}
+#endif
 
 __used void _exit(int code) {
     ret_code = code;
