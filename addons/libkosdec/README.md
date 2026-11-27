@@ -32,6 +32,11 @@ Use `make tools` and `tools/.build/adxcheck FILE...` to validate a port's standa
 ADX assets against the current decoder before target playback. See
 [`tools/README.md`](tools/README.md) for JSON results and validation limits.
 
+For Dreamcast-era archives, the opt-in [libAFS component](libAFS/README.md)
+provides bounded ordinal and name lookup with an independent SH-4 archive.
+`make -C libAFS host` builds the `afs` command for inspecting, extracting,
+packing and repacking general-purpose archive payloads.
+
 The SH-4 archive is `libADX/.build/sh4/libADX.a`. Installed consumers include
 `<kosdec/adx.h>`, `<kosdec/adx_memory.h>`, `<kosdec/adx_stream.h>` or
 `<kosdec/adx_file.h>`; buffered PCM uses `<kosdec/adx_pipe.h>`, cross-thread controls use

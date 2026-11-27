@@ -1,7 +1,7 @@
 # KOSdec media addon
 
 KOSdec owns `addons/libkosdec`: independent `libADX`, `libSFD`, `libAHX`
-components and host tools. libADX covers all 142 applicable Sega Library
+and `libAFS` components plus host tools. libADX covers all 142 applicable Sega Library
 2.00J entries through original implementations or accepted native equivalents.
 Playback qualification applies to the documented Flycast profiles on KOS
 Experimental. The [completion map](../../addons/libkosdec/libADX/COMPLETION.md)

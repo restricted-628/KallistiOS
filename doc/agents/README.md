@@ -28,7 +28,7 @@ without claiming a new per-path recount.
 | [VMU storage, packages and display](vmu-storage.md) | Kernel/platform + storage | 49 |
 | [Maple bus and input/capture devices](maple-devices.md) | Kernel/platform | 51 |
 | [AICA, SPU transfers, DSP and audio streams](audio.md) | AICA/Manatee audio | 90 |
-| [KOSdec media decoder and middleware addon](kosdec.md) | KOSdec | New scope; not recounted |
+| [KOSdec media, middleware and archive addons](kosdec.md) | KOSdec | New scope; not recounted |
 | [Flash configuration and persistent settings](flash-settings.md) | Kernel/platform + networking | 18 |
 | [RTC, timers and VBlank dispatch](clocks-vblank.md) | Kernel/platform + fibers | 69 |
 | [Video modes and the low-level PVR pipeline](video-pvr.md) | Graphics | 81 |
