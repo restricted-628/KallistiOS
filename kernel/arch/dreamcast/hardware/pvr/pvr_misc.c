@@ -441,10 +441,11 @@ void pvr_sync_reg_buffer(void) {
     //PVR_SET(PVR_RESET, PVR_RESET_TA);
     //PVR_SET(PVR_RESET, PVR_RESET_NONE);
 
-    /* Set buffer pointers */
+    /* Daniel Fairchild (KallistiOS PR #1593): OPB_POS still belongs to the
+       previous bank. Keep the limit above both banks until INIT moves it. */
+    PVR_SET(PVR_TA_OPB_END,         PVR_RAM_SIZE - 4);
     PVR_SET(PVR_TA_OPB_START,       opb_start);
     PVR_SET(PVR_TA_OPB_INIT,        buf->opb + buf->opb_size);
-    PVR_SET(PVR_TA_OPB_END,         buf->opb + buf->opb_size * (1 + buf->opb_overflow_count));
     PVR_SET(PVR_TA_VERTBUF_START,   buf->vertex);
     PVR_SET(PVR_TA_VERTBUF_END,     buf->vertex + buf->vertex_size);
 
@@ -453,6 +454,7 @@ void pvr_sync_reg_buffer(void) {
     PVR_SET(PVR_OPB_CFG,            pvr_state.list_reg_mask);   /* List enables */
     PVR_SET(PVR_TA_INIT,            PVR_TA_INIT_GO);            /* Confirm settings */
     (void)PVR_GET(PVR_TA_INIT);
+    PVR_SET(PVR_TA_OPB_END,         buf->opb + buf->opb_size * (1 + buf->opb_overflow_count));
 
 #if 0
     printf("== SYNC REG BUFFER:\n");
