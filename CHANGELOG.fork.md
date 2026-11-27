@@ -6,6 +6,15 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Demand-page reclaim and standalone AHX/AFS
+
+- Opt-in disc-page admission can now reclaim enough idle read-only pages of
+  the same file to fit a newly requested range. Manual prefetch is unchanged.
+- Add libAHX incremental mono decoding and finite-source streaming, with
+  separate FIPR and FMAC synthesis builds.
+- Add a standalone libAFS member reader and a host tool for listing,
+  extracting, packing and repacking Dreamcast-era AFS archives.
+
 ## 2026-11-27 — PVR registration and tile restart
 
 - Adapt Daniel Fairchild's single-INIT OPB bank-switch ordering from

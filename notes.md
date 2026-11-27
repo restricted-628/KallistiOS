@@ -506,8 +506,10 @@ only after publishing a read-only mapping. Overlapping admitted threads may
 share a page. End their uses before evicting it or closing the file.
 
 This is an opt-in alternative to explicit prefetch, not a change to normal
-KOS fault policy. It does not select eviction victims, swap writable memory,
-or page code or stacks. The carrier, stack headroom, selected address space,
+KOS fault policy. On admission, it can reclaim idle read-only pages of the
+same file outside the requested range to fit its resident limit. It does not
+evict pinned, loading, or still-admitted pages, swap writable memory, or page
+code or stacks. The carrier, stack headroom, selected address space,
 debug path and immutable direct ISO source have explicit lifetime constraints.
 A terminal backing error stops the admitted fault after I/O cleanup. Use
 explicit prefetch for recoverable media errors. See
@@ -738,6 +740,14 @@ was staged). It reports the new applied rate only after checked START.
 Key-on begins a fresh phase; it does not promise continuity of fractional
 interpolation across silence. Public sample time remains at nominal
 source Hz. The libADX completion matrix records the qualified rate range.
+
+### Standalone AHX and AFS addons
+
+Build libAHX and libAFS independently; neither changes the dependencies of
+existing players. The [AHX decoder](addons/libkosdec/libAHX/README.md) covers
+unencrypted mono type 0x10 version 6. The [AFS reader and host tool](addons/libkosdec/libAFS/README.md)
+cover ordinal archives with optional names; repacking preserves member
+contents, not the original physical layout.
 
 ## D22 — SH4DER/SH4DOW integration and strip partition default
 
