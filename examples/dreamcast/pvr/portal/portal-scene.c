@@ -75,15 +75,15 @@ int portal_scene_build(portal_scene_t *scene, bool clear_depth,
         if(quad(scene, 0, 40, 40, 600, 440, 1, 0xffff0000, NULL) < 0)
             return -1;
     }
-    else {
-        /* Independent coverage construction: a real hole, not a clear
-           emulation. This mode never placed wall depth in the opening. */
-        if(quad(scene, 0, 40, 40, 600, 129, 1, 0xffff0000, NULL) < 0 ||
-           quad(scene, 0, 40, 351, 600, 440, 1, 0xffff0000, NULL) < 0 ||
-           quad(scene, 0, 40, 129, 193, 351, 1, 0xffff0000, NULL) < 0 ||
-           quad(scene, 0, 447, 129, 600, 351, 1, 0xffff0000, NULL) < 0)
-            return -1;
-    }
+    /* Daniel Fairchild's console tests (KallistiOS #1594): a later CLEAR
+       redraws the background plane. Rebuild the visible wall around the
+       opening in that pass; the preserve route needs it only in pass zero. */
+    size_t wall_pass = clear_depth ? 1 : 0;
+    if(quad(scene, wall_pass, 40, 40, 600, 129, 1, 0xffff0000, NULL) < 0 ||
+       quad(scene, wall_pass, 40, 351, 600, 440, 1, 0xffff0000, NULL) < 0 ||
+       quad(scene, wall_pass, 40, 129, 193, 351, 1, 0xffff0000, NULL) < 0 ||
+       quad(scene, wall_pass, 447, 129, 600, 351, 1, 0xffff0000, NULL) < 0)
+        return -1;
     if(quad(scene, 0, 304, 80, 336, 400, 8, 0xff00ffff, NULL) < 0)
         return -1;
 

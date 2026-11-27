@@ -23,9 +23,10 @@ Two explicitly different composition routes produce the same intended image:
    depth was written there. All later boundaries preserve depth, including
    the cyan bar's depth. This is useful for authored, non-overlapping rooms.
 2. **Depth clear:** the wall initially covers the opening too. Clearing depth
-   before the remote view removes that wall occluder, while retaining its
-   color outside the opening. Because the clear affects every tile, the cyan
-   foreground bar is replayed before the remote view to restore its depth.
+   before the remote view restarts every tile from the background plane.
+   Following Daniel Fairchild's console finding in KallistiOS #1594, the
+   example redraws the wall around the aperture and the cyan foreground
+   bar before the remote view, restoring both their color and their depth.
    The last boundary preserves the newly populated depth.
 
 There is no automatic switch between these routes and no pixel expectation
@@ -56,12 +57,14 @@ staging, whose two frame halves are checked before admission.
 
 ## Validation limits
 
-In the current Flycast Vulkan tests, disjoint coverage passes all 27 samples.
-The strict depth-clear route fails six of 27: the old wall remains visible
+In earlier Flycast Vulkan tests, disjoint coverage passed all 27 samples.
+The previous depth-clear route failed six of 27: the old wall remained visible
 at the two remote-object samples in each submission mode. The known
 [depth-clear limitation](../../../../doc/pvr-multipass-design.md#depth-boundary-validation)
-is not counted as a PASS. The example prints separate route totals and exits
-with failure unless both totals are zero.
+is not counted as a PASS. A fresh Flycast dynarec run of the revised wall
+replay again passed all 27 disjoint samples and failed six of 27 CLEAR
+samples. The example reports the two totals separately and exits with
+failure unless both are zero.
 
 This is an application composition fixture, not a general portal engine or
 mirror implementation. The opening is one fixed, axis-aligned rectangle; it

@@ -170,9 +170,9 @@ int pvr_ta_layout_build_regions(uint32_t *regions, size_t capacity_words,
                 uint32_t control = (y << 8) | (x << 2);
                 size_t list;
 
-                /* Depth is an incoming-pass choice (bit 30); color retention
-                   is an outgoing boundary choice (bit 28). Clearing depth
-                   must not terminate accumulation or restart registration. */
+                /* Daniel Fairchild's Dreamcast tests (KallistiOS #1594):
+                   bit 28 suppresses writeout; it cannot preserve old color
+                   if bit 30 restarts this entry from the background plane. */
                 if(pass && !passes[pass].clear_depth)
                     control |= PVR_REGION_KEEP_DEPTH;
 

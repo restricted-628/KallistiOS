@@ -684,10 +684,11 @@ typedef struct pvr_pass_config {
 /** \brief Depth state entering a hardware registration pass.
     \ingroup pvr_init
 
-    This controls tile depth, not polygon depth writes or accumulated color.
+    On Dreamcast, restarting from the background plane also replaces prior
+    tile color (Daniel Fairchild's hardware tests, KallistiOS PR #1594).
 */
 typedef enum pvr_pass_depth {
-    PVR_PASS_DEPTH_CLEAR = 0, /**< Start this pass with cleared tile depth. */
+    PVR_PASS_DEPTH_CLEAR = 0, /**< Restart this tile from the background plane. */
     PVR_PASS_DEPTH_PRESERVE   /**< Retain depth from the preceding pass. */
 } pvr_pass_depth_t;
 
@@ -833,9 +834,9 @@ int pvr_init_multipass(const pvr_init_params_t *params,
     Behaves like pvr_init_multipass(), but depth[pass] selects whether depth
     is cleared before that pass or retained from the preceding pass. Pass
     zero must use PVR_PASS_DEPTH_CLEAR: depth cannot be inherited from another
-    tile or scene. Accumulated color is retained between passes independently
-    of this choice. A clear applies to every tile, not a portal rectangle;
-    later geometry must supply its own coverage and occlusion constraints.
+    tile or scene. CLEAR on a later pass also redraws the background plane;
+    it is not a depth-only clear. It applies to every tile, not a portal
+    rectangle. Use PRESERVE if earlier color must survive without redrawing.
 
     Settings are copied at initialization and apply to every scene, in direct,
     DMA and hybrid modes. There is no extra allocation beyond the established

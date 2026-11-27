@@ -166,7 +166,7 @@ static void test_frame_layout(void) {
     assert(frame.bank_end == 0x00402500);
 }
 
-static void test_depth_independent_of_color(void) {
+static void test_depth_and_writeout_control_bits(void) {
     /* Enumerate every depth-clear mask, including pass zero, for 1..8
        passes. Compare all words against legacy output, not just bit 30:
        pointers, sort, tile retention, coordinates and final marker must
@@ -270,7 +270,7 @@ int main(void) {
     test_three_pass_tile_order();
     test_maximum_pass_count();
     test_frame_layout();
-    test_depth_independent_of_color();
+    test_depth_and_writeout_control_bits();
     test_rejections();
     puts("pvr multipass layout tests passed");
     return 0;

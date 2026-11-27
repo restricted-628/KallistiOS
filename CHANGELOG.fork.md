@@ -6,6 +6,17 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — PVR registration and tile restart
+
+- Adapt Daniel Fairchild's single-INIT OPB bank-switch ordering from
+  [KallistiOS #1593](https://github.com/KallistiOS/KallistiOS/pull/1593).
+  Each new TA bank receives its own real overflow limit after INIT; list
+  continuation does not reinitialize the bank.
+- Correct the explicit CLEAR contract and the depth/portal examples using
+  Fairchild's Dreamcast background-plane observation in
+  [#1594](https://github.com/KallistiOS/KallistiOS/pull/1594). The ordinary
+  clear-first/preserve-later policy and public ABI are unchanged.
+
 ## 2026-11-27 — Automatic read faults on disc-backed data
 
 - Added the opt-in `libvmdemand` archive. A normal read of an admitted,

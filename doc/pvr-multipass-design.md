@@ -41,8 +41,8 @@ tile 1: pass 0, pass 1, ... pass N-1
 The control word uses these fields:
 
 - bit 31: final region; set only on the final pass of the final tile;
-- bit 30: preserve incoming depth; clear on pass zero, set on later passes
-  unless the caller explicitly requests a depth clear;
+- bit 30: preserve the previous tile depth and color; when clear, start
+  from the background plane. Clear on pass zero, normally set thereafter;
 - bit 29: translucent list is pre-sorted for this pass;
 - bit 28: preserve the tile accumulation result; set on every pass except the
   final pass;
@@ -86,13 +86,13 @@ depth is not inherited across tiles or scenes. Other passes may independently
 clear or preserve. Invalid policies are rejected before allocation or VRAM
 changes. Neither existing public structure changes layout.
 
-Depth clear and accumulated color retention are independent. Color remains
-live across every intermediate boundary; a depth clear changes only bit 30
-on that incoming pass, not bit 28 on the previous pass. It does not clear a
-framebuffer, write a replacement polygon, restart TA registration, allocate
-a new surface, or invalidate the shared geometry cursor. It applies to all
-tiles, not an arbitrary portal aperture. Applications must still constrain
-later geometry and reconstruct appropriate occlusion within their effect.
+Daniel Fairchild's [Dreamcast tests in KallistiOS PR #1594](https://github.com/KallistiOS/KallistiOS/pull/1594)
+distinguish avoiding tile writeout (bit 28) from what the next entry starts
+with (bit 30). A later CLEAR redraws the background plane, replacing the
+earlier color as well as clearing depth. It is not a framebuffer clear or a
+TA restart. Keep PRESERVE when compositing over earlier color. A portal using
+CLEAR must redraw any earlier color and occluders it still needs; the flag
+applies to all tiles, not just the aperture.
 
 `pvr_scene_next_pass()` closes the current pass, establishes the required
 registration boundary, and admits the next pass. It fails on the configured
@@ -126,7 +126,11 @@ The initial OPB size is the sum of the enabled per-list bin sizes across every
 pass and every tile. The continuation base for pass `p` is the initial OPB base
 plus the sizes of passes `0` through `p - 1`. The shared overflow area begins
 after all initial pass areas. The existing overflow-count policy applies to the
-combined initial area.
+combined initial area. Daniel Fairchild's [#1594](https://github.com/KallistiOS/KallistiOS/pull/1594)
+instead uses the largest single pass as the overflow unit. That saves VRAM
+but reduces the capacity of an already configured fork scene: two equally
+sized passes and one overflow unit would get half as much overflow space.
+The fork does not silently change that budget.
 
 The parameter buffer remains shared because continuation preserves the TA
 parameter cursor. It therefore keeps the established `vertex_buf_size`
@@ -213,6 +217,14 @@ current-pass lists, waits for TA acceptance, then advances both the build and
 hardware pass. Later passes can therefore flush lists against a known active
 TA pass. A list that was flushed early is never replayed at scene completion.
 
+Daniel Fairchild's [#1595](https://github.com/KallistiOS/KallistiOS/pull/1595)
+starts vertex DMA and lets the CPU continue until the next operation that
+needs the TA. Our checked flush remains synchronous. Returning earlier would
+change when the caller can reuse staging memory and when a DMA failure can
+be reported. Direct SQ lists mixed with flushed lists across groups are in
+Daniel's [separate follow-up](https://github.com/dfchil/KallistiOS/commit/5ca51d2f5e67c9a53dc3d699dcfe38059c28b2a0),
+not in either numbered PR on its own.
+
 ## Compatibility and failure rules
 
 - `pvr_init()` and every existing one-pass scene function retain their ABI and
@@ -253,17 +265,20 @@ The [depth example](../examples/dreamcast/pvr/multipass_depth/) verifies the
 actual submitted region controls through the uncached VRAM view after rendering
 is idle. Its independent pixel checks exercise legacy/preserve/clear policies
 under direct, buffered DMA and hybrid submission. Clear only at the middle
-boundary must expose a farther green panel without losing earlier red color
-outside it, and the following preserve boundary must hide a farther yellow
-panel. This is stronger than a successful registration-completion marker.
+boundary must expose a farther green panel and the blue background where
+only the earlier red panel had coverage. The following preserve boundary
+must hide a farther yellow panel.
 
-Current Flycast Vulkan interpreter and dynarec runs pass all submitted control
-words and all 30 legacy/preserve pixel samples. Each clear case fails the
-center sample (red instead of green); the other 12 clear-case samples pass.
-The strict test reports three failures out of 45, not an overall PASS.
-An additional OpenGL 4.1 dynarec run reproduces the same three mismatches,
+Earlier Flycast runs, using the old color-retention expectation, passed all
+submitted control words and all 30 legacy/preserve pixel samples. Each clear
+case failed the center sample (red instead of green); the other 12 clear-case
+samples passed. The strict test reported three failures out of 45.
+An additional OpenGL 4.1 dynarec run reproduced the same three mismatches,
 with the same correct region controls; changing renderer did not close the
-image-validation gate.
+image-validation gate. With the corrected oracle, a fresh Flycast dynarec
+run passed all 30 preserve/legacy samples but failed nine of the 15 CLEAR
+samples: the earlier red color remained at the two outer probes and the
+center. Do not count the emulator result as hardware confirmation.
 
 This is consistent with the emulator's implementation: its
 [parser](https://github.com/flyinghead/flycast/blob/0abac3465dc9547dca5f30f3352fee10b67e34b2/core/hw/pvr/ta_vtx.cpp#L1598)

@@ -10,10 +10,10 @@ twelve identical frames, waits for completion, checks pipeline faults, and
 reads five pixels from the displayed RGB565 framebuffer:
 
 - Blue background outside every panel.
-- Red pass-zero color outside the second panel, retained even across a clear.
+- Outside the second panel: red on preserve, blue background on clear.
 - Red at the center when depth is preserved; green there after a clear.
 - Cyan where pass-two geometry is nearer than both earlier passes.
-- Red near the outer panel's opposite corner.
+- The same preserve/clear distinction near the outer panel's opposite corner.
 
 A farther yellow panel in pass two must remain invisible. It catches a clear
 that incorrectly leaks into later preserve boundaries. The first two cases
@@ -30,9 +30,10 @@ and dynarec separately, with only one emulator instance open.
 
 The fixture also checks all 900 submitted tile control words per case. It
 continues after pixel mismatches to report the complete matrix, but ends with
-failure unless all 45 samples match. Current Flycast Vulkan runs produce
-three center-pixel mismatches (one per clear case) despite correct region
-controls. OpenGL 4.1 dynarec reproduces them; see the
+failure unless all 45 samples match. The clear cases use Daniel Fairchild's
+reported Dreamcast background-plane behavior, not the earlier assumption
+that only depth changed. Earlier Flycast runs disagreed even at the center
+pixel; they did not test these revised outer samples. See the
 [recorded limitation](../../../../doc/pvr-multipass-design.md#depth-boundary-validation).
 
 A PASS validates this fixture, not physical-console depth precision, overflow

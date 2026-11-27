@@ -41,13 +41,13 @@ static void raster(const pvr_vertex_t *a) {
 }
 
 static void render(const portal_scene_t *scene, bool clear_middle) {
-    memset(depths, 0, sizeof(depths));
-    for(unsigned y = 0; y < 480; ++y)
-        for(unsigned x = 0; x < 640; ++x)
-            pixels[y][x] = 0xff0000ff;
     for(size_t pass = 0; pass < 3; ++pass) {
-        if(pass == 1 && clear_middle)
+        if(pass == 0 || (pass == 1 && clear_middle)) {
             memset(depths, 0, sizeof(depths));
+            for(unsigned y = 0; y < 480; ++y)
+                for(unsigned x = 0; x < 640; ++x)
+                    pixels[y][x] = 0xff0000ff;
+        }
         assert(scene->count[pass] <= PORTAL_PASS_CAPACITY);
         assert(scene->count[pass] % 3 == 0);
         for(size_t i = 0; i < scene->count[pass]; i += 3) {
@@ -91,8 +91,8 @@ static void check_image(void) {
 static void check_remote_attributes(const portal_scene_t *scene) {
     for(size_t i = 0; i < scene->count[1]; ++i) {
         const pvr_vertex_t *v = scene->vertices[1] + i;
-        if(v->argb == 0xff00ffff)
-            continue; /* Replayed main-view foreground, already projected. */
+        if(v->argb == 0xff00ffff || v->argb == 0xffff0000)
+            continue; /* Replayed main-view bar or wall, already projected. */
         assert(v->x >= 193 && v->x <= 447);
         assert(v->y >= 129 && v->y <= 351);
         double u, texture_v;
@@ -116,6 +116,8 @@ int main(void) {
     assert(portal_scene_build(NULL, false, true) == -1 && errno == EINVAL);
     for(unsigned clear = 0; clear < 2; ++clear) {
         assert(portal_scene_build(&scene, clear != 0, true) == 0);
+        for(size_t pass = 0; pass < PORTAL_PASS_COUNT; ++pass)
+            assert(scene.count[pass] * sizeof(pvr_vertex_t) + 64 <= 4096 / 2);
         check_remote_attributes(&scene);
         render(&scene, clear != 0);
         check_image();
@@ -130,6 +132,16 @@ int main(void) {
     assert(pixels[240][240] == 0xffff0000);
     assert(pixels[240][400] == 0xffff0000);
     assert(pixels[240][240] != expected(240, 240));
+    /* Suppress the wall replay only. On a hardware-style restart, the old
+       wall cannot supply this color; a depth-only model would miss it. */
+    size_t keep = 0;
+    for(size_t i = 0; i < scene.count[1]; ++i)
+        if(scene.vertices[1][i].argb != 0xffff0000)
+            scene.vertices[1][keep++] = scene.vertices[1][i];
+    scene.count[1] = keep;
+    render(&scene, true);
+    assert(pixels[100][100] == 0xff0000ff);
+    assert(pixels[100][100] != expected(100, 100));
     puts("portal coverage, attributes, and negative controls passed");
     return 0;
 }

@@ -151,10 +151,12 @@ static unsigned run_case(unsigned mode, unsigned policy) {
     CHECK(vid_get_framebuffer_info(VID_FRAMEBUFFER_DISPLAYED, &fb) == 0);
     CHECK(fb.pixel_mode == PM_RGB565 && fb.width == 640 && fb.height == 480);
     unsigned failures = pixel(&fb, 10, 10, 0x001f);
-    failures += pixel(&fb, 100, 100, 0xf800);
+    /* Daniel Fairchild's hardware finding (#1594): a later CLEAR redraws
+       the background, including where no later panel covers pass zero. */
+    failures += pixel(&fb, 100, 100, policy == 2 ? 0x001f : 0xf800);
     failures += pixel(&fb, 320, 240, policy == 2 ? 0x07e0 : 0xf800);
     failures += pixel(&fb, 520, 240, 0x07ff);
-    failures += pixel(&fb, 550, 390, 0xf800);
+    failures += pixel(&fb, 550, 390, policy == 2 ? 0x001f : 0xf800);
     printf("case pixel mismatches: %u\n", failures);
     CHECK(pvr_shutdown() == 0);
     return failures;
