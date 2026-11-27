@@ -14,6 +14,13 @@ float math, dependency provenance and separate hardware/runtime gates.
 The [release scope](../../addons/libkosdec/libADX/PARITY.md) also tracks
 SA2-derived work, host authoring and the native interface boundary.
 
+The opt-in [libAHX decoder](../../addons/libkosdec/libAHX/README.md)
+provides finite-source mono PCM16. Its [inventory](../../addons/libkosdec/libAHX/BASELINE_API.csv)
+covers the recovered AHX decoder from Sonic Adventure 2 and Shenmue II.
+Preserve default FIPR, optional ordered FMAC, FPSCR restoration and the distinct
+coded and declared sample counts. The synchronous stream service leaves input
+and PCM scheduling to the caller. Device playback stays downstream.
+
 The optional host `tools/adxcheck` validates standalone assets with the unchanged
 decoder's explicit host math model. Its declared fields are not admitted metadata;
 compatibility requires the full body/footer and physical file EOF. Keep it read-only,
