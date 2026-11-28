@@ -215,6 +215,7 @@ This page serves as an index for all KallistiOS examples.
   - modifier_volume
   - modifier_volume_tex
   - modifier_volume_zclip
+  - [**proxy_shadow**](pvr/proxy_shadow/): Extrudes a closed directional shadow and compares the receiver mask through a near-plane crossing.
   - palette
   - [**pipeline_status**](pvr/pipeline_status/): Checks coherent PVR state,
     persistent fault records, and bounded interrupt-context event handlers

@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Closed proxy-shadow example
+
+- Extrude a fixed convex caster under a directional light and submit the
+  closed volume through the existing PVR modifier path. The example compares
+  its rendered mask with an independently authored volume, including when
+  the caster crosses the near plane. No renderer or public API changes.
+
 ## 2026-11-27 — Optional SH4DER cone spotlight
 
 - Light ordinary Compact vertices with a prepared cone, finite range and
