@@ -6,9 +6,7 @@ available in that repository; this is a source snapshot, not a history merge.
 Original author notices are retained. License: [KOS License](../../doc/license/LICENSE.KOS),
 as identified by the KallistiOS kos-ports libkosh recipe.
 
-Kosh depends on the fork's bundled Conio addon. This baseline supports future
-Nindows2-parity work; it does not yet add Nindows2 features. Runtime sources and
-headers are initially unchanged. The local Makefile uses the in-tree addon
+Kosh depends on the fork's bundled Conio addon. The local Makefile uses the in-tree addon
 build, configured KOS C standard and dependency files without rewriting any
 kos-ports headers. Public headers use a relative in-tree link.
 

@@ -12,7 +12,8 @@ and optional GDB support in the toolchain Docker image. The merge required no
 manual conflict resolution. The Docker change does not rebuild or change the
 installed compilers.
 
-SH4ZAM upstream remains at `ad353dc2cea596a7c8c7b56b05cbe2e07b84ed4a`.
+At this checkpoint SH4ZAM was at `ad353dc2cea596a7c8c7b56b05cbe2e07b84ed4a`.
+Use the [adapter guide](../addons/libsh4zam/README.md) and its gitlink for today's build.
 There is no newer algorithm to import at this checkpoint. The bundle retains
 its GCC 16 FFT operand fix, documentation fixes, and source formatting.
 See `addons/libsh4zam/README.md`, `source-lock.json`, and

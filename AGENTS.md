@@ -96,6 +96,11 @@ new standing policy from an implementation convenience.
 
 ## Publication and upstream review
 
+- Write public documentation around shipped interfaces, synthetic examples,
+  reproducible checks and known limits. Keep private vendor-kit comparisons,
+  title research and local research paths out of published prose. Preserve
+  licenses, trademark notices, dependency provenance and contributor credit.
+
 - Owner authorization, 2026-10-12: Integration may commit and publish routine,
   reviewed fixes, accepted helper deliveries and approved upstream merges to
   this fork's master without another permission round. Required validation and

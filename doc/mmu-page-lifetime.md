@@ -4,7 +4,8 @@ This topic is stacked on `pr/cache-whole-safety`. It adds checked dynamic
 mapping, cache/TLB retirement and static-map validation, without changing
 default MMU startup, cache mode, the scheduler, or any fiber provider.
 On this upstream topic applications explicitly initialize the MMU and own their
-mappings. An integrated fork can retain its separate default-startup policy.
+mappings. Integrated master enables the MMU in its default startup profile. For file-backed
+read faults, see the separate [opt-in pager](../addons/libvmdemand/README.md).
 
 ## Interfaces and ownership
 

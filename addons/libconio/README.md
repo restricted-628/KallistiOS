@@ -6,9 +6,7 @@ available in that repository; this is a source snapshot, not a history merge.
 Original author notices are retained. License: [KOS License](../../doc/license/LICENSE.KOS),
 as identified by the KallistiOS kos-ports libconio recipe.
 
-This is the baseline for the fork's Kosh-based Nindows2-parity addon work, not
-an implementation of Nindows2. Runtime sources and headers are initially
-unchanged. Local changes adapt the build to this tree: no writes into kos-ports,
+The fork builds Conio alongside Kosh. Local changes adapt the build to this tree: no writes into kos-ports,
 relative public-header routing, dependency files, the configured KOS C standard,
 and additive Dreamcast graphics flags rather than replacing caller CFLAGS.
 

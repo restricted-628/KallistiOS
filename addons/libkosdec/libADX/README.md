@@ -1,7 +1,6 @@
 # libADX
 
-The KOS Experimental milestone covers all **142 applicable Sega Library 2.00J
-Dreamcast middleware entries** through native implementations or accepted
+The KOS Experimental milestone covers all **142 applicable middleware entries** through native implementations or accepted
 native equivalents. Playback qualification applies to the documented Flycast
 profiles. See [COMPLETION.md](COMPLETION.md) for the count and its exclusions,
 and [PARITY.md](PARITY.md) for release scope and remaining work.
@@ -16,7 +15,7 @@ PCM frames. Metadata becomes valid when `header_ready` is true; use
 Headers may have zero extensions or a validated version-3 loop record:
 0..31 inserted leading samples, one type-1 loop, block-aligned start, ordered sample
 bounds and matching absolute byte offsets. Other extensions remain unsupported.
-48 kHz is our extension beyond the baseline ADX Talk header's 44.1 kHz maximum.
+48 kHz is our extension beyond the reference format's 44.1 kHz maximum.
 Out-of-domain rates/cutoffs, other versions/encodings and nonzero footer payloads
 remain unsupported.
 The native player accepts effective output rates 8000..48000 Hz; lower-rate
@@ -72,7 +71,7 @@ decoding or `adxcheck` for full-file admission.
 Probes accept byte-aligned input and allocate no memory. They inspect at most
 65539 bytes in parser steps of at most 512 bytes; choose the incremental decoder
 when a caller needs a single-step work bound. These are intentionally strict
-native queries, not CRI ABI recognizers: the shipped end-code recognizer checks
+native queries, not legacy ABI recognizers: the shipped end-code recognizer checks
 the marker and reports the supplied span, whereas our query reports the validated
 declared record size. Format support and PCM arithmetic are unchanged.
 
@@ -123,8 +122,8 @@ mutate its source, or retain the borrowed PCM pointer. In a pipe/service/player,
 it runs on the producer before publication; the audio consumer never calls it.
 Its execution time is part of the producer's budget.
 
-The native signature uses PCM frames and interleaved stride; CRI's callback uses
-per-channel byte lengths. This is a native behavior equivalent, not a CRI ABI
+The native signature uses PCM frames and interleaved stride; the legacy interface's callback uses
+per-channel byte lengths. This is a native behavior equivalent, not a legacy ABI
 wrapper. Audible-time amplitude extraction remains a separate unfinished feature.
 Rebuild consumers for the enlarged decoder and embedding reader/sequence state.
 
@@ -254,7 +253,7 @@ sound-memory retirement have separate validation.
 
 For a complete ordinary-file music consumer, see
 [`examples/file_audio.c`](examples/file_audio.c). Build it with
-`make file-audio-example` using the fork's configured SDK. Supply your own
+`make file-audio-example` using the fork's configured toolchain. Supply your own
 `/cd/test.adx`, or pass a path as the last argument. Default playback is once;
 `--loop` uses embedded supported loop metadata; `--repeat` repeats a whole
 non-looping file through the sequence service. Whole-file repeat resets predictor
@@ -347,7 +346,7 @@ holding KOS mutexes or hardware transactions. The example's 16 KiB stack is a
 provisioning choice, not a measured whole-call-chain stack bound.
 
 These APIs compose with the fork's storage and cooperative scheduling without
-changing global MMU/OIX policy. Audio port/Manatee integration and a complete
+changing global MMU/OIX policy. Audio port integration and a complete
 player/service lifecycle remain separate work. The host disc fixture tests
 adversarial timing and lifetime contracts, not real DMA, fiber execution or audio.
 
@@ -426,7 +425,7 @@ An entry completes only after its footer is validated through logical EOF. Then
 it is removed, and repeating mode appends its description to the queue tail.
 Disabling repeat lets all already queued entries finish. The queue advances at
 decoded EOF, not when compressed data is read ahead, so these counters intentionally
-do not duplicate CRI's input-service queue timing. `completed_entries`, `requeues`
+do not duplicate the legacy interface's input-service queue timing. `completed_entries`, `requeues`
 and `returned_frames` are modulo-2^64 software counters, never playback clocks.
 `count` includes the active entry. Keep providers alive through all duplicate and
 repeated references, and retire any transport requests separately before freeing.
@@ -435,7 +434,7 @@ Each file starts with zero predictor history. Padding in its final compressed
 group is never returned; no silence, overlap or crossfade is inserted. Embedded
 loop metadata is rejected, as are changes from the first admitted sample rate or
 channel count, before the offending entry emits PCM. This fixed-format policy
-keeps the output contract stable; it is not a claim about every SDK format change.
+keeps the output contract stable; it is not a claim about every reference format change.
 Current codec profile restrictions still apply. Zero-frame files perform bounded
 header/footer work and participate in entry counts without emitting samples.
 
@@ -444,7 +443,7 @@ sticky, and cancellation does not close a provider or retire DMA. Header/footer
 work and file transitions can return `MORE` with zero PCM; input waits return
 `NEED_INPUT`. The consuming service must buffer and schedule enough work to hide
 these intervals. Ordered PCM concatenation alone does not guarantee gapless
-hardware playback. This service is not a CRI ABI shim or an audio player.
+hardware playback. This service is not a legacy ABI shim or an audio player.
 
 The sequence suite checks 288 combinations against independently derived rational
 PCM vectors, including partial and zero-frame files, repetition, fragmented input,
@@ -545,7 +544,7 @@ sources and join producer, consumer and controller before reset/free; separately
 retire transport and downstream sound users. Service/pipe objects allocate no
 memory and pull in no scheduler or audio APIs. The one-outstanding-command slot
 provides payload ownership and acknowledgement, while the fork executor remains
-the scheduler. This interface is original and does not claim CRI ABI equivalence.
+the scheduler. This interface is original and does not claim legacy ABI equivalence.
 
 Tests verify PCM continuity through controls, sequence capacity/repeat, loop
 release, provider failure, cancellation of paused/full production, preserved
@@ -614,7 +613,7 @@ release/rebind and apply before output starts or through checked live pan update
 Channel1 may be prepared before format discovery and is ignored for mono output.
 Getters return the last successful software setting, including AUTO, even after
 failure/stop; they are not device readback. Invalid channel/value/state is EINVAL
-without mutation, rather than reproducing unchecked SDK indexing or clamping.
+without mutation, rather than reproducing unchecked reference indexing or clamping.
 Legacy `set_output` still emits the exact supplied KOS bytes and clears AUTO for
 both channels; `get_pan` then reports their equivalent signed positions (zero
 attenuation in either direction is center). Live AUTO resolves immediately from
@@ -624,7 +623,7 @@ Rebuild consumers for the expanded implementation-owned player state.
 
 `kosdec_adx_player_set_filter_settings` stores the raw Dreamcast cutoff and
 resonance values and `kosdec_adx_player_get_filter_settings` reads them back.
-They persist across source rebinds. The SDK's Manatee route leaves playback
+They persist across source rebinds. The compatibility route leaves playback
 unchanged by this setting. The producer PCM callback remains separate.
 
 After checked stop of a compatible ordinary stereo handle, the initial
@@ -685,7 +684,7 @@ Complete stop before shutting down sound or resetting G2. The private
 output owns its DMA through callback retirement.
 
 Build with `ADX_ORDINARY_TL=1` and enable initial attenuation on a
-READY checked ordinary title to use the exact 2.00J raw TL conversion.
+READY checked ordinary title to use the exact baseline raw TL conversion.
 The compatibility setter caches the requested signed level separately
 from playback. During live playback, a successful call acknowledges
 each active slot and returns a zero request ID. Service and explicitly
@@ -870,11 +869,12 @@ frequency for the current generation. One VBlank advances the estimate
 by 100 units. Over 60 ms of difference from the qualified audio clock
 refreshes the anchor for the next query. The display offset adds the same
 signed setting in VSync count units and contributes in source frames to
-the drift comparison, matching the SDK's unit handling.
+the drift comparison, matching the reference implementation's unit handling.
 
 The VSync query covers active playback and drain. Invalid observations and
 canceled sources leave the result unchanged. At source-output end it reports
-`ENOTSUP` pending Audio qualification for terminal timing, pause and discard.
+`ENOTSUP`. For checked playback through pause and terminal state, use the
+compatibility clock getters documented in [the completion map](COMPLETION.md).
 The sample-clock query remains available under its own contract.
 
 Use `kosdec_adx_player_set_time_mode` to select source, NTSC or PAL for
@@ -906,7 +906,7 @@ Stereo remains experimental. The combined stereo fixture returns
 default archive leaves live retained gain disabled.
 `kosdec_adx_player_set_attenuation` takes signed tenths of a dB and returns
 a request ID on local admission. The effective value clamps to -999 through
-0 and selects the stock 2.00J PCM route's zero-fade response after playback
+0 and selects the compatibility PCM route's zero-fade response after playback
 starts. The requested getter returns the signed low 16 bits of the accepted
 value before clamping. The setting applies to the active lease channels across
 source bindings.
@@ -1022,7 +1022,7 @@ The predictor uses float Q16 histories within each fixed logical channel group;
 histories quantize on group return, independently of input fragmentation.
 The single-pass codec never decodes padding; the resident reader uses full groups
 as described above. Versions 3 and 5 through 44100 Hz use the rounded Dreamcast
-2.00J setup model. Higher-rate extensions use the certified
+baseline setup model. Higher-rate extensions use the certified
 exact-real setup. All admit integer cutoffs 0..floor(rate/2) within the
 supported sample-rate range.
 The original 500 Hz pairs remain `{7334, -3283}` for 44100 Hz and
@@ -1058,8 +1058,8 @@ decoder equivalence. Target execution and hardware checks remain separate.
 The memory suite checks 360 combinations against independent carried-history
 rational vectors, plus lifecycle/error cases. Regenerate its vectors with
 `python3 tests/generate_memory.py`. Whole-block history is supported by the
-inspected SDK block/trap behavior. See the joint job mode below for tested
-2.00J batch boundaries and PCM.
+inspected reference block/trap behavior. See the joint job mode below for tested
+baseline batch boundaries and PCM.
 
 The stream suite covers 576 combinations of loop endpoints, channels, input
 fragmentation, output capacity, padded headers and intermittent waits, plus
@@ -1081,7 +1081,7 @@ rate/cutoff rejection. Regenerate setup certificates with
 `python3 tests/generate_coefficients.py` (optional `--proof PATH` for detailed
 rational bounds), and PCM vectors with `python3 tests/generate_rates.py`.
 The certificate uses rational alternating-series and square-root intervals to
-prove truncation results; it does not certify the SDK's transcendental functions
+prove truncation results; it does not certify the reference implementation's transcendental functions
 or establish full proprietary waveform equivalence.
 
 The direct-disc suite adds 216 indexed mono/stereo loop cases through delayed I/O,
@@ -1130,7 +1130,7 @@ input to alias either distinct output). The API performs no allocation, IRQ
 masking, cache maintenance, FPU work or scheduler operations. It can be driven
 by the existing producer fiber, with yields outside borrowed-buffer operations.
 
-The native contract deliberately uses typed status/kind instead of CRI error
+The native contract deliberately uses typed status/kind instead of legacy error
 numbers/UUIDs and does not support arbitrary concurrent or multiple same-line
 borrows. Full SJ conformance remains open;
 this facility alone does not close the middleware milestone.
@@ -1147,7 +1147,7 @@ normal queue operations use constant-time list endpoints.
 Each outstanding borrow reserves a node, so its full rollback remains possible
 when the pool fills. Partial reads or returns may need another node and return
 LIMIT unchanged if none is available. Reserved nodes are excluded from spare
-counts; this deliberately differs from the SDK's unchecked pool accounting.
+counts; this deliberately differs from the reference implementation's unchecked pool accounting.
 Reset forgets all seeded ranges and restores the node pool, only with no borrows.
 Neither reset nor close frees caller buffers. Auxiliary lines have caller-defined
 read/write roles; FREE/DATA retain the usual producer/consumer roles. Joint state
@@ -1170,7 +1170,7 @@ Close abandons any unread tail of the held chunk, returns it to FREE (or discard
 it for a memory joint), and never resets/frees the joint or joins an external
 provider. Restarting a file needs a fresh header, not the abandoned cursor.
 
-### 2.00J decode jobs
+### Compatibility decode jobs
 
 Call `kosdec_adx_joint_reader_enable_jobs` before starting the producer to use
 the stock batching rules on memory, mirrored-ring or queued input. Supply a separate
@@ -1257,7 +1257,7 @@ publishes after each step, including a rewind followed by provider WAIT/error.
 Release, pause, cancel and terminal status preserve the count; init/rebind clears
 it. The snapshot is independent of other PCM/status fields. Decode read-ahead can
 lead sound output: this is not an audible-loop clock or sample-fetch certificate.
-The baseline SDK likewise increments its loop count from a decoder trap, though
+The reference implementation likewise increments its loop count from a decoder trap, though
 exact service/prefetch timing is not asserted identical. Rebuild callers for the
 new pipe and player-info fields.
 
@@ -1293,7 +1293,7 @@ whole recording. An offset change can move the request backward, but discarded
 records stay discarded. The native record/storage API uses caller-owned records.
 
 The exact baseline format boundary and remaining container work are recorded in
-[FORMATS.md](FORMATS.md); passing the SDK sample corpus is not full parity.
+[FORMATS.md](FORMATS.md); passing the reference sample corpus is not full parity.
 
 ## Compressed silence insertion
 
@@ -1342,7 +1342,7 @@ with `kosdec_adx_stream_init` and the existing service/player path.
 `kosdec_adx_view_init` also constructs checked byte-range views directly. Empty
 views report EOF without a provider call; nonempty reads remain capped at512 bytes
 and their selected extent. View construction validates bounds, not payloads.
-Native typed byte ranges replace the SDK's compact sector work layout. Directory
+Native typed byte ranges replace the reference implementation's compact sector work layout. Directory
 source callbacks do not implicitly acquire or retire VFS descriptors, disc
 requests or DMA staging.
 
@@ -1429,12 +1429,12 @@ violation that prevents returning a borrow leaves the request active and reports
 IO_ERROR; successful stop/close is required before storage reuse. Provider-side
 staging/DMA remains independently owned and must still be retired by its owner.
 The request structure grows; rebuild consumers. Readonly memory joints cannot be
-destinations, and native byte-sized buffers replace the SDK sector-size restriction.
+destinations, and native byte-sized buffers replace the reference sector-size restriction.
 
 ## PCM WAV reader
 
 `adx_wave.h` implements a separate bounded RIFF/WAVE PCM reader: tag1, unsigned
-8-bit, signed little-endian16-bit or CRI packed4-bit ADPCM, mono/stereo. Each read makes at most one
+8-bit, signed little-endian16-bit or packed4-bit ADPCM, mono/stereo. Each read makes at most one
 provider call of512 bytes and emits at most32 interleaved signed16 frames. U8 is
 converted exactly as `(x - 128) * 256`; PCM16 loads are byte-safe. These are exact
 format conversions, with no FPU transform or SH4ZAM substitution needed.
@@ -1443,7 +1443,7 @@ Header processing walks RIFF chunk boundaries and word padding, skips unknown
 chunks, requires one valid fmt before data, and checks rate/block alignment,
 byte rate, whole-frame data length and extent bounds. Partial reads and WAIT
 retain progress. The strict structure rejects unsupported variants instead of
-copying the SDK's permissive bytewise string scan. Completion covers the selected
+copying the reference implementation's permissive bytewise string scan. Completion covers the selected
 data chunk; trailing chunks/source bytes are ignored, not validated. No loop
 metadata, floating PCM, extensible WAVE, RIFX or standard Yamaha tag0x20
 admission is implied. Packed4 ignores byte-rate/block-alignment hints but requires
@@ -1572,7 +1572,7 @@ With repeat enabled, a completed read moves its source to the queue tail and
 increments `completed_passes`. The original ID and provider loan persist.
 Disable repeat to let the queued passes finish.
 
-Select `kosdec_adx_loader_set_lsc_flow` before starting for 2.00J
+Select `kosdec_adx_loader_set_lsc_flow` before starting for baseline
 source-scoped flow control. The requested byte limit is captured when a
 source or repeat pass first enters service. Updates take effect at the next
 source. Reads wait while queued DATA meets the captured limit, excluding
@@ -1625,7 +1625,7 @@ undone. This setting neither alters loader rotation nor changes
 an already selected record. Close the reader and loader after producer
 join, then retire any provider DMA or descriptors separately.
 
-For a padded transport with the 2.00J buffered-header cutoff, enable linked
+For a padded transport with the baseline buffered-header cutoff, enable linked
 scan before binding the joint reader. At each validated footer, it examines
 the two currently available contiguous DATA spans for the next header on
 each span's halfword boundaries. A missing or incomplete header extent ends
@@ -1688,8 +1688,8 @@ record, while clearing discards it. The hook may copy its temporary snapshot but
 must not retain the pointer, reenter player calls, block/yield or change FPU modes.
 A later failure observation can latch again, including a failed stop retry.
 
-These are native per-handle diagnostics with explicit dispatch, not CRI's global
-text callback or numeric error-code ABI. Automatic stop/replay, SDK detection
+These are native per-handle diagnostics with explicit dispatch, not the legacy interface's global
+text callback or numeric error-code ABI. Automatic stop/replay, reference detection
 thresholds and qualified output recovery remain tracked separately. Rebuild all
 consumers for the extended implementation-owned player state.
 ### Owned filename sources
@@ -1725,8 +1725,8 @@ An admitted close returns 0, clears the handle, and reports any backend cleanup
 errno separately. A cleanup error cannot be retried: the descriptor slot was
 consumed and may already be reused. Constructor failure preserves its primary
 errno and separately reports cleanup failure, leaving the output handle NULL.
-This is native file ownership, not CRI ABI compatibility or completion of F1:
-global close/reset, directory resolution and full service/reload policy remain.
+This call owns one file. For collection close/reset, directory resolution and
+service/reload coverage, see [the completion map](COMPLETION.md).
 
 The fault suite covers allocation/open/extent failures, constructor unwind,
 wrong owner/IRQ state, outstanding loans, EOF, reborrow, close callback reentry,
@@ -1741,4 +1741,4 @@ and player collections, bounded recovery policy, adjacent compressed-record
 playback, atomic sequence-count queries, exact partition/provider resolution and
 finite live SFA framing. See [NATIVE_MIDDLEWARE.md](NATIVE_MIDDLEWARE.md) for
 composition, lifetime rules, baseline differences and unresolved qualifications.
-These are independent native implementations; no CRI/MWPLY ABI is supplied.
+These are independent native implementations; no legacy ABI is supplied.

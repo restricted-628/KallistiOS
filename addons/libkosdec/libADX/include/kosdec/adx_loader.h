@@ -101,7 +101,7 @@ enum kosdec_adx_loader_status kosdec_adx_loader_set_repeat(struct kosdec_adx_loa
 /* Bytes0..initial joint capacity; no I/O. Restores immediate byte flow. Changes
    affect new sector admission and an already admitted request can finish. */
 enum kosdec_adx_loader_status kosdec_adx_loader_set_flow(struct kosdec_adx_loader *, size_t);
-/* Select 2.00J LSC refill policy while STOPPED with at least one sector of joint
+/* Select baseline LSC refill policy while STOPPED with at least one sector of joint
    capacity. Once selected, update the requested byte limit at any time on the
    serialized owner. get_info reports that requested value. Each nonempty
    source/pass captures it on first service before checking refill eligibility.

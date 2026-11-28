@@ -5,10 +5,10 @@ KOSdec groups independently linkable Dreamcast media components:
 - `libADX`: ADX codec and Dreamcast middleware for KOS Experimental.
 - `libSFD`: preserved bounded video-only prototype and standalone OIX/AMX player.
 - `libAHX`: incremental mono AHX decoding and streaming PCM16.
-- `tools`: host asset compatibility checker; authoring tools remain pending.
+- `libAFS`: bounded archive reader, plus host inspection, packing and extraction tools.
+- `tools`: host ADX asset compatibility checker.
 
-The KOS Experimental libADX milestone covers all **142 applicable Sega Library
-2.00J Dreamcast middleware entries** through native implementations or accepted
+The KOS Experimental libADX milestone covers all **142 applicable middleware entries** through native implementations or accepted
 native equivalents. Playback qualification applies to the documented Flycast
 profiles. libADX provides incremental float decoding, repeat and release,
 buffered file and direct-disc input, ACX/AFS lookup, stream joints, and a
@@ -52,7 +52,7 @@ Host archives are test-only primitive emulation and are never installed.
 No aggregate addon build defaults are changed.
 
 See [libADX's contract](libADX/README.md) before using it. The public API is
-experimental, namespaced `kosdec_adx_*`, and is not a CRI ABI replacement.
+experimental, namespaced `kosdec_adx_*`, and is not a legacy ABI replacement.
 
 The opt-in [libSFD prototype](libSFD/README.md) builds independently with
 `make -C libSFD sh4`; it does not change the ADX-first default targets.
@@ -60,5 +60,4 @@ The opt-in [libSFD prototype](libSFD/README.md) builds independently with
 The opt-in [libAHX decoder](libAHX/README.md) builds with
 `make -C libAHX sh4`. FIPR synthesis is the default and
 `AHX_SYNTH=fmac` selects ordered FMAC. Its
-[baseline inventory](libAHX/BASELINE_API.csv) maps 41 recovered Dreamcast
-decoder behaviors to the native parser, synthesis and stream interfaces.
+[capability inventory](libAHX/BASELINE_API.csv) maps 41 decoder behaviors to the native parser, synthesis and stream interfaces.

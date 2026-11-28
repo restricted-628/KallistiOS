@@ -26,7 +26,8 @@ Compact 2D/3D graphics, SH4ZAM integration, fibers and services. Its default
 Dreamcast initialization also enables the MMU. These are fork additions and
 policy choices, not features attributed to standard upstream KOS.
 
-Start with [what changes and what remains experimental](FORK.md), then
+Start with the [integrated feature and API guide](BRANCH.md) and
+[what changes and what remains experimental](FORK.md), then
 [choose an integrated bundle or a focused contribution branch](BRANCHES.md).
 High-level graphics extraction is still in progress. Existing upstream
 credits, licensing and baseline setup documentation are retained below.

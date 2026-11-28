@@ -1,42 +1,42 @@
-area,reference_behavior,status,verification_or_gap
-stream,ahxsjd_initialize,implemented,Immutable tables and per-instance workspace initialization.
-stream,ahxsjd_finalize,implemented,Synchronous stop unbinds the provider with no library-global lifetime.
-stream,ahxsjd_create,implemented,Caller workspace binds one finite reader and mono PCM output.
-stream,ahxsjd_destroy,implemented,Stop retires the borrowed input before caller releases workspace.
-stream,ahxsjd_start,implemented,Start resets framing and synthesis history and rebinds input.
-stream,ahxsjd_read_header,implemented,Prime until a complete coded frame before publishing format.
-stream,ahxsjd_decode_and_queue,implemented,One native PCM granule per service when output room exists.
-stream,ahxsjd_service,implemented,Bounded source refill and output with distinct starvation and EOF.
-stream,ahxsjd_get_sample_rate,implemented,True sample rate published after stream prime.
-stream,ahxsjd_get_channels,implemented,Admitted type-0x10 profile always produces one channel.
-stream,ahxsjd_get_pcm_bits,implemented,Native output is signed PCM16.
-stream,ahxsjd_get_granule_samples,implemented,One granule is 96 samples with legal short consumer buffers.
-stream,ahxsjd_get_declared_samples,implemented,Declared duration remains separate from final coded samples.
-bit reader,ahxbsr_create,implemented,Frame reservoir and cursor are caller-owned state.
-bit reader,ahxbsr_destroy,implemented,Stop or workspace release retires borrowed input synchronously.
-bit reader,ahxbsr_refill,implemented,Incremental whole-frame admission with finite-source refill.
-bit reader,AHXBSR_GetBitStm,implemented,Bounded MSB-first reads for each payload field.
-bit reader,ahxbsr_tell_bits,implemented,Bit offset stays exact across side information and granules.
-bit reader,ahxbsr_at_end,implemented,Declared frame count and AHXE checked against physical EOF.
-bit reader,ahxbsr_sync_or_end,implemented,Explicit byte-aligned nibble scan for raw sync and AHXE markers. File validation is strict.
-codec,ahx_core_initialize,implemented,Immutable generated data and zeroed decoder state.
-codec,ahx_core_create,implemented,Explicit workspace size and alignment for each decoder instance.
-codec,ahx_core_destroy,implemented,Decoder has no allocations or pending references on caller release.
-codec,ahx_core_reset,implemented,Reinitialization clears framing and synth history.
-codec,ahx_core_bind_reader,implemented,Rebind attaches a finite offset reader and retires the old provider.
-codec,ahx_read_cri_header,implemented,Rate and sample extent plus a retained view of the optional header records.
-codec,ahx_begin_frame,implemented,Complete-frame admission and per-band side-information decode.
-codec,ahx_frame_complete,implemented,All twelve granules retire before admitting another frame or footer.
-codec,ahx_decode_granule,implemented,Exactly three groups of 32 PCM samples per synthesis step.
-codec,ahx_read_mpeg_header,implemented,Both observed mono MPEG markers including the private bit.
-codec,ahx_select_allocation_table,implemented,Normative low-rate Layer II mono allocation layout.
-codec,ahx_read_bit_allocation,implemented,All three allocation widths including their largest indexes.
-codec,ahx_read_scale_factors,implemented,All SCFSI combinations and the 6-bit scale index.
-codec,ahx_requantize_granule,implemented,Grouped and ungrouped codes through exact binary32 scale and FMAC.
-synthesis,ahx_synthesis_initialize,implemented,Zero history with generated cosine and window constants.
-synthesis,ahx_synthesis_create,implemented,Per-decoder synthesis workspace without a global pool.
-synthesis,ahx_synthesis_destroy,implemented,History belongs to the decoder workspace.
-synthesis,ahx_synthesize_32_pcm,implemented,Separate target FIPR and ordered FMAC implementations.
-codec,cri_parse_file_header,implemented,Validates the CRI extent and record count and preserves the opaque optional bytes.
-synthesis,ahx_cosine_matrix_64x32,implemented,Generated from the Layer II cosine equation.
-synthesis,ahx_window_all_phases,implemented,All sixteen phases use one ring and table derived from PL_MPEG.
+area,capability,status,verification_or_gap
+stream,initialize,implemented,Immutable tables and per-instance workspace initialization.
+stream,finalize,implemented,Synchronous stop unbinds the provider with no library-global lifetime.
+stream,create,implemented,Caller workspace binds one finite reader and mono PCM output.
+stream,destroy,implemented,Stop retires the borrowed input before caller releases workspace.
+stream,start,implemented,Start resets framing and synthesis history and rebinds input.
+stream,read header,implemented,Prime until a complete coded frame before publishing format.
+stream,decode and queue,implemented,One native PCM granule per service when output room exists.
+stream,service,implemented,Bounded source refill and output with distinct starvation and EOF.
+stream,get sample rate,implemented,True sample rate published after stream prime.
+stream,get channels,implemented,Admitted type-0x10 profile always produces one channel.
+stream,get pcm bits,implemented,Native output is signed PCM16.
+stream,get granule samples,implemented,One granule is 96 samples with legal short consumer buffers.
+stream,get declared samples,implemented,Declared duration remains separate from final coded samples.
+bit reader,create,implemented,Frame reservoir and cursor are caller-owned state.
+bit reader,destroy,implemented,Stop or workspace release retires borrowed input synchronously.
+bit reader,refill,implemented,Incremental whole-frame admission with finite-source refill.
+bit reader,read bits,implemented,Bounded MSB-first reads for each payload field.
+bit reader,tell bits,implemented,Bit offset stays exact across side information and granules.
+bit reader,at end,implemented,Declared frame count and AHXE checked against physical EOF.
+bit reader,sync or end,implemented,Explicit byte-aligned nibble scan for raw sync and AHXE markers. File validation is strict.
+codec,initialize,implemented,Immutable generated data and zeroed decoder state.
+codec,create,implemented,Explicit workspace size and alignment for each decoder instance.
+codec,destroy,implemented,Decoder has no allocations or pending references on caller release.
+codec,reset,implemented,Reinitialization clears framing and synth history.
+codec,bind reader,implemented,Rebind attaches a finite offset reader and retires the old provider.
+codec,read container header,implemented,Rate and sample extent plus a retained view of the optional header records.
+codec,begin frame,implemented,Complete-frame admission and per-band side-information decode.
+codec,frame complete,implemented,All twelve granules retire before admitting another frame or footer.
+codec,decode granule,implemented,Exactly three groups of 32 PCM samples per synthesis step.
+codec,read mpeg header,implemented,Both observed mono MPEG markers including the private bit.
+codec,select allocation table,implemented,Normative low-rate Layer II mono allocation layout.
+codec,read bit allocation,implemented,All three allocation widths including their largest indexes.
+codec,read scale factors,implemented,All SCFSI combinations and the 6-bit scale index.
+codec,requantize granule,implemented,Grouped and ungrouped codes through exact binary32 scale and FMAC.
+synthesis,initialize,implemented,Zero history with generated cosine and window constants.
+synthesis,create,implemented,Per-decoder synthesis workspace without a global pool.
+synthesis,destroy,implemented,History belongs to the decoder workspace.
+synthesis,synthesize 32 pcm,implemented,Separate target FIPR and ordered FMAC implementations.
+codec,parse file header,implemented,Validates the header extent and record count and preserves the opaque optional bytes.
+synthesis,cosine matrix 64x32,implemented,Generated from the Layer II cosine equation.
+synthesis,window all phases,implemented,All sixteen phases use one ring and table derived from PL_MPEG.

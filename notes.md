@@ -6,6 +6,10 @@ below come from the owner's instructions in the coordinating project chat;
 implementation anchors are listed separately and must be rechecked after changes.
 Do not copy private conversation transcripts or research into this file.
 
+**Public documentation (2026-11-27):** Describe the fork through its APIs, formats,
+examples and verified limits. Keep proprietary reference comparisons and research on
+external titles out of public prose. Retain contributor credits and required notices.
+
 ## D01 — Development and contribution boundaries
 
 **Accepted:** Keep integrated master for experimental development. Slow upstream
@@ -216,12 +220,12 @@ New subsystem chats share persistent records, not assumed conversational memory.
 Every iteration records status and evidence; larger policy changes require the
 owner's direction. A historical commit index is not a reconstructed test log.
 
-## D13 — Dedicated AICA/Manatee ownership
+## D13 — Dedicated AICA ownership
 
-**Accepted:** AICA/Manatee audio has its own subsystem chat, separate from
+**Accepted:** AICA audio has its own subsystem chat, separate from
 kernel/platform, because its firmware architecture and toolchain need focused
 maintenance. Audio owns ARM firmware, SH-4 audio transport, sound RAM, channels,
-DSP/streams and Manatee capability reconciliation. Kernel retains shared G2,
+DSP/streams and driver capability reconciliation. Kernel retains shared G2,
 IRQ/cache mechanisms and global lifecycle; integration co-reviews toolchains.
 This is an ownership split, not permission to import proprietary firmware or
 change shared interfaces without coordination. Anchor: `doc/agents/audio.md`.
@@ -233,7 +237,7 @@ matching START identity; they do not free samples, establish physical final-fetc
 retirement or turn LOST state into safe reuse. Existing firmware capability
 negotiation and legacy channel APIs remain. Anchors: `dc/sound/port.h`,
 `dc/sound/observation.h`, `dc/sound/playback.h` and their original examples.
-This is a bounded implementation, not complete Manatee parity.
+This is a bounded implementation, not complete driver parity.
 
 **Accepted private bank foundation, 2026-11-13:** `utils/aica-bank-tool` owns
 an original draft format, native validation/planning and a serialized PCM upload
@@ -258,7 +262,7 @@ still subject to a separate integration decision. No pointer-bearing state is
 shared across CPUs. Existing live firmware selects only the accepted registry,
 not these music cores. DSP linear-memory effects remain unqualified on the
 retained emulator because its interpreter ignores NOFL; host models are not
-audio execution. Full Manatee parity and physical retirement remain open.
+audio execution. Full driver parity and physical retirement remain open.
 
 ## D14 — Dedicated LZ4 addon ownership
 
@@ -268,9 +272,9 @@ formats/rendering, storage retains I/O, and fibers retains optional scheduling.
 Audit the current implementation before choosing extensions or optimizations.
 Anchor: `doc/agents/lz4-addon.md`.
 
-## D15 — Nindows2 parity as a Kosh-based addon
+## D15 — Interactive console support as a Kosh-based addon
 
-**Accepted direction:** Give Nindows2 parity its own chat and build it around
+**Accepted direction:** Give interactive console support its own chat and build it around
 Kosh as an addon, with Conio in scope. Substantial changes to Kosh and Conio are
 allowed by this direction, subject to bounded implementation assignments and
 interface coordination. Existing Kosh already depends on Conio. First reconcile
@@ -280,7 +284,7 @@ implement behavior, without importing proprietary SDK implementations/assets.
 **Packaging decision:** The owner selected editable sources directly in this
 fork, not submodules or separate library forks. Preserve upstream revision
 provenance and licenses; do not describe a source import as a history merge.
-Anchors: `doc/agents/nindows-kosh.md`, `addons/libkosh/README.md` and
+Anchors: `doc/agents/console-kosh.md`, `addons/libkosh/README.md` and
 `addons/libconio/README.md`.
 
 ## D16 — Host preparation and non-repeated graphics admission
@@ -670,7 +674,7 @@ remains deferred.
 **Accepted, 2026-11-11:** Publish KOSdec's reviewed native ADX music foundation
 for port integration, independently of unfinished full middleware parity.
 The original implementation lives in `addons/libkosdec/libADX`; installed APIs
-are namespaced `kosdec_adx_*`, not a CRI ABI replacement. Its explicit build
+are namespaced `kosdec_adx_*`, not a legacy ABI replacement. Its explicit build
 retains the pinned SH4ZAM definitions and exact scalar FMAC policy.
 
 The SH-4 producer decodes ADX into PCM supplied to the existing sound path.
@@ -682,10 +686,9 @@ Source EOF is not audible completion. Use the published completion matrix for
 remaining format, middleware, clock and output-control gates; host tests and
 target links do not establish physical-hardware behavior.
 
-**Scope clarification, 2026-11-11:** Finish the complete applicable Sega Library
-2.00J libADX middleware baseline; application adaptation is separate. The
+**Scope clarification, 2026-11-11:** Finish the complete applicable libADX middleware baseline; application adaptation is separate. The
 validated metadata/prefix-query slice is accepted with deliberately stricter
-native recognition and declared-record sizing, not CRI recognizer equivalence.
+native recognition and declared-record sizing, not legacy recognizer equivalence.
 Full historical-format and lifecycle/control conformance remain explicitly open.
 
 **Accepted continuation, 2026-11-13:** Requests, joint destinations and the

@@ -1,7 +1,7 @@
 # Private native sequence authoring
 
 ASQ is an original draft container for the private AICA sequence engine. It
-contains no samples and has no Sega bank/ABI compatibility. This utility prepares
+contains no samples and has no external bank/ABI compatibility. This utility prepares
 native programs. The optional private native owner below uploads and publishes
 them with matching firmware; the authoring CLI reserves no voices or hardware.
 
@@ -117,7 +117,7 @@ coverage. Target code-link probes still do not establish live ARM execution.
 `native/owner.h` composes the existing SPU transfer API with the private ARM
 catalog. Rebuild the ARM firmware and KOS before using it; initialization requires
 the sequence-resource feature. The unchanged prebuilt fallback does not supply
-this feature. This is an opt-in private interface, not a Sega binary ABI.
+this feature. This is an opt-in private interface, not an external binary ABI.
 
 Use one zeroed, exclusive, serialized ordinary-thread owner for the live sound
 runtime. Initialize with a 32-byte-multiple transfer chunk (32..32768) and a

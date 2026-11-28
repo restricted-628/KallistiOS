@@ -2,7 +2,7 @@
 
 Private format proposal, versions 1 and 2. This tool builds and validates original
 sample/instrument banks. It does not load sound RAM, play music, implement MIDI,
-interpret a Konami format, or import Manatee banks. No public format commitment
+or import external instrument banks. No public format commitment
 is implied. Python 3 standard library only; no target compiler is used here.
 
 ```sh
@@ -23,7 +23,7 @@ appear together and specify an exclusive interval in frames. Each zone needs a
 `sample` name. The fixture illustrates velocity splits and a separate drum map.
 Other optional zone fields and defaults are listed in `ZONE_FIELDS` and
 `ZONE_DEFAULTS`; they use native KOS linear gain/pan and raw AICA envelope/routing
-units, not CRI or Konami units. `root_key` describes the key at the sample's WAV
+units, not external driver units. `root_key` describes the key at the sample's WAV
 rate; `fine_cents` is metadata for the future pitch resolver, not applied here.
 
 ## Draft wire format
@@ -106,7 +106,7 @@ references and final device fetches retire; software stop is insufficient.
 
 This draft omits ADPCM, stereo groups, LFO/filter/extended envelopes, sequence
 events, DSP programs and a MIDI engine. Those remain native parity work. No
-retail hardware, audible fidelity or Konami-driver compatibility is claimed.
+retail hardware, audible fidelity or external driver compatibility is claimed.
 
 ## Layered-bank admission boundary
 

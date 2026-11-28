@@ -110,7 +110,7 @@ static enum kosdec_ahx_result file_fields(struct kosdec_ahx_parser *p) {
 }
 
 static bool file_extension(struct kosdec_ahx_parser *p) {
-    /* The common CRI extension starts with four bytes. Its last two
+    /* The optional container extension starts with four bytes. Its last two
        encode the count of following 20-byte records. Keep the optional
        records and any later channel metadata as unmodified bytes. */
     if(p->need >= 4) {

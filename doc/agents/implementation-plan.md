@@ -26,10 +26,10 @@ integration stay serialized. This does not authorize every lane's whole backlog.
 | 2 | Storage/direct I/O | Close request/stream, GAPS and VRAM consumer lifetimes against the accepted kernel contract; preserve direct defaults and the existing DMA-failure policy. |
 | 3 | Fibers/services | Apply selected storage/adapter improvements to both complete providers, then verify context state, teardown and provider exclusivity. Keep the narrow submission branch separate. |
 | 4 | Networking/BBA | Close driver/loader and packet/socket ownership reconciliation, then implement the first bounded NetBSD-backed networking slice. Existing research gates still apply. |
-| 5 | AICA/Manatee | Reconcile SH-4 transport and ARM firmware contracts; implement the reviewed drain/lifetime corrections without inventing sample-fetch retirement guarantees. |
+| 5 | AICA | Reconcile SH-4 transport and ARM firmware contracts; implement the reviewed drain/lifetime corrections without inventing sample-fetch retirement guarantees. |
 | 6 | LZ4 | Integrate justified frame/adapter correctness work and completion/callback contracts; keep codec provenance and format compatibility. |
 | 7 | Graphics/SH4ZAM | Review numerical/backend contracts and remaining repeated work; integrate one justified graphics change at a time. Preserve pinned upstream math. |
-| 8 | Nindows2/Kosh/Conio | Resolve input/callback/rendering follow-ups, then implement versioned parity slices and complete visual QA. |
+| 8 | Kosh/Conio | Resolve input/callback/rendering follow-ups, then implement versioned parity slices and complete visual QA. |
 
 Owner clarification, 2026-10-03: Kernel's investigation covers its entire
 primary and shared responsibility, in phases, not just G2 or failure handling.

@@ -2,7 +2,8 @@
 
 Documentation snapshot: 2026-09-24. This covers all 30 published branches
 in this fork at that snapshot, not private local worktrees or upstream's branches.
-See [fork differences](FORK.md) for what integrated master adds to upstream KOS.
+For current integrated functionality, use the [master guide](BRANCH.md). This snapshot
+is not a live branch listing.
 
 ## Choose by purpose
 

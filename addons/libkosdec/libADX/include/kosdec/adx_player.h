@@ -461,7 +461,7 @@ int kosdec_adx_player_poll(struct kosdec_adx_player *);
 /* Admit one live attenuation request on a retained PCM lease. Requires the
    optional ADX_RETAINED_GAIN build, a backend supporting the lease geometry
    and supporting firmware. Uses the stock
-   2.00J zero-fade response; effective request clamps to [-999, 0] tenths dB.
+   baseline zero-fade response; effective request clamps to [-999, 0] tenths dB.
    Success only issues a request. Service the player and check the applied
    bits for the active channels. Mono uses the left bit alone.
    Maximum TL carries no hard-mute guarantee.
@@ -577,7 +577,7 @@ int kosdec_adx_compat_player_set_live_transpose(struct kosdec_adx_player *,
 /* Checked linear0..255 per-channel gain and pan (0left,128center,255right).
    May set before start or during playback. Default full volume; mono centered,
    stereo separated. Channel1 settings ignored for mono. This is KOS's scale,
-   not CRI's attenuation/pan ABI. Failure may partially update hardware: stop. */
+   not the legacy interface's attenuation/pan ABI. Failure may partially update hardware: stop. */
 int kosdec_adx_player_set_output(struct kosdec_adx_player *,
     unsigned left_volume, unsigned right_volume, unsigned left_pan, unsigned right_pan);
 /* Signed per-channel pan: -15 left,0 center,+15 right, or KOSDEC_ADX_PAN_AUTO.
@@ -593,7 +593,7 @@ int kosdec_adx_player_set_pan(struct kosdec_adx_player *, unsigned channel, int 
 /* Last successfully configured software setting, including AUTO; not device
    readback. Valid after failure/stop too. Null output or channel>1 is EINVAL. */
 int kosdec_adx_player_get_pan(const struct kosdec_adx_player *, unsigned channel, int *pan);
-/* Dreamcast compatibility settings. The 2.00J player stores these raw values
+/* Dreamcast compatibility settings. The baseline player stores these raw values
    without filtering the output. They start at zero and persist across sources
    and stop until reinit. This API is separate from the producer PCM callback. */
 int kosdec_adx_player_set_filter_settings(struct kosdec_adx_player *,
@@ -625,7 +625,7 @@ int kosdec_adx_player_get_info(struct kosdec_adx_player *, struct kosdec_adx_pla
 /* First operational failure observed since init/clear. Decoder/state are captured
    at observation, not live queries. Bad API arguments, WAIT, normal starvation,
    EOF and requested cancellation do not latch diagnostics. Query leaves output
-   unchanged on invalid arguments. Native errno/status, not CRI numeric codes.
+   unchanged on invalid arguments. Native errno/status, not legacy numeric codes.
    Init failure has no initialized player to query: inspect its return/errno. */
 int kosdec_adx_player_get_error(const struct kosdec_adx_player *,
     struct kosdec_adx_player_error *);

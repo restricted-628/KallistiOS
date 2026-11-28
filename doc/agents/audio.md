@@ -1,7 +1,7 @@
 # AICA, SPU transfers, DSP and audio streams
 
 Task guide for KOS Experimental. Read root `AGENTS.md` first; this is a
-routing aid, not permission for broad changes. Owning lane: **AICA/Manatee audio**.
+routing aid, not permission for broad changes. Owning lane: **AICA audio**.
 
 ## Scope and entry points
 
@@ -43,9 +43,7 @@ Relevant existing documentation (dated claims must be rechecked):
   their instruction sets, toolchains and validation are not interchangeable.
   Current firmware build flags select arm7di; verify actual compiler/ABI/output
   before changing flags. Do not inherit SH-4 SH4ZAM or language settings blindly.
-- Treat Manatee as a separately versioned proprietary reference, not another
-  name for KOS firmware or permission to import its driver/banks. Compare useful
-  behavior and contracts using private evidence; preserve original sources.
+- Keep host transport, firmware and bank formats versioned. Publish the native interface and keep research material private.
 - Follow firmware source through ELF, stream.drv, generated embedding and the
   actual host load. Check the prebuilt fallback separately for protocol drift;
   a successful SH-4 build does not prove the ARM source was rebuilt.

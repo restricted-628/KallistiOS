@@ -974,13 +974,13 @@ Platform-specific changes are prefixed with the platform name, otherwise the cha
 - Fixed the "tile 0 bug", which was really stupid: it was just clipping tile 0 as I had requested in the polygon header.
 - Added new bin2o util that converts a binary into an object file for inclusion in the link process.
 - Tightened thread locking code and irq disable code: there are still some situations where two threads can enter a critical section, but doing it "right" put an incredible load on the CPU. Thus, I just tried to minimize the possibility.
-- Fixed a bug in 320x240 setup for RGB cables and VGA offset for 640x480 so it's the same as official games.
+- Fixed a bug in 320x240 setup for RGB cables and VGA offset for 640x480.
 - Fixed frame buffer size in 640x480; this prevents the first bits of your texture from showing up on the bottom of the screen.
 - Added a new ta_set_buffer_config() so that you can set the TA parameters like active lists and buffer sizes before calling init.
 - Integrated Andrew Kieschnick's RockRidge NM extension patches for the ISO9660 file system.
 - Added new romdisk file system. This is intended as a general replacement for the old "builtin" file system, though builtin still has its uses too.
 - Added conio->check_getch() in Kosh and added support for that to Streamtest; also added conio->freeze() and conio->thaw() so that you can run compliant apps from Kosh now. This is just a temporary hack and will be changed later, but it works for now.
-- New upstream version of Streamtest code (from our game).
+- New upstream version of Streamtest code.
 - Increased default thread stack space again, this time to 64k. Tune to your liking in include/kallisti/config.h.
 - Simplistic TA texture allocation system; names of texture_* funcs have changed; please see ta.c or ta.h.
 - BIOS font API now supports opaque or not; the bfont_* functions have changed; please see biosfont.c or biosfont.h.

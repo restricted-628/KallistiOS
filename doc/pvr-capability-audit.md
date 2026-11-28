@@ -5,6 +5,11 @@ KOS itself. It is a behavioral inventory, not a compatibility-layer plan. New
 interfaces must use KOS naming, ownership, error handling, synchronization, and
 resource-allocation conventions.
 
+For the current tile-pass API, see [multipass registration](pvr-multipass-design.md).
+It covers mixed direct and buffered lists, the source lifetime of an asynchronous
+flush, and the difference between background redraw and depth preservation.
+The tranches below record what was known when each was accepted.
+
 ## Scope and evidence policy
 
 The audit compares the current PVR, video, DMA, store-queue, matrix, and image

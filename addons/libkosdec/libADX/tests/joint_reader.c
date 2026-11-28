@@ -214,7 +214,7 @@ static uint32_t digest_pcm(const int16_t *pcm, size_t frames) {
 }
 
 static void queue_jobs(void) {
-    /* ADXSJD + SJUNI observations on 2.00J, two stereo groups at 44100 Hz. */
+    /* ADXSJD + SJUNI observations for two stereo groups at 44100 Hz. */
     static const struct {
         bool join;
         unsigned left, right, offset, maximum, steps;
@@ -328,7 +328,7 @@ static void queue_node_exhaustion(void) {
 }
 
 static void jobs(void) {
-    /* Observations from the 2.00J memory-source scheduler on synthetic data,
+    /* Observations from the reference memory-source scheduler on synthetic data,
        using the documented v3 profile at 44100 Hz / 500 Hz. */
     const struct {
         unsigned budget, end, offset, release, footer;

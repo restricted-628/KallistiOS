@@ -117,7 +117,7 @@ int main(int argc, char **argv) {
              "Profiles: encoding 3, v3/v5, mono/stereo, integer rates 1..48000 Hz.\n"
              "Cutoff: 0..floor(rate/2); default player output: 8000..48000 Hz.\n"
              "Exit: 0 all compatible; 1 any rejection/I/O error; 2 usage/output error.\n"
-             "Host validation model only; no target audio or full CRI parity claim.");
+             "Host validation model only; does not qualify target audio or other decoder profiles.");
         return fflush(stdout) != 0 || ferror(stdout) ? 2 : 0;
     }
     int first = argc > 1 && !strcmp(argv[1], "--") ? 2 : 1;

@@ -18,7 +18,7 @@ static void check_jobs(void) {
             coded[18 * block + i] = (uint8_t)(17 * i + 3 * block);
     }
     /* Built independently from the binary32 predictor, then checked against
-       the 2.00J mono and stereo decoder for the same synthetic block bytes. */
+       the reference mono and stereo decoder for the same synthetic block bytes. */
     const struct {
         unsigned channels, physical_frames, shown;
         uint32_t digest;

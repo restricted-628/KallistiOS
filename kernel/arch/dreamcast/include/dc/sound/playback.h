@@ -16,7 +16,7 @@
     A lost firmware session pins the attachment/channel capacity until runtime restart; no abandon
     or automatic recovery is supplied. Normally observe STOP, consume its result,
     and detach before exclusive sound shutdown. This releases software ownership
-    only, not sample retention. These limitations are not full Manatee parity.
+    only, not sample retention.
 
     Normal thread context and cooperative ownership are required. Raw/P1a/SFX
     writers must not independently use an attached channel. Interference is known

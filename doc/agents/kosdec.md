@@ -1,8 +1,7 @@
 # KOSdec media addon
 
 KOSdec owns `addons/libkosdec`: independent `libADX`, `libSFD`, `libAHX`
-and `libAFS` components plus host tools. libADX covers all 142 applicable Sega Library
-2.00J entries through original implementations or accepted native equivalents.
+and `libAFS` components plus host tools. libADX covers all 142 applicable entries through original implementations or accepted native equivalents.
 Playback qualification applies to the documented Flycast profiles on KOS
 Experimental. The [completion map](../../addons/libkosdec/libADX/COMPLETION.md)
 records applicability, published evidence and remaining qualification. Stock KOS
@@ -12,11 +11,11 @@ standalone OIX/AMX example and host fixture tests are opt-in. The example owns
 startup cache/MMU state; the archive does not. Preserve the documented profile,
 float math, dependency provenance and separate hardware/runtime gates.
 The [release scope](../../addons/libkosdec/libADX/PARITY.md) also tracks
-SA2-derived work, host authoring and the native interface boundary.
+named-file admission, host authoring and the native interface boundary.
 
 The opt-in [libAHX decoder](../../addons/libkosdec/libAHX/README.md)
 provides finite-source mono PCM16. Its [inventory](../../addons/libkosdec/libAHX/BASELINE_API.csv)
-covers the recovered AHX decoder from Sonic Adventure 2 and Shenmue II.
+lists framing, synthesis and finite-reader capabilities.
 Preserve default FIPR, optional ordered FMAC, FPSCR restoration and the distinct
 coded and declared sample counts. The synchronous stream service leaves input
 and PCM scheduling to the caller. Device playback stays downstream.
@@ -36,7 +35,7 @@ active pause, discard and logical PLAYEND. Played sound RAM stays reserved.
 Retail audible completion and allocator reuse require separate evidence.
 Keep decoder and service layers individually linkable.
 
-Use the root source-evidence gate before changing format/math or SDK behavior.
+Use the root source-evidence gate before changing format, arithmetic or compatibility behavior.
 Preserve exact float ordering, history boundaries, conversion and FPU-state
 contracts. Integer syntax/counts and final PCM representation are intentional.
 Retain dependency provenance and never copy proprietary implementations/assets.
@@ -59,7 +58,7 @@ exclusive fiber-provider rule; only yield outside driver locks and FPU mode chan
 
 Sequence transitions reset predictor history and validate each footer before
 advancing. Queue counters describe decoded PCM, not input read-ahead or playback.
-No audible seamless/CRI ABI claim follows from passing concatenation tests.
+Passing concatenation tests establishes neither an audible seam nor binary compatibility.
 
 PCM pipe ownership is one producer and one consumer. Source controls are
 producer-only; cancel requests require a producer acknowledgement and wakeup.
@@ -86,8 +85,7 @@ Provider retirement remains separate; no sound alloc/start/stop occurs on rebind
 never calls sound APIs. Detach callback/userdata on final stop, or disable PCM/wakes before source join;
 keep first failure distinct from stop/retry errors. On successful stop retain the
 sound allocation/handle while providers retire separately. No player API may
-reset global audio or reinterpret source drain as hardware completion. New SDK
-attenuation/pan parity must distinguish CRI's units from current KOS0..255 controls.
+reset global audio or reinterpret source drain as hardware completion. Keep compatibility attenuation and pan units distinct from the KOS 0..255 controls.
 
 Source seek is serialized while unbound: decode from zero to rebuild full-group
 history, with at most one provider call/32 discarded frames per step. The pipe
@@ -157,7 +155,7 @@ Forward-only joint sources reject loop/repeat/enqueue controls; no hidden seek.
 
 The baseline loop flag is selected before start and can only be released during
 playback. Do not invent live re-enable to close H4. Embedded-loop counts are
-source rewinds, not audible time; SDK updates its count in a decoder trap. Publish
+source rewinds, not audible time; the reference player updates its count in a decoder trap. Publish
 low32 bits from the producer with the existing lock-free atomic discipline;
 controller queries must not read the producer-owned64-bit wraps directly.
 Sequence cycles and forward-only joint input are not embedded-loop counts.
@@ -168,7 +166,7 @@ of silently dropping records or altering playback PCM. Keep one producer and one
 consumer per channel, release/acquire publication, explicit source-frame selection,
 and storage lifetime through producer join. Do not call analysis timestamps an
 Audio-qualified clock or replace the user's existing filter without composition.
-Native typed work sizing differs from the SDK; no peak-loop FPU/SH4ZAM claim.
+Native typed work sizing differs from the reference interface; no peak-loop FPU/SH4ZAM claim.
 
 Compressed silence insertion means complete zero residual ADX groups, not clearing
 predictor history. Preserve ring wrap/mirror publication and producer ownership;
@@ -183,7 +181,7 @@ an explicit immutable archive provider and may outlive metadata, never provider
 retirement. Sparse overlay push/pop uses caller-owned links; newest count bounds
 IDs and zero offsets fall back through older layers. Preserve selected archive
 identity, reference counts and same-base idempotence; replacement/unbind/close
-detach all associated links. Native byte-range work sizing is not CRI's compact
+detach all associated links. Native byte-range work sizing is not a legacy compact
 sector ABI. Rebuild consumers after registry layout changes.
 
 Sector request state owns only its callback/output borrows, not backend staging.
@@ -202,7 +200,7 @@ Check successful stop/close before recycling held storage; rebuild request state
 
 PCM WAV uses a distinct bounded reader, not widened ADX encoding admission.
 Preserve RIFF chunk/padding bounds and byte-safe PCM16 loads; U8 conversion is
-exact integer format conversion. PCM8/16 and CRI tag1 packed4 use existing
+exact integer format conversion. PCM8/16 and tag1 packed4 use existing
 pipe/service/player bindings. Packed4 reconstructs AICA-model PCM16, preserving
 per-channel history and low-first nibbles from channel-interleaved bytes. Do not
 substitute generic Yamaha rounding or add a high-pass. Preserve whole four-frame

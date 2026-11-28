@@ -77,7 +77,7 @@ enum kosdec_adx_status kosdec_adx_get_info(const struct kosdec_adx_decoder *,
    Work is bounded by one record (at most65539 bytes), using512-byte parser steps;
    these whole-record probes are not the incremental real-time decode API.
    Endcode size is its declared validated extent, not the supplied buffer size.
-   These strict admission queries differ from CRI's permissive recognizers. */
+   These strict admission queries differ from the legacy interface's permissive recognizers. */
 enum kosdec_adx_status kosdec_adx_probe_header(const uint8_t *, size_t,
                                             struct kosdec_adx_info *);
 enum kosdec_adx_status kosdec_adx_probe_endcode(const uint8_t *, size_t,

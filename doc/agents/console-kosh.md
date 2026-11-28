@@ -1,20 +1,17 @@
-# Nindows2 parity through a Kosh-based addon
+# Interactive console: Kosh and Conio
 
 Read root `AGENTS.md` and `notes.md` D15 first. Owning lane:
-**Nindows2/Kosh addon**, including Conio integration.
+**Kosh addon**, including Conio integration.
 
 ## Accepted direction and open design
 
-Build the Nindows2-parity effort around Kosh as an addon. The owner explicitly
+Build the console effort around Kosh as an addon. The owner explicitly
 anticipates substantial Kosh and Conio modifications; an unchanged wrapper is
 not a requirement. Preserve licenses, attribution and source history. Feature
 parity does not by itself require proprietary ABI/binary compatibility, a new
 mandatory desktop, or changes to kernel startup defaults.
 
-First define the parity matrix from versioned references and real use cases:
-existing, missing, adaptation needed, deferred and unresolved. Distinguish
-Nindows2 from older Nindows. Do not infer the entire original scope from a chat
-summary, or promise every reference feature before the matrix is reviewed.
+Track supported commands, input events, rendering and shutdown against concrete application use cases. Record missing behavior separately from verified interfaces.
 
 ## Entry points and evidence
 
@@ -25,9 +22,7 @@ summary, or promise every reference feature before the matrix is reviewed.
   headers route through `addons/include/kosh` and `addons/include/conio`.
   Existing Kosh depends on Conio; do not accidentally audit/link a different
   installed kos-ports copy. The owner chose direct sources, not submodules.
-- Use supplied versioned Nindows2 documentation/headers/samples as behavioral
-  evidence, not code or assets to transplant. Keep reference paths and research
-  outside this fork. Verify binary mappings before any scoped disassembly.
+- Keep private reference material outside the fork. Use synthetic fixtures and the included applications in published examples.
 
 ## Reconciliation questions
 

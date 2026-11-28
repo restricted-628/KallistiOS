@@ -2,15 +2,14 @@
 
 The codec accepts integer sample rates 1..48000 Hz and integer high-pass cutoffs
 0..floor(rate/2). Out-of-domain or null-output requests fail without writes.
-This is an explicit implementation domain, not a claim that every baseline SDK
+This is an explicit implementation domain, not a claim that every reference
 API accepts every combination. Rates above 44100 Hz are an original extension.
 Native player output remains 8000..48000 Hz; low-rate sources need an explicit
 in-range output override, which changes pitch and duration.
 
 ## Dreamcast rounding
 
-Versions 3 and 5 through 44100 Hz use the rounded Sega Library 2.00J setup.
-The linked SDK header path uses the same rate and cutoff calculation for both.
+Versions 3 and 5 through 44100 Hz use the same rounded coefficient setup.
 Header setup rounds the binary32 product of the cutoff and 2π before dividing
 by the rate. The integer significand calculation reconstructs that angle with
 ties to even. The Q12 lookup represents changes in the modeled setup output
@@ -18,7 +17,7 @@ at consecutive angle words. It includes local reversals caused by intermediate
 rounding. Blocks of up to 32 transitions have an absolute checkpoint followed
 by variable-length angle deltas and two signed coefficient deltas per entry.
 Use `tests/pack_rounded_setup.py` to pack ordered numerical transition values.
-The table contains output pairs. It uses no SDK polynomial or runtime code.
+The table contains output pairs. It uses no reference polynomial or runtime code.
 
 At 44100 Hz and a 1 Hz cutoff this setup returns {8192,-4096}. It matches the
 established profiles at 500 Hz. The argument calculation leaves FPSCR
@@ -33,7 +32,7 @@ For r = cutoff/rate, let b = sqrt(2)-1, a = sqrt(2)-cos(2*pi*r), and
 p = b/(a+sqrt(a*a-b*b)). The coefficient contract is
 `q0 = trunc(8192*p)` and `q1 = -trunc(4096*p*p)` using the mathematical real
 values. Zero cutoff gives {8192,-4096}; Nyquist gives {708,-30}. This does not
-model the SDK's intermediate rounding.
+model the reference implementation's intermediate rounding.
 
 As r increases, both positive coefficient magnitudes decrease monotonically.
 The runtime searches two original tables of transition thresholds using exact
@@ -83,22 +82,22 @@ coefficient or PCM test pass.
 The rounded map was checked against the binary32 model's transitions and their
 neighbors. The integer argument calculation matched strict IEEE binary32
 arithmetic at all 486,202,500 nonzero rate/cutoff pairs through 44100 Hz. A
-SuperH p-code execution of the linked 2.00J routine matched 185 model witnesses,
+SuperH p-code execution of the linked baseline routine matched 185 model witnesses,
 including all 140 differences found in the original eight-rate sweep. A separate
 run of that linked routine matched the native pair at all 22,051 integer
 cutoffs from zero through Nyquist at 44.1 kHz. Retail execution of the
 reference routine remains unverified.
 
 
-Private same-guest comparisons against the original 2.00J mono/stereo routines
+Private same-guest comparisons against the reference mono/stereo routines
 matched 8,064 PCM values and 504 stored histories in both Flycast CPU modes.
 The test covered the 13-bit scale, both ignored scale-word bits, seeded history,
-clipping and group carry. SDK decoding of multiple groups in one call preserves
+clipping and group carry. Reference decoding of multiple groups in one call preserves
 float history between them and differs from one-group calls on the test data.
 The native decoder fixes that boundary at each group for input-fragmentation
-invariance. Retail FPSCR and SDK scheduling equivalence remain unverified.
+invariance. Retail FPSCR and reference scheduling equivalence remain unverified.
 
-A whole-record comparison on the 11 standalone 2.00J ADX samples matched
+A whole-record comparison on the 11 standalone baseline ADX samples matched
 51,457,454 visible PCM values per Flycast CPU mode at the same one-group
 boundaries. Each run checked carried histories and validated the native
 footer for every record. For a partial final group, the native history

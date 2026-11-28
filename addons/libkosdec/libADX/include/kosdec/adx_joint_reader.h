@@ -85,7 +85,7 @@ enum kosdec_adx_status kosdec_adx_joint_reader_set_feed(
    predictor history at each record. Link mode can advance the producer feed
    while PCM is full. Incompatible with live SFA and the direct sector source. */
 enum kosdec_adx_status kosdec_adx_joint_reader_enable_linked(struct kosdec_adx_joint_reader *);
-/* Optional 2.00J buffered-header policy on an enabled linked reader. At the
+/* Optional baseline buffered-header policy on an enabled linked reader. At the
    validated footer, snapshot up to two contiguous DATA loans. Look for the
    next header at halfword offsets within each span, advancing at most 512
    bytes per scan step. No feed runs while scanning. If no full header extent
@@ -110,7 +110,7 @@ enum kosdec_adx_status kosdec_adx_joint_reader_set_link_follow(
 /* Finish the current record or stop at the existing record boundary.
    This does not change loader repeat policy or retire already prefetched DATA. */
 enum kosdec_adx_status kosdec_adx_joint_reader_release_link(struct kosdec_adx_joint_reader *);
-/* Select 2.00J-style decode jobs before the first read or producer start.
+/* Select baseline-style decode jobs before the first read or producer start.
    Supports memory, mirrored rings with at least 35 extra bytes, and queued
    input. Queue jobs use one head per call and require whole compressed groups
    within that head. A short head waits for a contiguous JOIN append or reports

@@ -41,7 +41,7 @@ except stdout/stderr; direct JSON output to a different file from the inputs.
 
 Admission currently includes encoding 3, versions 3/5, mono/stereo, 18-byte channel
 blocks, 4-bit residuals and integer rates 1..48000 Hz with cutoff 0..floor(rate/2).
-48 kHz is our extension beyond the baseline ADX Talk limit. See libADX's README
+48 kHz is our extension beyond the 44.1 kHz reference profile. See libADX's README
 for extension, loop, length and footer restrictions. Unsupported does not mean an
 asset is corrupt; it means this library does not yet admit its profile/layout.
 

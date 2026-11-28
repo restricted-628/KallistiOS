@@ -37,66 +37,41 @@ No physical-hardware tests or reduced-scratch performance claims were added.
 Make the optional LZ4 addon predictable in RAM use, stack use, and cooperative
 scheduling, then optimize measured Dreamcast bottlenecks. Preserve the upstream
 LZ4 1.10.0 implementation and its attribution. Keep KOS policy in the adapter,
-build settings, and tests. No Sega SDK source or implementation is imported.
+build settings, and tests.
 
 The first study covers the hardware sections relevant to compression and asset
 loading: memory organization, alignment, caches, OCRAM/index modes, store queues,
 cache allocation, and DMA ownership. It does not claim a cover-to-cover review
 of every peripheral chapter. Graphics addon extraction remains separate.
 
-## Reference basis
+## Hardware assumptions and references
 
-Local manuals were read without modification. Printed page numbers and PDF
-page numbers differ; both are given where useful. The SH7091-specific manual
-is the authority for this CPU. Generic SH7750 documents are cross-checks, not
-permission to assume later SH7750R cache features exist on Dreamcast.
+The adapter targets SH7091 cache and alignment rules. SH7750-family manuals are
+useful cross-checks, not evidence that later cache features work on this target.
+The LZ4 block and frame specifications govern the compressed byte stream.
 
-| ID | Source and selected sections | Relevance |
-| --- | --- | --- |
-| H | SH7091 Hardware Manual, `sh7091hm_2j.pdf`, sections 4.1-4.3, PDF pp. 65-73 / printed 4-1 through 4-9; section 4.6, PDF pp. 80-82 / printed 4-16 through 4-18 | Cache organization, software coherency, OCRAM mapping, prefetch, store queues |
-| P | SH7091 Programming Manual, `sh7091pm_2j.pdf`, section 10.61, PDF p. 281 / printed 10-121 | `MOVCA.L` semantics and partially initialized cache lines |
-| E | Hitachi SH-4 Programming Manual, `h14tp003d2.pdf`, section 2.5, PDF p. 35 / printed p. 21; data-address errors, PDF p. 116 | Natural alignment and address errors |
-| S | Dreamcast/Dev.Box System Architecture, 1999-09-03, PDF/printed p. 13 | 200 MHz CPU, 16 MiB system RAM, shared external-memory traffic |
-| A | `SH4_access990312_e.pdf`, pp. 1-2 | Access/transfer table explicitly describes simulation optimums, not achieved application throughput |
-| L | Upstream LZ4 v1.10.0 block/frame specifications and the vendored library | Match-history rules, frame bounds, allocation and decoding behavior |
-
-Local reference locations:
-
-- H: `/Users/joseph/Documents/Sega Library Dreamcast SDK 2.00J/doc/sh4/sh7091hm/sh7091hm_2j.pdf`
-- P: `/Users/joseph/Documents/Sega Library Dreamcast SDK 2.00J/doc/sh4/sh7091pm/sh7091pm_2j.pdf`
-- E: `/Users/joseph/Downloads/dreamcast-docs-main/files/sh4/h14tp003d2.pdf`
-- S: `/Users/joseph/Downloads/dreamcast-docs-main/files/official/DreamcastDevBoxSystemArchitecture.pdf`
-- A: `/Users/joseph/Downloads/dreamcast-docs-main/files/official/SH4_access990312_e.pdf`
-
-Public cross-checks:
 
 - [Renesas SH7750-family hardware manual](https://www.renesas.com/en/document/mah/sh7750-sh7750s-sh7750r-group-users-manual-hardware)
 - [LZ4 1.10.0 block format](https://github.com/lz4/lz4/blob/v1.10.0/doc/lz4_Block_format.md)
 - [LZ4 1.10.0 frame format](https://github.com/lz4/lz4/blob/v1.10.0/doc/lz4_Frame_format.md)
 
-The key SH7091 cache, mapping, store-queue, and MOVCA pages were also rendered
-and visually checked. Initial Poppler output omitted Japanese text; a second
-render with PyMuPDF restored it. No conclusions depend on those incomplete
-renders. Notes below paraphrase hardware behavior rather than reproduce SDK
-algorithms or code.
-
 ## Hardware facts and design consequences
 
 | Documented fact | Consequence for this port (engineering decision, not a speed claim) |
 | --- | --- |
-| 8 KiB direct-mapped instruction cache; 16 KiB direct-mapped operand cache; 32-byte lines [H 4.1] | Measure hot code size and data placement. Larger unrolled code or a large hash table is not automatically faster. |
-| OCRAM consumes half the operand cache, leaving 8 KiB cache and 8 KiB RAM [H 4.3.6] | Do not enable OCRAM inside LZ4. It cannot hold the general 64 KiB match history, and competes with rendering scratch. |
-| OCRAM's contiguous mapping changes with OCINDEX [H 4.3.6-4.3.7] | No private CCR changes or alias tricks. Any experiment needs KOS-level ownership, correct linker mapping, and restoration. |
-| Word/longword memory accesses require 2-/4-byte alignment [E 2.5] | A 32-byte-aligned buffer does not make every token or match pointer aligned. Keep safe unaligned access and test every byte offset. |
-| Cache/external-memory coherency is software-owned [H 4.3.8] | DMA transitions require the appropriate existing KOS ownership/cache protocol. Decompression alone must not flush whole caches. |
-| Store queues are two 32-byte outbound queues; writes are longword/quadword and transfers are aligned 32-byte bursts [H 4.6] | Use ordinary CPU-readable memory for match history. SQ is a possible final upload stage, not a replacement output pointer for the decoder. |
-| MOVCA avoids a line fetch on a write-back miss, leaving the other bytes unspecified [P 10.61] | Only consider it for exclusively owned complete destination lines that will be initialized before use. Never apply it blindly to partial lines or existing match history. |
-| 16 MiB main RAM; CPU and transfers share the memory system [S p. 13] | Count compressed residency, final output, decoder scratch, stacks, dictionaries, queued jobs, and outstanding DMA together. Do not equate bus peak with decode bandwidth. |
+| 8 KiB direct-mapped instruction cache; 16 KiB direct-mapped operand cache; 32-byte lines | Measure hot code size and data placement. Larger unrolled code or a large hash table is not automatically faster. |
+| OCRAM consumes half the operand cache, leaving 8 KiB cache and 8 KiB RAM | Do not enable OCRAM inside LZ4. It cannot hold the general 64 KiB match history, and competes with rendering scratch. |
+| OCRAM's contiguous mapping changes with OCINDEX | No private CCR changes or alias tricks. Any experiment needs KOS-level ownership, correct linker mapping, and restoration. |
+| Word/longword memory accesses require 2-/4-byte alignment | A 32-byte-aligned buffer does not make every token or match pointer aligned. Keep safe unaligned access and test every byte offset. |
+| Cache/external-memory coherency is software-owned | DMA transitions require the appropriate existing KOS ownership/cache protocol. Decompression alone must not flush whole caches. |
+| Store queues are two 32-byte outbound queues; writes are longword/quadword and transfers are aligned 32-byte bursts | Use ordinary CPU-readable memory for match history. SQ is a possible final upload stage, not a replacement output pointer for the decoder. |
+| MOVCA avoids a line fetch on a write-back miss, leaving the other bytes unspecified | Only consider it for exclusively owned complete destination lines that will be initialized before use. Never apply it blindly to partial lines or existing match history. |
+| 16 MiB main RAM; CPU and transfers share the memory system | Count compressed residency, final output, decoder scratch, stacks, dictionaries, queued jobs, and outstanding DMA together. Do not equate bus peak with decode bandwidth. |
 
 LZ4 matches reference earlier decoded bytes and may overlap their destination.
 Our default should therefore decode into the final, cacheable main-RAM buffer.
 Retain upstream overlap handling; replacing match copies with general `memcpy`,
-DMA, or SQ copies is not valid merely because the destination is aligned [L].
+DMA, or SQ copies is not valid merely because the destination is aligned.
 For texture uploads, finish and validate the RAM result before handing it to a
 separately owned KOS upload operation. PVR command submission is not a general
 byte-stream output sink.

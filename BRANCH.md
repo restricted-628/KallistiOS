@@ -1,48 +1,21 @@
-# Integrated experimental KallistiOS fork
+# Integrated experimental fork: master
 
-Branch: `master`
+Use this branch for the combined Dreamcast kernel, drivers and optional addons.
+It is not an official KallistiOS release. The following describes the tree
+through `1c7114b374de` (2026-11-27); the [fork changelog](CHANGELOG.fork.md)
+records subsequent changes. The [branch guide](BRANCHES.md) is a historical
+map of separately scoped branches, not a list of prerequisites for master.
 
-Role: Integrated SDK
+| If you need to… | Start here | Important limit |
+| --- | --- | --- |
+| Read immutable disc data on a page fault | [Demand paging](addons/libvmdemand/README.md) and [resident VM](doc/resident-vm.md) | Link the opt-in archive, admit the range on the reading carrier and retain the file. This is not demand paging for arbitrary pointers, writes or executable code. |
+| Load sectors directly into device memory | [GD-DMA invariants](doc/direct-gdrom-dma-invariants.md) and [examples by destination](doc/direct-dma-examples.md) | VRAM and bridge SRAM have different ownership rules. The wave-RAM loader allocates its destination; it cannot overwrite an arbitrary playing buffer. |
+| Mix ordered and autosorted tile passes | [PVR pass registration and list flush](doc/pvr-multipass-design.md) | A later clear redraws the background plane. Async flush borrows the source until its ticket retires; list completion is not render completion. |
+| Choose a media component | [KOSdec](addons/libkosdec/README.md) | ADX checked playback, standalone mono AHX decoding, AFS archive access and the video-only SFD player are distinct interfaces. |
+| Use the math or shader adapters | [SH4ZAM](addons/libsh4zam/README.md) and [SH4DER](addons/libsh4der/README.md) | Build against this checkout's pinned submodules. Do not mix installed headers or link two fiber providers. |
 
-Description snapshot: 2026-09-24
-
-Development home for the combined OS, direct-I/O, graphics and service work. This is not the official KallistiOS master branch or a single upstream pull request.
-
-## Included work
-
-- Kernel ownership/lifetime fixes and core fibers with integrated Service Executor support.
-- Direct-default disc APIs, G1/G2/GAPS integration, and optional application-fiber adapters.
-- Compact 2D/3D graphics and direct SH4ZAM math integration; bounded LZ4/ADX work.
-
-## Boundaries
-
-- Completed graphics-addon extraction and blanket physical-hardware validation are not claimed.
-
-## Dependencies and intended use
-
-Use one checkout for integrated development. Choose a complete fiber bundle when provider exclusivity is required.
-
-This branch includes integrated fork history. Do not submit its complete diff
-as a single upstream kernel change.
-
-## Source and detailed contracts
-
-- [FORK.md](FORK.md)
-- [BRANCHES.md](BRANCHES.md)
-- [doc/disc-backend-defaults.md](doc/disc-backend-defaults.md)
-
-Reviewed code snapshot: [`163e4a5b635e`](https://github.com/restricted-628/KallistiOS/commit/163e4a5b635eb106b7c4d49597b15aca022da231).
-
-Common ancestor with the inspected upstream master:
-[`55da82831f4c`](https://github.com/restricted-628/KallistiOS/commit/55da82831f4cadef233b02c95493011428fb917f).
-This records the inspected baseline, not a claim of being rebased to today's upstream.
-
-The description pass changes documentation only. It does not rerun code tests,
-prove hardware behavior, or certify every inherited feature. Follow the linked
-contracts and reproduce the relevant host, target and emulator checks; physical
-hardware validation remains a separate gate. Private research and uncommitted
-experiments are not part of this description.
-
-[All published branches](https://github.com/restricted-628/KallistiOS/blob/master/BRANCHES.md) ·
-[Integrated fork differences](https://github.com/restricted-628/KallistiOS/blob/master/FORK.md) ·
-[Official KallistiOS](https://github.com/KallistiOS/KallistiOS)
+Start a new checkout with `--recurse-submodules`. After changing revisions,
+run `git submodule update --init --recursive` and point `KOS_BASE` at that
+checkout before rebuilding. The [fork overview](FORK.md) distinguishes upstream
+facilities from fork defaults. Examples and hardware limits belong to their
+component guides; a successful target link or emulator run is not a console test.

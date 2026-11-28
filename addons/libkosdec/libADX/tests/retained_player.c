@@ -488,7 +488,7 @@ static void live_time_mode(void) {
     CHECK(!kosdec_adx_player_get_time_real(&f->player,1,&real) && real == -1);
     CHECK(!kosdec_adx_player_set_time_offset(&f->player,0));
 
-    /* One handle, nine queries from the linked 2.00J active-mode witness. */
+    /* One handle, nine queries from the linked reference active-mode witness. */
     static const struct {
         enum kosdec_adx_time_mode mode;
         unsigned tick, frames, count, frequency, real;

@@ -1,6 +1,6 @@
 # libAFS
 
-libAFS reads Dreamcast-era CRI AFS archives with arbitrary member data.
+libAFS reads Dreamcast-era AFS archives with arbitrary member data.
 It uses a caller-supplied byte-positioned reader and fixed parser scratch
 space. Link `-lAFS` and include `<kosdec/afs.h>`. The archive and source
 context must stay alive until the last member read. Serialize access when

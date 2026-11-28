@@ -15,4 +15,4 @@ The live backend intentionally has no natural-completion detection. Musical
 release voices remain conservative until explicit control/stealing; no key-off
 or logical stop releases sample memory or the physical channel pool. Nominal
 4410-Hz serviced ticks are converted to milliseconds; this is not measured
-physical timing. This fixture is not whole Manatee parity or DSP qualification.
+physical timing. This fixture is not whole driver parity or DSP qualification.

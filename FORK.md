@@ -5,9 +5,8 @@ This is Joseph Black's experimental integrated fork of
 `restricted-628/KallistiOS`. It builds on the work of KOS and its contributors;
 it is not the official KOS release or a drop-in compatibility promise.
 
-This overview describes committed `master` at the 2026-09-24 documentation
-snapshot. The reviewed implementation revision is recorded in [BRANCH.md](BRANCH.md).
-For the complete checkout and contribution-topic map, see [BRANCHES.md](BRANCHES.md).
+For the reviewed master revision and links by task, see [BRANCH.md](BRANCH.md).
+The [branch guide](BRANCHES.md) preserves the older contribution-topic map.
 
 ## Upstream foundation versus fork additions
 
@@ -26,7 +25,9 @@ in addons.
 | Startup policy | Dreamcast INIT_DEFAULT_ARCH includes INIT_MMU | This is a fork default, not part of the narrow MMU contribution; applications using explicit flags must choose deliberately |
 | 2D/3D graphics | Compact asset/model/scene pipeline, animation, skinning/morphing, lighting, toon/wire paths, particles, cells and tilemaps, with host asset tools | Much of this high-level code is still integrated into libkallisti; addon extraction is unfinished |
 | Graphics math | Direct SH4ZAM integration, including affine 3x4 hierarchy/skeleton work and fast-power specular lighting | Not a global removal of legacy KOS math or a measured hardware speed/precision guarantee |
-| Compression/audio | Optional LZ4 archive, bounded Compact Frame adapters and an experimental bounded ADX profile/PCM bridge | Memory budgets and format limits apply; not a general ADX compatibility claim |
+| File-backed VM | Optional immutable direct-disc read faults with per-carrier admission and reclaim of idle pages from the same file | No writeback, process isolation or paging on arbitrary stacks |
+| Tile passes | Per-pass region entries, sort policy, mixed direct/buffered registration and ticketed async list flush | An async transfer borrows the source; its ticket does not retire the rendered scene |
+| Media and compression | Optional LZ4 adapters; ADX codec and checked playback; mono AHX decoding; general AFS reader and host packing tools; video-only SFD prototype | Component-specific format limits apply. Playback coverage does not establish physical device retirement |
 | Devices and low-level APIs | Additional PVR, Maple, VMU, sound, storage and lifecycle work | Several areas still need focused extraction and hardware validation |
 
 Inherited upstream changes, including the merged NAOMI 2 support, remain credited

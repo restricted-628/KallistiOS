@@ -1,9 +1,8 @@
 # libADX completion boundary
 
-All **142 applicable entries** in the Sega Library 2.00J Dreamcast ADX
+All **142 applicable entries** in the ADX
 inventory have native implementations or accepted native equivalents for
-KOS Experimental. The target is ADXT 5.93 and the companion libraries in that
-SDK. The milestone is published at `07515908`. Playback qualification applies
+KOS Experimental. The milestone is published at `07515908`. Playback qualification applies
 to the documented Flycast profiles. The matrix records additional format,
 backend, and hardware qualification separately.
 
@@ -12,8 +11,7 @@ applicable count includes 73 ADXT, 26 ADXF, 21 SJ, 19 LSC, and three native
 MWPLY facade equivalents. The 12 exclusions are the Windows CE initializer,
 the verified empty `ADXT_ReleaseSeamless` return, four disabled declarations,
 three reserved SJ interface slots, and three application file-selector
-helpers. The ADX player manual revision is 5.78. Where it differs from the
-5.93 header and shipped archive, the matrix uses the checked binary evidence.
+helpers. The inventory distinguishes native behavior from binary compatibility.
 
 ## Runtime completion groups
 
@@ -24,9 +22,9 @@ below. The final column lists limits of their current qualification.
 | --- | --- | --- | --- |
 | H1 | Lifecycle and multi-handle management | player_init/start/stop plus explicit checked player/file collections, fair bounded polling, nonreused IDs and empty-only finish | The two-player retained-clock fixture fails with EPIPE during group poll. Audio-qualified multi-player output and device retirement/reuse remain open. No unsafe implicit reset; WinCE initialization is not applicable. |
 | H2 | Playback sources | Immutable source/range/index loans, ACX/AFS memory/provider selection, owned filename source and ADX/container/sequence/joint bindings. Resident loans can bind finite zero-copy memory joints and expose queued input | Complete format conformance remains C1. The native facade uses explicit extents and ownership. |
-| H3 | Metadata and framing queries | Validated metadata snapshot, strict header/endcode prefix probes and full-file adxcheck; truncation/malformed/unaligned/suffix tests | Admitted-format native queries implemented. CRI recognizer permissiveness and supplied-span endcode sizing are documented differences; complete baseline format conformance remains C1. |
+| H3 | Metadata and framing queries | Validated metadata snapshot, strict header/endcode prefix probes and full-file adxcheck; truncation/malformed/unaligned/suffix tests | Admitted-format native queries implemented. Legacy recognizer permissiveness and supplied-span endcode sizing are documented differences; complete baseline format conformance remains C1. |
 | H4 | Embedded loop controls | Init-selected v3 repeat, playback-time release, and decoded-wrap query. Memory jobs release at the active trap. Sector-backed jobs apply release at transport EOS, retain prefetched data through the sample trap and floor raw loop offsets to the first compressed group | Stock seek and release ordering and one mounted-VFS loop/release of the shipped sector-aligned sample passed in both BIOS Flycast CPU modes. Physical GD-ROM latency and additional loop geometries remain open. |
-| H5 | Volume and pan | Checked KOS linear volume, signed pan/AUTO and opt-in stock 2.00J attenuation. Checked ordinary stereo applies the requested level before START, confirms repeated live changes and starts a replacement track at the stopped request. | The public ordinary test does not exercise a paused volume change. Retained stereo polling after a gain update remains a separate open case. Per-channel writes do not guarantee simultaneous application or physical mute. |
+| H5 | Volume and pan | Checked KOS linear volume, signed pan/AUTO and opt-in compatibility attenuation. Checked ordinary stereo applies the requested level before START, confirms repeated live changes and starts a replacement track at the stopped request. | The public ordinary test does not exercise a paused volume change. Retained stereo polling after a gain update remains a separate open case. Per-channel writes do not guarantee simultaneous application or physical mute. |
 | H6 | Playback clock and completion | Qualified source-output clock and signed offsets in sample, NTSC and PAL modes. Healthy concurrent titles independently reach logical PLAYEND. A failed output transfer preserves the compatibility status while native diagnostics report failure. | Sample, NTSC and PAL compatibility clocks freeze on the Flycast active-pause profile below. Device-audible end remains distinct from logical PLAYEND. |
 | H7 | Service and input-buffer policy | Opt-in owner-driven service and direct title dispatch use one collection cadence latch. Phased ADX, WAVE, AIFF, AU and SPSD bindings preserve DECODER/RENDERER/FILE/STREAM/title/RELOAD order. Compatibility preparation uses admitted block geometry. Typed faults support checked STOP and caller-prepared REPLAY. Native fiber and group polling remain available. | Both Flycast CPU modes exercise live default stereo WAVE at NTSC and PAL with a 16,384-byte/channel sound buffer. Live default ADX REPLAY uses the same geometry. Other Audio compositions, exact physical storage timing and hardware output qualification remain open. |
 | H8 | Error reporting and recovery | Independent diagnostic query/clear/owner notification; NOACT/STOP/bounded REPLAY with terminal input errors and opt-in running stall detection; monotonic delay and checked stop/replay preparation | Qualify target thresholds and output failure classification. Audio-qualified retirement and reuse remain open. |
@@ -35,9 +33,9 @@ below. The final column lists limits of their current qualification.
 | H11 | Seamless queue and linked controls | Same-format PCM sequence or linked joint jobs. The linked player can start the loader with cached refill settings. A bound loader supports live registration, rotates at read completion, prefetches while PCM is full, and publishes pending-read count. Exact footer validation, optional two-span padded-header scan, history reset, live follow switch and final producer release | Audible transitions and physical drive timing. ReleaseSeamless is empty in the selected archive. Native loader repeat and finish are explicit. |
 | H12 | Special processing | Unbound seek, SFA prefix, strict and batched paired live SFA with late final length and shared body/zero-group budget; producer PCM filter and peak analyzer selectable by the qualified source clock. Checked active discard consumes the common submitted and decoded prefix. | Active discard uses the checked Flycast pause profile. SFD demux integration to supply final length remains open. Zero groups preserve history. |
 | F1 | File/partition services | Owned filename collections/loans and close-all; AFS directories/registries/overlays with exact provider-bound resolution; bounded sector requests and explicit flow policy | Transport/backend qualification for the accepted native filename/directory/lifecycle design. No hidden current-directory/reset; disabled GetFileRange is not a runtime obligation. |
-| J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts; two simultaneous DATA loans with ordered return and request-fit queries for each joint kind | The observed two-loan usage is supported. Broader arbitrary SDK loan patterns and target behavior require conformance evidence. |
-| L1 | Load/sequence controller | Bounded 16-entry loader with source IDs, copied labels, read-sector progress, pause and checked stop. The selected 2.00J flow policy captures the limit per source and admits batches from queued-DATA occupancy. File loans and a separate PCM sequence are available. | Exact cvFs completion visibility and physical drive/backend timing and retirement remain open. |
-| M1 | Sega middleware facade | Native namespaced lifecycle, source, service, recovery and collection APIs; explicit mapping in NATIVE_MIDDLEWARE.md | Native facade disposition accepted on 2026-11-14. Runtime qualification is tracked in the underlying rows. |
+| J1 | Stream joint | Caller-owned memory/ring/four-line queue byte joints: split, Get/Put/Unget/move/seed, query/error/reset/close; wrap region, SEPARATE/JOIN and node-pool counts; two simultaneous DATA loans with ordered return and request-fit queries for each joint kind | The observed two-loan usage is supported. Broader arbitrary reference loan patterns and target behavior require conformance evidence. |
+| L1 | Load/sequence controller | Bounded 16-entry loader with source IDs, copied labels, read-sector progress, pause and checked stop. The selected baseline flow policy captures the limit per source and admits batches from queued-DATA occupancy. File loans and a separate PCM sequence are available. | Exact provider completion visibility and physical drive/backend timing and retirement remain open. |
+| M1 | Native middleware facade | Native namespaced lifecycle, source, service, recovery and collection APIs; explicit mapping in NATIVE_MIDDLEWARE.md | Native facade disposition accepted on 2026-11-14. Runtime qualification is tracked in the underlying rows. |
 
 ### Active pause and discard: qualified behavior
 
@@ -103,7 +101,7 @@ sample-time mode.
 
 ### Applicable function inventory and profile limits
 
-The applicable 2.00J function tally for the qualified Flycast profiles is
+The applicable baseline function tally for the qualified Flycast profiles is
 **142 of 142.** The final entries, `ADXT_Pause` and `ADXT_DiscardSmpl`,
 passed on a direct stereo ADX source with an embedded repeat. Both Flycast
 CPU modes cut at playback frame 59,814, discarded 4,096 frames per channel,
@@ -112,15 +110,15 @@ all 131,072 emitted frames; terminal time used the 81,920-frame file length.
 This tally applies to the documented native profiles, not every combination
 of backend, file format and hardware.
 
-| 2.00J entry | What the public tests distinguish | Profile limits |
+| baseline entry | What the public tests distinguish | Profile limits |
 | --- | --- | --- |
 | `ADXT_Pause` | A confirmed cut stops the active mono voice or both stereo voices. A timeout followed by retry returns the same cut. A direct embedded repeat can be released while held. | Direct unlinked sources and qualified ring/rate combinations only. No general hardware pause claim. |
 | `ADXT_DiscardSmpl` | Discard consumes the unread submitted head before decoded data and returns the common count actually removed. Both stereo voices resumed at the first surviving frame after a loop wrap. | The native count deliberately excludes unused ring capacity. Post-admission discard requires the checked pause profile. |
 | `ADXT_GetStat` / `ADXT_Stop` | Checked playback distinguishes natural PLAYEND from explicit STOP. Stereo waits for both real source tails and checked stop/join. Stopping the replacement source early leaves completion false. | An unavailable pause transport and the separate retained group-poll failure are not evidence of natural completion. Played sound allocations remain owned. |
 | `ADXT_GetTime` / `ADXT_GetTimeReal` | Checked stereo covers sample, NTSC and PAL clocks after live transpose through pause, discard, resume and PLAYEND. Mono pause covers sample and PAL clocks, and 32 kHz covers sample and centisecond clocks through hold and completion. | Time in unavailable pause or replay states depends on qualifying those transport states. |
 
-The Dreamcast 2.00J filter parameter setter caches cutoff and resonance.
-The selected Manatee adapter ignores its command selector, and the getter
+The Dreamcast baseline filter parameter setter caches cutoff and resonance.
+The selected driver adapter ignores its command selector, and the getter
 reads the cached values. Native filter settings preserve this round trip.
 The producer PCM filter callback is a separate operation.
 
@@ -137,7 +135,7 @@ allocation. This qualifies that emulator playback profile. Retail disc and
 audio timing and final-fetch retirement remain separate.
 
 C1. Freeze the exact encoding/block/channel/version/header/history/loop/endcode
-combinations accepted by the 2.00J decoder, then implement or document each
+combinations accepted by the baseline decoder, then implement or document each
 baseline rejection with tests. Current admission is encoding 3, 18-byte/4-bit,
 mono/stereo v3/v5, zero extensions or the documented supported v3 loop layout
 with 0..31 inserted leading frames. The strict path uses a block-aligned
@@ -151,11 +149,11 @@ Do not assume later ADX variants must be added simply because they exist.
 See [FORMATS.md](FORMATS.md) for the distinction between active decoder behavior,
 shipped corpus coverage and permissive parsing. Runtime WAV PCM16/ADPCM4 is a
 documented middleware obligation. Native bounded PCM WAV8/16 mono/stereo reading
-and seek plus native pipe/service/player bindings are implemented. CRI tag1 packed
+and seek plus native pipe/service/player bindings are implemented. Tag 1 packed
 WAV4 now uses software AICA reconstruction through those bindings, with bounded
 history-rebuilding seek. Hardware PCM equivalence remains open. SPSD PCM16 has
 reader/pipe/service/player support for contiguous mono and exact-length
-sample-interleaved stereo with per-channel length. The selected SDK decoder
+sample-interleaved stereo with per-channel length. The selected reference decoder
 supplies the frame-count and copy rules. Shipped stereo corpus evidence and
 other SPSD layouts remain open.
 AIFF signed8/BE16 mono/stereo has a bounded reader, metadata, seek and filters;
@@ -167,11 +165,11 @@ Remaining container conformance is open.
 C2. Close native arithmetic conformance: predictor operation order, rounding,
 clipping, initial/carried histories and coefficient setup against the baseline.
 Version 3 and 5 setup through 44100 Hz selects Q12 pairs from the rounded
-Dreamcast model. A linked SDK instruction run in the SuperH p-code emulator
+Dreamcast model. A linked reference instruction run in the SuperH p-code emulator
 matches the sampled coefficient witnesses. The 13-bit scale and the scalar
-SH4ZAM/FMAC predictor match the SDK's one-group PCM and history on the tested
+SH4ZAM/FMAC predictor match the reference implementation's one-group PCM and history on the tested
 mono/stereo witnesses in both BIOS Flycast CPU modes, including FTRC saturation.
-SDK batching retains float history across the groups of a decode job. Its
+Reference batching retains float history across the groups of a decode job. Its
 input byte consumption can differ from the reported PCM frame count at a trap.
 The opt-in joint reader and player service schedule those jobs on memory,
 mirrored-ring and one-head JOIN/SEPARATE queue input. They publish separate
@@ -211,11 +209,9 @@ the profiles above. The same-title live-transpose/pause sequence requires
 the matching opt-in firmware. Neither checked stop nor a bank restart
 releases the played sound allocation.
 
-The separate host-tool/authoring milestone remains open: compatibility checking
-exists, while encoding/conversion and archive authoring do not. Sega's ADX record
-facade is not a decoder operation; assess it under authoring rather than silently
-expanding playback work. SFD, AHX and newer CRI codecs are outside this libADX
-runtime completion boundary.
+The host checker validates existing ADX files. Encoding and conversion are outside
+libADX. The separate [libAFS tools](../libAFS/README.md) can pack and repack archives;
+that capability does not encode their payloads. SFD and AHX are separate components.
 
 The published milestone closes the applicable entry inventory for the
 documented profiles. C1/C2 and V1/V2 track broader format, arithmetic, transport
@@ -236,7 +232,7 @@ the ADX ELF archives do not reference them. Applications supply selected filenam
 or byte ranges to libADX. Rebuilding the file-picker UI is outside runtime parity.
 
 The three SJUNI Get/Put/Unget callback registration declarations are disabled in
-the 2.00J header and absent from the Dreamcast ADX/Sofdec libraries. The error
+the baseline header and absent from the Dreamcast ADX/SFD libraries. The error
 callback and request-fit vtable operations are active.
 The remaining lifecycle and output qualifications are tracked in the matrix above.
 

@@ -6,6 +6,12 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Public documentation refresh
+
+- Updated integrated branch navigation, file-backed VM and direct DMA coverage.
+  Media guides and capability inventories describe native contracts and their
+  limits. Documentation only; no ABI, firmware or dependency update.
+
 ## 2026-11-27 — Wave-RAM reservation and orderly shutdown
 
 - The sound allocator can privately reserve an unpublished wave-RAM span
@@ -92,7 +98,7 @@ it is a historical index, not evidence that those changes passed tests.
   filesystem. On this error the caller's file and cleanup outputs are
   unchanged. Shorter paths still go through normal filesystem checks.
 
-- Completed the applicable Dreamcast ADX 2.00J inventory: 142 of 142
+- Completed the applicable Dreamcast ADX baseline inventory: 142 of 142
   functions on the documented Flycast profiles. Pause and discard now
   support a direct source with an embedded repeat. Releasing the loop
   while paused preserves the first surviving frame and drains the full
@@ -570,7 +576,7 @@ it is a historical index, not evidence that those changes passed tests.
 
 ## 2026-11-13 — Opt-in libSFD video prototype
 
-- Preserve the bounded video-only Sofdec prototype as an independently linkable
+- Preserve the bounded video-only SFD prototype as an independently linkable
   `libSFD.a`, with namespaced C/C++ headers and a standalone OIX/AMX example.
   Retain the modified MIT PL_MPEG provenance and existing float/SH4ZAM math.
 - Keep ADX-first addon defaults, shared drivers and dependency pins unchanged.
@@ -605,7 +611,7 @@ it is a historical index, not evidence that those changes passed tests.
   caller-owned 16-entry range loader with flow control, pause and checked stop.
   Providers remain borrowed; software completion never retires their DMA or
   closes their descriptors.
-- Add bounded PCM WAV, AU and AIFF readers and playback bindings, packed CRI
+- Add bounded PCM WAV, AU and AIFF readers and playback bindings, packed legacy
   WAV4 software conversion and the verified mono-PCM16 SPSD subset. Add prepared
   start gating independently of production pause. Reject unsupported layouts.
 - Record platform/UI applicability without success stubs. Rebuild consumers
@@ -758,7 +764,7 @@ it is a historical index, not evidence that those changes passed tests.
 - Full host/ASan/UBSan suites pass, including173,087 queue assertions and
   1,555,979 existing memory/ring assertions per lane. Strict staged SH-4 C/C++
   links pass. Live decoder adaptation and audible/hardware validation remain
-  separate; native pool accounting is not CRI ABI compatibility.
+  separate; native pool accounting is not legacy ABI compatibility.
 
 ## 2026-11-13 — libADX compressed-byte joints
 
@@ -769,7 +775,7 @@ it is a historical index, not evidence that those changes passed tests.
   PCM pipes or DMA ownership mechanisms.
 - Preserve explicit one-borrow-per-line and disjoint-storage contracts, with
   stale/foreign/out-of-order return rejection. Empty input means starvation,
-  not EOF. Native status and identity are not CRI ABI compatibility.
+  not EOF. Native status and identity are not legacy ABI compatibility.
 - Full host and sanitizer suites pass, including1,555,979 joint assertions per
   lane. Strict SH-4 archive and staged C/C++ consumer links pass. UNI queues,
   live decoder adaptation and audible/hardware qualification remain separate.
@@ -850,7 +856,7 @@ it is a historical index, not evidence that those changes passed tests.
   archive member and firmware-using ELFs; repeat builds preserve the firmware
   and embedding without regenerating them. Earlier scoped emulator
   evidence used the separately validated ARM-interpreter build; it is not proof
-  for every emulator backend or physical hardware. Full Manatee parity, bank
+  for every emulator backend or physical hardware. Full driver parity, bank
   publication, audible quality and safe sample reclamation remain open.
 
 ## 2026-11-13 — caller-owned SH4DER grading packets
@@ -1463,13 +1469,13 @@ it is a historical index, not evidence that those changes passed tests.
   notices and KOS licensing. Record upstream provenance in each addon README.
 - Use in-tree header routing and addon archives; remove upstream Makefile
   writes into kos-ports. Neither library is auto-started or kernel-linked.
-- Runtime sources/headers are unchanged; Nindows2 parity remains future work.
+- Runtime sources/headers are unchanged; interactive console support remains future work.
 - Validation: both archives compile with SH-4 GCC 16.2.0, GNU17, -O2,
   -m4-single. Existing basic, debug-I/O and Kosh examples link to the new
   archives, checked in linker maps. Link smoke uses existing core/SH4ZAM
   artifacts, not a fresh full-kernel build. Inherited keyboard-deprecation and
   directory-entry const warnings remain. No emulator/hardware run.
-- No Nindows2 implementation or inherited runtime behavior changes in this import.
+- No console feature or inherited runtime behavior changes in this import.
 
 ## 2026-10-01 — project handoff foundation
 
@@ -1480,9 +1486,9 @@ it is a historical index, not evidence that those changes passed tests.
   and repair its Git/submodule registration without changing commit history.
 - Add 21 selectively loaded component guides under `doc/agents`, with source
   entry points, contracts, interface partners, tests and handoff boundaries.
-- Assign AICA/Manatee audio to a dedicated sixth subsystem lane, with distinct
+- Assign AICA audio to a dedicated sixth subsystem lane, with distinct
   ARM firmware/toolchain, SH-4 host and DSP validation responsibilities.
-- Add dedicated LZ4 and Nindows2/Kosh addon lanes and two guides (23 total).
+- Add dedicated LZ4 and Kosh addon lanes and two guides (23 total).
   Record the owner's Kosh-based parity direction, including substantial Conio
   changes where justified. Initial assignments are source/design audits only.
 - Require relevant shared-source/tool consultation for subsystem investigations,

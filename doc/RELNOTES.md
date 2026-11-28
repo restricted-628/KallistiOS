@@ -1052,8 +1052,7 @@ configuration is not tested/supported any longer in dc-chain.
 # Floating-point ABI
 
 A significant change has been made regarding the default floating-point ABI used
-by KallistiOS. In previous KOS releases, and even in commercial games released
-during the Dreamcast's lifetime, the `m4-single-only` floating-point ABI was
+by KallistiOS. In previous KOS releases, the `m4-single-only` floating-point ABI was
 used. With the `m4-single-only` ABI, the SH4 CPU is always in single-precision
 mode and all uses of 64-bit `double` values are truncated to 32-bit `float`
 values by the compiler, allowing the compiler to use twice the number of

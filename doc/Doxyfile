@@ -918,7 +918,44 @@ INPUT                  = $(KOS_BASE)/include \
                          $(KOS_BASE)/doc/workqueue-safety.md \
                          $(KOS_BASE)/doc/background-execution-audit.md \
                          $(KOS_BASE)/doc/cache-maintenance.md \
-                         $(KOS_BASE)/doc/mmu-mapping.md \
+                         $(KOS_BASE)/BRANCH.md \
+                         $(KOS_BASE)/BRANCHES.md \
+                         $(KOS_BASE)/CHANGELOG.fork.md \
+                         $(KOS_BASE)/FORK.md \
+                         $(KOS_BASE)/addons/libfiber_disc/README.md \
+                         $(KOS_BASE)/addons/libkosdec/README.md \
+                         $(KOS_BASE)/addons/libkosdec/libADX/COEFFICIENTS.md \
+                         $(KOS_BASE)/addons/libkosdec/libADX/COMPLETION.md \
+                         $(KOS_BASE)/addons/libkosdec/libADX/FORMATS.md \
+                         $(KOS_BASE)/addons/libkosdec/libADX/NATIVE_MIDDLEWARE.md \
+                         $(KOS_BASE)/addons/libkosdec/libADX/PARITY.md \
+                         $(KOS_BASE)/addons/libkosdec/libADX/README.md \
+                         $(KOS_BASE)/addons/libkosdec/libAFS/README.md \
+                         $(KOS_BASE)/addons/libkosdec/libAHX/README.md \
+                         $(KOS_BASE)/addons/libkosdec/libSFD/README.md \
+                         $(KOS_BASE)/addons/libkosdec/libSFD/src/reference/PROVENANCE.md \
+                         $(KOS_BASE)/addons/libkosdec/tools/README.md \
+                         $(KOS_BASE)/addons/liblz4/README.md \
+                         $(KOS_BASE)/addons/libsh4der/COVERAGE.md \
+                         $(KOS_BASE)/addons/libsh4der/README.md \
+                         $(KOS_BASE)/addons/libsh4zam/README.md \
+                         $(KOS_BASE)/doc/CHANGELOG.md \
+                         $(KOS_BASE)/doc/disc-backend-defaults.md \
+                         $(KOS_BASE)/doc/gaps-ownership.md \
+                         $(KOS_BASE)/doc/license/TRADEMARKS.md \
+                         $(KOS_BASE)/doc/pvr-material-recipes.md \
+                         $(KOS_BASE)/doc/pvr-tilemaps.md \
+                         $(KOS_BASE)/doc/sh4zam-0.8.1-fast-trig.md \
+                         $(KOS_BASE)/doc/sh4zam-affine-skeleton.md \
+                         $(KOS_BASE)/doc/sh4zam-direct-graphics-math.md \
+                         $(KOS_BASE)/doc/stereo-sq-upload.md \
+                         $(KOS_BASE)/doc/tmu-channel-ownership.md \
+                         $(KOS_BASE)/doc/mmu-page-lifetime.md \
+                         $(KOS_BASE)/doc/resident-vm.md \
+                         $(KOS_BASE)/addons/libvmdemand/README.md \
+                         $(KOS_BASE)/doc/direct-gdrom-dma-invariants.md \
+                         $(KOS_BASE)/doc/direct-dma-examples.md \
+                         $(KOS_BASE)/doc/pvr-multipass-design.md \
                          $(KOS_BASE)/doc/store-queue-safety.md \
                          $(KOS_BASE)/doc/independent-heaps.md \
                          $(KOS_BASE)/doc/vblank-callback-safety.md \

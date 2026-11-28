@@ -30,7 +30,7 @@ enum kosdec_ahx_result {
 
 struct kosdec_ahx_info {
     uint32_t rate, declared_samples, header_bytes;
-    /* Optional bytes between the fixed fields and (c)CRI. This view
+    /* Optional bytes between the fixed fields and the six-byte header marker. This view
        remains valid until the parser/decoder is reset or released. */
     const uint8_t *extension;
     uint16_t extension_bytes, extension_records;
@@ -65,7 +65,7 @@ size_t kosdec_ahx_parser_workspace_alignment(void);
    Callers serialize operations and keep inputs/outputs disjoint from it. */
 struct kosdec_ahx_parser *kosdec_ahx_parser_init(void *workspace, size_t bytes);
 
-/* Non-mutating. Copies metadata only after the complete CRI header is valid. */
+/* Non-mutating. Copies metadata only after the complete file header is valid. */
 bool kosdec_ahx_parser_info(const struct kosdec_ahx_parser *parser, struct kosdec_ahx_info *info);
 
 /* Consume a prefix and return at most one structurally complete frame of

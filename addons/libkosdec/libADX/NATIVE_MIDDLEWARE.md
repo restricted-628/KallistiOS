@@ -1,7 +1,7 @@
 # Native middleware ownership and control
 
 These interfaces implement original KOS behavior against the fixed Dreamcast
-baseline. They are not CRI/MWPLY ABI replacements. Rebuild consumers: source,
+baseline. They are not legacy ABI replacements. Rebuild consumers: source,
 service and player state layouts have changed. Integration accepted the
 explicit-context, native scheduling and facade designs on 2026-11-14.
 The [completion map](COMPLETION.md) records the published 142-entry milestone
@@ -21,7 +21,7 @@ Return it only after all consumers join and their provider obligations retire.
 For `ADXT_StartMemIdx`, select the ACX entry and use
 `kosdec_adx_source_init_memory_joint` with the exact resident loan.
 The joint is finite and reports the selected bounds to the player.
-The 2.00J unsized and indexed calls use a one-GiB extent sentinel.
+The baseline unsized and indexed calls use a one-GiB extent sentinel.
 The native indexed selector preserves the last valid view on failure.
 
 `adx_files.h` owns up to32 named inputs per caller-owned collection. Filenames are
@@ -55,7 +55,7 @@ and the requested limit in the loader snapshot. The active source keeps
 its captured threshold. The buffer snapshot reports the effective value.
 Batch admission uses queued DATA and a 512-sector cap. The native loader
 services each batch through bounded provider calls and exposes incremental
-progress. Stock cvFs completion visibility remains a separate gate.
+progress. Exact provider completion visibility remains a separate gate.
 
 For `ADXT_StartSeamless`, select the linked player reload profile and
 bind a fresh reader with a stopped loader. The player stages the cached
@@ -88,7 +88,7 @@ reschedule the producer; control and cancellation use the existing mailbox/wakes
 Group polling adds owner-side fairness, not another decoder worker. A blocking
 synchronous provider can still delay its owner; use the nonblocking direct-disc
 provider where required. No VSync-frequency shim or global sound initializer is
-hidden in these APIs. Exact SDK server-call timing is not certified by this model.
+hidden in these APIs. Exact reference server-call timing is not certified by this model.
 
 Applications with synchronous service phases can opt into
 `adx_compat_service.h`. Each caller-owned collection has one shared watchdog
@@ -269,7 +269,7 @@ configuration and clears the compatibility settings.
 Use `kosdec_adx_compat_player_set_initial_transpose` on a READY
 PCM16 player to stage semitones and cents. At prefill, the player uses
 the 8,000–48,000 Hz source header and the staged setting to select an
-integer rate that writes the same AICA pitch word as Sega Library 2.00J.
+integer rate that writes the requested AICA pitch word.
 The selection uses an exact rate in 8,000–88,200 Hz for ordinary
 output or 8,000–48,000 Hz for retained output. Retained output sets this
 rate when it opens the lease and uses it for the lifetime of that lease.
@@ -497,14 +497,14 @@ Output-side sample discard and playback-time amplitude lookup remain Audio work.
 The supplied header disables `ADXF_GetFileRange` with `#if0`; the active
 GetFnameRange variants remain mapped to native directory/provider operations.
 The supplied library's `ADXT_ReleaseSeamless` is an empty return; native sequence
-repeat release is explicit useful behavior, not an inferred SDK implementation.
+repeat release is explicit useful behavior, not an inferred reference implementation.
 The header and archive disagree about whether CloseAllHandles also closes files;
 separate checked player/file collections make both operations explicit.
 
 Native namespaced lifecycle/service/recovery is the accepted native interface for the
 three MWPLY ADX facade declarations. No MWPLY vtable or ABI facade is implemented.
 This accepts the interface design, not unimplemented runtime behavior or timing.
-API declarations alone do not prove a matching SDK facade implementation.
+API declarations alone do not prove a matching reference facade implementation.
 
 Host tests distinguish control models, actual codec/player composition and Audio
 mocks. SH-4 compile/link proves target consumption, not physical sound retirement,

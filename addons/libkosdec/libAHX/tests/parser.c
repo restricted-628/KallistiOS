@@ -125,7 +125,7 @@ static void synthetic(void *workspace) {
     stream[2] = stream[3] = 0xff;
     assert(feed_until_end(workspace, stream, STREAM_BYTES, 9, &count, false) == KOSDEC_AHX_UNSUPPORTED);
     /* A common extension with one opaque 20-byte record, followed by
-       the CRI tag at the end of the declared header. */
+       the six-byte tag at the end of the declared header. */
     enum { EXTENSION_BYTES = 24 };
     uint8_t extended[STREAM_BYTES + EXTENSION_BYTES];
     memcpy(extended, header, 20);

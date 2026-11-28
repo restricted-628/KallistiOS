@@ -32,5 +32,4 @@ libAHX's parser, stream service and synthesis are original implementations.
 The arithmetic data generator uses MPEG equations for scale, requantization
 and cosine. Its window comes from the MIT-licensed PL_MPEG source already
 included under libSFD. The default synthesis uses the pinned SH4ZAM dot
-product. Commercial binaries and PCM captures served as private behavioral
-references. None of them, or extracted synthesis tables, ship with libAHX.
+product. The library ships generated tables and does not bundle external recordings.

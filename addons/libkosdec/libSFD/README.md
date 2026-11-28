@@ -1,13 +1,11 @@
 # libSFD
 
 This preserves the original KOSdec video-only player as an independently
-linkable, experimental `libSFD.a` and a standalone Dreamcast example. ADX
-middleware completion remains the first milestone; full Sofdec playback follows.
-This is a bounded prototype, not a complete SFD decoder or CRI ABI replacement.
+linkable, experimental `libSFD.a` and a standalone Dreamcast example. It handles video only; it does not implement synchronized audio playback.
 
 ## Current profile
 
-- Complete resident MPEG-1 program stream with the Sofdec marker, E0 video,
+- Complete resident MPEG-1 program stream with the SFD marker, E0 video,
   optional C0 audio packets (counted and skipped), and sector-padded program end.
 - MPEG-1 video: 320×240, 30 fps, default quantization matrices, I/P/B pictures,
   at most 4 MiB and 360 pictures. The caller supplies the expected picture count.
@@ -21,8 +19,7 @@ This is a bounded prototype, not a complete SFD decoder or CRI ABI replacement.
 
 The decoder uses a modified, pinned MIT PL_MPEG snapshot; see
 [src/reference/PROVENANCE.md](src/reference/PROVENANCE.md). Original KOSdec
-adapters/math and the diagnostic font accompany it. No CRI implementations or
-SDK/game assets are included. This is not wholly original bitstream-parser code.
+adapters/math and the diagnostic font accompany it. The parser retains its upstream license and authorship.
 
 ## Build and use
 

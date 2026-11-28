@@ -1,15 +1,13 @@
 # libADX release scope
 
 The KOS Experimental milestone is published with native implementations or
-accepted native equivalents for **142 of 142 applicable Sega Library 2.00J
-Dreamcast ADX entries**. The baseline is ADXT 5.93 and the companion Dreamcast
-libraries in that SDK. The [function inventory](BASELINE_API.csv) records named
+accepted native equivalents for **142 of 142 applicable ADX entries**. The [function inventory](BASELINE_API.csv) records named
 entries and their native coverage. The [completion map](COMPLETION.md) explains
 the 12 excluded entries and the limits of each capability.
 
 The native interface uses namespaced `kosdec_adx_*` functions with explicit
 owners, source extents, and service collections. Applications need to adapt to
-these contracts. CRI and MWPLY binary interfaces are outside the native
+these contracts. Legacy binary interfaces are outside the native
 release scope.
 
 ## Playback evidence
@@ -36,9 +34,7 @@ release scope.
 - Use [FORMATS.md](FORMATS.md) and [COEFFICIENTS.md](COEFFICIENTS.md) for the
   admitted decoder domain, arithmetic evidence and remaining format limits.
   Version 4 looping remains unsupported.
-- Sonic Adventure 2's later ADXT 5.99M served as a secondary behavioral
-  reference. Its named-open ordering informed the native preflight at
-  `2b3eee3a9`, which uses KOS `PATH_MAX`. Full 5.99M title compatibility
-  remains unverified.
-- Stock KOS integration and encoding/conversion and archive authoring remain
-  separate milestones. SFD and AHX have their own component scopes.
+- Filename admission checks raw length against KOS `PATH_MAX` before allocation or provider access.
+- Stock KOS integration and ADX encoding/conversion are outside this release.
+  AFS archive packing is available in [libAFS](../libAFS/README.md); SFD and AHX
+  have their own component scopes.

@@ -1,4 +1,4 @@
-/* Original bounded RIFF/WAVE PCM and CRI packed4 reader; separate from the ADX codec. */
+/* Original bounded RIFF/WAVE PCM and packed4 reader; separate from the ADX codec. */
 #ifndef KOSDEC_ADX_WAVE_H
 #define KOSDEC_ADX_WAVE_H
 #include <kosdec/adx_stream.h>
@@ -31,7 +31,7 @@ struct kosdec_adx_wave_result { enum kosdec_adx_status status; size_t frames; };
    read_at contract as ADX streams: no retained destination/reentry, independent
    staging belongs to provider. Every operation is externally serialized; state,
    source/provider storage and PCM output are disjoint. No allocation/device I/O.
-   Tag1, mono/stereo: unsignedPCM8, signedPCM16 or CRI packedADPCM4. Byte-aligned input accepted. RIFF/WAVE with
+   Tag1, mono/stereo: unsignedPCM8, signedPCM16 or packedADPCM4. Byte-aligned input accepted. RIFF/WAVE with
    word-padded chunks and fmt before data; validates rate/data bounds and PCM8/16 alignment/byte-rate hints.
    Packed4 ignores those two hints; data must contain whole four-frame groups
    (two bytes per channel). Channel bytes interleave; low nibble decodes first.

@@ -1,16 +1,15 @@
 # libAHX
 
-libAHX decodes the unencrypted mono AHX type 0x10, version 6 used by
-Dreamcast games including Sonic Adventure 2 and Shenmue II. It exposes
+libAHX decodes the unencrypted mono AHX type 0x10, version 6. It exposes
 incremental framing, PCM16 decoding and a serviced reader for finite
 sources. Callers own storage, input and output scheduling. The library
 does not allocate a sound device or require libADX.
 
 ## Build
 
-`make sh4` builds the default Sonic-style FIPR synthesis. It uses the
+`make sh4` builds the default FIPR synthesis. It uses the
 pinned SH4ZAM SH-4 dot-product helper. `make sh4 AHX_SYNTH=fmac` builds
-Shenmue-style ordered FMAC synthesis. The two modes have separate object
+ordered FMAC synthesis. The two modes have separate object
 and archive directories. Choose the same mode when installing with
 `make install PREFIX=/path/to/addons`.
 
@@ -39,7 +38,7 @@ equations and the MIT-licensed PL_MPEG window in libSFD.
   queue and continue servicing until `DONE` to validate the file. Keep
   decoded, submitted and played frame counts separate.
 
-The decoder uses the CRI header's sample rate and duration. It computes
+The decoder uses the file header's sample rate and duration. It computes
 the variable-length payload from the 30-band allocation, SCFSI, scale
 and sample fields. Both observed private-bit frame markers are accepted.
 Frames are structurally validated before synthesis. The stream rejects
@@ -48,13 +47,13 @@ footer and trailing bytes. The shared requantizer uses fused multiply-add
 in both builds. Synthesis restores the calling thread's FPSCR at each
 granule boundary.
 
-`BASELINE_API.csv` tracks the recovered decoder behaviors. The native
+`BASELINE_API.csv` lists the supported decoder behaviors. The native
 interface uses caller-owned state and explicit errors in place of global
-pools and CRI stream joints. The explicit `kosdec_ahx_scan_sync` helper locates legacy markers in
+pools and implicit stream ownership. The explicit `kosdec_ahx_scan_sync` helper locates legacy markers in
 a bounded span. Normal playback uses strict frame validation. Header
-info preserves the optional CRI records and their count, with no
+info preserves the optional header records and their count, with no
 interpretation of title-specific controls. File headers are bounded at
 512 bytes, covering both observed Dreamcast layouts.
-Game-specific ADXT dispatch, device playback and encoding are separate
+Player dispatch, device playback and encoding are separate
 from the decoder library. No game assets or extracted coefficient tables
 are part of the archive.

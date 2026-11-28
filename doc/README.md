@@ -1,4 +1,9 @@
 # Overview
+
+For integrated master, start with the [fork feature guide](../BRANCH.md).
+It links the supported paging, direct DMA, tile-pass and media paths to their
+build instructions, ownership requirements and validation limits.
+
 KallistiOS[^1] is a development library and unikernel operating system for
 the Dreamcast[^1] licensed under a [permissive software license](LICENSE.md).
 
@@ -64,8 +69,9 @@ What KallistiOS is NOT:
 - Memory protection; programs can overwrite each other at will
 - Pretty much anything else you can think of that's not in the above list
 
-(# There is an MMU module for the DC port, but nothing really uses it at
-   this point.)
+The fork supports explicit [resident VM regions](resident-vm.md) and an optional
+[read-fault pager](../addons/libvmdemand/README.md) for immutable direct-disc file pages.
+Neither gives applications process isolation or a general swap system.
 
 If you're looking for all these features in a solid proven kernel, then
 look no further than Linux or NetBSD. On the other hand, if you want a
@@ -244,7 +250,7 @@ a collection of homebrew games and demos called _DC Tonic_ at the E3 Electronics
 Entertainment Exposition. The demo disc was a hit and both the demos and the
 KallistiOS software caught the attention and praise of the console's manufacturer.
 
-Ports of KallistiOS once existed for the existed for the Gameboy Advance[^2],
+Ports of KallistiOS once existed for the the Gameboy Advance[^2],
 PlayStation 2[^2], and Intel[^2] ia32 platforms, although none were particularly
 complete. At this time, only the Dreamcast portion remains, but the project
 architecture still exists to add additional consoles at later time.

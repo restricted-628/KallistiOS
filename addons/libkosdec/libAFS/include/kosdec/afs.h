@@ -1,4 +1,4 @@
-/* Original bounded reader for Dreamcast-era CRI AFS archives. */
+/* Original bounded reader for Dreamcast-era AFS archives. */
 #ifndef KOSDEC_AFS_H
 #define KOSDEC_AFS_H
 

@@ -4,9 +4,11 @@
 Dreamcast checked MMU helpers. Ordinary malloc and P1 code/data are unchanged.
 This provides ordinary-data regions, explicit pin lifetimes, physical-run
 descriptions and explicit read-only file residency. The separate `<kos/vm_exec.h>` primitives described below own executable
-reservations. Package loading, managed stacks, transparent paging, DMA adapters,
-NX and process isolation remain outside these APIs. The one-page resident fault tickets and synchronous file loading
-described below remain separate operations.
+reservations. The base VM API does not automatically read a file on a fault.
+For that behavior, use the optional [read-only disc pager](../addons/libvmdemand/README.md).
+It admits a specific file range and carrier, performs I/O outside the fault handler,
+then retries the read. Resident fault tickets and synchronous prefetch remain
+separate operations. There is no general swap, NX or process isolation.
 
 Create an MMU context with a caller-assigned unique live ASID, then create one
 VM space borrowing that context and an empty arena. Space and raw reservation

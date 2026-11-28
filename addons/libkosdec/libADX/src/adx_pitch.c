@@ -1,4 +1,4 @@
-/* Original PCM pitch conversion for the Sega Library 2.00J PCM profile. */
+/* Original PCM pitch conversion for the supported Dreamcast profile. */
 #include "adx_pitch.h"
 #include <math.h>
 #include <stddef.h>

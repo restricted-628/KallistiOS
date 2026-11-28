@@ -1,4 +1,4 @@
-/* Original bounded MPEG-1 PS/Sofdec fixture reader. Video only. */
+/* Original bounded MPEG-1 PS/SFD fixture reader. Video only. */
 #ifndef KOSDEC_SFD_H
 #define KOSDEC_SFD_H
 #include <stddef.h>

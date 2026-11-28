@@ -4,13 +4,16 @@ Reproduced against the unmodified official tag `v0.8.1`, commit
 `be71e8a1428374498e8f5e7506c7e244375f4399`, using SH-4 GCC 16.2.0 and Flycast
 interpreter and dynarec modes. No physical Dreamcast result is claimed.
 
-**Current KOS status:** official v0.9.0, commit
+**Historical fix:** official v0.9.0, commit
 `0fd3a1e1fa0809d33198c062632b1494ec2f57df`. The temporary
 [PR #70](https://github.com/gyrovorbis/sh4zam/pull/70) fork pin has been retired.
 The new release uses runtime SH-4 inline FSCA even under fast-math and fixes
 the portable/constant paths to use 65536 units per turn. The failure results
 below are historical and apply to the exact original 0.8.1 commit above;
 upstream subsequently moved that tag.
+
+For the revision used by this checkout, see the [SH4ZAM adapter](../addons/libsh4zam/README.md)
+and its upstream gitlink. The measurements below were not repeated at the current pin.
 
 ## Symptom
 
@@ -56,14 +59,14 @@ Run the resulting ELF with serial output enabled. `fast-trig-call.c` contains
 only the library call and is compiled with `-ffast-math`. Its separate driver
 is compiled with `-fno-fast-math`, checks finiteness and a `3e-4` absolute
 tolerance, and prints the actual and expected pairs. On official 0.8.1 it
-reports `RESULT: FAIL (SH4ZAM fast-math u16 trig)`. With the current release it
+reports `RESULT: FAIL (SH4ZAM fast-math u16 trig)`. With the corrected implementation it
 must report `RESULT: PASS (SH4ZAM fast-math u16 trig)`. The probe is now built
 by the default integration example target; expectations were not relaxed.
 
 ## Integration policy
 
 KOS's default flags do not enable fast-math, and the kernel has no call to this
-u16 routine. The current submodule is a clean checkout of official v0.9.0,
+u16 routine. The v0.9.0 test used a clean upstream checkout,
 not a dirty or build-time-patched release. Direct SH-4 calls to
 `shz_sincosu16()` now support fast-math. If reverting to the original 0.8.1 commit,
 disable `-ffast-math`/`-Ofast` for those callers or use the local helper below.

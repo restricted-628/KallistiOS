@@ -3,9 +3,18 @@
 The Addons system allows the creation of standalone addon packages, similar to the ports in the kos-ports system. 
 
 ## Installing addons
-To install an add-on, simply place the addon directory inside this directory. Addons in this directory are automatically built when KallistiOS is built. Once built, the addon's headers will be available in `addons/include` and the built libraries in `addons/lib`. These paths are automatically included in your build flags if you are using the KOS Makefile system. You may disable an addon by creating an `unused` directory and moving the addons within, or you may uninstall an addon outright by simply deleting its directory.
+The aggregate [Makefile](Makefile) discovers addons with a matching
+`kos/$(KOS_ARCH).cnf`. A directory under `addons/` alone does **not** opt it
+into the build. For an explicitly built archive, follow its own build, install
+and link instructions; do not assume it is part of the kernel or was installed
+by building KOS.
 
 A few addons are supplied with KallistiOS. These include:
+
+- [libvmdemand](libvmdemand/README.md): opt-in read faults on admitted immutable disc-file ranges.
+- [KOSdec](libkosdec/README.md): independently buildable codec, player and archive components.
+- [libsh4der](libsh4der/README.md): effects and math adapters for the existing renderer.
+- [liblz4](liblz4/README.md): bounded decoding and cooperative service adapters.
 - [**libkosext2fs**](libkosext2fs/): A filesystem driver for the ext2 filesystem
 - [**libkosfat**](libkosfat/): A filesystem driver for FAT12, FAT16, and FAT32 filesystems, with long name support
 - [**libkosutils**](libkosutils/): Utilities: Functions for B-spline curve generation, MD5 checksum handling, image handling, network configuration management, and PCX images

@@ -11,6 +11,7 @@ each API's contract.
 | --- | --- | --- |
 | Main RAM | `cdrom/direct-read`, `cdrom/direct-async`, `cdrom/stream`; `cdrom/fiber-read` adds cooperative application-fiber waiting; `cdrom/fiber-disc-contract` covers cooperative streams with simulated transport | Fiber reads and cooperative streams need live-media and hardware validation |
 | PVR RAM | `cdrom/fiber-vram`: generated texture, guarded allocation, cooperative DMA wait, readback and render fence; `cdrom/direct-raw-dma` includes simulated transfers/bounds | Physical-hardware execution remains required; ordinary one-shot reads support VRAM, staged streaming remains RAM-only |
+| AICA wave RAM | [Direct wave-RAM load](../examples/dreamcast/cdrom/direct-aica/README.md): `gdrom_direct_load_aica` allocates a destination and publishes its offset only after the complete load succeeds | Loading phase only; not a generic DMA pointer, live refill or fiber stream |
 | GAPS bridge SRAM | `cdrom/direct-gaps-stage`: explicit SRAM lease, GD-DMA completion, then G2 DMA to main RAM; `cdrom/fiber-disc-contract` checks the lease-based fiber adapter with a submission spy | A live-media fiber/GAPS example and bridge/hardware validation remain teaching gaps |
 
 All example paths above are under `examples/dreamcast/`. The GAPS example is
@@ -31,8 +32,8 @@ span. Raw 2352-byte DMA reads require even sector counts. See the
 | RAM to/from AICA RAM via G2 DMA | `basic/dma/g2-state` | Allocated sound-memory range, round-trip data and terminal channel state |
 | Buffered TA registration via PVR DMA | `pvr/multipass_dma` | Per-pass double-buffered vertex staging and completion sequencing |
 
-Disc-to-audio is a staged pipeline (disc to RAM, then audio/G2 submission), not
-a supported direct GD-DMA-to-AICA shortcut. Likewise, uploading prepared
+Staging disc data in main RAM for a later G2 upload remains a separate path
+from the owned, loading-phase direct transfer above. Uploading prepared
 texture bytes and registering TA vertices are different operations. Direct
 disc-to-VRAM does not decompress, convert, or twiddle a texture automatically.
 

@@ -1,31 +1,16 @@
 # Decoder format boundary
 
-Sega Library 2.00J is the fixed baseline. Its active ADX playback dispatcher
-calls the floating mono/stereo decoder. An older integer decoder in the archive
-does not establish another active format. Header field extraction is permissive;
-a parser ignoring an encoding/version byte is not evidence that it implements
-the algorithm that byte designates.
+Read the encoding, version, block dimensions and channel count together. A readable header alone does not establish that an input is decodable.
 
 The native ADX path admits encoding3,18-byte blocks,4-bit samples, mono/stereo,
 versions3/5 with zero extensions or the documented v3 single-loop layout.
 Encoding 3 reads a 13-bit scale. The high bit identifies a control word; bits
 13 and 14 do not contribute to the scale.
-Standalone samples use version 3. The Sofdec sample corpus also contains
-version 5 records at 44100 Hz and a 500 Hz cutoff. The linked SDK header
-path selects coefficients by rate and cutoff for both versions. The native
-reader uses the rounded setup through 44100 Hz for either admitted version.
+The native reader uses the rounded setup through 44100 Hz for either admitted version.
 The baseline setup initializes predictor histories. Other encoding, history
 and encryption layouts remain unsupported.
 
-All11 standalone ADX files in the baseline sample tree were decoded completely
-through the native host checker, including strict body/endcode/EOF validation.
-They use version3,flags0,44100Hz/500Hz, mono/stereo, with ordinary and looped
-headers. All ten ADX members in the supplied ACX sample also passed strict
-full-member decoding at 22050 Hz with a 500 Hz cutoff. These checks cover those assets and their exact record boundaries.
-
-All 16 SFD samples in the SDK's Sofdec sample directory contain a finite ADX
-record in their C0 audio stream, including a 288-byte header and an endcode at
-the declared body boundary. Every record decodes to its declared frame count.
+An SFD C0 audio stream can contain a finite ADX record with its own header, declared length and endcode.
 Bytes after that endcode belong to the mux. The closing C0 payloads may contain
 mixed bytes as well as stuffing. A demux that presents a random-access C0 payload
 can supply its whole extent to `kosdec_adx_stream_init` with repeat disabled.
@@ -36,23 +21,11 @@ default strict reader. Both compositions produced identical PCM on the supplied
 corpus. Standalone decoding continues to require strict EOF. Headerless or
 late-count SFA uses the separate paired writer and joint reader.
 
-On both Flycast BIOS CPU modes, the native decoder matched the Sega Library
-2.00J SH-4 floating decoder primitive across all 37 complete records above.
-Each mode compared 37,743,869 frames, 74,472,221 PCM values and 4,654,574
-history values. Comparisons use identical one-group calls and independently
-observed stock coefficient pairs. The native decoder also validates the
-record footer and EOF. The comparison covers linear decode of each record.
-Middleware batching, repeat playback, demux timing and physical output
-remain separate. Asset identities and reference binaries stay private.
+On both Flycast BIOS CPU modes, linear decoding of 37 complete records matched at one-group boundaries (74,472,221 PCM values). This does not qualify playback timing or physical output.
 
-The player manual explicitly supports WAV16-bit PCM and4-bit ADPCM at runtime.
-Its WAV/AIFF authoring-input description alone does not establish runtime AIFF;
-the binary additionally contains distinct WAV/AIFF/AU/SPSD header/decoder paths.
-The native WAV reader admits tag1 unsigned8/signed16 PCM and CRI packed4-bit
+The native WAV reader admits tag1 unsigned8/signed16 PCM and packed4-bit
 ADPCM, mono/stereo, with strict RIFF/chunk bounds and pipe/service/player bindings.
-The binary establishes unsigned8 conversion in addition to the manual's PCM16
-promise. The SDK repacks4-bit input for hardware ADPCM; the native reader instead
-reconstructs signed16 PCM using the AICA predictor/quantizer model. Stereo channel
+The native reader reconstructs signed16 PCM using the AICA predictor/quantizer model. Stereo channel
 bytes interleave and nibbles decode low first. Whole four-frame groups are required;
 nonzero seeks rebuild histories in bounded steps. Hardware equivalence remains
 unqualified; this is not generic Yamaha WAVE tag0x20 support.

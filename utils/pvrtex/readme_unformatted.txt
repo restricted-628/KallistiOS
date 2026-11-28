@@ -79,7 +79,7 @@ Command Line Options:
 	The supported formats are:
 
 	.PVR
-		Official PowerVR texture. This is incomplete as was created to help test the output of the converter, by using PC PVR viewing programs to check the resulting texture. There are likely incompatiblities with .PVR handling of official games (for example, pvrtex does not add a GBIX chunk).
+		Official PowerVR texture. This is incomplete as was created to help test the output of the converter, by using PC PVR viewing programs to check the resulting texture. Consumers that require a GBIX chunk may reject this output: pvrtex does not emit one.
 	.TEX
 		Format used by tvspelsfreak's texconv. pvrtex will generate certain formats not supported by texconv but representable in the file format (like compressed stride textures).
 	.DT

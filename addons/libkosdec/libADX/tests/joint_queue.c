@@ -184,7 +184,7 @@ static void readiness(void) {
     uint8_t buffer[40] = {0};
     static const size_t requests[] = {0,8,16,24,32,40};
 
-    /* The six profiles match the linked 2.00J readiness witness. */
+    /* The six profiles match the linked reference readiness witness. */
     OK(kosdec_adx_joint_memory_init(&joint,buffer,24));
     for(unsigned i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i) {
         size_t request = requests[i];

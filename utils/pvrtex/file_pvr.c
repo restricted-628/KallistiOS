@@ -169,7 +169,7 @@ int fPvrLoad(const char *fname, PvrTexDecoder *dst) {
 	case TEXPVR_8B_TWID_MIP:
 	case TEXPVR_4B_TWID_MIP:
 	case TEXPVR_SQR_TWID_MIP:
-	case 0x12:	//??? used by SA2
+	case 0x12:	// Unidentified layout
 		mip = 1;
 		break;
 	case TEXPVR_VQ_TWID_MIP:

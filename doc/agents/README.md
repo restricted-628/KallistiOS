@@ -27,7 +27,7 @@ without claiming a new per-path recount.
 | [VFS, name manager and module lifetimes](vfs-modules.md) | Storage + kernel | 39 |
 | [VMU storage, packages and display](vmu-storage.md) | Kernel/platform + storage | 49 |
 | [Maple bus and input/capture devices](maple-devices.md) | Kernel/platform | 51 |
-| [AICA, SPU transfers, DSP and audio streams](audio.md) | AICA/Manatee audio | 90 |
+| [AICA, SPU transfers, DSP and audio streams](audio.md) | AICA audio | 90 |
 | [KOSdec media, middleware and archive addons](kosdec.md) | KOSdec | New scope; not recounted |
 | [Flash configuration and persistent settings](flash-settings.md) | Kernel/platform + networking | 18 |
 | [RTC, timers and VBlank dispatch](clocks-vblank.md) | Kernel/platform + fibers | 69 |
@@ -36,7 +36,7 @@ without claiming a new per-path recount.
 | [3D geometry, animation, rendering styles and SH4DER effects](graphics3d.md) | Graphics | 233 |
 | [Assets, textures, compression and host converters](assets-compression.md) | Graphics + storage | 168 |
 | [LZ4 Dreamcast addon and decode adapters](lz4-addon.md) | LZ4 addon | Subset of assets above |
-| [Nindows2 parity through Kosh and Conio](nindows-kosh.md) | Nindows2/Kosh addon | New scope; not recounted |
+| [Interactive console support through Kosh and Conio](console-kosh.md) | Kosh addon | New scope; not recounted |
 | [SH4ZAM dependency and math contracts](sh4zam.md) | Graphics + fibers | 41 |
 | [Startup, expansion probes and serial/debug paths](platform-serial.md) | Kernel/platform | 31 |
 
