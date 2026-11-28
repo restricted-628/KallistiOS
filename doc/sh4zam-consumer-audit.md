@@ -1,5 +1,26 @@
 # SH4ZAM consumer audit: checked animation matrices and skinning
 
+## Checked projection, rotation and incremental builds (2026-11-27)
+
+The checked frustum path divides directly for perspective projection and clip
+intersections. A valid W or distance denominator can have a square outside
+the float range even when the quotient is representable.
+
+Sprite, cell, particle and tilemap rotation still use SH4ZAM for angles up
+to 64 radians in magnitude. Larger finite angles use libm range reduction
+before computing the corner or view coordinates. Callers do not need to
+wrap accumulated angles themselves.
+
+The target builds for SH4DER, libSFD, libAHX and libADX track included
+headers even on system include paths. Editing a consumed inline header
+therefore invalidates the affected object without a clean build. Neither
+dependency pin nor public ABI changes.
+
+The SH-4 regression matched ordinary projection at W = 2^80 and 2^-80 in
+both Flycast CPU modes. The cell regression checked both signs of nine
+rotation magnitudes through the largest finite float in both modes. These
+checks cover coordinates and packets, not retail hardware or frame time.
+
 ## World-effect consumers (November 2026)
 
 At SH4ZAM `2d32eebb` and SH4DER `32912914`, the world-effect adapter uses
@@ -21,8 +42,9 @@ alias, layout and XMTRX contracts; no second SH4ZAM provider is linked.
 This pass follows the source-dependency migration on KOS master (`6f8b3394`).
 The original audit used unmodified SH4ZAM at
 `0bacf4b336368c0b47864ce9eeb59e7c07904b51`; the dependency subsequently moved to
-official 0.8.1, then PR #70's temporary u16 fix, and now official v0.9.0 at
-`0fd3a1e1fa0809d33198c062632b1494ec2f57df`. See the addon README for current provenance.
+official 0.8.1, then PR #70's temporary u16 fix, and later v0.9.0 at
+`0fd3a1e1fa0809d33198c062632b1494ec2f57df`. See the
+[addon README](../addons/libsh4zam/README.md) for the current pin.
 Dated results below retain the revision used for each earlier audit. All changes in
 this consumer audit are to KOS consumers, bridge assertions, tests, and
 documentation. Graphics-library extraction is deferred; no public matrix

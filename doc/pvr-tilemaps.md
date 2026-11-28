@@ -62,7 +62,8 @@ The cell compiler supplies established A/B/D/C strip ordering, UVs and corner
 colors. Fully visible tiles avoid clipping. Edge tiles reuse the frustum
 clipper with an identity screen transform, then restore the caller's depth.
 Degenerate tangent triangles are excluded from submission and capacity counts.
-SH4ZAM supplies target trigonometry and the existing clipper's target math.
+View rotation uses SH4ZAM for angles up to 64 radians in magnitude and
+libm range reduction for larger finite angles.
 Inverse selection and large-coordinate cancellation use double arithmetic;
 no performance gain over hand-specialized tile loops is claimed.
 

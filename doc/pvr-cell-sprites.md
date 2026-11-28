@@ -84,10 +84,11 @@ partition or submit batches through existing checked PVR material APIs.
 
 ## SH4ZAM integration
 
-Dreamcast builds use SH4ZAM's paired sine/cosine operation for whole-sprite and
-per-cell rotations. Three-dimensional hardware sprites and colored quads then
-use the shared SH4ZAM-backed batch projection path. Host builds use scalar
-`sinf()` and `cosf()` as an independent oracle.
+Whole-sprite and per-cell rotations use SH4ZAM's paired sine/cosine for
+angles up to 64 radians in magnitude. Larger finite angles use libm so
+accumulated turns do not saturate the target's phase conversion.
+Three-dimensional hardware sprites and colored quads then use the shared
+SH4ZAM-backed batch projection path.
 
 The public state and stream contracts do not expose SH4ZAM types. This keeps
 assets and application data portable while ensuring the target hot paths use

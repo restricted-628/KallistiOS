@@ -214,9 +214,9 @@ int pvr_cell_sprite_apply_transform(const pvr_cell_sprite_t *sprite,
 
 /** \brief Compose sampled cells under the whole cell-sprite transform.
 
-    On Dreamcast, rotation uses SH4ZAM's paired sine/cosine primitive. The
-    returned instance stream then reaches SH4ZAM again through the established
-    three-dimensional sprite projection path. Failure is atomic.
+    Rotation accepts finite radians, including accumulated turns. Ordinary
+    angles use SH4ZAM; larger angles use libm range reduction. Failure is
+    atomic.
 */
 int pvr_cell_sprite_resolve(const pvr_cell_sprite_t *sprite,
                             const pvr_cell_state_t *cells,
@@ -267,8 +267,8 @@ int pvr_cell_sprite_compile_colored_2d(
 
 /** \brief Compile and project colored cells as camera-facing quad strips.
 
-    World construction uses SH4ZAM paired sine/cosine on Dreamcast. Projection
-    uses the shared SH4ZAM-backed geometry batch and preserves the valid output
+    World construction uses the same rotation policy as cell resolution.
+    Projection uses the shared geometry batch and preserves the valid output
     prefix reported through \p result if a projected cell fails.
 */
 int pvr_cell_sprite_compile_colored_3d(

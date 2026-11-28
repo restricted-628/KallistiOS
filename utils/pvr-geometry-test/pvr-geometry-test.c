@@ -926,6 +926,78 @@ static void test_frustum_segment_clipping(void) {
            output[0].x == -0.5f && output[1].x == 0.5f);
 }
 
+/* Scaling homogeneous X, Y and W together must not move screen vertices or
+   change clipping topology. These exponents make W squared overflow/underflow
+   while W, 1/W, each edge distance, and their ratio remain representable. */
+static void test_frustum_ratio_range(float w) {
+    alignas(32) const matrix_t matrix = {
+        {w,0,0,0}, {0,w,0,0}, {0,0,0,w}, {0,0,0,0}
+    };
+    pvr_frustum_t f;
+    alignas(32) pvr_vertex_t in[3] = {
+        {.flags=PVR_CMD_VERTEX, .x=0.25f, .y=0.125f, .z=1},
+        {.flags=PVR_CMD_VERTEX, .y=-0.5f, .z=1, .u=1},
+        {.flags=PVR_CMD_VERTEX_EOL, .y=0.5f, .z=1, .u=0.5f}
+    };
+    alignas(32) pvr_vertex_t out[6], plain[3], saved[6];
+    const pvr_geometry_stream_t stream = {in, 3, sizeof(in[0])};
+    pvr_frustum_clip_result_t tri;
+    pvr_frustum_segment_result_t seg;
+    pvr_frustum_classification_t classified;
+    assert(pvr_frustum_init(&f, &matrix, -1,-1,1,1, w*0.5f, w*2) == 0);
+    assert(pvr_frustum_classify_triangle(in, &f, &classified) == 0 &&
+           classified == PVR_FRUSTUM_INSIDE);
+    assert(pvr_geometry_project(plain, 3, &stream, &matrix, NULL) == 0);
+    assert(pvr_frustum_clip_triangle(out, 6, in, &f, PVR_FRUSTUM_CLIP_UV, &tri) == 0);
+    assert(tri.polygon_vertices == 3 && tri.output_vertices == 3);
+    for(size_t i=0; i<3; ++i) {
+        assert(out[i].x == plain[i].x && out[i].x == in[i].x);
+        assert(out[i].y == plain[i].y && out[i].y == in[i].y);
+        assert(out[i].z == plain[i].z && out[i].z == 1.0f/w);
+    }
+
+    /* The left plane bisects both crossing edges: one in each direction. */
+    in[0].x = -2;
+    in[0].y = 0;
+    const float x[] = {-1,-1,0,-1,0,0};
+    const float y[] = {0.25f,-0.25f,-0.5f,0.25f,-0.5f,0.5f};
+    const float u[] = {0.25f,0.5f,1,0.25f,1,0.5f};
+    assert(pvr_frustum_clip_triangle(out, 6, in, &f, PVR_FRUSTUM_CLIP_UV, &tri) == 0);
+    assert(tri.polygon_vertices == 4 && tri.output_vertices == 6);
+    for(size_t i=0; i<6; ++i) {
+        assert(out[i].x == x[i] && out[i].y == y[i] && out[i].u == u[i]);
+        assert(out[i].z == 1.0f/w);
+        assert(out[i].flags == (i%3 == 2 ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX));
+    }
+    assert(pvr_frustum_clip_segment(out, in, &f, PVR_FRUSTUM_CLIP_UV, &seg) == 0);
+    assert(seg.clipped && seg.visible && out[0].x == -1 && out[0].y == -0.25f &&
+           out[0].u == 0.5f && out[1].x == 0 && out[1].y == -0.5f &&
+           out[0].z == 1.0f/w && out[1].z == 1.0f/w);
+    memset(out, 0x5a, sizeof(out));
+    memcpy(saved, out, sizeof(out));
+    assert(pvr_frustum_clip_triangle(out, 5, in, &f, 0, &tri) == -1 && errno == ENOSPC);
+    assert(tri.output_vertices == 6 && !memcmp(out,saved,sizeof(out)));
+    in[1].z = NAN;
+    assert(pvr_frustum_clip_segment(out, in, &f, 0, &seg) == -1 && errno == EDOM);
+    assert(!memcmp(out,saved,sizeof(out)));
+
+    /* Only corner C is behind near. Warp it, do not clip or reorder corners. */
+    alignas(32) pvr_modifier_vol_t volume = {
+        .flags=PVR_CMD_VERTEX_EOL, .ax=0.25f, .az=1, .by=-0.5f, .bz=1,
+        .cx=-0.25f, .cy=0.125f, .cz=0, .d6=0x1234
+    }, warped, original;
+    assert(pvr_frustum_project_modifier_warp(&warped, &volume, &f) == 0);
+    assert(warped.ax==0.25f && warped.ay==0 && warped.az==1.0f/w);
+    assert(warped.bx==0 && warped.by==-0.5f && warped.bz==1.0f/w);
+    assert(warped.cx==-0.5f && warped.cy==0.25f && warped.cz==2.0f/w);
+    assert(warped.flags==volume.flags && warped.d6==volume.d6);
+    memset(&warped, 0x5a, sizeof(warped));
+    original = warped;
+    volume.cz = NAN;
+    assert(pvr_frustum_project_modifier_warp(&warped, &volume, &f) == -1 && errno == EDOM);
+    assert(!memcmp(&warped, &original, sizeof(warped)));
+}
+
 static void test_example_frustum(void) {
     alignas(32) const matrix_t projection = {
         { 240.0f, 0.0f, 0.0f, 0.0f },
@@ -1007,6 +1079,9 @@ int main(void) {
     test_frustum_classification();
     test_frustum_clipping();
     test_frustum_segment_clipping();
+    test_frustum_ratio_range(1.0f);
+    test_frustum_ratio_range(0x1p80f);
+    test_frustum_ratio_range(0x1p-80f);
     test_example_frustum();
     test_modifier_near_warp();
     puts("PVR geometry tests passed");

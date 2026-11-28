@@ -14,6 +14,11 @@ sh4zam-state.o: $(SHZ_HOST_SOURCE) $(SHZ_HOST_HEADERS)
 sh4zam-matrix.o: $(SHZ_HOST_MATRIX) $(SHZ_HOST_MATRIX_IMPL) $(SHZ_HOST_HEADERS)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SHZ_HOST_WARNINGS) -c $< -o $@
 $(TARGET) $(GRID_TARGET) $(CLIP_TARGET): sh4zam-state.o sh4zam-matrix.o $(SHZ_HOST_HEADERS)
+# These host targets compile the graphics sources directly, without compiler
+# depfiles. Keep their private rotation dependency scoped to actual consumers.
+ifneq (,$(filter pvr_cell.c pvr_sprite_geometry.c pvr_tilemap.c pvr_particle.c,$(notdir $(SOURCES))))
+$(TARGET): ../../kernel/arch/dreamcast/hardware/pvr/pvr_2d_rotation.h
+endif
 LDLIBS := $(filter-out -lm,$(LDLIBS)) sh4zam-state.o sh4zam-matrix.o -lm
 .PHONY: clean-sh4zam-state
 clean: clean-sh4zam-state

@@ -6,7 +6,7 @@
 
 #include <dc/pvr_tilemap.h>
 #include <dc/pvr_frustum.h>
-#include <dc/sh4zam.h>
+#include "pvr_2d_rotation.h"
 
 #include <errno.h>
 #include <float.h>
@@ -114,7 +114,7 @@ static int prepare(const pvr_tilemap_t *map, const pvr_tilemap_view_t *view,
         return -1;
     window->sources[4] = *view_range;
 
-    shz_sincos_t angle = shz_sincosf(view->rotation);
+    shz_sincos_t angle = pvr_2d_sincos(view->rotation);
     sine = angle.sin;
     cosine = angle.cos;
     window->a = cosine * view->scale_x;

@@ -80,6 +80,12 @@ helpers against their stated domains and an actual rendering use case. Do not
 silently substitute KOS math, add blanket clobbers, or claim unmeasured speedups.
 Anchor: `addons/libsh4zam/README.md`, `doc/sh4zam-direct-graphics-math.md`.
 
+**Checked consumer range, 2026-11-27:** Frustum projection and clipping use
+direct division when the quotient, but not the denominator squared, must be
+representable. Checked 2D rotation uses libm outside the ordinary SH4ZAM
+phase range chosen by the fork. These are consumer fixes at the existing
+pin, not changes to the dependency. See [range and rebuild checks](doc/sh4zam-consumer-audit.md).
+
 **Scoped exception, 2026-10-11:** The owner authorizes a fork-local SH4ZAM
 matrix-alignment correction without upstream coordination. Preserve the
 official pinned submodule and licenses, with an explicit exact-base patch and

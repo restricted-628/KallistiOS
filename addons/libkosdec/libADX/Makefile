@@ -206,7 +206,7 @@ sanitize: $(BUILD)/sanitize/recovery_player $(BUILD)/sanitize/sfa $(BUILD)/sanit
 
 $(BUILD)/sh4/%.o: src/%.c $(HEADERS) Makefile
 	mkdir -p $(@D)
-	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) $(PRIVATE_PLAYER_FLAGS) $(PRIVATE_ORDINARY_FLAGS) -MMD -MP -c $< -o $@
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) $(PRIVATE_PLAYER_FLAGS) $(PRIVATE_ORDINARY_FLAGS) -MD -MP -c $< -o $@
 $(BUILD)/host-test/%.o: src/%.c $(HEADERS) Makefile
 	mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) $(INCLUDES) -DMEDIA_ADX_MATH_HOST_TEST -MMD -MP -c $< -o $@
@@ -363,7 +363,7 @@ ADX_NATIVE_OBJS = $(addprefix $(BUILD)/sh4/native-,$(addsuffix .o,$(ADX_NATIVE_C
 native-test-elf: $(BUILD)/sh4/adx_native_test.elf
 $(BUILD)/sh4/native-%.o: tests/%.c $(HEADERS) Makefile
 	mkdir -p $(@D)
-	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) -Isrc -MMD -MP -Dmain=adx_$*_run -c $< -o $@
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) -Isrc -MD -MP -Dmain=adx_$*_run -c $< -o $@
 $(BUILD)/sh4/adx_native_test.elf: tests/native.c $(ADX_NATIVE_OBJS) $(BUILD)/sh4/libADX.a
 	$(SH_CC) $(SH_CFLAGS) $(STRICT) -ml -m4-single $(INCLUDES) -o $@ $^ -lm
 -include $(ADX_NATIVE_OBJS:.o=.d)

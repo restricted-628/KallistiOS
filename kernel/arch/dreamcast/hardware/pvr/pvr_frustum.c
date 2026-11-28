@@ -413,7 +413,8 @@ int pvr_frustum_project_modifier_warp(
            positions, so a closed volume cannot acquire a near-plane hole. */
         if(transformed.w < frustum->w_near)
             transformed.w = frustum->w_near;
-        reciprocal_w = shz_invf(transformed.w);
+        /* Match ordinary projection: W need not have a representable square. */
+        reciprocal_w = 1.0f / transformed.w;
         *destination[vertex][0] = transformed.x * reciprocal_w;
         *destination[vertex][1] = transformed.y * reciprocal_w;
         *destination[vertex][2] = reciprocal_w;
@@ -500,7 +501,7 @@ static int clip_plane(const pvr_frustum_t *frustum, size_t plane,
 
             if(!isfinite(denominator) || fabsf(denominator) <= FLT_MIN)
                 return -1;
-            amount = shz_divf(previous_distance, denominator);
+            amount = previous_distance / denominator;
             if(!isfinite(amount) || amount < 0.0f || amount > 1.0f ||
                count >= CLIPPED_POLYGON_MAX)
                 return -1;
@@ -620,7 +621,7 @@ static int clip_segment(
                 errno = ERANGE;
                 return -1;
             }
-            amount = shz_divf(first_distance, denominator);
+            amount = first_distance / denominator;
             if(!isfinite(amount) || amount < 0.0f || amount > 1.0f) {
                 errno = ERANGE;
                 return -1;
@@ -639,7 +640,7 @@ static int clip_segment(
             errno = ERANGE;
             return -1;
         }
-        reciprocal_w = shz_invf(endpoints[vertex].w);
+        reciprocal_w = 1.0f / endpoints[vertex].w;
         staged[vertex] = input[vertex];
         staged[vertex].flags = vertex ? PVR_CMD_VERTEX_EOL : PVR_CMD_VERTEX;
         staged[vertex].x = endpoints[vertex].x * reciprocal_w;
@@ -770,7 +771,7 @@ int pvr_frustum_clip_triangle(pvr_vertex_t *output, size_t output_capacity,
                 return -1;
             }
 
-            reciprocal_w = shz_invf(source->w);
+            reciprocal_w = 1.0f / source->w;
             destination->flags = vertex == 2u ? PVR_CMD_VERTEX_EOL :
                                                 PVR_CMD_VERTEX;
             destination->x = source->x * reciprocal_w;

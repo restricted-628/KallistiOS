@@ -265,6 +265,20 @@ static void test_billboards(void) {
         assert(errno == ERANGE && !memcmp(output, unchanged, sizeof(output)));
     }
 
+    /* Exercise a real accumulated rotation instead of seeding a huge angle
+       directly. A unit interval at +60000 rad/update reaches 240000. */
+    stream.particle_count = 1;
+    particles[0].lifetime = 6;
+    particles[0].velocity = particles[0].acceleration = (vector_t){0};
+    particles[0].scale_velocity_x = particles[0].scale_velocity_y = 0;
+    particles[0].angular_velocity = 60000;
+    for(int i = 0; i < 4; ++i)
+        assert(pvr_particle_step(&stream, 1.0f, NULL) == 0);
+    assert(particles[0].rotation == 240000.0f);
+    assert(pvr_particle_compile_billboards(output, 12, &stream, &description, NULL) == 0);
+    assert(close_enough(output[0].x, 10.0f - 2*0.3893950075f - 0.9210708594f));
+    assert(close_enough(output[0].y, 20.0f - 2*0.9210708594f + 0.3893950075f));
+
     particles[0].flags = 0;
     assert(pvr_particle_compile_billboards(NULL, 0, &stream,
                                             &description, &result) == 0);

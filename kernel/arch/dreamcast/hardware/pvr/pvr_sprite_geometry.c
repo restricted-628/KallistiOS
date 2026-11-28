@@ -6,7 +6,7 @@
 
 #include <dc/pvr_sprite_geometry.h>
 
-#include <dc/sh4zam.h>
+#include "pvr_2d_rotation.h"
 
 #include <errno.h>
 #include <float.h>
@@ -199,7 +199,7 @@ static int build_packet(const pvr_sprite_cell_t *cell,
     size_t i;
 
     {
-        shz_sincos_t value = shz_sincosf(instance->rotation);
+        shz_sincos_t value = pvr_2d_sincos(instance->rotation);
 
         sine = value.sin;
         cosine = value.cos;

@@ -21,9 +21,9 @@ CAPTURE_HOLD_MS ?= 0
 
 .PHONY: sh4 install test sanitize fixture-test fixture-sanitize video-example clean FORCE
 sh4: $(BUILD)/sh4/libSFD.a
-$(BUILD)/sh4/%.o: src/%.c $(HEADERS)
+$(BUILD)/sh4/%.o: src/%.c $(HEADERS) Makefile
 	@mkdir -p $(@D)
-	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) -c $< -o $@
+	$(SH_CC) $(SH_CFLAGS) $(STRICT) $(INCLUDES) -MD -MP -c $< -o $@
 $(BUILD)/sh4/libSFD.a: $(SH_OBJS)
 	$(SH_AR) rcs $@ $^
 install: sh4
@@ -57,3 +57,5 @@ video-example: sh4 FORCE
 clean:
 	rm -rf $(BUILD)
 FORCE:
+
+-include $(SH_OBJS:.o=.d)

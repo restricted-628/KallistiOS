@@ -30,7 +30,7 @@ sh4: $(MODE_BUILD)/sh4/libAHX.a
 
 $(MODE_BUILD)/sh4/%.o: src/%.c $(HEADERS) Makefile
 	@mkdir -p $(@D)
-	$(SH_CC) $(SH_CFLAGS) $(WARNINGS) $(FP_FLAGS) $(SYNTH_INCLUDES) $(SYNTH_FLAGS) -c $< -o $@
+	$(SH_CC) $(SH_CFLAGS) $(WARNINGS) $(FP_FLAGS) $(SYNTH_INCLUDES) $(SYNTH_FLAGS) -MD -MP -c $< -o $@
 
 $(MODE_BUILD)/sh4/libAHX.a: $(SH_OBJECTS)
 	$(SH_AR) rcs $@ $^
@@ -55,3 +55,5 @@ sanitize:
 
 clean:
 	rm -rf $(BUILD)
+
+-include $(SH_OBJECTS:.o=.d)

@@ -6,7 +6,7 @@
 
 #include <dc/pvr_particle.h>
 
-#include <dc/sh4zam.h>
+#include "pvr_2d_rotation.h"
 
 #include <errno.h>
 #include <float.h>
@@ -408,7 +408,7 @@ int pvr_particle_emit_sprite_instances(
 }
 
 static void particle_sincos(float angle, float *sine, float *cosine) {
-    shz_sincos_t value = shz_sincosf(angle);
+    shz_sincos_t value = pvr_2d_sincos(angle);
 
     *sine = value.sin;
     *cosine = value.cos;

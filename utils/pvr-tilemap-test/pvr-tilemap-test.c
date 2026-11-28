@@ -167,8 +167,9 @@ static void test_maps(void) {
     view.scroll_y = 2.625f;
     for(int policy = PVR_TILEMAP_CLIP; policy <= PVR_TILEMAP_CLAMP; ++policy) {
         view.address_x = view.address_y = policy;
-        for(unsigned rot = 0; rot < 4; ++rot) {
-            view.rotation = rot * 0.47f;
+        static const float angles[] = { 0, 0.47f, 0.94f, 1.41f, -240000.0f, 0x1p100f };
+        for(unsigned rot = 0; rot < sizeof(angles) / sizeof(angles[0]); ++rot) {
+            view.rotation = angles[rot];
             view.scale_x = 0.73f;
             view.scale_y = 1.17f;
             view.anchor_x = 5.5f;

@@ -669,7 +669,51 @@ static void test_motion_and_events(void) {
     assert(errno == EINVAL);
 }
 
+/* Rounded binary32 inputs and independent sin/cos reference values. On
+   m4-single-only, computing a "double" reference on target is not independent. */
+static void test_full_range_rotation(void) {
+    static const struct { float angle, sine, cosine; } cases[] = {
+        { 1.0f, 0.8414709848f, 0.5403023059f },
+        { 64.0f, 0.9200260382f, 0.3918572304f },
+        { 0x1.000002p6f, 0.9200290278f, 0.3918502112f },
+        { 0x1.921fb4p17f, -0.009895499187f, 0.9999510383f },
+        { 0x1.921fb6p17f, 0.005729307966f, 0.9999835874f },
+        { 0x1.921fb8p17f, 0.02135271639f, 0.9997720048f },
+        { 240000.0f, 0.9210708594f, 0.3893950075f },
+        { 0x1p100f, -0.8721836054f, 0.4891786570f },
+        { 0x1.fffffep127f, -0.5218765233f, 0.8530210398f }
+    };
+    const pvr_sprite_cell_t cell = { 32, 16, 0, 0, 0, 0, 1, 1 };
+    const pvr_sprite_atlas_t atlas = { &cell, 1 };
+    pvr_cell_state_t state = make_state(0, 1, 0, 0, 0);
+    pvr_cell_sprite_t sprite = { .base_cells = &state, .cell_count = 1,
+        .position = { 0, 0, 1, 1 }, .scale_x = 1, .scale_y = 1 };
+    pvr_cell_resolved_t resolved;
+    alignas(32) pvr_sprite_txr_t packet;
+    alignas(32) pvr_vertex_t colored[4];
+
+    state.rotation = 0.0f;
+    for(size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
+        for(int sign = -1; sign <= 1; sign += 2) {
+            const float x = cases[i].cosine, y = sign * cases[i].sine;
+            const float eps = cases[i].angle <= 64 ? 0.00012f : 0.000001f;
+            sprite.rotation = sign * cases[i].angle;
+            assert(pvr_cell_sprite_resolve(&sprite, &state, 1, &resolved, 1, NULL) == 0);
+            assert(fabsf(resolved.instance.position.x - x) < eps);
+            assert(fabsf(resolved.instance.position.y - y) < eps);
+            assert(pvr_cell_sprite_compile_2d(&packet, 1, &atlas, &resolved, 1, NULL) == 0);
+            assert(pvr_cell_sprite_compile_colored_2d(colored, 4, &atlas, &resolved, 1, NULL) == 0);
+            /* Both top-right corners are (1 + 32, 0) before rotation. */
+            assert(fabsf(packet.cx - 33*x) < 33*eps);
+            assert(fabsf(packet.cy - 33*y) < 33*eps);
+            assert(fabsf(colored[3].x - 33*x) < 33*eps);
+            assert(fabsf(colored[3].y - 33*y) < 33*eps);
+        }
+    }
+}
+
 int main(void) {
+    test_full_range_rotation();
     test_cell_asset();
     test_streams_and_composition();
     test_stream_time_policy();

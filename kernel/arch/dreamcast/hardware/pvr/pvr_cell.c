@@ -6,7 +6,7 @@
 
 #include <dc/pvr_cell.h>
 
-#include <dc/sh4zam.h>
+#include "pvr_2d_rotation.h"
 
 #include <errno.h>
 #include <float.h>
@@ -621,7 +621,7 @@ int pvr_cell_sprite_resolve(const pvr_cell_sprite_t *sprite,
     }
 
     {
-        shz_sincos_t value = shz_sincosf(sprite->rotation);
+        shz_sincos_t value = pvr_2d_sincos(sprite->rotation);
 
         sine = value.sin;
         cosine = value.cos;
@@ -898,7 +898,7 @@ static int build_colored_quad(const pvr_sprite_cell_t *cell,
     size_t i;
 
     {
-        shz_sincos_t value = shz_sincosf(instance->rotation);
+        shz_sincos_t value = pvr_2d_sincos(instance->rotation);
 
         sine = value.sin;
         cosine = value.cos;
