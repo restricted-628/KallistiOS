@@ -17,10 +17,8 @@ linkable, experimental `libSFD.a` and a standalone Dreamcast example. It handles
   synchronization, fibers, seeking or concurrent decoder instances. Normal KOS
   FPU mode is required. IDCT and color conversion preserve caller XMTRX.
 
-Falco Girgis supplied the original SH4ZAM IDCT directly to Joseph Black, who
-adapted it for libSFD. See [IDCT authorship and kernel selection](IDCT.md).
-The [bundled MPEG decoder snapshot](src/reference/PROVENANCE.md) has separate
-authorship and license notices.
+The decoder uses [idct.c](src/idct.c). The two-matrix variant in
+[idct_dual.c](src/idct_dual.c) is built only for fixture comparisons.
 
 ## Build and use
 

@@ -16,8 +16,7 @@ it is a historical index, not evidence that those changes passed tests.
   source when a partition is detached.
 - libSFD skips the dense transform for zero and DC-only blocks. The alternate
   two-matrix transform is fixture-only; the default dense path is unchanged.
-  The original SH4ZAM IDCT is credited to Falco Girgis and the libSFD
-  adaptation to Joseph Black.
+  Remove the unused integer video transform from the bundled header.
 - Restore Kyle Mayer's copyright notices in the affected libADX and libAHX
   files.
 

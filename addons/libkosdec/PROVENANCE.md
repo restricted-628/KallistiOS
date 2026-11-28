@@ -28,8 +28,7 @@ The host asset checker and its synthetic CLI fixtures are original work. It call
 the unchanged decoder with the explicit host validation math model; it does not
 embed or invoke proprietary tools and does not certify target waveform equivalence.
 
-For libSFD's SH-4 video transform, see [IDCT authorship](libSFD/IDCT.md).
-The bundled decoder header has its own [source record](libSFD/src/reference/PROVENANCE.md).
+The bundled MPEG decoder header has its own [source record](libSFD/src/reference/PROVENANCE.md).
 
 libAHX's parser, stream service and synthesis are original implementations.
 The arithmetic data generator uses MPEG equations for scale, requantization

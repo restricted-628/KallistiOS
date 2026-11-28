@@ -1,8 +1,5 @@
 # Bundled MPEG decoder snapshot
 
-This record covers the modified header in this directory. For the SH-4
-transform implemented outside this snapshot, see [IDCT authorship](../../IDCT.md).
-
 Upstream: https://github.com/phoboslab/pl_mpeg
 Commit: c871f2be022ece7ef4f64230b4fb8e1fb9eb6023
 Original pl_mpeg.h Git blob: b42f53f89f868a697435ab1e15742f370819ffbc
@@ -21,7 +18,7 @@ Local changes for the bounded test consumer:
   premultiplier. Every coded zero/DC/general block calls media_mpeg_transform.
   That hook validates the frozen domain, calls the existing SH4ZAM IDCT once,
   and returns signed residuals. The later float numerical path described below
-  retains byte reference storage and placement; the integer IDCT is not selected.
+  retains byte reference storage and placement.
 - Fixed-memory buffers do not discard/memmove borrowed immutable input.
 - At end of input, a pending reference frame is returned even when the last
   coded picture was B. The original condition lost that delayed reference for
@@ -59,8 +56,8 @@ Float32 numerical-path amendment (independent implementation):
   mathematical nearest/ties-away. The new consumer requires integral float
   residuals and does not roundtrip through int16 for pixel reconstruction.
 - Integer bitstream syntax, counts, offsets, lookup indices and final pixel
-  representations are intentional boundaries. The unused upstream integer
-  IDCT/conversion utilities are not selected as runtime fallbacks.
+  representations are intentional boundaries. The unused integer video transform
+  was removed; conversion utilities are not selected as runtime fallbacks.
 
 These arithmetic adaptations are this project's design, not a claim that all
 original SDK motion/reconstruction arithmetic was floating point. Original
