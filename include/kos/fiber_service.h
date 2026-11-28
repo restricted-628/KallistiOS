@@ -44,7 +44,8 @@ typedef struct fiber_service fiber_service_t;
 /** \brief Fixed-size message copied through a service mailbox.
 
     The runtime does not interpret either word. Pointer values are borrowed;
-    their referents must remain valid until the consumer receives the message.
+    their referents must remain valid until the consumer receives the message
+    or the executor is destroyed.
 */
 typedef struct fiber_service_message {
     uintptr_t tag;
@@ -126,7 +127,10 @@ int fiber_service_queue_configure(fiber_service_t *service, size_t capacity);
 /** \brief Start the executor's owning KOS thread.
 
     This call waits until all configured fibers have been created or startup
-    has failed. Services begin waiting and run only after a wake request.
+    has failed. A service runs after a wake request or when a message is queued.
+    Failed startup preserves pending wakes, messages, and stop requests for a
+    retry. The executor owns a joinable thread. Detached attributes fail with
+    `EINVAL`.
 
     \param executor  Unstarted executor.
     \param attr      Optional KOS thread attributes.
@@ -162,7 +166,8 @@ int fiber_service_wake(fiber_service_t *service);
 
     This function may be called from interrupt context. The service should
     observe fiber_service_stop_requested() or an `ECANCELED` wait/yield result
-    and return from its entry point.
+    and return from its entry point. New mailbox posts fail with `ECANCELED`
+    once stop is requested. Unread messages remain queued until destruction.
 */
 int fiber_service_request_stop(fiber_service_t *service);
 
@@ -171,7 +176,8 @@ int fiber_service_request_stop(fiber_service_t *service);
     This operation may be called from interrupt context and performs no dynamic
     allocation. `EAGAIN` reports backpressure when the mailbox is full. A post
     made while the service fiber is blocked on a fiber event or mutex remains
-    queued and cannot complete that unrelated synchronization wait.
+    queued and cannot complete that unrelated synchronization wait. Posting
+    to a service that is stopping or has terminated fails with `ECANCELED`.
 
     Producers must stop posting before the executor is destroyed.
 */

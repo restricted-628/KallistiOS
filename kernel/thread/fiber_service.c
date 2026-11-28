@@ -103,8 +103,17 @@ static void service_entry(void *data) {
     service->deadline_ms = 0;
 }
 
+static kfiber_t *service_take_fiber(fiber_service_t *service) {
+    irq_disable_scoped();
+
+    kfiber_t *fiber = service->fiber;
+    service->fiber = NULL;
+    return fiber;
+}
+
 static int create_service_fibers(fiber_service_executor_t *executor) {
     fiber_service_t *service;
+    int saved_errno;
 
     executor->main_fiber = fiber_attach_ex(executor->fiber_flags);
     if(!executor->main_fiber)
@@ -119,30 +128,22 @@ static int create_service_fibers(fiber_service_executor_t *executor) {
                                     service) < 0)
             goto fail;
 
-        if(service->wake_pending) {
-            /* A pre-start wake admits the service for its first dispatch. */
-            service->wake_pending = false;
-            service->state = FIBER_SERVICE_READY;
-        }
-        else {
-            service->state = service->message_count ?
-                FIBER_SERVICE_READY : FIBER_SERVICE_WAITING;
-        }
+        /* The dispatcher consumes pending work only after startup succeeds. */
+        service->state = FIBER_SERVICE_WAITING;
     }
 
     return 0;
 
 fail:
+    saved_errno = errno;
     TAILQ_FOREACH(service, &executor->services, list) {
-        if(service->fiber) {
-            (void)_fiber_cancel_wait(service->fiber, ECANCELED);
-            (void)_fiber_set_wait_observer(service->fiber, NULL, NULL);
-            fiber_destroy(service->fiber);
-            service->fiber = NULL;
-        }
+        kfiber_t *fiber = service_take_fiber(service);
+        if(fiber)
+            fiber_destroy(fiber);
         service->state = FIBER_SERVICE_CREATED;
     }
-
+    executor->main_fiber = NULL;
+    errno = saved_errno;
     return -1;
 }
 
@@ -150,10 +151,9 @@ static void destroy_service_fibers(fiber_service_executor_t *executor) {
     fiber_service_t *service;
 
     TAILQ_FOREACH(service, &executor->services, list) {
-        if(service->fiber) {
-            fiber_destroy(service->fiber);
-            service->fiber = NULL;
-        }
+        kfiber_t *fiber = service_take_fiber(service);
+        if(fiber)
+            fiber_destroy(fiber);
 
         if(service->state != FIBER_SERVICE_FINISHED &&
            service->state != FIBER_SERVICE_FAILED)
@@ -411,19 +411,24 @@ int fiber_service_executor_start(fiber_service_executor_t *executor,
     };
 
     if(!executor || executor->state != EXECUTOR_CREATED ||
-       TAILQ_EMPTY(&executor->services)) {
+       TAILQ_EMPTY(&executor->services) || (attr && attr->create_detached)) {
         errno = EINVAL;
         return -1;
     }
 
-    executor->state = EXECUTOR_STARTING;
-    executor->start_result = -1;
-    executor->start_error = 0;
-    executor->thread = thd_create_ex(attr ? attr : &default_attr,
-                                     service_executor_thread, executor);
-    if(!executor->thread) {
-        executor->state = EXECUTOR_CREATED;
-        return -1;
+    {
+        /* Thread creation enqueues the carrier before returning. Publish its
+           identity before it can dispatch a service with pending work. */
+        irq_disable_scoped();
+        executor->state = EXECUTOR_STARTING;
+        executor->start_result = -1;
+        executor->start_error = 0;
+        executor->thread = thd_create_ex(attr ? attr : &default_attr,
+                                         service_executor_thread, executor);
+        if(!executor->thread) {
+            executor->state = EXECUTOR_CREATED;
+            return -1;
+        }
     }
 
     sem_wait(&executor->started);
@@ -536,10 +541,11 @@ int fiber_service_request_stop(fiber_service_t *service) {
             service->wake_pending = true;
             signal = true;
         }
-    }
 
-    if(service->fiber)
-        resumed = _fiber_cancel_wait(service->fiber, ECANCELED) > 0;
+        /* Keep the child live until cancellation has finished with it. */
+        if(service->fiber)
+            resumed = _fiber_cancel_wait(service->fiber, ECANCELED) > 0;
+    }
 
     if(signal && !resumed)
         sem_signal(&service->executor->work);
@@ -558,7 +564,7 @@ int fiber_service_post(fiber_service_t *service,
     }
 
     old_irq = irq_disable();
-    if(service->state == FIBER_SERVICE_FINISHED ||
+    if(service->stop_requested || service->state == FIBER_SERVICE_FINISHED ||
        service->state == FIBER_SERVICE_FAILED ||
        service->state == FIBER_SERVICE_STOPPED ||
        service->executor->stopping) {

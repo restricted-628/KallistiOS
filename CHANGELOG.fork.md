@@ -6,6 +6,15 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Fiber Service Executor startup and stop
+
+- Reject detached carriers before startup and register the joinable carrier
+  before its first dispatch. Once a service is stopping, new mailbox posts
+  fail with `ECANCELED`.
+- A partial startup failure preserves the original error and pending work for
+  retry. The executor clears child handles before destroying them so a stop
+  request cannot act on a retired fiber.
+
 ## 2026-11-27 — Standalone ACX archives
 
 - Add an allocation-free SH-4 reader for bounded reads by member number.
