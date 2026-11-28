@@ -6,6 +6,19 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — KOSdec archive and codec updates
+
+- libADX reads unencrypted v4 mono/stereo streams with signed initial
+  predictor histories and one supported embedded loop. Rebuild callers that
+  embed the decoder state.
+- libAFS adds caller-owned resident partitions, sparse overlays, sector-range
+  queries and file-list authoring. Existing member views keep their selected
+  source when a partition is detached.
+- libSFD skips the dense transform for zero and DC-only blocks. The alternate
+  two-matrix transform is fixture-only; the default dense path is unchanged.
+- Restore Kyle Mayer's copyright notices in the affected libADX and libAHX
+  files.
+
 ## 2026-11-27 — Fiber Service Executor startup and stop
 
 - Reject detached carriers before startup and register the joinable carrier

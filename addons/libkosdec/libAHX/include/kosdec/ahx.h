@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 /* Original incremental framing for Dreamcast mono AHX. */
 #ifndef KOSDEC_AHX_H
 #define KOSDEC_AHX_H

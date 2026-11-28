@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 /* Adapter fault/ownership tests. Actual VFS detach semantics are tested in
    utils/vm-test, not established by the backend model below. */
 #include <kosdec/adx_named_file.h>

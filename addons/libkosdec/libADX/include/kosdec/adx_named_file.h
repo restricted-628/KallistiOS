@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 /* Original owned filename binding over the synchronous KOS VFS reader. */
 #ifndef KOSDEC_ADX_NAMED_FILE_H
 #define KOSDEC_ADX_NAMED_FILE_H

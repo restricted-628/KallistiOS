@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 /* Original private-descriptor lifecycle; no global VFS/Audio state changes. */
 #include <kosdec/adx_named_file.h>
 #include <kosdec/adx_file.h>

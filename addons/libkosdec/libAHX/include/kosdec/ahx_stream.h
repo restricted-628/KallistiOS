@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 #ifndef KOSDEC_AHX_STREAM_H
 #define KOSDEC_AHX_STREAM_H
 

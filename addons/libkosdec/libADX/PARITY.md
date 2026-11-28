@@ -1,5 +1,7 @@
 # libADX release scope
 
+Copyright (C) 2026 Kyle Mayer
+
 The KOS Experimental milestone is published with native implementations or
 accepted native equivalents for **142 of 142 applicable ADX entries**. The [function inventory](BASELINE_API.csv) records named
 entries and their native coverage. The [completion map](COMPLETION.md) explains

@@ -1,5 +1,7 @@
 # libAHX
 
+Copyright (C) 2026 Kyle Mayer
+
 libAHX decodes the unencrypted mono AHX type 0x10, version 6. It exposes
 incremental framing, PCM16 decoding and a serviced reader for finite
 sources. Callers own storage, input and output scheduling. The library

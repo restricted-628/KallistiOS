@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 #include <kosdec/ahx_stream.h>
 
 #include <stdalign.h>

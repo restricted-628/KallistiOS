@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 #include <kosdec/ahx.h>
 #include "silent.h"
 #include <assert.h>

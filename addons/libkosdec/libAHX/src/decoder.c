@@ -1,3 +1,4 @@
+/* Copyright (C) 2026 Kyle Mayer */
 /* Original bounded AHX decoder and synthesis. */
 #include <kosdec/ahx.h>
 #include "frame.h"
