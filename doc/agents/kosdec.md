@@ -1,7 +1,7 @@
 # KOSdec media addon
 
-KOSdec owns `addons/libkosdec`: independent `libADX`, `libSFD`, `libAHX`
-and `libAFS` components plus host tools. libADX covers all 142 applicable entries through original implementations or accepted native equivalents.
+KOSdec owns `addons/libkosdec`: independent `libADX`, `libSFD`, `libAHX`,
+`libAFS` and `libACX` components plus host tools. libADX covers all 142 applicable entries through original implementations or accepted native equivalents.
 Playback qualification applies to the documented Flycast profiles on KOS
 Experimental. The [completion map](../../addons/libkosdec/libADX/COMPLETION.md)
 records applicability, published evidence and remaining qualification. Stock KOS
@@ -19,6 +19,11 @@ lists framing, synthesis and finite-reader capabilities.
 Preserve default FIPR, optional ordered FMAC, FPSCR restoration and the distinct
 coded and declared sample counts. The synchronous stream service leaves input
 and PCM scheduling to the caller. Device playback stays downstream.
+
+The [libACX addon](../../addons/libkosdec/libACX/README.md) reads and authors
+ordinal archives independently. Preserve big-endian offsets and exact payload
+sizes, including empty members. The existing libADX lookup owns its
+cooperative transport and stays an independent entry point.
 
 The optional host `tools/adxcheck` validates standalone assets with the unchanged
 decoder's explicit host math model. Its declared fields are not admitted metadata;

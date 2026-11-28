@@ -6,6 +6,12 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Standalone ACX archives
+
+- Add an allocation-free SH-4 reader for bounded reads by member number.
+  The host `acx` tool packs ordered file lists, lists entries and extracts
+  into a fresh directory. Existing libADX playback paths are unchanged.
+
 ## 2026-11-27 — Checked graphics math and incremental target builds
 
 - Preserve representable clip intersections and projected coordinates at large

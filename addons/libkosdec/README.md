@@ -6,6 +6,7 @@ KOSdec groups independently linkable Dreamcast media components:
 - `libSFD`: preserved bounded video-only prototype and standalone OIX/AMX player.
 - `libAHX`: incremental mono AHX decoding and streaming PCM16.
 - `libAFS`: bounded archive reader, plus host inspection, packing and extraction tools.
+- `libACX`: ordinal archive reader, plus host packing and extraction tools.
 - `tools`: host ADX asset compatibility checker.
 
 The KOS Experimental libADX milestone covers all **142 applicable middleware entries** through native implementations or accepted
@@ -36,6 +37,10 @@ For Dreamcast-era archives, the opt-in [libAFS component](libAFS/README.md)
 provides bounded ordinal and name lookup with an independent SH-4 archive.
 `make -C libAFS host` builds the `afs` command for inspecting, extracting,
 packing and repacking general-purpose archive payloads.
+
+The independent [libACX component](libACX/README.md) provides bounded ordinal
+access and a host tool for ordered packing, listing and extraction. Build it with
+`make -C libACX host`.
 
 The SH-4 archive is `libADX/.build/sh4/libADX.a`. Installed consumers include
 `<kosdec/adx.h>`, `<kosdec/adx_memory.h>`, `<kosdec/adx_stream.h>` or
