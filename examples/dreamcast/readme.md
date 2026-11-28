@@ -172,6 +172,8 @@ This page serves as an index for all KallistiOS examples.
     model, then resolves its texture identifiers through a pre-acquired
     fixed-slot residency set, checked materials, and an admitted signed-light
     diffuse-plus-specular render policy
+  - [**chunk_routed_lighting**](pvr/chunk_routed_lighting/): Shades a host-cooked
+    Compact receiver with independent light masks inside and outside a modifier volume.
   - [**chunk_scene**](pvr/chunk_scene/): Compiles two models with an animated
     skeleton and independent morph curves, checks numerical pose goldens, and
     renders their prepared caches without introducing retained scene ownership

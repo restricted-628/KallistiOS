@@ -11,7 +11,10 @@ it is a historical index, not evidence that those changes passed tests.
 - Compact draws can prepare up to three directional lights once and route
   their RGB contributions independently to the inside and outside material.
   The vertex callback preserves alpha, UVs, commands and geometry. This
-  change qualifies vertex packets, not the final modifier-volume image.
+  adapter was first qualified at the packet level.
+- Add the routed-lighting example with a host-cooked receiver. Its direct
+  PVR and Compact three-light paths produce identical 64×64 RGB565 images
+  on the tested Flycast per-pixel renderer; hardware timing is unmeasured.
 
 ## 2026-11-27 — KOSdec archive and codec updates
 
