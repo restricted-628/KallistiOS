@@ -17,9 +17,10 @@ linkable, experimental `libSFD.a` and a standalone Dreamcast example. It handles
   synchronization, fibers, seeking or concurrent decoder instances. Normal KOS
   FPU mode is required. IDCT and color conversion preserve caller XMTRX.
 
-The decoder uses a modified, pinned MIT PL_MPEG snapshot; see
-[src/reference/PROVENANCE.md](src/reference/PROVENANCE.md). Original KOSdec
-adapters/math and the diagnostic font accompany it. The parser retains its upstream license and authorship.
+Falco Girgis supplied the original SH4ZAM IDCT directly to Joseph Black, who
+adapted it for libSFD. See [IDCT authorship and kernel selection](IDCT.md).
+The [bundled MPEG decoder snapshot](src/reference/PROVENANCE.md) has separate
+authorship and license notices.
 
 ## Build and use
 
@@ -37,7 +38,7 @@ Installed headers are `<kosdec/sfd.h>` (container extraction),
 `<kosdec/sfd_mpeg.h>` (bounded video decoding), and `<kosdec/sfd_video.h>`
 (RGB565 conversion and diagnostic overlay). Link `-lSFD -lsh4zam -lm`.
 No ADX archive is required. These APIs are experimental and namespaced
-`kosdec_sfd_*`; internal PL_MPEG symbols have a private KOSdec prefix.
+`kosdec_sfd_*`; bundled decoder symbols have a private KOSdec prefix.
 The archive does not initialize sound, video, cache modes or the MMU.
 
 Keep input immutable through return. Callbacks borrow a frame only until they

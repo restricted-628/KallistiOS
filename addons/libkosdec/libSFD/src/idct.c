@@ -1,4 +1,8 @@
-/* Original separable cosine factorization; no vendor decoder code. */
+/* SH-4 IDCT: original implementation supplied by Falco Girgis to Joseph Black.
+ * Copyright (c) 2026 Falco Girgis (original SH4ZAM IDCT)
+ * Copyright (c) 2026 Joseph Black (libSFD adaptation)
+ * This production kernel uses one matrix for the odd terms.
+ */
 #include "idct.h"
 #include <sh4zam/shz_matrix.h>
 

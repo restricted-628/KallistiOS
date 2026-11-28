@@ -1,4 +1,5 @@
-/* Original libSFD IDCT. Private implementation interface. */
+/* Private interface to the SH-4 IDCT. Original transform: Falco Girgis;
+ * libSFD adaptation: Joseph Black. See ../IDCT.md for the two kernels. */
 #ifndef KOSDEC_SFD_PRIVATE_IDCT_H
 #define KOSDEC_SFD_PRIVATE_IDCT_H
 #include <stddef.h>

@@ -1,4 +1,7 @@
-# PL_MPEG test adaptation
+# Bundled MPEG decoder snapshot
+
+This record covers the modified header in this directory. For the SH-4
+transform implemented outside this snapshot, see [IDCT authorship](../../IDCT.md).
 
 Upstream: https://github.com/phoboslab/pl_mpeg
 Commit: c871f2be022ece7ef4f64230b4fb8e1fb9eb6023

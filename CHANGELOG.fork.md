@@ -16,6 +16,8 @@ it is a historical index, not evidence that those changes passed tests.
   source when a partition is detached.
 - libSFD skips the dense transform for zero and DC-only blocks. The alternate
   two-matrix transform is fixture-only; the default dense path is unchanged.
+  The original SH4ZAM IDCT is credited to Falco Girgis and the libSFD
+  adaptation to Joseph Black.
 - Restore Kyle Mayer's copyright notices in the affected libADX and libAHX
   files.
 
@@ -614,7 +616,7 @@ it is a historical index, not evidence that those changes passed tests.
 
 - Preserve the bounded video-only SFD prototype as an independently linkable
   `libSFD.a`, with namespaced C/C++ headers and a standalone OIX/AMX example.
-  Retain the modified MIT PL_MPEG provenance and existing float/SH4ZAM math.
+  Retain the bundled MPEG decoder's MIT notice and the separate SH4ZAM math path.
 - Keep ADX-first addon defaults, shared drivers and dependency pins unchanged.
   No SDK/game assets are bundled. The example owns its cache/MMU lifecycle;
   the library does not change global platform state.
