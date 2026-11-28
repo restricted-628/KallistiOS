@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Optional SH4DER two-volume lighting
+
+- Compact draws can prepare up to three directional lights once and route
+  their RGB contributions independently to the inside and outside material.
+  The vertex callback preserves alpha, UVs, commands and geometry. This
+  change qualifies vertex packets, not the final modifier-volume image.
+
 ## 2026-11-27 — KOSdec archive and codec updates
 
 - libADX reads unencrypted v4 mono/stereo streams with signed initial

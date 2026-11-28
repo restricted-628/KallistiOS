@@ -13,6 +13,17 @@ allocate VRAM, sample the scanout buffer, change fog or manage render targets.
 Applications explicitly link `-lsh4der`; KOS already supplies SH4ZAM.
 There is no new global fast-math policy.
 
+For independently lit Compact material volumes, include
+`<sh4der_kos_routed_lighting.h>` and link `-lsh4der`. Prepare a caller-owned
+plan when the light set or material routing changes. Each mask bit selects
+one of up to three directional lights. For textured packets, each volume
+has a base and an additive offset mask. Color-only packets accept base masks.
+Pass `sh4der_kos_routed_lighting_vertex` and the plan to the admitted
+two-volume draw. Directions and normals must be unit length in the same
+coordinate space. The callback replaces the selected RGB fields and preserves
+their alpha bytes. A zero mask gives black unless the caller supplies ambient.
+The optional ambient pair can be inherited or explicitly overridden inside.
+
 The reusable `<sh4der_kos.h>` adapter binds model-indexed sidecars once and
 composes blade/holo, AO and posed limb shadows through Compact's existing
 callback. See [coverage and contracts](COVERAGE.md) for exact available features

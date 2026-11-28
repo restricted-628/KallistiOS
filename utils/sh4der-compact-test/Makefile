@@ -18,13 +18,22 @@ all: $(TARGET)
 $(TARGET): ../../addons/include/sh4der_kos_uvwarp.h ../../addons/include/sh4der/sh4der_uvwarp.h
 $(TARGET): $(SOURCES) ../../addons/include/sh4der_kos.h ../../addons/include/sh4der_kos_geometry.h ../../examples/dreamcast/pvr/sh4der_compact/effects.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
-test: $(TARGET)
+test: $(TARGET) routed-test
 	./$(TARGET)
 	./$(TARGET) --cook-foot > cooked-foot.actual.h
 	cmp cooked-foot.h cooked-foot.actual.h
+.PHONY: routed-test
+routed-test: routed-lighting-test
+	./routed-lighting-test
+
+ROUTED_SOURCES = routed-lighting-test.c ../../addons/libsh4der/kos/routed_lighting.c
+routed-lighting-test: $(ROUTED_SOURCES) ../../addons/include/sh4der_kos_routed_lighting.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(ROUTED_SOURCES) -lm -o $@
+
 dreamcast:
+	kos-cc routed-lighting-test.c -lsh4der -lm -o routed-lighting-test.elf
 	kos-cc native.c -lsh4der -o sh4der-compact-test.elf
 	kos-cc foot-native.c -lsh4der -o sh4der-foot-test.elf
 clean:
-	$(RM) $(TARGET) cooked-foot.actual.h sh4der-compact-test.elf sh4der-foot-test.elf
+	$(RM) $(TARGET) routed-lighting-test routed-lighting-test.elf cooked-foot.actual.h sh4der-compact-test.elf sh4der-foot-test.elf
 include ../Makefile.sh4zam-state

@@ -784,6 +784,11 @@ alongside the earlier screen and pose effects. See `addons/libsh4der/COVERAGE.md
 for the binding sequence and evidence limits. The renderer ownership rule and
 six-entry strip partition default are unchanged.
 
+**Accepted two-volume adapter:** The optional SH4DER addon owns lighting
+policy; Compact retains projection and submission. Prepare a caller-owned
+plan for the admitted vertex format and pass it to the existing two-volume
+callback. Offset routes require textured packets. No new scene or cache ABI.
+
 **Accepted Compact slice:** `sh4der_kos_bind` admits indexed sidecar extent once;
 `sh4der_kos_vertex` composes blade/holo, AO and prepared limb shadows with an
 optional existing lighting callback. The caller retains model/frame/storage

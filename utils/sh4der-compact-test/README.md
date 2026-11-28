@@ -19,3 +19,9 @@ moved foot moves the shadow. Source and reader retirement precede release.
 CHECKs survive NDEBUG; errors shut PVR down before resource abandonment.
 Flycast readback requires RenderToTextureBuffer=yes. This proves native emulator
 execution, not physical-hardware visibility or performance.
+
+
+`make routed-test` checks the prepared two-volume callback against complete
+PCM and TPCM packets. It covers disjoint and overlapping masks, signed light
+gain, thin surfaces, sparse active lanes, ambient inheritance and failed-plan
+replacement. The Dreamcast build links the same test with the addon archive.
