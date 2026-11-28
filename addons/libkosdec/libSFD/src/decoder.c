@@ -83,10 +83,21 @@ static void media_mpeg_transform(float *values) {
             media_mpeg_fail(KOSDEC_SFD_MPEG_COEFFICIENT);
         if(values[i]) { ++nonzero; if(i) ++ac; }
     }
-    if(!nonzero) ++active->stats.zero_blocks;
-    else if(!ac) ++active->stats.dc_blocks;
-    else ++active->stats.general_blocks;
-    if(kosdec_sfd_private_idct_batch_f32(values, residual, 1)) media_mpeg_fail(KOSDEC_SFD_MPEG_COEFFICIENT);
+    enum kosdec_sfd_idct_class kind;
+    if(!nonzero) {
+        ++active->stats.zero_blocks;
+        kind = KOSDEC_SFD_IDCT_ZERO;
+    }
+    else if(!ac) {
+        ++active->stats.dc_blocks;
+        kind = KOSDEC_SFD_IDCT_DC;
+    }
+    else {
+        ++active->stats.general_blocks;
+        kind = KOSDEC_SFD_IDCT_DENSE;
+    }
+    if(kosdec_sfd_private_idct_block_f32(values, residual, kind))
+        media_mpeg_fail(KOSDEC_SFD_MPEG_COEFFICIENT);
     if(active->block) {
         /* Legacy diagnostic callback only. Normal video never creates this
            integer copy; reconstruction consumes the float residuals below. */

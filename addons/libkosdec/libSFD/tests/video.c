@@ -14,6 +14,7 @@ KOS_INIT_FLAGS(INIT_DEFAULT);
 static unsigned failures;
 #define REQUIRE(x) do { if(!(x)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #x); ++failures; } } while(0)
 #ifndef MEDIA_COLOR_ONLY
+#include "../src/idct.h"
 static uint8_t *load(const char *dir, const char *name, size_t *size) {
     char path[1024];
     if(snprintf(path, sizeof(path), "%s/%s", dir, name) >= (int)sizeof(path)) return NULL;
@@ -163,6 +164,40 @@ static void numeric_tests(void) {
     printf("KOSDEC_SFD_NUMERIC dequant_cases=%u DC=261632 pair=65536 nested=16777216 four_sum=1021 failures=%u\n", cases, failures);
 }
 struct frames { FILE *reference; const char *dir; size_t count; double sum; unsigned max; uint64_t hash; };
+static void check_classified_idct(void) {
+    float coefficients[64] = {0}, dense[64], actual[64];
+    shz_mat4x4_t seed, after;
+    for(unsigned i = 0; i < 16; ++i)
+        seed.elem[i] = i == 5 ? -0.0f : (float)i * 0.5f;
+    for(int value = -2048; value <= 2047; ++value) {
+        coefficients[0] = (float)value;
+        REQUIRE(kosdec_sfd_private_idct_batch_f32(coefficients, dense, 1) == 0);
+        shz_xmtrx_load_4x4(&seed);
+        REQUIRE(kosdec_sfd_private_idct_block_f32(coefficients, actual, KOSDEC_SFD_IDCT_DC) == 0);
+        shz_xmtrx_store_4x4(&after);
+        REQUIRE(!memcmp(dense, actual, sizeof(actual)) && !memcmp(&after, &seed, sizeof(seed)));
+        kosdec_sfd_private_idct_dual_f32(coefficients, actual);
+        shz_xmtrx_store_4x4(&after);
+        REQUIRE(!memcmp(dense, actual, sizeof(actual)) && !memcmp(&after, &seed, sizeof(seed)));
+    }
+    for(unsigned i = 0; i < 64; ++i)
+        coefficients[i] = i & 1 ? -0.0f : 0.0f;
+    REQUIRE(kosdec_sfd_private_idct_batch_f32(coefficients, dense, 1) == 0);
+    REQUIRE(kosdec_sfd_private_idct_block_f32(coefficients, actual, KOSDEC_SFD_IDCT_ZERO) == 0);
+    REQUIRE(!memcmp(dense, actual, sizeof(actual)));
+    REQUIRE(kosdec_sfd_private_idct_block_f32(coefficients, actual,
+                                             (enum kosdec_sfd_idct_class)3) < 0);
+    REQUIRE(!memcmp(dense, actual, sizeof(actual)));
+
+    for(unsigned i = 0; i < 64; ++i)
+        coefficients[i] = (float)((int)((i * 37) % 257) - 128);
+    REQUIRE(kosdec_sfd_private_idct_batch_f32(coefficients, dense, 1) == 0);
+    kosdec_sfd_private_idct_dual_f32(coefficients, actual);
+    shz_xmtrx_store_4x4(&after);
+    REQUIRE(!memcmp(&after, &seed, sizeof(seed)));
+    for(unsigned i = 0; i < 64; ++i)
+        REQUIRE(fabsf(dense[i] - actual[i]) <= 1.0f);
+}
 static int stop_frame(const uint8_t *p, size_t i, void *u) {
     (void)p; (void)i; (void)u; return 1;
 }
@@ -203,6 +238,7 @@ int main(int argc, char **argv) {
     check_conversion();
     exhaustive_color();
     numeric_tests();
+    check_classified_idct();
     size_t n = 0, oracle_size = 0;
     uint8_t *input = load(argv[1], "movie.sfd", &n);
     uint8_t *oracle = load(argv[1], "oracle.m1v", &oracle_size);

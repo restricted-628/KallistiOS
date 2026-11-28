@@ -33,8 +33,8 @@ install: sh4
 $(BUILD)/host/shz.o: $(SHZ_SOURCE)
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_FLAGS) -Wno-newline-eof -c $< -o $@
-$(BUILD)/host/video: tests/video.c $(SOURCES) $(HEADERS) $(BUILD)/host/shz.o
-	$(HOST_CC) $(HOST_FLAGS) -DMEDIA_MPEG_NUMERIC_TEST tests/video.c $(SOURCES) $(BUILD)/host/shz.o -lm -pthread -o $@
+$(BUILD)/host/video: tests/video.c $(SOURCES) src/idct_dual.c $(HEADERS) $(BUILD)/host/shz.o Makefile
+	$(HOST_CC) $(HOST_FLAGS) -DMEDIA_MPEG_NUMERIC_TEST tests/video.c $(SOURCES) src/idct_dual.c $(BUILD)/host/shz.o -lm -pthread -o $@
 $(BUILD)/host/color: tests/video.c src/convert.c $(HEADERS) $(BUILD)/host/shz.o
 	$(HOST_CC) $(HOST_FLAGS) -DMEDIA_COLOR_ONLY tests/video.c src/convert.c $(BUILD)/host/shz.o -lm -pthread -o $@
 test: $(BUILD)/host/color

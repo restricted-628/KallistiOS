@@ -34,6 +34,11 @@ static inline void transform(const float *a, size_t stride, float out[8]) {
     out[4] = p - r - odd.w;
 }
 
+static inline float round_float_residual(float biased) {
+    float rounded = shz_truncf(biased);
+    return rounded == 0.0f ? 0.0f : rounded;
+}
+
 /* Constant output selection is specialized into each public entry. */
 SHZ_FORCE_INLINE int idct_batch(const float *coeff, void *residual,
                                 size_t count, int float_output) {
@@ -58,10 +63,8 @@ SHZ_FORCE_INLINE int idct_batch(const float *coeff, void *residual,
                    is not mathematical nearest rounding at every half edge. */
                 float biased = value + (value < 0.0f ? -0.5f : 0.5f);
                 size_t index = block * 64 + y * 8 + x;
-                if(float_output) {
-                    float rounded = shz_truncf(biased);
-                    ((float *)residual)[index] = rounded == 0.0f ? 0.0f : rounded;
-                }
+                if(float_output)
+                    ((float *)residual)[index] = round_float_residual(biased);
                 else
                     ((int16_t *)residual)[index] = (int16_t)biased;
             }
@@ -77,4 +80,24 @@ int kosdec_sfd_private_idct_batch(const float *coeff, int16_t *residual, size_t 
 
 int kosdec_sfd_private_idct_batch_f32(const float *coeff, float *residual, size_t count) {
     return idct_batch(coeff, residual, count, 1);
+}
+
+int kosdec_sfd_private_idct_block_f32(const float *coeff, float *residual,
+                                     enum kosdec_sfd_idct_class kind) {
+    if(!coeff || !residual || (unsigned)kind > KOSDEC_SFD_IDCT_DENSE)
+        return -1;
+    if(kind == KOSDEC_SFD_IDCT_DENSE)
+        return kosdec_sfd_private_idct_batch_f32(coeff, residual, 1);
+
+    /* Both passes have a constant DC basis. The validated coefficient
+       domain makes this scale exact, with the same bias and truncation
+       as the dense path. Neither shortcut needs matrix state. */
+    float sample = 0.0f;
+    if(kind == KOSDEC_SFD_IDCT_DC) {
+        float value = coeff[0] * 0.125f;
+        sample = round_float_residual(value + (value < 0.0f ? -0.5f : 0.5f));
+    }
+    for(unsigned i = 0; i < 64; ++i)
+        residual[i] = sample;
+    return 0;
 }
