@@ -8,6 +8,11 @@ LDLIBS += -lm
 CPPFLAGS += -isystem ../../addons/include
 
 TARGET = pvr-chunk-skin-test
+SEAM_TARGET = pvr-chunk-joint-seam-test
+SEAM_SOURCE = ../../examples/dreamcast/pvr/chunk_joint_seam/chunk-joint-seam.c
+SEAM_SOURCES = $(SEAM_SOURCE) \
+	$(filter %/pvr_chunk_model.c %/pvr_chunk_skin.c %/pvr_deform.c \
+	         %/pvr_lighting.c %/matrix_compose.c,$(SOURCES))
 SOURCES = pvr-chunk-skin-test.c \
 	../pvr-model-convert/pvr-scene-ir.c \
 	../pvr-model-convert/pvr-skeleton-ir.c \
@@ -25,13 +30,18 @@ SOURCES = pvr-chunk-skin-test.c \
 
 .PHONY: all clean test
 
-all: $(TARGET)
+all: $(TARGET) $(SEAM_TARGET)
 
 $(TARGET): $(SOURCES)
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
 
-test: $(TARGET)
+$(SEAM_TARGET): $(SEAM_SOURCES)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -DCHUNK_JOINT_SEAM_HOST $(SEAM_SOURCES) $(LDLIBS) -o $@
+
+test: $(TARGET) $(SEAM_TARGET)
 	./$(TARGET)
+	./$(SEAM_TARGET)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(SEAM_TARGET)
+	rm -rf $(SEAM_TARGET).dSYM

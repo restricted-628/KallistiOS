@@ -6,6 +6,12 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Compact joint seam example
+
+- Bind pairs of vertices across two skinned meshes and copy their posed
+  positions before drawing. The example tests seven elbow poses without
+  changing either mesh's normals or UVs.
+
 ## 2026-11-27 — Optional SH4DER two-volume lighting
 
 - Compact draws can prepare up to three directional lights once and route

@@ -177,6 +177,8 @@ This page serves as an index for all KallistiOS examples.
   - [**chunk_scene**](pvr/chunk_scene/): Compiles two models with an animated
     skeleton and independent morph curves, checks numerical pose goldens, and
     renders their prepared caches without introducing retained scene ownership
+  - [**chunk_joint_seam**](pvr/chunk_joint_seam/): Keeps two posed meshes joined
+    at selected vertices while retaining each mesh's normals and UVs.
   - [**chunk_skin**](pvr/chunk_skin/): Binds explicit normalized joint
     influences, builds a reusable canonical source, and renders a moving
     deformed pose through constant-time model-index lookup
