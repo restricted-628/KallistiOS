@@ -159,6 +159,7 @@ This page serves as an index for all KallistiOS examples.
     into PCA1, then materializes, animates, priority-sorts, and routes one
     resolved cell sprite across opaque, punch-through, and translucent lists
   - cheap_shadow
+  - [**chunk_spotlight**](pvr/chunk_spotlight/): Moves a prepared cone light across a host-cooked room and checks its falloff in RGB565.
   - [**chunk_asset**](pvr/chunk_asset/): Generates a versioned compact-model
     asset, cooperatively decodes LZ4 through an opt-in service, destroys that
     service, and renders through caller-owned deformation and residency

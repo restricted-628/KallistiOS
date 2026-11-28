@@ -98,3 +98,12 @@ larger personal/commercial products does not remove those conditions.
 Preserve credits for Jilted Valkyrie (SH4DER-PVR and SH4DOW-DC),
 and Falco Girgis and contributors (SH4ZAM, separately MIT licensed). This
 adapter does not relicense any dependency under KOS's license.
+
+## Cone spotlight for an ordinary Compact cache
+
+Include `<sh4der_kos_spotlight.h>` and link the optional addon with `-lsh4der`.
+Prepare the lamp when its pose, color, cone or attenuation changes. Supply the
+plan and `sh4der_kos_spotlight_vertex` to `pvr_chunk_model_cache_draw_emit`.
+Distance and angular falloff modulate authored base RGB. The callback uses the
+resolved position and normal in the light's space, and preserves all other
+packet fields. See the [moving room example](../../examples/dreamcast/pvr/chunk_spotlight/).

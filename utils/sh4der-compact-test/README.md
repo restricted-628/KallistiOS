@@ -25,3 +25,8 @@ execution, not physical-hardware visibility or performance.
 PCM and TPCM packets. It covers disjoint and overlapping masks, signed light
 gain, thin surfaces, sparse active lanes, ambient inheritance and failed-plan
 replacement. The Dreamcast build links the same test with the addon archive.
+
+`make spotlight-test` checks the ordinary Compact spotlight against a
+double-precision cone and attenuation reference, including the apex, range,
+backface, tint and packet preservation. `make dreamcast` also links the
+same fixture as `spotlight-oracle.elf`.

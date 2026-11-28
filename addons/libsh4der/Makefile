@@ -16,8 +16,12 @@ endif
 KOS_CFLAGS += -Iupstream/include
 KOS_CFLAGS += -DSHZ_TLS_MODEL=SHZ_TLS_IMPLICIT
 
-OBJS += .build/world.o .build/routed_lighting.o
+OBJS += .build/world.o .build/routed_lighting.o .build/spotlight.o
 $(OBJS): Makefile $(wildcard upstream/include/*.h)
+
+.build/spotlight.o: kos/spotlight.c ../include/sh4der_kos_spotlight.h
+	@mkdir -p $(@D)
+	kos-cc $(CFLAGS) $(CPPFLAGS) -MD -MP -c $< -o $@
 
 .build/routed_lighting.o: kos/routed_lighting.c ../include/sh4der_kos_routed_lighting.h
 	@mkdir -p $(@D)

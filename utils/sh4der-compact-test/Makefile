@@ -18,7 +18,7 @@ all: $(TARGET)
 $(TARGET): ../../addons/include/sh4der_kos_uvwarp.h ../../addons/include/sh4der/sh4der_uvwarp.h
 $(TARGET): $(SOURCES) ../../addons/include/sh4der_kos.h ../../addons/include/sh4der_kos_geometry.h ../../examples/dreamcast/pvr/sh4der_compact/effects.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(SOURCES) $(LDLIBS) -o $@
-test: $(TARGET) routed-test
+test: $(TARGET) routed-test spotlight-test
 	./$(TARGET)
 	./$(TARGET) --cook-foot > cooked-foot.actual.h
 	cmp cooked-foot.h cooked-foot.actual.h
@@ -30,10 +30,19 @@ ROUTED_SOURCES = routed-lighting-test.c ../../addons/libsh4der/kos/routed_lighti
 routed-lighting-test: $(ROUTED_SOURCES) ../../addons/include/sh4der_kos_routed_lighting.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(ROUTED_SOURCES) -lm -o $@
 
+.PHONY: spotlight-test
+spotlight-test: spotlight-oracle
+	./spotlight-oracle
+
+SPOT_SOURCES = spotlight-test.c ../../addons/libsh4der/kos/spotlight.c
+spotlight-oracle: $(SPOT_SOURCES) ../../addons/include/sh4der_kos_spotlight.h
+	$(CC) $(CFLAGS) $(CPPFLAGS) $(SPOT_SOURCES) -lm -o $@
+
 dreamcast:
+	kos-cc spotlight-test.c -lsh4der -lm -o spotlight-oracle.elf
 	kos-cc routed-lighting-test.c -lsh4der -lm -o routed-lighting-test.elf
 	kos-cc native.c -lsh4der -o sh4der-compact-test.elf
 	kos-cc foot-native.c -lsh4der -o sh4der-foot-test.elf
 clean:
-	$(RM) $(TARGET) routed-lighting-test routed-lighting-test.elf cooked-foot.actual.h sh4der-compact-test.elf sh4der-foot-test.elf
+	$(RM) $(TARGET) spotlight-oracle spotlight-oracle.elf routed-lighting-test routed-lighting-test.elf cooked-foot.actual.h sh4der-compact-test.elf sh4der-foot-test.elf
 include ../Makefile.sh4zam-state

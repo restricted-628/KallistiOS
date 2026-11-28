@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Optional SH4DER cone spotlight
+
+- Light ordinary Compact vertices with a prepared cone, finite range and
+  distance attenuation. The callback multiplies base RGB and leaves alpha,
+  offset color, UVs and geometry intact. The moving-room example checks
+  falloff, backfaces and invariance under a rigid change of coordinates.
+
 ## 2026-11-27 — Compact joint seam example
 
 - Bind pairs of vertices across two skinned meshes and copy their posed

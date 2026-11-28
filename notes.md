@@ -784,6 +784,11 @@ alongside the earlier screen and pose effects. See `addons/libsh4der/COVERAGE.md
 for the binding sequence and evidence limits. The renderer ownership rule and
 six-entry strip partition default are unchanged.
 
+**Accepted cone spotlight:** The optional SH4DER addon uses the ordinary
+Compact prepare callback for one caller-owned light. Resolved positions,
+normals and the lamp share a coordinate space before projection. Existing
+point and directional light layouts and the core draw path stay unchanged.
+
 **Accepted two-volume adapter:** The optional SH4DER addon owns lighting
 policy; Compact retains projection and submission. Prepare a caller-owned
 plan for the admitted vertex format and pass it to the existing two-volume
