@@ -3,7 +3,8 @@ TARGET = .build/libfiber_sh4zam.a
 SOURCES = fiber fiber_sync fiber_service fiber_context fiber_switch
 OBJS = $(addprefix .build/,$(addsuffix .o,$(SOURCES)))
 PROBES = fiber-context-probe fiber fiber-sync fiber-math fiber-teardown \
-         fiber-service-probe fiber-service-sync fiber-service-queue
+         fiber-service-probe fiber-service-sync fiber-service-queue \
+         fiber-service-lifecycle
 ELFS = $(addprefix .build/,$(addsuffix .elf,$(PROBES)))
 ADDON_ROOT := $(abspath .)
 SH4ZAM_ROOT ?= $(KOS_BASE)/addons/libsh4zam/upstream
@@ -45,6 +46,7 @@ PROVIDER = -Wl,--whole-archive $(TARGET) -Wl,--no-whole-archive
 	kos-cc -Wl,-Map,$@.map -o $@ $< $(EXTRA_OBJS) $(PROVIDER) $(EXTRA_LDFLAGS)
 .build/fiber-service-probe.elf: EXTRA_OBJS = .build/test-fiber-service-math.o
 .build/fiber-service-probe.elf: .build/test-fiber-service-math.o
+.build/fiber-service-lifecycle.elf: EXTRA_LDFLAGS = -Wl,--wrap=thd_create_ex,--wrap=fiber_create,--wrap=fiber_destroy,--wrap=_fiber_cancel_wait
 .build/fiber-teardown.elf: EXTRA_LDFLAGS = -Wl,--wrap=calloc,--wrap=aligned_alloc,--wrap=free
 
 clean:
