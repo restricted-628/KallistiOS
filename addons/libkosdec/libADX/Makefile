@@ -231,9 +231,9 @@ $(BUILD)/host-test/profiles: tests/profiles.c tests/profile_vectors.h $(BUILD)/h
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
 $(BUILD)/sanitize/profiles: tests/profiles.c tests/profile_vectors.h $(BUILD)/sanitize/libADX-test.a include/kosdec/adx.h
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
-$(BUILD)/host-test/loop_metadata: tests/loop_metadata.c tests/profile_vectors.h $(BUILD)/host-test/libADX-test.a include/kosdec/adx.h
+$(BUILD)/host-test/loop_metadata: tests/loop_metadata.c tests/stream_fixture.h tests/profile_vectors.h $(BUILD)/host-test/libADX-test.a include/kosdec/adx.h
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
-$(BUILD)/sanitize/loop_metadata: tests/loop_metadata.c tests/profile_vectors.h $(BUILD)/sanitize/libADX-test.a include/kosdec/adx.h
+$(BUILD)/sanitize/loop_metadata: tests/loop_metadata.c tests/stream_fixture.h tests/profile_vectors.h $(BUILD)/sanitize/libADX-test.a include/kosdec/adx.h
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
 
 # Explicit destination avoids accidentally modifying another checkout's SDK.
@@ -305,10 +305,10 @@ clean:
 
 -include $(SH_OBJS:.o=.d) $(HOST_OBJS:.o=.d) $(SAN_OBJS:.o=.d)
 
-$(BUILD)/host-test/memory: tests/memory.c tests/memory_vectors.h tests/profile_vectors.h $(BUILD)/host-test/libADX-test.a $(HEADERS)
+$(BUILD)/host-test/memory: tests/memory.c tests/stream_fixture.h tests/memory_vectors.h tests/profile_vectors.h $(BUILD)/host-test/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(HOST_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/host-test/libADX-test.a -lm -o $@
 
-$(BUILD)/sanitize/memory: tests/memory.c tests/memory_vectors.h tests/profile_vectors.h $(BUILD)/sanitize/libADX-test.a $(HEADERS)
+$(BUILD)/sanitize/memory: tests/memory.c tests/stream_fixture.h tests/memory_vectors.h tests/profile_vectors.h $(BUILD)/sanitize/libADX-test.a $(HEADERS)
 	$(HOST_CC) $(SAN_CFLAGS) $(STRICT) -Iinclude $< $(BUILD)/sanitize/libADX-test.a -lm -o $@
 
 $(BUILD)/host-test/stream: tests/stream.c tests/stream_fixture.h tests/memory_vectors.h tests/profile_vectors.h $(BUILD)/host-test/libADX-test.a $(HEADERS)

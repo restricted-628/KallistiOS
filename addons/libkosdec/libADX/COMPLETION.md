@@ -138,7 +138,8 @@ C1. Freeze the exact encoding/block/channel/version/header/history/loop/endcode
 combinations accepted by the baseline decoder, then implement or document each
 baseline rejection with tests. Current admission is encoding 3, 18-byte/4-bit,
 mono/stereo v3/v5, zero extensions or the documented supported v3 loop layout
-with 0..31 inserted leading frames. The strict path uses a block-aligned
+with 0..31 inserted leading frames. The optional unencrypted v4 profile in
+[FORMATS.md](FORMATS.md) extends compatibility beyond the baseline fixture set. The strict path uses a block-aligned
 encoded start. Memory jobs support independent logical sample positions and
 whole-group byte offsets. Sector jobs accept a subsector raw start when its
 sector floor points to the corresponding compressed group. Nonaligned

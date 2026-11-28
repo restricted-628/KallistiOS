@@ -32,8 +32,8 @@ release scope.
   and the retained stereo live-gain composition. Checked ordinary playback
   has separate evidence.
 - Use [FORMATS.md](FORMATS.md) and [COEFFICIENTS.md](COEFFICIENTS.md) for the
-  admitted decoder domain, arithmetic evidence and remaining format limits.
-  Version 4 looping remains unsupported.
+  admitted decoder domain, including the unencrypted v4 mono/stereo loop
+  extension beyond the baseline fixture set.
 - Filename admission checks raw length against KOS `PATH_MAX` before allocation or provider access.
 - Stock KOS integration and ADX encoding/conversion are outside this release.
   AFS archive packing is available in [libAFS](../libAFS/README.md); SFD and AHX

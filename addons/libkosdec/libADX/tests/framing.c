@@ -102,7 +102,12 @@ static void framing_tests(void) {
     /* Admission and footer policy are deliberately narrow and fail sticky. */
     const unsigned bad_offsets[] = {0,2,4,5,6,7,8,18,19,20,287};
     for(unsigned i = 0; i < sizeof(bad_offsets) / sizeof(bad_offsets[0]); ++i) {
-        n = synthetic(data, 1); data[bad_offsets[i]] ^= 1;
+        n = synthetic(data, 1);
+        unsigned offset = bad_offsets[i];
+        if(offset == 18)
+            data[offset] = 6; /* Unsupported version; 4 now has its own valid layout. */
+        else
+            data[offset] ^= 1;
         enum kosdec_adx_status s = small_decode(data, n, 17, &d, actual);
         CHECK(s == KOSDEC_ADX_UNSUPPORTED || s == KOSDEC_ADX_INVALID);
         CHECK(!d.frames_done);

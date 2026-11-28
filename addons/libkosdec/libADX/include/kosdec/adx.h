@@ -17,7 +17,7 @@ enum kosdec_adx_status {
     KOSDEC_ADX_CANCELLED, KOSDEC_ADX_BAD_ARGUMENT, KOSDEC_ADX_IO_ERROR,
     KOSDEC_ADX_NOT_FOUND
 };
-/* Validated v3 loop metadata. The incremental codec always decodes once through
+/* Validated v3/v4 loop metadata. The incremental codec always decodes once through
    the file; this information does not enable automatic looping. End is exclusive.
    Byte offsets are absolute from file start. end_byte follows the block group
    containing the last loop sample, and may include compressed sample padding. */
@@ -42,7 +42,7 @@ struct kosdec_adx_decoder {
     enum kosdec_adx_status terminal;
     int16_t coefficient[2], history[2][2];
     struct kosdec_adx_loop loop;
-    uint8_t header[20], extension[24], footer_length[2], block[36];
+    uint8_t header[20], extension[36], footer_length[2], block[36];
     kosdec_adx_pcm_filter filter;
     void *filter_context;
 };
@@ -94,11 +94,13 @@ enum kosdec_adx_status kosdec_adx_probe_endcode(const uint8_t *, size_t,
 enum kosdec_adx_status kosdec_adx_make_sfa_header(uint8_t *, size_t,
     unsigned channels, uint32_t sample_rate, uint32_t total_frames);
 /* Initialize/reinitialize caller-owned state. No allocation or implicit I/O.
-   Profiles: v3/v5, encoding3/block18/4-bit, mono/stereo; integer rate1..48000Hz,
+   Profiles: v3/v4/v5, encoding3/block18/4-bit, mono/stereo; integer rate1..48000Hz,
    cutoff0..floor(rate/2) (above44.1k is an extension),
    26..65539-byte header and 18..65539-byte zero-padded end record.
-   Extensions: zero padding, or v3 insertion0..31/count1/type1 loop with block-aligned
-   start and consistent offsets. Other extensions/coefficient domains unsupported.
+   Extensions: zero padding and an optional v3/v4 insertion0..31/count1/type1 loop
+   with block-aligned start and consistent offsets. v4 includes its signed
+   initial predictor histories before the loop fields. Other extensions and
+   coefficient domains are unsupported. Rebuild callers that embed the decoder.
    Metadata (total_frames/header_bytes/sample_rate/cutoff/channels/version/loop)
    is valid only after header_ready. Fields remain implementation-owned. */
 void kosdec_adx_init(struct kosdec_adx_decoder *decoder);

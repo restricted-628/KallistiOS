@@ -6,26 +6,9 @@
 #include "profile_vectors.h"
 static unsigned failures, cases;
 #define CHECK(x) do { if(!(x)) { ++failures; printf("LOOP_META_FAIL line=%u\n", (unsigned)__LINE__); } } while(0)
-static void put32(uint8_t *p, uint32_t n) {
-    for(unsigned i=0;i<4;++i) p[i]=(uint8_t)(n>>(24-i*8));
-}
-static uint8_t *make_stream(unsigned hdr,unsigned tail,unsigned ch,unsigned start,unsigned end,size_t *size) {
-    *size=hdr+3*18*ch+tail;
-    uint8_t *p=calloc(*size+1,1); if(!p) exit(2);
-    p[0]=0x80; p[2]=(uint8_t)((hdr-4)>>8); p[3]=(uint8_t)(hdr-4);
-    p[4]=3;p[5]=18;p[6]=4;p[7]=(uint8_t)ch;put32(p+8,44100);put32(p+12,65);
-    p[16]=1;p[17]=0xf4;p[18]=3;
-    put32(p+20,1);put32(p+24,1);put32(p+28,start);
-    put32(p+32,hdr+start/32*18*ch);put32(p+36,end);put32(p+40,hdr+(end+31)/32*18*ch);
-    memcpy(p+hdr-6,"(c)CRI",6);
-    for(unsigned g=0;g<3;++g) for(unsigned c=0;c<ch;++c) {
-        uint8_t *b=p+hdr+(g*ch+c)*18;b[1]=(uint8_t)(c+1);
-        for(unsigned i=2;i<18;++i)b[i]=(uint8_t)(i*7+g*3+c*19);
-    }
-    uint8_t *f=p+*size-tail;f[0]=0x80;f[1]=1;f[2]=(uint8_t)((tail-4)>>8);f[3]=(uint8_t)(tail-4);
-    return p;
-}
+#include "stream_fixture.h"
 static enum kosdec_adx_status run(const uint8_t *p,size_t n,size_t fragment,struct kosdec_adx_decoder *d) {
+    const int16_t (*expected)[65] = n > 0x18 && p[18] == 4 && p[0x18] ? v4_golden : golden;
     kosdec_adx_init(d);size_t at=0;
     for(size_t calls=0;calls<n+256;++calls) {
         size_t bytes=n-at;if(bytes>fragment)bytes=fragment;
@@ -34,20 +17,70 @@ static enum kosdec_adx_status run(const uint8_t *p,size_t n,size_t fragment,stru
         struct kosdec_adx_result r=kosdec_adx_decode(d,p+at,bytes,out,32,at+bytes==n);
         CHECK(r.consumed<=bytes && r.consumed<=512 && r.frames<=32);at+=r.consumed;
         for(unsigned i=0;i<r.frames;++i)for(unsigned c=0;c<d->channels;++c)
-            CHECK(out[i*d->channels+c]==golden[c][before+i]);
+            CHECK(out[i*d->channels+c]==expected[c][before+i]);
         for(size_t i=r.frames*d->channels;i<66;++i)CHECK(out[i]==0x5a5a);
         if(r.status>=KOSDEC_ADX_DONE)return r.status;
         if(!r.consumed&&!r.frames){CHECK(0);return r.status;}
     }
     CHECK(0);return KOSDEC_ADX_INVALID;
 }
+static void check_v4(void) {
+    struct kosdec_adx_decoder d;
+    struct kosdec_adx_info info;
+    for(unsigned channels=1;channels<=2;++channels) {
+        for(unsigned header=38;header<=64;header+=26) {
+            bool loop=header==64;
+            size_t bytes;
+            uint8_t *data=stream_version(4,header,18,channels,32,loop?61:32,&bytes);
+            put32(data+0x18,0x0140ff4c);
+            if(channels==2) put32(data+0x1c,0xfda602c0);
+            for(unsigned i=0;i<header;++i)
+                CHECK(kosdec_adx_probe_header(data,i,&info)==KOSDEC_ADX_NEED_INPUT);
+            CHECK(kosdec_adx_probe_header(data,header,&info)==KOSDEC_ADX_DONE);
+            CHECK(info.version==4 && info.channels==channels && info.header_bytes==header);
+            CHECK(info.loop.present==loop && !info.inserted_frames);
+            if(loop) {
+                CHECK(info.loop.start_frame==32 && info.loop.end_frame==61);
+                CHECK(info.loop.start_byte==header+18*channels && info.loop.end_byte==header+36*channels);
+                data[0x21]=16;  /* Encoded insertion count, separate from v4 histories. */
+                CHECK(kosdec_adx_probe_header(data,header,&info)==KOSDEC_ADX_DONE && info.inserted_frames==16);
+                put32(data+0x2c,header+1);
+                CHECK(run(data,bytes,7,&d)==KOSDEC_ADX_INVALID && !d.header_ready && !d.history[0][0]);
+                put32(data+0x2c,header+18*channels);
+                put32(data+0x34,header+36*channels+1);
+                CHECK(run(data,bytes,7,&d)==KOSDEC_ADX_INVALID && !d.header_ready);
+                put32(data+0x34,header+36*channels);
+            }
+            CHECK(run(data,bytes,1,&d)==KOSDEC_ADX_DONE && d.frames_done==65);
+            data[19]=8;
+            CHECK(run(data,bytes,7,&d)==KOSDEC_ADX_UNSUPPORTED && !d.header_ready);
+            data[19]=9;
+            CHECK(run(data,bytes,7,&d)==KOSDEC_ADX_UNSUPPORTED && !d.header_ready);
+            data[19]=0;
+            data[0x14]=1;
+            CHECK(run(data,bytes,7,&d)==KOSDEC_ADX_UNSUPPORTED && !d.header_ready);
+            data[0x14]=0;
+            if(!loop) {
+                data[3]=(uint8_t)(header-5);
+                CHECK(run(data,bytes,7,&d)==KOSDEC_ADX_INVALID && !d.header_ready);
+            } else {
+                data[3]=54; /* 58-byte data start leaves the end offset outside the extension. */
+                memcpy(data+52,"(c)CRI",6);
+                CHECK(run(data,bytes,7,&d)==KOSDEC_ADX_UNSUPPORTED && !d.header_ready);
+            }
+            ++cases;
+            free(data);
+        }
+    }
+}
 int main(void) {
+    check_v4();
     const unsigned headers[]={50,1360,2048,65539},tails[]={18,332,564,1724,65539},fragments[]={1,37,512,8192};
     struct kosdec_adx_decoder d;
     for(unsigned h=0;h<4;++h)for(unsigned t=0;t<5;++t)for(unsigned ch=1;ch<=2;++ch)
     for(unsigned variant=0;variant<3;++variant) {
         unsigned start=variant?32:0,end=variant==2?65:61;size_t n;
-        uint8_t *p=make_stream(headers[h],tails[t],ch,start,end,&n);
+        uint8_t *p=stream(headers[h],tails[t],ch,start,end,&n);
         for(unsigned f=0;f<4;++f) {
             ++cases;CHECK(run(p,n,fragments[f],&d)==KOSDEC_ADX_DONE);
             CHECK(d.loop.present && d.loop.start_frame==start && d.loop.end_frame==end);
@@ -57,7 +90,7 @@ int main(void) {
         }
         free(p);
     }
-    size_t n;uint8_t *p=make_stream(50,18,2,32,61,&n);
+    size_t n;uint8_t *p=stream(50,18,2,32,61,&n);
     /* Every truncated prefix, including all loop fields. */
     for(size_t end=0;end<n;++end)CHECK(run(p,end,7,&d)==KOSDEC_ADX_TRUNCATED);
     const struct {unsigned offset;uint32_t value;enum kosdec_adx_status status;} bad[]={
@@ -75,7 +108,7 @@ int main(void) {
     CHECK(run(p,n+1,7,&d)==KOSDEC_ADX_INVALID);
     p[n-15]=13;CHECK(run(p,n,7,&d)==KOSDEC_ADX_UNSUPPORTED);free(p);
     /* Large footer budget plus cancellation must not consume another byte. */
-    p=make_stream(50,65539,1,0,61,&n);kosdec_adx_init(&d);size_t at=0;
+    p=stream(50,65539,1,0,61,&n);kosdec_adx_init(&d);size_t at=0;
     while(d.frames_done<65) {
         int16_t pcm[32];struct kosdec_adx_result r=kosdec_adx_decode(&d,p+at,n-at,pcm,32,true);
         CHECK(r.status==KOSDEC_ADX_MORE);at+=r.consumed;

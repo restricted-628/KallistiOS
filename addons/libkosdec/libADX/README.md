@@ -6,15 +6,16 @@ profiles. See [COMPLETION.md](COMPLETION.md) for the count and its exclusions,
 and [PARITY.md](PARITY.md) for release scope and remaining work.
 
 This is an independently written, incremental float ADX decoder. It accepts
-encoding 3, versions 3 and 5, 18-byte channel blocks, 4-bit residuals, mono/stereo
-at integer rates 1..48000 Hz with integer cutoff 0..floor(rate/2), a 26..65539-byte header,
+encoding 3, unencrypted versions 3, 4 and 5, 18-byte channel blocks, 4-bit residuals, mono/stereo
+at integer rates 1..48000 Hz with integer cutoff 0..floor(rate/2), a 26..65539-byte header (38-byte minimum for version 4),
 and an 18..65539-byte zero-padded end record. Declared length is limited to INT32_MAX
 PCM frames. Metadata becomes valid when `header_ready` is true; use
 `kosdec_adx_get_info` for a validated snapshot.
 
-Headers may have zero extensions or a validated version-3 loop record:
-0..31 inserted leading samples, one type-1 loop, block-aligned start, ordered sample
-bounds and matching absolute byte offsets. Other extensions remain unsupported.
+Versions 3 and 4 support one type-1 embedded loop with 0..31 inserted
+leading samples, a block-aligned start, ordered sample bounds and matching
+absolute byte offsets. Version 4 seeds the predictor from its header.
+See [FORMATS.md](FORMATS.md) for optional-header limits.
 48 kHz is our extension beyond the reference format's 44.1 kHz maximum.
 Out-of-domain rates/cutoffs, other versions/encodings and nonzero footer payloads
 remain unsupported.
@@ -27,7 +28,8 @@ The codec decodes each file once, including files with loop metadata. It exposes
 `decoder.loop` for the optional memory reader; it does not automatically repeat or
 seek. `end_frame` is exclusive. `end_byte` follows the compressed block group
 containing the final loop sample, which can contain samples beyond the loop end.
-The optional resident-input reader implements repeat/release with carried history.
+The resident and streamed readers implement repeat/release with carried history.
+Rebuild consumers of the decoder and the reader or player types that embed it.
 
 ## Use and ownership
 
@@ -1055,7 +1057,7 @@ suite checks PCM against independent exact-rational float vectors; regenerate
 them with `python3 tests/generate_profiles.py`. This is not proof of proprietary
 decoder equivalence. Target execution and hardware checks remain separate.
 
-The memory suite checks 360 combinations against independent carried-history
+The memory suite checks 720 combinations against independent carried-history
 rational vectors, plus lifecycle/error cases. Regenerate its vectors with
 `python3 tests/generate_memory.py`. Whole-block history is supported by the
 inspected reference block/trap behavior. See the joint job mode below for tested
@@ -1092,7 +1094,7 @@ retirement delays, cancellation and injected seek/submission/status/destruction/
 transfer failures. The mock is a host-only contract fixture, never installed.
 
 The expanded-rate suite adds 2304 cases across 18 rate/cutoff profiles:
-mono/stereo v3/v5 framing and exact PCM, loop/release through both readers,
+mono/stereo v3/v4/v5 framing and exact PCM, loop/release through both readers,
 boundary seeks with fragmented/waiting input, extreme history/clipping and
 strided output sentinels. Generate its independent binary32 vectors with
 `python3 tests/generate_expanded.py`. Player host tests check 16 initial-rate

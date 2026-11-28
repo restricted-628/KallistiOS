@@ -43,8 +43,11 @@ int main(void) {
     const unsigned fragments[]={1,17,37,512},caps[]={1,7,32},headers[]={50,2048};
     for(unsigned v=0;v<6;++v)for(unsigned ch=1;ch<=2;++ch)
     for(unsigned f=0;f<4;++f)for(unsigned c=0;c<3;++c)
-    for(unsigned h=0;h<2;++h)for(unsigned wait=0;wait<2;++wait) {
-        ++cases;size_t n;uint8_t *data=stream(headers[h],564,ch,vectors[v].start,vectors[v].end,&n);
+    for(unsigned h=0;h<2;++h)for(unsigned wait=0;wait<2;++wait)
+    for(unsigned version=3;version<=4;++version) {
+        unsigned header=version==4 && h==0 ? 62 : headers[h];
+        ++cases;size_t n;
+        uint8_t *data=stream_version(version,header,564,ch,vectors[v].start,vectors[v].end,&n);
         struct provider p={data,n,fragments[f],0,wait?2u:0u,0,0,0};
         struct kosdec_adx_stream s;kosdec_adx_stream_init(&s,read_at,&p,(uint32_t)n,true);
         size_t at=0;enum kosdec_adx_status status=KOSDEC_ADX_MORE;

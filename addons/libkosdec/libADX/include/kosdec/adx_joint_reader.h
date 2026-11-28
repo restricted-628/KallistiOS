@@ -134,7 +134,7 @@ enum kosdec_adx_status kosdec_adx_joint_reader_enable_jobs(
    sector-aligned cursors and a capacity of at least two whole sectors.
    Read batch is in 2048-byte sectors
    and at most the ring capacity. Use a record-relative provider and a
-   declared byte extent. The v3 loop start offset is rounded down to the
+   declared byte extent. The embedded loop start offset is rounded down to the
    sector containing the corresponding first compressed group. Metadata
    retains the unrounded offset. A nonaligned logical start is supported
    when the logical interval consumes the entire encoded loop span.

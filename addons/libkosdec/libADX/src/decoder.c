@@ -5,7 +5,17 @@
 #include <kosdec/adx_request.h>
 #include <string.h>
 #define ADX_MAGIC UINT32_C(0x41445846)
+enum {
+    ADX_LOOP_BYTES = 24,
+    ADX_V4_HISTORY_OFFSET = 4,  /* Relative to the 20-byte common header. */
+    ADX_V4_LOOP_OFFSET = 12,
+    ADX_MARKER_BYTES = 6
+};
 static uint32_t be16(const uint8_t *p) { return (uint32_t)p[0] * 256u + p[1]; }
+static int16_t signed_be16(const uint8_t *p) {
+    int32_t bits = (int32_t)be16(p);
+    return (int16_t)(bits < 0x8000 ? bits : bits - 0x10000);
+}
 static uint32_t be32(const uint8_t *p) { return be16(p) * 65536u + be16(p + 2); }
 void kosdec_adx_init(struct kosdec_adx_decoder *d) {
     if(d) {
@@ -40,8 +50,10 @@ static enum kosdec_adx_status header(struct kosdec_adx_decoder *d,
         h[18] == 3 && h[7] > 2 && h[7] <= INT8_MAX;
     if(h[4] != 3 || h[5] != 18 || h[6] != 4 ||
        (!check_channel_limit && (h[7] != 1 && h[7] != 2)) ||
-       (h[18] != 3 && h[18] != 5) || h[19] != 0)
+       (h[18] != 3 && h[18] != 4 && h[18] != 5) || h[19] != 0)
         return KOSDEC_ADX_UNSUPPORTED;
+    if(h[18] == 4 && d->header_bytes < sizeof(d->header) + ADX_V4_LOOP_OFFSET + ADX_MARKER_BYTES)
+        return KOSDEC_ADX_INVALID;
     d->total_frames = be32(h + 12);
     if(d->total_frames > KOSDEC_ADX_MAX_FRAMES) return KOSDEC_ADX_UNSUPPORTED;
     /* Metadata remains private until complete header/extension admission. */
@@ -58,13 +70,19 @@ static enum kosdec_adx_status header(struct kosdec_adx_decoder *d,
     d->version = h[18];
     return KOSDEC_ADX_MORE;
 }
+static unsigned loop_offset(const struct kosdec_adx_decoder *d) {
+    return d->version == 4 ? ADX_V4_LOOP_OFFSET : 0;
+}
 static enum kosdec_adx_status extension(struct kosdec_adx_decoder *d,
                                         enum media_adx_header_mode mode) {
-    const uint8_t *e = d->extension;
+    if(d->version == 4 && be32(d->extension))
+        return KOSDEC_ADX_UNSUPPORTED;
+    const uint8_t *e = d->extension + loop_offset(d);
     unsigned nonzero = 0;
-    for(unsigned i = 0; i < sizeof(d->extension); ++i) nonzero |= e[i];
+    for(unsigned i = 0; i < ADX_LOOP_BYTES; ++i) nonzero |= e[i];
     if(!nonzero) return KOSDEC_ADX_MORE;
-    if(!d->channels || d->version != 3 || d->header_bytes < 50 || be16(e) >= 32 ||
+    size_t required = sizeof(d->header) + loop_offset(d) + ADX_LOOP_BYTES + ADX_MARKER_BYTES;
+    if(!d->channels || d->version == 5 || d->header_bytes < required || be16(e) >= 32 ||
        be16(e + 2) != 1 || be32(e + 4) != 1)
         return KOSDEC_ADX_UNSUPPORTED;
     uint32_t start = be32(e + 8), end = be32(e + 16);
@@ -105,14 +123,14 @@ static enum kosdec_adx_status extension(struct kosdec_adx_decoder *d,
 struct kosdec_adx_result media_adx_decode_header(struct kosdec_adx_decoder *d,
     const uint8_t *input, size_t input_bytes, bool final_input, enum media_adx_header_mode mode) {
     struct kosdec_adx_result r = {KOSDEC_ADX_MORE, 0, 0};
-    static const uint8_t marker[] = {'(', 'c', ')', 'C', 'R', 'I'};
+    static const uint8_t marker[ADX_MARKER_BYTES] = {'(', 'c', ')', 'C', 'R', 'I'};
     while(d->header_used < d->header_bytes && r.consumed < input_bytes &&
           r.consumed < KOSDEC_ADX_HEADER_BUDGET) {
         unsigned n = d->header_used;
         uint8_t value = input[r.consumed++];
         if(n < sizeof(d->header)) d->header[n] = value;
         else if(n < d->header_bytes - sizeof(marker)) {
-            if(n < sizeof(d->header) + sizeof(d->extension))
+            if(n < sizeof(d->header) + loop_offset(d) + ADX_LOOP_BYTES)
                 d->extension[n - sizeof(d->header)] = value;
             else if(value) { r.status = KOSDEC_ADX_UNSUPPORTED; goto fail; }
         }
@@ -142,6 +160,13 @@ struct kosdec_adx_result media_adx_decode_header(struct kosdec_adx_decoder *d,
         d->channels = d->header[7];
         r.status = KOSDEC_ADX_UNSUPPORTED;
         goto fail;
+    }
+    if(d->version == 4) {
+        const uint8_t *history = d->extension + ADX_V4_HISTORY_OFFSET;
+        for(unsigned ch = 0; ch < d->channels; ++ch) {
+            d->history[ch][0] = signed_be16(history + 4u * ch);
+            d->history[ch][1] = signed_be16(history + 4u * ch + 2u);
+        }
     }
     d->header_ready = true;
     r.status = KOSDEC_ADX_MORE;
@@ -232,7 +257,7 @@ enum kosdec_adx_status kosdec_adx_get_info(const struct kosdec_adx_decoder *d,
     *info = (struct kosdec_adx_info){
         .header_bytes = d->header_bytes, .total_frames = d->total_frames,
         .sample_rate = d->sample_rate, .cutoff = d->cutoff,
-        .inserted_frames = (uint16_t)be16(d->extension),
+        .inserted_frames = (uint16_t)be16(d->extension + loop_offset(d)),
         .encoding = d->header[4], .block_bytes = d->header[5],
         .sample_bits = d->header[6], .channels = d->channels,
         .version = d->version, .loop = d->loop

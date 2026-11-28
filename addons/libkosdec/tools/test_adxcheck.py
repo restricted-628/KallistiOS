@@ -19,7 +19,7 @@ def asset(rate=44100, channels=2, version=3, frames=65, header=50, footer=18, lo
     struct.pack_into('>HHBBBBIIHBB', data, 0, 0x8000, header - 4,
                      3, 18, 4, channels, rate, frames, 500, version, 0)
     if loop:
-        struct.pack_into('>HHIIIII', data, 20, 0, 1, 1, 32,
+        struct.pack_into('>HHIIIII', data, 32 if version == 4 else 20, 0, 1, 1, 32,
                          header + 18 * channels, 65, header + 54 * channels)
     data[-6:] = b'(c)CRI'
     for group in range((frames + 31) // 32):
@@ -75,6 +75,20 @@ with tempfile.TemporaryDirectory(prefix='adxcheck-') as tmp:
             assert row['validated_header']['loop'] == dict(
                 start_frame=32, end_frame=65, start_byte=86, end_byte=158)
 
+    for channels in (1, 2):
+        path = root / f'v4-loop-{channels}.adx'
+        payload = asset(channels=channels, version=4, header=64, loop=True)
+        struct.pack_into('>hh', payload, 0x18, 320, -180)
+        path.write_bytes(payload)
+        row = invoke([path], 0)[0]
+        assert row['declared']['version'] == 4 and row['decoded_frames'] == 65
+        assert row['validated_header']['loop'] == dict(
+            start_frame=32, end_frame=65, start_byte=64 + 18 * channels,
+            end_byte=64 + 54 * channels)
+        payload[19] = 8
+        path.write_bytes(payload)
+        assert invoke([path], 1)[0]['status'] == 'unsupported'
+
     for rate, cutoff in [(1,0),(2,1),(7999,3999),(8000,0),(8000,4000),
                          (12345,123),(44100,499),(44100,1000),(48000,1),(48000,24000)]:
         path = root / f'general-{rate}-{cutoff}.adx'
@@ -97,7 +111,7 @@ with tempfile.TemporaryDirectory(prefix='adxcheck-') as tmp:
             ('signature', 0, 0, 'invalid'), ('encoding', 4, 4, 'unsupported'),
             ('block', 5, 17, 'unsupported'), ('bits', 6, 8, 'unsupported'),
             ('channels', 7, 3, 'unsupported'), ('rate', 8, 1, 'unsupported'),
-            ('cutoff', 16, 255, 'unsupported'), ('version', 18, 4, 'unsupported'),
+            ('cutoff', 16, 255, 'unsupported'), ('version', 18, 6, 'unsupported'),
             ('flags', 19, 1, 'unsupported'), ('marker', 49, 0, 'invalid'),
             ('scale', 50, 0x80, 'invalid'), ('footer', len(base)-18, 0, 'invalid'),
             ('footer_payload', len(base)-1, 1, 'invalid')]:

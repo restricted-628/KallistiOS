@@ -2,13 +2,24 @@
 
 Read the encoding, version, block dimensions and channel count together. A readable header alone does not establish that an input is decodable.
 
-The native ADX path admits encoding3,18-byte blocks,4-bit samples, mono/stereo,
-versions3/5 with zero extensions or the documented v3 single-loop layout.
-Encoding 3 reads a 13-bit scale. The high bit identifies a control word; bits
-13 and 14 do not contribute to the scale.
-The native reader uses the rounded setup through 44100 Hz for either admitted version.
-The baseline setup initializes predictor histories. Other encoding, history
-and encryption layouts remain unsupported.
+The native ADX path admits encoding 3, 18-byte blocks, 4-bit residuals,
+mono/stereo, and unencrypted versions 3, 4 and 5. Versions 3 and 4 accept
+a single embedded loop with a block-aligned start and consistent absolute
+byte offsets. Encoding 3 reads a 13-bit scale. The high bit identifies a
+control word. Bits 13 and 14 do not contribute to the scale.
+The native reader uses the rounded coefficient setup through 44100 Hz
+for all three versions.
+
+Versions 3 and 5 initialize the predictor histories to zero. Version 4
+loads a signed big-endian sample pair for each channel at byte 0x18.
+Its loop record starts at 0x20, 12 bytes after the v3 record. Linear decode
+uses the initial histories once. The memory and stream readers carry the
+predictor history through a repeat and rebuild it from the header on a
+stream seek. Nonaligned loop starts in the standard readers, encrypted
+revisions, multiple loops and optional chunks such as AINF are unsupported.
+
+Layout references are the [KOS-ports libADX recipe](https://github.com/KallistiOS/kos-ports/blob/f4faacc42faaf552625777b7709e871a827e1055/libadx/Makefile) for version 1.0.1
+and the [VGAudio v4 writer](https://github.com/Thealexbarney/VGAudio/blob/9d8f6ea04c83cccccb3dd7851a631bbd53a8dbbe/src/VGAudio/Containers/Adx/AdxWriter.cs).
 
 An SFD C0 audio stream can contain a finite ADX record with its own header, declared length and endcode.
 Bytes after that endcode belong to the mux. The closing C0 payloads may contain
