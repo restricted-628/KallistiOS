@@ -34,8 +34,13 @@ $(BUILD)/host/test: tests/afs.c $(SOURCE) $(HEADER) Makefile
 	@mkdir -p $(@D)
 	$(HOST_CC) $(HOST_CFLAGS) $(COMMON) $(SOURCE) $< -o $@
 
-test: $(BUILD)/host/test $(BUILD)/host/afs
+$(BUILD)/host/partition-test: tests/partition.c $(SOURCE) $(HEADER) Makefile
+	@mkdir -p $(@D)
+	$(HOST_CC) $(HOST_CFLAGS) $(COMMON) $(SOURCE) $< -o $@
+
+test: $(BUILD)/host/test $(BUILD)/host/partition-test $(BUILD)/host/afs
 	$(BUILD)/host/test
+	$(BUILD)/host/partition-test
 	python3 tests/cli.py $(BUILD)/host/afs
 
 sanitize:

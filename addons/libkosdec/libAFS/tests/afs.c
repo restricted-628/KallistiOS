@@ -77,6 +77,20 @@ int main(void) {
         memset(data + pointer, 0, 8);
     }
 
+    /* AFSLNK -add uses three name records for four ordinal slots.
+       The alias at ID 3 still gets its own name; the hole at ID 2 does not. */
+    memcpy(data + NAME_START + 96, "alias", 6);
+    word(data + PAYLOAD - 8, NAME_START);
+    word(data + PAYLOAD - 4, 3 * 48);
+    assert(kosdec_afs_open(&afs, read_part, &source, sizeof(data)) == KOSDEC_AFS_OK);
+    assert(afs.name_records == 3);
+    assert(kosdec_afs_get(&afs, 2, &member) == KOSDEC_AFS_OK && !member.has_name_table);
+    assert(kosdec_afs_get(&afs, 3, &member) == KOSDEC_AFS_OK && !strcmp(member.name, "alias"));
+    assert(kosdec_afs_find(&afs, "alias", &member) == KOSDEC_AFS_OK && member.id == 3);
+    word(data + PAYLOAD - 4, 2 * 48);
+    assert(kosdec_afs_open(&afs, read_part, &source, sizeof(data)) == KOSDEC_AFS_INVALID);
+    memset(data + PAYLOAD - 8, 0, 8);
+
     word(data + TABLE_END, PAYLOAD);
     word(data + TABLE_END + 4, COUNT * 48);
     assert(kosdec_afs_open(&afs, read_part, &source, sizeof(data)) == KOSDEC_AFS_INVALID);
