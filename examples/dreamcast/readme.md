@@ -215,6 +215,7 @@ This page serves as an index for all KallistiOS examples.
   - modifier_volume
   - modifier_volume_tex
   - modifier_volume_zclip
+  - [**rain_shelter**](pvr/rain_shelter/): Simulates wind-driven rain under a shelter and compares clear and fogged particle coverage.
   - [**proxy_shadow**](pvr/proxy_shadow/): Extrudes a closed directional shadow and compares the receiver mask through a near-plane crossing.
   - palette
   - [**pipeline_status**](pvr/pipeline_status/): Checks coherent PVR state,

@@ -6,6 +6,13 @@ iterations cannot be reconstructed completely from commit messages. The local
 control folder contains a generated index of pinned published-branch history;
 it is a historical index, not evidence that those changes passed tests.
 
+## 2026-11-27 — Sheltered rain example
+
+- Hide raindrops under an eave without pausing their motion or lifetime.
+  The example checks that a surviving drop reappears on its original
+  trajectory and that fog changes its color without changing pixel coverage.
+  No particle API or renderer changes.
+
 ## 2026-11-27 — Closed proxy-shadow example
 
 - Extrude a fixed convex caster under a directional light and submit the
